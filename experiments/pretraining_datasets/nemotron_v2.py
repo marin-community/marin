@@ -28,17 +28,22 @@ from experiments.llama import llama3_tokenizer
 
 # TODO (rav): remove these in favor of the datakit sources
 
-_downloads = {family: download_nemotron_v2_step(family) for family in NEMOTRON_V2_DATASETS}
 
-downloads: dict[str, ExecutorStep] = {family: step.as_executor_step() for family, step in _downloads.items()}
+def downloads() -> dict[str, ExecutorStep]:
+    """Raw download step per Nemotron v2 family."""
+    return {family: download_nemotron_v2_step(family).as_executor_step() for family in NEMOTRON_V2_DATASETS}
 
-# One normalize step per (family, subset) — normalize now processes a single directory.
-normalized: dict[str, dict[str, ExecutorStep]] = {}
-for _family, _dl in _downloads.items():
-    normalized[_family] = {
-        subset: normalize_nemotron_v2_step(_dl, family=_family, subset=subset).as_executor_step()
-        for subset in NEMOTRON_V2_DATASETS[_family].subsets
-    }
+
+def normalized() -> dict[str, dict[str, ExecutorStep]]:
+    """One normalize step per (family, subset) — normalize processes a single directory."""
+    result: dict[str, dict[str, ExecutorStep]] = {}
+    for family in NEMOTRON_V2_DATASETS:
+        download = download_nemotron_v2_step(family)
+        result[family] = {
+            subset: normalize_nemotron_v2_step(download, family=family, subset=subset).as_executor_step()
+            for subset in NEMOTRON_V2_DATASETS[family].subsets
+        }
+    return result
 
 
 # ============================================================================
@@ -60,7 +65,7 @@ def tokenize_nemotron_v2_family(
         tokenizer = llama3_tokenizer
 
     info = NEMOTRON_V2_DATASETS[family]
-    family_normalized = normalized[family]
+    family_normalized = normalized()[family]
 
     steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for subset in info.subsets:

@@ -22,6 +22,7 @@ import logging
 
 from fray import ResourceConfig
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
@@ -68,4 +69,5 @@ def build_smoke_step() -> StepSpec:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run([build_smoke_step()])
+    with executor_context():
+        StepRunner().run([build_smoke_step()])

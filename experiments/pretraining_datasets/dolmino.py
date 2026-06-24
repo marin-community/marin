@@ -12,11 +12,15 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.llama import llama3_tokenizer
 
-_dolmino_download = download_dolmino_step().as_executor_step()
-_dolmino_base_dir = _dolmino_download.cd("bb54cab").cd("data")
 
-# Backward compat — some consumers import this
-downloads = {"dolmino": _dolmino_download.cd("bb54cab")}
+def downloads() -> dict[str, ExecutorStep]:
+    """Raw Dolmino download. Some consumers import this."""
+    return {"dolmino": download_dolmino_step().as_executor_step().cd("bb54cab")}
+
+
+def _dolmino_base_dir() -> ExecutorStep:
+    return download_dolmino_step().as_executor_step().cd("bb54cab").cd("data")
+
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
 DOLMINO_LLAMA3_OVERRIDES = {
@@ -39,7 +43,7 @@ DOLMINO_LLAMA3_OVERRIDES = {
 def _get_dolmino_split_paths(split: str):
     """Helper to get file paths for a dolmino split."""
     patterns = DOLMINO_DATASETS[split]
-    dolmino_split_input_base_path = _dolmino_base_dir / split
+    dolmino_split_input_base_path = _dolmino_base_dir() / split
     return [dolmino_split_input_base_path / pattern for pattern in patterns]
 
 
@@ -77,10 +81,9 @@ def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> Executor
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
 
 
-# Special combined math split that includes all math/* datasets
-_all_dolmino_math_files = [
-    path for split in DOLMINO_DATASETS if "math" in split for path in _get_dolmino_split_paths(split)
-]
+def _all_dolmino_math_files():
+    """File paths for the combined math split (all math/* datasets)."""
+    return [path for split in DOLMINO_DATASETS if "math" in split for path in _get_dolmino_split_paths(split)]
 
 
 def tokenize_dolmino_math(tokenizer: str | None = None):
@@ -92,7 +95,7 @@ def tokenize_dolmino_math(tokenizer: str | None = None):
         name="tokenized/dolmino/all_math",
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=_all_dolmino_math_files,
+            train_paths=_all_dolmino_math_files(),
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),

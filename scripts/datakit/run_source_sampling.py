@@ -20,6 +20,7 @@ import logging
 import os
 
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner, check_cache
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -44,33 +45,34 @@ def main() -> None:
     os.environ["MARIN_PREFIX"] = STAGING_PREFIX
     base = marin_temp_bucket(ttl_days=TTL_DAYS, prefix=f"data/datakit/{RUN_ID}")
 
-    available = [s for s in all_sources().values() if check_cache(s.normalized.output_path)]
-    skipped = [s.name for s in all_sources().values() if not check_cache(s.normalized.output_path)]
+    with executor_context():
+        available = [s for s in all_sources().values() if check_cache(s.normalized.output_path)]
+        skipped = [s.name for s in all_sources().values() if not check_cache(s.normalized.output_path)]
 
-    fractions = proportional_sample_fractions(available, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+        fractions = proportional_sample_fractions(available, target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
 
-    # Sample terminals — StepRunner walks each one's dep chain (normalize →
-    # transforms → download) automatically and dedupes by output_path.
-    steps = [
-        sample_normalized_shards_step(
-            name=f"data/datakit/normalized/{src.name}",
-            normalized=src.normalized,
-            sample_fraction=fractions[src.name],
-            override_output_path=f"{base}/sample/{src.name}",
+        # Sample terminals — StepRunner walks each one's dep chain (normalize →
+        # transforms → download) automatically and dedupes by output_path.
+        steps = [
+            sample_normalized_shards_step(
+                name=f"data/datakit/normalized/{src.name}",
+                normalized=src.normalized,
+                sample_fraction=fractions[src.name],
+                override_output_path=f"{base}/sample/{src.name}",
+            )
+            for src in available
+        ]
+
+        logger.info(
+            "Sampling %d / %d sources targeting %.1fB tokens under %s/ (TTL=%dd, skipped %d not-yet-normalized)",
+            len(available),
+            len(all_sources()),
+            TARGET_TOTAL_TOKENS_B,
+            base,
+            TTL_DAYS,
+            len(skipped),
         )
-        for src in available
-    ]
-
-    logger.info(
-        "Sampling %d / %d sources targeting %.1fB tokens under %s/ (TTL=%dd, skipped %d not-yet-normalized)",
-        len(available),
-        len(all_sources()),
-        TARGET_TOTAL_TOKENS_B,
-        base,
-        TTL_DAYS,
-        len(skipped),
-    )
-    StepRunner().run(steps)
+        StepRunner().run(steps)
     logger.info("All %d sample steps reached a terminal state", len(steps))
 
 

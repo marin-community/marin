@@ -15,8 +15,9 @@ from marin.evaluation.perplexity_gap import raw_text_dataset
 
 # cyclic dependency
 # from experiments.llama import llama3_tokenizer
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -46,30 +47,34 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-paloma = (
-    ExecutorStep(
-        name="raw/paloma",
-        fn=download_hf,
-        config=HfDownloadConfig(
-            hf_dataset_id=versioned("allenai/paloma"),
-            revision=versioned("65cd6fc"),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-            append_sha_to_path=True,
-        ),
+
+def paloma() -> InputName:
+    """The raw Paloma eval set, downloaded from HuggingFace."""
+    return (
+        ExecutorStep(
+            name="raw/paloma",
+            fn=download_hf,
+            config=HfDownloadConfig(
+                hf_dataset_id=versioned("allenai/paloma"),
+                revision=versioned("65cd6fc"),
+                gcs_output_path=this_output_path(),
+                wait_for_completion=True,
+                append_sha_to_path=True,
+            ),
+        )
+        .with_output_path("raw/paloma-fc6827")
+        .cd("65cd6fc")
     )
-    .with_output_path("raw/paloma-fc6827")
-    .cd("65cd6fc")
-)
 
 
 def paloma_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: ExecutorStep = paloma
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: InputName | None = None
 ) -> dict[str, TokenizerStep]:
     """
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
     """
-    # avoid cyclic dependency
+    if paloma_raw is None:
+        paloma_raw = paloma()
 
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
@@ -83,7 +88,9 @@ def paloma_tokenized(
     return paloma_steps
 
 
-def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
+def paloma_raw_validation_sets(*, paloma_raw: InputName | None = None):
+    if paloma_raw is None:
+        paloma_raw = paloma()
     return {
         os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
         for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()
@@ -91,4 +98,5 @@ def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
 
 
 if __name__ == "__main__":
-    executor_main(steps=[paloma, *paloma_tokenized().values()])
+    with executor_context():
+        executor_main(steps=[paloma(), *paloma_tokenized().values()])

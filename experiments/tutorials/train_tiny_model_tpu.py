@@ -10,6 +10,7 @@ For GPU training, see train_tiny_model_gpu.py
 
 from fray import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
+from marin.execution import executor_context
 from marin.execution.types import versioned
 
 from experiments.defaults import train
@@ -29,16 +30,6 @@ RESOURCES = ResourceConfig.with_tpu(
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
 
-# 2. Tokenize the dataset with sampling
-# For this tutorial, we limit to 1000 documents per shard
-tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,
-    dataset=tinystories_hf_id,
-    tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=1000,
-)
-
 
 # 3. Define training configuration
 small_train_config = SimpleTrainConfig(
@@ -52,20 +43,31 @@ small_train_config = SimpleTrainConfig(
 )
 
 if __name__ == "__main__":
-    # 4. Submit the training job. `train` resolves the output path, bakes it
-    # into the trainer config, and blocks until the Iris job completes — a
-    # single call.
-    train(
-        name="marin-tinystories-30m",
-        # Steps can depend on other steps: the training job depends on tinystories_tokenized
-        tokenized=tinystories_tokenized,
-        model_config=versioned(llama_30m),
-        train_config=small_train_config,
-        # wandb tags
-        tags=["llama", "30m", "tinystories", "tutorial"],
-        # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
-        # during training, but there's no point in running evals on such a tiny model
-        eval_harness_tasks=[],
-        # to keep tutorial fast, skip default validation sets
-        use_default_validation=False,
-    )
+    with executor_context():
+        # 2. Tokenize the dataset with sampling
+        # For this tutorial, we limit to 1000 documents per shard
+        tinystories_tokenized = default_tokenize(
+            name=tinystories_hf_id,
+            dataset=tinystories_hf_id,
+            tokenizer=marin_tokenizer,
+            format=TextLmDatasetFormat(),
+            sample_count=1000,
+        )
+
+        # 4. Submit the training job. `train` resolves the output path, bakes it
+        # into the trainer config, and blocks until the Iris job completes — a
+        # single call.
+        train(
+            name="marin-tinystories-30m",
+            # Steps can depend on other steps: the training job depends on tinystories_tokenized
+            tokenized=tinystories_tokenized,
+            model_config=versioned(llama_30m),
+            train_config=small_train_config,
+            # wandb tags
+            tags=["llama", "30m", "tinystories", "tutorial"],
+            # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
+            # during training, but there's no point in running evals on such a tiny model
+            eval_harness_tasks=[],
+            # to keep tutorial fast, skip default validation sets
+            use_default_validation=False,
+        )

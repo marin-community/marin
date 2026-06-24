@@ -39,6 +39,7 @@ from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from rigging.filesystem import marin_prefix, marin_temp_bucket
@@ -46,9 +47,9 @@ from rigging.filesystem import marin_prefix, marin_temp_bucket
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
-    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
     env_int,
+    nemotron_mix_with_default_validation,
     run_grug_moe_trial,
     slimpajama_6b_data,
 )
@@ -153,7 +154,7 @@ def _build_step_from_env() -> ExecutorStep:
         # batch shrink: tokens = batch_size * max_seq_len * steps.
         target_tokens = env_int("CANARY_TARGET_TOKENS", 250_000_000)
         name = "canary-ferry-moe"
-        data = NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
+        data = nemotron_mix_with_default_validation()
         resources = ResourceConfig.with_tpu(_tpu_types_from_env())
         eval_config: GrugEvalConfig | None = GrugEvalConfig(
             eval_batch_size=batch_size,
@@ -289,11 +290,13 @@ def _build_step_from_env() -> ExecutorStep:
     )
 
 
-canary_moe_step = _build_step_from_env()
+def canary_moe_step() -> ExecutorStep:
+    return _build_step_from_env()
 
 
 def main():
-    executor_main(steps=[canary_moe_step])
+    with executor_context():
+        executor_main(steps=[canary_moe_step()])
 
 
 if __name__ == "__main__":

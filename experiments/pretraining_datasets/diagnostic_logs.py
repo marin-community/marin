@@ -9,7 +9,10 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer
 
-ghalogs_normalized = ghalogs_public_normalize_steps()[-1].as_executor_step()
+
+def ghalogs_normalized() -> ExecutorStep:
+    """The normalized GHALogs public training partition."""
+    return ghalogs_public_normalize_steps()[-1].as_executor_step()
 
 
 def tokenize_ghalogs(*, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
@@ -21,7 +24,7 @@ def tokenize_ghalogs(*, tokenizer: str | None = None) -> ExecutorStep[TokenizeCo
         name="tokenized/ghalogs_public",
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"],
+            train_paths=[ghalogs_normalized().as_input_name() / "outputs/main/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),

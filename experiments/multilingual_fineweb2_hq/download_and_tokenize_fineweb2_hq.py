@@ -11,6 +11,7 @@ Fineweb2 dataset.
 import os.path
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -19,21 +20,25 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
 
-fineweb2_raw = ExecutorStep(
-    name="raw/fineweb2_hq",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="epfml/FineWeb2-HQ",
-        gcs_output_path=this_output_path(),
-        revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
-        wait_for_completion=True,
-    ),
-).with_output_path("raw/fineweb2-hq")
+
+def fineweb2_raw() -> ExecutorStep:
+    """Raw FineWeb2-HQ download."""
+    return ExecutorStep(
+        name="raw/fineweb2_hq",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="epfml/FineWeb2-HQ",
+            gcs_output_path=this_output_path(),
+            revision="c0c06e94fd3a44ae9e802b2b0fc533817601eb5e",
+            wait_for_completion=True,
+        ),
+    ).with_output_path("raw/fineweb2-hq")
 
 
 def _get_fineweb2_split_paths(split):
     patterns = FINEWEB2_DATASETS[split]
-    fineweb2_split_paths = [output_path_of(fineweb2_raw, pattern) for pattern in patterns]
+    raw = fineweb2_raw()
+    fineweb2_split_paths = [output_path_of(raw, pattern) for pattern in patterns]
     return fineweb2_split_paths
 
 
@@ -62,4 +67,5 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
 
 
 if __name__ == "__main__":
-    executor_main(steps=list(tokenize_fineweb2hq_steps().values()), description="Tokenize Fineweb2-HQ dataset")
+    with executor_context():
+        executor_main(steps=list(tokenize_fineweb2hq_steps().values()), description="Tokenize Fineweb2-HQ dataset")

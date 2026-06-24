@@ -1562,9 +1562,17 @@ def executor_main(
 ):
     """Main entry point for experiments (to standardize).
 
+    Build ``steps`` inside an ``executor_context()`` (so they are not constructed
+    at module-import scope, which would freeze the importing environment's region
+    into the pipeline)::
+
+        if __name__ == "__main__":
+            with executor_context():
+                executor_main(steps=build_steps())
+
     Args:
         config: Parsed CLI config (draccus). Carries `--dry_run`, `--max_concurrent`, etc.
-        steps: Steps to execute.
+        steps: Steps to execute, built inside an `executor_context()`.
         description: Optional human-readable description recorded in executor info.
         max_concurrent: Programmatic cap on concurrent step execution. If provided,
             takes precedence over `config.max_concurrent`. Use this to express

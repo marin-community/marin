@@ -5,6 +5,7 @@
 
 from fray import ResourceConfig
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -12,7 +13,9 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.marin_models import marin_tokenizer
 
-molmo2_cap_normalized = molmo2_cap_normalize_steps()[-1].as_executor_step()
+
+def molmo2_cap_normalized() -> ExecutorStep:
+    return molmo2_cap_normalize_steps()[-1].as_executor_step()
 
 
 def tokenize_molmo2_cap(*, tokenizer: str | None = None) -> TokenizerStep:
@@ -24,7 +27,7 @@ def tokenize_molmo2_cap(*, tokenizer: str | None = None) -> TokenizerStep:
         name="tokenized/molmo2_cap",
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[molmo2_cap_normalized.as_input_name() / "outputs/main/*.parquet"],
+            train_paths=[molmo2_cap_normalized().as_input_name() / "outputs/main/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
@@ -34,4 +37,5 @@ def tokenize_molmo2_cap(*, tokenizer: str | None = None) -> TokenizerStep:
 
 
 if __name__ == "__main__":
-    executor_main(steps=[tokenize_molmo2_cap()])
+    with executor_context():
+        executor_main(steps=[tokenize_molmo2_cap()])

@@ -10,13 +10,15 @@ end-to-end shape is validated by a live smoke run rather than unit tests.
 """
 
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config
 
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.train import testbed_tokenize as _testbed_tokenize
 
-_SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
+with executor_context():
+    _SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 
 
 def test_tokenize_step_bridge_produces_training_ready_steps():

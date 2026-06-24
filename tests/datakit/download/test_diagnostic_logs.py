@@ -144,8 +144,11 @@ def test_all_sources_includes_normalized_ghalogs_public():
 def test_tokenize_ghalogs_reads_datakit_normalized_output():
     step = tokenize_ghalogs(tokenizer="test-tokenizer")
 
-    assert ghalogs_normalized.name == "normalized/ghalogs/public"
-    assert step.config.train_paths == [ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"]
+    normalized = ghalogs_normalized()
+    assert normalized.name == "normalized/ghalogs/public"
+    (train_path,) = step.config.train_paths
+    assert train_path.step.name == normalized.name
+    assert train_path.name == "outputs/main/*.parquet"
     assert step.config.validation_paths.value == []
 
 

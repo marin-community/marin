@@ -13,6 +13,7 @@ import math
 from fray.cluster import ResourceConfig
 from levanter.data.text import ConcatDatasetComponent, DatasetComponent, LmDataConfig, TextLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -342,53 +343,56 @@ _model, _optimizer, _batch_size, _steps = build_from_heuristic(
 
 _SLUG = f"d{_HIDDEN_DIM}-{_BUDGET:.2e}"
 
-datakit_moe_mix = ExecutorStep(
-    name=f"grug/datakit_moe_mix_{_SLUG}",
-    fn=run_grug_moe_trial,
-    config=GrugMoeLaunchConfig(
-        model=versioned(_model),
-        data=_datakit_data_config(
-            total_steps=_steps,
-            batch_size=_batch_size,
-            max_seq_len=_model.max_seq_len,
-            enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
+
+def datakit_moe_mix() -> ExecutorStep:
+    return ExecutorStep(
+        name=f"grug/datakit_moe_mix_{_SLUG}",
+        fn=run_grug_moe_trial,
+        config=GrugMoeLaunchConfig(
+            model=versioned(_model),
+            data=_datakit_data_config(
+                total_steps=_steps,
+                batch_size=_batch_size,
+                max_seq_len=_model.max_seq_len,
+                enable_simulated_epoching=ENABLE_SIMULATED_EPOCHING,
+            ),
+            output_path=this_output_path(),
+            run_id=f"datakit_moe_mix_{_SLUG}",
+            resources=versioned(ResourceConfig.with_tpu("v4-8", zone="us-central2-b", preemptible=False)),
+            steps=versioned(_steps),
+            batch_size=versioned(_batch_size),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="marin_moe",
+                tags=["moe", "datakit_store_mix", _SLUG],
+                group="datakit-moe-mix",
+                name=None,
+            ),
+            optimizer=versioned(_optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=1e-4,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=512,
+                    steps_per_eval=1000,
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
         ),
-        output_path=this_output_path(),
-        run_id=f"datakit_moe_mix_{_SLUG}",
-        resources=versioned(ResourceConfig.with_tpu("v4-8", zone="us-central2-b", preemptible=False)),
-        steps=versioned(_steps),
-        batch_size=versioned(_batch_size),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="marin_moe",
-            tags=["moe", "datakit_store_mix", _SLUG],
-            group="datakit-moe-mix",
-            name=None,
-        ),
-        optimizer=versioned(_optimizer),
-        grug_trainer=versioned(
-            GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-            )
-        ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
-    ),
-)
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[datakit_moe_mix],
-        description="Grug MoE on the datakit us-central2 store with the mixture-3 two-phase bucket schedule.",
-    )
+    with executor_context():
+        executor_main(
+            steps=[datakit_moe_mix()],
+            description="Grug MoE on the datakit us-central2 store with the mixture-3 two-phase bucket schedule.",
+        )

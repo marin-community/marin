@@ -14,6 +14,7 @@ import os
 
 from fray import ResourceConfig
 from marin.datakit.canonical import fineweb_edu
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
@@ -56,7 +57,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     configure_logging(logging.INFO)
-    StepRunner().run(build_steps(max_parallelism=args.max_parallelism))
+    with executor_context():
+        StepRunner().run(build_steps(max_parallelism=args.max_parallelism))
 
 
 if __name__ == "__main__":

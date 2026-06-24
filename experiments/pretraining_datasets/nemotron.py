@@ -110,18 +110,20 @@ def tokenize_nemotron(
     return nemotron_steps
 
 
-nemotron_mix = lm_mixture_data_config(
-    components={
-        **tokenize_nemotron(),
-        "starcoderdata": dclm_components_llama3["starcoderdata"],
-        "proofpile_2": dclm_components_llama3["proofpile_2"],
-    },
-    weights={
-        **NEMOTRON_WEIGHTS,
-        "starcoderdata": 0.25,
-        "proofpile_2": 0.055,
-    },
-)
+def nemotron_mix():
+    dclm = dclm_components_llama3()
+    return lm_mixture_data_config(
+        components={
+            **tokenize_nemotron(),
+            "starcoderdata": dclm["starcoderdata"],
+            "proofpile_2": dclm["proofpile_2"],
+        },
+        weights={
+            **NEMOTRON_WEIGHTS,
+            "starcoderdata": 0.25,
+            "proofpile_2": 0.055,
+        },
+    )
 
 
 def tokenize_nemotron_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:

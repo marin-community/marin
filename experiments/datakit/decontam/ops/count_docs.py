@@ -41,6 +41,7 @@ import pyarrow.parquet as pq
 from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from pyarrow import fs
 from rigging.filesystem import marin_prefix
@@ -217,7 +218,8 @@ def main() -> None:
     _, eval_inserts, eval_unique = _report_evals(eval_results)
 
     # Pass 2: corpus sources (large, MARIN_PREFIX-relative)
-    sources = all_sources()
+    with executor_context():
+        sources = all_sources()
     logger.info("counting %d corpus sources", len(sources))
     corpus_results: list[tuple[str, int | None, str]] = []
     with ThreadPoolExecutor(max_workers=SOURCE_CONCURRENCY) as pool:

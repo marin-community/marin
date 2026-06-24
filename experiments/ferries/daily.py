@@ -20,6 +20,7 @@ import os
 from dataclasses import replace
 
 from fray.cluster import ResourceConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train
@@ -73,18 +74,21 @@ train_config_kwargs = dict(
 
 train_config = SimpleTrainConfig(**train_config_kwargs)
 
-daily_ferry = default_train(
-    name=RUN_NAME,
-    tokenized=nemotron_mix,
-    model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
-    train_config=train_config,
-    eval_harness_tasks=[],
-    tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
-)
+
+def daily_ferry():
+    return default_train(
+        name=RUN_NAME,
+        tokenized=nemotron_mix(),
+        model_config=replace(llama_150m, max_seq_len=TRAIN_SEQ_LEN),
+        train_config=train_config,
+        eval_harness_tasks=[],
+        tags=["ferry", "daily", "integration", "125m", "nemotron", "seq4096"],
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[daily_ferry],
-        description="Daily ferry (125M-ish): bounded-change TPU integration run.",
-    )
+    with executor_context():
+        executor_main(
+            steps=[daily_ferry()],
+            description="Daily ferry (125M-ish): bounded-change TPU integration run.",
+        )

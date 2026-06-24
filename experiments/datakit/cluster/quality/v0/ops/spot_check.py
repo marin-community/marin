@@ -39,7 +39,8 @@ from statistics import mean, median, stdev
 
 import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import all_sources
+from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
@@ -178,7 +179,8 @@ def _lookup_texts(norm_dir: str, by_pid: dict[int, set[str]], preview_chars: int
     return out
 
 
-def _spot_check_one(source_name: str, inference_base: str, top_k: int, bottom_k: int, threshold: float, preview: int):
+def _spot_check_one(src: DatakitSource, inference_base: str, top_k: int, bottom_k: int, threshold: float, preview: int):
+    source_name = src.name
     attr_dir = _find_attr_dir(inference_base, source_name)
     if not attr_dir:
         return (source_name, None, "no attr dir")
@@ -200,7 +202,6 @@ def _spot_check_one(source_name: str, inference_base: str, top_k: int, bottom_k:
     for doc_id, pid, _ in top_rows + bot_rows:
         by_pid.setdefault(pid, set()).add(doc_id)
 
-    src = all_sources()[source_name]
     nd = Artifact.from_path(src.normalized, NormalizedData)
     text_by_id = _lookup_texts(nd.main_output_dir, by_pid, preview)
 
@@ -230,11 +231,16 @@ def run(
     num_workers: int,
     preview: int,
 ) -> list[SourceStats]:
-    names = sorted(all_sources())
+    with executor_context():
+        registry = all_sources()
+    names = sorted(registry)
     logger.info("spot-checking %d active sources from %s", len(names), inference_base)
     results: list[SourceStats] = []
     with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futs = {pool.submit(_spot_check_one, n, inference_base, top_k, bottom_k, threshold, preview): n for n in names}
+        futs = {
+            pool.submit(_spot_check_one, registry[n], inference_base, top_k, bottom_k, threshold, preview): n
+            for n in names
+        }
         for fut in as_completed(futs):
             name, stats, err = fut.result()
             if err:
@@ -246,21 +252,21 @@ def run(
 
 
 def print_ranking(results: list[SourceStats]) -> None:
-    print(f"\n{'='*100}\nPER-SOURCE MEAN P(high), sorted high -> low\n{'='*100}")
+    print(f"\n{'=' * 100}\nPER-SOURCE MEAN P(high), sorted high -> low\n{'=' * 100}")
     print(f"{'source':50s} {'n':>7s} {'mean':>7s} {'med':>7s} {'std':>7s} {'frac>=0.5':>10s}")
     for s in results:
         print(f"{s.name:50s} {s.n:>7d} {s.mean:>7.3f} {s.median:>7.3f} {s.std:>7.3f} {s.frac_high:>10.3f}")
 
 
 def print_examples(results: list[SourceStats], n_each: int = 5) -> None:
-    print(f"\n{'='*100}\nTOP {n_each} SOURCES BY MEAN P(high) -- highest-scored docs\n{'='*100}")
+    print(f"\n{'=' * 100}\nTOP {n_each} SOURCES BY MEAN P(high) -- highest-scored docs\n{'=' * 100}")
     for s in results[:n_each]:
         print(f"\n--- {s.name}  (mean={s.mean:.3f}, n={s.n}) ---")
         for doc_id, pid, score, text in s.top:
             print(f"  p={score:.3f} pid={pid} id={doc_id}")
             print(f"    {text}")
 
-    print(f"\n{'='*100}\nBOTTOM {n_each} SOURCES BY MEAN P(high) -- lowest-scored docs\n{'='*100}")
+    print(f"\n{'=' * 100}\nBOTTOM {n_each} SOURCES BY MEAN P(high) -- lowest-scored docs\n{'=' * 100}")
     for s in results[-n_each:]:
         print(f"\n--- {s.name}  (mean={s.mean:.3f}, n={s.n}) ---")
         for doc_id, pid, score, text in s.bottom:

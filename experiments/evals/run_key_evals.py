@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from fray.cluster import ResourceConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 
 from experiments.evals.evals import default_key_evals
@@ -10,12 +11,17 @@ from experiments.evals.evals import default_key_evals
 # model_path = "gs://marin-us-central2/checkpoints/llama-8b-control-00f31b/hf/step-210388"
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
-key_evals = default_key_evals(
-    step=model_path,
-    resource_config=ResourceConfig.with_tpu("v6e-8"),
-    # model_name="llama-8b-control-00f31b",
-    model_name="small_model",
-)
+
+
+def build_steps():
+    return default_key_evals(
+        step=model_path,
+        resource_config=ResourceConfig.with_tpu("v6e-8"),
+        # model_name="llama-8b-control-00f31b",
+        model_name="small_model",
+    )
+
 
 if __name__ == "__main__":
-    executor_main(steps=key_evals)
+    with executor_context():
+        executor_main(steps=build_steps())

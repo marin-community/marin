@@ -14,6 +14,7 @@ For CPU training, see train_tiny_model_cpu.py
 
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import versioned
 
@@ -26,15 +27,6 @@ from experiments.tokenization import default_tokenize
 # 1. Choose a dataset
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"
 
-# For this tutorial, we limit to 1000 documents per shard
-wikitext_tokenized = default_tokenize(
-    name=wikitext_hf_id,
-    dataset=wikitext_hf_id,
-    tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
-)
-
 
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
@@ -45,23 +37,32 @@ nano_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-nano_wikitext_model = default_train(
-    name="llama-nano-wikitext",
-    # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
-    tokenized=wikitext_tokenized,
-    model_config=llama_nano,
-    train_config=nano_train_config,
-    tags=["llama", "nano", "wikitext", "tutorial"],
-    # no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
+
+def build_steps():
+    # For this tutorial, we limit to 1000 documents per shard
+    wikitext_tokenized = default_tokenize(
+        name=wikitext_hf_id,
+        dataset=wikitext_hf_id,
+        tokenizer=marin_tokenizer,
+        format=TextLmDatasetFormat(),
+        sample_count=versioned(1000),
+    )
+
+    nano_wikitext_model = default_train(
+        name="llama-nano-wikitext",
+        # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
+        tokenized=wikitext_tokenized,
+        model_config=llama_nano,
+        train_config=nano_train_config,
+        tags=["llama", "nano", "wikitext", "tutorial"],
+        # no point in running evals on such a tiny model
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+
+    return [wikitext_tokenized, nano_wikitext_model]
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            wikitext_tokenized,
-            nano_wikitext_model,
-        ]
-    )
+    with executor_context():
+        executor_main(steps=build_steps())

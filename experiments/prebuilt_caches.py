@@ -24,7 +24,14 @@ from marin.processing.tokenize.download_pretokenized import download_pretokenize
 from experiments.marin_models import marin_tokenizer
 
 fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
-fineweb_edu_subcache_10B = download_pretokenized_cache("fineweb-edu-10B", fineweb_edu_10B_repo_id, marin_tokenizer)
-
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
-fineweb_edu_subcache_10M = download_pretokenized_cache("fineweb-edu-10M", fineweb_edu_10M_repo_id, marin_tokenizer)
+
+
+def fineweb_edu_subcache_10B():
+    """Prebuilt 10B-token subcache of fineweb-edu."""
+    return download_pretokenized_cache("fineweb-edu-10B", fineweb_edu_10B_repo_id, marin_tokenizer)
+
+
+def fineweb_edu_subcache_10M():
+    """Prebuilt 10M-token subcache of fineweb-edu (mostly for testing)."""
+    return download_pretokenized_cache("fineweb-edu-10M", fineweb_edu_10M_repo_id, marin_tokenizer)

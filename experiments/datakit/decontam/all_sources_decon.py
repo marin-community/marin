@@ -39,6 +39,7 @@ import logging
 from fray import ResourceConfig
 from marin.datakit.decon import build_eval_bloom_step, decon_step
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
@@ -102,4 +103,5 @@ def build_decon_steps() -> list[StepSpec]:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run(build_decon_steps())
+    with executor_context():
+        StepRunner().run(build_decon_steps())

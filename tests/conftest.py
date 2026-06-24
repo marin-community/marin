@@ -5,6 +5,7 @@ import tempfile
 
 import pytest
 from fray import LocalClient, set_current_client
+from marin.execution import executor_context
 from marin.execution.artifact_registry import FilesystemArtifactRegistry, use_default_registry
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
@@ -49,3 +50,20 @@ def _isolate_artifact_registry(tmp_path_factory):
     temp_root = str(tmp_path_factory.mktemp("artifact_registry"))
     with use_default_registry(FilesystemArtifactRegistry(temp_root)):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _executor_build_phase(request):
+    """Run each test inside an executor build phase so step construction is allowed.
+
+    ``ExecutorStep``/``StepSpec`` construction requires an active ``executor_context()``.
+    Tests build steps directly, which is a legitimate build phase, so wrap them by default.
+    Opt out with ``@pytest.mark.no_executor_context`` for tests that must observe the raw
+    guard — notably ``test_dry_run`` (runs each experiment's ``__main__`` via ``runpy``, which
+    opens its own context) and the guard's own negative test.
+    """
+    if request.node.get_closest_marker("no_executor_context"):
+        yield
+    else:
+        with executor_context():
+            yield

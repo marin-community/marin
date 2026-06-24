@@ -18,6 +18,7 @@ Example usage:
 
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 
 from experiments.defaults import SimpleTrainConfig, default_train
@@ -59,18 +60,23 @@ training_config = SimpleTrainConfig(
     z_loss_weight=1e-4,  # Stabilization technique to prevent extreme logits
 )
 
+
 # Create the training pipeline for the DCLM mixture model
-dclm_mixture_model = default_train(
-    name="dclm_1b_1x_how_to",
-    tokenized=dclm_mixture_config_llama3,
-    model_config=llama_1_4b_dclm,
-    train_config=training_config,
-    tags=["HOWTOS", "DCLM_1B_1X"],  # Tags for experiment tracking
-)
+def build_steps():
+    dclm_mixture_model = default_train(
+        name="dclm_1b_1x_how_to",
+        tokenized=dclm_mixture_config_llama3(),
+        model_config=llama_1_4b_dclm,
+        train_config=training_config,
+        tags=["HOWTOS", "DCLM_1B_1X"],  # Tags for experiment tracking
+    )
+    return [dclm_mixture_model]
+
 
 # Main execution block
 if __name__ == "__main__":
-    executor_main(
-        steps=[dclm_mixture_model],
-        description="A How-To Which Reproduces the DCLM 1B/1X Baseline for the competition pool.",
-    )
+    with executor_context():
+        executor_main(
+            steps=build_steps(),
+            description="A How-To Which Reproduces the DCLM 1B/1X Baseline for the competition pool.",
+        )

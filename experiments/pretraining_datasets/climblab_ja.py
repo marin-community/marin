@@ -11,6 +11,7 @@ pipelines.
 import os.path
 
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -18,10 +19,15 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.marin_models import marin_tokenizer
 
-_download_spec, _normalize_spec = climblab_ja_normalize_steps()
 
-download: ExecutorStep = _download_spec.as_executor_step()
-normalized: ExecutorStep = _normalize_spec.as_executor_step()
+def download() -> ExecutorStep:
+    download_spec, _ = climblab_ja_normalize_steps()
+    return download_spec.as_executor_step()
+
+
+def normalized() -> ExecutorStep:
+    _, normalize_spec = climblab_ja_normalize_steps()
+    return normalize_spec.as_executor_step()
 
 
 def tokenize_climblab_ja(*, tokenizer: str = marin_tokenizer) -> TokenizerStep:
@@ -29,7 +35,7 @@ def tokenize_climblab_ja(*, tokenizer: str = marin_tokenizer) -> TokenizerStep:
         name=os.path.join("tokenized", "climblab-ja"),
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[normalized / "outputs/main/*.parquet"],
+            train_paths=[normalized() / "outputs/main/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
@@ -38,4 +44,5 @@ def tokenize_climblab_ja(*, tokenizer: str = marin_tokenizer) -> TokenizerStep:
 
 
 if __name__ == "__main__":
-    executor_main(steps=[tokenize_climblab_ja()])
+    with executor_context():
+        executor_main(steps=[tokenize_climblab_ja()])

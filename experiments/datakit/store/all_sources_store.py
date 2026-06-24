@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
@@ -130,7 +131,8 @@ def main() -> None:
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
-    sources_to_resolve = list(all_sources())
+    with executor_context():
+        sources_to_resolve = list(all_sources())
 
     # Build a {source_name: full_dir} index per root via shallow fs.ls walks
     # -- bounded GCS work + bounded memory. See `_build_resolution_index`.

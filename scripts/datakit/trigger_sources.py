@@ -20,6 +20,7 @@ import argparse
 import logging
 
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from rigging.log_setup import configure_logging
 
@@ -38,11 +39,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    sources = list(all_sources().values())
-    terminals = [src.normalize_steps[0] if args.downloads_only else src.normalized for src in sources]
-    stage = "downloads" if args.downloads_only else "normalize chains"
-    logger.info("Running %s for %d sources", stage, len(sources))
-    StepRunner().run(terminals)
+    with executor_context():
+        sources = list(all_sources().values())
+        terminals = [src.normalize_steps[0] if args.downloads_only else src.normalized for src in sources]
+        stage = "downloads" if args.downloads_only else "normalize chains"
+        logger.info("Running %s for %d sources", stage, len(sources))
+        StepRunner().run(terminals)
     logger.info("All %d sources reached a terminal state", len(sources))
 
 

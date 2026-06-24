@@ -14,6 +14,7 @@ import os
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -157,7 +158,7 @@ def main() -> None:
     run_id = os.environ["SMOKE_RUN_ID"]
 
     _write_status("running", marin_prefix)
-    with log_time("Datakit ferry total wall time"):
+    with log_time("Datakit ferry total wall time"), executor_context():
         StepRunner().run(build_steps(run_id))
     _write_status("succeeded", marin_prefix)
 

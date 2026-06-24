@@ -43,6 +43,7 @@ from typing import Any
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -224,4 +225,5 @@ def build_classify_steps() -> list[StepSpec]:
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run(build_classify_steps())
+    with executor_context():
+        StepRunner().run(build_classify_steps())

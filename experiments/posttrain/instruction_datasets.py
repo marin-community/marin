@@ -47,6 +47,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
@@ -665,30 +666,38 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-tulu_3_in_dolma = ExecutorStep(
-    name="dolma/tulu_3_in_dolma",
-    fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
-)
+def tulu_3_in_dolma() -> ExecutorStep:
+    """Tulu-3 SFT mixture converted to dolma format."""
+    return ExecutorStep(
+        name="dolma/tulu_3_in_dolma",
+        fn=convert_conversation_to_dolma,
+        config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
+    )
 
 
-# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
-tulu3_flat_llama_tokenized_as_validation = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
-).with_output_path("tokenized/tulu_sft-1bb7d4")
-"""
-"flat" here means that we interpolated all the chat messages into a single string per doc
-"""
+def tulu3_flat_llama_tokenized_as_validation() -> ExecutorStep:
+    """Tulu-3 SFT mixture flattened and tokenized as a validation set.
 
-tulu3_flat_llama_tokenized_as_train = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
-).with_output_path("tokenized/tulu_sft-349fb7/")
+    "flat" here means that we interpolated all the chat messages into a single string per doc.
+    """
+    # levanter treats validation and training as separate so we tokenize twice. Not ideal, but fine here.
+    return default_tokenize(
+        "tulu_sft", tulu_3_in_dolma(), tokenizer=llama3_tokenizer, is_validation=True
+    ).with_output_path("tokenized/tulu_sft-1bb7d4")
+
+
+def tulu3_flat_llama_tokenized_as_train() -> ExecutorStep:
+    """Tulu-3 SFT mixture flattened and tokenized as a training set."""
+    return default_tokenize(
+        "tulu_sft", tulu_3_in_dolma(), tokenizer=llama3_tokenizer, is_validation=False
+    ).with_output_path("tokenized/tulu_sft-349fb7/")
 
 
 if __name__ == "__main__":
-    all_steps = []
-    for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        transformed_dataset = transform_dataset_step(config)
-        all_steps.append(transformed_dataset)
+    with executor_context():
+        all_steps = []
+        for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
+            transformed_dataset = transform_dataset_step(config)
+            all_steps.append(transformed_dataset)
 
-    executor_main(steps=all_steps)
+        executor_main(steps=all_steps)

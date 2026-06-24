@@ -95,6 +95,7 @@ from marin.datakit.decon import (
 )
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -651,14 +652,15 @@ def main() -> None:
     names = [s.strip() for s in args.sources.split(",") if s.strip()] if args.sources else None
     scale = SMOKE_SCALE if args.scale == "smoke" else DEFAULT_SCALE
 
-    result = reference_datakit_steps(
-        select_sources(names),
-        domain_centroids=args.domain_centroids,
-        quality_model=args.quality_model,
-        store_shards_per_task=args.store_shards_per_task,
-        scale=scale,
-    )
-    StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
+    with executor_context():
+        result = reference_datakit_steps(
+            select_sources(names),
+            domain_centroids=args.domain_centroids,
+            quality_model=args.quality_model,
+            store_shards_per_task=args.store_shards_per_task,
+            scale=scale,
+        )
+        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

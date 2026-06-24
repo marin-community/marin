@@ -46,6 +46,7 @@ import pyarrow.parquet as pq
 import yaml
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from pyarrow import fs as pa_fs
 from rigging.filesystem import url_to_fs
@@ -327,7 +328,8 @@ def main() -> None:
                 needed_eval_ids.add(eids[0])
                 break
     eval_id_to_text = _eval_id_to_text(EVAL_ROOT, needed_eval_ids)
-    corpus_id_to_text = _corpus_id_to_text(args.source_name, sample)
+    with executor_context():
+        corpus_id_to_text = _corpus_id_to_text(args.source_name, sample)
 
     # Stage 3: judge.
     from anthropic import Anthropic  # noqa: PLC0415  # optional dep: anthropic

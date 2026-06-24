@@ -11,6 +11,7 @@ This script demonstrates how to:
 """
 
 from fray.cluster import ResourceConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train
@@ -26,15 +27,20 @@ llama_150m_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
-llama_150m_fineweb_edu_model = default_train(
-    name="llama-150m-fineweb-edu-gpu",
-    tokenized=fineweb_edu_subcache_10M,
-    model_config=llama_150m,
-    train_config=llama_150m_train_config,
-    tags=["llama", "150m", "fineweb-edu", "gpu", "tutorial"],
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
+
+def build_steps():
+    llama_150m_fineweb_edu_model = default_train(
+        name="llama-150m-fineweb-edu-gpu",
+        tokenized=fineweb_edu_subcache_10M(),
+        model_config=llama_150m,
+        train_config=llama_150m_train_config,
+        tags=["llama", "150m", "fineweb-edu", "gpu", "tutorial"],
+        eval_harness_tasks=[],
+        use_default_validation=False,
+    )
+    return [llama_150m_fineweb_edu_model]
+
 
 if __name__ == "__main__":
-    executor_main(steps=[llama_150m_fineweb_edu_model])
+    with executor_context():
+        executor_main(steps=build_steps())

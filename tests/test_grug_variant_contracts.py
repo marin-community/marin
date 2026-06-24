@@ -153,7 +153,7 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
 
     canary_ferry = importlib.import_module("experiments.ferries.canary_ferry")
     canary_ferry = importlib.reload(canary_ferry)
-    data = canary_ferry.canary_moe_step.config.data
+    data = canary_ferry.canary_moe_step().config.data
 
     components = list(data.components.values())
     assert components

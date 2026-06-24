@@ -19,6 +19,7 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, this_output_path
@@ -107,10 +108,13 @@ RESOURCE_FILENAME = "vizier_resource.json"
 OPTIMAL_FILENAME = "vizier_optimal.json"
 VIZIER_DB_FILENAME = "vizier.db"
 
-NEMOTRON_MIX_WITH_EVAL = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
+
+def nemotron_mix_with_eval():
+    mix = nemotron_mix()
+    return add_validation_sets_to_mixture(
+        mix,
+        default_validation_sets(tokenizer=mix.tokenizer),
+    )
 
 
 @dataclass(frozen=True)
@@ -304,7 +308,7 @@ def _build_base_launch_config() -> GrugBaseLaunchConfig:
 
     return GrugBaseLaunchConfig(
         model=GRUG_130M_MODEL,
-        data=NEMOTRON_MIX_WITH_EVAL,
+        data=nemotron_mix_with_eval(),
         output_path=this_output_path(),
         run_id=f"{SWEEP.experiment_name}-base",
         resources=ResourceConfig.with_tpu("v4-8"),
@@ -654,35 +658,36 @@ if __name__ == "__main__":
         num_loops = 1
     suggestions_per_loop = SWEEP.suggestions_per_loop
 
-    previous_update_step: ExecutorStep | None = None
-    base_launch_config = _build_base_launch_config()
+    with executor_context():
+        previous_update_step: ExecutorStep | None = None
+        base_launch_config = _build_base_launch_config()
 
-    for loop_index in range(num_loops):
-        input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
-        suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
+        for loop_index in range(num_loops):
+            input_db_path = previous_update_step / VIZIER_DB_FILENAME if previous_update_step else None
+            suggest_step = _build_suggest_step(loop_index=loop_index, input_db_path=input_db_path)
 
-        suggestions_path = suggest_step / SUGGESTIONS_FILENAME
-        training_steps = [
-            _build_train_step(
+            suggestions_path = suggest_step / SUGGESTIONS_FILENAME
+            training_steps = [
+                _build_train_step(
+                    loop_index=loop_index,
+                    suggestion_index=suggestion_index,
+                    suggestions_path=suggestions_path,
+                    base_launch_config=base_launch_config,
+                )
+                for suggestion_index in range(suggestions_per_loop)
+            ]
+
+            update_step = _build_update_step(
                 loop_index=loop_index,
-                suggestion_index=suggestion_index,
+                study_resource_name=SWEEP.study_resource_name,
+                input_db_path=suggest_step / VIZIER_DB_FILENAME,
                 suggestions_path=suggestions_path,
-                base_launch_config=base_launch_config,
+                training_steps=training_steps,
             )
-            for suggestion_index in range(suggestions_per_loop)
-        ]
+            previous_update_step = update_step
 
-        update_step = _build_update_step(
-            loop_index=loop_index,
+        optimal_step = _build_optimal_step(
+            input_db_path=previous_update_step / VIZIER_DB_FILENAME,
             study_resource_name=SWEEP.study_resource_name,
-            input_db_path=suggest_step / VIZIER_DB_FILENAME,
-            suggestions_path=suggestions_path,
-            training_steps=training_steps,
         )
-        previous_update_step = update_step
-
-    optimal_step = _build_optimal_step(
-        input_db_path=previous_update_step / VIZIER_DB_FILENAME,
-        study_resource_name=SWEEP.study_resource_name,
-    )
-    executor_main(steps=[optimal_step])
+        executor_main(steps=[optimal_step])

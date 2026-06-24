@@ -49,6 +49,7 @@ from levanter.checkpoint import CheckpointerConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 
@@ -203,11 +204,13 @@ def build_scale_step() -> ExecutorStep:
     )
 
 
-scale_moe_step = build_scale_step()
+def scale_moe_step() -> ExecutorStep:
+    return build_scale_step()
 
 
 def main():
-    executor_main(steps=[scale_moe_step])
+    with executor_context():
+        executor_main(steps=[scale_moe_step()])
 
 
 if __name__ == "__main__":

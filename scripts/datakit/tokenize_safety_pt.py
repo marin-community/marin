@@ -15,6 +15,7 @@ import logging
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -45,12 +46,13 @@ def _tokenize_step(source: DatakitSource) -> StepSpec:
 
 
 def main() -> None:
-    sources = [s for name, s in all_sources().items() if name.startswith(SAFETY_PT_PREFIX)]
-    if not sources:
-        raise RuntimeError(f"No sources matched prefix {SAFETY_PT_PREFIX!r}")
-    terminals = [_tokenize_step(s) for s in sources]
-    logger.info("Tokenizing %d safety_pt sources with %s", len(sources), TOKENIZER)
-    StepRunner().run(terminals)
+    with executor_context():
+        sources = [s for name, s in all_sources().items() if name.startswith(SAFETY_PT_PREFIX)]
+        if not sources:
+            raise RuntimeError(f"No sources matched prefix {SAFETY_PT_PREFIX!r}")
+        terminals = [_tokenize_step(s) for s in sources]
+        logger.info("Tokenizing %d safety_pt sources with %s", len(sources), TOKENIZER)
+        StepRunner().run(terminals)
     logger.info("All %d sources tokenized", len(sources))
 
 

@@ -33,6 +33,7 @@ os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 from fray import ResourceConfig  # noqa: E402
 from marin.datakit.normalize import NormalizedData  # noqa: E402
 from marin.datakit.sources import all_sources  # noqa: E402
+from marin.execution import executor_context  # noqa: E402
 from marin.execution.artifact import Artifact  # noqa: E402
 from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
@@ -217,4 +218,5 @@ def _build_steps() -> list[StepSpec]:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
-    StepRunner().run(_build_steps())
+    with executor_context():
+        StepRunner().run(_build_steps())

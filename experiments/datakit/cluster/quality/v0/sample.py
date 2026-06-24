@@ -43,7 +43,8 @@ from dataclasses import dataclass
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import all_sources
+from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
@@ -83,11 +84,6 @@ class SourceQuota:
     name: str
     quota: int
     rough_tokens_b: float
-
-
-def _active_sources() -> dict[str, float]:
-    """Return ``{name: rough_token_count_b}`` for the active sources."""
-    return {name: src.rough_token_count_b for name, src in all_sources().items()}
 
 
 def compute_quotas(
@@ -181,8 +177,7 @@ def _read_quota_from_shard(shard_url: str, quota: int) -> Iterator[dict[str, obj
                 return
 
 
-def _sample_one_source(quota: SourceQuota, seed: int) -> list[dict[str, object]]:
-    src = all_sources()[quota.name]
+def _sample_one_source(src: DatakitSource, quota: SourceQuota, seed: int) -> list[dict[str, object]]:
     nd = Artifact.from_path(src.normalized, NormalizedData)
     shards = _list_shards(nd.main_output_dir)
     if not shards:
@@ -219,7 +214,9 @@ def sample(
     seed: int,
     num_workers: int,
 ) -> None:
-    sources = _active_sources()
+    with executor_context():
+        registry = all_sources()
+    sources = {name: src.rough_token_count_b for name, src in registry.items()}
     quotas = compute_quotas(sources, total_size=total_size, floor_per_source=floor_per_source)
     quotas.sort(key=lambda q: -q.quota)
     logger.info(
@@ -236,7 +233,7 @@ def sample(
 
     rows: list[dict[str, object]] = []
     with ThreadPoolExecutor(max_workers=num_workers) as pool:
-        futs = {pool.submit(_sample_one_source, q, _per_source_seed(q.name, seed)): q for q in quotas}
+        futs = {pool.submit(_sample_one_source, registry[q.name], q, _per_source_seed(q.name, seed)): q for q in quotas}
         for fut in as_completed(futs):
             q = futs[fut]
             try:

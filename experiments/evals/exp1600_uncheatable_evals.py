@@ -19,6 +19,7 @@ from functools import lru_cache
 from fray.cluster import ResourceConfig
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
 from marin.evaluation.perplexity_gap import raw_text_dataset
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of
 from marin.processing.tokenize import TokenizeConfig
@@ -60,12 +61,17 @@ ACTIVE_DATASETS = [
     "ao3_english",
 ]
 
-uncheatable_eval = make_uncheatable_eval_step()
+
+def uncheatable_eval() -> ExecutorStep:
+    """The raw uncheatable-eval datasets, downloaded from HuggingFace."""
+    return make_uncheatable_eval_step()
 
 
 def uncheatable_eval_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep = uncheatable_eval
+    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, uncheatable_eval_raw: ExecutorStep | None = None
 ) -> dict[str, TokenizerStep]:
+    if uncheatable_eval_raw is None:
+        uncheatable_eval_raw = uncheatable_eval()
     uncheatable_eval_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset in ACTIVE_DATASETS:
         path_part = ALL_UNCHEATABLE_EVAL_DATASETS[dataset]
@@ -79,7 +85,9 @@ def uncheatable_eval_tokenized(
     return uncheatable_eval_steps
 
 
-def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep = uncheatable_eval):
+def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep | None = None):
+    if uncheatable_eval_raw is None:
+        uncheatable_eval_raw = uncheatable_eval()
     return {
         os.path.join("uncheatable_eval", dataset): raw_text_dataset(uncheatable_eval_raw.cd(path_part))
         for dataset, path_part in ((dataset, ALL_UNCHEATABLE_EVAL_DATASETS[dataset]) for dataset in ACTIVE_DATASETS)
@@ -161,8 +169,9 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    for step in build_steps():
-        executor_main(steps=[step])
+    with executor_context():
+        for step in build_steps():
+            executor_main(steps=[step])
 
 
 if __name__ == "__main__":

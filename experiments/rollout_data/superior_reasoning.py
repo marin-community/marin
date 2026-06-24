@@ -10,6 +10,7 @@ Usage:
 
 from fray import ResourceConfig
 from marin.datakit.download.superior_reasoning import download_superior_reasoning_step
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -39,4 +40,5 @@ def build_steps() -> list[StepSpec]:
 
 
 if __name__ == "__main__":
-    StepRunner().run(build_steps())
+    with executor_context():
+        StepRunner().run(build_steps())

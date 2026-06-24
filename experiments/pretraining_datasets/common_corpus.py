@@ -15,9 +15,9 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.marin_models import marin_tokenizer
 
-common_corpus_download = normalize_common_corpus_step(
-    filter_common_corpus_step(download_common_corpus_raw_step())
-).as_executor_step()
+
+def common_corpus_download() -> ExecutorStep:
+    return normalize_common_corpus_step(filter_common_corpus_step(download_common_corpus_raw_step())).as_executor_step()
 
 
 def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
@@ -29,7 +29,7 @@ def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
         name="tokenized/common_corpus_english",
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[common_corpus_download.as_input_name() / "outputs/main/*.parquet"],
+            train_paths=[common_corpus_download().as_input_name() / "outputs/main/*.parquet"],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),

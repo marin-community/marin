@@ -5,11 +5,13 @@
 
 import pytest
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution import executor_context
 
 from experiments.datakit.testbed.sampler import build_testbed_steps
 
-_ALL = all_sources()
-_ALL_LIST = list(_ALL.values())
+with executor_context():
+    _ALL = all_sources()
+    _ALL_LIST = list(_ALL.values())
 
 
 def _source(name: str) -> DatakitSource:

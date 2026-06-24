@@ -27,6 +27,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
 from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
@@ -119,7 +120,8 @@ def main() -> None:
     # all_sources() materializes any chain.
     os.environ["MARIN_PREFIX"] = args.prefix
 
-    sources = all_sources()
+    with executor_context():
+        sources = all_sources()
     raw_paths = sorted({leaf.output_path for s in sources.values() for leaf in _raw_leaves(s.normalize_steps)})
     normalized_paths = sorted({s.normalized.output_path for s in sources.values()})
 

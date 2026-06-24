@@ -21,6 +21,7 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -63,10 +64,12 @@ class GrugMoeLaunchConfig:
     slow object-store commit can't wedge the end-of-run barrier."""
 
 
-NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
+def nemotron_mix_with_default_validation():
+    mix = nemotron_mix()
+    return add_validation_sets_to_mixture(
+        mix,
+        default_validation_sets(tokenizer=mix.tokenizer),
+    )
 
 
 def env_int(key: str, default: int) -> int:
@@ -174,50 +177,52 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-baseline_moe = ExecutorStep(
-    name="grug/4_10_baseline_moe",
-    fn=run_grug_moe_trial,
-    config=GrugMoeLaunchConfig(
-        model=versioned(_baseline_model),
-        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
-        output_path=this_output_path(),
-        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-        run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(_baseline_steps),
-        batch_size=versioned(_baseline_batch),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="marin_moe",
-            tags=["moe"],
-            group="moe-iter04",
-            name=None,
+def baseline_moe() -> ExecutorStep:
+    return ExecutorStep(
+        name="grug/4_10_baseline_moe",
+        fn=run_grug_moe_trial,
+        config=GrugMoeLaunchConfig(
+            model=versioned(_baseline_model),
+            data=nemotron_mix_with_default_validation(),
+            # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
+            output_path=this_output_path(),
+            # Keep run id out of versioning so changing job metadata doesn't create a new output path.
+            run_id=RESOLVED_RUN_ID,
+            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            steps=versioned(_baseline_steps),
+            batch_size=versioned(_baseline_batch),
+            seed=versioned(0),
+            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=WandbConfig(
+                project="marin_moe",
+                tags=["moe"],
+                group="moe-iter04",
+                name=None,
+            ),
+            optimizer=versioned(_baseline_optimizer),
+            grug_trainer=versioned(
+                GrugTrainerConfig(
+                    z_loss_weight=1e-4,
+                    ema_beta=None,
+                    log_every=1,
+                )
+            ),
+            eval=versioned(
+                GrugEvalConfig(
+                    eval_batch_size=512,
+                    steps_per_eval=1000,
+                    max_eval_batches=8,
+                    eval_current=True,
+                    eval_ema=False,
+                )
+            ),
         ),
-        optimizer=versioned(_baseline_optimizer),
-        grug_trainer=versioned(
-            GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-            )
-        ),
-        eval=versioned(
-            GrugEvalConfig(
-                eval_batch_size=512,
-                steps_per_eval=1000,
-                max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
-            )
-        ),
-    ),
-)
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[baseline_moe],
-        description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
-    )
+    with executor_context():
+        executor_main(
+            steps=[baseline_moe()],
+            description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
+        )

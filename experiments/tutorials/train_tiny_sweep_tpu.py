@@ -16,6 +16,7 @@ process. On a multi-host slice the whole gang acts as one worker: its leader
 ``ports=["actor"]`` in its ``JobRequest`` so the leader's coordination actor is
 reachable by its followers.
 """
+
 import dataclasses
 from dataclasses import dataclass
 
@@ -23,6 +24,7 @@ from fray import client as fray_client
 from fray.cluster import ResourceConfig
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.main.train_lm import TrainLmConfig
+from marin.execution import executor_context
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.execution.types import versioned
 from marin.training.run_environment import extras_for_resources
@@ -79,26 +81,31 @@ class SweepTrial:
     raw_config: TrainLmConfig
 
 
-# Build all trials at submission time so workers do no config work. Configs
-# carry placeholders (OutputName, InputName) until resolved on the worker, so
-# checkpoint paths land in the *worker's* region after a cross-region
-# preemption.
-trials = []
-for sc in sweep_configs:
-    # Marin will automatically create unique ids for runs b/c the model_config is versioned
-    # however, we can give each run a unique name for easier identification
-    _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
-    _job_name, _raw_config = prepare_lm_train(
-        name=_name,
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=sc,
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
-    )
-    trials.append(SweepTrial(name=_job_name, raw_config=_raw_config))
+def build_targets() -> list[SweepTarget]:
+    """Build all sweep trials so workers do no config work.
 
-targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
+    Configs carry placeholders (OutputName, InputName) until resolved on the
+    worker, so checkpoint paths land in the *worker's* region after a
+    cross-region preemption.
+    """
+    with executor_context():
+        tokenized_data = tokenized()
+        trials = []
+        for sc in sweep_configs:
+            # Marin will automatically create unique ids for runs b/c the model_config is versioned
+            # however, we can give each run a unique name for easier identification
+            _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
+            _job_name, _raw_config = prepare_lm_train(
+                name=_name,
+                tokenized=tokenized_data["slimpajama_6b"],
+                model_config=versioned(llama_30m),
+                train_config=sc,
+                tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
+                eval_harness_tasks=CORE_TASKS,
+            )
+            trials.append(SweepTrial(name=_job_name, raw_config=_raw_config))
+
+    return [SweepTarget(target_id=t.name, config=t) for t in trials]
 
 
 def _run_one(target: SweepTarget) -> None:
@@ -120,7 +127,7 @@ def _sweep_worker_entrypoint(sweep_root: str) -> None:
     contend on the same lock namespace regardless of where Iris schedules
     them.
     """
-    claim_and_run(sweep_root, targets, _run_one)
+    claim_and_run(sweep_root, build_targets(), _run_one)
 
 
 if __name__ == "__main__":

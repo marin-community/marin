@@ -13,6 +13,7 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.remote import remote
 from marin.execution.types import ExecutorStep, InputName, OutputName, output_path_of, this_output_path, versioned
@@ -742,22 +743,23 @@ def run_evalchemy_experiment(
         discover_latest_checkpoint: Whether to auto-discover latest checkpoint.
         max_parallel_jobs: Maximum eval jobs to run concurrently. None for no limit.
     """
-    eval_steps, compile_steps = build_evalchemy_eval_steps(
-        checkpoints=checkpoints,
-        task_seed_groups=task_seed_groups,
-        base_generation_params=base_generation_params,
-        resource_config=resource_config,
-        engine_kwargs=engine_kwargs,
-        apply_chat_template=apply_chat_template,
-        discover_latest_checkpoint=discover_latest_checkpoint,
-    )
+    with executor_context():
+        eval_steps, compile_steps = build_evalchemy_eval_steps(
+            checkpoints=checkpoints,
+            task_seed_groups=task_seed_groups,
+            base_generation_params=base_generation_params,
+            resource_config=resource_config,
+            engine_kwargs=engine_kwargs,
+            apply_chat_template=apply_chat_template,
+            discover_latest_checkpoint=discover_latest_checkpoint,
+        )
 
-    # Run all eval steps in a single executor_main call, capping concurrent
-    # execution at max_parallel_jobs. The executor walks the shared dependency
-    # DAG once instead of once per batch.
-    executor_main(steps=eval_steps, max_concurrent=max_parallel_jobs)
+        # Run all eval steps in a single executor_main call, capping concurrent
+        # execution at max_parallel_jobs. The executor walks the shared dependency
+        # DAG once instead of once per batch.
+        executor_main(steps=eval_steps, max_concurrent=max_parallel_jobs)
 
-    # Run compile steps separately. Their eval-step dependencies have already
-    # succeeded, so the executor skips them and only runs the compile steps.
-    if compile_steps:
-        executor_main(steps=compile_steps)
+        # Run compile steps separately. Their eval-step dependencies have already
+        # succeeded, so the executor skips them and only runs the compile steps.
+        if compile_steps:
+            executor_main(steps=compile_steps)

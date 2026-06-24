@@ -19,6 +19,7 @@ import os
 import sys
 from collections.abc import Callable
 
+from marin.execution import executor_context
 from marin.execution.executor import Executor
 from rigging.filesystem import open_url
 
@@ -48,8 +49,10 @@ def resolve_canary_output_path() -> str:
         prefix="mirror://",
         executor_info_base_path="mirror://experiments",
     )
-    executor.compute_version(canary_moe_step, is_pseudo_dep=False)
-    return executor.output_paths[canary_moe_step]
+    with executor_context():
+        step = canary_moe_step()
+        executor.compute_version(step, is_pseudo_dep=False)
+    return executor.output_paths[step]
 
 
 def read_summary(output_path: str) -> dict:

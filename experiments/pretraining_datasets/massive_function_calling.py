@@ -9,28 +9,34 @@ adapt it to an ExecutorStep, then wire a tokenize ExecutorStep that reads its
 """
 
 from marin.datakit.download.massive import massive_normalize_steps
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer
 
-# massive_normalize_steps returns (stage, transform, normalize); the terminal
-# normalize step is what consumers tokenize off.
-*_, _massive_normalized_step = massive_normalize_steps()
-massive_function_calling_download = _massive_normalized_step.as_executor_step()
 
-massive_function_calling_tokenized = ExecutorStep(
-    name="tokenized/massive_function_calling",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(massive_function_calling_download, "outputs/main/*.parquet")],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(marin_tokenizer),
-    ),
-)
+def massive_function_calling_download() -> ExecutorStep:
+    # massive_normalize_steps returns (stage, transform, normalize); the terminal
+    # normalize step is what consumers tokenize off.
+    *_, normalized_step = massive_normalize_steps()
+    return normalized_step.as_executor_step()
+
+
+def massive_function_calling_tokenized() -> ExecutorStep:
+    return ExecutorStep(
+        name="tokenized/massive_function_calling",
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=[output_path_of(massive_function_calling_download(), "outputs/main/*.parquet")],
+            validation_paths=versioned([]),
+            cache_path=this_output_path(),
+            tokenizer=versioned(marin_tokenizer),
+        ),
+    )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[massive_function_calling_tokenized])
+    with executor_context():
+        executor_main(steps=[massive_function_calling_tokenized()])

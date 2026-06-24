@@ -28,6 +28,7 @@ import logging
 import os
 
 import draccus
+from marin.execution import executor_context
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from rigging.log_setup import configure_logging
 
@@ -55,24 +56,27 @@ def main() -> None:
     tokenizer = TESTBED_TOKENIZER
     run_id = "baseline"
 
-    testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    sampled_by_source = {
-        s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in testbed_steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
-    }
-    if not sampled_by_source:
-        raise ValueError("no sample steps found in the testbed DAG")
+    with executor_context():
+        testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+        sampled_by_source = {
+            s.name.removeprefix(_SAMPLE_STEP_PREFIX): s for s in testbed_steps if s.name.startswith(_SAMPLE_STEP_PREFIX)
+        }
+        if not sampled_by_source:
+            raise ValueError("no sample steps found in the testbed DAG")
 
-    tokenized_buckets = {name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()}
-    weights_step = tokenized_bucket_weights_step(run_id, tokenized_buckets)
-    training_step = run_testbed_config(
-        name=run_id,
-        tokenized_buckets=tokenized_buckets,
-        weights_step=weights_step,
-        tokenizer=tokenizer,
-    )
+        tokenized_buckets = {
+            name: testbed_tokenize(name, sampled, tokenizer) for name, sampled in sampled_by_source.items()
+        }
+        weights_step = tokenized_bucket_weights_step(run_id, tokenized_buckets)
+        training_step = run_testbed_config(
+            name=run_id,
+            tokenized_buckets=tokenized_buckets,
+            weights_step=weights_step,
+            tokenizer=tokenizer,
+        )
 
-    logger.info("Baseline DAG: %d sources → tokenize → weights → train", len(sampled_by_source))
-    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
+        logger.info("Baseline DAG: %d sources → tokenize → weights → train", len(sampled_by_source))
+        executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

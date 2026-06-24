@@ -12,6 +12,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path
 from rigging.filesystem import open_url
@@ -67,28 +68,34 @@ def compute_stats(config: ComputeStatsConfig):
 
 n = 100
 
-data = ExecutorStep(
-    name="hello_world/data",
-    description=f"Generate data from 0 to {n}-1.",
-    fn=generate_data,
-    config=GenerateDataConfig(
-        n=n,
-        output_path=this_output_path(),
-    ),
-)
 
-stats = ExecutorStep(
-    name="hello_world/stats",
-    description="Compute stats of the generated data.",
-    fn=compute_stats,
-    config=ComputeStatsConfig(
-        input_path=output_path_of(data),
-        output_path=this_output_path(),
-    ),
-)
+def build_steps() -> list[ExecutorStep]:
+    data = ExecutorStep(
+        name="hello_world/data",
+        description=f"Generate data from 0 to {n}-1.",
+        fn=generate_data,
+        config=GenerateDataConfig(
+            n=n,
+            output_path=this_output_path(),
+        ),
+    )
+
+    stats = ExecutorStep(
+        name="hello_world/stats",
+        description="Compute stats of the generated data.",
+        fn=compute_stats,
+        config=ComputeStatsConfig(
+            input_path=output_path_of(data),
+            output_path=this_output_path(),
+        ),
+    )
+
+    return [data, stats]
+
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[data, stats],
-        description="Simple experiment to compute stats of some numbers.",
-    )
+    with executor_context():
+        executor_main(
+            steps=build_steps(),
+            description="Simple experiment to compute stats of some numbers.",
+        )

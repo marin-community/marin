@@ -9,15 +9,19 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 
 from experiments.marin_models import marin_tokenizer
 
-nsf_awards_download = normalize_nsf_awards_step(download_nsf_awards_step()).as_executor_step()
 
-nsf_awards_tokenized = ExecutorStep(
-    name="tokenized/nsf_awards",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(nsf_awards_download, "outputs/main/*.parquet")],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(marin_tokenizer),
-    ),
-)
+def nsf_awards_download() -> ExecutorStep:
+    return normalize_nsf_awards_step(download_nsf_awards_step()).as_executor_step()
+
+
+def nsf_awards_tokenized() -> ExecutorStep:
+    return ExecutorStep(
+        name="tokenized/nsf_awards",
+        fn=tokenize,
+        config=TokenizeConfig(
+            train_paths=[output_path_of(nsf_awards_download(), "outputs/main/*.parquet")],
+            validation_paths=versioned([]),
+            cache_path=this_output_path(),
+            tokenizer=versioned(marin_tokenizer),
+        ),
+    )

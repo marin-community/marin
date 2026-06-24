@@ -35,6 +35,7 @@ import logging
 from fray import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
@@ -75,4 +76,5 @@ MAX_CONCURRENT_STEPS = 20
 
 if __name__ == "__main__":
     configure_logging(logging.INFO)
-    StepRunner().run(build_tokenize_steps(), max_concurrent=MAX_CONCURRENT_STEPS)
+    with executor_context():
+        StepRunner().run(build_tokenize_steps(), max_concurrent=MAX_CONCURRENT_STEPS)

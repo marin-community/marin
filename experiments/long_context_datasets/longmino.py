@@ -5,28 +5,34 @@
 
 from experiments.tokenization import default_download
 
-dolma3_longmino_pool_raw = default_download(
-    name="dolma3_longmino_pool",
-    hf_dataset_id="allenai/dolma3_longmino_pool",
-    revision="bb7828777019d4a2a0bfd81412a11395d09f705f",
-    override_output_path="dolma3_longmino_pool",
-)
+
+def dolma3_longmino_pool_raw():
+    """Raw dolma3_longmino_pool download."""
+    return default_download(
+        name="dolma3_longmino_pool",
+        hf_dataset_id="allenai/dolma3_longmino_pool",
+        revision="bb7828777019d4a2a0bfd81412a11395d09f705f",
+        override_output_path="dolma3_longmino_pool",
+    )
 
 
-longmino_by_bucket = {
-    name: dolma3_longmino_pool_raw / f"data/*-{desc}/*.jsonl.zst"
-    for name, desc in {
-        # they use 2eX notation but seem to mean powers of two
-        "8k-16k": "2e13",
-        "16k-32k": "2e14",
-        "32k-64k": "2e15",
-        "64k-128k": "2e16",
-        "128k-256k": "2e17",
-        "256k-512k": "2e18",
-        "512k-1M": "2e19",
-        "1M+": "2e20",
-    }.items()
-}
+def longmino_by_bucket():
+    """Path globs for each length bucket of the longmino pool."""
+    raw = dolma3_longmino_pool_raw()
+    return {
+        name: raw / f"data/*-{desc}/*.jsonl.zst"
+        for name, desc in {
+            # they use 2eX notation but seem to mean powers of two
+            "8k-16k": "2e13",
+            "16k-32k": "2e14",
+            "32k-64k": "2e15",
+            "64k-128k": "2e16",
+            "128k-256k": "2e17",
+            "256k-512k": "2e18",
+            "512k-1M": "2e19",
+            "1M+": "2e20",
+        }.items()
+    }
 
 
 # longmino has a *ton* of metadata which makes the usual "compressed bytes ≈ tokens" heuristic not great

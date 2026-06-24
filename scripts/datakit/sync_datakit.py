@@ -80,6 +80,7 @@ from enum import StrEnum
 import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution import executor_context
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -660,7 +661,8 @@ def main() -> None:
     src_prefix = args.src_prefix or marin_prefix()
     logger.info("Syncing %s -> %s (scope=%s)", src_prefix, args.dest_prefix, args.scope.value)
 
-    sources = _select_sources(args.source)
+    with executor_context():
+        sources = _select_sources(args.source)
 
     # Pre-flight: drop sources whose dst already has ``.executor_status`` on
     # every in-scope path. Parallelized because each check is one ``fs.exists``
@@ -686,28 +688,29 @@ def main() -> None:
     if len(todo) < len(sources):
         logger.info("Pre-flight: skipped %d/%d already-synced source(s)", len(sources) - len(todo), len(sources))
 
-    steps = [
-        sync_source_step(
-            src,
-            src_prefix=src_prefix,
-            dest_prefix=args.dest_prefix,
-            scope=args.scope,
-            files_per_shard=args.files_per_shard,
-            copy_threads=args.copy_threads,
-            status_prefix=args.status_prefix,
-        )
-        for src in todo
-    ]
+    with executor_context():
+        steps = [
+            sync_source_step(
+                src,
+                src_prefix=src_prefix,
+                dest_prefix=args.dest_prefix,
+                scope=args.scope,
+                files_per_shard=args.files_per_shard,
+                copy_threads=args.copy_threads,
+                status_prefix=args.status_prefix,
+            )
+            for src in todo
+        ]
 
-    logger.info("Built %d sync StepSpec(s)", len(steps))
-    for s in steps:
-        logger.info("  %s -> %s", s.name, s.output_path)
+        logger.info("Built %d sync StepSpec(s)", len(steps))
+        for s in steps:
+            logger.info("  %s -> %s", s.name, s.output_path)
 
-    if args.dry_run:
-        print(f"{len(steps)} sync StepSpec(s) built (dry run).")
-        return
+        if args.dry_run:
+            print(f"{len(steps)} sync StepSpec(s) built (dry run).")
+            return
 
-    StepRunner().run(steps)
+        StepRunner().run(steps)
     print(f"Synced {len(steps)} source(s): {src_prefix} -> {args.dest_prefix}.")
 
 

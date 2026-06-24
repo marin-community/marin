@@ -435,6 +435,7 @@ markers = [
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
     "requires_cluster: mark tests that need a running iris cluster",
+    "no_executor_context: opt a test out of the autouse executor build phase (e.g. dry-run/guard tests)",
 ]
 testpaths = ["tests", "experiments"]
 

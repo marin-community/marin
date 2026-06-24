@@ -23,6 +23,7 @@ import os
 import draccus
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
@@ -185,9 +186,10 @@ def main() -> None:
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
 
-    testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
+    with executor_context():
+        testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
+        training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer)
+        executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

@@ -12,10 +12,11 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 
 from experiments.llama import llama3_tokenizer
 
-_dolma_download = download_dolma_step().as_executor_step()
 
-# Backward compat — some consumers import this
-downloads = {"dolma": _dolma_download}
+def downloads() -> dict[str, ExecutorStep]:
+    """Raw Dolma 1.7 download. Some consumers import this."""
+    return {"dolma": download_dolma_step().as_executor_step()}
+
 
 # Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
 DOLMA_OLMO_MIXTURE_WEIGHTS = {

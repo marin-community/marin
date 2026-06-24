@@ -22,9 +22,13 @@ HPLT_DATASETS = {
     "all": ["*.parquet"],
 }
 
-_hplt_v3_download_spec = download_hplt_v3_step()
-hplt_v3_download = _hplt_v3_download_spec.as_executor_step()
-hplt_v3_normalized = normalize_hplt_v3_step(_hplt_v3_download_spec).as_executor_step()
+
+def hplt_v3_download() -> ExecutorStep:
+    return download_hplt_v3_step().as_executor_step()
+
+
+def hplt_v3_normalized() -> ExecutorStep:
+    return normalize_hplt_v3_step(download_hplt_v3_step()).as_executor_step()
 
 
 def tokenize_hplt_v3(
@@ -41,7 +45,7 @@ def tokenize_hplt_v3(
         name=output_path,
         fn=tokenize,
         config=TokenizeConfig(
-            train_paths=[output_path_of(hplt_v3_normalized, "outputs/main/*.parquet")],
+            train_paths=[output_path_of(hplt_v3_normalized(), "outputs/main/*.parquet")],
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),

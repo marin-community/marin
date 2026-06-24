@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pyarrow.parquet as pq
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -172,4 +173,5 @@ def _build_steps() -> list[StepSpec]:
 if __name__ == "__main__":
     os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
     configure_logging(logging.INFO)
-    StepRunner().run(_build_steps())
+    with executor_context():
+        StepRunner().run(_build_steps())

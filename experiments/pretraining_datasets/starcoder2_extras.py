@@ -10,6 +10,7 @@ from marin.datakit.download.starcoder2_extras import (
     download_starcoder2_extras_step,
 )
 from marin.datakit.normalize import normalize_step
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
 
@@ -46,4 +47,5 @@ def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[Toke
 
 
 if __name__ == "__main__":
-    executor_main(steps=tokenize_starcoder2_extras())
+    with executor_context():
+        executor_main(steps=tokenize_starcoder2_extras())

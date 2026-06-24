@@ -29,6 +29,7 @@ import argparse
 import logging
 from dataclasses import replace
 
+from marin.execution import executor_context
 from marin.execution.step_runner import StepRunner
 from rigging.log_setup import configure_logging
 
@@ -81,13 +82,14 @@ def main() -> None:
         scale = SMOKE_SCALE
         logger.info("no centroids given -> inline-train K=%d", scale.cluster.k_train)
 
-    result = reference_datakit_steps(
-        select_sources(names),
-        domain_centroids=args.domain_centroids,
-        quality_model=args.quality_model,
-        scale=scale,
-    )
-    StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
+    with executor_context():
+        result = reference_datakit_steps(
+            select_sources(names),
+            domain_centroids=args.domain_centroids,
+            quality_model=args.quality_model,
+            scale=scale,
+        )
+        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

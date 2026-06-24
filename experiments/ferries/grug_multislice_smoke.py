@@ -24,6 +24,7 @@ import os
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution import executor_context
 from marin.execution.executor import compute_output_path, unwrap_versioned_value
 from marin.execution.types import this_output_path, versioned
 
@@ -73,14 +74,15 @@ def multislice_smoke_launch():
     batch_size = _env_int("GRUG_MULTISLICE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
     max_seq_len = _env_int("GRUG_MULTISLICE_MAX_SEQ_LEN", DEFAULT_MAX_SEQ_LEN)
     loss_implementation = os.environ.get("GRUG_MULTISLICE_CE_IMPL") or None
-    model = dataclasses.replace(unwrap_versioned_value(grug_base_launch.model), max_seq_len=max_seq_len)
+    base_launch = grug_base_launch()
+    model = dataclasses.replace(unwrap_versioned_value(base_launch.model), max_seq_len=max_seq_len)
     grug_trainer = dataclasses.replace(
-        unwrap_versioned_value(grug_base_launch.grug_trainer),
+        unwrap_versioned_value(base_launch.grug_trainer),
         loss_implementation=loss_implementation,
     )
 
     return dataclasses.replace(
-        grug_base_launch,
+        base_launch,
         run_id=_run_id(),
         model=versioned(model),
         resources=versioned(multislice_smoke_resources()),
@@ -155,15 +157,16 @@ def _wipe_canary_output(
 
 
 def main() -> None:
-    launch = multislice_smoke_launch()
-    override_output_path = _override_output_path()
-    _wipe_canary_output(CANARY_STEP_NAME, launch, override_output_path)
-    train_grug(
-        CANARY_STEP_NAME,
-        launch,
-        override_output_path=override_output_path,
-        env_vars=_child_env_vars(),
-    )
+    with executor_context():
+        launch = multislice_smoke_launch()
+        override_output_path = _override_output_path()
+        _wipe_canary_output(CANARY_STEP_NAME, launch, override_output_path)
+        train_grug(
+            CANARY_STEP_NAME,
+            launch,
+            override_output_path=override_output_path,
+            env_vars=_child_env_vars(),
+        )
 
 
 if __name__ == "__main__":

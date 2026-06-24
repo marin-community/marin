@@ -14,6 +14,7 @@ from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact, PathMetadata
 from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
@@ -348,6 +349,24 @@ def test_prefixless_step_resolves_under_run_prefix(monkeypatch):
     executor = Executor(prefix="gs://marin-us-central1", executor_info_base_path="gs://marin-us-central1/experiments")
     executor.compute_version(build_step, is_pseudo_dep=False)
     assert executor.output_paths[build_step] == "gs://marin-us-central1/raw/dolma"
+
+
+@pytest.mark.no_executor_context
+def test_step_construction_requires_build_context():
+    """Constructing a step outside an ``executor_context()`` raises.
+
+    This is the guard that keeps steps from being built at module-import scope (which
+    would freeze the importing environment's region). Inside a context, construction
+    succeeds; outside, it raises.
+    """
+    with pytest.raises(RuntimeError, match="executor_context"):
+        ExecutorStep(name="guarded", fn=lambda output_path: None, config={})
+    with pytest.raises(RuntimeError, match="executor_context"):
+        StepSpec(name="guarded")
+
+    with executor_context():
+        ExecutorStep(name="guarded", fn=lambda output_path: None, config={})
+        StepSpec(name="guarded")
 
 
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:

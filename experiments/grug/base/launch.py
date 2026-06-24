@@ -21,6 +21,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from marin.execution import executor_context
 from marin.execution.executor import compute_output_path, materialize, resolve_local_placeholders, unwrap_versioned_value
 from marin.execution.types import this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -70,10 +71,13 @@ GRUG_130M_MODEL = GrugModelConfig(
     head_dim=None,
 )
 
-NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
+
+def nemotron_mix_with_default_validation():
+    mix = nemotron_mix()
+    return add_validation_sets_to_mixture(
+        mix,
+        default_validation_sets(tokenizer=mix.tokenizer),
+    )
 
 
 def _resolve_run_id(default_run_id: str) -> str:
@@ -201,52 +205,54 @@ def train_grug(
 _GRUG_BASE_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
 
-grug_base_launch = GrugBaseLaunchConfig(
-    model=versioned(GRUG_130M_MODEL),
-    data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-    output_path=this_output_path(),
-    # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-    run_id=_resolve_run_id("grug-base-trial"),
-    resources=versioned(_GRUG_BASE_RESOURCES),
-    steps=versioned(2_000),
-    batch_size=versioned(512),
-    seed=versioned(0),
-    mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-    tracker=WandbConfig(
-        project="marin",
-        tags=["grug", "template"],
-        group="grug-base-trial",
-        name=None,  # filled from run_id in _resolve_tracker
-        replicate_path=this_output_path(),
-    ),
-    optimizer=versioned(
-        AdamConfig(
-            learning_rate=3e-3,
-            weight_decay=0.1,
-            lr_schedule="cosine",
-            decay=0.2,
-            min_lr_ratio=0.1,
-            warmup=1000,
-        )
-    ),
-    grug_trainer=versioned(
-        GrugTrainerConfig(
-            z_loss_weight=1e-4,
-            ema_beta=None,
-            log_every=1,
-        )
-    ),
-    eval=versioned(
-        GrugEvalConfig(
-            eval_batch_size=512,
-            steps_per_eval=1000,
-            max_eval_batches=8,
-            eval_current=True,
-            eval_ema=False,
-        )
-    ),
-)
+def grug_base_launch() -> GrugBaseLaunchConfig:
+    return GrugBaseLaunchConfig(
+        model=versioned(GRUG_130M_MODEL),
+        data=nemotron_mix_with_default_validation(),
+        output_path=this_output_path(),
+        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
+        run_id=_resolve_run_id("grug-base-trial"),
+        resources=versioned(_GRUG_BASE_RESOURCES),
+        steps=versioned(2_000),
+        batch_size=versioned(512),
+        seed=versioned(0),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="marin",
+            tags=["grug", "template"],
+            group="grug-base-trial",
+            name=None,  # filled from run_id in _resolve_tracker
+            replicate_path=this_output_path(),
+        ),
+        optimizer=versioned(
+            AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1000,
+            )
+        ),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=1,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
 
 
 if __name__ == "__main__":
-    train_grug(name="grug/base-trial", launch=grug_base_launch)
+    with executor_context():
+        train_grug(name="grug/base-trial", launch=grug_base_launch())

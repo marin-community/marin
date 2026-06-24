@@ -47,6 +47,7 @@ from typing import Any
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -263,7 +264,8 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
-    StepRunner().run(build_classify_steps(model_bin_path=args.model_bin, inference_name=args.inference_name))
+    with executor_context():
+        StepRunner().run(build_classify_steps(model_bin_path=args.model_bin, inference_name=args.inference_name))
 
 
 if __name__ == "__main__":

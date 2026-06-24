@@ -72,7 +72,8 @@ def _dl(
 # ============================================================================
 
 
-def _build_downloads() -> dict[str, ExecutorStep | InputName]:
+def downloads() -> dict[str, ExecutorStep | InputName]:
+    """Raw dataset downloads for the simple single-corpus datasets."""
     fineweb_edu_base = fineweb_edu_download().as_executor_step()
 
     return {
@@ -112,47 +113,48 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
     }
 
 
-downloads = _build_downloads()
-
-
 # ============================================================================
 # TOKENIZED DATASETS
 # ============================================================================
 
-tokenized = {
-    "dclm_baseline": _tokenize_simple(
-        "dclm_baseline",
-        downloads["dclm_baseline"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/dclm_baseline-0206f1/",
-    ),
-    "starcoderdata": _tokenize_simple(
-        "starcoderdata",
-        downloads["starcoderdata"],
-        tokenizer=llama3_tokenizer,
-        text_format=TextLmDatasetFormat(text_key="content"),
-        override_path="tokenized/starcoderdata-12f018/",
-    ),
-    "proofpile_2": _tokenize_simple(
-        "proofpile_2",
-        downloads["proofpile_2"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/proofpile_2-4a35c7/",
-    ),
-    "slimpajama_6b": _tokenize_simple(
-        "SlimPajama-6B",
-        downloads["slimpajama_6b"],
-        tokenizer=llama3_tokenizer,
-    ),
-    "fineweb_edu": _tokenize_simple(
-        "fineweb-edu",
-        downloads["fineweb_edu"],
-        tokenizer=llama3_tokenizer,
-    ),
-    "dolma3_mix_150b_1025": _tokenize_simple(
-        "dolma3_mix-150B-1025",
-        downloads["dolma3_mix_150b_1025"],
-        tokenizer=llama3_tokenizer,
-        override_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
-    ),
-}
+
+def tokenized() -> dict[str, ExecutorStep]:
+    """Tokenized versions of the simple single-corpus datasets."""
+    raw = downloads()
+    return {
+        "dclm_baseline": _tokenize_simple(
+            "dclm_baseline",
+            raw["dclm_baseline"],
+            tokenizer=llama3_tokenizer,
+            override_path="tokenized/dclm_baseline-0206f1/",
+        ),
+        "starcoderdata": _tokenize_simple(
+            "starcoderdata",
+            raw["starcoderdata"],
+            tokenizer=llama3_tokenizer,
+            text_format=TextLmDatasetFormat(text_key="content"),
+            override_path="tokenized/starcoderdata-12f018/",
+        ),
+        "proofpile_2": _tokenize_simple(
+            "proofpile_2",
+            raw["proofpile_2"],
+            tokenizer=llama3_tokenizer,
+            override_path="tokenized/proofpile_2-4a35c7/",
+        ),
+        "slimpajama_6b": _tokenize_simple(
+            "SlimPajama-6B",
+            raw["slimpajama_6b"],
+            tokenizer=llama3_tokenizer,
+        ),
+        "fineweb_edu": _tokenize_simple(
+            "fineweb-edu",
+            raw["fineweb_edu"],
+            tokenizer=llama3_tokenizer,
+        ),
+        "dolma3_mix_150b_1025": _tokenize_simple(
+            "dolma3_mix-150B-1025",
+            raw["dolma3_mix_150b_1025"],
+            tokenizer=llama3_tokenizer,
+            override_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
+        ),
+    }

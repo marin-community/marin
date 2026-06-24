@@ -44,8 +44,8 @@ into the pipeline, so a run launched into a different region disagrees with the
 frozen path and trips the cross-region guard.
 
 `executor_context()` marks a legitimate build phase. The executor opens one
-around graph resolution, so the recommended recipe is to build your steps inside
-the same context:
+around graph resolution, so the recipe is to build your steps inside the same
+context — wrap the whole call:
 
 ```python
 from marin.execution import executor_context
@@ -58,7 +58,13 @@ if __name__ == "__main__":
         executor_main(steps=build_steps())
 ```
 
-Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning.
+The same wrapper applies to scripts that drive `StepRunner` directly
+(`with executor_context(): StepRunner().run(build_steps())`).
+
+Constructing an `ExecutorStep` / `StepSpec` outside any context **raises**.
+Shared dataset/model libraries therefore expose steps as zero-argument factory
+functions (`def dclm_mixture_config_llama3() -> ...`) rather than module-level
+values, so nothing is built until a caller invokes them inside a build phase.
 Output paths built without an explicit prefix stay *prefix-relative* and are
 anchored under the **run** prefix by the executor, so a step built in one region
 runs correctly in another. Set an explicit `output_path_prefix` only to

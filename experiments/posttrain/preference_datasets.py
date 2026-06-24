@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.execution import executor_context
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.transform.conversation.transform_preference_data import (
@@ -169,11 +170,12 @@ def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",
 
 
 if __name__ == "__main__":
-    all_steps = []
-    for config in PREFERENCE_DATASET_NAME_TO_CONFIG.values():
-        downloaded_dataset = download_preference_dataset_step(config)
-        all_steps.append(downloaded_dataset)
-        transformed_dataset = transform_preference_dataset_step(config, downloaded_dataset)
-        all_steps.append(transformed_dataset)
+    with executor_context():
+        all_steps = []
+        for config in PREFERENCE_DATASET_NAME_TO_CONFIG.values():
+            downloaded_dataset = download_preference_dataset_step(config)
+            all_steps.append(downloaded_dataset)
+            transformed_dataset = transform_preference_dataset_step(config, downloaded_dataset)
+            all_steps.append(transformed_dataset)
 
-    executor_main(steps=all_steps)
+        executor_main(steps=all_steps)

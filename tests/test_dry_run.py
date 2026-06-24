@@ -19,9 +19,15 @@ marin_root = Path(__file__).parent.parent
 experiments_dir = marin_root / "experiments"
 
 
+@pytest.mark.no_executor_context
 @parameterize_with_configs(pattern="*.py", config_path=str(experiments_dir))
 def test_run_dry_runs(config_file, monkeypatch):
-    """Test the dry runs of experiment scripts"""
+    """Test the dry runs of experiment scripts.
+
+    Opts out of the autouse executor build phase: each experiment opens its own
+    ``executor_context()`` when run via ``runpy``, and the un-wrapped test is what
+    keeps the guard honest — a step built at module-import scope must still raise here.
+    """
     script = config_file
     monkeypatch.setenv("WANDB_MODE", "disabled")
     # first get this script path
