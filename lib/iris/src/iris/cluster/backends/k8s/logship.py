@@ -75,15 +75,26 @@ class CriLogLine:
     message: str
 
 
-def parse_cri_line(raw: str) -> tuple[int, str, bool, str] | None:
+@dataclass(frozen=True)
+class ParsedCriLine:
+    """One CRI log line after field splitting, before partial-line reassembly.
+
+    ``is_full`` is True for an ``F`` tag (a complete line) and False for ``P`` (a
+    continuation to be joined onto the next fragment).
+    """
+
+    epoch_ms: int
+    stream: str
+    is_full: bool
+    message: str
+
+
+def parse_cri_line(raw: str) -> ParsedCriLine | None:
     """Parse one CRI on-disk log line.
 
     The format is ``<rfc3339> <stdout|stderr> <F|P> <message>``: a timestamp, the
     stream, a full/partial tag, then the message (which may itself contain
-    spaces). Returns ``(epoch_ms, stream, is_full, message)``; ``is_full`` is
-    True for an ``F`` tag (complete line) and False for ``P`` (a continuation to
-    be joined onto the next fragment). Returns None for a line that does not
-    match the format.
+    spaces). Returns None for a line that does not match the format.
     """
     parts = raw.split(" ", 3)
     if len(parts) < 4:
@@ -94,7 +105,7 @@ def parse_cri_line(raw: str) -> tuple[int, str, bool, str] | None:
     epoch_ms = _rfc3339_to_epoch_ms(timestamp_str)
     if epoch_ms is None:
         return None
-    return epoch_ms, stream, tag == "F", message
+    return ParsedCriLine(epoch_ms=epoch_ms, stream=stream, is_full=tag == "F", message=message)
 
 
 def _rfc3339_to_epoch_ms(timestamp_str: str) -> int | None:
@@ -177,14 +188,14 @@ class _LineBuffer:
         parsed = parse_cri_line(raw)
         if parsed is None:
             return None
-        epoch_ms, stream, is_full, message = parsed
-        if not is_full:
-            self.pending.append(message)
+        if not parsed.is_full:
+            self.pending.append(parsed.message)
             return None
+        message = parsed.message
         if self.pending:
             message = "".join(self.pending) + message
             self.pending.clear()
-        return CriLogLine(epoch_ms=epoch_ms, stream=stream, message=message)
+        return CriLogLine(epoch_ms=parsed.epoch_ms, stream=parsed.stream, message=message)
 
 
 class LogShipper:

@@ -44,29 +44,31 @@ class FakeLogWriter:
 def test_parse_full_line():
     parsed = parse_cri_line("2026-06-24T12:00:00.123456789Z stdout F hello world")
     assert parsed is not None
-    epoch_ms, stream, is_full, message = parsed
-    assert stream == "stdout"
-    assert is_full is True
-    assert message == "hello world"
+    assert parsed.stream == "stdout"
+    assert parsed.is_full is True
+    assert parsed.message == "hello world"
     # Nanosecond precision is truncated to ms.
-    assert epoch_ms % 1000 == 123
+    assert parsed.epoch_ms % 1000 == 123
 
 
 def test_parse_stderr_stream():
-    _epoch, stream, _is_full, message = parse_cri_line("2026-06-24T12:00:00Z stderr F boom")
-    assert stream == "stderr"
-    assert message == "boom"
+    parsed = parse_cri_line("2026-06-24T12:00:00Z stderr F boom")
+    assert parsed is not None
+    assert parsed.stream == "stderr"
+    assert parsed.message == "boom"
 
 
 def test_parse_partial_line_flagged_not_full():
-    _epoch, _stream, is_full, message = parse_cri_line("2026-06-24T12:00:00Z stdout P frag")
-    assert is_full is False
-    assert message == "frag"
+    parsed = parse_cri_line("2026-06-24T12:00:00Z stdout P frag")
+    assert parsed is not None
+    assert parsed.is_full is False
+    assert parsed.message == "frag"
 
 
 def test_parse_message_with_spaces_preserved():
-    _epoch, _stream, _is_full, message = parse_cri_line("2026-06-24T12:00:00Z stdout F a b  c")
-    assert message == "a b  c"
+    parsed = parse_cri_line("2026-06-24T12:00:00Z stdout F a b  c")
+    assert parsed is not None
+    assert parsed.message == "a b  c"
 
 
 def test_parse_rejects_malformed_lines():
@@ -77,7 +79,7 @@ def test_parse_rejects_malformed_lines():
 
 
 def test_full_line_carries_parsed_log_level():
-    """A glog-style line yields a LogEntry with the parsed level, like the worker."""
+    """A glog-style line yields a LogEntry with the parsed level."""
     buffer = _LineBuffer()
     line = buffer.feed("2026-06-24T12:00:00Z stderr F E0624 12:00:00 boom")
     assert line is not None
