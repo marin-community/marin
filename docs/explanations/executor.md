@@ -59,11 +59,10 @@ if __name__ == "__main__":
 ```
 
 Constructing an `ExecutorStep` / `StepSpec` outside any context logs a warning.
-Set `MARIN_EXECUTOR_STRICT=1` to turn the warning into a hard error. Output paths
-built without an explicit prefix stay *prefix-relative* and are anchored under
-the **run** prefix by the executor, so a step built in one region runs correctly
-in another. Set an explicit `output_path_prefix` only to deliberately pin a step
-to a fixed bucket.
+Output paths built without an explicit prefix stay *prefix-relative* and are
+anchored under the **run** prefix by the executor, so a step built in one region
+runs correctly in another. Set an explicit `output_path_prefix` only to
+deliberately pin a step to a fixed bucket.
 
 ## Mirrored inputs
 
