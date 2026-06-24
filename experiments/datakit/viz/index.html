@@ -1,0 +1,198 @@
+<!doctype html>
+<!-- Copyright The Marin Authors / SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datakit store viz</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --border: #dcdfe4; --text: #1c2024; --muted: #687078;
+  --accent: #2563eb; --heat0: #eef2f7; --heat: #2563eb;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); }
+header { padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border); }
+header h1 { margin: 0 0 4px; font-size: 17px; }
+.path { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.stats { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 8px; }
+.stat b { display: block; font-size: 16px; }
+.stat span { color: var(--muted); font-size: 12px; }
+.layout { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(440px, 1.2fr); gap: 16px; padding: 16px 20px; align-items: start; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.card h2 { margin: 0 0 10px; font-size: 14px; }
+table.heat { border-collapse: collapse; }
+table.heat th, table.heat td { text-align: center; padding: 0; }
+table.heat th { font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px 6px; white-space: nowrap; }
+table.heat td.rowhdr { font-size: 11px; color: var(--muted); padding-right: 8px; text-align: right; font-family: ui-monospace, monospace; }
+.cell { width: 78px; height: 40px; border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+  display: flex; flex-direction: column; justify-content: center; line-height: 1.1; margin: 2px; }
+.cell.empty { cursor: default; background: #fafbfc; color: #c4c8cc; }
+.cell .n { font-size: 12px; font-weight: 600; }
+.cell .t { font-size: 10px; opacity: .8; }
+.cell.sel { outline: 3px solid var(--accent); outline-offset: -1px; }
+.legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.controls label { font-size: 12px; color: var(--muted); }
+.controls input[type=number], .controls input[type=search] { padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; }
+.controls input[type=search] { width: 200px; }
+button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 5px; background: #fff; cursor: pointer; font-size: 13px; }
+button:hover { background: #f0f4fb; } button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.bhdr { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 10px; }
+.bhdr .big { font-size: 16px; font-weight: 600; }
+.bhdr .m { color: var(--muted); font-size: 13px; }
+.sample { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; }
+.sample .shdr { display: flex; gap: 12px; padding: 7px 10px; background: #f8fafc; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+.sample pre { white-space: pre-wrap; word-wrap: break-word; margin: 0; padding: 10px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 360px; overflow-y: auto; }
+.placeholder { color: var(--muted); padding: 30px 0; text-align: center; }
+.hidden { display: none !important; }
+.spin { color: var(--accent); }
+.sources { color: var(--muted); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>datakit store visualizer</h1>
+  <div class="path" id="path">loading…</div>
+  <div class="stats" id="summary"></div>
+  <div class="sources" id="sources"></div>
+</header>
+
+<div class="layout">
+  <div class="card">
+    <h2>buckets — cluster × quality <span class="m" id="heat-sub"></span></h2>
+    <div id="heat"><div class="placeholder">loading…</div></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card">
+    <h2>samples</h2>
+    <div class="controls">
+      <label>n <input type="number" id="n" value="20" min="1" max="500" style="width:70px"></label>
+      <label>seed <input type="number" id="seed" value="0" style="width:70px"></label>
+      <button id="resample" class="primary">resample</button>
+      <input type="search" id="filter" placeholder="filter samples by text…">
+      <span class="count m" id="scount"></span>
+    </div>
+    <div id="samples"><div class="placeholder">select a bucket on the left to draw samples</div></div>
+  </div>
+</div>
+
+<script>
+const fmt = n => n.toLocaleString();
+let SUMMARY = null, SELECTED = null;
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+function renderSummary(s) {
+  document.getElementById('path').textContent = s.artifact_path;
+  const stats = [
+    ['buckets', fmt(s.n_buckets)], ['clusters', `${fmt(s.n_clusters)} (view k=${s.cluster_view})`],
+    ['documents', fmt(s.total_elements)], ['tokens', fmt(s.total_tokens)],
+    ['quality buckets', s.n_quality_buckets], ['split', s.split],
+  ];
+  document.getElementById('summary').innerHTML =
+    stats.map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+  document.getElementById('sources').textContent =
+    `tokenizer: ${s.tokenizer}  ·  sources: ${s.source_names.join(', ')}`;
+}
+
+function renderHeat(s) {
+  const clusters = [...new Set(s.buckets.map(b => b.cluster_id))].sort((a, b) => a - b);
+  const nq = s.n_quality_buckets;
+  const byKey = {}; let max = 0;
+  for (const b of s.buckets) { byKey[`${b.cluster_id}:${b.quality_bucket}`] = b; max = Math.max(max, b.total_elements); }
+  const ranges = [];
+  for (let q = 0; q < nq; q++) { const b = s.buckets.find(x => x.quality_bucket === q); ranges[q] = b ? b.quality_range : `q${q}`; }
+
+  let html = '<table class="heat"><thead><tr><th></th>';
+  for (let q = 0; q < nq; q++) html += `<th>q${q}<br>${ranges[q]}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const c of clusters) {
+    html += `<tr><td class="rowhdr">cluster ${c}</td>`;
+    for (let q = 0; q < nq; q++) {
+      const b = byKey[`${c}:${q}`];
+      if (!b) { html += `<td><div class="cell empty">·</div></td>`; continue; }
+      const frac = max ? Math.log1p(b.total_elements) / Math.log1p(max) : 0;
+      const fg = frac > 0.55 ? '#fff' : 'var(--text)';
+      const bg = `color-mix(in srgb, var(--heat) ${Math.round(frac * 100)}%, var(--heat0))`;
+      html += `<td><div class="cell" data-c="${c}" data-q="${q}" style="background:${bg};color:${fg}"
+        title="cluster ${c}, ${b.quality_range}\n${fmt(b.total_elements)} docs · ${fmt(b.total_tokens)} tokens · avg ${b.avg_tokens} tok/doc">
+        <span class="n">${fmt(b.total_elements)}</span><span class="t">${b.avg_tokens} t/d</span></div></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('heat').innerHTML = html;
+  document.getElementById('heat-sub').textContent = `(${clusters.length} clusters × ${nq} quality)`;
+  document.getElementById('legend').textContent = `cell = doc count (log-scaled shade), max ${fmt(max)} docs · click a cell to sample`;
+  document.querySelectorAll('.cell[data-c]').forEach(el =>
+    el.addEventListener('click', () => selectBucket(+el.dataset.c, +el.dataset.q)));
+}
+
+function selectBucket(c, q) {
+  SELECTED = { c, q };
+  document.querySelectorAll('.cell').forEach(el => el.classList.toggle('sel', +el.dataset.c === c && +el.dataset.q === q));
+  loadSamples();
+}
+
+async function loadSamples() {
+  if (!SELECTED) return;
+  const { c, q } = SELECTED;
+  const n = +document.getElementById('n').value, seed = +document.getElementById('seed').value;
+  const panel = document.getElementById('samples');
+  panel.innerHTML = '<div class="placeholder spin">drawing samples…</div>';
+  try {
+    const d = await getJSON(`/api/bucket/${c}/${q}/samples?n=${n}&seed=${seed}`);
+    let html = `<div class="bhdr"><span class="big">cluster ${d.cluster_id} · q${d.quality_bucket} ${d.quality_range}</span>
+      <span class="m">${fmt(d.total_elements)} docs · ${fmt(d.total_tokens)} tokens · showing ${d.n_returned} (seed ${d.seed})</span></div>`;
+    for (const s of d.samples) {
+      html += `<div class="sample"><div class="shdr"><span>#${s.index}</span><span>${fmt(s.n_tokens)} tokens${s.truncated ? ' (truncated)' : ''}</span></div>
+        <pre>${escapeHtml(s.text)}</pre></div>`;
+    }
+    panel.innerHTML = html;
+    applyFilter();
+  } catch (e) {
+    panel.innerHTML = `<div class="placeholder">error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function applyFilter() {
+  const q = document.getElementById('filter').value.toLowerCase().trim();
+  const cards = [...document.querySelectorAll('.sample')];
+  let vis = 0;
+  for (const c of cards) {
+    const show = !q || c.textContent.toLowerCase().includes(q);
+    c.classList.toggle('hidden', !show); if (show) vis++;
+  }
+  document.getElementById('scount').textContent = cards.length ? `${vis} / ${cards.length} shown` : '';
+}
+
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+document.getElementById('resample').addEventListener('click', () => {
+  document.getElementById('seed').value = Math.floor(Math.random() * 1e6); loadSamples();
+});
+document.getElementById('n').addEventListener('change', loadSamples);
+document.getElementById('seed').addEventListener('change', loadSamples);
+document.getElementById('filter').addEventListener('input', applyFilter);
+
+(async () => {
+  try {
+    SUMMARY = await getJSON('/api/summary');
+    renderSummary(SUMMARY);
+    renderHeat(SUMMARY);
+  } catch (e) {
+    document.getElementById('heat').innerHTML = `<div class="placeholder">error loading summary: ${escapeHtml(e.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
