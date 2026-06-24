@@ -23,9 +23,5 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
 - Testing: use `LocalClient` for unit tests. Only use the Iris backend for integration tests.
 - Task setup: `EnvironmentConfig(setup_scripts=...)` controls how the worker prepares
-  the env. `None` builds the default uv-sync script; `[]` skips setup (bring-your-own
-  image); a list runs verbatim. Either way iris appends its own runtime-deps step.
-  `sync_packages` scopes the default sync to specific workspace members instead of
-  `--all-packages`. Build and tweak the default with `fray.default_setup_script(...)`
-  (re-exported from Iris). See `lib/iris/AGENTS.md` for the script-facing `IRIS_*` env
-  contract and the Docker setup-vs-runtime caveat.
+  the env — `None` for the default uv-sync, `[]` to skip (bring-your-own image), or a
+  verbatim list; iris always appends its runtime-deps step. See `lib/iris/AGENTS.md`.

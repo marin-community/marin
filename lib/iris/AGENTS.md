@@ -103,50 +103,15 @@ See https://github.com/marin-community/marin/issues/3859 for context.
 
 ## Task Setup
 
-Before running the command, the worker runs a **list of setup scripts** to prepare
-the environment. Execution is pure mechanism: the worker runs whatever scripts it
-is handed, one at a time, and never decides anything. The list is resolved on the
-**client** side: `EnvironmentSpec.to_proto()` resolves the user scripts (the default
-uv-sync, or your list) onto the wire, and `build_runtime_entrypoint` appends iris's
-own deps as a final step. The builders live in `iris.cluster.setup`
-(`default_setup_script`, `iris_runtime_setup_script`, re-exported from `iris.client`
-and `fray`), out of the execution path.
-
-What runs is `[<user setup…>, iris_runtime_setup_script()]`: iris's own deps
-(cloudpickle for callable entrypoints, py-spy/memray for the profiler) are a
-separate, final step rather than spliced into the user's script — never conflated.
-That step is best-effort: it installs into `$IRIS_VENV` only if a venv exists and
-swallows failures, so a non-Python image is left untouched.
-
-- **Default**: `EnvironmentSpec(setup_scripts=None)` builds the standard uv-sync
-  script. `sync_packages` scopes the sync to specific workspace members (default:
-  `--all-packages`): `EnvironmentSpec(sync_packages=["marin-core"], extras=["tpu"])`.
-- **Custom**: `EnvironmentSpec(setup_scripts=["…", "…"])` runs those verbatim, then
-  the iris step. Build the default and extend it:
-  `EnvironmentSpec(setup_scripts=[default_setup_script(packages=["marin-core"]) + "\n…"])`.
-- **Bring-your-own-env / no setup**: `EnvironmentSpec(setup_scripts=[])` skips
-  everything (no user setup, no iris step) — the image is used as-is. Callable
-  entrypoints (`Entrypoint.from_callable`) then require `cloudpickle` in the image.
-
-Each script runs with the task's `IRIS_*` env available, so it can parameterize
-itself: `IRIS_WORKDIR` (workspace root), `IRIS_VENV` / `UV_PROJECT_ENVIRONMENT`
-(canonical venv the run phase activates), `IRIS_PYTHON`, `IRIS_BUNDLE_ID`,
-`IRIS_TASK_RESOURCES`. A setup script should create the venv at `$IRIS_VENV`; the
-run phase activates it only if it exists. Backends run each script as its own step
-(`render_setup_steps`) so a failure points at the exact script.
-
-Caveat: on Docker, setup runs in a *separate build container* from the command, so a
-setup script's `export FOO=bar` does **not** reach the running command — use
-`env_vars` for runtime environment. Setup scripts should only mutate the shared
-`/app` workdir (e.g. create the venv).
-
-Child jobs inherit the parent's resolved `setup_scripts` so they land in the same
-environment. A child that specifies its own setup — explicit `setup_scripts`, or
-builder inputs like `extras`/`sync_packages` — takes control and does not inherit;
-one that specifies only `env_vars` (or nothing) reuses the parent's. Inheritance
-rides on `IRIS_JOB_SETUP_SCRIPTS` (JSON; absent ⇒ no parent).
-
-See https://github.com/marin-community/marin/issues/6595 for context.
+Before the command runs, the worker executes a list of setup scripts (default: a
+`uv sync`) to prepare the environment. The worker is pure mechanism; the list is
+resolved client-side from `EnvironmentSpec.setup_scripts` — `None` for the default,
+`[]` to skip setup (bring-your-own image), or a verbatim list — and iris always
+appends its own runtime-deps step. The script builders, the `IRIS_*` env scripts
+parameterize against (notably `$IRIS_VENV`, the venv the run phase activates), child
+inheritance, and the Docker gotcha (setup runs in a separate container, so `export`
+does not reach the command — use `env_vars`) all live in `iris.cluster.setup`. See
+https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
 
