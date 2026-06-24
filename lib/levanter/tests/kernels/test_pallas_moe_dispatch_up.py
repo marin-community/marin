@@ -12,6 +12,7 @@ from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
     dispatch_prepacked_moe_dispatch_up_reference,
     compute_moe_up_from_layout_reference,
+    compute_moe_up_from_layout_ragged_dot,
     prepack_moe_dispatch_up_reference,
 )
 
@@ -200,6 +201,52 @@ def test_moe_dispatch_up_reference_is_differentiable():
 
     assert grad.shape == w_gate_up.shape
     assert jnp.isfinite(grad).all()
+
+
+def test_moe_dispatch_up_ragged_dot_matches_reference_with_capacity_overflow():
+    x_by_rank, expert_ids, router_weights = _hand_routing_inputs()
+    w_gate_up = jnp.arange(2 * 2 * 2 * 6, dtype=jnp.float32).reshape(2, 2, 2, 6) / 13.0
+    prepacked = prepack_moe_dispatch_up_reference(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        num_experts=4,
+        recv_capacity=4,
+    )
+    layout = dispatch_prepacked_moe_dispatch_up_reference(prepacked, recv_capacity=4)
+
+    expected = compute_moe_up_from_layout_reference(layout, w_gate_up)
+    actual = compute_moe_up_from_layout_ragged_dot(layout, w_gate_up, implementation="xla")
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    assert int(np.asarray(layout.overflow_count)) == 4
+
+
+def test_moe_dispatch_up_api_can_use_ragged_dot_w13():
+    x_by_rank, expert_ids, router_weights = _hand_routing_inputs()
+    w_gate_up = jnp.arange(2 * 2 * 2 * 6, dtype=jnp.float32).reshape(2, 2, 2, 6) / 13.0
+
+    expected, expected_layout = dispatch_up_api.moe_dispatch_up(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        w_gate_up,
+        num_experts=4,
+        recv_capacity=6,
+    )
+    actual, actual_layout = dispatch_up_api.moe_dispatch_up(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        w_gate_up,
+        num_experts=4,
+        recv_capacity=6,
+        w13_implementation="ragged_dot",
+        ragged_dot_implementation="xla",
+    )
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(actual_layout.recv_x), np.asarray(expected_layout.recv_x))
 
 
 def test_moe_dispatch_up_backward_reference_matches_autodiff():

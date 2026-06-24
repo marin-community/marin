@@ -4,10 +4,14 @@
 """Pure JAX oracle for the MoE dispatch-up subkernel."""
 
 import math
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
+
+from haliax.nn.ragged_dot import ragged_dot
+
+RaggedDotImplementation = Literal["auto", "megablox", "triton", "xla"]
 
 
 class MoeDispatchUpLayout(NamedTuple):
@@ -306,6 +310,43 @@ def compute_moe_up_from_layout_reference(
             expert_h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
             h = h.at[dst_rank].add(expert_h * mask[:, None])
     return h
+
+
+def _effective_rows_per_expert(layout: MoeDispatchUpLayout) -> jax.Array:
+    recv_capacity = layout.recv_x.shape[1]
+    remaining_capacity = jnp.maximum(recv_capacity - layout.expert_base, 0)
+    return jnp.minimum(layout.rows_per_expert, remaining_capacity)
+
+
+def compute_moe_up_from_layout_ragged_dot(
+    layout: MoeDispatchUpLayout,
+    w_gate_up_by_rank: jax.Array,
+    *,
+    implementation: RaggedDotImplementation = "auto",
+) -> jax.Array:
+    """Compute W13/SiLU from a dispatched layout using Haliax grouped matmul."""
+
+    if w_gate_up_by_rank.ndim != 4:
+        raise ValueError(f"w_gate_up_by_rank must have shape [EP, EL, D, 2I], got {w_gate_up_by_rank.shape}")
+    ep_size, recv_capacity, hidden = layout.recv_x.shape
+    if w_gate_up_by_rank.shape[0] != ep_size or w_gate_up_by_rank.shape[2] != hidden:
+        raise ValueError(
+            "w_gate_up_by_rank must share EP and hidden dimensions with layout.recv_x; "
+            f"got {w_gate_up_by_rank.shape} vs {layout.recv_x.shape}"
+        )
+    if w_gate_up_by_rank.shape[3] % 2 != 0:
+        raise ValueError(f"w_gate_up_by_rank last dimension must be even, got {w_gate_up_by_rank.shape[3]}")
+
+    effective_rows = _effective_rows_per_expert(layout)
+
+    def rank_w13(recv_x: jax.Array, group_sizes: jax.Array, w_gate_up: jax.Array) -> jax.Array:
+        w13_out = ragged_dot(recv_x, w_gate_up, group_sizes, implementation=implementation)
+        gate, up = jnp.split(w13_out, 2, axis=-1)
+        h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
+        valid_rows = jnp.arange(recv_capacity, dtype=jnp.int32) < jnp.sum(group_sizes, dtype=jnp.int32)
+        return jnp.where(valid_rows[:, None], h, jnp.zeros((), dtype=h.dtype))
+
+    return jax.vmap(rank_w13)(layout.recv_x, effective_rows, w_gate_up_by_rank)
 
 
 def compute_moe_up_from_layout_reference_bwd(

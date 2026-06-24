@@ -14,6 +14,7 @@ from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
     MoeDispatchUpPrepackedSend,
     compute_moe_up_from_layout_reference,
+    compute_moe_up_from_layout_ragged_dot,
     dispatch_prepacked_moe_dispatch_up_reference,
     moe_dispatch_up_reference_bwd,
     moe_dispatch_up_layout_reference as _moe_dispatch_up_layout_reference,
@@ -21,6 +22,8 @@ from levanter.kernels.pallas.moe_dispatch_up.reference import (
 )
 
 Implementation: TypeAlias = Literal["reference", "mosaic_gpu"]
+W13Implementation: TypeAlias = Literal["reference", "ragged_dot"]
+RaggedDotImplementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
 
 
 def _mosaic_gpu_dispatch(
@@ -111,6 +114,8 @@ def moe_dispatch_up(
     capacity_factor: float = 1.25,
     recv_capacity: int | None = None,
     implementation: Implementation | Sequence[Implementation | Callable[..., MoeDispatchUpLayout]] | None = None,
+    w13_implementation: W13Implementation = "reference",
+    ragged_dot_implementation: RaggedDotImplementation = "auto",
 ) -> tuple[jax.Array, MoeDispatchUpLayout]:
     prepacked = prepack_moe_dispatch_up(
         x_by_rank,
@@ -121,7 +126,17 @@ def moe_dispatch_up(
         recv_capacity=recv_capacity,
     )
     layout = moe_dispatch_up_layout(prepacked, recv_capacity=recv_capacity, implementation=implementation)
-    return compute_moe_up_from_layout_reference(layout, w_gate_up_by_rank), layout
+    if w13_implementation == "reference":
+        dispatch_up = compute_moe_up_from_layout_reference(layout, w_gate_up_by_rank)
+    elif w13_implementation == "ragged_dot":
+        dispatch_up = compute_moe_up_from_layout_ragged_dot(
+            layout,
+            w_gate_up_by_rank,
+            implementation=ragged_dot_implementation,
+        )
+    else:
+        raise ValueError(f"Unsupported MoE dispatch-up W13 implementation: {w13_implementation!r}")
+    return dispatch_up, layout
 
 
 def moe_dispatch_up_layout_reference(
