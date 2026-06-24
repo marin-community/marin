@@ -23,9 +23,9 @@ def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdev
     (cuda / "bin").mkdir(parents=True)
     if with_ptxas:
         for tool in ("ptxas", "nvlink"):
-            exe = cuda / "bin" / tool
-            exe.write_text("#!/bin/sh\n")
-            exe.chmod(0o755)
+            tool_path = cuda / "bin" / tool
+            tool_path.write_text("#!/bin/sh\n")
+            tool_path.chmod(0o755)
     if with_libdevice:
         libdevice = cuda / "nvvm" / "libdevice"
         libdevice.mkdir(parents=True)
@@ -112,15 +112,12 @@ def test_wants_gpu_extra():
 
 def test_gpu_extra_appends_cuda_setup_script():
     scripts = list(EnvironmentSpec(extras=["gpu"]).to_proto().setup_scripts)
-    assert len(scripts) == 2
-    assert "uv sync" in scripts[0]
-    assert "cuda_sdk_lib" in scripts[1]
+    assert cuda_toolchain_setup_script() in scripts
 
 
 def test_non_gpu_extra_has_no_cuda_setup_script():
     scripts = list(EnvironmentSpec(extras=["cpu"]).to_proto().setup_scripts)
-    assert len(scripts) == 1
-    assert "cuda_sdk_lib" not in scripts[0]
+    assert cuda_toolchain_setup_script() not in scripts
 
 
 def test_custom_setup_scripts_skip_cuda_staging():

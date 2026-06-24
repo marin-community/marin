@@ -130,23 +130,21 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
     return any((e.split(":", 1)[1] if ":" in e else e) == "gpu" for e in extras)
 
 
+# The NVVM bitcode library JAX/XLA load to compile GPU kernels.
+_LIBDEVICE_FILE = "libdevice.10.bc"
+# XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
+_XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+
+
 def cuda_toolchain_setup_script() -> str:
-    """Render a setup script that exposes the venv's CUDA toolchain for JAX/Pallas.
+    """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
-    ``jax[cuda13]`` installs the CUDA compiler wheels into the venv — ptxas/nvlink
-    (``nvidia-cuda-nvcc``) under ``nvidia/cu*/bin`` and ``libdevice.10.bc``
-    (``nvidia-nvvm``) under ``nvidia/cu*/nvvm/libdevice`` — but nothing exposes
-    them, so JAX reports "No PTX compilation provider" and Mosaic GPU lowering
-    cannot find ``libdevice.10.bc``.
-
-    Symlinks the toolchain binaries into the venv's ``bin`` (already on ``PATH``
-    once the venv is activated) and stages ``libdevice.10.bc`` into XLA's default
-    CUDA data dir (``./cuda_sdk_lib``) and the working directory — the locations
-    XLA and Mosaic probe — so no run-phase env injection is needed. Keyed on a
-    ``ptxas`` under ``nvidia/cu*`` so it spans CUDA major versions and is a no-op
-    when no toolchain is installed.
+    Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
+    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
+    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
+    run-phase changes. A no-op when the venv carries no CUDA toolchain.
     """
-    return r"""set -e
+    return rf"""set -e
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
   if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
@@ -154,11 +152,11 @@ done
 if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
 echo 'staging CUDA toolchain'
 ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
-_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/libdevice.10.bc"
+_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/{_LIBDEVICE_FILE}"
 if [ -f "$_libdevice" ]; then
-  mkdir -p "$IRIS_WORKDIR/cuda_sdk_lib/nvvm/libdevice"
-  cp -f "$_libdevice" "$IRIS_WORKDIR/cuda_sdk_lib/nvvm/libdevice/libdevice.10.bc"
-  cp -f "$_libdevice" "$IRIS_WORKDIR/libdevice.10.bc"
+  mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
 fi
 """
 
