@@ -21,7 +21,6 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
@@ -131,7 +130,6 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": config.expert_parallel}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         checkpointer=config.checkpointer
@@ -144,7 +142,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         ),
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer, expert_axis_size=config.expert_parallel)
 
     run_config = GrugRunConfig(
         model=config.model,
@@ -220,7 +218,7 @@ for _dim, _bs, _steps in _COMPUTE_OPT_CELLS:
                 ),
                 eval=versioned(
                     GrugEvalConfig(
-                        eval_batch_size=512,
+                        eval_batch_size=256,
                         steps_per_eval=1000,
                         max_eval_batches=8,
                         eval_current=True,

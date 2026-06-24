@@ -60,14 +60,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 
 class MoEExpertMlp(eqx.Module):
-    """Expert MLP weights for routed MoE calls.
-
-    ``w_gate`` and ``w_up`` are stored as separate ``(e, d, i)`` pytree leaves
-    so a downstream optimizer (e.g. Muon / MuonH's Newton-Schulz, which
-    orthogonalises one leaf at a time) sees each half independently. The two
-    halves are concatenated to ``(e, d, 2i)`` on every forward call before the
-    backend matmul.
-    """
+    """Expert MLP weights for routed MoE calls."""
 
     w_gate: jax.Array
     w_up: jax.Array

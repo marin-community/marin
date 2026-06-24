@@ -225,8 +225,6 @@ class MoeHeuristic:
             # Round up to nearest 128 for Pallas TPU MoE kernel compatibility
             intermediate_dim=math.ceil(hidden_size / 2 / 128) * 128,
             shared_expert_intermediate_dim=hidden_size,
-            # num_experts / num_experts_per_token left at GrugModelConfig defaults
-            # (256 / 4 — the May Recipe baseline).
             num_layers=num_layers,
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
