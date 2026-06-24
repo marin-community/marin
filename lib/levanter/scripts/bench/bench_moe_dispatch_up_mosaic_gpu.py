@@ -911,6 +911,84 @@ def _compact_a2a_mosaic_w13_dispatch_up_fn(
     )
 
 
+def _compact_a2a_transport_fn(mesh: Mesh) -> Callable[..., tuple[jax.Array, jax.Array]]:
+    def local_transport(send_x_by_dst_expert, send_count_by_dst_expert):
+        send_x_by_dst_expert = jnp.squeeze(send_x_by_dst_expert, axis=0)
+        send_count_by_dst_expert = jnp.squeeze(send_count_by_dst_expert, axis=0)
+        source_expert_x = lax.all_to_all(
+            send_x_by_dst_expert,
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+        )
+        source_expert_count = lax.all_to_all(
+            send_count_by_dst_expert,
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+        )
+        return source_expert_x[None, ...], source_expert_count[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_transport,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None),
+            ),
+            check_vma=False,
+        )
+    )
+
+
+def _compact_a2a_merged_mosaic_w13_fn(
+    mesh: Mesh,
+    args,
+) -> Callable[..., jax.Array]:
+    def local_w13(source_expert_x, local_w_gate_up):
+        source_expert_x = jnp.squeeze(source_expert_x, axis=0)
+        local_w_gate_up = jnp.squeeze(local_w_gate_up, axis=0)
+        ep_size, local_experts, source_expert_capacity, hidden = source_expert_x.shape
+        local_expert_x = jnp.swapaxes(source_expert_x, 0, 1).reshape(
+            local_experts * ep_size * source_expert_capacity,
+            hidden,
+        )
+        local_expert_rows = jnp.full(
+            (local_experts,),
+            ep_size * source_expert_capacity,
+            dtype=jnp.int32,
+        )
+        h = compute_moe_up_mosaic_gpu_local(
+            local_expert_x,
+            local_expert_rows,
+            local_w_gate_up,
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            max_concurrent_steps=args.num_stages,
+            grid_block_n=args.grid_block_n,
+        )
+        return h[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_w13,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None, None),
+            ),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+
+
 def _pallas_compact_source_expert_dispatch_fn(
     mesh: Mesh,
     *,
@@ -1861,6 +1939,11 @@ def main() -> None:
         help="Benchmark compact source/expert all-to-all followed by Mosaic GPU W13/SiLU.",
     )
     parser.add_argument(
+        "--run-compact-a2a-breakdown",
+        action="store_true",
+        help="Benchmark compact source/expert all-to-all transport and merged Mosaic W13 separately.",
+    )
+    parser.add_argument(
         "--compact-a2a-return-compact-output",
         action="store_true",
         help="Return compact source/expert W13 output instead of scattering back to destination-major rows.",
@@ -2030,6 +2113,7 @@ def main() -> None:
             or args.run_ring_gather_dispatch_up
             or args.run_ring_gather_mosaic_dispatch_up
             or args.run_compact_a2a_mosaic_dispatch_up
+            or args.run_compact_a2a_breakdown
         )
         and not args.run_pallas
     ):
@@ -2105,6 +2189,7 @@ def main() -> None:
         and not args.run_compact_source_expert_dispatch
         and not args.run_compact_source_expert_dispatch_up
         and not args.run_compact_a2a_mosaic_dispatch_up
+        and not args.run_compact_a2a_breakdown
     ):
         return
     if len(devices) < args.ep_size:
@@ -2523,6 +2608,83 @@ def main() -> None:
                 )
             if compact_a2a_mosaic_steady_ms is not None:
                 print(f"dispatch_up/compact_a2a_mosaic_gpu_end_to_end_ms: {compact_a2a_mosaic_steady_ms:.3f}")
+
+        if args.run_compact_a2a_breakdown:
+            source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)
+            compact_prepacked, _ = _time_block(
+                "prepack/source_expert_reference",
+                lambda: prepack_moe_dispatch_up_source_expert_reference(
+                    x_by_rank,
+                    expert_ids,
+                    router_weights,
+                    num_experts=num_experts,
+                    recv_capacity=recv_capacity,
+                    source_expert_capacity=source_expert_capacity,
+                ),
+            )
+            inferred_source_expert_capacity = compact_prepacked.send_x_by_dst_expert.shape[3]
+            if source_expert_capacity_factor is None:
+                print(f"source_expert_capacity: {inferred_source_expert_capacity}")
+            else:
+                print(
+                    "source_expert_capacity: "
+                    f"{inferred_source_expert_capacity} from factor={source_expert_capacity_factor:g}"
+                )
+            print(f"source_expert_overflow_count: {int(jax.device_get(compact_prepacked.overflow_count))}")
+            _print_source_expert_load_stats(compact_prepacked, args, send_capacity=send_capacity)
+
+            compact_transport_fn = _compact_a2a_transport_fn(mesh)
+            compact_transport_args = (
+                _sharded(mesh, compact_prepacked.send_x_by_dst_expert, P("expert", None, None, None, None)),
+                _sharded(mesh, compact_prepacked.send_count_by_dst_expert, P("expert", None, None)),
+            )
+
+            def run_compact_a2a_transport():
+                return compact_transport_fn(*compact_transport_args)
+
+            compact_transport_result, _ = _time_block(
+                "dispatch/compact_a2a_transport",
+                run_compact_a2a_transport,
+            )
+            source_expert_x, source_expert_count = compact_transport_result
+            if args.bench_iters > 0:
+                compact_transport_steady_ms = _measure_steady_state(
+                    "dispatch/compact_a2a_transport",
+                    run_compact_a2a_transport,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            else:
+                compact_transport_steady_ms = None
+            print(f"dispatch/compact_a2a_transport_count_max: {int(jnp.max(source_expert_count))}")
+
+            compact_merged_w13_fn = _compact_a2a_merged_mosaic_w13_fn(mesh, args)
+            compact_merged_w13_args = (
+                source_expert_x,
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_compact_merged_w13():
+                return compact_merged_w13_fn(*compact_merged_w13_args)
+
+            _compact_merged_h, _ = _time_block(
+                "w13_silu/compact_a2a_merged_mosaic_gpu",
+                run_compact_merged_w13,
+            )
+            if args.bench_iters > 0:
+                compact_merged_w13_steady_ms = _measure_steady_state(
+                    "w13_silu/compact_a2a_merged_mosaic_gpu",
+                    run_compact_merged_w13,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            else:
+                compact_merged_w13_steady_ms = None
+            if compact_transport_steady_ms is not None and compact_merged_w13_steady_ms is not None:
+                print(
+                    "dispatch_up/compact_a2a_breakdown_sum_ms: "
+                    f"{compact_transport_steady_ms + compact_merged_w13_steady_ms:.3f}"
+                )
 
         if args.run_compact_source_expert_dispatch:
             source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)

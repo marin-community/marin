@@ -1313,3 +1313,37 @@
   source/expert-capacity transport but feed merged local-expert W13 tiles as
   each source chunk arrives, instead of materializing all compact chunks and
   then launching W13.
+
+### 2026-06-24 11:46 PT - Compact all-to-all breakdown and overlap target
+
+- Hypothesis: The merged compact-a2a path is close enough that overlap only
+  needs to hide transport behind W13. Split transport and W13 to quantify the
+  required overlap.
+- Change:
+  - Added `--run-compact-a2a-breakdown`.
+  - The breakdown times compact source/expert `lax.all_to_all` transport
+    separately from the merged local-expert Mosaic W13 consumer.
+- Commands:
+  - Cap 64 / no buffer: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-compact-a2a-breakdown-target-cap64 --env-vars JAX_OPTIMIZATION_LEVEL O1 --env-vars XLA_FLAGS "--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true" -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.0 --source-expert-capacity 64 --block-m 64 --block-n 128 --block-k 64 --num-stages 4 --grid-block-n 1 --run-compact-a2a-breakdown --skip-reference-checks --bench-iters 5 --warmup-steps 2`
+  - Cap 80 / 25% source-expert buffer: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-compact-a2a-breakdown-target-cap80 --env-vars JAX_OPTIMIZATION_LEVEL O1 --env-vars XLA_FLAGS "--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true" -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --block-n 128 --block-k 64 --num-stages 4 --grid-block-n 1 --run-compact-a2a-breakdown --skip-reference-checks --bench-iters 5 --warmup-steps 2`
+- Results:
+  - Cap 64: transport steady `0.559 ms` (min `0.546`, max `0.575`), merged
+    Mosaic W13 steady `1.446 ms` (min `1.440`, max `1.451`), sum `2.006 ms`.
+  - Cap 80: transport steady `0.635 ms` (min `0.609`, max `0.676`), merged
+    Mosaic W13 steady `1.742 ms` (min `1.715`, max `1.779`), sum `2.377 ms`.
+- Synchronization decision:
+  - Local JAX `collective_matmul_mgpu.py` uses a single ordered cumulative
+    GMEM semaphore with `decrement=False`, where receivers wait for cumulative
+    thresholds per ring step.
+  - Shaped semaphore refs exist, but installed examples and lowering evidence
+    favor scalar cumulative semaphores for cross-device producer/consumer
+    synchronization. Use a ring-step pipeline rather than unordered per-block
+    semaphore slots.
+- Interpretation: The overlap target is realistic. For cap 80, hiding
+  `0.4-0.6 ms` of transport under `~1.7 ms` of W13 should get below `2 ms`.
+  The next prototype should implement an ordered source-step pipeline: send a
+  compact source/expert chunk into destination scratch, signal the cumulative
+  step semaphore, and have the destination W13 consume merged local-expert
+  chunks step-by-step instead of waiting for a completed all-to-all result.
+- Next action: Build the first ordered cumulative-semaphore compact ring-step
+  Mosaic prototype on H128, then target cap 64/80 once correctness is stable.
