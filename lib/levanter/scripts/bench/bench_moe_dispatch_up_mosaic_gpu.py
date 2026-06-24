@@ -19,6 +19,7 @@ from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local,
     compute_moe_up_mosaic_gpu_local,
+    compute_moe_up_mosaic_gpu_ready_local,
 )
 from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
@@ -360,6 +361,19 @@ def _pallas_w13_silu_args(mesh: Mesh, layout: MoeDispatchUpLayout, w_gate_up: ja
     )
 
 
+def _pallas_ready_w13_silu_args(
+    mesh: Mesh,
+    layout: MoeDispatchUpLayout,
+    ready_count: jax.Array,
+    w_gate_up: jax.Array,
+) -> tuple[jax.Array, ...]:
+    return (
+        _sharded(mesh, layout.recv_x, P("expert", None, None)),
+        ready_count,
+        _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+    )
+
+
 def _pallas_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
     def local_w13(recv_x, rows_per_expert, local_w_gate_up):
         h = compute_moe_up_mosaic_gpu_local(
@@ -379,6 +393,32 @@ def _pallas_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
             local_w13,
             mesh=mesh,
             in_specs=(P("expert", None, None), P("expert", None), P("expert", None, None, None)),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+    return fn
+
+
+def _pallas_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
+    def local_w13(recv_x, ready_count, local_w_gate_up):
+        h = compute_moe_up_mosaic_gpu_ready_local(
+            jnp.squeeze(recv_x, axis=0),
+            jnp.squeeze(ready_count, axis=0),
+            jnp.squeeze(local_w_gate_up, axis=0),
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            max_concurrent_steps=args.num_stages,
+            grid_block_n=1,
+        )
+        return h[None, ...]
+
+    fn = jax.jit(
+        shard_map(
+            local_w13,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None, None), P("expert", None, None, None)),
             out_specs=P("expert", None, None),
             check_vma=False,
         )
@@ -506,6 +546,8 @@ def _resolve_recv_capacity(args, *, synthetic_layout: bool) -> tuple[int, float 
 def _run_synthetic_layout_benchmark(args, dtype: jnp.dtype, devices: list[jax.Device]) -> None:
     if len(devices) < args.ep_size:
         raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
+    if args.w13_impl == "mosaic_gpu_ready":
+        raise ValueError("--w13-impl=mosaic_gpu_ready requires routed source/expert ready-count metadata")
     recv_capacity, recv_capacity_factor = _resolve_recv_capacity(args, synthetic_layout=True)
     mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
     capacity_desc = (
@@ -690,7 +732,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--w13-impl",
-        choices=("mosaic_gpu", "ragged_dot", "both"),
+        choices=("mosaic_gpu", "mosaic_gpu_ready", "ragged_dot", "both"),
         default="mosaic_gpu",
         help="W13/SiLU implementation to benchmark.",
     )
@@ -810,11 +852,11 @@ def main() -> None:
     mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
     with jax.set_mesh(mesh):
         pallas_dispatch_steady_ms = None
+        pallas_ready_count = None
         if args.pallas_w13_from_reference_layout:
             pallas_layout = ref_layout
             print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
         else:
-            pallas_ready_count = None
             if args.dispatch_copy_mode == "scratch_ready":
                 pallas_dispatch_fn = _pallas_dispatch_ready_fn(mesh, recv_capacity=recv_capacity)
                 pallas_dispatch_args = _pallas_dispatch_ready_args(mesh, prepacked)
@@ -878,13 +920,22 @@ def main() -> None:
 
         if args.w13_impl == "both":
             raise ValueError("--w13-impl=both is only supported with --synthetic-layout")
-        if args.w13_impl == "ragged_dot":
+        if args.w13_impl == "mosaic_gpu_ready":
+            if pallas_ready_count is None:
+                pallas_ready_count = _sharded(
+                    mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
+                )
+            pallas_w13_fn = _pallas_ready_w13_silu_fn(mesh, args)
+            pallas_w13_args = _pallas_ready_w13_silu_args(mesh, pallas_layout, pallas_ready_count, w_gate_up)
+            w13_label = "w13_silu/mosaic_gpu_ready"
+        elif args.w13_impl == "ragged_dot":
             pallas_w13_fn = _ragged_dot_w13_silu_fn(mesh, args)
+            pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
             w13_label = "w13_silu/ragged_dot"
         else:
             pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
+            pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
             w13_label = "w13_silu/mosaic_gpu"
-        pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
 
         def run_pallas_w13():
             return pallas_w13_fn(*pallas_w13_args)

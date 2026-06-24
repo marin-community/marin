@@ -415,3 +415,34 @@
 - Next action: Add a W13 consumer mode that consumes source/expert ranges from
   `ready_count` and validate it against the current whole-buffer W13 result
   before attempting to remove the full barrier.
+
+### 2026-06-24 - Ready-range W13 consumer
+
+- Hypothesis: A W13/SiLU Mosaic kernel scheduled over flattened
+  source/expert ready ranges can consume `ready_count` directly and preserve
+  correctness. This tests the consumer-side scheduling contract before removing
+  the full producer barrier.
+- Commands:
+  - H128 smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-ready-w13-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --w13-impl mosaic_gpu_ready --bench-iters 1 --warmup-steps 1`
+  - H2560 relevant-shape smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-ready-w13-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --w13-impl mosaic_gpu_ready --bench-iters 2 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, Grug-truncated weights, top-k 4, `T/rank=8`, capacity factor 1.25.
+- Result:
+  - H128: dispatch max error 0, metadata errors 0, ready-count max error 0.
+    Ready-range W13/SiLU max abs error 0.0078125; steady-state mean
+    0.231 ms versus 0.174 ms reference JIT.
+  - H2560: dispatch max error 0, metadata errors 0, ready-count max error 0.
+    Ready-range W13/SiLU max abs error 0.015625; steady-state mean
+    5.370 ms versus 8.506 ms reference JIT.
+- Interpretation: The consumer-side ready-count contract is correct, but the
+  naive source/expert range schedule fragments W13 badly on the small-token
+  relevant-shape probe. The earlier expert-major W13 kernel ran about 0.667 ms
+  on the same shape; splitting into 256 source/expert groups costs most of the
+  TensorCore efficiency. The final overlap path should not simply run one
+  independent W13 schedule per source/expert range. It needs either coarser
+  block readiness, expert-local coalescing of ready ranges, or enough
+  communication/compute pipeline overlap at the large-token shape to offset the
+  scheduling fragmentation.
+- Next action: For the large-token shape, prototype block-level readiness with
+  expert-major coalescing, or keep W13 as the built-in grouped matmul and focus
+  on overlapping dispatch with the non-fragmented expert-major consumer.
