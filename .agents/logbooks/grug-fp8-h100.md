@@ -1067,3 +1067,22 @@ confirms the path.
   `… job run --gpu H100x1 --enable-extra-resources --extra gpu --memory 24GB --disk 32GB
   -- python lib/levanter/scripts/bench/bench_ragged_mosaic_f8.py`. The bench self-heals the ptxas/libdevice
   toolchain; no XLA_FLAGS needed on the command line.
+
+#### GFP8-022 addendum — VERIFIED: mixed-FP8 wgmma is a Mosaic limitation, not Hopper hardware
+Triple-checked (own source read + codex + opencode/glm-5.2, neutral prompts, all **high confidence**,
+no dissent). The backward's mixed e4m3×e5m2 GEMM is NOT a hardware wall:
+- **PTX ISA primary source (codex, verbatim NVIDIA examples):**
+  `wgmma.mma_async.sync.aligned.m64n8k32.f16.e4m3.e5m2` and `...f32.e5m2.e4m3` — NVIDIA's own docs show
+  FP8 wgmma with *different* a/b types. ISA defines `.atype ∈ {e4m3,e5m2}` and `.btype ∈ {e4m3,e5m2}`
+  independently; same-type is required for all FP floating-point wgmma *except* the FP8 (and int u8/s8)
+  variants. Requires `sm_90a` = Hopper.
+- **Mosaic source (direct, local):** emitter hardcodes ONE type for both operands —
+  `wgmma.py:242` emits `....{el_ty}.{el_ty}` from a single `element_type`; wrapper rejects mismatch at
+  `wgmma.py:359`. So Mosaic both refuses AND structurally can't emit mixed even if the check is deleted.
+- **Corroboration:** cuBLASLt exposes independent AType/BType FP8 columns incl. mixed rows; Transformer
+  Engine uses mixed FP8 GEMMs in production; and JAX's OWN `hopper_mixed_type_matmul_mgpu.py:222` works
+  around Mosaic's single-type limit by casting A→B dtype before `plgpu.wgmma`.
+- **Backward implications:** native mixed e4m3×e5m2 needs a small localized fork of the vendored Mosaic
+  emitter (thread separate a/b element types through `wgmma_m64` → template `.{a_el_ty}.{b_el_ty}`, drop
+  the line-359 check). Quick interim alternative (no fork): cast the e5m2 grad→e4m3 before the wgmma
+  (JAX's own trick), trading the e5m2 range for zero kernel surgery. A/B the two numerically.
