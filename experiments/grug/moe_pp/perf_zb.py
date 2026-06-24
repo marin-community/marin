@@ -1,0 +1,172 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Throughput: device-group pipeline (pipeline_zb) vs the FSDP/EP baseline on GPU.
+
+Times one full forward+backward step of each on the SAME model and global batch:
+
+* **FSDP/EP baseline** -- ``jax.value_and_grad(Transformer.next_token_loss)`` over
+  all devices (FSDP over ``data``, EP over ``expert``); one jitted program.
+* **Device-group pipeline** -- :func:`pipeline_zb.zb_build` with ``num_stages``
+  stages on disjoint device slices, microbatched, GPipe order. Compiled stage calls
+  on disjoint slices dispatch asynchronously so the runtime overlaps them.
+
+Defaults to 8-way PP (1 device/stage) at ~1B -- the original ``v6e-8`` goal scale.
+On a single NVLink node FSDP may still win on throughput (its all-gather is cheap
+and the GPipe bubble is ``(P-1)/(M+P-1)``); PP's win is multi-node comm and
+depth/memory scaling. Size via the ``MOE_PP_*`` env vars.
+
+    iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --extra gpu \\
+      -e MOE_PP_HIDDEN 1536 -e MOE_PP_LAYERS 24 -e MOE_PP_EXPERTS 8 -e MOE_PP_STAGE 8 \\
+      -e MOE_PP_NMICRO 8 -e MOE_PP_BATCH 32 -- python -m experiments.grug.moe_pp.perf_zb
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+from haliax.partitioning import set_mesh
+from levanter.grug.sharding import compact_grug_mesh
+
+from experiments.grug.moe.model import Transformer
+from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
+from experiments.grug.moe_pp.oracle import oracle_loss
+from experiments.grug.moe_pp.pipeline_zb import zb_build
+
+logger = logging.getLogger(__name__)
+
+
+def _peak_hbm_gib() -> float:
+    peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
+    return max(peaks, default=0) / 2**30
+
+
+def _time(fn, *, warmup: int, iters: int):
+    last = None
+    for _ in range(warmup):
+        last = fn()
+        jax.block_until_ready(last)
+    start = time.perf_counter()
+    for _ in range(iters):
+        last = fn()
+    jax.block_until_ready(last)
+    return (time.perf_counter() - start) / iters, last
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    init_distributed()
+    n = jax.device_count()
+    platform = jax.devices()[0].platform
+
+    num_stages = int(os.environ.get("MOE_PP_STAGE", "8"))
+    expert_per_stage = int(os.environ.get("MOE_PP_EPS", "1"))
+    data_per_stage = int(os.environ.get("MOE_PP_DPS", "1"))
+    num_microbatches = int(os.environ.get("MOE_PP_NMICRO", "8"))
+    hidden_dim = int(os.environ.get("MOE_PP_HIDDEN", "1536"))
+    num_layers = int(os.environ.get("MOE_PP_LAYERS", "24"))
+    num_experts = int(os.environ.get("MOE_PP_EXPERTS", "8"))
+    num_experts_per_token = int(os.environ.get("MOE_PP_EPT", "2"))
+    seq_len = int(os.environ.get("MOE_PP_SEQ", "1024"))
+    vocab_size = int(os.environ.get("MOE_PP_VOCAB", "32768"))
+    global_batch = int(os.environ.get("MOE_PP_BATCH", "32"))
+    warmup = int(os.environ.get("MOE_PP_WARMUP", "2"))
+    iters = int(os.environ.get("MOE_PP_ITERS", "5"))
+
+    cfg = _config(
+        vocab_size=vocab_size,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        seq_len=seq_len,
+        attention_implementation="reference",
+    )
+    total_b, active_b = _param_count(cfg)
+    tokens_per_step = global_batch * seq_len
+    logger.info("perf_zb on %d %s device(s), %d host(s)", n, platform, jax.process_count())
+    logger.info(
+        "model ~%.1fB total / ~%.1fB active | hidden=%d L=%d E=%d seq=%d | global_batch=%d | "
+        "PP stages=%d eps=%d dps=%d microbatches=%d | tokens/step=%d",
+        total_b,
+        active_b,
+        hidden_dim,
+        num_layers,
+        num_experts,
+        seq_len,
+        global_batch,
+        num_stages,
+        expert_per_stage,
+        data_per_stage,
+        num_microbatches,
+        tokens_per_step,
+    )
+
+    tokens = jax.random.randint(jax.random.PRNGKey(1), (global_batch, seq_len), 0, vocab_size, dtype=jnp.int32)
+    weight = jnp.ones((global_batch, seq_len), jnp.float32)
+
+    # --- FSDP/EP baseline: full mesh, one jitted value_and_grad ---
+    fsdp_expert = expert_per_stage * data_per_stage if expert_per_stage > 1 else 1
+    fsdp_mesh = compact_grug_mesh(
+        expert_axis_size=fsdp_expert, replica_axis_size=1, model_axis_size=1, stage_axis_size=1
+    )
+    with set_mesh(fsdp_mesh):
+        model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
+        arrays, static = eqx.partition(model, eqx.is_array)
+        fsdp_tokens = jax.device_put(tokens, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
+        fsdp_weight = jax.device_put(weight, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
+
+        @jax.jit
+        def fsdp_grad(arrays):
+            return jax.value_and_grad(lambda p: oracle_loss(eqx.combine(p, static), fsdp_tokens, fsdp_weight))(arrays)
+
+        fsdp_sec, fsdp_out = _time(lambda: fsdp_grad(arrays), warmup=warmup, iters=iters)
+        fsdp_loss = float(np.asarray(fsdp_out[0]))
+        fsdp_hbm = _peak_hbm_gib()
+
+    # --- device-group pipeline (init under any full mesh; zb_build re-places per stage) ---
+    with set_mesh(fsdp_mesh):
+        pp_model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
+    step = zb_build(
+        pp_model,
+        num_stages=num_stages,
+        num_microbatches=num_microbatches,
+        expert_per_stage=expert_per_stage,
+        data_per_stage=data_per_stage,
+    )
+    pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
+    pp_loss = float(np.asarray(pp_out[0]))
+    pp_hbm = _peak_hbm_gib()
+
+    logger.info(
+        "PERF fsdp_baseline   : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB",
+        fsdp_sec,
+        tokens_per_step / fsdp_sec,
+        fsdp_loss,
+        fsdp_hbm,
+    )
+    logger.info(
+        "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB",
+        pp_sec,
+        tokens_per_step / pp_sec,
+        pp_loss,
+        pp_hbm,
+    )
+    logger.info(
+        "PERF zb / fsdp = %.2fx step time | GPipe bubble ~%.0f%% ((P-1)/(M+P-1), P=%d M=%d)",
+        pp_sec / fsdp_sec,
+        100.0 * (num_stages - 1) / (num_microbatches + num_stages - 1),
+        num_stages,
+        num_microbatches,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
