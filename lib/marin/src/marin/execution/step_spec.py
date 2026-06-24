@@ -121,29 +121,11 @@ class StepSpec:
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
 
-    @property
-    def executor_override_path(self) -> str:
-        """Prefix-relative identity to pin as an ``ExecutorStep``'s override path.
-
-        Without an explicit ``output_path_prefix``, this stays relative so the
-        :class:`~marin.execution.executor.Executor` anchors it under the *run*
-        prefix (region-portable) instead of freezing the build environment's
-        region. An explicit ``output_path_prefix`` or an absolute
-        ``override_output_path`` is a deliberate pin and kept as-is.
-        """
-        if self.output_path_prefix is not None:
-            return self.output_path
-        if self.override_output_path is not None:
-            return self.override_output_path
-        return self.name_with_hash
-
     def as_executor_step(self) -> ExecutorStep:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
-        The resulting ``ExecutorStep`` preserves this step's caching identity via
-        a prefix-relative ``override_output_path`` (:attr:`executor_override_path`),
-        which the executor anchors under the run prefix. Round-tripping through
-        ``resolve_executor_step`` returns the original ``StepSpec``.
+        Round-tripping through ``resolve_executor_step`` returns the original
+        ``StepSpec``.
         """
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 
@@ -153,11 +135,19 @@ class StepSpec:
             deps=dep_steps,
         )
 
+        # ExecutorStep carries only override_output_path. An explicit prefix (or an
+        # absolute override) is a deliberate pin, kept as an absolute path; otherwise
+        # stay relative so the executor anchors under the run prefix, not the build region.
+        if self.output_path_prefix is not None:
+            override_output_path = self.output_path
+        else:
+            override_output_path = self.override_output_path or self.name_with_hash
+
         result = ExecutorStep(
             name=self.name,
             fn=self.fn,
             config=config,
-            override_output_path=self.executor_override_path,
+            override_output_path=override_output_path,
             resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original
