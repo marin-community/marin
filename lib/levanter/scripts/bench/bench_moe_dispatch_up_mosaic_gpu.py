@@ -14,6 +14,7 @@ import numpy as np
 from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+from haliax.nn.ragged_dot import ragged_dot
 from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
     compute_moe_up_mosaic_gpu_local,
@@ -275,6 +276,207 @@ def _pallas_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
     return fn
 
 
+def _ragged_dot_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
+    def local_w13(recv_x, rows_per_expert, local_w_gate_up):
+        w13_out = ragged_dot(
+            jnp.squeeze(recv_x, axis=0),
+            jnp.squeeze(local_w_gate_up, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            implementation=args.ragged_dot_impl,
+        )
+        gate, up = jnp.split(w13_out, 2, axis=-1)
+        h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
+        return h[None, ...]
+
+    fn = jax.jit(
+        shard_map(
+            local_w13,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None), P("expert", None, None, None)),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+    return fn
+
+
+def _synthetic_layout(
+    mesh: Mesh,
+    *,
+    ep_size: int,
+    recv_capacity: int,
+    experts_per_rank: int,
+    hidden: int,
+    intermediate: int,
+    dtype: jnp.dtype,
+    weight_init: str,
+    weight_std: float | None,
+) -> tuple[MoeDispatchUpLayout, jax.Array]:
+    if recv_capacity % experts_per_rank != 0:
+        raise ValueError(
+            f"synthetic recv_capacity={recv_capacity} must be divisible by experts_per_rank={experts_per_rank}"
+        )
+    recv_sharding = NamedSharding(mesh, P("expert", None, None))
+    metadata_sharding = NamedSharding(mesh, P("expert", None))
+    weight_sharding = NamedSharding(mesh, P("expert", None, None, None))
+
+    k_x, k_w = jax.random.split(jax.random.key(6597))
+    recv_x = jax.random.normal(
+        k_x,
+        (ep_size, recv_capacity, hidden),
+        dtype=dtype,
+        out_sharding=recv_sharding,
+    )
+    rows_per_expert_host = np.full((ep_size, experts_per_rank), recv_capacity // experts_per_rank, dtype=np.int32)
+    rows_per_expert = jax.device_put(rows_per_expert_host, metadata_sharding)
+    expert_base = jax.device_put(
+        np.broadcast_to(
+            np.arange(experts_per_rank, dtype=np.int32) * (recv_capacity // experts_per_rank),
+            (ep_size, experts_per_rank),
+        ),
+        metadata_sharding,
+    )
+    recv_valid = jnp.ones((ep_size, recv_capacity), dtype=jnp.bool, out_sharding=metadata_sharding)
+    metadata_zeros = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32, out_sharding=metadata_sharding)
+    router_weights = jnp.ones((ep_size, recv_capacity), dtype=dtype, out_sharding=metadata_sharding)
+    overflow_count = jnp.zeros((ep_size,), dtype=jnp.int32, out_sharding=NamedSharding(mesh, P("expert")))
+
+    w_shape = (ep_size, experts_per_rank, hidden, 2 * intermediate)
+    if weight_init == "grug_truncated":
+        std = 0.5 / math.sqrt(hidden) if weight_std is None else weight_std
+        w_gate_up = (
+            std
+            * jax.random.truncated_normal(
+                k_w,
+                -3,
+                3,
+                w_shape,
+                dtype=dtype,
+                out_sharding=weight_sharding,
+            )
+        ).astype(dtype)
+    elif weight_init == "standard_normal":
+        w_gate_up = jax.random.normal(k_w, w_shape, dtype=dtype, out_sharding=weight_sharding)
+    else:
+        raise ValueError(f"unknown weight_init={weight_init!r}")
+
+    layout = MoeDispatchUpLayout(
+        recv_x,
+        recv_valid,
+        rows_per_expert,
+        expert_base,
+        metadata_zeros,
+        metadata_zeros,
+        metadata_zeros,
+        metadata_zeros,
+        router_weights,
+        overflow_count,
+    )
+    return layout, w_gate_up
+
+
+def _resolve_recv_capacity(args, *, synthetic_layout: bool) -> tuple[int, float | None]:
+    if args.recv_capacity is not None and args.recv_capacity_factor is not None:
+        raise ValueError("Specify at most one of --recv-capacity and --recv-capacity-factor")
+
+    routed_rows_per_rank = args.tokens_per_rank * args.top_k
+    if args.recv_capacity is not None:
+        return args.recv_capacity, None
+
+    if args.recv_capacity_factor is not None:
+        return math.ceil(args.recv_capacity_factor * routed_rows_per_rank), args.recv_capacity_factor
+
+    if synthetic_layout:
+        return routed_rows_per_rank, 1.0
+
+    default_capacity_factor = 1.25
+    return math.ceil(default_capacity_factor * routed_rows_per_rank), default_capacity_factor
+
+
+def _run_synthetic_layout_benchmark(args, dtype: jnp.dtype, devices: list[jax.Device]) -> None:
+    if len(devices) < args.ep_size:
+        raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
+    recv_capacity, recv_capacity_factor = _resolve_recv_capacity(args, synthetic_layout=True)
+    mesh = Mesh(np.array(devices[: args.ep_size]), ("expert",), axis_types=(AxisType.Explicit,))
+    capacity_desc = (
+        f"recv_capacity_factor={recv_capacity_factor:g}"
+        if recv_capacity_factor is not None
+        else "recv_capacity=explicit"
+    )
+    print(
+        "synthetic_layout: "
+        f"recv_capacity={recv_capacity} {capacity_desc} rows_per_expert={recv_capacity // args.experts_per_rank} "
+        f"w13_impl={args.w13_impl} ragged_dot_impl={args.ragged_dot_impl}"
+    )
+    with jax.set_mesh(mesh):
+        layout, w_gate_up = _synthetic_layout(
+            mesh,
+            ep_size=args.ep_size,
+            recv_capacity=recv_capacity,
+            experts_per_rank=args.experts_per_rank,
+            hidden=args.hidden,
+            intermediate=args.intermediate,
+            dtype=dtype,
+            weight_init=args.weight_init,
+            weight_std=args.weight_std,
+        )
+
+        timings: dict[str, float] = {}
+        outputs: dict[str, jax.Array] = {}
+        if args.w13_impl in ("mosaic_gpu", "both"):
+            pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
+            pallas_w13_args = _pallas_w13_silu_args(mesh, layout, w_gate_up)
+
+            def run_pallas_w13():
+                return pallas_w13_fn(*pallas_w13_args)
+
+            pallas_h, _ = _time_block("w13_silu/mosaic_gpu", run_pallas_w13)
+            outputs["mosaic_gpu"] = pallas_h
+            if args.bench_iters > 0:
+                timings["mosaic_gpu"] = _measure_steady_state(
+                    "w13_silu/mosaic_gpu",
+                    run_pallas_w13,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+        if args.w13_impl in ("ragged_dot", "both"):
+            ragged_w13_fn = _ragged_dot_w13_silu_fn(mesh, args)
+            ragged_w13_args = _pallas_w13_silu_args(mesh, layout, w_gate_up)
+
+            def run_ragged_w13():
+                return ragged_w13_fn(*ragged_w13_args)
+
+            ragged_h, _ = _time_block("w13_silu/ragged_dot", run_ragged_w13)
+            outputs["ragged_dot"] = ragged_h
+            if args.bench_iters > 0:
+                timings["ragged_dot"] = _measure_steady_state(
+                    "w13_silu/ragged_dot",
+                    run_ragged_w13,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+        if args.check_w13 and set(outputs) == {"mosaic_gpu", "ragged_dot"}:
+            h_err = jnp.max(
+                jnp.abs(outputs["mosaic_gpu"].astype(jnp.float32) - outputs["ragged_dot"].astype(jnp.float32))
+            )
+            h_err_float = float(h_err)
+            print(f"w13_silu_mosaic_vs_ragged_dot_max_abs_error: {h_err_float:.6g}")
+            _print_error_summary("w13_silu_mosaic_vs_ragged_dot", outputs["mosaic_gpu"], outputs["ragged_dot"])
+            _check_error("w13_silu_mosaic_vs_ragged_dot_max_abs_error", h_err_float, args.w13_atol)
+        for label, steady_ms in timings.items():
+            _print_roofline(
+                ep_size=args.ep_size,
+                tokens_per_rank=recv_capacity // args.top_k,
+                experts_per_rank=args.experts_per_rank,
+                top_k=args.top_k,
+                hidden=args.hidden,
+                intermediate=args.intermediate,
+                dtype_bytes=2 if dtype == jnp.bfloat16 else 4,
+                dispatch_ms=None,
+                w13_ms=steady_ms,
+            )
+
+
 def _print_error_debug(
     label: str,
     actual: jax.Array,
@@ -360,6 +562,40 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--run-pallas", action="store_true")
     parser.add_argument(
+        "--synthetic-layout",
+        action="store_true",
+        help="Skip routing/prepack and benchmark W13/SiLU on a synthetic expert-major layout.",
+    )
+    parser.add_argument(
+        "--recv-capacity",
+        type=int,
+        default=None,
+        help="Rows per destination rank. Overrides --recv-capacity-factor.",
+    )
+    parser.add_argument(
+        "--recv-capacity-factor",
+        type=float,
+        default=None,
+        help="Capacity multiplier for T*K routed rows per destination rank; defaults to 1.25 routed, 1.0 synthetic.",
+    )
+    parser.add_argument(
+        "--w13-impl",
+        choices=("mosaic_gpu", "ragged_dot", "both"),
+        default="mosaic_gpu",
+        help="W13/SiLU implementation to benchmark.",
+    )
+    parser.add_argument(
+        "--ragged-dot-impl",
+        choices=("auto", "triton", "xla"),
+        default="auto",
+        help="haliax.nn.ragged_dot implementation when --w13-impl includes ragged_dot.",
+    )
+    parser.add_argument(
+        "--check-w13",
+        action="store_true",
+        help="In synthetic layout mode with --w13-impl=both, compare Mosaic GPU W13 against ragged_dot.",
+    )
+    parser.add_argument(
         "--dispatch-copy-mode",
         choices=("scalar", "row_vector", "scratch"),
         default="scratch",
@@ -386,6 +622,9 @@ def main() -> None:
         f"K={args.top_k} H={args.hidden} I={args.intermediate} dtype={args.dtype} "
         f"weight_init={args.weight_init} weight_std={args.weight_std}"
     )
+    if args.synthetic_layout:
+        _run_synthetic_layout_benchmark(args, dtype, devices)
+        return
 
     x_by_rank, expert_ids, router_weights, w_gate_up = _make_inputs(
         ep_size=args.ep_size,
@@ -398,7 +637,11 @@ def main() -> None:
         weight_init=args.weight_init,
         weight_std=args.weight_std,
     )
-    recv_capacity = args.ep_size * args.tokens_per_rank * args.top_k
+    recv_capacity, recv_capacity_factor = _resolve_recv_capacity(args, synthetic_layout=False)
+    if recv_capacity_factor is not None:
+        print(f"recv_capacity: {recv_capacity} from factor={recv_capacity_factor:g}")
+    else:
+        print(f"recv_capacity: {recv_capacity}")
     num_experts = args.ep_size * args.experts_per_rank
 
     prepacked, _ = _time_block(
@@ -505,23 +748,30 @@ def main() -> None:
                     f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
                 )
 
-        pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
+        if args.w13_impl == "both":
+            raise ValueError("--w13-impl=both is only supported with --synthetic-layout")
+        if args.w13_impl == "ragged_dot":
+            pallas_w13_fn = _ragged_dot_w13_silu_fn(mesh, args)
+            w13_label = "w13_silu/ragged_dot"
+        else:
+            pallas_w13_fn = _pallas_w13_silu_fn(mesh, args)
+            w13_label = "w13_silu/mosaic_gpu"
         pallas_w13_args = _pallas_w13_silu_args(mesh, pallas_layout, w_gate_up)
 
         def run_pallas_w13():
             return pallas_w13_fn(*pallas_w13_args)
 
-        pallas_h, _ = _time_block("w13_silu/mosaic_gpu", run_pallas_w13)
+        pallas_h, _ = _time_block(w13_label, run_pallas_w13)
         pallas_w13_steady_ms = None
         if args.bench_iters > 0:
             pallas_w13_steady_ms = _measure_steady_state(
-                "w13_silu/mosaic_gpu",
+                w13_label,
                 run_pallas_w13,
                 warmup_steps=args.warmup_steps,
                 bench_iters=args.bench_iters,
             )
             if ref_w13_steady_ms is not None:
-                _print_speedup("w13_silu/mosaic_gpu_vs_reference_jit", ref_w13_steady_ms, pallas_w13_steady_ms)
+                _print_speedup(f"{w13_label}_vs_reference_jit", ref_w13_steady_ms, pallas_w13_steady_ms)
         h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
         h_err_float = float(h_err)
         print(f"w13_silu_max_abs_error: {h_err_float:.6g}")

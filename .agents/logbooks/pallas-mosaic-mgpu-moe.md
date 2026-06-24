@@ -325,3 +325,38 @@
   later overlapped prototype only after dispatch is improved, likely by
   coarsening row programs into larger transfer tiles or fusing compaction with
   W13 consumption.
+
+### 2026-06-24 - Large-token grouped W13 baseline
+
+- Hypothesis: At the more relevant per-rank token count
+  `T/rank=4096 * 8 = 32768`, the W13/SiLU grouped matmul should be compute
+  intensive, not HBM-bound. Built-in Haliax `ragged_dot(auto)` should provide a
+  stronger target than `ragged_dot_general` XLA lowering.
+- Commands:
+  - XLA grouped matmul baseline: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 3600 --job-name dlwh-6597-moe-bigshape-ragged-dot-xla -- ... bench_moe_dispatch_up_mosaic_gpu.py --synthetic-layout --ep-size 8 --tokens-per-rank 32768 --recv-capacity 131072 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --w13-impl ragged_dot --ragged-dot-impl xla --bench-iters 3 --warmup-steps 1`
+  - Triton/auto grouped matmul baseline: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 3600 --job-name dlwh-6597-moe-bigshape-ragged-dot-auto -- ... bench_moe_dispatch_up_mosaic_gpu.py --synthetic-layout --ep-size 8 --tokens-per-rank 32768 --recv-capacity-factor 1.0 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --w13-impl ragged_dot --ragged-dot-impl auto --bench-iters 3 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, synthetic
+  expert-major layout, bf16, `H=2560`, `I=2560`, top-k 4, 32 local experts per
+  rank, 256 global experts, Grug-truncated expert weights. Capacity was sized
+  to 0% buffer for the balanced synthetic layout:
+  `recv_capacity=32768 * 4 = 131072`, so each local expert received 4096 rows.
+- Result:
+  - XLA `ragged_dot_general` W13/SiLU steady-state mean was 139.973 ms,
+    measuring 196.38 TFLOP/s.
+  - Haliax `ragged_dot(auto)`, which selects the Pallas Triton grouped matmul
+    on GPU, compiled in 370.7 ms and reached steady-state mean 7.321 ms,
+    measuring 3754.64 TFLOP/s.
+  - Large-shape roofline summary: 1,048,576 routed rows globally; W13 work
+    27.49 PFLOP; estimated W13 bytes 17.45 GB; arithmetic intensity
+    1575 flop/byte including activations and weights; simple 8xH100 BF16
+    peak estimate 7912 TFLOP/s.
+- Interpretation: The earlier `~1 flop/byte` estimate was only true for the
+  tiny `T/rank=8` probe. At the large token count, W13/SiLU is compute
+  intensive and the built-in Triton grouped matmul is the relevant baseline.
+  The measured 7.321 ms is about 47% of the simple BF16 peak estimate; the
+  W13-only compute lower bound is roughly 3.5 ms, so a `<2 ms` end-to-end
+  target for this full W13 shape is below roofline.
+- Next action: Treat `ragged_dot(auto)` as the grouped W13 baseline and focus
+  Mosaic work on dispatch/overlap only where it can improve end-to-end time.
+  Benchmark capacity should be expressed as a per-rank routed-token factor:
+  1.0 for no buffer and roughly 1.1-1.25 for normal imbalance.
