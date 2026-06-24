@@ -569,3 +569,49 @@
   all-gather matmul pattern.
 - Next action: Replace the scratch row-copy transport with block/coalesced
   receive writes before rerunning T/rank=4096 or the full T/rank=32768 shape.
+
+### 2026-06-24 - Direct-ready dispatch transport probe
+
+- Hypothesis: The stalled T/rank=4096 probes may be dominated by the scratch
+  transport's second local compaction pass. A direct-ready transport that writes
+  routed rows straight into final receive buffers, then emits the same
+  source/expert and block readiness metadata, should isolate whether scratch
+  compaction or row-wise remote writes are the large-shape blocker.
+- Changes:
+  - Added `direct_ready` dispatch mode. It uses the same dynamic row-program
+    structure as `scratch_ready`, but writes remote rows directly into
+    destination `recv_x` and metadata buffers.
+  - Added an explicit zero barrier before remote writes so destination-local
+    output initialization cannot race with incoming writes.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/kernels/pallas/moe_dispatch_up/mosaic_gpu.py lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - H128 smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-direct-ready-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode direct_ready --dispatch-rows-per-program 16 --w13-impl mosaic_gpu_block_ready --bench-iters 1 --warmup-steps 1`
+  - Required H2560 validation: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-direct-ready-h2560 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode direct_ready --dispatch-rows-per-program 16 --w13-impl mosaic_gpu_block_ready --bench-iters 2 --warmup-steps 1`
+  - Stopped medium candidate: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-direct-ready-t4096-ragged -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --send-capacity-factor 1.25 --run-pallas --dispatch-copy-mode direct_ready --dispatch-rows-per-program 16 --w13-impl ragged_dot --ragged-dot-impl auto --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+- Result:
+  - H128: dispatch max error 0, metadata errors 0, source/expert ready-count
+    max error 0, block-ready-count max error 0. Dispatch steady-state mean
+    1.628 ms. Block-ready W13/SiLU steady-state mean 0.193 ms, max abs error
+    0.0078125.
+  - H2560 required validation: dispatch max error 0, metadata errors 0,
+    source/expert ready-count max error 0, block-ready-count max error 0.
+    Dispatch steady-state mean 1.733 ms versus 0.790 ms reference JIT.
+    Block-ready W13/SiLU steady-state mean 0.611 ms versus 8.522 ms reference
+    JIT, max abs error 0.015625.
+  - H2560 roofline summary: 256 routed rows, dispatch payload 1280 KiB,
+    W13 work 6710.886 MFLOP, arithmetic intensity 1.000 flop/byte, measured W13
+    10.99 TFLOP/s, estimated HBM-bound W13 roofline 26.79 TFLOP/s.
+  - T/rank=4096 direct-ready candidate used `recv_capacity=20480` and
+    `send_capacity=2560` from 25% buffers. Prepack completed in 21.2 s, but no
+    dispatch timing appeared after several minutes; the job was stopped.
+- Interpretation: Direct final-row writes preserve correctness on the required
+  H2560 validation shape, but they do not fix the large-token scaling failure.
+  This narrows the bottleneck from "scratch compaction" to the broader row-wise
+  remote-write transport and synchronization pattern. The next implementation
+  should move data in coalesced receive blocks or use a collective-style
+  primitive closer to the JAX all-gather matmul example, then signal
+  `ready_block_count` as blocks complete.
+- Next action: Prototype block/coalesced remote movement for expert-major
+  receive blocks. Do not spend more H100 time on row-wise scratch or direct
+  final-row transport at T/rank=4096+ unless the transport changes.
