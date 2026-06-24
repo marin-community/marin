@@ -1,27 +1,21 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Left-preconditioned Muon (Ali Jadbabaie's "idea 4").
+"""Left-preconditioned Muon (Ali Jadbabaie's "idea 4"), Mudam-style coupled-Newton solver.
 
-Muon orthogonalizes the (momentum) gradient via its matrix sign / polar factor.
-**Left-preconditioned** Muon additionally whitens on the *output* side by the gradient's
-own left second moment ``H = EMA(G Gᵀ)`` (the Shampoo-style left factor). For a weight
-``W`` (d_out × d_in) with momentum ``M`` and gradient second moment ``H`` (d_out × d_out):
+    U = ρ · H^{-1/2} · polar( H^{-1/2} · M ) ,   H = EMA(G Gᵀ)   (output/left side)
 
-    U = ρ · H^{-1/2} · polar( H^{-1/2} · M )           (polar = matrix sign = NS5)
-    W ← W − η · U
+``H^{-1/2}`` is the **saturating coarse inverse-sqrt** ``q_k`` (``solver="qk"``): eigh, then the k-step
+Muon-coeff NS scalar map applied to the (λ_max-normalized) eigenvalues. This reproduces Mudam's
+coupled-NS operator exactly (proven by spectral mapping) and beats the exact ``w^{-1/2}``
+(``solver="eigh"``) because it *caps* the amplification of the smallest/noisiest eigen-directions
+rather than blowing them up — the beneficial regularization that makes Mudam (1.165) beat exact
+whitening (1.185).
 
-i.e. whiten on the left by ``H^{-1/2}``, orthogonalize, whiten again. ``H = I`` recovers plain
-Muon. Unlike idea 3 (which whitened by the *activation* second moment AAᵀ and needed forward
-capture), ``H`` here is built from the gradient alone — so this is a pure optimizer with no
-trainer/model changes. Using the EMA (rather than the current ``G Gᵀ``) keeps it non-degenerate:
-``H^{-1/2}M`` is not the polar factor of ``M`` because ``H`` reflects the gradient's *history*.
-
-``H^{-1/2}`` uses a **truncated (rank-)pseudo-inverse** (facebookresearch/optimizers#265): tiny
-eigenvalues are zeroed rather than blown up by the inverse root, which is more stable than a
-plain inverse-root or additive damping. The eigenvalues are normalized by the mean kept
-eigenvalue first, so ``H^{-1/2}`` is scale-free and the update magnitude (and the learning rate)
-stays comparable to Muon.
+``outer_precond=False`` drops the outer factor, giving ``polar(H^{-1/2} M)`` — provably identical to
+Mudam-with-another_muon. ``outer_precond=True`` is the full idea-4 update; ``outer_msign`` re-
+orthogonalizes after it; ``normalize_fro`` rescales to plain-Muon's Frobenius norm. ``H = I`` recovers
+plain Muon. Gradient-only; no activation capture.
 """
 
 import dataclasses
@@ -51,20 +45,14 @@ from levanter.utils.jax_utils import leaf_key_paths
 class LeftPrecondMuonConfig(OptimizerConfig):
     """Left-preconditioned Muon (idea 4): U = ρ H^{-1/2} polar(H^{-1/2} M), H = EMA(G Gᵀ)."""
 
-    # --- the new knobs (vs Muon) ---
+    # --- the idea-4 knobs ---
     h_beta: float = 0.95  # EMA decay for the gradient second moment H = EMA(G Gᵀ)
-    clamp_rel: float = 1e-15  # truncated pseudo-inverse: zero eigenvalues below clamp_rel · λ_max
-    # 1e-15 (= Shampoo / fb#265) truncates only numerically-zero directions; larger values
-    # aggressively drop real low-curvature directions (which hurts) — keep this tiny.
+    solver: str = "qk"  # "qk": saturating coarse NS-polynomial inverse-sqrt (= Mudam); "eigh": exact w^{-1/2}
+    qk_steps: int = 5  # k in the q_k saturating polynomial (Muon-coeff scalar map on eigenvalues)
+    outer_precond: bool = True  # True: U = H^{-1/2} polar(H^{-1/2} M) (full); False: U = polar(H^{-1/2} M)
+    outer_msign: bool = False  # re-orthogonalize after the outer factor: U = polar(H^{-1/2} polar(H^{-1/2} M))
+    normalize_fro: bool = False  # rescale U to plain-Muon's Frobenius norm (polar(M))
     ns_steps: int = 5  # Newton-Schulz steps for the polar factor
-    damping: float = 0.0  # additive damping λ on mean-normalized eigenvalues: (w/mean + λ)^{-p}.
-    # λ=0 over-amplifies tiny eigenvalues; larger λ bounds the amplification; λ→∞ ⟹ plain Muon.
-    inv_power: float = 0.5  # whitening exponent p in (w/mean+λ)^{-p}: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler).
-
-    # --- variants (ablations) ---
-    outer_precond: bool = True  # True: U = H^{-1/2} polar(H^{-1/2} M); False (v1): U = polar(H^{-1/2} M)
-    real_inverse: bool = False  # False: truncated pseudo-inverse; True (v2): damped real inverse (no truncation)
-    normalize_fro: bool = False  # True (v3): rescale U to Muon's Frobenius norm √(min(d_out,d_in))
 
     # --- Muon-shared knobs ---
     lr: float = 0.02
@@ -76,7 +64,7 @@ class LeftPrecondMuonConfig(OptimizerConfig):
     beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
-    matrix_epsilon: float = 1e-7  # NS5 normalization floor
+    matrix_epsilon: float = 1e-7  # NS / normalization floor
     max_grad_norm: float = 1.0
     use_kimi_scaling: bool = False
 
@@ -91,15 +79,14 @@ class LeftPrecondMuonConfig(OptimizerConfig):
                         self.momentum,
                         self.nesterov,
                         self.h_beta,
-                        self.clamp_rel,
+                        self.solver,
+                        self.qk_steps,
                         self.ns_steps,
                         self.matrix_epsilon,
                         self.use_kimi_scaling,
                         self.outer_precond,
-                        self.real_inverse,
+                        self.outer_msign,
                         self.normalize_fro,
-                        self.damping,
-                        self.inv_power,
                     )
                 ]
                 if self.weight_decay > 0:
@@ -118,10 +105,7 @@ class LeftPrecondMuonConfig(OptimizerConfig):
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 
-            transformations = {
-                "left_precond_muon": matrix_transform(),
-                "adamw": adamw_transform(),
-            }
+            transformations = {"left_precond_muon": matrix_transform(), "adamw": adamw_transform()}
             return optax.multi_transform(
                 transformations, partial(self.create_mask, use_kimi_scaling=self.use_kimi_scaling)
             )
@@ -150,45 +134,65 @@ class ScaleByLeftPrecondMuonState(NamedTuple):
     h_ema: optax.Updates  # per-matrix gradient second moment EMA, [..., d_out, d_out] (raw arrays)
 
 
-def _inv_sqrt(h, clamp_rel, eps, real_inverse, damping, inv_power):
-    """H^{-p}. Eigenvalues normalized by the mean (scale-free; H ∝ I ⟹ H^{-p} ∝ I).
+_MUON_NS_COEFFS = (3.4445, -4.7750, 2.0315)
 
-    real_inverse=False: truncated pseudo-inverse — zero eigenvalues below clamp_rel·λ_max (fb#265).
-    real_inverse=True : invert ALL eigenvalues (no truncation).
-    damping λ floors the (mean-normalized) eigenvalues: (w/mean + λ)^{-p}, bounding the
-    amplification of tiny eigenvalues; λ→∞ ⟹ H^{-p} ∝ I ⟹ plain Muon.
-    inv_power p: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler whitening).
+
+def _qk_inv_sqrt(h, steps, eps):
+    """Saturating coarse inverse-sqrt: eigh + the k-step Muon-coeff NS scalar map q_k(w).
+
+    Reproduces Mudam's coupled-NS operator exactly (proven by spectral mapping). Normalize the
+    eigenvalues by λ_max so the spectrum is in (0,1] (the NS convergence basin). As k→∞, q_k(w) →
+    w^{-1/2}; at finite k it SATURATES the amplification of the smallest/noisiest eigen-directions
+    instead of blowing them up — that cap is the beneficial regularization over the exact inverse.
+    Reduces to plain Muon when H ∝ I (all eigenvalues equal → uniform scaling, washed by the polar).
     """
     h = h.astype(jnp.float32)
     h = 0.5 * (h + h.T)
-    w, u = jnp.linalg.eigh(h)
+    w, u_vec = jnp.linalg.eigh(h)
     w = jnp.maximum(w, 0.0)
-    wmax = jnp.max(w)
-    keep = w > clamp_rel * wmax + eps
-    mean_kept = jnp.sum(jnp.where(keep, w, 0.0)) / jnp.maximum(jnp.sum(keep), 1.0)
-    wn = w / (mean_kept + eps)
-    pw = (wn + damping + eps) ** (-inv_power)
-    inv = pw if real_inverse else jnp.where(keep, pw, 0.0)
-    return (u * inv[None, :]) @ u.T
+    lam = w / (jnp.max(w) + eps)  # spectrum in (0, 1]
+    a, b, c = _MUON_NS_COEFFS
+    al = lam
+    mult = jnp.ones_like(lam)
+    for _ in range(steps):
+        f = a + b * al + c * al * al
+        mult = mult * f
+        al = f * f * al
+    return (u_vec * mult) @ u_vec.T
+
+
+def _exact_inv_sqrt(h, eps):
+    """Exact mean-normalized H^{-1/2} via eigh (the un-regularized 'inner_muon' whitening)."""
+    h = h.astype(jnp.float32)
+    h = 0.5 * (h + h.T)
+    w, u_vec = jnp.linalg.eigh(h)
+    w = jnp.maximum(w, 0.0)
+    lam = w / (jnp.mean(w) + eps)
+    inv = jnp.where(lam > 1e-12, lam**-0.5, 0.0)
+    return (u_vec * inv) @ u_vec.T
 
 
 def _left_precond_matrix(
-    m, h, *, clamp_rel, ns_steps, eps, use_kimi_scaling, outer_precond, real_inverse, normalize_fro, damping, inv_power
+    m, h, *, solver, qk_steps, ns_steps, eps, use_kimi_scaling, outer_precond, outer_msign, normalize_fro
 ):
-    """U for one weight M (d_out × d_in), H (d_out × d_out).
+    """U = H^{-1/2} polar(H^{-1/2} M) for one weight M (d_out × d_in), H (d_out × d_out).
 
-    Full (idea 4): U = H^{-1/2} polar(H^{-1/2} M). outer_precond=False drops the outer factor.
+    outer_precond=False drops the outer H^{-1/2} (gives polar(H^{-1/2} M)).
+    outer_msign re-orthogonalizes after the outer factor: U = polar(H^{-1/2} polar(H^{-1/2} M)).
+    normalize_fro rescales U to plain-Muon's Frobenius norm (polar(M)).
     """
     orig_dtype = m.dtype
     x = m.astype(jnp.float32)
-    hih = _inv_sqrt(h, clamp_rel, eps, real_inverse, damping, inv_power)  # (out, out)
+    hih = _qk_inv_sqrt(h, qk_steps, eps) if solver == "qk" else _exact_inv_sqrt(h, eps)  # (out, out)
     whitened = hih @ x  # H^{-1/2} M
     ortho = zeropower_via_newtonschulz5(whitened, steps=ns_steps, eps=eps, coefficient_type="quintic")
     u = (hih @ ortho) if outer_precond else ortho
+    if outer_msign:
+        u = zeropower_via_newtonschulz5(u, steps=ns_steps, eps=eps, coefficient_type="quintic")
 
     if normalize_fro:
-        k = min(u.shape[0], u.shape[1])
-        u = u * (jnp.sqrt(jnp.float32(k)) / (jnp.linalg.norm(u) + eps))
+        muon = zeropower_via_newtonschulz5(x, steps=ns_steps, eps=eps, coefficient_type="quintic")
+        u = u * (jnp.linalg.norm(muon) / (jnp.linalg.norm(u) + eps))
 
     if not use_kimi_scaling:
         scale = jnp.sqrt(jnp.maximum(1.0, u.shape[0] / u.shape[1]))  # sqrt(Out/In)
@@ -201,19 +205,17 @@ def scale_with_left_precond_muon(
     momentum=0.95,
     nesterov=True,
     h_beta=0.95,
-    clamp_rel=1e-15,
+    solver="qk",
+    qk_steps=5,
     ns_steps=5,
     eps=1e-7,
     use_kimi_scaling=False,
     outer_precond=True,
-    real_inverse=False,
+    outer_msign=False,
     normalize_fro=False,
-    damping=0.0,
-    inv_power=0.5,
 ):
     momentum = float(momentum)
     h_beta = float(h_beta)
-    clamp_rel = float(clamp_rel)
 
     def _gram(weight_array):
         # weight_array: [..., out, in] → left Gram [..., out, out] = G Gᵀ (sum over in)
@@ -233,7 +235,6 @@ def scale_with_left_precond_muon(
         return ScaleByLeftPrecondMuonState(momentum_buffer=otu.tree_zeros_like(params), h_ema=h_ema)
 
     def update_fn(updates, state, params=None):
-        # momentum on the search direction (like Muon)
         buf = jax.tree.map(
             lambda m, g: None if g is None else momentum * m + g,
             state.momentum_buffer,
@@ -248,7 +249,7 @@ def scale_with_left_precond_muon(
             else buf
         )
 
-        # update H = EMA(G Gᵀ) from the RAW gradient (flattened to 2D-per-layer)
+        # H = EMA(G Gᵀ) from the RAW gradient; newest term = current gradient.
         flat_grad = flatten_linear_layers(updates)
 
         def new_h(layer, h):
@@ -260,32 +261,29 @@ def scale_with_left_precond_muon(
             new_h, flat_grad, state.h_ema, is_leaf=lambda x: isinstance(x, haliax.nn.Linear)
         )
 
-        # apply U = H^{-1/2} polar(H^{-1/2} M) per matrix (vmapped over the stacked Layer axis)
         flat_dir = flatten_linear_layers(direction)
-        paths = leaf_key_paths(flat_dir, is_leaf=lambda x: isinstance(x, haliax.nn.Linear))
 
-        def precond(layer, h, path):
+        def precond(layer, h):
             if not (isinstance(layer, haliax.nn.Linear) and isinstance(layer.weight, haliax.NamedArray)):
                 return layer
             w = layer.weight
             arr = w.array
             fn = partial(
                 _left_precond_matrix,
-                clamp_rel=clamp_rel,
+                solver=solver,
+                qk_steps=qk_steps,
                 ns_steps=ns_steps,
                 eps=eps,
                 use_kimi_scaling=use_kimi_scaling,
                 outer_precond=outer_precond,
-                real_inverse=real_inverse,
+                outer_msign=outer_msign,
                 normalize_fro=normalize_fro,
-                damping=damping,
-                inv_power=inv_power,
             )
             new_arr = jax.vmap(fn)(arr, h) if arr.ndim == 3 else fn(arr, h)
             return dataclasses.replace(layer, weight=dataclasses.replace(w, array=new_arr))  # type: ignore
 
         flat_out = haliax.tree_util.tree_map(
-            precond, flat_dir, h_ema, paths, is_leaf=lambda x: isinstance(x, haliax.nn.Linear)
+            precond, flat_dir, h_ema, is_leaf=lambda x: isinstance(x, haliax.nn.Linear)
         )
         new_updates = unflatten_linear_layers(direction, flat_out)
         return new_updates, ScaleByLeftPrecondMuonState(momentum_buffer=buf, h_ema=h_ema)

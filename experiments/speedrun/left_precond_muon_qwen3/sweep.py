@@ -5,11 +5,12 @@
 
     U = ρ · H^{-1/2} · polar( H^{-1/2} · M ) ,   H = EMA(G Gᵀ)
 
-Left/output-side whitening by the gradient's own second moment H (Shampoo left factor),
-with a truncated pseudo-inverse for H^{-1/2} (facebookresearch/optimizers#265). Pure
-optimizer — gradient-only, no activation capture (cf. idea 3). H = I recovers plain Muon.
+Left/output-side whitening by the gradient's own second moment H (Shampoo left factor).
+H^{-1/2} uses the SATURATING coarse inverse-sqrt q_k (eigh + k-step Muon-coeff NS scalar map),
+which reproduces Mudam's operator exactly and caps the amplification of noisy small-eigenvalue
+directions (vs the exact w^{-1/2}, which over-whitens). Pure optimizer — gradient-only, no
+activation capture (cf. idea 3). H = I recovers plain Muon.
 
-Swept knobs: learning rate (primary) × clamp_rel (truncated-pseudo-inverse threshold).
 Everything else mirrors the gain-gated / activation-aware Qwen3 speedrun (marin#4933):
 130m = llama_150m, fineweb-edu-10B, paloma, W&B marin-community/speedrun. Compare on
 **eval/paloma/c4_en/bpb** (Muon baseline 1.1663; a same-setup Muon control = 1.1673).
@@ -20,7 +21,7 @@ Submit (v6e-8 preemptible, us-east5):
     .venv/bin/iris --config lib/iris/config/marin.yaml job run --no-wait \\
       --preemptible --region us-east5 --extra tpu \\
       -e WANDB_API_KEY "$WANDB_API_KEY" -e MARIN_PREFIX "gs://marin-us-east5" \\
-      -e REGION us-east5 -e TPU_VARIANT v6e-8 -e LR_MULTS -e CLAMPS -e RUN_TAG \\
+      -e REGION us-east5 -e TPU_VARIANT v6e-8 -e VARIANTS -e SOLVER -e QK_STEPS -e RUN_TAG \\
       -- python -m experiments.speedrun.left_precond_muon_qwen3.sweep
 """
 
@@ -50,35 +51,31 @@ WANDB_ENTITY = "marin-community"
 WANDB_PROJECT = "speedrun"
 
 
-def _floats(env: str, default: str) -> tuple[float, ...]:
-    return tuple(float(x) for x in os.environ.get(env, default).split(","))
+# q_k = the saturating coarse inverse-sqrt (eigh + k-step Muon-coeff NS scalar map on eigenvalues),
+# which reproduces Mudam exactly and beats exact w^{-1/2} by capping noisy-direction amplification.
+SOLVER: str = os.environ.get("SOLVER", "qk")
+QK_STEPS: int = int(os.environ.get("QK_STEPS", "5"))
 
-
-# LR is the primary tuning axis (per the goal). clamp_rel is fixed near Shampoo's 1e-15 (only
-# numerically-zero directions truncated); 1e-8 included once to confirm insensitivity to mild truncation.
-LR_MULTIPLIERS: tuple[float, ...] = _floats("LR_MULTS", "0.5,1.0,2.0,4.0")
-CLAMPS: tuple[float, ...] = _floats("CLAMPS", "1e-15,1e-8")
-
-# Variant ablations (comma-separated). Each maps to optimizer flags:
-#   full       — U = H^{-1/2} polar(H^{-1/2} M)            (the base idea 4)
-#   inner_only — U = polar(H^{-1/2} M)                     (v1: drop the outer H^{-1/2})
-#   real_inv   — damped real inverse instead of truncated  (v2)
-#   fro_norm   — rescale U to Muon's Frobenius norm        (v3)
+# Each variant → (variant_flags, LR multipliers to sweep). The q_k finding's test plan:
+#   inner_only            — U = polar(H^{-1/2} M)                        — sanity (≈ Mudam 1.165), LR 1×
+#   full                  — U = H^{-1/2} polar(H^{-1/2} M)               — does a SATURATING outer help? LR 1×,2×
+#   full_fro              — full, rescaled to Muon's Frobenius norm                                LR 1×,2×
+#   full_outer_msign      — U = polar(H^{-1/2} polar(H^{-1/2} M))        — re-orthogonalize the outer LR 1×,2×
 VARIANT_FLAGS = {
-    "full": dict(outer_precond=True, real_inverse=False, normalize_fro=False),
-    "inner_only": dict(outer_precond=False, real_inverse=False, normalize_fro=False),
-    "real_inv": dict(outer_precond=True, real_inverse=True, normalize_fro=False),
-    "fro_norm": dict(outer_precond=True, real_inverse=False, normalize_fro=True),
+    "inner_only": dict(outer_precond=False, outer_msign=False, normalize_fro=False),
+    "full": dict(outer_precond=True, outer_msign=False, normalize_fro=False),
+    "full_fro": dict(outer_precond=True, outer_msign=False, normalize_fro=True),
+    "full_outer_msign": dict(outer_precond=True, outer_msign=True, normalize_fro=False),
 }
-VARIANTS: tuple[str, ...] = tuple(v.strip() for v in os.environ.get("VARIANTS", "full").split(","))
-
-# Damping λ on mean-normalized H eigenvalues: (w/mean + λ)^{-1/2}. λ=0 = un-damped (over-amplifies
-# tiny eigenvalues); larger λ bounds it, λ→∞ ⟹ Muon. Swept (esp. for inner_only) to test whether a
-# damped inner whitening beats Muon.
-DAMPINGS: tuple[float, ...] = _floats("DAMPINGS", "0.0")
-
-# Whitening exponent p in (w/mean+λ)^{-p}: 0.5 = H^{-1/2}, 0.25 = H^{-1/4} (gentler).
-INV_POWERS: tuple[float, ...] = _floats("INV_POWERS", "0.5")
+VARIANT_LRS: dict[str, tuple[float, ...]] = {
+    "inner_only": (1.0,),
+    "full": (1.0, 2.0),
+    "full_fro": (1.0, 2.0),
+    "full_outer_msign": (1.0, 2.0),
+}
+VARIANTS: tuple[str, ...] = tuple(
+    v.strip() for v in os.environ.get("VARIANTS", "inner_only,full,full_fro,full_outer_msign").split(",")
+)
 
 
 @dataclass(frozen=True)
@@ -128,10 +125,6 @@ def _lr_label(m: float) -> str:
     return f"lrx{f'{m:g}'.replace('.', '_')}"
 
 
-def _clamp_label(c: float) -> str:
-    return f"c{f'{c:g}'.replace('.', '_').replace('-', 'm').replace('+', 'p')}"
-
-
 def _override_tracker(step: ExecutorStep) -> ExecutorStep:
     pod = step.config
     inner = pod.train_config
@@ -145,17 +138,14 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
-def _build_step(
-    multiplier: float, clamp_rel: float, variant: str, damping: float = 0.0, inv_power: float = 0.5
-) -> ExecutorStep:
+def _build_step(multiplier: float, variant: str) -> ExecutorStep:
     matrix_lr = SIZE.muon_lr * multiplier
     adam_lr = SIZE.adam_lr * multiplier
     optimizer = LeftPrecondMuonConfig(
         h_beta=0.95,
-        clamp_rel=clamp_rel,
+        solver=SOLVER,
+        qk_steps=QK_STEPS,
         ns_steps=5,
-        damping=damping,
-        inv_power=inv_power,
         **VARIANT_FLAGS[variant],
         lr=matrix_lr,
         learning_rate=matrix_lr,
@@ -184,16 +174,14 @@ def _build_step(
         optimizer_config=optimizer,
     )
     tag = f"_{RUN_TAG}" if RUN_TAG else ""
-    vlabel = "" if variant == "full" else f"_{variant}"
-    dlabel = "" if damping == 0.0 else f"_dmp{f'{damping:g}'.replace('.', '_')}"
-    plabel = "" if inv_power == 0.5 else f"_p{f'{inv_power:g}'.replace('.', '_')}"
-    run_id = f"qwen3_{SIZE.label}_leftprec{vlabel}{plabel}{dlabel}{tag}_{_clamp_label(clamp_rel)}_{SEQ_LEN}_{_lr_label(multiplier)}"
+    slabel = "" if SOLVER == "qk" else f"_{SOLVER}"
+    run_id = f"qwen3_{SIZE.label}_leftprec_{variant}{slabel}{tag}_{SEQ_LEN}_{_lr_label(multiplier)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
         model_config=_to_qwen3_from_llama(SIZE.llama_cfg),
         train_config=train,
-        tags=["speedrun", "left_precond_muon", variant, _clamp_label(clamp_rel), f"qwen3_{SIZE.label}"],
+        tags=["speedrun", "left_precond_muon", variant, SOLVER, f"qwen3_{SIZE.label}"],
         use_default_validation=True,
         eval_harness_tasks=(),
         wandb_name=run_id,
@@ -206,26 +194,15 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [
-        _build_step(m, c, v, d, p)
-        for v in VARIANTS
-        for m in LR_MULTIPLIERS
-        for c in CLAMPS
-        for d in DAMPINGS
-        for p in INV_POWERS
-    ]
+    steps = [_build_step(m, v) for v in VARIANTS for m in VARIANT_LRS[v]]
     logger.info(
-        "Left-precond Muon 130m sweep: %d runs (variants=%s lr=%s clamps=%s dampings=%s inv_powers=%s)",
+        "Left-precond Muon 130m sweep (solver=%s qk_steps=%d): %d runs (%s)",
+        SOLVER,
+        QK_STEPS,
         len(steps),
-        VARIANTS,
-        LR_MULTIPLIERS,
-        CLAMPS,
-        DAMPINGS,
-        INV_POWERS,
+        ", ".join(f"{v}@{VARIANT_LRS[v]}" for v in VARIANTS),
     )
-    executor_main(
-        steps=steps, description="Qwen3-130m left-preconditioned Muon sweep (Ali idea 4): variant x LR x clamp."
-    )
+    executor_main(steps=steps, description="Qwen3-130m left-preconditioned Muon (Ali idea 4) q_k sweep: variant x LR.")
 
 
 if __name__ == "__main__":
