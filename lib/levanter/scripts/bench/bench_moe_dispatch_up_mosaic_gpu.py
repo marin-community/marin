@@ -1779,7 +1779,7 @@ def main() -> None:
                 return ring_gather_fn(*ring_gather_args)
 
             ring_gather_result, _ = _time_block("dispatch_up/ring_gather_ragged_dot", run_ring_gather_dispatch_up)
-            _, ring_gather_dropped = ring_gather_result
+            ring_gather_h, ring_gather_dropped = ring_gather_result
             ring_gather_dropped_int = int(jnp.max(ring_gather_dropped))
             print(f"dispatch_up/ring_gather_dropped_total: {ring_gather_dropped_int}")
             ring_gather_steady_ms = None
@@ -1790,7 +1790,18 @@ def main() -> None:
                     warmup_steps=args.warmup_steps,
                     bench_iters=args.bench_iters,
                 )
-            print("dispatch_up/ring_gather_ragged_dot/reference_check: skipped")
+            if ref_h is None:
+                print("dispatch_up/ring_gather_ragged_dot/reference_check: skipped")
+            else:
+                ring_gather_err = jnp.max(jnp.abs(ring_gather_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
+                ring_gather_err_float = float(ring_gather_err)
+                print(f"dispatch_up_ring_gather_ragged_dot_max_abs_error: {ring_gather_err_float:.6g}")
+                _print_error_summary("dispatch_up_ring_gather_ragged_dot", ring_gather_h, ref_h)
+                _check_error(
+                    "dispatch_up_ring_gather_ragged_dot_max_abs_error",
+                    ring_gather_err_float,
+                    args.w13_atol,
+                )
             if ring_gather_steady_ms is not None:
                 print(f"dispatch_up/ring_gather_ragged_dot_end_to_end_ms: {ring_gather_steady_ms:.3f}")
 

@@ -827,6 +827,7 @@
   - Fixed-neighbor H128 correctness: `... --job-name dlwh-6597-moe-fixed-neighbor-h128 -- ... bench_moe_mgpu_block_transport.py --ep-size 8 --rows 32 --hidden 128 --block-rows 16 --block-cols 128 --dtype bf16 --fixed-neighbor --bench-iters 2 --warmup-steps 1`
   - Fixed-neighbor H2560 bulk probe: `... --job-name dlwh-6597-moe-fixed-neighbor-h2560-rows2560 -- ... --rows 2560 --hidden 2560 --block-rows 32 --block-cols 256 --fixed-neighbor --skip-reference-checks --bench-iters 2 --warmup-steps 1`
   - Ring-gather H128 smoke: `... --job-name dlwh-6597-moe-ring-gather-up-h128-nopad-gmm -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --skip-reference-checks --ragged-dot-impl auto --bench-iters 1 --warmup-steps 1`
+  - Ring-gather H128 correctness: `... --job-name dlwh-6597-moe-ring-gather-up-h128-correctness -- ... same shape with --run-ring-gather-dispatch-up and reference checks enabled`
   - Ring-gather T/rank=4096 buffer sweep: `... --job-name dlwh-6597-moe-ring-gather-up-t4096-nopad-sweep -- ... for factor in 1.0 1.1 1.25; do ... --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --recv-capacity-factor $factor --run-ring-gather-dispatch-up --skip-reference-checks --ragged-dot-impl auto --bench-iters 2 --warmup-steps 1; done`
 - Result:
   - Fixed-neighbor H128 was correct: max abs error `0`, steady `1.492 ms` for
@@ -836,6 +837,8 @@
     a seven-hop ring unattractive versus built-in collectives.
   - Ring-gather H128 25% capacity smoke lowered and ran at `0.340 ms`, dropped
     `0`.
+  - Ring-gather H128 with reference checks enabled matched the W13 oracle: max
+    abs error `1.90735e-06`, dropped `0`, steady `0.400 ms`.
   - Ring-gather T/rank=4096, H=I=2560, E=256, topk=4, Grug-truncated weights:
     - 0% buffer (`recv_capacity=16384`): dropped `0`, steady `1.816 ms`.
     - 10% buffer (`recv_capacity=18023`): dropped `0`, steady `1.856 ms`.
