@@ -2025,13 +2025,36 @@ class K8sTaskProvider:
                 len(old_task_hashes - safe_hashes),
             )
 
+    def _list_terminal_pods(self) -> list[dict]:
+        """Bulk-list managed pods in a terminal phase (Succeeded or Failed).
+
+        Field selectors AND their comma-separated terms, so the active-pods
+        selector ``status.phase!=Succeeded,status.phase!=Failed`` excludes both,
+        but the inverse ``status.phase==Succeeded,status.phase==Failed`` matches
+        nothing (a pod is never both), so the two terminal phases are listed
+        separately.
+        """
+        pods: list[dict] = []
+        for phase in ("Succeeded", "Failed"):
+            pods.extend(
+                self.kubectl.list_json(
+                    K8sResource.PODS,
+                    labels=_MANAGED_POD_LABELS,
+                    field_selector=f"status.phase={phase}",
+                )
+            )
+        return pods
+
     def _poll_pods(self, running: list[RunningTaskEntry], cached_pods: list[dict]) -> list[TaskUpdate]:
         """Poll pod phases for all running tasks.
 
-        Uses the pre-fetched pod list (active pods only, terminal pods excluded
-        by field selector). For entries missing from the cached list, does a
-        targeted get_json to check if the pod completed — this avoids the grace-
-        period-to-FAILED path for legitimately Succeeded pods.
+        Uses the pre-fetched active-pods list (terminal pods excluded by field
+        selector). Running tasks whose pod has left that list have either
+        completed (phase moved to Succeeded/Failed) or vanished; they are
+        resolved with a single bulk terminal-pods list rather than a per-pod
+        get_json each, so the reconcile thread issues only bulk LISTs even when a
+        whole gang finishes in one cycle. A pod absent from both lists falls to
+        the grace-period path below.
 
         Log fetching and resource usage collection are handled by background
         LogCollector and ResourceCollector threads. After building updates,
@@ -2050,6 +2073,15 @@ class K8sTaskProvider:
         pods_by_name: dict[str, dict] = {pod.get("metadata", {}).get("name", ""): pod for pod in cached_pods}
         updates: list[TaskUpdate] = []
 
+        # Resolve running tasks whose pod has left the active list (completed or
+        # vanished) with one bulk terminal-pods list instead of a per-pod GET
+        # each. Lazy: only fetched on cycles where at least one pod is missing,
+        # so steady-state cycles add no call. setdefault keeps the active entry
+        # if a name somehow appears in both.
+        if any(_pod_name(entry.task_id, entry.attempt_id) not in pods_by_name for entry in running):
+            for pod in self._list_terminal_pods():
+                pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
+
         # Build up the authoritative pod sets for collectors.
         log_pods: dict[str, _LogPod] = {}
         # (task_id_wire, attempt_id) -> pod_name. Resource samples are
@@ -2062,10 +2094,6 @@ class K8sTaskProvider:
             pod_name = _pod_name(entry.task_id, entry.attempt_id)
             cursor_key = f"{entry.task_id.to_wire()}:{entry.attempt_id}"
             pod = pods_by_name.get(pod_name)
-
-            if pod is None:
-                # Pod not in active list — may have completed or truly vanished.
-                pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
 
             if pod is None:
                 count = self._pod_not_found_counts.get(cursor_key, 0) + 1

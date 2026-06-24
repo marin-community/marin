@@ -306,6 +306,31 @@ def test_sync_succeeded_pod_fetches_logs(provider, k8s, log_service: LogServiceC
     assert any(e.data == "task complete" for e in logs)
 
 
+def test_completed_pod_resolved_via_bulk_list_without_per_pod_get(provider, k8s, monkeypatch):
+    """A running task whose pod went terminal is read from the bulk terminal-pods
+    list, never a per-pod GET — so a whole gang completing in one cycle costs one
+    extra LIST, not one GET per pod."""
+    task_id = JobName.from_wire("/job/done")
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(k8s, pod_name, "Succeeded")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+
+    pod_gets: list[str] = []
+    real_get_json = k8s.get_json
+
+    def spy_get_json(resource, name):
+        if resource == K8sResource.PODS:
+            pod_gets.append(name)
+        return real_get_json(resource, name)
+
+    monkeypatch.setattr(k8s, "get_json", spy_get_json)
+
+    result = provider.reconcile(make_batch(running_tasks=[entry]))
+
+    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert pod_gets == []
+
+
 def test_sync_empty_batch(provider):
     batch = make_batch()
     result = provider.reconcile(batch)
