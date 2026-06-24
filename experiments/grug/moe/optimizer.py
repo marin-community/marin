@@ -131,8 +131,8 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
 
     - adamh: attention weights, dense MLP weights (2D matrices)
-    - adamh_expert: expert MLP weights (mlp.expert_mlp.w_gate_up,
-      mlp.expert_mlp.w_down, shared.w_*)
+    - adamh_expert: expert MLP weights (mlp.expert_mlp.w_gate,
+      mlp.expert_mlp.w_up, mlp.expert_mlp.w_down, shared.w_*)
     - adam: norms, biases, router, embeddings, attention gates (1D / small params)
     """
 

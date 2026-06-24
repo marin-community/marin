@@ -97,12 +97,20 @@ class GrugModelConfig:
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
-    max_seq_len: int = 4096
+    max_seq_len: int = 8192
     sliding_window: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
+    disable_pko: bool = True
+    """When True (default), the every-4th + last 'long' layers skip Partial
+    Key Offset (no shift of the second half of K, no doc-start zeroing). Short
+    layers never had PKO. Set to False to re-enable PKO on long layers."""
+    disable_long_rope: bool = True
+    """When True (default), the every-4th + last 'long' layers skip rotary
+    embedding entirely (Q and K go into attention un-rotated). Short layers
+    still apply half-RoPE. Set to False to keep RoPE on long layers."""
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
@@ -173,6 +181,7 @@ class CausalSelfAttention(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
+        disable_rope: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -211,14 +220,17 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
-        # Second half is rope-free on every layer.
-        half = head_dim // 2
-        q_rot, k_rot = apply_rotary_embedding(
-            q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-        )
-        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim
+        # (second half is rope-free on every layer). ``disable_rope`` skips
+        # the RoPE step entirely on this layer — used to opt long layers out
+        # of rotary embedding when ``cfg.disable_long_rope`` is set.
+        if not disable_rope:
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
@@ -434,7 +446,6 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-                split_w_gate_up=True,  # store w_gate / w_up separately so MuonH NS sees each half as its own leaf
             ),
             cfg=cfg,
         )
@@ -536,9 +547,10 @@ class Block(eqx.Module):
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
+        disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
+        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -606,8 +618,11 @@ class Transformer(eqx.Module):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long
-            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(hidden, layer_mask, use_pko)
+            use_pko = is_long and not cfg.disable_pko
+            disable_rope = is_long and cfg.disable_long_rope
+            hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
+                hidden, layer_mask, use_pko, disable_rope
+            )
             moe_router_stats.append(router_stats)
 
         router_metrics = {

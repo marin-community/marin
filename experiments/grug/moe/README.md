@@ -7,19 +7,10 @@ the dense base template.
 
 ## Architecture
 
-Describes the May Recipe defaults (V2) — what the model + optimizer + schedule
-actually run as on `moe_may_pr` today. The architecture choices are hardcoded
-in [`model.py`](./model.py); only shape/size knobs live in `GrugModelConfig`.
-
-All layers are MoE. No dense initial layers, no auxiliary load-balancing loss
-(QB bias does the balancing), no z-losses (router or final-logit).
-
 **Experts.**
 - `num_experts = 256` routed pool; `num_experts_per_token = 4` active per token.
 - One always-on **shared** dense MLP per block, in parallel with the routed
   experts (contributes to every token).
-- **MoEMLP** stores per-expert `w_gate` and `w_up` as separate `(e, d, i)`
-  tensors and concatenates on the forward pass.
 
 **Router.**
 - Linear projection of `hidden_dim → num_experts` in **fp32** (cast back at
@@ -40,12 +31,18 @@ All layers are MoE. No dense initial layers, no auxiliary load-balancing loss
 - **Half-RoPE**: rotary embeddings applied only to the first half of Q/K per
   head (`q[..., :head_dim/2]`, `k[..., :head_dim/2]`); the second half is
   rope-free on every layer.
-- **PKO (Partial Key Offset)** on the every-4th + last "long" layers: shift
-  the rope-free second half of K back by one position, zero at document
-  starts (`segment_ids` change), then rms-norm. Short layers skip PKO.
+- **PKO (Partial Key Offset)** is wired up but disabled by default
+  (`disable_pko=True`). When enabled it would shift the rope-free second half
+  of K back by one position on every-4th + last "long" layers (zero at doc
+  starts, then rms-norm); short layers always skip PKO.
+- **NoPE on long layers**: every-4th + last layers run with rotary embedding
+  skipped entirely (`disable_long_rope=True`); short layers keep half-RoPE.
 - **Sliding window**: long layers run full causal attention
   (`sliding_window = None`). Short layers run `cfg.sliding_window` (default
   2048).
+
+To reduce risk of long-context extension, we have excluded PKO and use NoPE on
+long layers.
 - **XSA (Exclusive Self-Attention)**: after attention, subtract the component
   of each head's output parallel to its `aligned_v`: `z = y − (yᵀv / ‖v‖²)·v`
   per head. Followed by a headwise sigmoid gate.
@@ -54,7 +51,7 @@ All layers are MoE. No dense initial layers, no auxiliary load-balancing loss
 - **GatedNorm**: rank-128 low-rank gate on RMS-normalised input pre-attention
   and pre-MLP. Acts as a learned per-token gate over the hidden dimension.
 
-**Optimizer + schedule** ([`heuristic_v2.py`](./heuristic_v2.py) +
+**Optimizer + schedule** ([`heuristic.py`](./heuristic.py) +
 [`optimizer.py`](./optimizer.py)).
 - **MuonH** (`GrugMoeMuonHConfig`, registered as `grug_moe_muonh_v1`):
   Newton-Schulz orthogonalisation + Frobenius-hyperball scale-invariant
@@ -67,59 +64,28 @@ All layers are MoE. No dense initial layers, no auxiliary load-balancing loss
   `muonh_lr = 18.31 · tokens^-0.395 · dim^-0.150 · sqrt(B)`
   (equivalently `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(tpb)`).
 
+**Loss.**
+- Cross-entropy on the next-token logits.
+- **Final-logit z-loss** (`GrugTrainerConfig.z_loss_weight = 1e-4` by
+  default): adds `z_loss_weight · mean(logsumexp(logits)²)` to stabilise the
+  lm-head softmax.
+- **Router z-loss off** by default (`router_z_loss_coef = 0.0`).
+- No auxiliary load-balancing loss; QB router bias does the balancing.
+
 **Other.**
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
-## What changed from V1
-
-V1 was the first Marin MoE formula, used on the May 2026 1e23
-``129B / A29B MoE V1`` hero run (`heuristic_v1.MoeHeuristicV1`, AdamH on the
-v16 architecture). Everything below is what moved between V1 and the V2
-defaults documented in the Architecture section above.
-
-- **Optimizer**: MuonH (V2) vs AdamH (V1) on the matrix + GatedNorm group.
-- **Expert pool**: 256 experts (V2) vs 64 experts (V1), K=4 in both — bigger
-  pool, same active path.
-- **Routing renormalisation**: sigmoid combine weights now renorm to sum 2.5
-  (V2). V1 did not renormalise.
-- **Split `w_gate` / `w_up`** in MoEMLP (V2). V1 stored them fused.
-- **Half-RoPE on every layer** (V2). V1 applied RoPE to the full head_dim.
-- **PKO** on every-4th + last layer (V2). V1 had no PKO.
-- **Sliding-window pattern**: long layers fully causal, short layers at
-  `cfg.sliding_window` (V2). V1 used `cfg.sliding_window` on long layers and
-  halved it on short layers, with no last-layer special case.
-- **Router z-loss off** (V2: `router_z_loss_coef = 0.0`). V1: `0.001`.
-- **Final-logit z-loss off** (V2: `GrugTrainerConfig.z_loss_weight = 0.0`).
-  V1: `1e-4`.
-- **No gradient clipping** (V2: `max_grad_norm = None`). V1: `1.0`.
-- **1% warmup** (V2). V1: 10%.
-- **LR refit** (`heuristic_v2.py`, `MoeHeuristicV2`):
-  V1: `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`.
-  V2: `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(B)`.
-
 ## Scaling heuristic
 
-Two heuristic classes turn `(budget, hidden_dim)` into model + optimizer
-hyperparameters. Both expose `build_model_config(hidden_dim, seq_len)` and
-`build_optimizer_config(batch_size, tokens, hidden_dim, seq_len)`.
-
-- **[`MoeHeuristicV1`](./heuristic_v1.py)** — original v16 AdamH fit
-  (186 runs, R²=0.995). Used on the May 2026 1e23 `129B / A29B MoE V1` hero
-  run; kept as the reference curve for `agent.md` effective-speedup
-  comparisons against v16.
-- **[`MoeHeuristicV2`](./heuristic_v2.py)** — May Recipe refit, MuonH
-  optimizer (issue #5951; 17 cells, R²=0.996). **Current default** for
-  compute-optimal cells and ablation comparisons.
-
-LR scaling differs between the two; everything else (compute-budget convention,
-epsilon, beta1/beta2, layer count, GQA) is shared. All formulas anchor at
-**seq_len = 4096** and write batch effects in terms of
+[`MoeHeuristic`](./heuristic.py) turns `(budget, hidden_dim)` into model +
+optimizer hyperparameters via `build_model_config(hidden_dim, seq_len)` and
+`build_optimizer_config(batch_size, tokens, hidden_dim, seq_len)`. May Recipe
+refit on the MuonH LR sweep (issue #5951; 17 cells, R²=0.996). All formulas
+anchor at **seq_len = 4096** and write batch effects in terms of
 `tokens_per_batch = batch_size · seq_len`.
 
-- **V1 LR**: `adam_lr = 1.63 · tokens^-0.2813 · dim^-0.3678 · sqrt(B)`,
-  `adamh_lr = (13/3) · adam_lr`.
-- **V2 LR**: `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(B)`,
+- **LR**: `adam_lr = 0.06602 · tokens^-0.395 · dim^-0.150 · sqrt(B)`,
   `muonh_lr = (13/3) · adam_lr`.
 - **Compute budget**: `C = 3 · flops_per_token(no_lm_head) · tokens`.
 - **Epsilon**: `epsilon_coeff · sqrt(tokens / tokens_per_batch)`.
@@ -128,11 +94,9 @@ epsilon, beta1/beta2, layer count, GQA) is shared. All formulas anchor at
 - **Layer count**: `num_layers ≈ dim / (64 + 4·log2(dim) − 9)` (rounded).
 - **GQA**: largest divisor of `num_heads ≤ num_heads / 4`.
 
-V1 also exposes a top-level `build_from_heuristic(budget, hidden_dim,
-target_steps=2**14)` helper that returns the full `(model, optimizer,
-batch_size, num_steps)` tuple (used by `canary_ferry.py`). For V2, instantiate
-`MoeHeuristicV2()` and call `build_model_config` / `build_optimizer_config`
-directly — `launch.py` does this for the baseline.
+For the earlier AdamH-tuned heuristic (64 experts, used on the May 2026 1e23
+hero run), see the pre-rename
+[`heuristic.py` on main](https://github.com/marin-community/marin/blob/8586719b524bf7743ec5034403c7e834505fe73e/experiments/grug/moe/heuristic.py).
 
 ## Compute-optimal baseline
 
@@ -144,8 +108,12 @@ that ablation experiments compare against.
 ### May Recipe (drop-1e18 fit, issue #6074) — current baseline
 
 Reference runs on **v4-32 us-central2 with EP=1**, MuonH optimizer
-(`muonh_lr` from `heuristic_v2.MoeHeuristicV2.build_optimizer_config`), 1pct-noclip
+(`muonh_lr` from `heuristic.MoeHeuristic.build_optimizer_config`), 1pct-noclip
 schedule, no permanent step-interval checkpoints.
+
+The Paloma macro numbers below were measured under the **previous defaults**:
+`seq_len = 4096`, PKO on for long layers, partial half-RoPE on every layer
+(no NoPE on long layers), and final-logit z-loss off (`z_loss_weight = 0`).
 
 | Budget   | Dim    | Layers | bs  | Steps    | Tokens  | Paloma macro | v4-32 tok/s | Runtime | Run |
 |----------|--------|--------|-----|----------|---------|--------------|-------------|---------|-----|
@@ -198,7 +166,7 @@ Most promotable changes will land in one of three files:
 
 - [`model.py`](./model.py) — architecture tweaks (routing, norms, attention,
   activation functions, expert layout, etc.).
-- [`heuristic_v2.py`](./heuristic_v2.py) — scaling heuristics (LR formula
+- [`heuristic.py`](./heuristic.py) — scaling heuristics (LR formula
   coefficients, depth/width formula, GQA ratio, per-batch-size epsilon/beta2
   scaling).
 - [`optimizer.py`](./optimizer.py) — optimizer internals (MuonH / AdamH
@@ -216,11 +184,14 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
   `GrugMoeMuonHConfig` wrappers with expert-param-group awareness.
 - [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `_apply_qb_betas`,
   `run_grug` (dispatches a Fray job).
-- [`heuristic_v1.py`](./heuristic_v1.py) — `MoeHeuristicV1` (AdamH, v16 fit)
-  and `build_from_heuristic` entry point.
-- [`heuristic_v2.py`](./heuristic_v2.py) — `MoeHeuristicV2` (MuonH, May
-  Recipe refit). Current default.
+- [`heuristic.py`](./heuristic.py) — `MoeHeuristic` (MuonH, May Recipe
+  refit) and `build_from_heuristic` entry point. Current default.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
+- [`launch_cw_scale.py`](./launch_cw_scale.py) — CoreWeave scale-test launcher.
+- [`launch_datakit_moe_mix.py`](./launch_datakit_moe_mix.py) — launcher using
+  the datakit MoE pretraining mixture.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
+- [`test_optimizer.py`](./test_optimizer.py) — unit tests for the AdamH
+  parameter-group mask.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.

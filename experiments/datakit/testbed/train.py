@@ -40,7 +40,7 @@ from marin.processing.tokenize.data_configs import TokenizerStep
 from experiments.datakit.testbed.mixture import read_bucket_weights
 from experiments.datakit.testbed.settings import TESTBED_SEQ_LEN, TESTBED_TOKENIZER
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_v1 import build_from_heuristic
+from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 

@@ -1,35 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling heuristic for MoE — V2 (May Recipe refit).
+"""Compute-scaling heuristic for MoE — May Recipe (MuonH, 256 experts).
 
-Successor to ``heuristic_v1`` (V1, used on the May 2026 1e23 hero run
-``129B / A29B MoE V1``). Refit on the May Recipe LR sweep (issue #5951:
-17 cells across d ∈ {512, 768, 1024, 1280}, MuonH optimizer, R²=0.996),
-and is the current default for compute-optimal cells and ablation
-comparisons. All empirical
-fits were measured on runs with seq_len=4096; the formulas are written in
-terms of ``tokens_per_batch = batch_size * seq_len`` so they generalise to
-other sequence lengths, though the coefficients are an extrapolation beyond
-4096.
+Refit on the May Recipe LR sweep (issue #5951: 17 cells across
+d ∈ {512, 768, 1024, 1280}, MuonH optimizer, R²=0.996), and is the
+current default for compute-optimal cells and ablation comparisons.
+All empirical fits were measured on runs with seq_len=4096; the
+formulas are written in terms of ``tokens_per_batch = batch_size *
+seq_len`` so they generalise to other sequence lengths, though the
+coefficients are an extrapolation beyond 4096.
 
-What changed from V1:
-- **Optimizer**: MuonH (Newton-Schulz + Frobenius hyperball, scale-invariant
-  updates) on the matrix + GatedNorm group, vs V1's AdamH on the same group.
-  ``adamh`` here only covers the lm_head; ``adam`` covers token_embed,
-  router, biases, attn_gate, and 1-D norm weights.
-- **LR exponents and coefficient**: refit on May Recipe.
-  V1 was ``adam_lr = 1.63 * tokens^-0.2813 * dim^-0.3678 * sqrt(B)``.
-  V2 is ``adam_lr = 0.06602 * tokens^-0.395 * dim^-0.150 * sqrt(B)``
-  (equivalently ``muonh_lr = 18.31 * tokens^-0.395 * dim^-0.150 * sqrt(B)``).
-  Token-exponent moved farther from 0; dim-exponent moved closer to 0.
-- **Schedule**: 1pct warmup + linear decay to 0, ``max_grad_norm=None``
-  (no clipping). V1 used 10pct warmup + 1.0 grad clip.
-- **Architecture changes that come with the recipe** (in ``model.py``,
-  not this file): half-RoPE on every layer, PKO on every-4th + last layer,
-  routing renorm sum 2.5, 256 experts (vs V1's 64), router z-loss off,
-  final-logit z-loss off. The heuristic does not toggle these; they are
-  baked into ``GrugModelConfig`` defaults.
+For the earlier AdamH-tuned heuristic (64 experts), see the pre-rename
+``experiments/grug/moe/heuristic.py`` on main:
+https://github.com/marin-community/marin/blob/8586719b524bf7743ec5034403c7e834505fe73e/experiments/grug/moe/heuristic.py
 
 Formulas:
 - Adam LR: ``adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(B)``
@@ -49,7 +33,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 
-SEQ_LEN: int = 4096
+SEQ_LEN: int = 8192
 MIN_BATCH_SIZE: int = 32
 DEFAULT_TARGET_STEPS: int = 2**14
 
@@ -101,7 +85,7 @@ def compute_tokens_and_batch(
 
 
 @dataclass(frozen=True)
-class MoeHeuristicV2:
+class MoeHeuristic:
     """Compute-scaling heuristic for MoE models (May Recipe refit).
 
     Returns a ``MuonH`` optimizer config via ``build_optimizer_config``.
@@ -247,7 +231,37 @@ class MoeHeuristicV2:
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             max_seq_len=seq_len,
-            sliding_window=seq_len // 2,
+            sliding_window=2048,
             initializer_std=0.5 / math.sqrt(hidden_size),
             qk_mult=1.3,
         )
+
+
+def build_from_heuristic(
+    *,
+    budget: float,
+    hidden_dim: int,
+    heuristic: MoeHeuristic | None = None,
+    target_steps: int = DEFAULT_TARGET_STEPS,
+    min_batch_size: int = MIN_BATCH_SIZE,
+    seq_len: int = SEQ_LEN,
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig, int, int]:
+    """Construct (model, optimizer, batch_size, num_steps) for a compute budget.
+
+    Uses ``MoeHeuristic`` to size the model (from ``hidden_dim``) and to set
+    the MuonH hyperparameters (scaled by tokens_per_batch = batch_size * seq_len).
+    Callers who want manual control should continue passing ``GrugModelConfig`` /
+    ``GrugMoeMuonHConfig`` directly to ``GrugMoeLaunchConfig``.
+    """
+    h = heuristic or MoeHeuristic()
+    model_cfg = h.build_model_config(hidden_dim, seq_len=seq_len)
+    fpt = compute_flops_per_token(model_cfg)
+    tokens, batch_size, num_steps = compute_tokens_and_batch(
+        budget,
+        fpt,
+        target_steps=target_steps,
+        min_batch_size=min_batch_size,
+        seq_len=seq_len,
+    )
+    optimizer_cfg = h.build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=seq_len)
+    return model_cfg, optimizer_cfg, batch_size, num_steps

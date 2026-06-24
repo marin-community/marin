@@ -29,7 +29,7 @@ from marin.processing.tokenize.data_configs import lm_data_config
 from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
-from experiments.grug.moe.heuristic_v2 import MoeHeuristicV2
+from experiments.grug.moe.heuristic import MoeHeuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
@@ -158,24 +158,27 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
 
 # May Recipe compute-optimal cells from the drop-1e18 isoflop fit
-# (issue #6074). ``MoeHeuristicV2`` (heuristic_v2) supplies LR / beta2 /
+# (issue #6074). ``MoeHeuristic`` (heuristic.py) supplies LR / beta2 /
 # epsilon; (bs, steps) hardcoded so callers don't depend on
-# ``compute_tokens_and_batch`` heuristics for cell selection.
+# ``compute_tokens_and_batch`` heuristics for cell selection. Batch sizes
+# are halved relative to the original seq=4096 cells to keep
+# ``tokens_per_batch = bs * seq`` (and therefore tokens, steps, and
+# muonh_lr) unchanged at the new seq=8192 default.
 #
 #   dim   budget     bs    steps   tokens     muonh_lr   tpu
-#   512   3.82e17    32    10_980  1.44e9     0.00980    v4-32 (EP=1)
-#   768   2.81e18    64    16_875  4.42e9     0.00837    v4-32 (EP=1)
-#   1024  1.16e19    128   16_080  8.43e9     0.00879    v4-32 (EP=1)
-#   1280  3.46e19    256   14_325  1.50e10    0.00957    v4-32 (EP=1)
-_SEQ_LEN: int = 4096
+#   512   3.82e17    16    10_980  1.44e9     0.00980    v4-32 (EP=1)
+#   768   2.81e18    32    16_875  4.42e9     0.00837    v4-32 (EP=1)
+#   1024  1.16e19    64    16_080  8.43e9     0.00879    v4-32 (EP=1)
+#   1280  3.46e19    128   14_325  1.50e10    0.00957    v4-32 (EP=1)
+_SEQ_LEN: int = 8192
 _COMPUTE_OPT_CELLS: tuple[tuple[int, int, int], ...] = (
-    (512, 32, 10_980),
-    # (768, 64, 16_875),
-    # (1024, 128, 16_080),
-    # (1280, 256, 14_325),
+    (512, 16, 10_980),
+    # (768, 32, 16_875),
+    # (1024, 64, 16_080),
+    # (1280, 128, 14_325),
 )
 
-_heuristic = MoeHeuristicV2()
+_heuristic = MoeHeuristic()
 
 # Public alias for the d=512 baseline GrugModelConfig. Kept because
 # consumers (e.g. experiments/ferries/canary_ferry.py) import it by name.
