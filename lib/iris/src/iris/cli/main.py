@@ -56,13 +56,20 @@ def _cluster_auth_from_proto(auth: config_pb2.AuthConfig) -> ClusterAuth:
     """
     provider = auth.WhichOneof("provider")
     if provider == "iap":
+        # ``audiences`` are the login audiences the controller accepts; they
+        # include the desktop client id (interactive flow). A service-account
+        # edge token must carry an IAP-secured audience — never the desktop one,
+        # which IAP rejects — so the desktop client id is dropped here and only
+        # genuine programmatic audiences reach the service-account token path.
+        desktop_oauth_client_id = auth.iap.oauth_client_id or None
+        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != desktop_oauth_client_id)
         return ClusterAuth(
             AuthProvider.IAP,
             iap=IapAuth(
                 url=auth.iap.url,
-                desktop_oauth_client_id=auth.iap.oauth_client_id or None,
+                desktop_oauth_client_id=desktop_oauth_client_id,
                 desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
-                programmatic_audiences=tuple(auth.iap.audiences),
+                programmatic_audiences=programmatic_audiences,
                 signed_header_audience=auth.iap.signed_header_audience or None,
             ),
         )
