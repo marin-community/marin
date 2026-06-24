@@ -20,10 +20,18 @@ if it exists, so a setup that leaves no venv runs in the image's own environment
 """
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+
+# Set this env var (to any non-empty value) to surface uv's output during setup.
+DEBUG_UV_SYNC_ENV = "IRIS_DEBUG_UV_SYNC"
+
+
+def setup_is_quiet(env_vars: Mapping[str, str]) -> bool:
+    """Whether setup scripts should suppress uv output (the default)."""
+    return not env_vars.get(DEBUG_UV_SYNC_ENV)
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:

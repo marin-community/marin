@@ -27,7 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import default_setup_script
+from iris.cluster.setup import default_setup_script, setup_is_quiet
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -645,8 +645,7 @@ class EnvironmentSpec:
 
         ``setup_scripts=None`` builds the default uv-sync script from
         extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
-        wire carries only this user list — iris appends its own runtime-deps script
-        when assembling the command (see ``build_runtime_entrypoint``).
+        wire carries only this user list.
         """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -665,7 +664,7 @@ class EnvironmentSpec:
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
-                    quiet=not merged_env_vars.get("IRIS_DEBUG_UV_SYNC"),
+                    quiet=setup_is_quiet(merged_env_vars),
                 )
             ]
         else:
