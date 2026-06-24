@@ -701,3 +701,55 @@
 - Next action: Keep built-in `ragged_dot` as the W13 consumer and switch the
   dispatch/transport plan to either a built-in collective all-to-all/all-gather
   route or an all-gather-style fixed-neighbor ring if overlap is still required.
+
+### 2026-06-24 - Built-in collective dispatch-up probes
+
+- Hypothesis: If arbitrary-peer Pallas TMA is blocked, the practical path to
+  fast dispatch-up may be built-in collective transport followed by built-in
+  grouped matmul. Grug's existing `ragged_all_to_all` and fixed-bucket
+  `all_to_all` helpers provide good baselines for this direction.
+- Changes:
+  - Added `--run-ragged-a2a-dispatch-up` to
+    `bench_moe_dispatch_up_mosaic_gpu.py`. It uses Grug's global-expert sort,
+    `lax.ragged_all_to_all`, local expert-major permute, and
+    `ragged_dot(auto)` W13/SiLU.
+  - Added `--run-padded-a2a-dispatch-up`. It uses Grug's fixed-bucket
+    `lax.all_to_all` dispatch helper, reports dropped assignments, and runs
+    `ragged_dot(auto)` W13/SiLU.
+  - Candidate-only collective runs now skip reference prepack when
+    `--skip-reference-checks` is set and no Mosaic dispatch mode is requested.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - H128 ragged correctness: `... --job-name dlwh-6597-moe-ragged-a2a-up-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ragged-a2a-dispatch-up --w13-impl ragged_dot --ragged-dot-impl auto --bench-iters 1 --warmup-steps 1`
+  - Required H2560 ragged correctness: `... --job-name dlwh-6597-moe-ragged-a2a-up-h2560-t8 -- ... --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ragged-a2a-dispatch-up --w13-impl ragged_dot --ragged-dot-impl auto --bench-iters 2 --warmup-steps 1`
+  - T/rank=4096 ragged capacity sweep: `... --job-name dlwh-6597-moe-ragged-a2a-up-t4096-buf-sweep -- ... for factor in 1.0 1.1 1.25; do ... --tokens-per-rank 4096 --hidden 2560 --intermediate 2560 --recv-capacity-factor $factor --run-ragged-a2a-dispatch-up --skip-reference-checks --bench-iters 2 --warmup-steps 1; done`
+  - H128 padded correctness/drop probe: `... --job-name dlwh-6597-moe-padded-a2a-up-h128 -- ... --hidden 128 --intermediate 64 --recv-capacity-factor 1.25 --run-padded-a2a-dispatch-up --bench-iters 1 --warmup-steps 1`
+  - T/rank=4096 padded 0% probe: `... --job-name dlwh-6597-moe-padded-a2a-up-t4096-buf-sweep -- ... --run-padded-a2a-dispatch-up --skip-reference-checks --bench-iters 2 --warmup-steps 1`; stopped during the 10% compile after the 0% result.
+- Result:
+  - H128 ragged all-to-all dispatch-up: max abs error `1.90735e-06`, steady
+    end-to-end `0.629 ms`.
+  - Required H2560/T=8 ragged all-to-all dispatch-up: max abs error
+    `0.0078125`, steady end-to-end `0.840 ms`. Reference JIT dispatch was
+    `0.751 ms`; reference W13 was `8.507 ms`.
+  - T/rank=4096 ragged all-to-all dispatch-up candidate-only:
+    - 0% buffer (`recv_capacity=16384`): `5.999 ms`.
+    - 10% buffer (`recv_capacity=18023`): `6.122 ms`.
+    - 25% buffer (`recv_capacity=20480`): `6.190 ms`.
+  - H128 padded all-to-all dispatch-up: steady `0.424 ms`, but max abs error
+    `1.78906`; the small random shape can exceed fixed per-peer buckets and
+    drop routed rows.
+  - T/rank=4096 padded all-to-all 0%: dropped assignments `0`, but steady
+    end-to-end `12.821 ms`. The 10% compile was stopped because the zero-drop
+    0% result was already far above target and slower than ragged all-to-all.
+- Interpretation: Built-in `ragged_all_to_all + ragged_dot` is a correct
+  end-to-end collective baseline, but it is ~6 ms at the relevant T/rank=4096
+  shape. Fixed-bucket `all_to_all` is not a shortcut to <2 ms here: it is fast
+  on tiny shapes but either drops rows under small skewed capacity or is much
+  slower at the large no-drop shape. Since isolated `ragged_dot` is ~1.1-1.4 ms,
+  the remaining gap is dispatch transport plus permutation/sort overhead, not
+  W13 math.
+- Next action: Use the collective baseline as the correctness/perf comparator,
+  then either profile the ragged path to split sort/collective/W13 costs or
+  prototype a fixed-neighbor ring/all-gather schedule that avoids arbitrary-peer
+  TMA while enabling overlap.
