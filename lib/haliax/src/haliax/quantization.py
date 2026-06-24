@@ -26,6 +26,8 @@ from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
 from ._src.fp8 import dot_general_with_precision, fp8_scaled_dot_general, in_qdq, out_qdq
+from ._src.fp8_ragged import fp8_scaled_ragged_dot
+from .nn.ragged_dot import Implementation
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
@@ -269,6 +271,63 @@ class Fp8DirectDotGeneralOp(OverwriteWithGradient):
             rhs_amax_history=self.kernel_amax_history,
             grad_amax_history=self.output_grad_amax_history,
             quantize_compute_type=comp_dtype,
+        )
+
+
+class Fp8RaggedDotOp(OverwriteWithGradient):
+    """Direct-quantization FP8 for the grouped (ragged) matmul — the ragged analog of
+    :class:`Fp8DirectDotGeneralOp`.
+
+    Carries the same per-tensor delayed-scaling state (input/kernel/output-grad scales and
+    amax windows) and dispatches to :func:`haliax._src.fp8_ragged.fp8_scaled_ragged_dot`.
+    Unlike the dense ops this is called as ``op(lhs, rhs, group_sizes)`` rather than through
+    a ``Linear``'s ``dot_general``, because the MoE expert path invokes ``ragged_dot``
+    directly.
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    implementation: Implementation = eqx.field(static=True, default="auto")
+
+    @classmethod
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        implementation: Implementation = "auto",
+    ):
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+            implementation=implementation,
+        )
+
+    def __call__(self, lhs, rhs, group_sizes):
+        comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+        return fp8_scaled_ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            implementation=self.implementation,
         )
 
 
