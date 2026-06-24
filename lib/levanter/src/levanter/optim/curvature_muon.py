@@ -68,6 +68,9 @@ class CurvatureMuonConfig(OptimizerConfig):
     # fixed λ is scale-fragile. normalize_curvature renders it dimensionless per-matrix by using the
     # coefficient λ·‖N‖ instead of λ·λ̂_max (operator = λ‖N‖(α I − P/λ̂_max)), so λ~O(1) is meaningful.
     normalize_curvature: bool = True
+    # If set, the curvature strength tracks the LR schedule: lambda_t = curvature_lambda * lr_t / peak_lr.
+    # So curvature is strongest at peak LR and fades during warmup / cosine decay (curvature_lambda = peak).
+    lambda_tracks_lr: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -91,6 +94,8 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.curvature_alpha,
                         self.inner_steps,
                         self.normalize_curvature,
+                        self.learning_rate,
+                        self.lambda_tracks_lr,
                     )
                 )
                 return optax.chain(*components)
@@ -143,9 +148,11 @@ class ScaleByCurvatureMuonState(NamedTuple):
     power_vec: optax.Updates  # q, flattened-linear tree of [..., M]
 
 
-def _curv_direction_2d(g, n, p, q, *, rho, lam, alpha, steps, eps, ctype, inner_steps, normalize):
+def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, alpha, steps, eps, ctype, inner_steps, normalize):
     """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
 
+    lam_static (python float) is the on/off / peak strength used for the static branch; lam_coef is the
+    actual coefficient (may be a traced scalar when it tracks the LR schedule).
     Returns (new_p, new_q, x) with x in the original [out, in] orientation.
     """
     out, inn = g.shape
@@ -159,15 +166,15 @@ def _curv_direction_2d(g, n, p, q, *, rho, lam, alpha, steps, eps, ctype, inner_
     ell = jnp.dot(new_q, new_p @ new_q)  # Rayleigh estimate of λ_max(P)
 
     x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
-    if lam > 0.0:
+    if lam_static > 0.0:
         eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
         if normalize:
             # dimensionless: operator = λ·‖N‖·(α I − P/λ̂_max)
-            coef = lam * jnp.linalg.norm(n_t)
+            coef = lam_coef * jnp.linalg.norm(n_t)
             operator = coef * (alpha * eye - new_p / (ell + eps))
         else:
             # literal spec: (c I − λ P), c = α λ λ̂_max
-            operator = (alpha * lam * ell) * eye - lam * new_p
+            operator = (alpha * lam_coef * ell) * eye - lam_coef * new_p
         for _ in range(int(inner_steps)):
             x = zeropower_via_newtonschulz5(n_t + operator @ x, steps=steps, eps=eps, coefficient_type=ctype)
 
@@ -187,13 +194,17 @@ def scale_with_curvature_muon(
     curvature_alpha=1.5,
     inner_steps=1,
     normalize_curvature=True,
+    peak_lr=0.02,
+    lambda_tracks_lr=False,
 ):
     steps = int(steps)
     mu = float(momentum)
     rho = float(curvature_beta)
-    lam = float(curvature_lambda)
+    lam = float(curvature_lambda)  # static peak strength (also the on/off switch)
     alpha = float(curvature_alpha)
     normalize = bool(normalize_curvature)
+    peak_lr = float(peak_lr)
+    tracks_lr = bool(lambda_tracks_lr)
 
     def _is_linear_weight(layer):
         return isinstance(layer, haliax.nn.Linear) and isinstance(layer.weight, haliax.NamedArray)
@@ -241,6 +252,9 @@ def scale_with_curvature_muon(
         flat_grad = flatten_linear_layers(updates)
         flat_signal = flatten_linear_layers(signal)
 
+        # Effective coefficient: tracks the LR schedule when requested (traced scalar), else the static peak.
+        lam_coef = lam * (learning_rate / peak_lr) if tracks_lr else lam
+
         def per_layer(g_layer, n_layer, p, q):
             if not _is_linear_weight(g_layer):
                 return n_layer  # passthrough (these are routed to adam/adamh anyway)
@@ -252,7 +266,8 @@ def scale_with_curvature_muon(
                 pp,
                 qq,
                 rho=rho,
-                lam=lam,
+                lam_static=lam,
+                lam_coef=lam_coef,
                 alpha=alpha,
                 steps=steps,
                 eps=muon_eps,

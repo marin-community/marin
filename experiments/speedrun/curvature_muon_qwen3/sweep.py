@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 REGION = os.environ.get("REGION", "us-east5")
 SEQ_LEN = 4096
 WANDB_ENTITY = "marin-community"
-WANDB_PROJECT = "speedrun"
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "speedrun")
 
 
 def _floats(env: str, default: str) -> tuple[float, ...]:
@@ -63,6 +63,8 @@ LAMBDAS: tuple[float, ...] = _floats("LAMBDAS", "0.0,0.1,1.0")
 KS: tuple[int, ...] = _ints("KS", "1,2")
 ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.5")
 NORMALIZE: bool = os.environ.get("NORMALIZE", "true").lower() in ("1", "true", "yes")
+# lambda tracks the LR schedule: lambda_t = (swept lambda = peak) * lr_t / peak_lr.
+LAMBDA_TRACKS_LR: bool = os.environ.get("LAMBDA_TRACKS_LR", "false").lower() in ("1", "true", "yes")
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
@@ -138,6 +140,7 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         curvature_alpha=alpha,
         inner_steps=k,
         normalize_curvature=NORMALIZE,
+        lambda_tracks_lr=LAMBDA_TRACKS_LR,
         learning_rate=SIZE.learning_rate,
         lr_schedule="cosine",
         warmup=SIZE.warmup,
@@ -156,7 +159,8 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         clabel = "_lam0"  # MuonH control (alpha/K/normalize irrelevant)
     else:
         nlabel = "n" if NORMALIZE else "r"
-        clabel = f"_lam{_label(lam)}_a{_label(alpha)}_K{k}_{nlabel}"
+        tlabel = "_tl" if LAMBDA_TRACKS_LR else ""
+        clabel = f"_lam{_label(lam)}_a{_label(alpha)}_K{k}_{nlabel}{tlabel}"
     run_id = f"qwen3_{SIZE.label}_curvmuon{clabel}{tag}_{SEQ_LEN}"
     step = default_train(
         name=run_id,
