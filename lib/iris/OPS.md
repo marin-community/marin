@@ -211,7 +211,7 @@ client. The first command opens a browser and caches a long-lived refresh token
 in `~/.config/marin/credentials/marin.json`:
 
 ```bash
-uv run marin-cluster --cluster marin login
+uv run iris --cluster marin login
 ```
 
 Mint a short-lived IAP ID token from the cached credentials and send it in

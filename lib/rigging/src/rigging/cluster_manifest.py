@@ -15,7 +15,7 @@ Different layers read different slices of it:
 - Sections owned by callers *above* rigging — ``provisioning:`` (one-time GCP
   rollouts) and ``policy:`` (per-user budgets/roles) — are intentionally **not**
   modeled here. The loader tolerates them and exposes the raw document via
-  :attr:`ClusterManifest.document` so ``marin_cluster`` can parse its own slice.
+  :attr:`ClusterManifest.document` so a higher layer can parse its own slice.
 
 Keeping this leaf narrow is what lets iris and finelog read identity/auth without
 importing the admin tool, while the admin tool layers provisioning/policy on top.

@@ -68,7 +68,7 @@ class IapLoginRequired(RuntimeError):
 
     Raised when nothing is cached yet, or when the cached refresh token has
     expired or been revoked so the silent ID-token re-mint failed. The message is
-    self-contained — it includes the ``marin-cluster login`` command to run — so a
+    self-contained — it names the remedy (log in again) — so a
     CLI can surface ``str(exc)`` directly instead of synthesising its own remedy.
     """
 

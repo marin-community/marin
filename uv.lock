@@ -158,7 +158,6 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
-    "marin-cluster",
     "marin-core",
     "marin-finelog",
     "marin-fray",
@@ -4380,54 +4379,6 @@ wheels = [
 ]
 
 [[package]]
-name = "marin-cluster"
-version = "0.1.0"
-source = { editable = "lib/cluster" }
-dependencies = [
-    { name = "click" },
-    { name = "marin-rigging" },
-    { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "marin-finelog" },
-    { name = "marin-iris" },
-]
-finelog = [
-    { name = "marin-finelog" },
-]
-iris = [
-    { name = "marin-iris" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "marin-finelog" },
-    { name = "marin-iris" },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "marin-finelog", marker = "extra == 'all'", editable = "lib/finelog" },
-    { name = "marin-finelog", marker = "extra == 'finelog'", editable = "lib/finelog" },
-    { name = "marin-iris", marker = "extra == 'all'", editable = "lib/iris" },
-    { name = "marin-iris", marker = "extra == 'iris'", editable = "lib/iris" },
-    { name = "marin-rigging", editable = "lib/rigging" },
-    { name = "pyyaml", specifier = ">=6.0" },
-]
-provides-extras = ["iris", "finelog", "all"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-iris", editable = "lib/iris" },
-    { name = "pytest", specifier = ">=8.3.2" },
-]
-
-[[package]]
 name = "marin-core"
 version = "0.2.0"
 source = { editable = "lib/marin" }
@@ -5279,6 +5230,7 @@ dependencies = [
     { name = "gcsfs" },
     { name = "google-auth" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "s3fs" },
 ]
 
@@ -5303,6 +5255,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
 ]
 provides-extras = ["iap"]
@@ -5319,7 +5272,6 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "marin-cluster", extra = ["all"] },
     { name = "marin-core" },
     { name = "marin-dupekit" },
     { name = "marin-finelog" },
@@ -5334,7 +5286,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-cluster", extras = ["all"], editable = "lib/cluster" },
     { name = "marin-core", editable = "lib/marin" },
     { name = "marin-dupekit", specifier = ">=0.1.2.dev202606060824" },
     { name = "marin-finelog", editable = "lib/finelog" },

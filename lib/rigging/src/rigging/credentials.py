@@ -6,14 +6,14 @@
 This is the *consumer* convention behind "one login": given a cluster's auth
 shape, assemble the bearer material a client must attach, drawn from the standard
 sources in a fixed order. It never runs an interactive flow — acquiring a token
-(the browser OAuth + JWT exchange) is the job of the layer above
-(``marin_cluster.login``); this module only locates whatever that produced and
+(the browser OAuth + JWT exchange) is the job of the login orchestration
+layer above; this module only locates whatever that produced and
 hands back ready-to-attach interceptors.
 
 App-token resolution order (the ``Authorization`` bearer):
 
 1. ``$MARIN_CLUSTER_TOKEN`` — an explicit override for CI / headless runs.
-2. The per-cluster credential file written by ``marin-cluster login``.
+2. The per-cluster credential file written by the cluster login command.
 3. An ambient provider implied by the cluster's auth provider — a GCP access
    token for a ``gcp`` cluster, a configured static token for a ``static`` one.
    An ``iap`` cluster has no ambient app token (its Iris JWT comes only from
@@ -77,7 +77,7 @@ class ClientCredentials:
 
 def _login_hint(cluster: str) -> str:
     """The canonical 'log in again' remedy for ``cluster``."""
-    return f"run `marin-cluster --cluster {cluster} login` to authenticate"
+    return f"log in to cluster {cluster!r} to authenticate"
 
 
 def iap_edge_provider(
@@ -87,7 +87,7 @@ def iap_edge_provider(
 ) -> IapRefreshTokenProvider | None:
     """Build the IAP edge provider from ``cluster``'s cached desktop-OAuth login.
 
-    Pairs the refresh token cached by ``marin-cluster login`` with ``cluster``'s
+    Pairs the refresh token cached by the cluster login with ``cluster``'s
     desktop client to silently re-mint the OIDC ID token IAP requires. Returns
     None when the user has not logged in (so a pre-login command degrades to a
     clear UNAUTHENTICATED error rather than crashing on a missing credential).

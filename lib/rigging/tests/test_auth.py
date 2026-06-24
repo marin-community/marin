@@ -205,11 +205,11 @@ def test_iap_refresh_token_provider_raises_login_required_when_refresh_fails(mon
         "client-id",
         "secret",
         "refresh-tok",
-        login_hint="run `marin-login login marin --client-secrets <desktop.json>`",
+        login_hint="log in to cluster marin to authenticate",
     )
 
     # The raw google-auth error becomes an actionable, self-contained IapLoginRequired.
-    with pytest.raises(IapLoginRequired, match="marin-login login marin"):
+    with pytest.raises(IapLoginRequired, match="log in to cluster marin"):
         provider.get_token()
 
 

@@ -7,7 +7,7 @@ This is the *mechanism* half of "one login": a single place a Marin client tool
 caches the bearer material for a cluster, stored owner-only and written
 atomically. rigging deliberately does not know what an ``app_token`` is or how an
 ``edge_refresh_token`` was obtained — orchestrating a login and deciding what goes
-in the record is the job of the layer above (``marin_cluster.login``). Keeping the
+in the record is the job of the login orchestration layer above. Keeping the
 store opaque is what lets it live at the leaf without dragging in iris/IAP
 concepts.
 

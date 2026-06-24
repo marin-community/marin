@@ -1,12 +1,4 @@
 iris: coreweave
-
-identity:
-  name: coreweave
-  dashboard_url: https://iris-coreweave.oa.dev
-
-# No `provisioning:` block: CoreWeave is S3/non-GCP, so the GCP-only admin verbs
-# (`marin-cluster admin iam/iap`) do not apply and fail with a clear message.
-
 data:
   scheme: s3
   region_buckets: { na: marin-na }

@@ -1,34 +1,4 @@
 iris: marin
-
-identity:
-  name: marin
-  dashboard_url: https://iris.oa.dev
-
-# One-time GCP rollout spec for `marin-cluster admin`. Drives `admin iam` and
-# `admin iap` from config instead of hard-coded constants. Role-sets and required
-# APIs stay as code (platform mechanics, not cluster identity).
-provisioning:
-  gcp:
-    project: hai-gcp-models
-    default_zone: us-central1-a
-    network: default
-  iam:
-    service_accounts:
-      controller: iris-controller
-      worker: iris-worker
-    principals:
-      ci: serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
-  iap_gclb:
-    domain: iris-marin.oa.dev
-    controller:
-      port: 10000
-      discovery_label: iris-marin-controller
-    resources:
-      prefix: iris-marin
-    firewall:
-      apply_allow_rule: true
-      deny_public_default: false
-
 data:
   scheme: gs
   region_buckets:

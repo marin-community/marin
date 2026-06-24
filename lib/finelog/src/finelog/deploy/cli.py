@@ -47,7 +47,7 @@ def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generat
     if cfg.client_url:
         provider = iap_edge_provider(name)
         if provider is None:
-            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; run `marin-cluster --cluster {name} login`")
+            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
         client = connect(
             cfg.client_url,
             lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),

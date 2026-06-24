@@ -4,7 +4,7 @@
 # The platform/controller/scale_groups below are shown as `local` purely so this
 # file validates and the auth.iap schema is easy to read in isolation. A real
 # IAP deployment fronts a gcp/coreweave controller with the ingress stood up via
-# `marin-cluster admin iap` (GCLB + IAP); copy the `auth:` block into that
+# lib/iris/scripts/iap_gclb.py (GCLB + IAP); copy the `auth:` block into that
 # cluster's config.
 #
 # Login + use:

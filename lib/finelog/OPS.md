@@ -10,7 +10,7 @@ Authenticate once with the built-in Marin desktop OAuth client (it is
 registered as an IAP programmatic client):
 
 ```bash
-uv run marin-cluster --cluster marin login
+uv run iris --cluster marin login
 ```
 
 The command caches a refresh token in `~/.config/marin/credentials/marin.json`.

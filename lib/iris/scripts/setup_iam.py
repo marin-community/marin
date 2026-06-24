@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,22 +7,25 @@
 Creates a controller service account and a worker service account if missing,
 grants their project roles, and wires impersonation / act-as bindings for the
 configured CI and operator principals.
-
-Project, service-account ids, the CI principal, and operators all come from the
-cluster's ``provisioning.iam`` config; role-sets and required APIs stay as code
-constants (platform mechanics, the same for every GCP cluster).
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 
 import click
 
 logger = logging.getLogger("setup-iam")
 
+# Marin-specific default CI principal used by the repo's Iris GCP workflows.
+DEFAULT_CI_PRINCIPAL = "serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com"
+DEFAULT_CONTROLLER_SA_ID = "iris-controller"
+DEFAULT_WORKER_SA_ID = "iris-worker"
 REQUIRED_APIS = (
     "compute.googleapis.com",
     "iam.googleapis.com",
@@ -291,23 +295,45 @@ def _gcloud_storage_bucket_probe(bucket: str, service_account: str) -> tuple[boo
     )
 
 
-def reconcile_iam(
+@click.group(help=__doc__)
+@click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    level = logging.INFO if verbose else logging.WARNING
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stdout)
+
+
+@cli.command()
+@click.option("--project", required=True, help="GCP project id")
+@click.option(
+    "--operator-principal",
+    required=True,
+    help="Operator principal email or full IAM member string (e.g. russell.power@gmail.com)",
+)
+@click.option(
+    "--ci-principal", default=DEFAULT_CI_PRINCIPAL, show_default=True, help="CI principal email or IAM member string"
+)
+@click.option("--controller-sa-id", default=DEFAULT_CONTROLLER_SA_ID, show_default=True)
+@click.option("--worker-sa-id", default=DEFAULT_WORKER_SA_ID, show_default=True)
+@click.option("--dry-run", is_flag=True, help="Print planned actions without changing IAM")
+def init(
     project: str,
+    operator_principal: str,
+    ci_principal: str,
     controller_sa_id: str,
     worker_sa_id: str,
-    operator_members: tuple[str, ...],
-    ci_member: str | None,
-    *,
     dry_run: bool,
 ) -> None:
-    """Create the service accounts and wire all IAM bindings to desired state.
+    """Create service accounts and wire IAM bindings.
 
-    Fetches each IAM policy once, computes all missing bindings in memory, then
-    writes each policy back in a single ``set-iam-policy`` call. Re-runnable: a
-    policy already at desired state produces no writes.
+    Fetches each IAM policy once, computes all missing bindings in memory,
+    then writes each policy back in a single set-iam-policy call.
     """
     logging.getLogger().setLevel(logging.INFO)
-    ci_principal_member = _principal_member(ci_member) if ci_member else None
+    operator_member = _principal_member(operator_principal)
+    ci_member = _principal_member(ci_principal)
 
     _require_apis(project)
 
@@ -336,15 +362,14 @@ def reconcile_iam(
 
     controller_sa_member = f"serviceAccount:{controller_sa}"
     worker_sa_member = f"serviceAccount:{worker_sa}"
-    privileged_principals = tuple(p for p in (*operator_members, ci_principal_member) if p)
 
     summary: dict[str, object] = {
         "project": project,
         "dry_run": dry_run,
         "controller_service_account": controller_sa,
         "worker_service_account": worker_sa,
-        "operator_principals": list(operator_members),
-        "ci_principal": ci_principal_member,
+        "operator_principal": operator_member,
+        "ci_principal": ci_member,
         "project_user_count": len(project_user_members),
         "project_user_members": project_user_members,
     }
@@ -358,7 +383,7 @@ def reconcile_iam(
     for role in WORKER_PROJECT_ROLES:
         if _add_policy_binding(proj_policy, role, worker_sa_member):
             proj_additions.append(f"  {worker_sa_member} -> {role}")
-    for principal in {*operator_members, *project_user_members}:
+    for principal in {operator_member, *project_user_members}:
         for role in USER_PROJECT_ROLES:
             if _add_policy_binding(proj_policy, role, principal):
                 proj_additions.append(f"  {principal} -> {role}")
@@ -371,7 +396,7 @@ def reconcile_iam(
 
     # -- Controller SA bindings (single set-iam-policy call) -------------------
     ctrl_additions: list[str] = []
-    for principal in privileged_principals:
+    for principal in (operator_member, ci_member):
         for role in IMPERSONATION_ROLES:
             if _add_policy_binding(ctrl_policy, role, principal):
                 ctrl_additions.append(f"  {principal} -> {role}")
@@ -391,7 +416,7 @@ def reconcile_iam(
 
     # -- Worker SA bindings (single set-iam-policy call) -----------------------
     wrkr_additions: list[str] = []
-    for principal in privileged_principals:
+    for principal in (operator_member, ci_member):
         for role in IMPERSONATION_ROLES:
             if _add_policy_binding(wrkr_policy, role, principal):
                 wrkr_additions.append(f"  {principal} -> {role}")
@@ -410,55 +435,6 @@ def reconcile_iam(
         _set_sa_iam_policy(worker_sa, wrkr_policy, dry_run=dry_run)
     else:
         logger.info("Worker SA IAM policy already up to date")
-
-
-def bind_user(
-    project: str,
-    controller_sa_id: str,
-    worker_sa_id: str,
-    member: str,
-    *,
-    dry_run: bool,
-) -> None:
-    """Grant a single human *member* the project + SA bindings to use Iris.
-
-    Reconciles the same desired-state bindings the project-member loop in
-    :func:`reconcile_iam` applies: project-level SSH roles and impersonation /
-    act-as on both service accounts. Idempotent.
-    """
-    controller_sa = _service_account_email(project, controller_sa_id)
-    worker_sa = _service_account_email(project, worker_sa_id)
-    controller_sa_member = f"serviceAccount:{controller_sa}"
-
-    if dry_run:
-        proj_policy = {"bindings": []}
-        ctrl_policy = {"bindings": []}
-        wrkr_policy = {"bindings": []}
-    else:
-        proj_policy = _get_raw_policy(["gcloud", "projects", "get-iam-policy", project, "--format=json"])
-        ctrl_policy = _get_raw_policy(
-            ["gcloud", "iam", "service-accounts", "get-iam-policy", controller_sa, "--format=json"]
-        )
-        wrkr_policy = _get_raw_policy(
-            ["gcloud", "iam", "service-accounts", "get-iam-policy", worker_sa, "--format=json"]
-        )
-
-    proj_changed = any(_add_policy_binding(proj_policy, role, member) for role in USER_PROJECT_ROLES)
-    if proj_changed:
-        logger.info("→ binding %s project SSH roles", member)
-        _set_project_iam_policy(project, proj_policy, dry_run=dry_run)
-
-    ctrl_changed = any(_add_policy_binding(ctrl_policy, role, member) for role in PROJECT_USER_IMPERSONATION_ROLES)
-    if ctrl_changed:
-        logger.info("→ binding %s impersonation on controller SA", member)
-        _set_sa_iam_policy(controller_sa, ctrl_policy, dry_run=dry_run)
-
-    wrkr_changed = any(_add_policy_binding(wrkr_policy, role, member) for role in PROJECT_USER_IMPERSONATION_ROLES)
-    # Keep the worker SA reachable by the controller SA, matching `reconcile_iam`.
-    wrkr_changed |= any(_add_policy_binding(wrkr_policy, role, controller_sa_member) for role in IMPERSONATION_ROLES)
-    if wrkr_changed:
-        logger.info("→ binding %s impersonation on worker SA", member)
-        _set_sa_iam_policy(worker_sa, wrkr_policy, dry_run=dry_run)
 
 
 def _print_results_table(results: list[tuple[str, bool]]) -> None:
@@ -493,20 +469,32 @@ def _check_result(
     return passed
 
 
-def check_user(
-    project: str,
-    controller_sa_id: str,
-    worker_sa_id: str,
-    probe_gcs_path: tuple[str, ...],
-    email: str,
-) -> None:
+@cli.command()
+@click.option("--project", required=True, help="GCP project id")
+@click.option("--controller-sa-id", default=DEFAULT_CONTROLLER_SA_ID, show_default=True)
+@click.option("--worker-sa-id", default=DEFAULT_WORKER_SA_ID, show_default=True)
+@click.option(
+    "--probe-gcs-path",
+    multiple=True,
+    help=(
+        "Optional gs:// bucket or path used to verify bucket metadata access "
+        "with the worker SA, e.g. gs://marin-us-east5 or "
+        "gs://marin-us-east5/tmp/ttl=1d"
+    ),
+)
+@click.argument("email")
+def check(project: str, controller_sa_id: str, worker_sa_id: str, probe_gcs_path: tuple[str, ...], email: str) -> None:
     """Check whether a user has the IAM bindings and live credentials to use Iris.
 
     Checks IAM policy bindings, then performs live gcloud probes for each
     capability the Iris CLI needs: SA impersonation, OS Login SSH key
     registration, compute instance listing, OS Login profile resolution,
     metadata-style SSH key setup, and optional worker-SA GCS bucket
-    metadata probes. Exits non-zero if any check fails.
+    metadata probes.
+
+    \b
+    Example:
+        python setup_iam.py check --project=hai-gcp-models tim@openathena.ai
     """
     member = _principal_member(email)
     checked_email = member.split(":", 1)[1] if ":" in member else member
@@ -688,3 +676,7 @@ def check_user(
     # -- Summary table ---------------------------------------------------------
     _print_results_table(results)
     raise SystemExit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    cli()
