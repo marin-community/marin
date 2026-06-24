@@ -811,3 +811,42 @@ confirms the path.
   `QuantizationConfig` as a selectable path, then re-measure both arms at the routed-MoE expert-GEMM shapes.
 - **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
   --cpu 8 --memory 64GB -- bash lib/levanter/scripts/bench/_s2_h100_batch.sh` (arms E1/E2 = `--path direct`).
+
+### 2026-06-24 — GFP8-017: S5 H100 — quantize-around the Triton ragged kernel is INSUFFICIENT; option B needed
+- **Context:** S5 = FP8 for the grouped/MoE expert GEMMs. Built the ragged analog of `Fp8DirectDotGeneralOp`
+  (`fp8_scaled_ragged_dot` + `Fp8RaggedDotOp`): E4M3 operands into `ragged_dot`, E5M2 output grad in the
+  backward, each contraction dispatched to the existing Triton kernel via the bf16 dlhs/drhs layouts. This is
+  **option A** (quantize *around* the unmodified kernel) vs **option B** (write an f8-aware Triton kernel). The
+  A-vs-B decider is purely perf: feeding f8 into the existing `pl.dot(a.astype(result_type), …)` — does it
+  engage f8 tensor cores, or not? This run answers it.
+- **Job:** `/matt/grug-fp8-s5-ragged-bench2` (H100x1, Triton backend). MoE expert MLP (two grouped GEMMs +
+  SiLU gate), real Grug shapes T=8192/D=2048/F=5632/E=8. One-shot.
+
+  | arm | path | dir | TFLOP/s | MFU | steady | note |
+  |-----|------|-----|---------|-----|--------|------|
+  | 1 | bf16 | fwd+bwd | 447 | 45.2% | 3.80 ms | baseline (vs 989 bf16 peak) |
+  | 3 | bf16 | fwd | 411 | 41.6% | 1.38 ms | baseline fwd |
+  | 4 | **fp8** | **fwd** | **241** | 12.2% | **2.35 ms** | f8e4m3 operands DO reach the GEMM; **1.7× SLOWER than bf16** |
+  | 2 | **fp8** | fwd+bwd | — | — | — | **CRASH** before timing |
+
+- **Finding 1 — forward: f8 reaches the GEMM as f8, but is 1.7× slower than bf16.** The Triton custom-call
+  (`__gpu$xla.gpu.triton`) genuinely takes `f8e4m3fn[…]` operands and emits bf16 (HLO arm 5 operand layouts:
+  `f8e4m3fn[1024,512]` × `f8e4m3fn[8,512,2048]` → `bf16[1024,2048]`). So the operands are not upcast *before*
+  the kernel — yet throughput is **241 vs 411 TFLOP/s fwd** (0.59×), 12% of the f8 peak. The generic kernel
+  (`block_k=32`, `num_warps=4`, bf16-tuned tiling, `pl.dot` on a `result_type`-cast) does **not** convert the
+  f8 operands into an f8-tensor-core win; the quant/dequant is pure overhead on top of a non-f8-rate MMA.
+- **Finding 2 — backward crashes on the existing kernel.** Arm 2 (fwd+bwd) dies in the kernel:
+  `TypePromotionError: ('float8_e5m2','float8_e4m3fn') have no implicit promotion`. The dlhs/drhs grad dots mix
+  the E5M2 output-grad with E4M3 operands, and the kernel's `jnp.result_type(a, b)` (ragged_dot.py:108/173)
+  rejects mixed f8. (The op is correct on XLA — `ragged_dot_general` *does* accept mixed f8, so the CPU tests
+  pass — but the production Triton kernel cannot host the f8 backward as written.)
+- **Verdict: option B is required.** Quantizing around the unmodified Triton ragged kernel is insufficient on
+  both axes: the forward gets no f8 speedup (it's a regression), and the backward will not even compile. B must
+  (a) handle mixed-f8 operands (drop the `result_type` cast; accept E5M2×E4M3 with an f32 accumulator) and
+  (b) tile for f8 tensor-core throughput. Numerics are not the blocker — fp8 tracks bf16 at 6.6% rel-Frobenius
+  where it runs.
+- **Detector note:** the bench's `f8_reaches_gemm` flag is a coarse "f8 substring on a GEMM-marker line"; it
+  reads true here and the HLO operand layouts confirm it, but the marker `kind=kCustom` also matches f8
+  transpose fusions, so trust the operand-layout dtypes (arm 5 full HLO), not the flag alone.
+- **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
+  --cpu 4 --memory 64GB -- bash lib/levanter/scripts/bench/_s5_ragged_validate.sh`.
