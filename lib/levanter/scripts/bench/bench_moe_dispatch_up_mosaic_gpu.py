@@ -567,6 +567,111 @@ def _pallas_block_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array
     return fn
 
 
+def _pallas_fused_dispatch_block_ready_w13_fn(
+    mesh: Mesh,
+    args,
+    *,
+    recv_capacity: int,
+    ready_block_m: int,
+    rows_per_program: int,
+    copy_mode: str,
+) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
+    if copy_mode not in ("scratch_ready", "direct_ready"):
+        raise ValueError(f"copy_mode must be 'scratch_ready' or 'direct_ready', got {copy_mode!r}")
+
+    def local_dispatch_up(
+        send_x,
+        send_row,
+        send_local_expert,
+        send_src_token_idx,
+        send_topk_slot,
+        send_router_weight,
+        send_count,
+        rows_per_expert,
+        expert_base,
+        send_expert_base,
+        send_expert_count,
+        recv_source_expert_base,
+        recv_source_expert_count,
+        local_w_gate_up,
+    ):
+        if copy_mode == "scratch_ready":
+            layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
+                jnp.squeeze(send_x, axis=0),
+                jnp.squeeze(send_row, axis=0),
+                jnp.squeeze(send_local_expert, axis=0),
+                jnp.squeeze(send_src_token_idx, axis=0),
+                jnp.squeeze(send_topk_slot, axis=0),
+                jnp.squeeze(send_router_weight, axis=0),
+                jnp.squeeze(send_count, axis=0),
+                jnp.squeeze(rows_per_expert, axis=0),
+                jnp.squeeze(expert_base, axis=0),
+                jnp.squeeze(send_expert_base, axis=0),
+                jnp.squeeze(send_expert_count, axis=0),
+                jnp.squeeze(recv_source_expert_base, axis=0),
+                jnp.squeeze(recv_source_expert_count, axis=0),
+                axis_name="expert",
+                recv_capacity=recv_capacity,
+                ready_block_m=ready_block_m,
+                rows_per_program=rows_per_program,
+            )
+        else:
+            layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local(
+                jnp.squeeze(send_x, axis=0),
+                jnp.squeeze(send_row, axis=0),
+                jnp.squeeze(send_local_expert, axis=0),
+                jnp.squeeze(send_src_token_idx, axis=0),
+                jnp.squeeze(send_topk_slot, axis=0),
+                jnp.squeeze(send_router_weight, axis=0),
+                jnp.squeeze(send_count, axis=0),
+                jnp.squeeze(rows_per_expert, axis=0),
+                jnp.squeeze(expert_base, axis=0),
+                jnp.squeeze(recv_source_expert_base, axis=0),
+                jnp.squeeze(recv_source_expert_count, axis=0),
+                axis_name="expert",
+                recv_capacity=recv_capacity,
+                ready_block_m=ready_block_m,
+                rows_per_program=rows_per_program,
+            )
+        h = compute_moe_up_mosaic_gpu_block_ready_local(
+            layout.recv_x,
+            layout.rows_per_expert,
+            ready_block_count,
+            jnp.squeeze(local_w_gate_up, axis=0),
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            max_concurrent_steps=args.num_stages,
+            grid_block_n=1,
+        )
+        return h[None, ...], ready_count[None, ...], ready_block_count[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_dispatch_up,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None, None),
+            ),
+            out_specs=(P("expert", None, None), P("expert", None, None), P("expert", None)),
+            check_vma=False,
+        )
+    )
+
+
 def _pallas_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
     def local_w13(recv_x, ready_count, local_w_gate_up):
         h = compute_moe_up_mosaic_gpu_ready_local(
@@ -1314,6 +1419,11 @@ def main() -> None:
         help="Benchmark all-gather/ring-style dispatch followed by ragged_dot W13/SiLU.",
     )
     parser.add_argument(
+        "--run-pallas-fused-dispatch-up",
+        action="store_true",
+        help="Benchmark one jitted ready-dispatch plus block-ready Mosaic GPU W13/SiLU path.",
+    )
+    parser.add_argument(
         "--synthetic-layout",
         action="store_true",
         help="Skip routing/prepack and benchmark W13/SiLU on a synthetic expert-major layout.",
@@ -1509,6 +1619,7 @@ def main() -> None:
         and not args.run_ragged_a2a_breakdown
         and not args.run_padded_a2a_dispatch_up
         and not args.run_ring_gather_dispatch_up
+        and not args.run_pallas_fused_dispatch_up
     ):
         return
     if len(devices) < args.ep_size:
@@ -1804,6 +1915,73 @@ def main() -> None:
                 )
             if ring_gather_steady_ms is not None:
                 print(f"dispatch_up/ring_gather_ragged_dot_end_to_end_ms: {ring_gather_steady_ms:.3f}")
+
+        if args.run_pallas_fused_dispatch_up:
+            if prepacked is None:
+                raise AssertionError("prepacked sends are required for fused Mosaic GPU dispatch-up")
+            if args.dispatch_copy_mode not in ("scratch_ready", "direct_ready"):
+                raise ValueError(
+                    "--run-pallas-fused-dispatch-up requires --dispatch-copy-mode=scratch_ready or direct_ready"
+                )
+            fused_dispatch_up_fn = _pallas_fused_dispatch_block_ready_w13_fn(
+                mesh,
+                args,
+                recv_capacity=recv_capacity,
+                ready_block_m=args.block_m,
+                rows_per_program=args.dispatch_rows_per_program,
+                copy_mode=args.dispatch_copy_mode,
+            )
+            fused_dispatch_up_args = (
+                *_pallas_dispatch_ready_args(mesh, prepacked),
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_pallas_fused_dispatch_up():
+                return fused_dispatch_up_fn(*fused_dispatch_up_args)
+
+            fused_dispatch_up_result, _ = _time_block(
+                "dispatch_up/mosaic_gpu_fused_block_ready",
+                run_pallas_fused_dispatch_up,
+            )
+            fused_h, fused_ready_count, fused_ready_block_count = fused_dispatch_up_result
+            fused_dispatch_up_steady_ms = None
+            if args.bench_iters > 0:
+                fused_dispatch_up_steady_ms = _measure_steady_state(
+                    "dispatch_up/mosaic_gpu_fused_block_ready",
+                    run_pallas_fused_dispatch_up,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            expected_ready_count = _sharded(
+                mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
+            )
+            fused_ready_count_err = int(jnp.max(jnp.abs(fused_ready_count - expected_ready_count)))
+            print(f"dispatch_up_fused_ready_count_max_abs_error: {fused_ready_count_err}")
+            if fused_ready_count_err != 0:
+                raise AssertionError(f"fused dispatch ready-count mismatch: max_abs={fused_ready_count_err}")
+            expected_ready_block_count = _sharded(
+                mesh, _expected_ready_block_count(prepacked, recv_capacity, args.block_m), P("expert", None)
+            )
+            fused_ready_block_count_err = int(jnp.max(jnp.abs(fused_ready_block_count - expected_ready_block_count)))
+            print(f"dispatch_up_fused_ready_block_count_max_abs_error: {fused_ready_block_count_err}")
+            if fused_ready_block_count_err != 0:
+                raise AssertionError(
+                    f"fused dispatch ready-block-count mismatch: max_abs={fused_ready_block_count_err}"
+                )
+            if ref_h is None:
+                print("dispatch_up/mosaic_gpu_fused_block_ready/reference_check: skipped")
+            else:
+                fused_err = jnp.max(jnp.abs(fused_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
+                fused_err_float = float(fused_err)
+                print(f"dispatch_up_mosaic_gpu_fused_block_ready_max_abs_error: {fused_err_float:.6g}")
+                _print_error_summary("dispatch_up_mosaic_gpu_fused_block_ready", fused_h, ref_h)
+                _check_error(
+                    "dispatch_up_mosaic_gpu_fused_block_ready_max_abs_error",
+                    fused_err_float,
+                    args.w13_atol,
+                )
+            if fused_dispatch_up_steady_ms is not None:
+                print(f"dispatch_up/mosaic_gpu_fused_block_ready_end_to_end_ms: {fused_dispatch_up_steady_ms:.3f}")
 
         if not args.run_pallas:
             return

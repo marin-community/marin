@@ -854,3 +854,47 @@
 - Next action: Productionize the ring-gather dispatch-up path behind the
   Mosaic/Grug MoE backend boundary, with an explicit correctness check for the
   receiver-local row metadata or a full combine path.
+
+### 2026-06-24 - Fused Pallas ready-dispatch plus block-ready W13 diagnostic
+
+- Hypothesis: Calling scratch-ready Mosaic GPU dispatch and block-ready Mosaic
+  GPU W13/SiLU inside one `jax.jit(shard_map(...))` may expose enough
+  producer/consumer structure for scheduling overlap, or at least quantify the
+  gap before attempting a deeper single-kernel rewrite.
+- Changes:
+  - Added `--run-pallas-fused-dispatch-up` to
+    `bench_moe_dispatch_up_mosaic_gpu.py`.
+  - The mode invokes `dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local`
+    or `dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local`,
+    immediately feeds the resulting `recv_x` and `ready_block_count` to
+    `compute_moe_up_mosaic_gpu_block_ready_local`, and reports W13/reference
+    parity plus exact ready-count checks.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - H128 correctness: `... --job-name dlwh-6597-moe-pallas-fused-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --recv-capacity-factor 1.25 --dispatch-copy-mode scratch_ready --dispatch-rows-per-program 4 --w13-impl mosaic_gpu_block_ready --run-pallas-fused-dispatch-up --bench-iters 1 --warmup-steps 1`
+  - H2560/T=8 correctness: `... --job-name dlwh-6597-moe-pallas-fused-h2560-t8 -- ... --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --recv-capacity-factor 1.25 --dispatch-copy-mode scratch_ready --dispatch-rows-per-program 4 --w13-impl mosaic_gpu_block_ready --run-pallas-fused-dispatch-up --bench-iters 1 --warmup-steps 1`
+  - T/rank=4096 perf attempt: `... --job-name dlwh-6597-moe-pallas-fused-t4096-buf100 -- ... --tokens-per-rank 4096 --hidden 2560 --intermediate 2560 --recv-capacity-factor 1.0 --dispatch-copy-mode scratch_ready --dispatch-rows-per-program 16 --run-pallas-fused-dispatch-up --skip-reference-checks --bench-iters 1 --warmup-steps 1`
+- Result:
+  - H128: ready-count and ready-block-count errors `0`; W13 max abs
+    `0.0078125`; steady `1.604 ms`.
+  - H2560/T=8: ready-count and ready-block-count errors `0`; W13 max abs
+    `0.015625`; steady `1.951 ms`.
+  - T/rank=4096 0% buffer: prepack completed in `27.3 s`, then the fused
+    Pallas candidate produced no timing or error after roughly 40 minutes in
+    compile/run. The job was stopped to avoid burning more H100 time:
+    `/dlwh/dlwh-6597-moe-pallas-fused-t4096-buf100`.
+- Interpretation: The fused diagnostic is correct on the requested H=I=2560,
+  E=256, topk=4 validation shape at T/rank=8 and narrowly under 2 ms there.
+  It is not viable for the relevant T/rank=4096 throughput shape in the current
+  prepacked scratch-ready form: compilation/codegen does not return in a
+  practical window, whereas the ring-gather built-in collective path returns
+  `1.816-1.861 ms` across 0-25% buffers. A real overlapped Mosaic path likely
+  needs a smaller in-kernel/ring transport schedule or a production
+  ring-gather/GMM integration rather than the current giant prepacked scratch
+  dispatch.
+- Next action: Treat the current prepacked scratch-ready fused path as a
+  validation/negative-result harness. For production, integrate the correct
+  ring-gather dispatch-up path first, or redesign Mosaic dispatch around a
+  streaming fixed-neighbor schedule that avoids the `EP x send_capacity x H`
+  scratch/prepack shape.
