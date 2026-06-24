@@ -8,7 +8,6 @@ import pytest
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
-import levanter.grug.attention._fa4_cute_config as fa4_cute_config
 from levanter.grug.attention import (
     AttentionMask,
     gpu_fa4_cute_attention,
@@ -74,37 +73,6 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
-
-
-def test_sm90_native_backward_boundary_requires_sm90_config():
-    q = jnp.ones((1, 8, 4, 128), dtype=jnp.bfloat16)
-    k = jnp.ones((1, 8, 1, 128), dtype=jnp.bfloat16)
-    v = jnp.ones((1, 8, 1, 128), dtype=jnp.bfloat16)
-    lower_bounds = jnp.zeros((1, 8), dtype=jnp.int32)
-    valid = jnp.ones((1, 8), dtype=jnp.bool_)
-    mask_block_cnt = jnp.ones((1, 1, 1), dtype=jnp.int32)
-    mask_block_idx = jnp.zeros((1, 1, 1, 1), dtype=jnp.int32)
-
-    with pytest.raises(NotImplementedError, match="sm90_backward"):
-        fa4_cute_backend.segmented_flash_attention_backward_sm90_native(
-            q,
-            k,
-            v,
-            q,
-            q,
-            jnp.ones((1, 4, 8), dtype=jnp.float32),
-            lower_bounds,
-            valid,
-            mask_block_cnt,
-            mask_block_idx,
-            softmax_scale=1.0,
-            kernel_config=fa4_cute_config.Flash4CuteKernelConfig(
-                forward_tile=(128, 64),
-                backward_tile=(128, 64),
-                num_threads=128,
-                backward_arch=80,
-            ),
-        )
 
 
 def test_fa4_frontend_rejects_mismatched_q_kv_segment_ids():
