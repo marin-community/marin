@@ -701,6 +701,203 @@ def _ragged_a2a_dispatch_up_fn(
     )
 
 
+def _ragged_a2a_dispatch_only_fn(
+    mesh: Mesh,
+    *,
+    recv_capacity: int,
+    num_experts: int,
+) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
+    def local_dispatch(x_local, selected_experts_local):
+        x_local = jnp.squeeze(x_local, axis=0)
+        selected_experts_local = jnp.squeeze(selected_experts_local, axis=0)
+        shard_id = lax.axis_index("expert")
+        local_experts = num_experts // lax.axis_size("expert")
+        topk = selected_experts_local.shape[1]
+        assignments_per_shard = x_local.shape[0] * topk
+
+        sorted_x, _, group_sizes = _permute_by_global_expert(
+            x_local,
+            selected_experts_local,
+            num_experts=num_experts,
+        )
+        all_group_sizes = lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        clipped_group_sizes = _clip_receiver_group_sizes(
+            all_group_sizes,
+            local_expert_size=local_experts,
+            receiver_capacity=recv_capacity,
+        )
+        sender_group_sizes = clipped_group_sizes[shard_id]
+        keep_mask = _expert_prefix_keep_mask(
+            group_sizes.astype(jnp.int32),
+            sender_group_sizes,
+            total_size=assignments_per_shard,
+        )
+        compacted_x = _compact_by_keep_mask(sorted_x, keep_mask)
+
+        ep_size = num_experts // local_experts
+        all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        dispatched_shape = jnp.zeros((recv_capacity, x_local.shape[1]), dtype=x_local.dtype)
+        x_dispatched = lax.ragged_all_to_all(
+            compacted_x,
+            dispatched_shape,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+
+        x_dispatch, _, ragged_group_sizes = _local_permute_from_counts(
+            x_dispatched,
+            clipped_group_sizes,
+            local_expert_size=local_experts,
+            shard_index=shard_id,
+        )
+        local_counts_by_sender = lax.dynamic_slice_in_dim(
+            clipped_group_sizes,
+            start_index=shard_id * local_experts,
+            slice_size=local_experts,
+            axis=1,
+        )
+        true_local_group_sizes = jnp.sum(local_counts_by_sender, axis=0, dtype=jnp.int32)
+        return x_dispatch[None, ...], ragged_group_sizes[None, ...], true_local_group_sizes[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_dispatch,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None, None)),
+            out_specs=(P("expert", None, None), P("expert", None), P("expert", None)),
+            check_vma=False,
+        )
+    )
+
+
+def _ragged_a2a_dispatched_w13_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
+    def local_w13(x_dispatch, ragged_group_sizes, true_group_sizes, local_w_gate_up):
+        x_dispatch = jnp.squeeze(x_dispatch, axis=0)
+        ragged_group_sizes = jnp.squeeze(ragged_group_sizes, axis=0)
+        true_group_sizes = jnp.squeeze(true_group_sizes, axis=0)
+        local_w_gate_up = jnp.squeeze(local_w_gate_up, axis=0)
+
+        w13_out = ragged_dot(
+            x_dispatch,
+            local_w_gate_up,
+            ragged_group_sizes,
+            implementation=args.ragged_dot_impl,
+        )
+        gate, up = jnp.split(w13_out, 2, axis=-1)
+        h = jax.nn.silu(gate.astype(jnp.float32)).astype(gate.dtype) * up
+        valid_rows = jnp.arange(x_dispatch.shape[0], dtype=jnp.int32) < jnp.sum(true_group_sizes, dtype=jnp.int32)
+        return jnp.where(valid_rows[:, None], h, jnp.zeros((), dtype=h.dtype))[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_w13,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None), P("expert", None), P("expert", None, None, None)),
+            out_specs=P("expert", None, None),
+            check_vma=False,
+        )
+    )
+
+
+def _ragged_a2a_precollective_fn(
+    mesh: Mesh,
+    *,
+    recv_capacity: int,
+    num_experts: int,
+) -> Callable[..., tuple[jax.Array, jax.Array]]:
+    def local_precollective(x_local, selected_experts_local):
+        x_local = jnp.squeeze(x_local, axis=0)
+        selected_experts_local = jnp.squeeze(selected_experts_local, axis=0)
+        shard_id = lax.axis_index("expert")
+        local_experts = num_experts // lax.axis_size("expert")
+        topk = selected_experts_local.shape[1]
+        assignments_per_shard = x_local.shape[0] * topk
+
+        sorted_x, _, group_sizes = _permute_by_global_expert(
+            x_local,
+            selected_experts_local,
+            num_experts=num_experts,
+        )
+        all_group_sizes = lax.all_gather(group_sizes.astype(jnp.int32), "expert")
+        clipped_group_sizes = _clip_receiver_group_sizes(
+            all_group_sizes,
+            local_expert_size=local_experts,
+            receiver_capacity=recv_capacity,
+        )
+        sender_group_sizes = clipped_group_sizes[shard_id]
+        keep_mask = _expert_prefix_keep_mask(
+            group_sizes.astype(jnp.int32),
+            sender_group_sizes,
+            total_size=assignments_per_shard,
+        )
+        compacted_x = _compact_by_keep_mask(sorted_x, keep_mask)
+        return compacted_x[None, ...], clipped_group_sizes
+
+    return jax.jit(
+        shard_map(
+            local_precollective,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P("expert", None, None)),
+            out_specs=(P("expert", None, None), P(None, None)),
+            check_vma=False,
+        )
+    )
+
+
+def _ragged_a2a_transport_from_precollective_fn(
+    mesh: Mesh,
+    *,
+    recv_capacity: int,
+    num_experts: int,
+) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
+    def local_transport(compacted_x, clipped_group_sizes):
+        compacted_x = jnp.squeeze(compacted_x, axis=0)
+        shard_id = lax.axis_index("expert")
+        local_experts = num_experts // lax.axis_size("expert")
+
+        ep_size = num_experts // local_experts
+        all_shard_counts = jnp.sum(clipped_group_sizes.reshape(ep_size, ep_size, local_experts), axis=2)
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(all_shard_counts, shard_id)
+        dispatched_shape = jnp.zeros((recv_capacity, compacted_x.shape[1]), dtype=compacted_x.dtype)
+        x_dispatched = lax.ragged_all_to_all(
+            compacted_x,
+            dispatched_shape,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+        x_dispatch, _, ragged_group_sizes = _local_permute_from_counts(
+            x_dispatched,
+            clipped_group_sizes,
+            local_expert_size=local_experts,
+            shard_index=shard_id,
+        )
+        local_counts_by_sender = lax.dynamic_slice_in_dim(
+            clipped_group_sizes,
+            start_index=shard_id * local_experts,
+            slice_size=local_experts,
+            axis=1,
+        )
+        true_local_group_sizes = jnp.sum(local_counts_by_sender, axis=0, dtype=jnp.int32)
+        return x_dispatch[None, ...], ragged_group_sizes[None, ...], true_local_group_sizes[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_transport,
+            mesh=mesh,
+            in_specs=(P("expert", None, None), P(None, None)),
+            out_specs=(P("expert", None, None), P("expert", None), P("expert", None)),
+            check_vma=False,
+        )
+    )
+
+
 def _padded_a2a_dispatch_up_fn(
     mesh: Mesh,
     args,
@@ -1030,6 +1227,11 @@ def main() -> None:
         help="Benchmark built-in ragged_all_to_all dispatch followed by ragged_dot W13/SiLU.",
     )
     parser.add_argument(
+        "--run-ragged-a2a-breakdown",
+        action="store_true",
+        help="Benchmark ragged_all_to_all dispatch-only and ragged_dot-on-dispatched-layout as separate steps.",
+    )
+    parser.add_argument(
         "--run-padded-a2a-dispatch-up",
         action="store_true",
         help="Benchmark fixed-bucket all_to_all dispatch followed by ragged_dot W13/SiLU.",
@@ -1156,7 +1358,7 @@ def main() -> None:
     prepacked = None
     if (
         args.skip_reference_checks
-        and (args.run_ragged_a2a_dispatch_up or args.run_padded_a2a_dispatch_up)
+        and (args.run_ragged_a2a_dispatch_up or args.run_ragged_a2a_breakdown or args.run_padded_a2a_dispatch_up)
         and not args.run_pallas
     ):
         print("prepack/reference: skipped")
@@ -1219,7 +1421,12 @@ def main() -> None:
                 bench_iters=args.bench_iters,
             )
 
-    if not args.run_pallas and not args.run_ragged_a2a_dispatch_up and not args.run_padded_a2a_dispatch_up:
+    if (
+        not args.run_pallas
+        and not args.run_ragged_a2a_dispatch_up
+        and not args.run_ragged_a2a_breakdown
+        and not args.run_padded_a2a_dispatch_up
+    ):
         return
     if len(devices) < args.ep_size:
         raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
@@ -1265,6 +1472,163 @@ def main() -> None:
                 )
             if ragged_a2a_steady_ms is not None:
                 print(f"dispatch_up/ragged_a2a_ragged_dot_end_to_end_ms: {ragged_a2a_steady_ms:.3f}")
+
+        if args.run_ragged_a2a_breakdown:
+            ragged_dispatch_fn = _ragged_a2a_dispatch_only_fn(
+                mesh,
+                recv_capacity=recv_capacity,
+                num_experts=num_experts,
+            )
+            ragged_dispatch_args = (
+                _sharded(mesh, x_by_rank, P("expert", None, None)),
+                _sharded(mesh, expert_ids, P("expert", None, None)),
+            )
+
+            def run_ragged_dispatch():
+                return ragged_dispatch_fn(*ragged_dispatch_args)
+
+            ragged_dispatch_result, _ = _time_block("dispatch/ragged_a2a", run_ragged_dispatch)
+            x_dispatch, ragged_group_sizes, true_group_sizes = ragged_dispatch_result
+            ragged_dispatch_steady_ms = None
+            if args.bench_iters > 0:
+                ragged_dispatch_steady_ms = _measure_steady_state(
+                    "dispatch/ragged_a2a",
+                    run_ragged_dispatch,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+
+            ragged_dispatched_w13_fn = _ragged_a2a_dispatched_w13_fn(mesh, args)
+            ragged_dispatched_w13_args = (
+                x_dispatch,
+                ragged_group_sizes,
+                true_group_sizes,
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_ragged_dispatched_w13():
+                return ragged_dispatched_w13_fn(*ragged_dispatched_w13_args)
+
+            ragged_breakdown_h, _ = _time_block(
+                "w13_silu/ragged_dot_on_ragged_a2a_layout",
+                run_ragged_dispatched_w13,
+            )
+            ragged_dispatched_w13_steady_ms = None
+            if args.bench_iters > 0:
+                ragged_dispatched_w13_steady_ms = _measure_steady_state(
+                    "w13_silu/ragged_dot_on_ragged_a2a_layout",
+                    run_ragged_dispatched_w13,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            if ref_h is None:
+                print("dispatch/ragged_a2a/reference_check: skipped")
+            else:
+                ragged_breakdown_err = jnp.max(
+                    jnp.abs(ragged_breakdown_h.astype(jnp.float32) - ref_h.astype(jnp.float32))
+                )
+                ragged_breakdown_err_float = float(ragged_breakdown_err)
+                print(f"dispatch_up_ragged_a2a_breakdown_max_abs_error: {ragged_breakdown_err_float:.6g}")
+                _print_error_summary("dispatch_up_ragged_a2a_breakdown", ragged_breakdown_h, ref_h)
+                _check_error(
+                    "dispatch_up_ragged_a2a_breakdown_max_abs_error",
+                    ragged_breakdown_err_float,
+                    args.w13_atol,
+                )
+            if ragged_dispatch_steady_ms is not None and ragged_dispatched_w13_steady_ms is not None:
+                print(
+                    "dispatch_up/ragged_a2a_breakdown_sum_ms: "
+                    f"{ragged_dispatch_steady_ms + ragged_dispatched_w13_steady_ms:.3f}"
+                )
+
+            ragged_precollective_fn = _ragged_a2a_precollective_fn(
+                mesh,
+                recv_capacity=recv_capacity,
+                num_experts=num_experts,
+            )
+
+            def run_ragged_precollective():
+                return ragged_precollective_fn(*ragged_dispatch_args)
+
+            ragged_precollective_result, _ = _time_block(
+                "dispatch/ragged_a2a_precollective",
+                run_ragged_precollective,
+            )
+            compacted_x, clipped_group_sizes = ragged_precollective_result
+            ragged_precollective_steady_ms = None
+            if args.bench_iters > 0:
+                ragged_precollective_steady_ms = _measure_steady_state(
+                    "dispatch/ragged_a2a_precollective",
+                    run_ragged_precollective,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+
+            ragged_transport_fn = _ragged_a2a_transport_from_precollective_fn(
+                mesh,
+                recv_capacity=recv_capacity,
+                num_experts=num_experts,
+            )
+
+            def run_ragged_transport():
+                return ragged_transport_fn(compacted_x, clipped_group_sizes)
+
+            ragged_transport_result, _ = _time_block(
+                "dispatch/ragged_a2a_transport_local_permute",
+                run_ragged_transport,
+            )
+            transport_x_dispatch, transport_ragged_group_sizes, transport_true_group_sizes = ragged_transport_result
+            ragged_transport_steady_ms = None
+            if args.bench_iters > 0:
+                ragged_transport_steady_ms = _measure_steady_state(
+                    "dispatch/ragged_a2a_transport_local_permute",
+                    run_ragged_transport,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+
+            ragged_transport_w13_args = (
+                transport_x_dispatch,
+                transport_ragged_group_sizes,
+                transport_true_group_sizes,
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_ragged_transport_w13():
+                return ragged_dispatched_w13_fn(*ragged_transport_w13_args)
+
+            ragged_transport_w13_h, _ = _time_block(
+                "w13_silu/ragged_dot_on_transport_layout",
+                run_ragged_transport_w13,
+            )
+            ragged_transport_w13_steady_ms = None
+            if args.bench_iters > 0:
+                ragged_transport_w13_steady_ms = _measure_steady_state(
+                    "w13_silu/ragged_dot_on_transport_layout",
+                    run_ragged_transport_w13,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            if ref_h is not None:
+                transport_breakdown_err = jnp.max(
+                    jnp.abs(ragged_transport_w13_h.astype(jnp.float32) - ref_h.astype(jnp.float32))
+                )
+                transport_breakdown_err_float = float(transport_breakdown_err)
+                print(f"dispatch_up_ragged_a2a_transport_breakdown_max_abs_error: {transport_breakdown_err_float:.6g}")
+                _check_error(
+                    "dispatch_up_ragged_a2a_transport_breakdown_max_abs_error",
+                    transport_breakdown_err_float,
+                    args.w13_atol,
+                )
+            if (
+                ragged_precollective_steady_ms is not None
+                and ragged_transport_steady_ms is not None
+                and ragged_transport_w13_steady_ms is not None
+            ):
+                print(
+                    "dispatch_up/ragged_a2a_deep_breakdown_sum_ms: "
+                    f"{ragged_precollective_steady_ms + ragged_transport_steady_ms + ragged_transport_w13_steady_ms:.3f}"
+                )
 
         if args.run_padded_a2a_dispatch_up:
             padded_capacity_factor = recv_capacity / (args.tokens_per_rank * args.top_k)

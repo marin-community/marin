@@ -753,3 +753,51 @@
   then either profile the ragged path to split sort/collective/W13 costs or
   prototype a fixed-neighbor ring/all-gather schedule that avoids arbitrary-peer
   TMA while enabling overlap.
+
+### 2026-06-24 - Ragged all-to-all dispatch-up stage breakdown
+
+- Hypothesis: The ~6 ms T/rank=4096 ragged collective dispatch-up baseline is
+  dominated by either the source-side sort/compact, the collective/local
+  receive permute, or W13 on the real routed layout. Splitting those stages
+  should tell us whether overlap can plausibly reach <2 ms or whether transport
+  must be replaced.
+- Changes:
+  - Added `--run-ragged-a2a-breakdown` stage splits to
+    `bench_moe_dispatch_up_mosaic_gpu.py`.
+  - The split reports full ragged dispatch-only, W13 on the dispatched layout,
+    pre-collective sort/compact/all-gather, ragged-all-to-all plus local
+    permute, and W13 on the transport output.
+- Commands:
+  - Local validation: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local checks: `./infra/pre-commit.py --changed-files --fix`
+  - H128 split correctness: `... --job-name dlwh-6597-moe-ragged-a2a-breakdown-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ragged-a2a-breakdown --w13-impl ragged_dot --ragged-dot-impl auto --bench-iters 1 --warmup-steps 1`
+  - H128 deep split correctness: `... --job-name dlwh-6597-moe-ragged-a2a-deep-breakdown-h128 -- ... same command after adding pre-collective/transport split`
+  - T/rank=4096 split: `... --job-name dlwh-6597-moe-ragged-a2a-breakdown-t4096 -- ... for factor in 1.0 1.25; do ... --tokens-per-rank 4096 --hidden 2560 --intermediate 2560 --recv-capacity-factor $factor --run-ragged-a2a-breakdown --skip-reference-checks --bench-iters 2 --warmup-steps 1; done`
+  - T/rank=4096 deep split: `... --job-name dlwh-6597-moe-ragged-a2a-deep-breakdown-t4096-buf100 -- ... --recv-capacity-factor 1.0 --run-ragged-a2a-breakdown --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+- Result:
+  - H128 split remained correct: max abs error `1.90735e-06`.
+    Full dispatch-only `0.584-0.597 ms`; W13 on dispatched layout
+    `0.187-0.217 ms`. Deep split: pre-collective `0.420 ms`,
+    transport/local-permute `0.438 ms`, W13 `0.157 ms`. Separate launches sum
+    higher than fused end-to-end, so use large-shape splits for bottleneck
+    allocation.
+  - T/rank=4096 top-level split:
+    - 0% buffer: dispatch-only `5.036-5.038 ms`, W13 `1.138-1.149 ms`,
+      sum `6.174-6.187 ms`.
+    - 25% buffer: dispatch-only `5.140 ms`, W13 `1.347 ms`, sum `6.487 ms`.
+  - T/rank=4096 deep split at 0% buffer:
+    - pre-collective sort/compact/all-gather: `0.796 ms`.
+    - ragged-all-to-all plus local receive permute: `4.595 ms`.
+    - W13 on transport layout: `1.137 ms`.
+    - deep split sum: `6.527 ms` (extra launch overhead versus fused).
+- Interpretation: The front sort/compact is not the blocker. The target gap is
+  almost entirely the built-in ragged transport/local-permute stage. Even perfect
+  overlap of W13 under current ragged dispatch would leave roughly a 5 ms
+  dispatch floor, so <2 ms requires replacing that transport/local-permute
+  structure. The next viable direction is a fixed-neighbor/ring/all-gather style
+  schedule that avoids arbitrary-peer TMA and avoids the expensive ragged
+  all-to-all/local re-permute, or a lower-level collective primitive that can
+  produce the expert-major layout directly.
+- Next action: Prototype a fixed-neighbor ring/all-gather dispatch layout for
+  dispatch-up, using the ragged collective baseline as the correctness oracle
+  and preserving built-in `ragged_dot` for W13.
