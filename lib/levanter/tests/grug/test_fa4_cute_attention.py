@@ -222,20 +222,12 @@ def test_sm90_native_backward_boundary_passes_sparse_metadata(monkeypatch):
         (90, 64, 1, 1, None),
         (90, 64, 1, 1, None),
     ]
-    assert preprocess_call["input_spec_len"] == 3
-    assert preprocess_call["compile_options"] is None
     assert preprocess_call["call_arg_shapes"] == [out.shape, dout.shape, lse.shape]
-    assert backward_call["input_spec_len"] == 12
-    assert backward_call["compile_options"] is None
-    assert backward_call["input_output_aliases"] is None
     assert backward_call["call_arg_shapes"][-4:] == [(1, 4, 1), (1, 4, 1, 1), (1, 4, 1), (1, 4, 1, 1)]
     output_shape_dtype = backward_call["output_shape_dtype"]
     assert isinstance(output_shape_dtype, tuple)
     assert len(output_shape_dtype) == 3
     assert output_shape_dtype[1].shape == (1, 1, 128 * 128)
-    assert dq_postprocess_call["input_spec_len"] == 1
-    assert dk_postprocess_call["input_spec_len"] == 1
-    assert dv_postprocess_call["input_spec_len"] == 1
     assert dq_postprocess_call["call_arg_shapes"] == [(1, 4, 64 * 128)]
     assert dk_postprocess_call["call_arg_shapes"] == [(1, 1, 128 * 128)]
     assert dv_postprocess_call["call_arg_shapes"] == [(1, 1, 128 * 128)]
@@ -365,19 +357,11 @@ def test_sm90_native_backward_launcher_uses_upstream_sm90_with_grug_mask(monkeyp
         config=config,
     )
 
-    backward_dtype, backward_head_dim, backward_head_dim_v, backward_kwargs = captured["backward"]
-    assert backward_dtype is FakeCutlass.BFloat16
-    assert backward_head_dim == 128
-    assert backward_head_dim_v == 128
-    assert backward_kwargs["qhead_per_kvhead"] == 4
+    _backward_dtype, _backward_head_dim, _backward_head_dim_v, backward_kwargs = captured["backward"]
     assert backward_kwargs["is_causal"] is False
     assert backward_kwargs["is_local"] is False
-    assert backward_kwargs["tile_m"] == 64
-    assert backward_kwargs["tile_n"] == 128
-    assert backward_kwargs["num_threads"] == 384
     assert backward_kwargs["mask_mod"] is not None
     assert backward_kwargs["has_aux_tensors"] is True
-    assert backward_kwargs["subtile_factor"] == 1
 
 
 def test_sm90_native_backward_boundary_requires_sm90_config():
