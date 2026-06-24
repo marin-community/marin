@@ -60,10 +60,17 @@ Nontrivial differences from upstream FA4/CuTe:
 
 import importlib
 import math
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
 
 from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
+
+
+@dataclass(frozen=True)
+class _BackwardArchSelection:
+    path_arch: int
+    postprocess_arch: int
 
 
 def _module_attr(modules: Any, name: str) -> Any:
@@ -976,12 +983,14 @@ def segmented_flash_attention_backward_launcher(
     SegmentedFlashAttentionBackwardSm80 = segmented_bwd_module.SegmentedFlashAttentionBackwardSm80
     SegmentedFlashAttentionBackwardSm120 = segmented_bwd_module.SegmentedFlashAttentionBackwardSm120
 
-    path_arch, postprocess_arch = _segmented_backward_arches(
+    arch_selection = _segmented_backward_arches(
         compute_arch=compute_arch,
         tile_m=tile_m,
         tile_n=tile_n,
         num_threads=num_threads,
     )
+    path_arch = arch_selection.path_arch
+    postprocess_arch = arch_selection.postprocess_arch
     if path_arch == 120:
         num_stages_q = 2 if head_dim <= 64 else 1
         num_stages_do = 2 if head_dim <= 64 else 1
@@ -1175,12 +1184,7 @@ def segmented_flash_attention_backward_sm90_launcher(
     config: Flash4CuteSm90BackwardConfig,
     window_size_left: int | None = None,
 ) -> Any:
-    """Build the native Hopper segmented backward mainloop launcher.
-
-    The SM90 mainloop TMA-loads ``LSE log2`` and ``dPsum`` from gmem, so this
-    launcher expects a separate preprocess call to materialize those tensors
-    before it runs.
-    """
+    """Build the native Hopper segmented backward mainloop launcher."""
     _validate_sm90_native_config(
         head_dim=head_dim,
         head_dim_v=head_dim_v,
@@ -1493,8 +1497,8 @@ def _patch_jax_array_list_tvm_ffi_converter() -> None:
         converter_module = importlib.import_module("cutlass.cute._tvm_ffi_args_spec_converter")
         jax_types_module = importlib.import_module("cutlass.jax.types")
         tvm_ffi_builder_module = importlib.import_module("cutlass.base_dsl.tvm_ffi_builder")
-    except ModuleNotFoundError:
-        return
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Installed CUTLASS JAX is missing the TVM-FFI converter needed by SM90 backward.") from exc
 
     JaxArrayList = jax_types_module.JaxArrayList
     tvm_spec = tvm_ffi_builder_module.spec
@@ -1519,29 +1523,29 @@ def _segmented_backward_arches(
     tile_m: int,
     tile_n: int,
     num_threads: int,
-) -> tuple[int, int]:
+) -> _BackwardArchSelection:
     is_sm120_config = tile_m == 64 and tile_n == 64 and num_threads == 128
     if compute_arch is None:
         inferred_arch = 120 if is_sm120_config else 80
-        return inferred_arch, inferred_arch
+        return _BackwardArchSelection(path_arch=inferred_arch, postprocess_arch=inferred_arch)
 
     arch_family = compute_arch // 10
     if arch_family == 8:
-        return 80, 80
+        return _BackwardArchSelection(path_arch=80, postprocess_arch=80)
     if arch_family == 9:
         if not is_sm120_config:
             raise NotImplementedError(
                 "SM90 segmented FA4/CuTe backward requires the Hopper 64x64/128-thread path, "
                 f"got tile_m={tile_m}, tile_n={tile_n}, num_threads={num_threads}."
             )
-        return 120, 120
+        return _BackwardArchSelection(path_arch=120, postprocess_arch=120)
     if arch_family in (10, 12):
         if not is_sm120_config:
             raise NotImplementedError(
                 f"SM{compute_arch} segmented FA4/CuTe backward requires the 64x64/128-thread path, "
                 f"got tile_m={tile_m}, tile_n={tile_n}, num_threads={num_threads}."
             )
-        return 120, 120
+        return _BackwardArchSelection(path_arch=120, postprocess_arch=120)
     raise NotImplementedError(f"segmented FA4/CuTe backward does not support SM{compute_arch}.")
 
 

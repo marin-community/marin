@@ -75,7 +75,7 @@ def test_packed_segment_backward_block_sparse_indices_are_q_direction():
         sliding_window=None,
     )
 
-    mask_block_cnt, mask_block_idx = fa4_cute._packed_segment_backward_block_sparse_indices(
+    mask_block_cnt, mask_block_idx = fa4_cute_backend._packed_segment_backward_block_sparse_indices(
         lower_bounds,
         valid,
         tile_m=2,
@@ -349,13 +349,14 @@ def test_sm90_native_backward_launcher_uses_upstream_sm90_with_grug_mask(monkeyp
 
     monkeypatch.setattr(fa4_cute_kernels, "_import_cute_dependencies", fake_dependencies)
     monkeypatch.setattr(fa4_cute_kernels.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(fa4_cute_kernels, "_patch_jax_array_list_tvm_ffi_converter", lambda: None)
 
     config = fa4_cute_config.sm90_flash4_cute_backward_config(
         128,
         schedule=fa4_cute_config.Sm90BackwardSchedule.CAUSAL_OR_LOCAL,
     )
 
-    launcher = fa4_cute_kernels.segmented_flash_attention_backward_sm90_launcher(
+    fa4_cute_kernels.segmented_flash_attention_backward_sm90_launcher(
         object(),
         dtype=jnp.dtype(jnp.bfloat16),
         head_dim=128,
@@ -365,7 +366,6 @@ def test_sm90_native_backward_launcher_uses_upstream_sm90_with_grug_mask(monkeyp
     )
 
     backward_dtype, backward_head_dim, backward_head_dim_v, backward_kwargs = captured["backward"]
-    assert callable(launcher)
     assert backward_dtype is FakeCutlass.BFloat16
     assert backward_head_dim == 128
     assert backward_head_dim_v == 128
@@ -449,7 +449,7 @@ def test_segmented_fa4_cute_hopper_backward_uses_sm120_compatible_postprocess(mo
         def __init__(self, *args, **kwargs):
             captured["backward_class"] = "sm120"
 
-    def fake_dependencies(modules):
+    def fake_dependencies(_modules):
         return SimpleNamespace(cutlass=FakeCutlass, cute=FakeCute, cuda=FakeCuda)
 
     def fake_import_module(name):

@@ -146,13 +146,7 @@ def segmented_flash_attention_backward(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """FA4/CuTe segmented attention backward boundary.
-
-    This is intentionally a separate CUTLASS call from the forward path because
-    upstream FA4 backward is a preprocess + main-kernel + postprocess pipeline.
-    SM90 D128 GQA routes to the native Hopper path; other cases use the
-    SM120-compatible segmented launcher.
-    """
+    """Return gradients for FA4/CuTe packed-segment attention."""
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     try:
@@ -242,6 +236,8 @@ def segmented_flash_attention_backward_sm90_native(
     sm90_config = kernel_config.sm90_backward
     if sm90_config is None:
         raise NotImplementedError("native SM90 backward requires kernel_config.sm90_backward.")
+    if sm90_config.tile[0] != 64:
+        raise NotImplementedError(f"native SM90 postprocess requires tile_m=64, got {sm90_config.tile}.")
     _validate_backward_block_sparse_metadata(
         q,
         k,
@@ -331,7 +327,7 @@ def segmented_flash_attention_backward_sm90_native(
         vector_elems=8,
     )
     postprocess_arch = 90
-    postprocess_tile_m = 64
+    postprocess_tile_m = sm90_config.tile[0]
     postprocess_atom_layout_m = 1
     dq_postprocess = modules.cjax.cutlass_call(
         flash_attention_backward_postprocess_launcher(
