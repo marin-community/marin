@@ -59,13 +59,19 @@ _MUON_QUINTIC = NEWTON_SCHULZ_COEFFICIENTS["quintic"]
 
 
 def _newton_schulz(x: jax.Array, eps: float = 1e-7) -> jax.Array:
-    """Orthogonalize a 2D matrix via Muon's 5-step quintic Newton-Schulz iteration."""
+    """Orthogonalize a 2D matrix via Muon's 5-step quintic Newton-Schulz iteration.
+
+    The ``x @ x.T`` Gram matmul contracts ``x``'s wide dimension; ``out_sharding=P()``
+    makes it replicated, so when that dimension is sharded (an FSDP grad) XLA emits the
+    all-reduce -- the optimizer's grad exchange -- and when it is not (a single-device
+    stage grad) the matmul is local. The rest of the iteration follows from the Gram.
+    """
     x = x / (jnp.linalg.norm(x) + eps)
     transpose = x.shape[0] > x.shape[1]
     if transpose:
         x = x.T
     for a, b, c in _MUON_QUINTIC:
-        gram = x @ x.T
+        gram = jnp.matmul(x, x.T, out_sharding=_REPLICATED)
         x = a * x + (b * gram + c * (gram @ gram)) @ x
     return x.T if transpose else x
 
