@@ -19,7 +19,7 @@ Then add implementation variants as needed:
 
 - `xla.py`: default implementation, if different from reference.
 - `pallas_tpu.py`: TPU Pallas implementation.
-- `pallas_mgpu.py`: GPU Pallas Mosaic implementation.
+- `pallas_mosaic_gpu.py`: GPU Pallas Mosaic implementation.
 - `tuned_block_sizes.py`: checked-in tuned table for runtime selection.
 
 Reference template:
