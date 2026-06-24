@@ -103,6 +103,7 @@ from iris.rpc.proto_display import (
     container_profile_name,
     job_state_friendly,
     priority_band_name,
+    resolve_container_profile,
     task_state_friendly,
 )
 from iris.time_proto import timestamp_to_proto
@@ -1097,30 +1098,36 @@ class ControllerServiceImpl:
 
         # Container security profile authorization.
         #
-        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent,
-        # so they are gated harder than priority bands:
-        # - With an auth provider configured, they require admin (loopback
-        #   callers resolve to admin, the intended host-trust path).
-        # - In null-auth mode they are rejected by default — unlike PRODUCTION
-        #   priority, whose blast radius is only a scheduling band. An operator
-        #   running a trusted single-tenant null-auth cluster opts in via
-        #   AuthConfig.allow_unauthenticated_elevated_profiles.
-        # RESTRICTED and DEFAULT are unprivileged and need no authorization.
+        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
+        # and require the admin role. The check runs only when an auth provider
+        # is configured (a trusted-loopback caller resolves to admin, the
+        # intended host-trust path). In null-auth mode there is no provider and
+        # every caller is the anonymous admin, so the gate is a no-op — the
+        # operator has already opted into an untrusted cluster. This mirrors the
+        # PRODUCTION priority-band gate above. RESTRICTED and DEFAULT are
+        # unprivileged and need no authorization.
         if container_profile_is_elevated(request.container_profile):
             if self._auth.provider:
                 authorize(AuthzAction.SET_CONTAINER_PROFILE)
-            elif not self._auth.allow_unauthenticated_elevated_profiles:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"Container profile {container_profile_name(request.container_profile)} is "
-                    "elevated (host-root-equivalent) and cannot be used on a controller without "
-                    "an auth provider. Configure authentication, or set "
-                    "auth.allow_unauthenticated_elevated_profiles for a trusted single-tenant cluster.",
-                )
             logger.info(
-                "Job %s authorized for elevated container profile %s",
+                "Job %s using elevated container profile %s",
                 job_id.to_wire(),
                 container_profile_name(request.container_profile),
+            )
+
+        # DOCKER_ACCESS mounts the host docker socket, which only the docker
+        # worker backend has. Reject it at submit on a cluster backend (k8s nodes
+        # run containerd, no host socket) so the job never lands — the k8s
+        # manifest builder would otherwise raise mid-reconcile and stall dispatch.
+        if (
+            resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+            and BackendCapability.WORKER_DAEMON not in self._controller.capabilities
+        ):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile docker_access requires the docker worker backend (it mounts the "
+                "host docker socket); this cluster's backend does not support it. Use a privileged "
+                "profile with an in-pod runtime, or submit to a docker-worker cluster.",
             )
 
         # Cap the number of non-terminal tasks a single user may hold at once.

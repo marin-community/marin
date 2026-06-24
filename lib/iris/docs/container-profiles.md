@@ -23,9 +23,10 @@ at submission:
 - **With an auth provider configured:** only the `admin` role may submit an
   elevated profile (a trusted-loopback caller resolves to admin). Everyone else
   gets `PERMISSION_DENIED`.
-- **In null-auth mode (no provider):** elevated profiles are **rejected by
-  default**. An operator running a trusted single-tenant cluster can opt in with
-  `auth.allow_unauthenticated_elevated_profiles: true` in the cluster config.
+- **In null-auth mode (no provider):** every caller is the anonymous admin, so
+  the gate is a no-op and elevated profiles are allowed — the operator has
+  already opted into an untrusted cluster. This mirrors how the `PRODUCTION`
+  priority band behaves in null-auth.
 
 `RESTRICTED` and `DEFAULT` are unprivileged and need no authorization — anyone
 may use them. `RESTRICTED` is strictly safer than the default.

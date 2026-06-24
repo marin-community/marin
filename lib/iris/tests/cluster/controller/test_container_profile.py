@@ -16,6 +16,7 @@ from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import dispatch
@@ -102,19 +103,21 @@ def test_non_admin_can_use_unprivileged_profile(service, profile):
     assert resp.job_id == "/alice/job"
 
 
-def test_null_auth_rejects_elevated_by_default(state, tmp_path, log_client):
-    """No auth provider: elevated profiles are fail-closed."""
-    service = _make_service(state, tmp_path, log_client, ControllerAuth())
+def test_docker_access_rejected_on_cluster_backend(state, tmp_path, log_client):
+    """DOCKER_ACCESS needs the docker worker backend; a CLUSTER_VIEW (k8s)
+    backend rejects it at submit so it never stalls the reconcile tick."""
+    service = _make_service(state, tmp_path, log_client, ControllerAuth(provider="static"))
+    service._controller.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     with pytest.raises(ConnectError) as exc:
-        _as("admin", "anonymous", service.launch_job, _launch("/anonymous/job", PRIVILEGED), None)
-    assert exc.value.code == Code.PERMISSION_DENIED
-    assert "elevated" in str(exc.value.message).lower()
+        _as("admin", "admin", service.launch_job, _launch("/admin/job", DOCKER_ACCESS), None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "docker_access" in str(exc.value.message).lower()
 
 
-def test_null_auth_allows_elevated_with_optin(state, tmp_path, log_client):
-    """The explicit opt-in lets a trusted single-tenant null-auth cluster elevate."""
-    auth = ControllerAuth(allow_unauthenticated_elevated_profiles=True)
-    service = _make_service(state, tmp_path, log_client, auth)
+def test_null_auth_allows_elevated(state, tmp_path, log_client):
+    """No auth provider: every caller is the anonymous admin, so the elevation
+    gate is a no-op (the operator has opted into an untrusted cluster)."""
+    service = _make_service(state, tmp_path, log_client, ControllerAuth())
     resp = _as("admin", "anonymous", service.launch_job, _launch("/anonymous/job", PRIVILEGED), None)
     assert resp.job_id == "/anonymous/job"
 
