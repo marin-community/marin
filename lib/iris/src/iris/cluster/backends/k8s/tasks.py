@@ -1959,39 +1959,33 @@ class K8sTaskProvider:
         gang_pod_names: list[str] = []
         gang_pod_groups: set[str] = set()
         gang_task_hashes: set[str] = set()
-        for phase in ("Succeeded", "Failed"):
-            pods = self.kubectl.list_json(
-                K8sResource.PODS,
-                labels=_MANAGED_POD_LABELS,
-                field_selector=f"status.phase={phase}",
-            )
-            for pod in pods:
-                meta = pod.get("metadata", {})
-                created = meta.get("creationTimestamp", "")
-                if not created:
-                    continue
-                ts = parse_k8s_timestamp(created).timestamp()
-                task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
-                pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
-                # Gang sweep: a deletionTimestamp means a prior delete is
-                # wedged on the Kueue finalizer; otherwise the shorter gang
-                # retention applies. Handled pods are excluded from the 1h
-                # sweep below. Pods whose group still has live members are
-                # deferred wholesale (not even age-swept): a partial delete
-                # would wedge on the finalizer, and releasing the shared
-                # Workload would evict the running siblings.
-                if pod_group and pod_group in active_gang_groups:
-                    continue
-                if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
-                    gang_pod_names.append(meta["name"])
-                    gang_pod_groups.add(pod_group)
-                    if task_hash:
-                        gang_task_hashes.add(task_hash)
-                    continue
-                if ts < cutoff:
-                    old_pod_names.append(meta["name"])
-                    if task_hash:
-                        old_task_hashes.add(task_hash)
+        for pod in self._list_terminal_pods():
+            meta = pod.get("metadata", {})
+            created = meta.get("creationTimestamp", "")
+            if not created:
+                continue
+            ts = parse_k8s_timestamp(created).timestamp()
+            task_hash = meta.get("labels", {}).get(_LABEL_TASK_HASH)
+            pod_group = meta.get("labels", {}).get(_KUEUE_POD_GROUP_NAME)
+            # Gang sweep: a deletionTimestamp means a prior delete is
+            # wedged on the Kueue finalizer; otherwise the shorter gang
+            # retention applies. Handled pods are excluded from the 1h
+            # sweep below. Pods whose group still has live members are
+            # deferred wholesale (not even age-swept): a partial delete
+            # would wedge on the finalizer, and releasing the shared
+            # Workload would evict the running siblings.
+            if pod_group and pod_group in active_gang_groups:
+                continue
+            if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
+                gang_pod_names.append(meta["name"])
+                gang_pod_groups.add(pod_group)
+                if task_hash:
+                    gang_task_hashes.add(task_hash)
+                continue
+            if ts < cutoff:
+                old_pod_names.append(meta["name"])
+                if task_hash:
+                    old_task_hashes.add(task_hash)
 
         if gang_pod_names:
             # force (gracePeriodSeconds=0): these pods are already terminal, so
@@ -2026,15 +2020,11 @@ class K8sTaskProvider:
             )
 
     def _list_terminal_pods(self) -> list[dict]:
-        """Bulk-list managed pods in a terminal phase (Succeeded or Failed).
-
-        Field selectors AND their comma-separated terms, so the active-pods
-        selector ``status.phase!=Succeeded,status.phase!=Failed`` excludes both,
-        but the inverse ``status.phase==Succeeded,status.phase==Failed`` matches
-        nothing (a pod is never both), so the two terminal phases are listed
-        separately.
-        """
+        """Bulk-list managed pods in a terminal phase (Succeeded or Failed)."""
         pods: list[dict] = []
+        # Field selectors AND their comma-separated terms, so a single
+        # status.phase==Succeeded,status.phase==Failed matches nothing (a pod is
+        # never both); list each terminal phase separately.
         for phase in ("Succeeded", "Failed"):
             pods.extend(
                 self.kubectl.list_json(
