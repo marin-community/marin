@@ -545,8 +545,8 @@ def test_get_job_status_returns_original_request(client, state):
             disk_bytes=100 * 1024**3,
         ),
         environment=job_pb2.EnvironmentConfig(
-            pip_packages=["torch", "numpy"],
-            python_version="3.12",
+            setup_scripts=["uv sync\n"],
+            env_vars={"MY_FLAG": "1"},
         ),
         replicas=2,
         constraints=[
@@ -574,8 +574,8 @@ def test_get_job_status_returns_original_request(client, state):
     assert int(res["diskBytes"]) == 100 * 1024**3
     # Verify environment
     env = returned_request.get("environment", {})
-    assert env["pipPackages"] == ["torch", "numpy"]
-    assert env["pythonVersion"] == "3.12"
+    assert env["setupScripts"] == ["uv sync\n"]
+    assert env["envVars"] == {"MY_FLAG": "1"}
     # Verify replicas
     assert returned_request["replicas"] == 2
     # Verify constraints

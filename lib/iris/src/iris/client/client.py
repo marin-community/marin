@@ -663,28 +663,34 @@ class IrisClient:
         else:
             job_id = JobName.root(resolve_job_user(user), name)
 
-        # If running inside a job, inherit env vars, extras, and pip_packages from parent.
-        # Child-specified values take precedence over inherited ones.
+        # If running inside a job, inherit env vars and the parent's resolved setup
+        # from the parent. A child that specifies its own setup (explicit
+        # setup_scripts, or builder inputs to rebuild the default) takes control of
+        # its environment; one that specifies only env vars (or nothing) reuses the
+        # parent's setup so it lands in the same environment.
         if parent_job_id:
             job_info = get_job_info()
             inherited = dict(job_info.env) if job_info else {}
             child_env = {**inherited, **(environment.env_vars or {})} if environment else inherited
 
-            parent_extras = job_info.extras if job_info else []
-            parent_pip = job_info.pip_packages if job_info else []
+            parent_setup_scripts = job_info.setup_scripts if job_info else None
 
             if environment:
+                child_owns_setup = (
+                    environment.setup_scripts is not None
+                    or environment.extras
+                    or environment.pip_packages
+                    or environment.sync_packages
+                )
                 environment = EnvironmentSpec(
-                    pip_packages=environment.pip_packages or parent_pip,
+                    pip_packages=environment.pip_packages,
                     env_vars=child_env,
-                    extras=environment.extras or parent_extras,
+                    extras=environment.extras,
+                    setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
+                    sync_packages=environment.sync_packages,
                 )
             else:
-                environment = EnvironmentSpec(
-                    env_vars=child_env,
-                    extras=parent_extras,
-                    pip_packages=parent_pip,
-                )
+                environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
 
             parent_constraints = list(job_info.constraints) if job_info else []
             if constraints is None:

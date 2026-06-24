@@ -27,6 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
+from iris.cluster.setup import default_setup_script, setup_is_quiet
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -618,15 +619,34 @@ class EnvironmentSpec:
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
 
+    Setup:
+    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
+      scopes that sync to specific workspace members (default: all members).
+    - ``setup_scripts`` set to a list runs those scripts verbatim before the
+      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
+      image is used as-is). Build the default and tweak it via
+      ``iris.cluster.setup.default_setup_script``.
+
+    Whenever any setup runs (default or custom), iris appends its own
+    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
+    present; it is skipped only for the no-setup (``[]``) case.
+
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format, resolving the user setup scripts.
+
+        ``setup_scripts=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
+        wire carries only this user list.
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -636,14 +656,21 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if self.setup_scripts is None:
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            setup_scripts = [
+                default_setup_script(
+                    extras=list(self.extras or []),
+                    pip_packages=list(self.pip_packages or []),
+                    python_version=py_version,
+                    packages=list(self.sync_packages or []) or None,
+                    quiet=setup_is_quiet(merged_env_vars),
+                )
+            ]
+        else:
+            setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        return job_pb2.EnvironmentConfig(
-            pip_packages=list(self.pip_packages or []),
-            env_vars=merged_env_vars,
-            extras=list(self.extras or []),
-            python_version=py_version,
-        )
+        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
 
 class Namespace(str):

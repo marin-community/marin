@@ -554,6 +554,8 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
@@ -662,6 +664,8 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
+        setup_scripts=setup_scripts,
+        sync_packages=sync_packages,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
@@ -686,6 +690,8 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
@@ -709,7 +715,9 @@ def _submit_and_wait_job(
         entrypoint=entrypoint,
         name=job_name,
         resources=resources,
-        environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
+        environment=EnvironmentSpec(
+            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+        ),
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
@@ -834,6 +842,19 @@ Examples:
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
+    "--sync-package",
+    multiple=True,
+    help=(
+        "Scope the default `uv sync` to specific workspace members instead of "
+        "syncing all of them (e.g., --sync-package marin-core). Can be repeated."
+    ),
+)
+@click.option(
+    "--no-sync",
+    is_flag=True,
+    help="Skip environment setup entirely: run the command in the task image as-is (no uv sync).",
+)
+@click.option(
     "--reserve",
     multiple=True,
     help=(
@@ -903,6 +924,8 @@ def run(
     region: tuple[str, ...],
     zone: str | None,
     extra: tuple[str, ...],
+    sync_package: tuple[str, ...],
+    no_sync: bool,
     reserve: tuple[str, ...],
     priority: str | None,
     preemptible: bool | None,
@@ -917,6 +940,8 @@ def run(
     dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
+    if no_sync and sync_package:
+        raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
 
     command = list(cmd)
     if not command:
@@ -954,6 +979,8 @@ def run(
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
+            setup_scripts=[] if no_sync else None,
+            sync_packages=list(sync_package),
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
