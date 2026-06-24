@@ -1122,8 +1122,7 @@ def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
     )
     k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
 
-    provider._last_gc_time = 0.0
-    provider._maybe_gc_terminal_resources(active_pods=[])
+    provider._gc_terminal_resources(active_pods=[])
 
     assert k8s.get_json(K8sResource.PODS, "wedged-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
