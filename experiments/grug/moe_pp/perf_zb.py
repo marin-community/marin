@@ -79,6 +79,7 @@ def main() -> int:
     remat = os.environ.get("MOE_PP_REMAT", "1") == "1"
     muon = os.environ.get("MOE_PP_MUON", "0") == "1"
     async_transport = os.environ.get("MOE_PP_ASYNC_XPORT", "0") == "1"
+    p2p_transport = os.environ.get("MOE_PP_P2P", "0") == "1"
     hidden_dim = int(os.environ.get("MOE_PP_HIDDEN", "1536"))
     num_layers = int(os.environ.get("MOE_PP_LAYERS", "24"))
     num_experts = int(os.environ.get("MOE_PP_EXPERTS", "8"))
@@ -174,6 +175,7 @@ def main() -> int:
         remat=remat,
         muon=muon,
         async_transport=async_transport,
+        p2p_transport=p2p_transport,
     )
     pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
     pp_loss = float(np.asarray(pp_out[0]))
@@ -187,11 +189,12 @@ def main() -> int:
         fsdp_hbm,
     )
     logger.info(
-        "PERF zb_pipeline mode: schedule=%s remat=%s muon=%s async_transport=%s",
+        "PERF zb_pipeline mode: schedule=%s remat=%s muon=%s async_transport=%s p2p=%s",
         schedule.value,
         remat,
         muon,
         async_transport,
+        p2p_transport,
     )
     logger.info(
         "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB  microbatch=%d (%d tok/call)",
