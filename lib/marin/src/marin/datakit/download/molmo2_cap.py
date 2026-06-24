@@ -8,11 +8,10 @@ Long-form video captioning dataset. Each row carries a paragraph-level
 row as the merged caption followed by timestamp-labeled frame captions.
 """
 
-from fray import ResourceConfig
-from zephyr import Dataset, ZephyrContext, counters, load_parquet
+from zephyr import counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
+from marin.datakit.download.rollout_transforms import run_document_transform, text_document
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -43,14 +42,13 @@ def row_to_doc(row: dict) -> list[dict]:
 
 
 def transform(input_path: str, output_path: str) -> None:
-    pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.parquet")
-        .flat_map(load_parquet)
-        .flat_map(row_to_doc)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+    run_document_transform(
+        input_path=input_path,
+        output_path=output_path,
+        row_to_doc=row_to_doc,
+        name="molmo2-cap-transform",
+        ram="8g",
     )
-    ctx = ZephyrContext(name="molmo2-cap-transform", resources=ResourceConfig(cpu=1, ram="8g"))
-    ctx.execute(pipeline)
 
 
 def download_molmo2_cap_step() -> StepSpec:
