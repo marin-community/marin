@@ -296,6 +296,70 @@ def test_start_controller_stops_old_controller_before_reapply():
     provider.shutdown()
 
 
+def test_start_controller_waits_for_old_pod_not_just_deployment():
+    """start_controller blocks on the old controller Pod terminating, not just
+    the Deployment object disappearing, before applying the new Deployment.
+
+    Background cascade deletion removes the Deployment object immediately while
+    the controller Pod keeps Terminating with the SQLite DB held open on the
+    ReadWriteOnce state PVC. That PVC permits a second Pod on the same node, so
+    a new --fresh controller applied during this window wipes the DB out from
+    under the old process and crashes with EBUSY. The delete must wait for the
+    Pod to disappear.
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    # Old controller Pod still present after its Deployment was already removed.
+    k8s.apply_json(
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "iris-controller-old",
+                "namespace": "iris",
+                "labels": {"app": "iris-controller"},
+            },
+            "spec": {"containers": [{"name": "iris-controller", "image": "img"}]},
+        }
+    )
+
+    real_list = k8s.list_json
+    real_apply = k8s.apply_json
+    pod_poll_count = {"n": 0}
+    pods_present_at_deploy_apply: list[int] = []
+
+    def counting_list(resource, **kwargs):
+        result = real_list(resource, **kwargs)
+        if resource is K8sResource.PODS and kwargs.get("labels") == {"app": "iris-controller"}:
+            pod_poll_count["n"] += 1
+            # Simulate the old Pod finishing termination after a couple polls.
+            if pod_poll_count["n"] == 2:
+                k8s.delete(K8sResource.PODS, "iris-controller-old")
+        return result
+
+    def recording_apply(manifest):
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "iris-controller":
+            pods_present_at_deploy_apply.append(len(real_list(K8sResource.PODS, labels={"app": "iris-controller"})))
+        return real_apply(manifest)
+
+    k8s.list_json = counting_list
+    k8s.apply_json = recording_apply
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    # New Deployment applied exactly once, and only after the old Pod was gone.
+    assert pods_present_at_deploy_apply == [0]
+    # The wait loop polled the controller Pods more than once -- it blocked on
+    # Pod termination rather than returning as soon as the Deployment was gone.
+    assert pod_poll_count["n"] >= 2
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
 def test_stop_controller_deletes_resources():
     """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC."""
     provider, k8s = _make_provider()

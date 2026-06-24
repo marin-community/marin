@@ -393,16 +393,32 @@ class K8sControllerProvider:
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:
-        """Delete the controller Deployment and wait until it's fully gone."""
+        """Delete the controller Deployment and wait until its Pods are gone.
+
+        Deleting the Deployment with background cascade deletion removes the
+        Deployment object immediately while the controller Pod keeps
+        Terminating — running its SIGTERM handler (final checkpoint) and
+        holding the SQLite file on the ReadWriteOnce state PVC open. That PVC
+        permits multiple Pods on the same node to mount it at once, so a new
+        --fresh controller started during this window wipes the DB directory
+        out from under the old process and crashes with EBUSY (Device or
+        resource busy). We must therefore wait for the old Pod to disappear,
+        not merely the Deployment object, before applying the new Deployment.
+        """
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
         deadline = Deadline.from_seconds(_DEPLOYMENT_DELETE_TIMEOUT)
         while not self._shutdown_event.is_set():
-            if self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None:
-                logger.info("Controller Deployment iris-controller deleted")
+            deployment_gone = self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+            pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
+            if deployment_gone and not pods:
+                logger.info("Controller Deployment iris-controller and its Pods deleted")
                 return
             if deadline.expired():
+                pod_names = [p.get("metadata", {}).get("name", "") for p in pods]
                 raise InfraError(
-                    f"Controller Deployment iris-controller did not delete within {_DEPLOYMENT_DELETE_TIMEOUT}s"
+                    f"Controller Deployment iris-controller did not fully delete within "
+                    f"{_DEPLOYMENT_DELETE_TIMEOUT}s (deployment_gone={deployment_gone}, "
+                    f"pods still present: {pod_names})"
                 )
             self._shutdown_event.wait(self._poll_interval)
 
