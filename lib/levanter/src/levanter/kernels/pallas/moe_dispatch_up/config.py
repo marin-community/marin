@@ -15,7 +15,7 @@ class MoeDispatchUpConfig:
     block_m: int = 64
     block_n: int = 128
     block_k: int = 64
-    num_stages: int = 2
+    num_stages: int = 4
     prepacked_send: bool = True
     overlap_dispatch_compute: bool = False
     fuse_w13_silu: bool = False

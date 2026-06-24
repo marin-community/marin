@@ -990,3 +990,238 @@
 - Next action: Replace the barriered compact dispatch with a producer-marked
   valid/ready schedule and then merge W13 consumption into the same Mosaic
   kernel or ordered ring pipeline.
+
+### 2026-06-24 01:00 PT - Tiled compact dispatch transport lowering
+
+- Hypothesis: The target-shape compact dispatch stall is from large row-vector
+  peer stores and barriers, not the source/expert layout. Tiling hidden columns
+  and writing only valid source/expert rows should produce a smaller Mosaic
+  transport substrate.
+- Changes:
+  - Added `--compact-dispatch-skip-zero-recv` to avoid zeroing the full receive
+    payload and metadata when validation only needs written rows.
+  - Added `--compact-dispatch-copy-cols` and a tiled compact source/expert
+    dispatch kernel that copies one row/column tile per program and writes
+    row metadata from column tile zero.
+  - The tiled payload path uses `copy_gmem_to_smem` then `copy_smem_to_gmem`
+    for remote payload writes. Direct remote vector assignment failed Mosaic
+    layout inference; Warpgroup lowering then failed with peer GMEM refs, so
+    the tiled transport uses the generic Mosaic GPU lowering while W13 remains
+    a separate Warpgroup kernel.
+- Commands:
+  - Local syntax: `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/kernels/pallas/moe_dispatch_up/mosaic_gpu.py lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - Local tests: `uv run --package marin-levanter pytest lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py -q`
+  - H128 tiled dispatch first attempt: `... --job-name dlwh-6597-moe-compact-tiled-smem-dispatch-h128 -- ... --hidden 128 --intermediate 64 --compact-dispatch-copy-cols 64 --run-compact-source-expert-dispatch --bench-iters 1 --warmup-steps 1`
+  - H128 tiled dispatch without Warpgroup lowering: `... --job-name dlwh-6597-moe-compact-tiled-smem-dispatch-h128-nw -- ... --hidden 128 --intermediate 64 --compact-dispatch-copy-cols 64 --run-compact-source-expert-dispatch --bench-iters 1 --warmup-steps 1`
+- Result:
+  - Local kernel tests: `13 passed`.
+  - H128 first attempt got past the previous layout-inference failure but failed
+    in lowering with `NotImplementedError: GMEM refs with peer ids are not
+    supported in warpgroup lowering`.
+  - H128 non-Warpgroup tiled dispatch matched reference exactly: ready-count,
+    ready-block-count, `recv_x`, `recv_valid`, metadata, and router-weight
+    max errors were all `0`. Steady dispatch time was `1.623 ms`.
+- Interpretation: Compact tiled remote payload transport is correct on H100x8
+  once it is kept out of Warpgroup lowering. The next target-shape run should
+  use explicit source/expert capacity `80`, because for `T/rank=4096`,
+  `topk=4`, `E=256`, the balanced source/expert group has `64` rows and the
+  normal 25% imbalance buffer gives `80` rows with zero overflow in this
+  synthetic routing case.
+- Next action: Run target-shape dispatch-only with `H=2560`, `I=2560`,
+  `E=256`, `topk=4`, `T/rank=4096`, source/expert capacity `80`, and
+  `copy_cols=256`. If that returns, measure dispatch+W13 and then decide the
+  overlap boundary.
+
+### 2026-06-24 01:03 PT - Target-shape compact tiled dispatch returns
+
+- Hypothesis: The compact tiled dispatch transport should return on the
+  relevant `H=2560`, `T/rank=4096` shape once capacity is source/expert based
+  and payload writes are tiled.
+- Command: `... --job-name dlwh-6597-moe-compact-tiled-dispatch-t4096-cap80 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --compact-dispatch-copy-cols 256 --run-compact-source-expert-dispatch --skip-reference-checks --bench-iters 1 --warmup-steps 1`
+- Result:
+  - Source/expert load stats: balanced `64.000`, mean `64.000`, max `64`,
+    p95 `64.0`, p99 `64.0`.
+  - Compact capacity: old full send slots/source `131072`; compact 25% buffer
+    cap `80`, overflow `0`, slots/source `20480`.
+  - Dispatch-only compile+first run: `1802.188 ms`.
+  - Dispatch-only steady: `2.766 ms` for one measured iteration.
+  - Ready-count and ready-block-count max errors: `0`.
+- Interpretation: The compact tiled transport solves the previous non-returning
+  large-shape Mosaic dispatch problem. It is not yet fast enough: dispatch
+  alone is above the desired `<2 ms` end-to-end target. With `copy_cols=256`,
+  the kernel launches `8 * 32 * 80 * 10 = 204800` tiny payload programs, so the
+  next axis is wider column tiles to reduce program count.
+- Next action: Sweep `copy_cols` over wider tiles (`512`, `1280`, `2560`) on
+  the same target shape, then measure compact dispatch+W13 at the best dispatch
+  tile.
+
+### 2026-06-24 01:16 PT - Row-tiling compact transport probe
+
+- Hypothesis: Since Mosaic async copies cap each dimension at `256`, wider
+  column tiles cannot reduce the target dispatch program count. Grouping
+  multiple source/expert rows per program while keeping `copy_cols <= 256`
+  should reduce program count without changing the compact layout.
+- Changes:
+  - Added `--compact-dispatch-copy-rows`.
+  - Rejected `copy_cols > 256` and `copy_rows > 256` in the tiled dispatch
+    wrapper.
+  - Tried a 2D `(copy_rows, copy_cols)` peer payload copy, then switched back
+    to repeated 1D row payload copies inside each row-tile program because
+    Mosaic could not recompute the peer id for the 2D remote copy descriptor.
+- Commands:
+  - Failed wider-column runs: `... --compact-dispatch-copy-cols 512` and
+    `... --compact-dispatch-copy-cols 1280` on the target shape.
+  - H128 row-tile correctness: `... --job-name dlwh-6597-moe-compact-tiled-smem-dispatch-h128-r4-1d -- ... --hidden 128 --intermediate 64 --compact-dispatch-copy-cols 64 --compact-dispatch-copy-rows 4 --run-compact-source-expert-dispatch --bench-iters 1 --warmup-steps 1`
+- Result:
+  - `copy_cols=512` and `1280` both failed with `Async copies only support
+    copying <=256 elements along each dimension`.
+  - The first 2D row-tile attempt failed with `Failed to recompute the
+    async_copy peer id on the host`.
+  - Repeated 1D row copies with `copy_rows=4` passed H128 correctness: ready
+    counts, ready blocks, payload, valid mask, metadata, and router weights all
+    had max error `0`; steady dispatch was `1.711 ms`.
+- Interpretation: The viable row-tiling path is multiple 1D peer copies per
+  program, not a 2D peer TMA tile. This reduces program count and may reduce
+  scheduling overhead, but it does not reduce the number of payload copy
+  operations.
+- Next action: Measure target-shape dispatch with `copy_rows=8` and
+  `copy_cols=256`; if it improves, sweep row tile size and then measure
+  dispatch+W13.
+
+### 2026-06-24 01:18 PT - Target-shape row-tile dispatch improves modestly
+
+- Hypothesis: Repeated 1D row copies inside a row-tile program should reduce
+  program scheduling overhead enough to improve target dispatch time.
+- Command: `... --job-name dlwh-6597-moe-compact-tiled-dispatch-t4096-cap80-r8 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --compact-dispatch-copy-cols 256 --compact-dispatch-copy-rows 8 --run-compact-source-expert-dispatch --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+- Result:
+  - Source/expert load stats unchanged: balanced/mean/max all `64`, compact
+    cap `80`, overflow `0`, slots/source `20480`.
+  - Dispatch-only compile+first run: `2103.207 ms`.
+  - Dispatch-only steady: mean `2.477 ms`, min `2.375`, max `2.579`, iters `2`.
+  - Ready-count and ready-block-count max errors: `0`.
+- Interpretation: Row tiling improves dispatch-only time from `2.766 ms` to
+  `2.477 ms`, but the effect is modest because each row still performs the same
+  number of 1D async payload copies. The substrate is correct and now returns
+  reliably, but dispatch alone remains above the desired end-to-end budget.
+- Next action: Try `copy_rows=16`; then measure dispatch+W13 to quantify the
+  non-overlapped floor before deciding whether overlap must happen above this
+  remote-copy primitive or by switching back to the built-in ring/GMM path.
+
+### 2026-06-24 01:21 PT - Row tiling plateaus
+
+- Hypothesis: Increasing row tile size from `8` to `16` should further reduce
+  dispatch program overhead if program count is the dominant cost.
+- Command: `... --job-name dlwh-6597-moe-compact-tiled-dispatch-t4096-cap80-r16 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --compact-dispatch-copy-cols 256 --compact-dispatch-copy-rows 16 --run-compact-source-expert-dispatch --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+- Result:
+  - Dispatch-only compile+first run: `2349.337 ms`.
+  - Dispatch-only steady: mean `2.450 ms`, min `2.339`, max `2.561`, iters `2`.
+  - Ready-count and ready-block-count max errors: `0`.
+- Interpretation: `copy_rows=16` is only slightly faster than `copy_rows=8`
+  (`2.450 ms` vs `2.477 ms`) and remains much slower than the ring-gather/GMM
+  helper (`~1.86 ms` end-to-end). This suggests the limiting cost is the
+  per-row 1D peer-copy work or Mosaic async-copy overhead, not just program
+  launch count.
+- Next action: Measure compact tiled dispatch+W13 with `copy_rows=16` to get
+  the non-overlapped Mosaic floor, then decide whether true overlap can recover
+  enough or whether the built-in collective path should be the production path.
+
+### 2026-06-24 08:24 PT - Compact tiled dispatch+W13 target floor
+
+- Hypothesis: The compact source/expert substrate plus block-ready W13 should
+  compile and return on the target shape, giving the non-overlapped Mosaic
+  dispatch-up floor.
+- Command: `... --job-name dlwh-6597-moe-compact-tiled-dispatch-up-t4096-cap80-r16 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --block-n 64 --block-k 64 --num-stages 2 --compact-dispatch-copy-cols 256 --compact-dispatch-copy-rows 16 --run-compact-source-expert-dispatch-up --skip-reference-checks --bench-iters 2 --warmup-steps 1`
+- Result:
+  - Source/expert load stats: balanced/mean/max all `64`, compact cap `80`,
+    overflow `0`, slots/source `20480`.
+  - Dispatch+W13 compile+first run: `3084.608 ms`.
+  - Dispatch+W13 steady: mean `5.911 ms`, min `5.847`, max `5.976`, iters `2`.
+  - Ready-count and ready-block-count max errors: `0`.
+- Interpretation: The compact Mosaic substrate is now correct and returns at
+  the target shape, but the non-overlapped end-to-end floor is far above the
+  `<2 ms` goal and the ring-gather/GMM helper (`~1.86 ms`). Overlap would need
+  to hide most of the remaining remote-copy/W13 work; small tiling changes on
+  this peer-copy primitive are unlikely to close the gap.
+- Next action: Treat this as the Mosaic remote-copy negative result and move
+  the production path toward the built-in ring/GMM helper for the <2 ms target,
+  or design a fundamentally different overlapped schedule that does not depend
+  on per-row peer async copies.
+
+### 2026-06-24 09:31 PT - Isolated W13 target baseline
+
+- Hypothesis: The compact dispatch+W13 result is too slow partly because the
+  block-ready Mosaic W13 consumer is slow, independent of dispatch. Measure W13
+  alone on a synthetic expert-major target layout.
+- Command: `... --job-name dlwh-6597-moe-w13-synthetic-target-mosaic-ragged -- ... bench_moe_dispatch_up_mosaic_gpu.py --synthetic-layout --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity 20480 --block-m 64 --block-n 64 --block-k 64 --num-stages 2 --w13-impl both --ragged-dot-impl auto --check-w13 --bench-iters 2 --warmup-steps 1`
+- Result:
+  - Synthetic layout: recv capacity `20480`, rows/expert `640`.
+  - Mosaic W13 steady: mean `4.200 ms`, min `4.194`, max `4.207`.
+  - `ragged_dot` W13 steady: mean `1.366 ms`, min `1.354`, max `1.377`.
+  - Mosaic vs ragged max abs error: `0.03125` with mean abs `0.000183599`.
+  - Reported W13 throughput: Mosaic `~1022 TFLOP/s`, ragged `~3145 TFLOP/s`.
+- Interpretation: The non-overlapped compact dispatch+W13 floor is not only a
+  transport problem. The current Mosaic W13 kernel is about 3x slower than
+  `ragged_dot` on the same target layout. True dispatch/W13 overlap cannot hit
+  `<2 ms` unless the W13 consumer is also tuned or replaced.
+- Next action: Expose `--grid-block-n` and sweep Mosaic W13 tile/scheduling
+  choices on the same synthetic target layout.
+
+### 2026-06-24 10:41 PT - Compact-layout Mosaic W13 sweep
+
+- Hypothesis: The first isolated W13 baseline used a conservative tile; larger
+  `N` tiles and deeper stages may make Mosaic W13 competitive enough that
+  dispatch/W13 overlap is still plausible.
+- Command: `... --job-name dlwh-6597-moe-w13-synthetic-target-sweep1 -- ... for cfg in "64 128 64 2 1" "64 128 64 4 1" "128 64 64 2 1" "128 128 64 2 1" "128 128 64 4 1" "64 64 128 2 1" "64 128 128 2 1" "64 128 64 2 4" "128 128 64 2 4"; do ... bench_moe_dispatch_up_mosaic_gpu.py --synthetic-layout --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity 20480 --block-m $bm --block-n $bn --block-k $bk --num-stages $stages --grid-block-n $gbn --w13-impl mosaic_gpu --bench-iters 2 --warmup-steps 1; done`
+- Result:
+  - Job `/dlwh/dlwh-6597-moe-w13-synthetic-target-sweep1` succeeded on
+    `cw-us-east-02a`.
+  - Steady W13 timings:
+
+    | block_m | block_n | block_k | stages | grid_block_n | mean ms | min ms | max ms |
+    |---:|---:|---:|---:|---:|---:|---:|---:|
+    | 64 | 128 | 64 | 2 | 1 | 2.551 | 2.539 | 2.564 |
+    | 64 | 128 | 64 | 4 | 1 | 1.658 | 1.649 | 1.668 |
+    | 128 | 64 | 64 | 2 | 1 | 3.028 | 3.026 | 3.030 |
+    | 128 | 128 | 64 | 2 | 1 | 4.672 | 4.660 | 4.684 |
+    | 128 | 128 | 64 | 4 | 1 | 5.225 | 5.174 | 5.276 |
+    | 64 | 64 | 128 | 2 | 1 | 3.232 | 3.196 | 3.268 |
+    | 64 | 128 | 128 | 2 | 1 | 2.263 | 2.258 | 2.268 |
+    | 64 | 128 | 64 | 2 | 4 | 2.438 | 2.437 | 2.439 |
+    | 128 | 128 | 64 | 2 | 4 | 4.561 | 4.558 | 4.563 |
+
+  - Best config: `block_m=64`, `block_n=128`, `block_k=64`, `num_stages=4`,
+    `grid_block_n=1` at `1.658 ms`.
+- Interpretation: Mosaic W13 is tunable on the compact layout: the best sweep
+  point is 2.5x faster than the first `4.200 ms` baseline, though still slower
+  than `ragged_dot` (`1.366 ms`). The target end-to-end path is now limited by
+  the compact remote-copy transport (`~2.45 ms`) plus any non-hidden W13 work;
+  true overlap would need to hide most of the transport behind this `~1.66 ms`
+  consumer.
+- Next action: Remeasure compact source/expert dispatch+W13 with the best W13
+  config and `source_expert_capacity=80` before deeper overlap changes.
+
+### 2026-06-24 10:45 PT - Compact dispatch+W13 with tuned W13 tile
+
+- Hypothesis: Reusing the best isolated Mosaic W13 tile should lower the
+  compact source/expert dispatch+W13 floor enough to clarify the remaining
+  overlap gap.
+- Command: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 3600 --job-name dlwh-6597-moe-compact-tiled-dispatch-up-t4096-cap80-r16-w13best -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --block-n 128 --block-k 64 --num-stages 4 --grid-block-n 1 --compact-dispatch-copy-cols 256 --compact-dispatch-copy-rows 16 --run-compact-source-expert-dispatch-up --skip-reference-checks --bench-iters 3 --warmup-steps 1`
+- Result:
+  - Job `/dlwh/dlwh-6597-moe-compact-tiled-dispatch-up-t4096-cap80-r16-w13best`
+    succeeded on `cw-us-east-02a`.
+  - Source/expert load stats: balanced/mean/max all `64`, compact cap `80`,
+    overflow `0`, slots/source `20480`.
+  - Dispatch+W13 compile+first run: `3394.243 ms`.
+  - Dispatch+W13 steady: mean `3.722 ms`, min `3.700`, max `3.760`, iters `3`.
+  - Ready-count and ready-block-count max errors: `0`.
+- Interpretation: Tuning the W13 tile improves the compact Mosaic
+  dispatch+W13 floor from `5.911 ms` to `3.722 ms`, but it remains above both
+  the `<2 ms` target and the ring-gather/GMM helper (`~1.86 ms`). The compact
+  source/expert layout is still the right shape fix: it shrinks source slots
+  from `131072` to `20480` at this target. The remaining issue is not capacity;
+  it is the non-overlapped generic Mosaic peer-copy transport, whose
+  dispatch-only floor is `~2.45 ms`.
+- Next action: Keep the compact source/expert layout as the Mosaic-facing
+  substrate, but shift the next implementation attempt toward a collective
+  ring/all-gather schedule or built-in GMM path that can overlap transport with
+  W13 instead of relying on per-row arbitrary peer async copies.

@@ -30,6 +30,7 @@ from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local,
+    dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_tiled_local,
     compute_moe_up_mosaic_gpu_local,
     compute_moe_up_mosaic_gpu_block_ready_local,
     compute_moe_up_mosaic_gpu_ready_local,
@@ -527,7 +528,7 @@ def _pallas_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
             block_n=args.block_n,
             block_k=args.block_k,
             max_concurrent_steps=args.num_stages,
-            grid_block_n=1,
+            grid_block_n=args.grid_block_n,
         )
         return h[None, ...]
 
@@ -554,7 +555,7 @@ def _pallas_block_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array
             block_n=args.block_n,
             block_k=args.block_k,
             max_concurrent_steps=args.num_stages,
-            grid_block_n=1,
+            grid_block_n=args.grid_block_n,
         )
         return h[None, ...]
 
@@ -645,7 +646,7 @@ def _pallas_fused_dispatch_block_ready_w13_fn(
             block_n=args.block_n,
             block_k=args.block_k,
             max_concurrent_steps=args.num_stages,
-            grid_block_n=1,
+            grid_block_n=args.grid_block_n,
         )
         return h[None, ...], ready_count[None, ...], ready_block_count[None, ...]
 
@@ -699,6 +700,9 @@ def _pallas_compact_source_expert_dispatch_up_fn(
     recv_capacity: int,
     ready_block_m: int,
     rows_per_program: int,
+    zero_recv: bool,
+    copy_cols: int | None,
+    copy_rows: int,
 ) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
     def local_dispatch_up(
         send_x_by_dst_expert,
@@ -726,13 +730,26 @@ def _pallas_compact_source_expert_dispatch_up_fn(
             jnp.squeeze(recv_source_expert_count, axis=0),
             jnp.array(0, dtype=jnp.int32),
         )
-        layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
-            compact_prepacked,
-            axis_name="expert",
-            recv_capacity=recv_capacity,
-            ready_block_m=ready_block_m,
-            rows_per_program=rows_per_program,
-        )
+        if copy_cols is None:
+            layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+                compact_prepacked,
+                axis_name="expert",
+                recv_capacity=recv_capacity,
+                ready_block_m=ready_block_m,
+                rows_per_program=rows_per_program,
+                zero_recv=zero_recv,
+            )
+        else:
+            layout, ready_count, ready_block_count = (
+                dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_tiled_local(
+                    compact_prepacked,
+                    axis_name="expert",
+                    recv_capacity=recv_capacity,
+                    ready_block_m=ready_block_m,
+                    copy_cols=copy_cols,
+                    copy_rows=copy_rows,
+                )
+            )
         h = compute_moe_up_mosaic_gpu_block_ready_local(
             layout.recv_x,
             layout.rows_per_expert,
@@ -742,7 +759,7 @@ def _pallas_compact_source_expert_dispatch_up_fn(
             block_n=args.block_n,
             block_k=args.block_k,
             max_concurrent_steps=args.num_stages,
-            grid_block_n=1,
+            grid_block_n=args.grid_block_n,
         )
         return h[None, ...], ready_count[None, ...], ready_block_count[None, ...]
 
@@ -775,6 +792,9 @@ def _pallas_compact_source_expert_dispatch_fn(
     recv_capacity: int,
     ready_block_m: int,
     rows_per_program: int,
+    zero_recv: bool,
+    copy_cols: int | None,
+    copy_rows: int,
 ) -> Callable[..., tuple[jax.Array, ...]]:
     def local_dispatch(
         send_x_by_dst_expert,
@@ -801,13 +821,26 @@ def _pallas_compact_source_expert_dispatch_fn(
             jnp.squeeze(recv_source_expert_count, axis=0),
             jnp.array(0, dtype=jnp.int32),
         )
-        layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
-            compact_prepacked,
-            axis_name="expert",
-            recv_capacity=recv_capacity,
-            ready_block_m=ready_block_m,
-            rows_per_program=rows_per_program,
-        )
+        if copy_cols is None:
+            layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+                compact_prepacked,
+                axis_name="expert",
+                recv_capacity=recv_capacity,
+                ready_block_m=ready_block_m,
+                rows_per_program=rows_per_program,
+                zero_recv=zero_recv,
+            )
+        else:
+            layout, ready_count, ready_block_count = (
+                dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_tiled_local(
+                    compact_prepacked,
+                    axis_name="expert",
+                    recv_capacity=recv_capacity,
+                    ready_block_m=ready_block_m,
+                    copy_cols=copy_cols,
+                    copy_rows=copy_rows,
+                )
+            )
         return (
             layout.recv_x[None, ...],
             layout.recv_valid[None, ...],
@@ -862,7 +895,7 @@ def _pallas_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
             block_n=args.block_n,
             block_k=args.block_k,
             max_concurrent_steps=args.num_stages,
-            grid_block_n=1,
+            grid_block_n=args.grid_block_n,
         )
         return h[None, ...]
 
@@ -1588,9 +1621,15 @@ def main() -> None:
         help="Override expert weight std. Defaults to 0.5/sqrt(hidden) for grug_truncated.",
     )
     parser.add_argument("--block-m", type=int, default=64)
-    parser.add_argument("--block-n", type=int, default=64)
+    parser.add_argument("--block-n", type=int, default=128)
     parser.add_argument("--block-k", type=int, default=64)
-    parser.add_argument("--num-stages", type=int, default=2)
+    parser.add_argument("--num-stages", type=int, default=4)
+    parser.add_argument(
+        "--grid-block-n",
+        type=int,
+        default=1,
+        help="N-axis snake-grid tile width for Mosaic W13/SiLU kernels.",
+    )
     parser.add_argument("--dtype", choices=("bf16", "fp32"), default="bf16")
     parser.add_argument("--run-pallas", action="store_true")
     parser.add_argument(
@@ -1703,6 +1742,23 @@ def main() -> None:
         type=int,
         default=1,
         help="Send rows handled by each scratch_ready dispatch program.",
+    )
+    parser.add_argument(
+        "--compact-dispatch-skip-zero-recv",
+        action="store_true",
+        help="For compact source/expert dispatch, skip receive-buffer zeroing and validate only written rows.",
+    )
+    parser.add_argument(
+        "--compact-dispatch-copy-cols",
+        type=int,
+        default=None,
+        help="Use the tiled compact source/expert dispatch path with this hidden-column tile size.",
+    )
+    parser.add_argument(
+        "--compact-dispatch-copy-rows",
+        type=int,
+        default=1,
+        help="Rows per compact source/expert payload tile when --compact-dispatch-copy-cols is set.",
     )
     parser.add_argument(
         "--pallas-w13-from-reference-layout",
@@ -2163,6 +2219,9 @@ def main() -> None:
                 recv_capacity=recv_capacity,
                 ready_block_m=args.block_m,
                 rows_per_program=args.dispatch_rows_per_program,
+                zero_recv=not args.compact_dispatch_skip_zero_recv,
+                copy_cols=args.compact_dispatch_copy_cols,
+                copy_rows=args.compact_dispatch_copy_rows,
             )
             compact_dispatch_args = _compact_source_expert_args(mesh, compact_prepacked)
 
@@ -2218,19 +2277,31 @@ def main() -> None:
             if ref_layout is None:
                 print("dispatch/mosaic_gpu_compact_source_expert/reference_check: skipped")
             else:
+                valid_mask = ref_layout.recv_valid
                 recv_x_err = float(
-                    jnp.max(jnp.abs(compact_recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32)))
+                    jnp.max(
+                        jnp.abs(compact_recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32))
+                        * valid_mask[:, :, None].astype(jnp.float32)
+                    )
                 )
                 print(f"dispatch_mosaic_gpu_compact_source_expert_recv_x_max_abs_error: {recv_x_err:.6g}")
                 _check_error("dispatch_mosaic_gpu_compact_source_expert_recv_x_max_abs_error", recv_x_err, 0.0)
+                valid_err = int(jnp.max(jnp.abs(compact_recv_valid.astype(jnp.int32) - valid_mask.astype(jnp.int32))))
+                print(f"dispatch_mosaic_gpu_compact_source_expert_recv_valid_max_abs_error: {valid_err}")
+                if valid_err != 0:
+                    raise AssertionError(f"compact source/expert recv_valid mismatch: max_abs={valid_err}")
                 for label, actual, expected in (
-                    ("recv_valid", compact_recv_valid, ref_layout.recv_valid),
                     ("recv_local_expert", compact_recv_local_expert, ref_layout.recv_local_expert),
                     ("recv_src_rank", compact_recv_src_rank, ref_layout.recv_src_rank),
                     ("recv_src_token_idx", compact_recv_src_token_idx, ref_layout.recv_src_token_idx),
                     ("recv_topk_slot", compact_recv_topk_slot, ref_layout.recv_topk_slot),
                 ):
-                    err = int(jnp.max(jnp.abs(actual.astype(jnp.int32) - expected.astype(jnp.int32))))
+                    err = int(
+                        jnp.max(
+                            jnp.abs(actual.astype(jnp.int32) - expected.astype(jnp.int32))
+                            * valid_mask.astype(jnp.int32)
+                        )
+                    )
                     print(f"dispatch_mosaic_gpu_compact_source_expert_{label}_max_abs_error: {err}")
                     if err != 0:
                         raise AssertionError(f"compact source/expert {label} mismatch: max_abs={err}")
@@ -2240,6 +2311,7 @@ def main() -> None:
                             compact_recv_router_weight.astype(jnp.float32)
                             - ref_layout.recv_router_weight.astype(jnp.float32)
                         )
+                        * valid_mask.astype(jnp.float32)
                     )
                 )
                 print(
@@ -2281,6 +2353,9 @@ def main() -> None:
                 recv_capacity=recv_capacity,
                 ready_block_m=args.block_m,
                 rows_per_program=args.dispatch_rows_per_program,
+                zero_recv=not args.compact_dispatch_skip_zero_recv,
+                copy_cols=args.compact_dispatch_copy_cols,
+                copy_rows=args.compact_dispatch_copy_rows,
             )
             compact_dispatch_up_args = (
                 *_compact_source_expert_args(mesh, compact_prepacked),
