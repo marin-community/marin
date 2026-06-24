@@ -65,11 +65,11 @@ _F8_COMPUTE_MODE = os.environ.get("RAGGED_DOT_F8_COMPUTE", "passthrough")
 
 
 def _ragged_cast(a: jax.Array, b: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Cast a dot's operands to a common compute dtype before ``pl.dot``.
+    """Cast a dot's operands to a common compute dtype before the matmul.
 
     For two 8-bit-float operands we skip ``jnp.result_type`` — which has no promotion
-    path for (E5M2, E4M3) and raises — and (by default) feed them straight to ``pl.dot``
-    so the f8 MMA engages. Non-f8 operands keep the original promotion behavior.
+    path for (E5M2, E4M3) and raises — and (by default) keep them as-is so the f8 MMA
+    engages. Non-f8 operands keep the original promotion behavior.
     """
     if a.dtype.itemsize == 1 and b.dtype.itemsize == 1:
         if _F8_COMPUTE_MODE == "bf16":
@@ -79,6 +79,21 @@ def _ragged_cast(a: jax.Array, b: jax.Array) -> tuple[jax.Array, jax.Array]:
         return a, b
     dtype = jnp.result_type(a, b)
     return a.astype(dtype), b.astype(dtype)
+
+
+def _ragged_dot(a: jax.Array, b: jax.Array, *, trans_a: bool = False) -> jax.Array:
+    """f8-tolerant block matmul with an f32 accumulator.
+
+    ``pl.dot`` infers its output dtype via ``jnp.promote_types``, which raises on
+    (E5M2, E4M3) — the backward grad-dot — before it ever reaches the tensor-core op.
+    We cast the operands and call ``lax.dot_general`` directly with an explicit f32
+    accumulator (exactly what ``pl.dot`` does internally, minus the promotion guard),
+    so mixed-f8 operands lower to an f8 tensor-core dot. ``trans_a`` contracts ``a``'s
+    leading axis (the drhs layout's ``a.T @ b``); ``b`` always contracts axis 0.
+    """
+    a, b = _ragged_cast(a, b)
+    a_contract = 0 if trans_a else 1
+    return jax.lax.dot_general(a, b, (((a_contract,), (0,)), ((), ())), preferred_element_type=jnp.float32)
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -142,8 +157,7 @@ def _triton_ragged_dot_kernel(
             span_k = pl.ds(start_k, block_k)
             a = plgpu.load(a_ref.at[span_m, span_k])
             b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
-            a, b = _ragged_cast(a, b)
-            return acc + pl.dot(a, b)
+            return acc + _ragged_dot(a, b)
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
@@ -217,8 +231,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
             other = 0.0
         a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
-        a, b = _ragged_cast(a, b)
-        return acc + pl.dot(a.T, b)
+        return acc + _ragged_dot(a, b, trans_a=True)
 
     num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
