@@ -924,7 +924,7 @@ confirms the path.
 - **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
   --cpu 4 --memory 128GB --disk 64GB -- bash lib/levanter/scripts/bench/_s5_xla_validate.sh`.
 
-### 2026-06-24 — GFP8-020: S5 H100 — B-lite is DEAD: Pallas-Triton can't do an f8-MMA ragged dot
+### 2026-06-24 — GFP8-020: S5 H100 — B-lite as-run loses to bf16 (backward can't do f8; forward f8 slower) — mechanism open
 - **Why:** GFP8-018's verdict was "B-lite first" — fix the mixed-f8 backward dtype + retune `block_k`/warps/
   stages on the *existing* Pallas-Triton kernel, escalate to a full rewrite only if tuned f8 still loses bf16.
   This is that experiment: one controlled job, identical real Grug shape (T8192/D2048/F5632/E8) and step count
@@ -950,17 +950,30 @@ confirms the path.
   | fp8  | e5m2×e4m3 (mixed f8) | — | — | — | **does not lower** (ValueError mixed f8) |
   | fp8  | f8 storage, **bf16** MMA (`F8_COMPUTE=bf16`) | 272 | — | **0.60×** | only f8 fwd+bwd that *runs*; no f8 MMA on the dot |
 
-- **Conclusion — the A/B line is now settled by evidence, against B-lite.** Three independent walls on the
-  Pallas-Triton path, none movable by tuning: (a) mixed-f8 dot unsupported → the natural E5M2-grad backward is
-  impossible; (b) same-type-e4m3 backward crashes the compiler; (c) where f8 *does* run (forward), it is **1.6×
-  slower than bf16** and block_k/warps/stages barely move it (239↔261) — i.e. the lowering is **not engaging an
-  efficient f8 wgmma** (smaller operands yet slower ⇒ upcast-before-MMA or a non-f8 dot path). The only f8
-  fwd+bwd that executes is f8-storage/bf16-compute at 272, which by construction uses no f8 tensor cores and
-  still loses to bf16's 454. **Quantize-around the existing kernel cannot win; tuning it cannot win.**
-- **What this means for the win condition.** To beat the production bf16 Triton kernel (454) with f8 needs a
-  kernel that controls the MMA dtype directly — genuine **option B**, and specifically NOT via pallas.triton's
-  `dot_general`. Candidate backends: `pallas.mosaic_gpu` (explicit Hopper `wgmma`, supports f8 incl. mixed
-  e4m3/e5m2) or a raw Triton-DSL kernel. XLA-fp8 remains the only *working* f8 ragged path (GFP8-019, ~2× within
-  XLA) but XLA ragged is ~4.6× slower than Triton overall, so it is a correct baseline, not a production win.
+- **Conclusion — B-lite as-run loses to bf16; two of three walls are firm, the third's *mechanism* is open.**
+  (a) Mixed-f8 dot unsupported → the natural E5M2-grad backward is impossible on this backend (firm: explicit
+  `ValueError` in the lowering). (b) Same-type-e4m3 backward crashes XLA codegen with `bad optional access`
+  (deterministic, but this smells like a *compiler bug* at this jaxlib/shape, not necessarily a fundamental
+  limit — could be version/shape-specific). (c) Where f8 runs (forward) it is **1.6× slower than bf16**, and
+  block_k/warps/stages barely move it (239↔261).
+- **CORRECTION (do not repeat the earlier overreach): the forward IS a genuine f8 dot, not a bf16 upcast.**
+  Read the lowering: `lax.dot_general` with default precision → `(Precision.DEFAULT, Precision.DEFAULT)` →
+  the tuple branch does **no `_cast`** of the operands (`lowering.py:2339-2351`), and `tt_dialect.dot(a, b, acc)`
+  (`~:2425`) runs with operands still `f8E4M3`. So at the Pallas→Triton MLIR level the matmul is f8, not bf16.
+  Therefore the forward being slower than bf16 does **not** prove "f8 MMA is slow" — it is equally consistent
+  with the kernel being **memory/overhead-bound** (block_k=32, grouped masking, no autotune), so f8's compute
+  advantage is wasted while its quant overhead is not. Whether Triton's *backend* compiles that f8 `tt.dot`
+  into a true Hopper f8 `wgmma` or silently upcasts to f16 inside its MMA pipeline (SASS level) is **unverified**
+  — the `.ttgir`/PTX dump was not captured. This is the open mechanistic question.
+- **What this means for the win condition.** Empirically, B-lite as-run does not beat bf16 (454): the backward
+  can't do f8 on this backend, and the forward (which does) is slower. To beat the production bf16 Triton kernel
+  with f8 most likely needs a kernel that controls the MMA dtype and tiling directly — `pallas.mosaic_gpu`
+  (explicit Hopper `wgmma`, supports f8 incl. mixed e4m3/e5m2) or a raw Triton-DSL kernel — BUT before
+  committing to that scope, the open items above should be closed: (i) dump the forward `.ttgir`/PTX to see if
+  the f8 `tt.dot` is a real f8 `wgmma` or an internal upcast; (ii) determine whether the forward is
+  compute- or memory-bound at this shape (does the f8 advantage even have room?); (iii) check whether the e4m3
+  `bad optional access` is a known/fixable jaxlib bug. XLA-fp8 remains the only *working* f8 ragged path
+  (GFP8-019, ~2× within XLA) but XLA ragged is ~4.6× slower than Triton overall, so it is a correct baseline,
+  not a production win. **Independent review of this evidence (codex + glm-5.2) requested before concluding.**
 - **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk 64GB --
   bash lib/levanter/scripts/bench/_s5_tune_validate.sh` (sweep) and `… _s5_e4m3_complete.sh` (e4m3 backward).
