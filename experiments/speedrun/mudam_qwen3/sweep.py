@@ -47,6 +47,10 @@ WANDB_PROJECT = "speedrun"
 # Absolute matrix LRs (kimi scaling → optimum well below Muon's 0.016).
 LRS: tuple[float, ...] = tuple(float(x) for x in os.environ.get("LRS", "0.0002,0.0005,0.001,0.003,0.01").split(","))
 USE_SCALING: str = os.environ.get("USE_SCALING", "kimi")
+# Re-orthogonalize after the SOAP whitening (apply a second, standard Muon NS on top).
+ANOTHER_MUON: bool = os.environ.get("ANOTHER_MUON", "true").lower() in ("1", "true", "yes")
+# Which side to precondition: "input" (prefer_input_side=True, GᵀG) or "output" (prefer_input_side=False, GGᵀ).
+SIDES: tuple[str, ...] = tuple(s.strip() for s in os.environ.get("SIDES", "input,output").split(","))
 RUN_TAG: str = os.environ.get("RUN_TAG", "")
 
 
@@ -103,7 +107,7 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
     return dataclasses.replace(step, config=dataclasses.replace(pod, train_config=inner))
 
 
-def _build_step(lr: float) -> ExecutorStep:
+def _build_step(lr: float, side: str) -> ExecutorStep:
     optimizer = MudamConfig(
         momentum=0.95,
         shampoo_beta=0.95,
@@ -114,7 +118,8 @@ def _build_step(lr: float) -> ExecutorStep:
         max_grad_norm=1.0,
         adam_lr=SIZE.adam_lr,
         use_scaling=USE_SCALING,
-        prefer_input_side=True,
+        prefer_input_side=(side == "input"),
+        another_muon=ANOTHER_MUON,
         normalization="muon",
         learning_rate=lr,
         lr_schedule="linear",
@@ -132,13 +137,13 @@ def _build_step(lr: float) -> ExecutorStep:
         optimizer_config=optimizer,
     )
     tag = f"_{RUN_TAG}" if RUN_TAG else ""
-    run_id = f"qwen3_{SIZE.label}_mudam{tag}_{USE_SCALING}_{SEQ_LEN}_{_lr_label(lr)}"
+    run_id = f"qwen3_{SIZE.label}_mudam_{side}{tag}_{USE_SCALING}_{SEQ_LEN}_{_lr_label(lr)}"
     step = default_train(
         name=run_id,
         tokenized=fineweb_edu_subcache_10B,
         model_config=_to_qwen3_from_llama(SIZE.llama_cfg),
         train_config=train,
-        tags=["speedrun", "mudam", USE_SCALING, f"qwen3_{SIZE.label}"],
+        tags=["speedrun", "mudam", side, USE_SCALING, f"qwen3_{SIZE.label}"],
         use_default_validation=True,
         eval_harness_tasks=(),
         wandb_name=run_id,
@@ -151,8 +156,11 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    steps = [_build_step(lr) for lr in LRS]
-    logger.info("Mudam 130m repro: %d runs (scaling=%s lrs=%s)", len(steps), USE_SCALING, LRS)
+    steps = [_build_step(lr, side) for side in SIDES for lr in LRS]
+    logger.info(
+        "Mudam 130m repro: %d runs (scaling=%s another_muon=%s sides=%s lrs=%s)",
+        len(steps), USE_SCALING, ANOTHER_MUON, SIDES, LRS,
+    )
     executor_main(steps=steps, description="Qwen3-130m Mudam (Shampoo-Muon) reproduction vs Muon: LR sweep.")
 
 
