@@ -886,3 +886,40 @@ confirms the path.
   re-run the fwd+bwd arm, and dump readable Triton IR (`.ttgir`) to confirm `pl.dot(f8,f8)` emits an f8 `tl.dot`
   rather than an upcast. If tuned f8 crosses bf16 → stay in A(+tuning); if not → escalate to B with the
   bottleneck identified.
+
+### 2026-06-24 — GFP8-019: S5 H100 — FP8 ragged on the XLA backend WORKS end-to-end (fwd+bwd) and is ~2× bf16
+- **Why:** validate the *simplest* fp8 path — `jax.lax.ragged_dot_general` + manual q/dq (the op's
+  `implementation="xla"` arm, the XLA fallback haliax used before the Triton kernel) — to separate fp8
+  CORRECTNESS from kernel performance. No custom kernel involved; also sidesteps the Triton mixed-f8 crash
+  (GFP8-017), since `ragged_dot_general` accepts E5M2×E4M3.
+- **Job:** `/matt/grug-fp8-s5-xla-bench` (H100x1, `--implementation xla`, 128 GB host). All five arms ran —
+  **no crash, no compile-OOM, including real-shape fwd+bwd** (the feared XLA ragged compile-memory blow-up did
+  not occur here at fwd+bwd).
+
+  | shape | path | dir | TFLOP/s | steady | rel_frob | note |
+  |-------|------|-----|---------|--------|----------|------|
+  | T2048/D1024/F2048 | fp8 | fwd+bwd | 113 | 0.683 ms | 0.066 | runs; f8 reaches GEMM |
+  | T2048/D1024/F2048 | bf16 | fwd+bwd | 68 | 1.133 ms | — | baseline → **fp8 1.66× faster** |
+  | T8192/D2048/F5632 (real) | fp8 | fwd+bwd | 195 | 8.70 ms | 0.066 | runs at real shape |
+  | T8192/D2048/F5632 (real) | bf16 | fwd+bwd | 97 | 17.54 ms | — | baseline → **fp8 2.02× faster** |
+
+- **Correctness milestone reached.** fp8 ragged runs end-to-end on GPU, fwd AND bwd, at real Grug shapes, no
+  crash/OOM; numerics 6.6% rel-Frobenius, stable across shapes. The backward that died on Triton (GFP8-017)
+  works here — confirming that failure is a Triton-kernel dtype bug, not an algorithmic one (GFP8-018 finding).
+- **fp8 delivers a real ~2× on XLA.** Same backend, same shapes, same flop count: real-shape fwd+bwd is 8.70 ms
+  (fp8) vs 17.54 ms (bf16) = 2.0×. HLO shows `f8e4m3fn[…]` (fwd) and `f8e5m2[…]` (bwd) operands bitcast into
+  XLA's `gemm_fusion_dot` (Triton-backed, `kind=kCustom`, bf16 out) and `cublas-batch-gemm` calls. I cannot
+  read the exact dtype each GEMM *consumes* off the operand names, but a 2× wall-clock win is itself strong
+  evidence f8 does real work — an internal upcast would make fp8 *slower* than bf16 (as on the Triton path,
+  GFP8-017), not 2× faster. **So the f8 win for ragged is achievable in principle** — corroborating GFP8-018
+  that the Triton fp8 slowdown is a tuning artifact, not "f8 can't help ragged."
+- **But XLA-fp8 is NOT a production win.** Cross-backend, fwd+bwd, real shape: Triton bf16 **447** TFLOP/s
+  (GFP8-017) ≫ XLA fp8 **195** > XLA bf16 **97**. XLA ragged is ~4–5× slower than the Triton kernel regardless
+  of dtype, so switching the model to XLA-fp8 would *regress* ~2.3× vs today's Triton-bf16 production. XLA-fp8
+  is a correct, working **baseline**, not a deployable path.
+- **Bottom line:** the simplest-thing-first call was right — we now have (a) a correct fp8 ragged op validated
+  end-to-end on H100, and (b) hardware evidence that f8 gives ~2× for ragged when the backend cooperates,
+  de-risking the Triton tuning. To beat the *production* bf16 path still requires fp8 on the Triton kernel
+  (the GFP8-018 B-lite: explicit mixed-f8 dtype + `block_k` retune). Next: that, benchmarked vs Triton bf16 447.
+- **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
+  --cpu 4 --memory 128GB --disk 64GB -- bash lib/levanter/scripts/bench/_s5_xla_validate.sh`.
