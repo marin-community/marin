@@ -11,6 +11,7 @@ source text. The GPU extra wires it into the resolved setup scripts.
 import subprocess
 from pathlib import Path
 
+import pytest
 from iris.cluster.setup import cuda_toolchain_setup_script, wants_gpu_extra
 from iris.cluster.types import EnvironmentSpec
 
@@ -33,13 +34,20 @@ def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdev
     return venv
 
 
-def _run_setup(venv: Path, workdir: Path) -> None:
+def _run_script(script: str, venv: Path, workdir: Path) -> None:
     env = {"IRIS_VENV": str(venv), "IRIS_WORKDIR": str(workdir), "PATH": "/usr/bin:/bin"}
-    subprocess.run(["bash", "-c", cuda_toolchain_setup_script()], env=env, capture_output=True, text=True, check=True)
+    subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
 
 
-def test_stages_toolchain_when_present(tmp_path):
-    venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+def _run_setup(venv: Path, workdir: Path) -> None:
+    _run_script(cuda_toolchain_setup_script(), venv, workdir)
+
+
+# cu12 and cu13 exercise the version-agnostic glob: the same script must stage
+# either CUDA major with no change.
+@pytest.mark.parametrize("cuda_major", ["cu12", "cu13"])
+def test_stages_toolchain_when_present(tmp_path, cuda_major):
+    venv = _make_venv(tmp_path, cuda_major=cuda_major, with_ptxas=True, with_libdevice=True)
     workdir = tmp_path / "work"
     workdir.mkdir()
 
@@ -51,18 +59,6 @@ def test_stages_toolchain_when_present(tmp_path):
     assert (venv / "bin" / "nvlink").is_symlink()
     # libdevice staged into XLA's default data dir and the working directory.
     assert (workdir / "cuda_sdk_lib" / "nvvm" / "libdevice" / "libdevice.10.bc").is_file()
-    assert (workdir / "libdevice.10.bc").is_file()
-
-
-def test_version_agnostic(tmp_path):
-    # The same script handles a different CUDA major (cu12) with no change.
-    venv = _make_venv(tmp_path, cuda_major="cu12", with_ptxas=True, with_libdevice=True)
-    workdir = tmp_path / "work"
-    workdir.mkdir()
-
-    _run_setup(venv, workdir)
-
-    assert (venv / "bin" / "ptxas").is_symlink()
     assert (workdir / "libdevice.10.bc").is_file()
 
 
@@ -110,17 +106,24 @@ def test_wants_gpu_extra():
     assert not wants_gpu_extra(["tpu", "vllm"])
 
 
-def test_gpu_extra_appends_cuda_setup_script():
-    scripts = list(EnvironmentSpec(extras=["gpu"]).to_proto().setup_scripts)
-    assert cuda_toolchain_setup_script() in scripts
+def test_gpu_extra_appends_a_real_staging_step(tmp_path):
+    """A GPU job appends exactly one setup step over the CPU baseline, and that
+    step actually stages the toolchain — verified by effect, not string identity."""
+    cpu_scripts = list(EnvironmentSpec(extras=["cpu"]).to_proto().setup_scripts)
+    gpu_scripts = list(EnvironmentSpec(extras=["gpu"]).to_proto().setup_scripts)
 
+    appended = gpu_scripts[len(cpu_scripts) :]
+    assert len(appended) == 1
 
-def test_non_gpu_extra_has_no_cuda_setup_script():
-    scripts = list(EnvironmentSpec(extras=["cpu"]).to_proto().setup_scripts)
-    assert cuda_toolchain_setup_script() not in scripts
+    venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    _run_script(appended[0], venv, workdir)
+    assert (venv / "bin" / "ptxas").is_symlink()
 
 
 def test_custom_setup_scripts_skip_cuda_staging():
-    # An explicit setup_scripts list is used verbatim; no CUDA staging is added.
+    # An explicit setup_scripts list is used verbatim even with the gpu extra:
+    # no staging step is appended, so a bring-your-own setup must stage itself.
     scripts = list(EnvironmentSpec(extras=["gpu"], setup_scripts=["echo hi\n"]).to_proto().setup_scripts)
     assert scripts == ["echo hi\n"]
