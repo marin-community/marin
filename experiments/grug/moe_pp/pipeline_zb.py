@@ -17,18 +17,20 @@ so the runtime overlaps them. Activations cross stage boundaries by an explicit
 way. Each stage's blocks are rematerialized (via :func:`_stage_forward`), so only
 stage-boundary activations are held and the backward recomputes block internals.
 
-With ``wb_split`` (the zero-bubble path) the whole step runs from one interleaved
-schedule (:func:`zb_schedule`): F, B (input-grad) and W (weight-grad) ops wavefront
-across the stages, the backward split so deferred W work fills the bubble the last
-stages leave while the backward drains to stage 0. ``wb_split=False`` is the GPipe
-baseline: a full forward sweep, then a combined-``vjp`` backward (B and W fused, so no
-work fills the bubble) -- the reference the wavefront is measured against.
+The op order is a :class:`Schedule`. The ``ZERO_BUBBLE`` (ZB-H1) path runs the whole
+step from one interleaved :func:`pipeline_schedule`: F, B (input-grad) and W
+(weight-grad) ops wavefront across the stages, the backward split so deferred W work
+fills the bubble the last stages leave while the backward drains to stage 0.
+``ONE_F_ONE_B`` interleaves F with the combined backward in the same wavefront (no W to
+defer); ``GPIPE`` is the baseline -- a full forward sweep then a combined-``vjp``
+backward sweep, two separate fills with nothing covering the bubble.
 """
 
 from __future__ import annotations
 
 import os
 import time
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -73,17 +75,37 @@ def _put_act(x: jax.Array, mesh: Mesh) -> jax.Array:
     return jax.device_put(x, NamedSharding(mesh, grug_model._batch_spec()))
 
 
-# Op kinds in the zero-bubble schedule. F = stage forward, B = input-grad (the
-# critical path, threaded upstream), W = weight-grad (deferrable, fills bubbles).
+# Op kinds in the wavefront schedule. F = stage forward, B = input-grad (the critical
+# path, threaded upstream), W = weight-grad (deferrable, fills bubbles). When the
+# backward is not split, B is the combined vjp and carries the weight-grad itself.
 _F, _B, _W = "F", "B", "W"
 _PRIORITY = {_B: 0, _F: 1, _W: 2}
 
 
-def zb_schedule(num_stages: int, num_microbatches: int) -> list[tuple[str, int, int]]:
-    """Zero-bubble (ZB-H1) op order: a list of ``(kind, microbatch, stage)`` to dispatch.
+class Schedule(StrEnum):
+    """How the microbatched forward/backward ops are ordered across the stages.
 
-    The schedule is the wavefront heuristic. Each stage is a resource that runs one op
-    per time slot; an op is eligible once its data deps are met:
+    * ``GPIPE`` -- a full forward sweep, then a combined-``vjp`` backward sweep. Two
+      separate pipeline fills; nothing covers the backward-warmup bubble. 3F FLOPs.
+    * ``ONE_F_ONE_B`` -- F and the combined (input+weight) backward interleaved in one
+      wavefront, so later microbatches' forwards overlap earlier ones' backwards. One
+      warmup/drain bubble remains (no deferred W to fill it). 3F FLOPs.
+    * ``ZERO_BUBBLE`` -- ZB-H1: the backward split into B (input-grad, critical path)
+      and W (weight-grad, deferred), wavefronted so W fills the tail bubble. ~0 bubble,
+      but the split uses two ``jax.vjp`` passes per stage, so 5F FLOPs (double forward
+      recompute) -- a win only while the bubble it removes exceeds that extra compute.
+    """
+
+    GPIPE = "gpipe"
+    ONE_F_ONE_B = "1f1b"
+    ZERO_BUBBLE = "zb"
+
+
+def pipeline_schedule(num_stages: int, num_microbatches: int, *, split_w: bool) -> list[tuple[str, int, int]]:
+    """Wavefront op order: a list of ``(kind, microbatch, stage)`` to dispatch.
+
+    The schedule is the heuristic. Each stage is a resource that runs one op per time
+    slot; an op is eligible once its data deps are met:
 
     * ``F(m,s)`` needs ``F(m,s-1)`` (the upstream activation),
     * ``B(m,s)`` needs ``F(m,s)`` and ``B(m,s+1)`` (the downstream input-grad),
@@ -91,16 +113,19 @@ def zb_schedule(num_stages: int, num_microbatches: int) -> list[tuple[str, int, 
 
     Per slot every free stage greedily takes its highest-priority eligible op with
     ``B > F > W``: advance the backward critical path first, otherwise push a forward,
-    and only when neither is ready spend the slot on a deferred weight-grad. Because the
-    last stage drains its ``B`` early and idles while the backward marches down to stage
-    0, its ``W`` work slides into that tail -- the bubble the plain forward-then-B-then-W
-    order leaves empty. Splitting ``W`` out of ``B`` is what frees those slots; with
-    ``M >> P`` every stage stays busy across F+B+W and the bubble fraction goes to ~0.
+    and only when neither is ready spend the slot on a deferred weight-grad. With
+    ``split_w`` the backward emits separate B and W ops (ZB-H1): the last stage drains
+    its B early and idles while the backward marches to stage 0, so its W work slides
+    into that tail -- the bubble the plain forward-then-backward order leaves empty.
+    Without ``split_w`` the backward is a single combined op (1F1B); there is no W to
+    defer, so a warmup/drain bubble remains, but the forward/backward sweeps still merge
+    into one wavefront.
 
     Forwards are issued eagerly (no run-ahead cap), so all ``M`` activations stay live --
     the memory cost the device-group pipeline already pays; this targets the bubble, not
     activation memory (a bounded ZB-2p variant would cap concurrent forwards).
     """
+    kinds = (_F, _B, _W) if split_w else (_F, _B)
 
     def deps(op: tuple[str, int, int]) -> list[tuple[str, int, int]]:
         kind, m, s = op
@@ -110,7 +135,7 @@ def zb_schedule(num_stages: int, num_microbatches: int) -> list[tuple[str, int, 
             return [(_F, m, s)] + ([(_B, m, s + 1)] if s < num_stages - 1 else [])
         return [(_B, m, s)]
 
-    remaining = {(k, m, s) for k in (_F, _B, _W) for m in range(num_microbatches) for s in range(num_stages)}
+    remaining = {(k, m, s) for k in kinds for m in range(num_microbatches) for s in range(num_stages)}
     done: set[tuple[str, int, int]] = set()
     schedule: list[tuple[str, int, int]] = []
     while remaining:
@@ -121,7 +146,7 @@ def zb_schedule(num_stages: int, num_microbatches: int) -> list[tuple[str, int, 
             if cand:
                 picked.append(min(cand, key=lambda op: (_PRIORITY[op[0]], op[1])))
         if not picked:
-            raise RuntimeError("zero-bubble schedule deadlocked (dependency cycle)")
+            raise RuntimeError("pipeline schedule deadlocked (dependency cycle)")
         schedule.extend(picked)
         remaining.difference_update(picked)
         done.update(picked)
@@ -181,22 +206,16 @@ def zb_build(
     num_microbatches: int,
     expert_per_stage: int = 1,
     data_per_stage: int = 1,
-    wb_split: bool = True,
+    schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
 ):
     """Place params on per-stage sub-meshes and compile the stage fns ONCE.
 
     Returns a ``step(token_ids, loss_weight) -> (loss, embed_head_grads, block_grads)``
-    closure that runs the device-group schedule, reusing the placed params and compiled
-    stage fns across calls. Hoisting this setup out of the step is what makes the
-    pipeline timeable (and usable in a real training loop) instead of recompiling every
-    iteration.
-
-    With ``wb_split`` (the zero-bubble path), the backward is split into a B-pass
-    (input-gradient, the chained critical path) followed by a W-pass (weight-gradient,
-    independent across every microbatch/stage, so it fans out over all devices instead
-    of gating each stage's ``dx`` on the expensive weight-grad). With ``wb_split=False``
-    the backward is the GPipe combined ``vjp`` -- the correctness baseline.
+    closure that runs the device-group ``schedule``, reusing the placed params and
+    compiled stage fns across calls. Hoisting this setup out of the step is what makes
+    the pipeline timeable (and usable in a real training loop) instead of recompiling
+    every iteration. See :class:`Schedule` for the op-order variants.
 
     Stages own disjoint device slices of ``expert_per_stage * data_per_stage`` devices
     each (so ``num_stages * expert_per_stage * data_per_stage == device_count``).
@@ -256,7 +275,9 @@ def zb_build(
 
     inv_m = 1.0 / num_microbatches
     dz = jnp.asarray(inv_m * coef / num_layers, jnp.float32)
-    schedule = zb_schedule(num_stages, num_microbatches) if wb_split else []
+    split_w = schedule is Schedule.ZERO_BUBBLE
+    use_schedule = schedule is not Schedule.GPIPE
+    op_order = pipeline_schedule(num_stages, num_microbatches, split_w=split_w) if use_schedule else []
 
     def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array, tuple, list]:
         """Run one pipelined forward+backward over the global batch; returns ``(loss, g_eh, g_blocks)``.
@@ -306,11 +327,13 @@ def zb_build(
             g_eh_m = jax.tree_util.tree_map(jnp.add, g_embed_m, g_head_on0)
             return g_eh_m if prev is None else jax.tree_util.tree_map(jnp.add, prev, g_eh_m)
 
-        if wb_split:
-            # Zero-bubble wavefront: one interleaved dispatch following ``schedule``. F/B/W
-            # ops stream across the stages; reductions are deferred so the single Python
-            # dispatch thread never stalls (an in-loop tree_map serializes the GPUs).
-            for kind, m, s in schedule:
+        if use_schedule:
+            # Wavefront: one interleaved dispatch following ``op_order``. F/B/W ops stream
+            # across the stages; reductions are deferred so the single Python dispatch
+            # thread never stalls (an in-loop tree_map serializes the GPUs). With
+            # ``split_w`` the B op is input-grad only and W ops carry the weight-grad;
+            # otherwise B is the combined vjp and writes the weight-grad itself.
+            for kind, m, s in op_order:
                 if kind == _F:
                     if s == 0:
                         with set_mesh(mesh0):
@@ -329,13 +352,16 @@ def zb_build(
                             g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
                         saved_dy[m][s] = dy
                     with set_mesh(submeshes[s]):
-                        dx = stage_fns[s].b(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                        if split_w:
+                            dx = stage_fns[s].b(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                        else:
+                            w_grads[m][s], dx = stage_fns[s].backward(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
                     if s > 0:
                         saved_dy[m][s - 1] = _put_act(dx, submeshes[s - 1])
                     else:
                         with set_mesh(mesh0):
                             (g_embed_mb[m],) = embed_bwd(eh0, tok_mb[m], dx)
-                else:  # _W
+                else:  # _W (emitted only when split_w)
                     with set_mesh(submeshes[s]):
                         w_grads[m][s] = stage_fns[s].w(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
 
@@ -402,11 +428,11 @@ def zb_build(
             jax.block_until_ready((loss, g_eh, g_blocks))
             now = time.perf_counter()
             total = (now - _t["start"]) * 1e3
-            if wb_split:
+            if use_schedule:
                 sched = (_t["sched"] - _t["start"]) * 1e3
                 print(
-                    f"TRACE zb_wavefront dispatch+exec={sched:.0f}ms reduce={total - sched:.0f}ms total={total:.0f}ms "
-                    f"(M={num_microbatches} P={num_stages} ops={len(schedule)})"
+                    f"TRACE {schedule.value} wavefront dispatch+exec={sched:.0f}ms reduce={total - sched:.0f}ms "
+                    f"total={total:.0f}ms (M={num_microbatches} P={num_stages} ops={len(op_order)})"
                 )
             else:
                 fwd, bwd = (_t["fwd"] - _t["start"]) * 1e3, (now - _t["fwd"]) * 1e3
@@ -429,7 +455,7 @@ def zb_value_and_grad(
     num_microbatches: int,
     expert_per_stage: int = 1,
     data_per_stage: int = 1,
-    wb_split: bool = True,
+    schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
 ) -> tuple[jax.Array, tuple, list]:
     """One-shot ``(loss, embed_head_grads, block_grads)`` (builds + steps once).
@@ -443,7 +469,7 @@ def zb_value_and_grad(
         num_microbatches=num_microbatches,
         expert_per_stage=expert_per_stage,
         data_per_stage=data_per_stage,
-        wb_split=wb_split,
+        schedule=schedule,
         remat=remat,
     )
     return step(token_ids, loss_weight)

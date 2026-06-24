@@ -36,7 +36,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe_pp.oracle import oracle_loss
 from experiments.grug.moe_pp.pipeline_manual import _EMBED_HEAD_FIELDS
-from experiments.grug.moe_pp.pipeline_zb import zb_value_and_grad
+from experiments.grug.moe_pp.pipeline_zb import Schedule, zb_value_and_grad
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,15 @@ def _expert_router_leaves(block_grads) -> list:
     return leaves
 
 
-def _run(label: str, *, num_stages: int, expert_per_stage: int, data_per_stage: int, num_microbatches: int) -> bool:
+def _run(
+    label: str,
+    *,
+    num_stages: int,
+    expert_per_stage: int,
+    data_per_stage: int,
+    num_microbatches: int,
+    schedule: Schedule,
+) -> bool:
     model_key = jax.random.PRNGKey(0)
     tokens = jax.random.randint(jax.random.PRNGKey(1), (BATCH, SEQ_LEN), 0, CONFIG.vocab_size, dtype=jnp.int32)
     weight = jnp.ones((BATCH, SEQ_LEN), dtype=jnp.float32)
@@ -114,6 +122,7 @@ def _run(label: str, *, num_stages: int, expert_per_stage: int, data_per_stage: 
         num_microbatches=num_microbatches,
         expert_per_stage=expert_per_stage,
         data_per_stage=data_per_stage,
+        schedule=schedule,
     )
 
     ref_loss, pipe_loss = float(np.asarray(ref_loss)), float(np.asarray(pipe_loss))
@@ -126,8 +135,9 @@ def _run(label: str, *, num_stages: int, expert_per_stage: int, data_per_stage: 
 
     ok = np.isfinite(pipe_loss) and loss_diff < LOSS_TOL and max(embed_rel, block_rel, er_rel) < GRAD_REL_TOL
     logger.info(
-        "[%-12s] stages=%d eps=%d dps=%d M=%d | loss diff=%.2e | grad rel embed=%.2e block=%.2e er=%.2e -> %s",
+        "[%-10s %-5s] stages=%d eps=%d dps=%d M=%d | loss diff=%.2e | grad rel embed=%.2e block=%.2e er=%.2e -> %s",
         label,
+        schedule.value,
         num_stages,
         expert_per_stage,
         data_per_stage,
@@ -150,10 +160,17 @@ def main() -> int:
         return 1
 
     ok = True
-    ok = _run("pure-PP", num_stages=8, expert_per_stage=1, data_per_stage=1, num_microbatches=4) and ok
-    ok = _run("PP-single-mb", num_stages=8, expert_per_stage=1, data_per_stage=1, num_microbatches=1) and ok
-    ok = _run("PPxEP", num_stages=4, expert_per_stage=2, data_per_stage=1, num_microbatches=4) and ok
-    ok = _run("PPxFSDP", num_stages=4, expert_per_stage=1, data_per_stage=2, num_microbatches=4) and ok
+    # Every schedule must produce the same grads; cover them on the base pure-PP config.
+    for schedule in Schedule:
+        ok = (
+            _run("pure-PP", num_stages=8, expert_per_stage=1, data_per_stage=1, num_microbatches=4, schedule=schedule)
+            and ok
+        )
+    # Sharding variants (single-mb, EP, FSDP) on the zero-bubble path.
+    zb = Schedule.ZERO_BUBBLE
+    ok = _run("single-mb", num_stages=8, expert_per_stage=1, data_per_stage=1, num_microbatches=1, schedule=zb) and ok
+    ok = _run("PPxEP", num_stages=4, expert_per_stage=2, data_per_stage=1, num_microbatches=4, schedule=zb) and ok
+    ok = _run("PPxFSDP", num_stages=4, expert_per_stage=1, data_per_stage=2, num_microbatches=4, schedule=zb) and ok
     logger.info("RESULT: %s", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 

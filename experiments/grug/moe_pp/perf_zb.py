@@ -8,17 +8,19 @@ Times one full forward+backward step of each on the SAME model and global batch:
 * **FSDP/EP baseline** -- ``jax.value_and_grad(Transformer.next_token_loss)`` over
   all devices (FSDP over ``data``, EP over ``expert``); one jitted program.
 * **Device-group pipeline** -- :func:`pipeline_zb.zb_build` with ``num_stages``
-  stages on disjoint device slices, microbatched, GPipe order. Compiled stage calls
+  stages on disjoint device slices, microbatched, ordered by ``MOE_PP_SCHED``
+  (:class:`pipeline_zb.Schedule`: ``gpipe`` / ``1f1b`` / ``zb``). Compiled stage calls
   on disjoint slices dispatch asynchronously so the runtime overlaps them.
 
 Defaults to 8-way PP (1 device/stage) at ~1B -- the original ``v6e-8`` goal scale.
 On a single NVLink node FSDP may still win on throughput (its all-gather is cheap
-and the GPipe bubble is ``(P-1)/(M+P-1)``); PP's win is multi-node comm and
-depth/memory scaling. Size via the ``MOE_PP_*`` env vars.
+and the bubble is ``(P-1)/(M+P-1)``); PP's win is multi-node comm and depth/memory
+scaling. Size via the ``MOE_PP_*`` env vars.
 
     iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --extra gpu \\
-      -e MOE_PP_HIDDEN 1536 -e MOE_PP_LAYERS 24 -e MOE_PP_EXPERTS 8 -e MOE_PP_STAGE 8 \\
-      -e MOE_PP_NMICRO 8 -e MOE_PP_BATCH 32 -- python -m experiments.grug.moe_pp.perf_zb
+      -e MOE_PP_SCHED zb -e MOE_PP_HIDDEN 1536 -e MOE_PP_LAYERS 24 -e MOE_PP_EXPERTS 8 \\
+      -e MOE_PP_STAGE 8 -e MOE_PP_NMICRO 8 -e MOE_PP_BATCH 32 \\
+      -- python -m experiments.grug.moe_pp.perf_zb
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
 from experiments.grug.moe_pp.oracle import oracle_loss
-from experiments.grug.moe_pp.pipeline_zb import zb_build
+from experiments.grug.moe_pp.pipeline_zb import Schedule, zb_build
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +71,7 @@ def main() -> int:
     expert_per_stage = int(os.environ.get("MOE_PP_EPS", "1"))
     data_per_stage = int(os.environ.get("MOE_PP_DPS", "1"))
     num_microbatches = int(os.environ.get("MOE_PP_NMICRO", "8"))
-    wb_split = os.environ.get("MOE_PP_WB", "1") == "1"
+    schedule = Schedule(os.environ.get("MOE_PP_SCHED", "zb"))
     remat = os.environ.get("MOE_PP_REMAT", "1") == "1"
     hidden_dim = int(os.environ.get("MOE_PP_HIDDEN", "1536"))
     num_layers = int(os.environ.get("MOE_PP_LAYERS", "24"))
@@ -146,7 +148,7 @@ def main() -> int:
         num_microbatches=num_microbatches,
         expert_per_stage=expert_per_stage,
         data_per_stage=data_per_stage,
-        wb_split=wb_split,
+        schedule=schedule,
         remat=remat,
     )
     pp_sec, pp_out = _time(lambda: step(tokens, weight), warmup=warmup, iters=iters)
@@ -160,7 +162,7 @@ def main() -> int:
         fsdp_loss,
         fsdp_hbm,
     )
-    logger.info("PERF zb_pipeline mode: wb_split=%s remat=%s", wb_split, remat)
+    logger.info("PERF zb_pipeline mode: schedule=%s remat=%s", schedule.value, remat)
     logger.info(
         "PERF zb_pipeline     : %.4f s/step  %9.0f tok/s  loss=%.4f  peak_hbm=%.1f GiB  microbatch=%d (%d tok/call)",
         pp_sec,
