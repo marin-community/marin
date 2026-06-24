@@ -60,11 +60,20 @@ def _stage_forward(block_arrays_slice, block_static, hidden: jax.Array, stage_ma
     ``block_arrays_slice`` is the tuple of this stage's per-block array pytrees and
     ``stage_masks`` the matching per-layer ``AttentionMask`` objects. The router
     z-loss is summed across this stage's layers so the driver can aggregate it.
+
+    Each block is wrapped in ``jax.checkpoint``: the backward recomputes the block
+    forward (attention scores, the MoE dispatch/GMM intermediates) instead of saving
+    them for the whole pipeline depth, so only the residual stream at block
+    boundaries is held. Remat is value-identical, so the grads are unchanged.
     """
     z = jnp.zeros((), jnp.float32)
     for block_arrays, mask in zip(block_arrays_slice, stage_masks, strict=True):
-        block = eqx.combine(block_arrays, block_static)
-        hidden, router_stats = block(hidden, mask)
+
+        def _apply_block(b_arrays, h, _mask=mask):
+            block = eqx.combine(b_arrays, block_static)
+            return block(h, _mask)
+
+        hidden, router_stats = jax.checkpoint(_apply_block)(block_arrays, hidden)
         z = z + router_stats["router_z_loss"].astype(jnp.float32)
     return hidden, z
 
