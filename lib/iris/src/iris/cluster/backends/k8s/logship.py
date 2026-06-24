@@ -27,6 +27,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -208,17 +209,13 @@ class LogShipper:
     sidecar and wedge pod teardown.
     """
 
-    def __init__(self, client: LogClient, log_dir_glob: str, key: str, attempt_id: int):
+    def __init__(self, client: LogClient, log_dir_glob: str, key: str, attempt_id: int, stop: threading.Event):
         self._client = client
         self._log_dir_glob = log_dir_glob
         self._key = key
         self._attempt_id = attempt_id
         self._buffer = _LineBuffer()
-        self._stop = False
-
-    def request_stop(self) -> None:
-        """Signal the ship loop to drain to EOF and exit (called from SIGTERM)."""
-        self._stop = True
+        self._stop = stop
 
     def run(self) -> None:
         """Follow the active log file across rotations until stopped, then flush.
@@ -245,7 +242,7 @@ class LogShipper:
         partial = ""
         while True:
             partial = self._drain(handle, partial)
-            if self._stop:
+            if self._stop.is_set():
                 # Final drain to EOF after the task container exited.
                 self._drain(handle, partial)
                 return None
@@ -256,7 +253,7 @@ class LogShipper:
 
     def _await_file(self) -> str | None:
         """Wait for the active CRI log file to appear; stop early if asked to."""
-        while not self._stop:
+        while not self._stop.is_set():
             path = _active_log_file(self._log_dir_glob)
             if path is not None:
                 return path
@@ -343,9 +340,8 @@ def _connect_log_client(controller_address: str) -> LogClient:
     )
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s logship %(message)s")
-
+def _ship(stop: threading.Event) -> None:
+    """Connect to the log server and ship the task container's logs until stopped."""
     task_id = os.environ["IRIS_TASK_ID"]
     controller_address = os.environ["IRIS_CONTROLLER_ADDRESS"]
     namespace = os.environ["IRIS_POD_NAMESPACE"]
@@ -353,13 +349,27 @@ def main() -> int:
 
     key, attempt_id = split_key_attempt(task_id)
     client = _connect_log_client(controller_address)
-    shipper = LogShipper(client, _log_dir_glob(namespace, pod_name), key, attempt_id)
-
-    signal.signal(signal.SIGTERM, lambda *_: shipper.request_stop())
+    shipper = LogShipper(client, _log_dir_glob(namespace, pod_name), key, attempt_id, stop)
 
     logger.info("logship: shipping logs for %s (attempt %d) from %s", key, attempt_id, pod_name)
     shipper.run()
     client.close()
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s logship %(message)s")
+
+    # As a native sidecar, this process must stay running for the task container
+    # to start. Log shipping is best-effort: any failure is logged and the
+    # process then idles until SIGTERM, so a broken shipper degrades to "no logs"
+    # rather than wedging the task pod in PodInitializing.
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    try:
+        _ship(stop)
+    except Exception:
+        logger.exception("logship: shipping failed; idling so the task pod is not blocked")
+        stop.wait()
     return 0
 
 

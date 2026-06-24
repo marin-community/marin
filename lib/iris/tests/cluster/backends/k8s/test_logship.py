@@ -150,12 +150,13 @@ def test_tail_ships_full_lines(tmp_path):
     )
 
     writer = FakeLogWriter()
-    shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0:1", attempt_id=1)
+    stop = threading.Event()
+    shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0:1", attempt_id=1, stop=stop)
     thread = _run_shipper_until_drained(shipper)
     try:
         _wait_until(lambda: len(writer.entries()) >= 2)
     finally:
-        shipper.request_stop()
+        stop.set()
         thread.join(timeout=5)
 
     entries = writer.entries()
@@ -175,7 +176,8 @@ def test_tail_continues_across_rotation_without_duplicates(tmp_path):
     _write_cri_lines(active, ["2026-06-24T12:00:00.000000000Z stdout F line-before-rotation"])
 
     writer = FakeLogWriter()
-    shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0", attempt_id=0)
+    stop = threading.Event()
+    shipper = LogShipper(writer, str(tmp_path / "*" / "task"), key="/u/job/0", attempt_id=0, stop=stop)
     thread = _run_shipper_until_drained(shipper)
     try:
         _wait_until(lambda: any(e.data == "line-before-rotation" for e in writer.entries()))
@@ -186,7 +188,7 @@ def test_tail_continues_across_rotation_without_duplicates(tmp_path):
 
         _wait_until(lambda: any(e.data == "line-after-rotation" for e in writer.entries()))
     finally:
-        shipper.request_stop()
+        stop.set()
         thread.join(timeout=5)
 
     messages = [e.data for e in writer.entries()]

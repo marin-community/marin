@@ -343,6 +343,11 @@ class PodConfig:
 
     namespace: str
     default_image: str
+    # Image for the log-shipper sidecar. The task default_image is a bare runtime
+    # that only gains the iris package after the task's own `uv sync`, so the
+    # sidecar instead runs the iris controller image (iris + finelog installed),
+    # which can launch `python -m iris.cluster.backends.k8s.logship` directly.
+    logship_image: str = ""
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
@@ -454,7 +459,7 @@ def _build_init_container_spec(
 def _build_logship_sidecar(
     task_id_wire: str,
     controller_address: str | None,
-    default_image: str,
+    logship_image: str,
 ) -> dict:
     """Build the native log-shipping sidecar container spec.
 
@@ -466,6 +471,9 @@ def _build_logship_sidecar(
     ``varlogpods`` hostPath) and pushes lines to finelog. It resolves the log
     server via the controller and pushes unauthenticated — the finelog log
     service performs no auth, matching the controller's own writes.
+
+    Runs ``logship_image`` (the iris controller image) rather than the task
+    image, which lacks the iris package until the task's own dependency sync.
     """
     env: list[dict] = [
         {"name": "IRIS_TASK_ID", "value": task_id_wire},
@@ -476,7 +484,7 @@ def _build_logship_sidecar(
         env.append({"name": "IRIS_CONTROLLER_ADDRESS", "value": controller_address})
     return {
         "name": _LOGSHIP_CONTAINER_NAME,
-        "image": default_image,
+        "image": logship_image,
         "imagePullPolicy": "IfNotPresent",
         "restartPolicy": "Always",
         "command": ["python", "-m", "iris.cluster.backends.k8s.logship"],
@@ -705,7 +713,7 @@ def _build_pod_manifest(
     logship = _build_logship_sidecar(
         iris_env["IRIS_TASK_ID"],
         config.controller_address,
-        default_image,
+        config.logship_image,
     )
     volumes.append(
         {
@@ -1358,6 +1366,8 @@ class K8sTaskProvider:
     kubectl: K8sService
     namespace: str
     default_image: str
+    # Iris controller image, used for the log-shipper sidecar (see PodConfig).
+    logship_image: str = ""
     cache_dir: str = "/cache"
     service_account: str = ""
     host_network: bool = False
@@ -1628,6 +1638,7 @@ class K8sTaskProvider:
         return PodConfig(
             namespace=self.namespace,
             default_image=self.default_image,
+            logship_image=self.logship_image,
             cache_dir=self.cache_dir,
             service_account=self.service_account,
             host_network=self.host_network,

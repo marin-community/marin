@@ -1187,6 +1187,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> TaskBackend:
             kubectl=CloudK8sService(namespace=namespace, kubeconfig_path=kp.kubeconfig or None),
             namespace=namespace,
             default_image=kp.default_image,
+            logship_image=cluster_config.controller.image,
             service_account=kp.service_account or "",
             host_network=kp.host_network,
             cache_dir=kp.cache_dir or "/cache",
