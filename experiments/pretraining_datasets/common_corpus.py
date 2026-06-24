@@ -13,7 +13,7 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 common_corpus_download = normalize_common_corpus_step(
     filter_common_corpus_step(download_common_corpus_raw_step())

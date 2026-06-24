@@ -7,7 +7,7 @@ from marin.datakit.download.nsf_awards import download_nsf_awards_step, normaliz
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 nsf_awards_download = normalize_nsf_awards_step(download_nsf_awards_step()).as_executor_step()
 
