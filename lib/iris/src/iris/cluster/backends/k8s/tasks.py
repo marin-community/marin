@@ -56,7 +56,7 @@ from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
+from iris.cluster.runtime.env import VENV_PATH, build_common_iris_env, normalize_workdir_relative_path
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -1374,7 +1374,7 @@ class _K8sProfileDispatch:
         return self.kubectl.read_file(self.pod_name, path, container="task")
 
     def _venv_exec(self, cmd: list[str], *, timeout: int) -> ExecResult:
-        shell_cmd = ["bash", "-lc", f"source /app/.venv/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
+        shell_cmd = ["bash", "-lc", f"source {VENV_PATH}/bin/activate 2>/dev/null; {shlex.join(cmd)}"]
         result = self.kubectl.exec(self.pod_name, shell_cmd, container="task", timeout=timeout)
         return ExecResult(result.returncode, (result.stdout or "").encode("utf-8"), result.stderr or "")
 

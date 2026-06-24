@@ -30,7 +30,7 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -91,8 +91,8 @@ class _DockerProfileDispatch:
     """
 
     container_id: str
-    pyspy_bin: str = "/app/.venv/bin/py-spy"
-    memray_bin: str = "/app/.venv/bin/memray"
+    pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
+    memray_bin: str = f"{VENV_PATH}/bin/memray"
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:

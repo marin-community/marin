@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 
+# Container paths shared across runtimes: the bundle unpacks into WORKDIR_PATH and
+# the setup script populates the venv at VENV_PATH (which the run phase activates).
+WORKDIR_PATH = "/app"
+VENV_PATH = f"{WORKDIR_PATH}/.venv"
+
 
 def normalize_workdir_relative_path(path: str) -> str:
     """Return a normalized relative path safe to write under a task workdir."""
@@ -126,13 +131,13 @@ def build_common_iris_env(
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
-    env["IRIS_WORKDIR"] = "/app"
+    env["IRIS_WORKDIR"] = WORKDIR_PATH
     env["IRIS_PYTHON"] = "python"
     # Canonical venv the setup script populates and the run phase activates.
     # UV_PROJECT_ENVIRONMENT points uv (sync/pip install) at the same path so a
     # custom setup script does not have to depend on uv's cwd-relative default.
-    env["IRIS_VENV"] = "/app/.venv"
-    env["UV_PROJECT_ENVIRONMENT"] = "/app/.venv"
+    env["IRIS_VENV"] = VENV_PATH
+    env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
     env["UV_PYTHON_INSTALL_DIR"] = "/uv/cache/python"
     env["CARGO_TARGET_DIR"] = "/root/.cargo/target"
 

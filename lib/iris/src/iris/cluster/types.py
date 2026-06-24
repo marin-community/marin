@@ -639,9 +639,9 @@ class EnvironmentSpec:
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the setup script.
 
-        The default (``setup_script=None``) is built here, in Python, where the
-        ``None``/``""``/custom distinction is unambiguous; the worker receives one
-        already-resolved script and never decides anything.
+        ``setup_script=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; an explicit string (including ``""``) is used
+        verbatim.
         """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
