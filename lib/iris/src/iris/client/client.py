@@ -668,18 +668,30 @@ class IrisClient:
 
             parent_extras = job_info.extras if job_info else []
             parent_pip = job_info.pip_packages if job_info else []
+            parent_sync = job_info.sync_packages if job_info else []
+            parent_setup_script = job_info.setup_script if job_info else None
 
             if environment:
+                # setup_script inheritance is presence-aware: an explicit child
+                # script (including "") wins, otherwise the parent's CUSTOM script
+                # carries through so a bring-your-own-env parent stays BYO.
+                child_setup_script = (
+                    environment.setup_script if environment.setup_script is not None else parent_setup_script
+                )
                 environment = EnvironmentSpec(
                     pip_packages=environment.pip_packages or parent_pip,
                     env_vars=child_env,
                     extras=environment.extras or parent_extras,
+                    setup_script=child_setup_script,
+                    sync_packages=environment.sync_packages or parent_sync,
                 )
             else:
                 environment = EnvironmentSpec(
                     env_vars=child_env,
                     extras=parent_extras,
                     pip_packages=parent_pip,
+                    setup_script=parent_setup_script,
+                    sync_packages=parent_sync,
                 )
 
             parent_constraints = list(job_info.constraints) if job_info else []

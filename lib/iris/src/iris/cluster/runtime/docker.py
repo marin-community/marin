@@ -449,15 +449,19 @@ class DockerContainerHandle:
         Non-blocking - returns immediately after starting the container.
         Use status() to monitor execution progress.
         """
-        # Build the run command: activate venv then exec user command
+        # Build the run command: activate the venv (if one exists) then exec the
+        # user command.
         quoted_cmd = " ".join(shlex.quote(arg) for arg in self.config.entrypoint.run_command.argv)
 
-        # If we had setup_commands, the venv exists and we should activate it
+        # When a setup script ran it left a venv at $IRIS_VENV, which we activate.
+        # Activation is conditional on the venv existing so a custom or no-setup
+        # script that brings its own environment runs in the image as-is instead
+        # of failing on a missing .venv.
         if self.config.entrypoint.setup_commands:
             run_script = f"""#!/bin/bash
 set -e
-cd /app
-source .venv/bin/activate
+cd "$IRIS_WORKDIR"
+[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
 exec {quoted_cmd}
 """
             self._write_run_script(run_script)

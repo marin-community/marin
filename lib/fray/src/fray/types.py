@@ -453,6 +453,11 @@ class EnvironmentConfig:
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
         extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
+        setup_script: Setup script run before the command. ``None`` builds the
+            default uv-sync script; a string runs verbatim (``""`` => no setup,
+            image used as-is). Build the default and tweak it via
+            ``fray.default_setup_script``.
+        sync_packages: Workspace members the default sync targets (default: all).
     """
 
     workspace: str | None = None
@@ -460,6 +465,8 @@ class EnvironmentConfig:
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
     extras: Sequence[str] = field(default_factory=list)
+    setup_script: str | None = None
+    sync_packages: Sequence[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.workspace and self.docker_image:
@@ -474,6 +481,8 @@ def create_environment(
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
     extras: Sequence[str] | None = None,
+    setup_script: str | None = None,
+    sync_packages: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
     """Create an EnvironmentConfig with sensible defaults.
 
@@ -499,6 +508,8 @@ def create_environment(
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
         extras=list(extras or []),
+        setup_script=setup_script,
+        sync_packages=list(sync_packages or []),
     )
 
 

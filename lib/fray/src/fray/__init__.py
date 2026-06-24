@@ -3,6 +3,8 @@
 
 """Fray: minimal job and actor scheduling interface."""
 
+from iris.cluster.runtime.setup import default_setup_script
+
 from fray.actor import (
     ActorContext,
     ActorFuture,
@@ -70,6 +72,7 @@ __all__ = [
     "create_environment",
     "current_actor",
     "current_client",
+    "default_setup_script",
     "get_tpu_topology",
     "set_current_client",
     "wait_all",

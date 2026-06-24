@@ -101,6 +101,41 @@ Key behaviors:
 
 See https://github.com/marin-community/marin/issues/3859 for context.
 
+## Task Setup
+
+Before running the command, the worker runs a **setup script** to prepare the
+environment. The runtime is pure mechanism — it runs whatever script it is given;
+the policy (what the script does) lives in `iris.cluster.runtime.setup`.
+
+- **Default**: `EnvironmentSpec(setup_script=None)` builds the standard uv-sync
+  script via `default_setup_script(...)`. `sync_packages` scopes the sync to
+  specific workspace members (default: `--all-packages`):
+  `EnvironmentSpec(sync_packages=["marin-core"], extras=["tpu"])`.
+- **Custom**: `EnvironmentSpec(setup_script="...")` runs the string verbatim. Build
+  the default and extend it: `default_setup_script(packages=["marin-core"]) + "\n…"`.
+- **Bring-your-own-env / no sync**: `EnvironmentSpec(setup_script="")` skips setup
+  entirely — the image is used as-is (the escape hatch from a forced full-workspace
+  `uv sync`). Callable entrypoints (`Entrypoint.from_callable`) then require
+  `cloudpickle` to already be in the image.
+
+The script runs with the task's `IRIS_*` env available, so it can parameterize
+itself: `IRIS_WORKDIR` (workspace root), `IRIS_VENV` / `UV_PROJECT_ENVIRONMENT`
+(canonical venv the run phase activates), `IRIS_PYTHON`, `IRIS_BUNDLE_ID`,
+`IRIS_JOB_EXTRAS` / `IRIS_JOB_PIP_PACKAGES` (JSON; absent ⇒ treat as `[]`),
+`IRIS_TASK_RESOURCES`. The script should create the venv at `$IRIS_VENV`; the run
+phase activates it only if it exists.
+
+Caveat: on Docker, setup runs in a *separate build container* from the command, so a
+setup script's `export FOO=bar` does **not** reach the running command — use
+`env_vars` for runtime environment. Setup scripts should only mutate the shared
+`/app` workdir (e.g. create the venv).
+
+A custom setup script is inherited by child jobs only when the parent explicitly set
+one (so a BYO parent's children stay BYO); default-mode parents' children rebuild the
+default from their own (or inherited) extras/pip/sync_packages.
+
+See https://github.com/marin-community/marin/issues/6595 for context.
+
 ## Architecture Notes
 
 ### The TaskBackend contract

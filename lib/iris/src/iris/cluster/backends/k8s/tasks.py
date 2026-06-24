@@ -363,10 +363,17 @@ class PodConfig:
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
-    """Build a shell script that runs setup_commands then the run_command."""
+    """Build a shell script that runs the setup script then the run_command.
+
+    Setup and command share one shell here (unlike Docker's split build/run
+    containers), so venv activation happens inline before exec. It is conditional
+    on the venv existing so a custom or no-setup script that brings its own
+    environment runs in the image as-is.
+    """
     lines = ["set -e", "ulimit -c 0", "mkdir -p /app", "cd /app"]
     for cmd in run_req.entrypoint.setup_commands:
         lines.append(cmd)
+    lines.append('[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"')
     if run_req.entrypoint.run_command.argv:
         lines.append("exec " + shlex.join(run_req.entrypoint.run_command.argv))
     return "\n".join(lines)

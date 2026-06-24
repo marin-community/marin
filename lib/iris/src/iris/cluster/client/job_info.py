@@ -44,6 +44,15 @@ class JobInfo:
     pip_packages: list[str] = field(default_factory=list)
     """Pip packages from parent job, for child job inheritance."""
 
+    sync_packages: list[str] = field(default_factory=list)
+    """Workspace members the parent scoped its default sync to, for inheritance."""
+
+    setup_script: str | None = None
+    """Parent's custom setup script, set only when the parent chose CUSTOM mode.
+
+    ``None`` means the parent used the default uv-sync setup, so children rebuild
+    the default from their own (or inherited) extras/pip/sync_packages."""
+
     ports: dict[str, int] = field(default_factory=dict)
     """Name to port number mapping for this task."""
 
@@ -119,6 +128,8 @@ def get_job_info() -> JobInfo | None:
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             extras=json.loads(os.environ.get("IRIS_JOB_EXTRAS", "[]")),
             pip_packages=json.loads(os.environ.get("IRIS_JOB_PIP_PACKAGES", "[]")),
+            sync_packages=json.loads(os.environ.get("IRIS_JOB_SYNC_PACKAGES", "[]")),
+            setup_script=os.environ.get("IRIS_JOB_SETUP_SCRIPT"),
             bundle_id=os.environ.get("IRIS_BUNDLE_ID"),
             ports=_parse_ports_from_env(),
             env=job_env,

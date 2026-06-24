@@ -618,12 +618,22 @@ class EnvironmentSpec:
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
 
+    Setup:
+    - ``setup_script=None`` builds the default uv-sync script. ``sync_packages``
+      scopes that sync to specific workspace members (default: all members).
+    - ``setup_script`` set to a string runs it verbatim before the command, with
+      the task's ``IRIS_*`` env available; ``""`` means no setup (the image is
+      used as-is). Build the default and tweak it via
+      ``iris.cluster.runtime.default_setup_script``.
+
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    setup_script: str | None = None
+    sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
@@ -638,12 +648,17 @@ class EnvironmentSpec:
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        return job_pb2.EnvironmentConfig(
+        cfg = job_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
             python_version=py_version,
+            sync_packages=list(self.sync_packages or []),
         )
+        if self.setup_script is not None:
+            cfg.setup_mode = job_pb2.SETUP_MODE_CUSTOM
+            cfg.setup_script = self.setup_script
+        return cfg
 
 
 class Namespace(str):

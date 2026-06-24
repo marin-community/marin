@@ -1,113 +1,59 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for entrypoint construction and bash script generation."""
+"""Tests for RuntimeEntrypoint assembly from an Entrypoint + EnvironmentConfig."""
 
-import pytest
-from iris.cluster.runtime.entrypoint import build_runtime_entrypoint, runtime_entrypoint_to_bash_script
+from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint
 from iris.rpc import job_pb2
-
-
-def _make_env_config(
-    extras: list[str] | None = None,
-    pip_packages: list[str] | None = None,
-    python_version: str = "",
-) -> job_pb2.EnvironmentConfig:
-    cfg = job_pb2.EnvironmentConfig()
-    if extras:
-        cfg.extras[:] = extras
-    if pip_packages:
-        cfg.pip_packages[:] = pip_packages
-    if python_version:
-        cfg.python_version = python_version
-    return cfg
 
 
 def _make_entrypoint(command: list[str]) -> Entrypoint:
     return Entrypoint(command=command, workdir_files={})
 
 
-def test_build_runtime_entrypoint_includes_extras():
+def test_default_env_carries_setup_script_in_setup_commands():
     ep = _make_entrypoint(["python", "train.py"])
-    env = _make_env_config(extras=["gpu", "mypackage:data"])
+    env = job_pb2.EnvironmentConfig(extras=["gpu"], pip_packages=["torch>=2.0"])
     rt = build_runtime_entrypoint(ep, env)
 
-    setup = "\n".join(rt.setup_commands)
-    assert "--extra gpu" in setup
-    assert "--extra data" in setup
+    # The resolved default script lands as a single setup_commands element.
+    assert len(rt.setup_commands) == 1
+    setup = rt.setup_commands[0]
+    assert "uv sync" in setup
     assert "--all-packages" in setup
+    assert "--extra gpu" in setup
+    assert "torch>=2.0" in setup
+    assert list(rt.run_command.argv) == ["python", "train.py"]
 
 
-def test_build_runtime_entrypoint_includes_pip_packages():
+def test_custom_setup_script_passes_through():
     ep = _make_entrypoint(["python", "train.py"])
-    env = _make_env_config(pip_packages=["torch>=2.0", "numpy"])
+    env = job_pb2.EnvironmentConfig(
+        setup_mode=job_pb2.SETUP_MODE_CUSTOM,
+        setup_script="echo prep\n",
+        extras=["gpu"],  # ignored in custom mode
+    )
     rt = build_runtime_entrypoint(ep, env)
 
-    setup = "\n".join(rt.setup_commands)
-    assert "torch" in setup
-    assert "numpy" in setup
-    # cloudpickle, py-spy, memray are always included
-    assert "cloudpickle" in setup
-    assert "py-spy" in setup
-    assert "memray" in setup
+    assert list(rt.setup_commands) == ["echo prep\n"]
+    assert "uv sync" not in rt.setup_commands[0]
 
 
-def test_build_runtime_entrypoint_with_python_version():
-    ep = _make_entrypoint(["python", "app.py"])
-    env = _make_env_config(python_version="3.12")
+def test_no_setup_leaves_setup_commands_empty():
+    ep = _make_entrypoint(["python", "train.py"])
+    env = job_pb2.EnvironmentConfig(setup_mode=job_pb2.SETUP_MODE_CUSTOM, setup_script="")
     rt = build_runtime_entrypoint(ep, env)
 
-    setup = "\n".join(rt.setup_commands)
-    assert "--python 3.12" in setup
+    # Empty script => no build phase; the command runs in the image as-is.
+    assert list(rt.setup_commands) == []
+    assert list(rt.run_command.argv) == ["python", "train.py"]
 
 
-def test_build_runtime_entrypoint_no_python_version():
-    ep = _make_entrypoint(["python", "app.py"])
-    env = _make_env_config()
-    rt = build_runtime_entrypoint(ep, env)
-
-    setup = "\n".join(rt.setup_commands)
-    assert "--python" not in setup
-
-
-def test_runtime_entrypoint_to_bash_script_structure():
-    rt = job_pb2.RuntimeEntrypoint()
-    rt.setup_commands[:] = ["cd /app", "echo hello"]
-    rt.run_command.argv[:] = ["python", "train.py", "--lr", "0.001"]
-
-    script = runtime_entrypoint_to_bash_script(rt)
-
-    assert script.startswith("#!/bin/bash\n")
-    assert "set -e" in script
-    assert "cd /app" in script
-    assert "echo hello" in script
-    assert "exec python train.py --lr 0.001" in script
-
-
-def test_build_runtime_entrypoint_propagates_workdir_file_refs():
+def test_workdir_files_and_refs_propagate():
     refs = {"_callable.pkl": "sha256abc", "weights.bin": "sha256def"}
     ep = Entrypoint(command=["python", "run.py"], workdir_files={"small.txt": b"hi"}, workdir_file_refs=refs)
-    env = _make_env_config()
-    rt = build_runtime_entrypoint(ep, env)
+    rt = build_runtime_entrypoint(ep, job_pb2.EnvironmentConfig())
 
     assert dict(rt.workdir_files) == {"small.txt": b"hi"}
     assert dict(rt.workdir_file_refs) == refs
-
-
-@pytest.mark.parametrize(
-    "extras,expected_fragments",
-    [
-        ([], []),
-        (["train"], ["--extra train"]),
-        (["pkg:feat", "other"], ["--extra feat", "--extra other"]),
-    ],
-)
-def test_build_runtime_entrypoint_extras_parametrized(extras, expected_fragments):
-    ep = _make_entrypoint(["python", "run.py"])
-    env = _make_env_config(extras=extras)
-    rt = build_runtime_entrypoint(ep, env)
-
-    setup = "\n".join(rt.setup_commands)
-    for fragment in expected_fragments:
-        assert fragment in setup

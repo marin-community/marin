@@ -37,6 +37,11 @@ class TaskState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATE_COSCHED_FAILED: _ClassVar[TaskState]
     TASK_STATE_MISSING: _ClassVar[TaskState]
 
+class SetupMode(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SETUP_MODE_DEFAULT: _ClassVar[SetupMode]
+    SETUP_MODE_CUSTOM: _ClassVar[SetupMode]
+
 class ConstraintOp(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     CONSTRAINT_OP_EQ: _ClassVar[ConstraintOp]
@@ -95,6 +100,8 @@ TASK_STATE_ASSIGNED: TaskState
 TASK_STATE_PREEMPTED: TaskState
 TASK_STATE_COSCHED_FAILED: TaskState
 TASK_STATE_MISSING: TaskState
+SETUP_MODE_DEFAULT: SetupMode
+SETUP_MODE_CUSTOM: SetupMode
 CONSTRAINT_OP_EQ: ConstraintOp
 CONSTRAINT_OP_NE: ConstraintOp
 CONSTRAINT_OP_EXISTS: ConstraintOp
@@ -580,7 +587,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
+    __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile", "setup_mode", "setup_script", "sync_packages")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -593,12 +600,18 @@ class EnvironmentConfig(_message.Message):
     EXTRAS_FIELD_NUMBER: _ClassVar[int]
     PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
     DOCKERFILE_FIELD_NUMBER: _ClassVar[int]
+    SETUP_MODE_FIELD_NUMBER: _ClassVar[int]
+    SETUP_SCRIPT_FIELD_NUMBER: _ClassVar[int]
+    SYNC_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     pip_packages: _containers.RepeatedScalarFieldContainer[str]
     env_vars: _containers.ScalarMap[str, str]
     extras: _containers.RepeatedScalarFieldContainer[str]
     python_version: str
     dockerfile: str
-    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ..., dockerfile: _Optional[str] = ...) -> None: ...
+    setup_mode: SetupMode
+    setup_script: str
+    sync_packages: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ..., dockerfile: _Optional[str] = ..., setup_mode: _Optional[_Union[SetupMode, str]] = ..., setup_script: _Optional[str] = ..., sync_packages: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)
