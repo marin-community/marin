@@ -132,7 +132,6 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         adam_lr=SIZE.adam_lr,
         momentum=0.95,
         nesterov=True,
-        backend_steps=5,
         beta1=0.9,
         beta2=0.98,
         epsilon=1e-15,
