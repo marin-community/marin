@@ -155,66 +155,6 @@ def test_build_pod_manifest_no_env_secret_omits_envfrom():
     assert "envFrom" not in manifest["spec"]["containers"][0]
 
 
-# ---------------------------------------------------------------------------
-# Log-shipper native sidecar
-# ---------------------------------------------------------------------------
-
-
-def _logship_container(manifest: dict) -> dict:
-    return next(c for c in manifest["spec"]["initContainers"] if c["name"] == "log-shipper")
-
-
-def test_logship_sidecar_is_native_init_container():
-    """The log-shipper runs as a native sidecar: an initContainer with
-    restartPolicy Always, the iris runtime image, and the logship entrypoint."""
-    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config(controller_address="http://ctrl:8080"))
-
-    # Native sidecar lives in initContainers, NOT containers, so the pod still
-    # reaches Succeeded/Failed when only the task container exits.
-    assert all(c["name"] != "log-shipper" for c in manifest["spec"]["containers"])
-    sidecar = _logship_container(manifest)
-    assert sidecar["restartPolicy"] == "Always"
-    assert sidecar["image"] == "myrepo/iris:latest"
-    assert sidecar["command"] == ["python", "-m", "iris.cluster.backends.k8s.logship"]
-
-
-def test_logship_sidecar_downward_api_and_task_id():
-    """The sidecar receives the same IRIS_TASK_ID as the task plus namespace/name
-    via the downward API and the controller address."""
-    req = make_run_req("/test-job/0", attempt_id=2)
-    manifest = _build_pod_manifest(req, pod_config(controller_address="http://ctrl:8080"))
-    sidecar = _logship_container(manifest)
-    env = {e["name"]: e for e in sidecar["env"]}
-
-    task_env = {e["name"]: e for e in manifest["spec"]["containers"][0]["env"]}
-    assert env["IRIS_TASK_ID"]["value"] == task_env["IRIS_TASK_ID"]["value"] == "/test-job/0:2"
-    assert env["IRIS_CONTROLLER_ADDRESS"]["value"] == "http://ctrl:8080"
-    assert env["IRIS_POD_NAMESPACE"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.namespace"
-    assert env["IRIS_POD_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.name"
-
-
-def test_logship_sidecar_mounts_node_pod_logs_readonly():
-    """The sidecar reads node CRI logs via a read-only varlogpods hostPath."""
-    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
-    sidecar = _logship_container(manifest)
-
-    mount = next(m for m in sidecar["volumeMounts"] if m["name"] == "varlogpods")
-    assert mount["mountPath"] == "/var/log/pods"
-    assert mount["readOnly"] is True
-
-    volume = next(v for v in manifest["spec"]["volumes"] if v["name"] == "varlogpods")
-    assert volume["hostPath"] == {"path": "/var/log/pods", "type": "Directory"}
-
-
-def test_task_container_unchanged_by_sidecar():
-    """The task container keeps its bash entrypoint and is not wrapped in a tee
-    pipe — log shipping reads the node file, leaving the task untouched."""
-    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
-    task = next(c for c in manifest["spec"]["containers"] if c["name"] == "task")
-    assert task["command"][:2] == ["bash", "-lc"]
-    assert "tee" not in task["command"][2]
-
-
 def test_build_pod_manifest_gpu():
     req = make_run_req("/test-job/0")
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))

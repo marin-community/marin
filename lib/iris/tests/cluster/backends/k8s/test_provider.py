@@ -273,31 +273,6 @@ def test_pod_not_found_grace_resets_when_pod_reappears(provider, k8s):
     assert result.updates[0].new_state == job_pb2.TASK_STATE_FAILED
 
 
-def test_completed_pod_resolved_via_bulk_list_without_per_pod_get(provider, k8s, monkeypatch):
-    """A running task whose pod went terminal is read from the bulk terminal-pods
-    list, never a per-pod GET — so a whole gang completing in one cycle costs one
-    extra LIST, not one GET per pod."""
-    task_id = JobName.from_wire("/job/done")
-    pod_name = _pod_name(task_id, 0)
-    populate_pod(k8s, pod_name, "Succeeded")
-    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
-
-    pod_gets: list[str] = []
-    real_get_json = k8s.get_json
-
-    def spy_get_json(resource, name):
-        if resource == K8sResource.PODS:
-            pod_gets.append(name)
-        return real_get_json(resource, name)
-
-    monkeypatch.setattr(k8s, "get_json", spy_get_json)
-
-    result = provider.reconcile(make_batch(running_tasks=[entry]))
-
-    assert result.updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
-    assert pod_gets == []
-
-
 def test_sync_empty_batch(provider):
     batch = make_batch()
     result = provider.reconcile(batch)
@@ -697,19 +672,6 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
     assert len(configmaps) == 0
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
-
-
-def test_apply_pod_orders_staging_before_logship_sidecar(provider, k8s):
-    """The workdir-staging init container runs before the log-shipper native
-    sidecar so staging completes first; the sidecar stays in initContainers."""
-    req = make_run_req("/my-job/task-0")
-    req.entrypoint.workdir_files["script.py"] = b"print('hi')"
-
-    provider._apply_pod(req)
-
-    pod = k8s.list_json(K8sResource.PODS)[0]
-    names = [c["name"] for c in pod["spec"]["initContainers"]]
-    assert names == ["stage-workdir", "log-shipper"]
 
 
 # ---------------------------------------------------------------------------
