@@ -31,7 +31,6 @@ import time
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import numpy as np
 from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
@@ -39,7 +38,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe_pp.benchmark import _config, _param_count, init_distributed
 from experiments.grug.moe_pp.oracle import oracle_loss
-from experiments.grug.moe_pp.pipeline_zb import Schedule, orthogonalize_tree, zb_build
+from experiments.grug.moe_pp.pipeline_zb import Schedule, _stage_submesh, orthogonalize_tree, zb_build
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +46,16 @@ logger = logging.getLogger(__name__)
 def _peak_hbm_gib() -> float:
     peaks = [(d.memory_stats() or {}).get("peak_bytes_in_use", 0) for d in jax.local_devices()]
     return max(peaks, default=0) / 2**30
+
+
+def _replicate(x, mesh):
+    """Replicate a host-local array onto every device of ``mesh`` (multi-host aware)."""
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    if jax.process_count() == 1:
+        return jax.device_put(x, sharding)
+    host = np.asarray(x)
+    shards = [jax.device_put(host, d) for d in mesh.devices.flat if d.process_index == jax.process_index()]
+    return jax.make_array_from_single_device_arrays(host.shape, sharding, shards)
 
 
 def _time(fn, *, warmup: int, iters: int):
@@ -113,8 +122,13 @@ def main() -> int:
         tokens_per_step,
     )
 
-    tokens = jax.random.randint(jax.random.PRNGKey(1), (global_batch, seq_len), 0, vocab_size, dtype=jnp.int32)
-    weight = jnp.ones((global_batch, seq_len), jnp.float32)
+    # Inputs are host-local numpy (identical on every process via the shared seed): the
+    # pipeline places them onto the stage sub-meshes, and the FSDP baseline replicates
+    # them. Numpy (not a jax array) keeps them fully addressable on every host -- a global
+    # device array would reshard on the first per-microbatch slice.
+    multihost = jax.process_count() > 1
+    tokens = np.random.default_rng(1).integers(0, vocab_size, (global_batch, seq_len), dtype=np.int32)
+    weight = np.ones((global_batch, seq_len), np.float32)
     skip_fsdp = os.environ.get("MOE_PP_SKIP_FSDP", "0") == "1"
 
     # --- FSDP/EP baseline: full mesh, one jitted value_and_grad ---
@@ -127,8 +141,8 @@ def main() -> int:
         model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
         if not skip_fsdp:
             arrays, static = eqx.partition(model, eqx.is_array)
-            fsdp_tokens = jax.device_put(tokens, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
-            fsdp_weight = jax.device_put(weight, jax.sharding.NamedSharding(fsdp_mesh, jax.sharding.PartitionSpec()))
+            fsdp_tokens = _replicate(tokens, fsdp_mesh)
+            fsdp_weight = _replicate(weight, fsdp_mesh)
 
             @jax.jit
             def fsdp_grad(arrays):
@@ -144,8 +158,15 @@ def main() -> int:
             fsdp_loss = float(np.asarray(fsdp_out[0]))
             fsdp_hbm = _peak_hbm_gib()
 
-    # --- device-group pipeline (init under any full mesh; zb_build re-places per stage) ---
-    with set_mesh(fsdp_mesh):
+    # --- device-group pipeline (zb_build re-places per stage). Multi-host: init under a
+    # mesh of THIS process's local devices (identical params on every process via the
+    # shared PRNG, fully addressable on each host) so zb_build builds each stage's shards
+    # without a cross-host reshard from a 16-device array. ---
+    if multihost:
+        host_mesh = _stage_submesh(jax.local_devices(), expert=1, data=jax.local_device_count())
+    else:
+        host_mesh = fsdp_mesh
+    with set_mesh(host_mesh):
         pp_model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
     step = zb_build(
         pp_model,

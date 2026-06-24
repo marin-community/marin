@@ -37,6 +37,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES
@@ -112,14 +113,75 @@ def _stage_submesh(group_devices, *, expert: int, data: int) -> Mesh:
     return Mesh(arr, _GRUG_MESH_AXIS_NAMES, axis_types=tuple(AxisType.Explicit for _ in _GRUG_MESH_AXIS_NAMES))
 
 
+def _multihost() -> bool:
+    return jax.process_count() > 1
+
+
+def _make_global(full, mesh: Mesh, spec: P, shape, dtype) -> jax.Array:
+    """Assemble a global ``jax.Array`` on ``(mesh, spec)`` from a host-local source.
+
+    ``full`` is the entire array as a host-local value (numpy/single-host) -- identical
+    on every process for replicated inputs (params, inputs), or the broadcast result of
+    a cross-host transfer for activations -- or ``None`` when this process owns none of
+    the target devices. Each process contributes only its local devices' shards, the
+    multi-controller way to place data on a device set this process may not fully own.
+    """
+    sharding = NamedSharding(mesh, spec)
+    shards = []
+    if full is not None:
+        host = np.asarray(full)
+        idx_map = sharding.devices_indices_map(tuple(shape))
+        for d in mesh.devices.flat:
+            if d.process_index == jax.process_index():
+                shards.append(jax.device_put(host[idx_map[d]], d))
+    # ``dtype`` is required when this process contributes no shards (the target sub-mesh is
+    # entirely on another host), since it cannot be inferred from an empty shard list.
+    return jax.make_array_from_single_device_arrays(tuple(shape), sharding, shards, dtype=jnp.dtype(dtype))
+
+
 def _put_params(tree, mesh: Mesh):
-    """Replicate a param pytree onto ``mesh`` (fully replicated within the stage slice)."""
-    return jax.device_put(tree, NamedSharding(mesh, _REPLICATED))
+    """Replicate a param pytree onto ``mesh`` (fully replicated within the stage slice).
+
+    Multi-host: params are identically initialized on every process, so each builds its
+    local shards from its own host-local copy -- no cross-host transfer.
+    """
+    if not _multihost():
+        return jax.device_put(tree, NamedSharding(mesh, _REPLICATED))
+    return jax.tree_util.tree_map(lambda x: _make_global(x, mesh, _REPLICATED, x.shape, x.dtype), tree)
 
 
-def _put_act(x: jax.Array, mesh: Mesh) -> jax.Array:
-    """Transport an activation/cotangent onto ``mesh`` with the grug batch sharding."""
-    return jax.device_put(x, NamedSharding(mesh, grug_model._batch_spec()))
+def _put_act(x, mesh: Mesh) -> jax.Array:
+    """Place a HOST-LOCAL input (tokens/labels/weight) onto ``mesh``, batch-sharded.
+
+    The input is identical on every process (same PRNG), so this needs no transfer; for
+    runtime activations crossing stages use :func:`_transport` instead.
+    """
+    spec = grug_model._batch_spec()
+    if not _multihost():
+        return jax.device_put(x, NamedSharding(mesh, spec))
+    return _make_global(x, mesh, spec, x.shape, x.dtype)
+
+
+def _transport(x: jax.Array, mesh: Mesh, spec: P = grug_model._batch_spec()) -> jax.Array:
+    """Move a runtime global array ``x`` onto ``mesh`` (batch sharding by default).
+
+    Single-host: a plain ``device_put``. Multi-host: each stage sub-mesh lives entirely
+    on one process, so ``x`` is fully addressable on the process(es) owning its devices;
+    that process pulls it to the host, and when the target is on a different process the
+    data is ``broadcast``-ed there. Every process then builds its local shards. Only the
+    one host-boundary hop actually crosses the wire; intra-host hops stay local.
+    """
+    if not _multihost():
+        return jax.device_put(x, NamedSharding(mesh, spec))
+    pid = jax.process_index()
+    src_procs = {d.process_index for d in x.sharding.device_set}
+    dst_procs = {d.process_index for d in mesh.devices.flat}
+    full = np.asarray(jax.device_get(x)) if pid in src_procs else None
+    if src_procs != dst_procs:
+        src = min(src_procs)
+        send = full if pid == src else np.zeros(x.shape, x.dtype)
+        full = multihost_utils.broadcast_one_to_all(send, is_source=(pid == src))
+    return _make_global(full if pid in dst_procs else None, mesh, spec, x.shape, x.dtype)
 
 
 # Op kinds in the wavefront schedule. F = stage forward, B = input-grad (the critical
@@ -333,7 +395,7 @@ def zb_build(
     op_order = pipeline_schedule(num_stages, num_microbatches, split_w=split_w) if use_schedule else []
     muon_fn = jax.jit(orthogonalize_tree) if muon else None
 
-    def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array, tuple, list]:
+    def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array | float, tuple | None, list]:
         """Run one pipelined forward+backward over the global batch; returns ``(loss, g_eh, g_blocks)``.
 
         With ``wb_split`` the F/B/W ops follow the zero-bubble ``schedule``; otherwise a
@@ -346,20 +408,25 @@ def zb_build(
         if global_batch % num_microbatches != 0:
             raise ValueError(f"global_batch={global_batch} must divide by num_microbatches={num_microbatches}")
         mb = global_batch // num_microbatches
-        weight = loss_weight.astype(jnp.float32)
         if _TRACE:
             _t["start"] = time.perf_counter()
 
         # Per-microbatch inputs on the terminal stages' meshes (tokens feed stage 0;
-        # labels/loss-weight feed the head on the last stage).
+        # labels/loss-weight feed the head on the last stage). They are computed as
+        # HOST-LOCAL numpy (identical on every process), then placed onto the terminal
+        # meshes. Keeping them numpy -- never a device array -- avoids a reshard when
+        # slicing under multi-host (a global array is not host-addressable).
         tok_mb: list = [None] * num_microbatches
         labels_mb: list = [None] * num_microbatches
         weight_mb: list = [None] * num_microbatches
+        tok_host = np.asarray(token_ids)
+        weight_host = np.asarray(loss_weight, np.float32)
         for m in range(num_microbatches):
-            tok = _put_act(token_ids[m * mb : (m + 1) * mb], mesh0)
-            labels_mb[m] = _put_act(jnp.concatenate([tok[:, 1:], tok[:, :1] * 0], axis=1).astype(jnp.int32), meshL)
-            weight_mb[m] = _put_act(weight[m * mb : (m + 1) * mb], meshL)
-            tok_mb[m] = tok
+            tok_slice = tok_host[m * mb : (m + 1) * mb]
+            labels_slice = np.concatenate([tok_slice[:, 1:], tok_slice[:, :1] * 0], axis=1).astype(np.int32)
+            tok_mb[m] = _put_act(tok_slice, mesh0)
+            labels_mb[m] = _put_act(labels_slice, meshL)
+            weight_mb[m] = _put_act(weight_host[m * mb : (m + 1) * mb], meshL)
 
         # Activation/cotangent buffers, indexed [microbatch][stage]. ``saved_x`` is each
         # stage's block INPUT (embed output for stage 0); ``saved_dy`` the cotangent fed
@@ -376,8 +443,32 @@ def zb_build(
         g_eh = None
         g_blocks: list = [None] * num_layers
 
+        # Multi-host: every process walks the full op_order in lockstep, but COMPUTE for a
+        # stage runs only on the process owning its sub-mesh; other processes supply a
+        # placeholder so the shared transports (a cross-host broadcast inside ``_transport``)
+        # still pair up. Single-host: ``_local`` is always true, so every guard passes and
+        # this reduces to the original straight-line dispatch.
+        seq = token_ids.shape[1]
+        act_shape = (mb, seq, cfg.hidden_dim)
+
+        def _local(mesh: Mesh) -> bool:
+            return any(d.process_index == jax.process_index() for d in mesh.devices.flat)
+
+        def _act_ph(mesh: Mesh) -> jax.Array:
+            return _make_global(None, mesh, grug_model._batch_spec(), act_shape, jnp.float32)
+
+        def _scalar_ph(mesh: Mesh) -> jax.Array:
+            return _make_global(None, mesh, _REPLICATED, (), jnp.float32)
+
+        if _multihost() and not use_schedule:
+            raise NotImplementedError("multi-host pipeline requires a 1f1b/zb schedule (GPipe path is single-host)")
+
         def _accum_embed_head(g_embed_m, g_head_m, prev):
-            g_head_on0 = jax.device_put(g_head_m, NamedSharding(mesh0, _REPLICATED))
+            # The head grad lives on the last stage's host; transport it to stage 0's host
+            # (a broadcast on both processes) and accumulate there.
+            g_head_on0 = jax.tree_util.tree_map(lambda g: _transport(g, mesh0, _REPLICATED), g_head_m)
+            if not _local(mesh0):
+                return prev
             g_eh_m = jax.tree_util.tree_map(jnp.add, g_embed_m, g_head_on0)
             return g_eh_m if prev is None else jax.tree_util.tree_map(jnp.add, prev, g_eh_m)
 
@@ -389,35 +480,50 @@ def zb_build(
             # otherwise B is the combined vjp and writes the weight-grad itself.
             for kind, m, s in op_order:
                 if kind == _F:
-                    if s == 0:
+                    if s == 0 and _local(mesh0):
                         with set_mesh(mesh0):
                             saved_x[m][0] = embed_fwd(eh0, tok_mb[m])
-                    with set_mesh(submeshes[s]):
-                        h_out, z_mb[m][s] = stage_fns[s].forward(stage_params[s], saved_x[m][s])
+                    if _local(submeshes[s]):
+                        with set_mesh(submeshes[s]):
+                            h_out, z_mb[m][s] = stage_fns[s].forward(stage_params[s], saved_x[m][s])
+                    else:
+                        h_out, z_mb[m][s] = _act_ph(submeshes[s]), _scalar_ph(submeshes[s])
                     if s < num_stages - 1:
-                        saved_x[m][s + 1] = _put_act(h_out, submeshes[s + 1])
+                        saved_x[m][s + 1] = _transport(h_out, submeshes[s + 1])
                     else:
                         head_h[m] = h_out
-                        with set_mesh(meshL):
-                            ce_mb[m] = head_fwd(ehL, h_out, labels_mb[m], weight_mb[m])
+                        if _local(meshL):
+                            with set_mesh(meshL):
+                                ce_mb[m] = head_fwd(ehL, h_out, labels_mb[m], weight_mb[m])
+                        else:
+                            ce_mb[m] = _scalar_ph(meshL)
                 elif kind == _B:
                     if s == num_stages - 1:
-                        with set_mesh(meshL):
-                            g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
-                        saved_dy[m][s] = dy
-                    with set_mesh(submeshes[s]):
-                        if split_w:
-                            dx = stage_fns[s].b(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                        if _local(meshL):
+                            with set_mesh(meshL):
+                                g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
+                            saved_dy[m][s] = dy
                         else:
-                            w_grads[m][s], dx = stage_fns[s].backward(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
-                    if s > 0:
-                        saved_dy[m][s - 1] = _put_act(dx, submeshes[s - 1])
+                            g_head_mb[m], saved_dy[m][s] = ehL, _act_ph(meshL)
+                    if _local(submeshes[s]):
+                        with set_mesh(submeshes[s]):
+                            if split_w:
+                                dx = stage_fns[s].b(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                            else:
+                                w_grads[m][s], dx = stage_fns[s].backward(
+                                    stage_params[s], saved_x[m][s], saved_dy[m][s], dz
+                                )
                     else:
+                        dx = _act_ph(submeshes[s])
+                    if s > 0:
+                        saved_dy[m][s - 1] = _transport(dx, submeshes[s - 1])
+                    elif _local(mesh0):
                         with set_mesh(mesh0):
                             (g_embed_mb[m],) = embed_bwd(eh0, tok_mb[m], dx)
                 else:  # _W (emitted only when split_w)
-                    with set_mesh(submeshes[s]):
-                        w_grads[m][s] = stage_fns[s].w(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
+                    if _local(submeshes[s]):
+                        with set_mesh(submeshes[s]):
+                            w_grads[m][s] = stage_fns[s].w(stage_params[s], saved_x[m][s], saved_dy[m][s], dz)
 
             if _TRACE:
                 jax.block_until_ready((ce_mb, z_mb, g_head_mb, g_embed_mb, w_grads))
@@ -426,6 +532,8 @@ def zb_build(
             for m in range(num_microbatches):
                 g_eh = _accum_embed_head(g_embed_mb[m], g_head_mb[m], g_eh)
             for s in range(num_stages):
+                if not _local(submeshes[s]):
+                    continue
                 base = s * lps
                 acc = list(w_grads[0][s])
                 for m in range(1, num_microbatches):
@@ -440,7 +548,7 @@ def zb_build(
                     h = embed_fwd(eh0, tok_mb[m])
                 for s in range(num_stages):
                     if s > 0:
-                        h = _put_act(h, submeshes[s])
+                        h = _transport(h, submeshes[s])
                     saved_x[m][s] = h
                     with set_mesh(submeshes[s]):
                         h, z_mb[m][s] = stage_fns[s].forward(stage_params[s], h)
@@ -462,11 +570,11 @@ def zb_build(
                     g_head_m, d_hidden = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
                 for s in reversed(range(num_stages)):
                     if s < num_stages - 1:
-                        d_hidden = _put_act(d_hidden, submeshes[s])
+                        d_hidden = _transport(d_hidden, submeshes[s])
                     with set_mesh(submeshes[s]):
                         g_slice, d_hidden = stage_fns[s].backward(stage_params[s], saved_x[m][s], d_hidden, dz)
                     _accum_blocks(s * lps, g_slice)
-                d_hidden = _put_act(d_hidden, mesh0)
+                d_hidden = _transport(d_hidden, mesh0)
                 with set_mesh(mesh0):
                     (g_embed_m,) = embed_bwd(eh0, tok_mb[m], d_hidden)
                 g_eh = _accum_embed_head(g_embed_m, g_head_m, g_eh)
@@ -478,16 +586,26 @@ def zb_build(
         if muon_fn is not None:
             for j in range(lps):
                 for s in range(num_stages):
+                    if not _local(submeshes[s]):
+                        continue
                     layer = s * lps + j
                     with set_mesh(submeshes[s]):
                         g_blocks[layer] = muon_fn(g_blocks[layer])
 
         # Loss (deferred reduction; the backward seeds are constants, so this never gates it).
+        # The per-stage router z-loss scalars are gathered onto the head mesh before summing;
+        # multi-host then broadcasts the final scalar so every process can read it.
         per_mb_loss = []
         for m in range(num_microbatches):
-            z_total = jnp.sum(jnp.stack([jax.device_put(z, ce_mb[m].sharding) for z in z_mb[m]]))
-            per_mb_loss.append(ce_mb[m] + coef * (z_total / num_layers))
-        loss = jnp.mean(jnp.stack([jax.device_put(pl, per_mb_loss[0].sharding) for pl in per_mb_loss]))
+            # Gather every stage's z scalar onto the head mesh (a broadcast on both processes);
+            # only the head's host owns the result, so reduce it there.
+            z_on_head = [_transport(z, meshL, _REPLICATED) for z in z_mb[m]]
+            if _local(meshL):
+                per_mb_loss.append(ce_mb[m] + coef * (jnp.sum(jnp.stack(z_on_head)) / num_layers))
+        loss = jnp.mean(jnp.stack(per_mb_loss)) if _local(meshL) else None
+        if _multihost():
+            src = np.asarray(jax.device_get(loss) if _local(meshL) else 0.0, np.float32)
+            loss = float(multihost_utils.broadcast_one_to_all(src, is_source=_local(meshL)))
 
         if _TRACE:
             jax.block_until_ready((loss, g_eh, g_blocks))
@@ -523,7 +641,7 @@ def zb_value_and_grad(
     schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
     muon: bool = False,
-) -> tuple[jax.Array, tuple, list]:
+) -> tuple[jax.Array | float, tuple | None, list]:
     """One-shot ``(loss, embed_head_grads, block_grads)`` (builds + steps once).
 
     Convenience for tests; a training/perf loop should call :func:`zb_build` once and
