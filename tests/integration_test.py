@@ -32,6 +32,7 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
+from marin.execution import executor_context
 from marin.execution.artifact import Artifact
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.step_spec import StepSpec
@@ -236,8 +237,9 @@ def _run_executor(prefix: str, synth_data: str, tokenizer: str) -> None:
         prefix=prefix,
         executor_info_base_path=f"{prefix}/experiments",
     )
-    steps = create_steps("quickstart-tests", synth_data, tokenizer)
-    executor_main(config, steps=steps)
+    with executor_context():
+        steps = create_steps("quickstart-tests", synth_data, tokenizer)
+        executor_main(config, steps=steps)
 
 
 # ---------------------------------------------------------------------------
@@ -313,9 +315,10 @@ def main():
                 prefix=prefix,
                 executor_info_base_path=f"{prefix}/experiments",
             )
-            steps = create_steps("quickstart-tests", synth_data, tokenizer)
-            with set_current_client(iris_client):
-                executor_main(config, steps=steps)
+            with executor_context():
+                steps = create_steps("quickstart-tests", synth_data, tokenizer)
+                with set_current_client(iris_client):
+                    executor_main(config, steps=steps)
 
         logger.info("Pipeline completed successfully")
     except Exception:
