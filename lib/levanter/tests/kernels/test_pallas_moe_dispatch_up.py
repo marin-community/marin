@@ -10,9 +10,11 @@ import jax.numpy as jnp
 from levanter.kernels.pallas.moe_dispatch_up import api as dispatch_up_api
 from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
+    dispatch_prepacked_moe_dispatch_up_source_expert_reference,
     dispatch_prepacked_moe_dispatch_up_reference,
     compute_moe_up_from_layout_reference,
     compute_moe_up_from_layout_ragged_dot,
+    prepack_moe_dispatch_up_source_expert_reference,
     prepack_moe_dispatch_up_reference,
 )
 
@@ -160,6 +162,59 @@ def test_moe_dispatch_up_prepack_matches_direct_layout_reference():
     np.testing.assert_array_equal(np.asarray(from_prepack.recv_src_rank), np.asarray(direct.recv_src_rank))
     np.testing.assert_array_equal(np.asarray(from_prepack.recv_src_token_idx), np.asarray(direct.recv_src_token_idx))
     np.testing.assert_array_equal(np.asarray(from_prepack.recv_topk_slot), np.asarray(direct.recv_topk_slot))
+
+
+def test_source_expert_prepack_matches_standard_prepack():
+    x_by_rank, expert_ids, router_weights = _hand_routing_inputs()
+
+    standard_prepacked = prepack_moe_dispatch_up_reference(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        num_experts=4,
+        recv_capacity=6,
+    )
+    compact_prepacked = prepack_moe_dispatch_up_source_expert_reference(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        num_experts=4,
+        recv_capacity=6,
+    )
+    standard = dispatch_prepacked_moe_dispatch_up_reference(standard_prepacked, recv_capacity=6)
+    compact = dispatch_prepacked_moe_dispatch_up_source_expert_reference(compact_prepacked, recv_capacity=6)
+
+    np.testing.assert_allclose(np.asarray(compact.recv_x), np.asarray(standard.recv_x), rtol=0, atol=0)
+    np.testing.assert_array_equal(np.asarray(compact.recv_valid), np.asarray(standard.recv_valid))
+    np.testing.assert_array_equal(np.asarray(compact.recv_local_expert), np.asarray(standard.recv_local_expert))
+    np.testing.assert_array_equal(np.asarray(compact.recv_src_rank), np.asarray(standard.recv_src_rank))
+    np.testing.assert_array_equal(np.asarray(compact.recv_src_token_idx), np.asarray(standard.recv_src_token_idx))
+    np.testing.assert_array_equal(np.asarray(compact.recv_topk_slot), np.asarray(standard.recv_topk_slot))
+    np.testing.assert_allclose(
+        np.asarray(compact.recv_router_weight),
+        np.asarray(standard.recv_router_weight),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert compact_prepacked.send_x_by_dst_expert.shape == (2, 2, 2, 2, 2)
+    assert int(np.asarray(compact.overflow_count)) == 0
+
+
+def test_source_expert_prepack_reports_source_capacity_overflow():
+    x_by_rank, expert_ids, router_weights = _hand_routing_inputs()
+
+    compact_prepacked = prepack_moe_dispatch_up_source_expert_reference(
+        x_by_rank,
+        expert_ids,
+        router_weights,
+        num_experts=4,
+        recv_capacity=6,
+        source_expert_capacity=1,
+    )
+    compact = dispatch_prepacked_moe_dispatch_up_source_expert_reference(compact_prepacked, recv_capacity=6)
+
+    assert int(np.asarray(compact.overflow_count)) == 4
+    assert int(np.asarray(jnp.sum(compact.recv_valid))) == 8
 
 
 def _manual_w13_silu(layout: MoeDispatchUpLayout, w_gate_up_by_rank: jax.Array) -> jax.Array:

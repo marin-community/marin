@@ -44,6 +44,20 @@ class MoeDispatchUpPrepackedSend(NamedTuple):
     overflow_count: jax.Array
 
 
+class MoeDispatchUpSourceExpertPrepackedSend(NamedTuple):
+    send_x_by_dst_expert: jax.Array
+    send_src_token_idx_by_dst_expert: jax.Array
+    send_topk_slot_by_dst_expert: jax.Array
+    send_router_weight_by_dst_expert: jax.Array
+    send_row_base_by_dst_expert: jax.Array
+    send_count_by_dst_expert: jax.Array
+    rows_per_expert: jax.Array
+    expert_base: jax.Array
+    recv_source_expert_base: jax.Array
+    recv_source_expert_count: jax.Array
+    overflow_count: jax.Array
+
+
 def _validate_routing_inputs(
     x_by_rank: jax.Array,
     expert_ids_by_rank: jax.Array,
@@ -218,6 +232,180 @@ def prepack_moe_dispatch_up_reference(
         recv_source_expert_base,
         recv_source_expert_count,
         overflow_count,
+    )
+
+
+def prepack_moe_dispatch_up_source_expert_reference(
+    x_by_rank: jax.Array,
+    expert_ids_by_rank: jax.Array,
+    router_weights_by_rank: jax.Array,
+    *,
+    num_experts: int,
+    capacity_factor: float = 1.25,
+    recv_capacity: int | None = None,
+    source_expert_capacity: int | None = None,
+) -> MoeDispatchUpSourceExpertPrepackedSend:
+    """Prepack sends by destination and local expert.
+
+    This is a compact source-owned representation for Mosaic GPU bring-up. Rows
+    are grouped as `[src, dst, local_expert, source_expert_row]`, avoiding the
+    conservative `[src, dst, T*K]` capacity used by the original validation
+    prepack.
+    """
+
+    ep_size, tokens_per_rank, hidden, top_k = _validate_routing_inputs(
+        x_by_rank,
+        expert_ids_by_rank,
+        router_weights_by_rank,
+        num_experts=num_experts,
+    )
+    local_experts = num_experts // ep_size
+    recv_capacity = _recv_capacity(
+        ep_size=ep_size,
+        tokens_per_rank=tokens_per_rank,
+        top_k=top_k,
+        capacity_factor=capacity_factor,
+        recv_capacity=recv_capacity,
+    )
+
+    counts = _counts_by_destination_source_expert(expert_ids_by_rank, num_experts=num_experts)
+    if source_expert_capacity is None:
+        source_expert_capacity = max(1, int(jax.device_get(jnp.max(counts))))
+    if source_expert_capacity < 1:
+        raise ValueError(f"source_expert_capacity must be positive, got {source_expert_capacity}")
+
+    rows_per_expert = jnp.sum(counts, axis=2, dtype=jnp.int32)
+    expert_base = jnp.cumsum(rows_per_expert, axis=1, dtype=jnp.int32) - rows_per_expert
+    recv_source_expert_count = jnp.transpose(counts, (0, 2, 1))
+    recv_source_expert_base = jnp.transpose(
+        expert_base[:, :, None] + jnp.cumsum(counts, axis=2, dtype=jnp.int32) - counts,
+        (0, 2, 1),
+    )
+    rows_per_rank = jnp.sum(rows_per_expert, axis=1, dtype=jnp.int32)
+    receiver_overflow = jnp.sum(jnp.maximum(rows_per_rank - recv_capacity, 0), dtype=jnp.int32)
+    source_expert_overflow = jnp.sum(jnp.maximum(counts - source_expert_capacity, 0), dtype=jnp.int32)
+    overflow_count = receiver_overflow + source_expert_overflow
+
+    send_x = jnp.zeros(
+        (ep_size, ep_size, local_experts, source_expert_capacity, hidden),
+        dtype=x_by_rank.dtype,
+    )
+    send_src_token_idx = jnp.zeros(
+        (ep_size, ep_size, local_experts, source_expert_capacity),
+        dtype=jnp.int32,
+    )
+    send_topk_slot = jnp.zeros(
+        (ep_size, ep_size, local_experts, source_expert_capacity),
+        dtype=jnp.int32,
+    )
+    send_router_weight = jnp.zeros(
+        (ep_size, ep_size, local_experts, source_expert_capacity),
+        dtype=router_weights_by_rank.dtype,
+    )
+    send_row_base = jnp.transpose(recv_source_expert_base, (1, 0, 2))
+    send_count = jnp.transpose(counts, (2, 0, 1))
+
+    token_ids = jnp.arange(tokens_per_rank, dtype=jnp.int32)[:, None]
+    topk_slots = jnp.arange(top_k, dtype=jnp.int32)[None, :]
+    flat_token_ids = jnp.broadcast_to(token_ids, (tokens_per_rank, top_k)).reshape(-1)
+    flat_topk_slots = jnp.broadcast_to(topk_slots, (tokens_per_rank, top_k)).reshape(-1)
+
+    for src_rank in range(ep_size):
+        flat_experts = expert_ids_by_rank[src_rank].reshape(-1)
+        flat_weights = router_weights_by_rank[src_rank].reshape(-1)
+        flat_x = x_by_rank[src_rank, flat_token_ids]
+        for dst_rank in range(ep_size):
+            for local_expert in range(local_experts):
+                global_expert = dst_rank * local_experts + local_expert
+                mask = flat_experts == global_expert
+                local_rank = jnp.cumsum(mask.astype(jnp.int32), dtype=jnp.int32) - 1
+                valid = mask & (local_rank < source_expert_capacity)
+                safe_slot = jnp.where(valid, local_rank, 0)
+
+                send_x = send_x.at[src_rank, dst_rank, local_expert, safe_slot].add(flat_x * valid[:, None])
+                send_src_token_idx = send_src_token_idx.at[src_rank, dst_rank, local_expert, safe_slot].add(
+                    jnp.where(valid, flat_token_ids, 0)
+                )
+                send_topk_slot = send_topk_slot.at[src_rank, dst_rank, local_expert, safe_slot].add(
+                    jnp.where(valid, flat_topk_slots, 0)
+                )
+                send_router_weight = send_router_weight.at[src_rank, dst_rank, local_expert, safe_slot].add(
+                    flat_weights * valid.astype(flat_weights.dtype)
+                )
+
+    return MoeDispatchUpSourceExpertPrepackedSend(
+        send_x,
+        send_src_token_idx,
+        send_topk_slot,
+        send_router_weight,
+        send_row_base,
+        send_count,
+        rows_per_expert,
+        expert_base,
+        recv_source_expert_base,
+        recv_source_expert_count,
+        overflow_count,
+    )
+
+
+def dispatch_prepacked_moe_dispatch_up_source_expert_reference(
+    prepacked: MoeDispatchUpSourceExpertPrepackedSend,
+    *,
+    recv_capacity: int | None = None,
+) -> MoeDispatchUpLayout:
+    """Destination-owned dispatch from compact source/expert prepack."""
+
+    send_x = prepacked.send_x_by_dst_expert
+    ep_size, _, local_experts, source_expert_capacity, hidden = send_x.shape
+    if recv_capacity is None:
+        recv_capacity = source_expert_capacity * ep_size * local_experts
+
+    recv_x = jnp.zeros((ep_size, recv_capacity, hidden), dtype=send_x.dtype)
+    recv_valid_count = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32)
+    recv_local_expert = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32)
+    recv_src_rank = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32)
+    recv_src_token_idx = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32)
+    recv_topk_slot = jnp.zeros((ep_size, recv_capacity), dtype=jnp.int32)
+    recv_router_weight = jnp.zeros((ep_size, recv_capacity), dtype=prepacked.send_router_weight_by_dst_expert.dtype)
+
+    positions = jnp.arange(source_expert_capacity, dtype=jnp.int32)
+    for dst_rank in range(ep_size):
+        for src_rank in range(ep_size):
+            for local_expert in range(local_experts):
+                count = prepacked.send_count_by_dst_expert[src_rank, dst_rank, local_expert]
+                row = prepacked.send_row_base_by_dst_expert[src_rank, dst_rank, local_expert] + positions
+                valid_recv = (positions < count) & (row < recv_capacity)
+                safe_row = jnp.where(valid_recv, row, 0)
+                valid_i32 = valid_recv.astype(jnp.int32)
+
+                recv_x = recv_x.at[dst_rank, safe_row].add(
+                    prepacked.send_x_by_dst_expert[src_rank, dst_rank, local_expert] * valid_recv[:, None]
+                )
+                recv_valid_count = recv_valid_count.at[dst_rank, safe_row].add(valid_i32)
+                recv_local_expert = recv_local_expert.at[dst_rank, safe_row].add(local_expert * valid_i32)
+                recv_src_rank = recv_src_rank.at[dst_rank, safe_row].add(src_rank * valid_i32)
+                recv_src_token_idx = recv_src_token_idx.at[dst_rank, safe_row].add(
+                    prepacked.send_src_token_idx_by_dst_expert[src_rank, dst_rank, local_expert] * valid_i32
+                )
+                recv_topk_slot = recv_topk_slot.at[dst_rank, safe_row].add(
+                    prepacked.send_topk_slot_by_dst_expert[src_rank, dst_rank, local_expert] * valid_i32
+                )
+                recv_router_weight = recv_router_weight.at[dst_rank, safe_row].add(
+                    prepacked.send_router_weight_by_dst_expert[src_rank, dst_rank, local_expert]
+                    * valid_recv.astype(prepacked.send_router_weight_by_dst_expert.dtype)
+                )
+
+    return MoeDispatchUpLayout(
+        recv_x,
+        recv_valid_count > 0,
+        prepacked.rows_per_expert,
+        prepacked.expert_base,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        prepacked.overflow_count,
     )
 
 

@@ -935,3 +935,58 @@
   Mosaic/Grug backend selection boundary or continue toward a true overlapped
   Mosaic dispatch/W13 implementation if avoiding the built-in collective is
   still required.
+
+### 2026-06-24 00:32 PT - Compact source/expert Mosaic dispatch substrate
+
+- Hypothesis: The prepacked Mosaic path stalls at the target shape because it
+  uses `[dst, T*K, H]` source/destination buffers. Repacking by
+  source/destination/local-expert should size capacity by source-expert
+  imbalance instead. At the target shape, the balanced group is
+  `4096 * 4 / 256 = 64` rows.
+- Changes:
+  - Added `MoeDispatchUpSourceExpertPrepackedSend` plus
+    `prepack_moe_dispatch_up_source_expert_reference` and
+    `dispatch_prepacked_moe_dispatch_up_source_expert_reference`.
+  - Added CPU tests that compact prepack reconstructs the same destination
+    layout as the original prepack and reports source-expert capacity overflow.
+  - Added compact source/expert Mosaic dispatch entrypoints and benchmark flags:
+    `--run-compact-source-expert-dispatch` and
+    `--run-compact-source-expert-dispatch-up`.
+  - Added benchmark source/expert load stats and compact capacity projections.
+- Commands:
+  - Local syntax: `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/kernels/pallas/moe_dispatch_up/reference.py lib/levanter/src/levanter/kernels/pallas/moe_dispatch_up/mosaic_gpu.py lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py`
+  - Local tests: `uv run --package marin-levanter pytest lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py -q`
+  - H128 compact dispatch+W13: `... --job-name dlwh-6597-moe-compact-source-expert-h128 -- ... --run-compact-source-expert-dispatch-up --dispatch-rows-per-program 4 --block-m 64 --bench-iters 1 --warmup-steps 1`
+  - H128 compact dispatch-only after column tiling: `... --job-name dlwh-6597-moe-compact-dispatch-h128-coltile -- ... --run-compact-source-expert-dispatch --dispatch-rows-per-program 4 --block-m 64 --bench-iters 1 --warmup-steps 1`
+  - Large compact dispatch attempts:
+    - `... --job-name dlwh-6597-moe-compact-source-expert-t4096 -- ... --run-compact-source-expert-dispatch-up --dispatch-rows-per-program 64 --skip-reference-checks`
+    - `... --job-name dlwh-6597-moe-compact-source-expert-dispatch-t4096 -- ... --run-compact-source-expert-dispatch --dispatch-rows-per-program 64 --skip-reference-checks`
+    - `... --job-name dlwh-6597-moe-compact-source-expert-dispatch-t4096-rpp8-cap80 -- ... --run-compact-source-expert-dispatch --source-expert-capacity 80 --dispatch-rows-per-program 8 --skip-reference-checks`
+    - `... --job-name dlwh-6597-moe-compact-dispatch-t4096-rpp1-cap80-coltile -- ... --run-compact-source-expert-dispatch --source-expert-capacity 80 --dispatch-rows-per-program 1 --skip-reference-checks`
+- Result:
+  - Local kernel tests: `13 passed`.
+  - H128 compact dispatch+W13: ready-count and ready-block-count errors `0`,
+    W13 max abs error `0.0078125`, steady `1.477 ms`.
+  - H128 compact dispatch-only: exact `recv_x`, metadata, ready-count, and
+    ready-block-count parity. Before column tiling, steady `1.577 ms`; after
+    column tiling, steady `1.748 ms`.
+  - Target-shape source/expert stats:
+    - balanced `64.000`, mean `64.000`, max `64`, p95 `64`, p99 `64`.
+    - old full send slots/source: `131072`.
+    - compact 1.25x source/expert capacity: cap `80`, overflow `0`,
+      slots/source `20480` (6.4x fewer source slots).
+  - Large barriered compact Mosaic attempts still did not emit first timing:
+    the dispatch+W13 rpp64 job was killed after about 9 minutes, dispatch-only
+    rpp64 after about 7 minutes, dispatch-only rpp8/cap80 after about 7
+    minutes, and dispatch-only rpp1/cap80/column-tiled after about 7 minutes.
+- Interpretation: The compact source/expert representation is the right data
+  model and is validated on small H100x8 correctness runs. It fixes the shape
+  economics: target-shape capacity should be source/expert based, and 25% buffer
+  is zero-overflow in this harness. The remaining failure is in the barriered
+  Mosaic copy kernel shape/schedule, not in the compact layout. The next kernel
+  iteration should stop zeroing the full receive capacity and stop using a
+  global all-program barrier before readiness; instead copy only valid compact
+  rows, mark valid/ready metadata, and let W13 consume ready groups/blocks.
+- Next action: Replace the barriered compact dispatch with a producer-marked
+  valid/ready schedule and then merge W13 consumption into the same Mosaic
+  kernel or ordered ring pipeline.

@@ -29,14 +29,17 @@ from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local,
+    dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local,
     compute_moe_up_mosaic_gpu_local,
     compute_moe_up_mosaic_gpu_block_ready_local,
     compute_moe_up_mosaic_gpu_ready_local,
 )
 from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
+    MoeDispatchUpSourceExpertPrepackedSend,
     dispatch_prepacked_moe_dispatch_up_reference,
     compute_moe_up_from_layout_reference,
+    prepack_moe_dispatch_up_source_expert_reference,
     prepack_moe_dispatch_up_reference,
 )
 
@@ -672,6 +675,183 @@ def _pallas_fused_dispatch_block_ready_w13_fn(
     )
 
 
+def _compact_source_expert_args(
+    mesh: Mesh, prepacked: MoeDispatchUpSourceExpertPrepackedSend
+) -> tuple[jax.Array, ...]:
+    return (
+        _sharded(mesh, prepacked.send_x_by_dst_expert, P("expert", None, None, None, None)),
+        _sharded(mesh, prepacked.send_src_token_idx_by_dst_expert, P("expert", None, None, None)),
+        _sharded(mesh, prepacked.send_topk_slot_by_dst_expert, P("expert", None, None, None)),
+        _sharded(mesh, prepacked.send_router_weight_by_dst_expert, P("expert", None, None, None)),
+        _sharded(mesh, prepacked.send_row_base_by_dst_expert, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_count_by_dst_expert, P("expert", None, None)),
+        _sharded(mesh, prepacked.rows_per_expert, P("expert", None)),
+        _sharded(mesh, prepacked.expert_base, P("expert", None)),
+        _sharded(mesh, prepacked.recv_source_expert_base, P("expert", None, None)),
+        _sharded(mesh, prepacked.recv_source_expert_count, P("expert", None, None)),
+    )
+
+
+def _pallas_compact_source_expert_dispatch_up_fn(
+    mesh: Mesh,
+    args,
+    *,
+    recv_capacity: int,
+    ready_block_m: int,
+    rows_per_program: int,
+) -> Callable[..., tuple[jax.Array, jax.Array, jax.Array]]:
+    def local_dispatch_up(
+        send_x_by_dst_expert,
+        send_src_token_idx_by_dst_expert,
+        send_topk_slot_by_dst_expert,
+        send_router_weight_by_dst_expert,
+        send_row_base_by_dst_expert,
+        send_count_by_dst_expert,
+        rows_per_expert,
+        expert_base,
+        recv_source_expert_base,
+        recv_source_expert_count,
+        local_w_gate_up,
+    ):
+        compact_prepacked = MoeDispatchUpSourceExpertPrepackedSend(
+            jnp.squeeze(send_x_by_dst_expert, axis=0),
+            jnp.squeeze(send_src_token_idx_by_dst_expert, axis=0),
+            jnp.squeeze(send_topk_slot_by_dst_expert, axis=0),
+            jnp.squeeze(send_router_weight_by_dst_expert, axis=0),
+            jnp.squeeze(send_row_base_by_dst_expert, axis=0),
+            jnp.squeeze(send_count_by_dst_expert, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            jnp.squeeze(expert_base, axis=0),
+            jnp.squeeze(recv_source_expert_base, axis=0),
+            jnp.squeeze(recv_source_expert_count, axis=0),
+            jnp.array(0, dtype=jnp.int32),
+        )
+        layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+            compact_prepacked,
+            axis_name="expert",
+            recv_capacity=recv_capacity,
+            ready_block_m=ready_block_m,
+            rows_per_program=rows_per_program,
+        )
+        h = compute_moe_up_mosaic_gpu_block_ready_local(
+            layout.recv_x,
+            layout.rows_per_expert,
+            ready_block_count,
+            jnp.squeeze(local_w_gate_up, axis=0),
+            block_m=args.block_m,
+            block_n=args.block_n,
+            block_k=args.block_k,
+            max_concurrent_steps=args.num_stages,
+            grid_block_n=1,
+        )
+        return h[None, ...], ready_count[None, ...], ready_block_count[None, ...]
+
+    return jax.jit(
+        shard_map(
+            local_dispatch_up,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None, None),
+            ),
+            out_specs=(P("expert", None, None), P("expert", None, None), P("expert", None)),
+            check_vma=False,
+        )
+    )
+
+
+def _pallas_compact_source_expert_dispatch_fn(
+    mesh: Mesh,
+    *,
+    recv_capacity: int,
+    ready_block_m: int,
+    rows_per_program: int,
+) -> Callable[..., tuple[jax.Array, ...]]:
+    def local_dispatch(
+        send_x_by_dst_expert,
+        send_src_token_idx_by_dst_expert,
+        send_topk_slot_by_dst_expert,
+        send_router_weight_by_dst_expert,
+        send_row_base_by_dst_expert,
+        send_count_by_dst_expert,
+        rows_per_expert,
+        expert_base,
+        recv_source_expert_base,
+        recv_source_expert_count,
+    ):
+        compact_prepacked = MoeDispatchUpSourceExpertPrepackedSend(
+            jnp.squeeze(send_x_by_dst_expert, axis=0),
+            jnp.squeeze(send_src_token_idx_by_dst_expert, axis=0),
+            jnp.squeeze(send_topk_slot_by_dst_expert, axis=0),
+            jnp.squeeze(send_router_weight_by_dst_expert, axis=0),
+            jnp.squeeze(send_row_base_by_dst_expert, axis=0),
+            jnp.squeeze(send_count_by_dst_expert, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            jnp.squeeze(expert_base, axis=0),
+            jnp.squeeze(recv_source_expert_base, axis=0),
+            jnp.squeeze(recv_source_expert_count, axis=0),
+            jnp.array(0, dtype=jnp.int32),
+        )
+        layout, ready_count, ready_block_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+            compact_prepacked,
+            axis_name="expert",
+            recv_capacity=recv_capacity,
+            ready_block_m=ready_block_m,
+            rows_per_program=rows_per_program,
+        )
+        return (
+            layout.recv_x[None, ...],
+            layout.recv_valid[None, ...],
+            layout.recv_local_expert[None, ...],
+            layout.recv_src_rank[None, ...],
+            layout.recv_src_token_idx[None, ...],
+            layout.recv_topk_slot[None, ...],
+            layout.recv_router_weight[None, ...],
+            ready_count[None, ...],
+            ready_block_count[None, ...],
+        )
+
+    return jax.jit(
+        shard_map(
+            local_dispatch,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None),
+            ),
+            check_vma=False,
+        )
+    )
+
+
 def _pallas_ready_w13_silu_fn(mesh: Mesh, args) -> Callable[..., jax.Array]:
     def local_w13(recv_x, ready_count, local_w_gate_up):
         h = compute_moe_up_mosaic_gpu_ready_local(
@@ -1208,6 +1388,41 @@ def _resolve_send_capacity(args) -> tuple[int, float | None]:
     return args.tokens_per_rank * args.top_k, None
 
 
+def _resolve_source_expert_capacity(args) -> tuple[int | None, float | None]:
+    if args.source_expert_capacity is not None and args.source_expert_capacity_factor is not None:
+        raise ValueError("Specify at most one of --source-expert-capacity and --source-expert-capacity-factor")
+    if args.source_expert_capacity is not None:
+        return args.source_expert_capacity, None
+    if args.source_expert_capacity_factor is not None:
+        balanced = args.tokens_per_rank * args.top_k / (args.ep_size * args.experts_per_rank)
+        return max(1, math.ceil(args.source_expert_capacity_factor * balanced)), args.source_expert_capacity_factor
+    return None, None
+
+
+def _print_source_expert_load_stats(prepacked, args, *, send_capacity: int) -> None:
+    counts = np.asarray(jax.device_get(prepacked.send_expert_count_by_dst))
+    balanced = args.tokens_per_rank * args.top_k / (args.ep_size * args.experts_per_rank)
+    print(
+        "source_expert_loads: "
+        f"balanced={balanced:.3f} "
+        f"mean={float(np.mean(counts)):.3f} "
+        f"max={int(np.max(counts))} "
+        f"p95={float(np.percentile(counts, 95)):.1f} "
+        f"p99={float(np.percentile(counts, 99)):.1f}"
+    )
+    current_slots_per_source = args.ep_size * send_capacity
+    compact_parts = []
+    for factor in (1.25, 1.5, 2.0):
+        capacity = max(1, math.ceil(factor * balanced))
+        overflow = int(np.maximum(counts - capacity, 0).sum())
+        slots_per_source = args.ep_size * args.experts_per_rank * capacity
+        compact_parts.append(f"{factor:g}x:cap={capacity},overflow={overflow},slots/source={slots_per_source}")
+    print(
+        "source_expert_compact_capacity: "
+        f"current_slots/source={current_slots_per_source} " + " ".join(compact_parts)
+    )
+
+
 def _run_synthetic_layout_benchmark(args, dtype: jnp.dtype, devices: list[jax.Device]) -> None:
     if len(devices) < args.ep_size:
         raise RuntimeError(f"Need at least {args.ep_size} local devices, found {len(devices)}")
@@ -1404,6 +1619,16 @@ def main() -> None:
         help="Benchmark one jitted ready-dispatch plus block-ready Mosaic GPU W13/SiLU path.",
     )
     parser.add_argument(
+        "--run-compact-source-expert-dispatch",
+        action="store_true",
+        help="Benchmark compact source/expert Mosaic dispatch without W13/SiLU.",
+    )
+    parser.add_argument(
+        "--run-compact-source-expert-dispatch-up",
+        action="store_true",
+        help="Benchmark compact source/expert Mosaic dispatch followed by block-ready W13/SiLU.",
+    )
+    parser.add_argument(
         "--synthetic-layout",
         action="store_true",
         help="Skip routing/prepack and benchmark W13/SiLU on a synthetic expert-major layout.",
@@ -1437,6 +1662,18 @@ def main() -> None:
             "Capacity multiplier for balanced T*K/EP rows per source/destination pair. "
             "Defaults to T*K for conservative skew tolerance."
         ),
+    )
+    parser.add_argument(
+        "--source-expert-capacity",
+        type=int,
+        default=None,
+        help="Rows per source/destination/local-expert compact send group. Overrides factor.",
+    )
+    parser.add_argument(
+        "--source-expert-capacity-factor",
+        type=float,
+        default=None,
+        help="Compact send capacity multiplier for balanced T*K/(EP*experts_per_rank) source/expert rows.",
     )
     parser.add_argument(
         "--w13-impl",
@@ -1546,6 +1783,7 @@ def main() -> None:
                 send_capacity=send_capacity,
             ),
         )
+        _print_source_expert_load_stats(prepacked, args, send_capacity=send_capacity)
     ref_dispatch_steady_ms = None
     ref_w13_steady_ms = None
     ref_layout = None
@@ -1600,6 +1838,8 @@ def main() -> None:
         and not args.run_padded_a2a_dispatch_up
         and not args.run_ring_gather_dispatch_up
         and not args.run_pallas_fused_dispatch_up
+        and not args.run_compact_source_expert_dispatch
+        and not args.run_compact_source_expert_dispatch_up
     ):
         return
     if len(devices) < args.ep_size:
@@ -1896,6 +2136,215 @@ def main() -> None:
                 )
             if ring_gather_steady_ms is not None:
                 print(f"dispatch_up/ring_gather_ragged_dot_end_to_end_ms: {ring_gather_steady_ms:.3f}")
+
+        if args.run_compact_source_expert_dispatch:
+            source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)
+            compact_prepacked, _ = _time_block(
+                "prepack/source_expert_reference",
+                lambda: prepack_moe_dispatch_up_source_expert_reference(
+                    x_by_rank,
+                    expert_ids,
+                    router_weights,
+                    num_experts=num_experts,
+                    recv_capacity=recv_capacity,
+                    source_expert_capacity=source_expert_capacity,
+                ),
+            )
+            inferred_source_expert_capacity = compact_prepacked.send_x_by_dst_expert.shape[3]
+            if source_expert_capacity_factor is None:
+                print(f"source_expert_capacity: {inferred_source_expert_capacity}")
+            else:
+                print(
+                    "source_expert_capacity: "
+                    f"{inferred_source_expert_capacity} from factor={source_expert_capacity_factor:g}"
+                )
+            compact_dispatch_fn = _pallas_compact_source_expert_dispatch_fn(
+                mesh,
+                recv_capacity=recv_capacity,
+                ready_block_m=args.block_m,
+                rows_per_program=args.dispatch_rows_per_program,
+            )
+            compact_dispatch_args = _compact_source_expert_args(mesh, compact_prepacked)
+
+            def run_compact_source_expert_dispatch():
+                return compact_dispatch_fn(*compact_dispatch_args)
+
+            compact_dispatch_result, _ = _time_block(
+                "dispatch/mosaic_gpu_compact_source_expert",
+                run_compact_source_expert_dispatch,
+            )
+            (
+                compact_recv_x,
+                compact_recv_valid,
+                compact_recv_local_expert,
+                compact_recv_src_rank,
+                compact_recv_src_token_idx,
+                compact_recv_topk_slot,
+                compact_recv_router_weight,
+                compact_ready_count,
+                compact_ready_block_count,
+            ) = compact_dispatch_result
+            compact_dispatch_steady_ms = None
+            if args.bench_iters > 0:
+                compact_dispatch_steady_ms = _measure_steady_state(
+                    "dispatch/mosaic_gpu_compact_source_expert",
+                    run_compact_source_expert_dispatch,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            if prepacked is not None:
+                expected_ready_count = _sharded(
+                    mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
+                )
+                compact_ready_count_err = int(jnp.max(jnp.abs(compact_ready_count - expected_ready_count)))
+                print(f"dispatch_compact_source_expert_ready_count_max_abs_error: {compact_ready_count_err}")
+                if compact_ready_count_err != 0:
+                    raise AssertionError(
+                        f"compact source/expert ready-count mismatch: max_abs={compact_ready_count_err}"
+                    )
+                expected_ready_block_count = _sharded(
+                    mesh, _expected_ready_block_count(prepacked, recv_capacity, args.block_m), P("expert", None)
+                )
+                compact_ready_block_count_err = int(
+                    jnp.max(jnp.abs(compact_ready_block_count - expected_ready_block_count))
+                )
+                print(
+                    f"dispatch_compact_source_expert_ready_block_count_max_abs_error: {compact_ready_block_count_err}"
+                )
+                if compact_ready_block_count_err != 0:
+                    raise AssertionError(
+                        "compact source/expert ready-block-count mismatch: " f"max_abs={compact_ready_block_count_err}"
+                    )
+            if ref_layout is None:
+                print("dispatch/mosaic_gpu_compact_source_expert/reference_check: skipped")
+            else:
+                recv_x_err = float(
+                    jnp.max(jnp.abs(compact_recv_x.astype(jnp.float32) - ref_layout.recv_x.astype(jnp.float32)))
+                )
+                print(f"dispatch_mosaic_gpu_compact_source_expert_recv_x_max_abs_error: {recv_x_err:.6g}")
+                _check_error("dispatch_mosaic_gpu_compact_source_expert_recv_x_max_abs_error", recv_x_err, 0.0)
+                for label, actual, expected in (
+                    ("recv_valid", compact_recv_valid, ref_layout.recv_valid),
+                    ("recv_local_expert", compact_recv_local_expert, ref_layout.recv_local_expert),
+                    ("recv_src_rank", compact_recv_src_rank, ref_layout.recv_src_rank),
+                    ("recv_src_token_idx", compact_recv_src_token_idx, ref_layout.recv_src_token_idx),
+                    ("recv_topk_slot", compact_recv_topk_slot, ref_layout.recv_topk_slot),
+                ):
+                    err = int(jnp.max(jnp.abs(actual.astype(jnp.int32) - expected.astype(jnp.int32))))
+                    print(f"dispatch_mosaic_gpu_compact_source_expert_{label}_max_abs_error: {err}")
+                    if err != 0:
+                        raise AssertionError(f"compact source/expert {label} mismatch: max_abs={err}")
+                router_weight_err = float(
+                    jnp.max(
+                        jnp.abs(
+                            compact_recv_router_weight.astype(jnp.float32)
+                            - ref_layout.recv_router_weight.astype(jnp.float32)
+                        )
+                    )
+                )
+                print(
+                    "dispatch_mosaic_gpu_compact_source_expert_recv_router_weight_max_abs_error: "
+                    f"{router_weight_err:.6g}"
+                )
+                _check_error(
+                    "dispatch_mosaic_gpu_compact_source_expert_recv_router_weight_max_abs_error",
+                    router_weight_err,
+                    0.0,
+                )
+            if compact_dispatch_steady_ms is not None:
+                print(f"dispatch/mosaic_gpu_compact_source_expert_end_to_end_ms: {compact_dispatch_steady_ms:.3f}")
+
+        if args.run_compact_source_expert_dispatch_up:
+            source_expert_capacity, source_expert_capacity_factor = _resolve_source_expert_capacity(args)
+            compact_prepacked, _ = _time_block(
+                "prepack/source_expert_reference",
+                lambda: prepack_moe_dispatch_up_source_expert_reference(
+                    x_by_rank,
+                    expert_ids,
+                    router_weights,
+                    num_experts=num_experts,
+                    recv_capacity=recv_capacity,
+                    source_expert_capacity=source_expert_capacity,
+                ),
+            )
+            inferred_source_expert_capacity = compact_prepacked.send_x_by_dst_expert.shape[3]
+            if source_expert_capacity_factor is None:
+                print(f"source_expert_capacity: {inferred_source_expert_capacity}")
+            else:
+                print(
+                    "source_expert_capacity: "
+                    f"{inferred_source_expert_capacity} from factor={source_expert_capacity_factor:g}"
+                )
+            compact_dispatch_up_fn = _pallas_compact_source_expert_dispatch_up_fn(
+                mesh,
+                args,
+                recv_capacity=recv_capacity,
+                ready_block_m=args.block_m,
+                rows_per_program=args.dispatch_rows_per_program,
+            )
+            compact_dispatch_up_args = (
+                *_compact_source_expert_args(mesh, compact_prepacked),
+                _sharded(mesh, w_gate_up, P("expert", None, None, None)),
+            )
+
+            def run_compact_source_expert_dispatch_up():
+                return compact_dispatch_up_fn(*compact_dispatch_up_args)
+
+            compact_result, _ = _time_block(
+                "dispatch_up/mosaic_gpu_compact_source_expert_block_ready",
+                run_compact_source_expert_dispatch_up,
+            )
+            compact_h, compact_ready_count, compact_ready_block_count = compact_result
+            compact_steady_ms = None
+            if args.bench_iters > 0:
+                compact_steady_ms = _measure_steady_state(
+                    "dispatch_up/mosaic_gpu_compact_source_expert_block_ready",
+                    run_compact_source_expert_dispatch_up,
+                    warmup_steps=args.warmup_steps,
+                    bench_iters=args.bench_iters,
+                )
+            if prepacked is not None:
+                expected_ready_count = _sharded(
+                    mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
+                )
+                compact_ready_count_err = int(jnp.max(jnp.abs(compact_ready_count - expected_ready_count)))
+                print(f"dispatch_up_compact_source_expert_ready_count_max_abs_error: {compact_ready_count_err}")
+                if compact_ready_count_err != 0:
+                    raise AssertionError(
+                        f"compact source/expert ready-count mismatch: max_abs={compact_ready_count_err}"
+                    )
+                expected_ready_block_count = _sharded(
+                    mesh, _expected_ready_block_count(prepacked, recv_capacity, args.block_m), P("expert", None)
+                )
+                compact_ready_block_count_err = int(
+                    jnp.max(jnp.abs(compact_ready_block_count - expected_ready_block_count))
+                )
+                print(
+                    "dispatch_up_compact_source_expert_ready_block_count_max_abs_error: "
+                    f"{compact_ready_block_count_err}"
+                )
+                if compact_ready_block_count_err != 0:
+                    raise AssertionError(
+                        "compact source/expert ready-block-count mismatch: " f"max_abs={compact_ready_block_count_err}"
+                    )
+            if ref_h is None:
+                print("dispatch_up/mosaic_gpu_compact_source_expert_block_ready/reference_check: skipped")
+            else:
+                compact_err = jnp.max(jnp.abs(compact_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
+                compact_err_float = float(compact_err)
+                print(
+                    f"dispatch_up_mosaic_gpu_compact_source_expert_block_ready_max_abs_error: {compact_err_float:.6g}"
+                )
+                _print_error_summary("dispatch_up_mosaic_gpu_compact_source_expert_block_ready", compact_h, ref_h)
+                _check_error(
+                    "dispatch_up_mosaic_gpu_compact_source_expert_block_ready_max_abs_error",
+                    compact_err_float,
+                    args.w13_atol,
+                )
+            if compact_steady_ms is not None:
+                print(
+                    f"dispatch_up/mosaic_gpu_compact_source_expert_block_ready_end_to_end_ms: {compact_steady_ms:.3f}"
+                )
 
         if args.run_pallas_fused_dispatch_up:
             if prepacked is None:

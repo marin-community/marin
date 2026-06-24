@@ -16,6 +16,7 @@ from jax.experimental.pallas.ops.gpu.ragged_dot_mgpu import GroupInfo
 from levanter.kernels.pallas.moe_dispatch_up.errors import MosaicGpuUnsupportedError
 from levanter.kernels.pallas.moe_dispatch_up.reference import (
     MoeDispatchUpLayout,
+    MoeDispatchUpSourceExpertPrepackedSend,
     MoeDispatchUpPrepackedSend,
     dispatch_prepacked_moe_dispatch_up_reference,
 )
@@ -958,6 +959,253 @@ def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_direct_ready_local(
         expert_base,
         recv_source_expert_base,
         recv_source_expert_count,
+        axis_name=axis_name,
+        recv_capacity=recv_capacity,
+        ready_block_m=ready_block_m,
+        rows_per_program=rows_per_program,
+    )
+
+
+def _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+    send_x_by_dst_expert: jax.Array,
+    send_src_token_idx_by_dst_expert: jax.Array,
+    send_topk_slot_by_dst_expert: jax.Array,
+    send_router_weight_by_dst_expert: jax.Array,
+    send_row_base_by_dst_expert: jax.Array,
+    send_count_by_dst_expert: jax.Array,
+    rows_per_expert: jax.Array,
+    expert_base: jax.Array,
+    recv_source_expert_base: jax.Array,
+    recv_source_expert_count: jax.Array,
+    *,
+    axis_name: str,
+    recv_capacity: int,
+    ready_block_m: int = 64,
+    rows_per_program: int = 1,
+) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
+    """Compact source/expert remote dispatch with readiness metadata."""
+
+    if rows_per_program < 1:
+        raise ValueError(f"rows_per_program must be positive, got {rows_per_program}")
+    ep_size, local_experts, source_expert_capacity, hidden = send_x_by_dst_expert.shape
+    copy_cols = 256 if hidden >= 256 and hidden % 256 == 0 else hidden
+    recv_blocks = math.ceil(recv_capacity / ready_block_m)
+    copy_chunks = math.ceil(source_expert_capacity / rows_per_program)
+    zero_programs = math.ceil(recv_capacity / rows_per_program)
+    copy_programs = local_experts * copy_chunks
+    grid_rows = max(zero_programs, copy_programs, local_experts, recv_blocks)
+    ready_rows = jnp.minimum(jnp.sum(rows_per_expert, dtype=jnp.int32), jnp.int32(recv_capacity))
+
+    def kernel_body(
+        send_x_ref,
+        send_src_token_idx_ref,
+        send_topk_slot_ref,
+        send_router_weight_ref,
+        send_row_base_ref,
+        send_count_ref,
+        recv_source_expert_base_ref,
+        recv_source_expert_count_ref,
+        ready_rows_ref,
+        recv_x_ref,
+        recv_valid_count_ref,
+        recv_local_expert_ref,
+        recv_src_rank_ref,
+        recv_src_token_idx_ref,
+        recv_topk_slot_ref,
+        recv_router_weight_ref,
+        ready_count_ref,
+        ready_block_count_ref,
+    ):
+        recv_sem = pl.get_global(plgpu.SemaphoreType.REGULAR)
+        src_rank = lax.axis_index(axis_name)
+        dst_rank = pl.program_id(0)
+        row_or_group = pl.program_id(1)
+
+        @pl.when((dst_rank == 0) & (row_or_group < zero_programs))
+        def _zero_recv_rows():
+            row_start = row_or_group * rows_per_program
+            for row_offset in range(rows_per_program):
+                recv_row = row_start + row_offset
+
+                @pl.when(recv_row < recv_capacity)
+                def _zero_recv_row():
+                    for col_start in range(0, hidden, copy_cols):
+                        recv_x_ref.at[recv_row, pl.ds(col_start, copy_cols)][...] = jnp.zeros(
+                            (copy_cols,), dtype=recv_x_ref.dtype
+                        )
+                    recv_valid_count_ref[recv_row] = jnp.int32(0)
+                    recv_local_expert_ref[recv_row] = jnp.int32(0)
+                    recv_src_rank_ref[recv_row] = jnp.int32(0)
+                    recv_src_token_idx_ref[recv_row] = jnp.int32(0)
+                    recv_topk_slot_ref[recv_row] = jnp.int32(0)
+                    recv_router_weight_ref[recv_row] = jnp.zeros((), dtype=recv_router_weight_ref.dtype)
+
+        @pl.when(row_or_group < local_experts)
+        def _zero_ready_count():
+            ready_count_ref[dst_rank, row_or_group] = jnp.int32(0)
+
+        @pl.when((dst_rank == 0) & (row_or_group < recv_blocks))
+        def _zero_ready_block_count():
+            ready_block_count_ref[row_or_group] = jnp.int32(0)
+
+        pl.semaphore_signal(recv_sem, device_id=dst_rank)
+        pl.semaphore_wait(recv_sem, value=ep_size * grid_rows, decrement=False)
+
+        remote_recv_x = plgpu.remote_ref(recv_x_ref, jnp.int32(dst_rank))
+        remote_recv_valid_count = plgpu.remote_ref(recv_valid_count_ref, jnp.int32(dst_rank))
+        remote_recv_local_expert = plgpu.remote_ref(recv_local_expert_ref, jnp.int32(dst_rank))
+        remote_recv_src_rank = plgpu.remote_ref(recv_src_rank_ref, jnp.int32(dst_rank))
+        remote_recv_src_token_idx = plgpu.remote_ref(recv_src_token_idx_ref, jnp.int32(dst_rank))
+        remote_recv_topk_slot = plgpu.remote_ref(recv_topk_slot_ref, jnp.int32(dst_rank))
+        remote_recv_router_weight = plgpu.remote_ref(recv_router_weight_ref, jnp.int32(dst_rank))
+
+        @pl.when(row_or_group < copy_programs)
+        def _copy_source_expert_rows():
+            local_expert = row_or_group // copy_chunks
+            chunk = row_or_group - local_expert * copy_chunks
+            row_start = chunk * rows_per_program
+            count = send_count_ref[dst_rank, local_expert]
+            dst_base = send_row_base_ref[dst_rank, local_expert]
+
+            for row_offset in range(rows_per_program):
+                source_expert_row = row_start + row_offset
+                safe_row = jnp.minimum(source_expert_row, jnp.int32(source_expert_capacity - 1))
+                dst_row = dst_base + source_expert_row
+                send_valid = (source_expert_row < count) & (dst_row < recv_capacity)
+
+                @pl.when(send_valid)
+                def _copy_row_to_recv():
+                    for col_start in range(0, hidden, copy_cols):
+                        remote_recv_x.at[dst_row, pl.ds(col_start, copy_cols)][...] = send_x_ref.at[
+                            dst_rank, local_expert, safe_row, pl.ds(col_start, copy_cols)
+                        ][...]
+                    remote_recv_valid_count[dst_row] = jnp.int32(1)
+                    remote_recv_local_expert[dst_row] = local_expert
+                    remote_recv_src_rank[dst_row] = src_rank
+                    remote_recv_src_token_idx[dst_row] = send_src_token_idx_ref[dst_rank, local_expert, safe_row]
+                    remote_recv_topk_slot[dst_row] = send_topk_slot_ref[dst_rank, local_expert, safe_row]
+                    remote_recv_router_weight[dst_row] = send_router_weight_ref[dst_rank, local_expert, safe_row]
+
+        pl.semaphore_signal(recv_sem, device_id=dst_rank)
+        pl.semaphore_wait(recv_sem, value=2 * ep_size * grid_rows, decrement=False)
+
+        @pl.when(row_or_group < local_experts)
+        def _mark_ready_count():
+            base = recv_source_expert_base_ref[dst_rank, row_or_group]
+            count = recv_source_expert_count_ref[dst_rank, row_or_group]
+            remaining_capacity = jnp.maximum(jnp.int32(recv_capacity) - base, jnp.int32(0))
+            ready_count_ref[dst_rank, row_or_group] = jnp.minimum(count, remaining_capacity)
+
+        @pl.when((dst_rank == 0) & (row_or_group < recv_blocks))
+        def _mark_ready_block_count():
+            block_start = row_or_group * ready_block_m
+            remaining_rows = jnp.maximum(ready_rows_ref[()] - block_start, jnp.int32(0))
+            ready_block_count_ref[row_or_group] = jnp.minimum(remaining_rows, jnp.int32(ready_block_m))
+
+    (
+        recv_x,
+        recv_valid_count,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        ready_count,
+        ready_block_count,
+    ) = plgpu.kernel(
+        kernel_body,
+        out_shape=[
+            jax.ShapeDtypeStruct((recv_capacity, hidden), send_x_by_dst_expert.dtype),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), jnp.int32),
+            jax.ShapeDtypeStruct((recv_capacity,), send_router_weight_by_dst_expert.dtype),
+            jax.ShapeDtypeStruct((ep_size, local_experts), jnp.int32),
+            jax.ShapeDtypeStruct((recv_blocks,), jnp.int32),
+        ],
+        grid=(ep_size, grid_rows),
+        grid_names=("dst", "row_or_group"),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )(
+        send_x_by_dst_expert,
+        send_src_token_idx_by_dst_expert,
+        send_topk_slot_by_dst_expert,
+        send_router_weight_by_dst_expert,
+        send_row_base_by_dst_expert,
+        send_count_by_dst_expert,
+        recv_source_expert_base,
+        recv_source_expert_count,
+        ready_rows,
+    )
+    overflow_count = jnp.maximum(jnp.sum(rows_per_expert, dtype=jnp.int32) - recv_capacity, 0)
+    layout = MoeDispatchUpLayout(
+        recv_x,
+        recv_valid_count > 0,
+        rows_per_expert,
+        expert_base,
+        recv_local_expert,
+        recv_src_rank,
+        recv_src_token_idx,
+        recv_topk_slot,
+        recv_router_weight,
+        overflow_count,
+    )
+    return layout, ready_count, ready_block_count
+
+
+def dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+    prepacked: MoeDispatchUpSourceExpertPrepackedSend,
+    *,
+    axis_name: str,
+    recv_capacity: int,
+    ready_block_m: int = 64,
+    rows_per_program: int = 1,
+) -> tuple[MoeDispatchUpLayout, jax.Array, jax.Array]:
+    """Compact source/expert dispatch plus source/expert and block ready counts."""
+
+    _require_mgpu_runtime()
+    if prepacked.send_x_by_dst_expert.ndim != 4:
+        raise ValueError(
+            "local compact send_x_by_dst_expert must have shape [EP, EL, C, D], "
+            f"got {prepacked.send_x_by_dst_expert.shape}"
+        )
+    ep_size, local_experts, _capacity, _hidden = prepacked.send_x_by_dst_expert.shape
+    if prepacked.send_count_by_dst_expert.shape != (ep_size, local_experts):
+        raise ValueError(
+            "local send_count_by_dst_expert must have shape "
+            f"{(ep_size, local_experts)}, got {prepacked.send_count_by_dst_expert.shape}"
+        )
+    if prepacked.send_row_base_by_dst_expert.shape != (ep_size, local_experts):
+        raise ValueError(
+            "local send_row_base_by_dst_expert must have shape "
+            f"{(ep_size, local_experts)}, got {prepacked.send_row_base_by_dst_expert.shape}"
+        )
+    if prepacked.recv_source_expert_base.shape != (ep_size, local_experts):
+        raise ValueError(
+            "local recv_source_expert_base must have shape "
+            f"{(ep_size, local_experts)}, got {prepacked.recv_source_expert_base.shape}"
+        )
+    if prepacked.recv_source_expert_count.shape != (ep_size, local_experts):
+        raise ValueError(
+            "local recv_source_expert_count must have shape "
+            f"{(ep_size, local_experts)}, got {prepacked.recv_source_expert_count.shape}"
+        )
+
+    return _dispatch_prepacked_moe_dispatch_up_mosaic_gpu_source_expert_local(
+        prepacked.send_x_by_dst_expert,
+        prepacked.send_src_token_idx_by_dst_expert,
+        prepacked.send_topk_slot_by_dst_expert,
+        prepacked.send_router_weight_by_dst_expert,
+        prepacked.send_row_base_by_dst_expert,
+        prepacked.send_count_by_dst_expert,
+        prepacked.rows_per_expert,
+        prepacked.expert_base,
+        prepacked.recv_source_expert_base,
+        prepacked.recv_source_expert_count,
         axis_name=axis_name,
         recv_capacity=recv_capacity,
         ready_block_m=ready_block_m,
