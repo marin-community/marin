@@ -386,3 +386,32 @@
 - Next action: Add the Mosaic source/expert ready dispatch variant, validate it
   against the existing layout reference, then attach W13 scheduling to those
   ready ranges.
+
+### 2026-06-24 - Scratch-ready Pallas dispatch
+
+- Hypothesis: A Pallas scratch dispatch variant can expose
+  `ready_count[src_rank, local_expert]` matching the clipped source/expert
+  receive ranges. This is the producer-side contract needed before W13 can wait
+  on source/expert readiness instead of full-buffer completion.
+- Commands:
+  - H128 smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-dispatch-scratch-ready-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --bench-iters 1 --warmup-steps 1`
+  - H2560 relevant-shape smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-dispatch-scratch-ready-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --bench-iters 2 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh. Both runs use Grug-truncated weights and 1.25 capacity factor
+  (`recv_capacity=40` for `T/rank=8`, top-k 4).
+- Result:
+  - H128: dispatch max error 0, metadata errors 0, ready-count max error 0.
+    Dispatch steady-state mean 1.689 ms versus 0.689 ms reference JIT.
+    W13/SiLU max abs error 0.0078125.
+  - H2560: dispatch max error 0, metadata errors 0, ready-count max error 0.
+    Dispatch steady-state mean 1.685 ms versus 0.782 ms reference JIT.
+    W13/SiLU steady-state mean 0.667 ms versus 8.528 ms reference JIT.
+    W13/SiLU max abs error 0.015625.
+- Interpretation: The producer side can now materialize exact source/expert
+  readiness counts on the Mosaic path. This still uses a full-kernel barrier
+  before marking ranges ready; it is not the final overlap design. The next
+  step is to replace the whole-buffer barrier with range/block-local
+  coordination, then schedule W13 over ready ranges.
+- Next action: Add a W13 consumer mode that consumes source/expert ranges from
+  `ready_count` and validate it against the current whole-buffer W13 result
+  before attempting to remove the full barrier.

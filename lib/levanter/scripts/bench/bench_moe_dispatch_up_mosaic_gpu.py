@@ -17,6 +17,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from haliax.nn.ragged_dot import ragged_dot
 from levanter.kernels.pallas.moe_dispatch_up.mosaic_gpu import (
     dispatch_prepacked_moe_dispatch_up_mosaic_gpu_local,
+    dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local,
     compute_moe_up_mosaic_gpu_local,
 )
 from levanter.kernels.pallas.moe_dispatch_up.reference import (
@@ -164,6 +165,21 @@ def _pallas_dispatch_args(mesh: Mesh, prepacked) -> tuple[jax.Array, ...]:
     )
 
 
+def _pallas_dispatch_ready_args(mesh: Mesh, prepacked) -> tuple[jax.Array, ...]:
+    return (
+        *_pallas_dispatch_args(mesh, prepacked),
+        _sharded(mesh, prepacked.send_expert_base_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.send_expert_count_by_dst, P("expert", None, None)),
+        _sharded(mesh, prepacked.recv_source_expert_base, P("expert", None, None)),
+        _sharded(mesh, prepacked.recv_source_expert_count, P("expert", None, None)),
+    )
+
+
+def _expected_ready_count(prepacked, recv_capacity: int) -> jax.Array:
+    remaining_capacity = jnp.maximum(recv_capacity - prepacked.recv_source_expert_base, 0)
+    return jnp.minimum(prepacked.recv_source_expert_count, remaining_capacity)
+
+
 def _pallas_dispatch_fn(
     mesh: Mesh,
     *,
@@ -234,6 +250,100 @@ def _pallas_dispatch_fn(
                 P("expert", None),
                 P("expert", None),
                 P("expert", None),
+            ),
+            out_specs=out_specs,
+            check_vma=False,
+        )
+    )
+    return fn
+
+
+def _pallas_dispatch_ready_fn(
+    mesh: Mesh,
+    *,
+    recv_capacity: int,
+) -> Callable[..., tuple[MoeDispatchUpLayout, jax.Array]]:
+    def local_dispatch(
+        send_x,
+        send_row,
+        send_local_expert,
+        send_src_token_idx,
+        send_topk_slot,
+        send_router_weight,
+        send_count,
+        rows_per_expert,
+        expert_base,
+        send_expert_base,
+        send_expert_count,
+        recv_source_expert_base,
+        recv_source_expert_count,
+    ):
+        layout, ready_count = dispatch_prepacked_moe_dispatch_up_mosaic_gpu_ready_local(
+            jnp.squeeze(send_x, axis=0),
+            jnp.squeeze(send_row, axis=0),
+            jnp.squeeze(send_local_expert, axis=0),
+            jnp.squeeze(send_src_token_idx, axis=0),
+            jnp.squeeze(send_topk_slot, axis=0),
+            jnp.squeeze(send_router_weight, axis=0),
+            jnp.squeeze(send_count, axis=0),
+            jnp.squeeze(rows_per_expert, axis=0),
+            jnp.squeeze(expert_base, axis=0),
+            jnp.squeeze(send_expert_base, axis=0),
+            jnp.squeeze(send_expert_count, axis=0),
+            jnp.squeeze(recv_source_expert_base, axis=0),
+            jnp.squeeze(recv_source_expert_count, axis=0),
+            axis_name="expert",
+            recv_capacity=recv_capacity,
+        )
+        return (
+            MoeDispatchUpLayout(
+                layout.recv_x[None, ...],
+                layout.recv_valid[None, ...],
+                layout.rows_per_expert[None, ...],
+                layout.expert_base[None, ...],
+                layout.recv_local_expert[None, ...],
+                layout.recv_src_rank[None, ...],
+                layout.recv_src_token_idx[None, ...],
+                layout.recv_topk_slot[None, ...],
+                layout.recv_router_weight[None, ...],
+                layout.overflow_count[None],
+            ),
+            ready_count[None, ...],
+        )
+
+    out_specs = (
+        MoeDispatchUpLayout(
+            P("expert", None, None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert"),
+        ),
+        P("expert", None, None),
+    )
+    fn = jax.jit(
+        shard_map(
+            local_dispatch,
+            mesh=mesh,
+            in_specs=(
+                P("expert", None, None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
+                P("expert", None, None),
             ),
             out_specs=out_specs,
             check_vma=False,
@@ -597,7 +707,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--dispatch-copy-mode",
-        choices=("scalar", "row_vector", "scratch"),
+        choices=("scalar", "row_vector", "scratch", "scratch_ready"),
         default="scratch",
         help="Mosaic GPU dispatch copy implementation.",
     )
@@ -704,15 +814,24 @@ def main() -> None:
             pallas_layout = ref_layout
             print("dispatch/mosaic_gpu: skipped; using reference layout for W13/SiLU")
         else:
-            pallas_dispatch_fn = _pallas_dispatch_fn(
-                mesh, recv_capacity=recv_capacity, copy_mode=args.dispatch_copy_mode
-            )
-            pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
+            pallas_ready_count = None
+            if args.dispatch_copy_mode == "scratch_ready":
+                pallas_dispatch_fn = _pallas_dispatch_ready_fn(mesh, recv_capacity=recv_capacity)
+                pallas_dispatch_args = _pallas_dispatch_ready_args(mesh, prepacked)
+            else:
+                pallas_dispatch_fn = _pallas_dispatch_fn(
+                    mesh, recv_capacity=recv_capacity, copy_mode=args.dispatch_copy_mode
+                )
+                pallas_dispatch_args = _pallas_dispatch_args(mesh, prepacked)
 
             def run_pallas_dispatch():
                 return pallas_dispatch_fn(*pallas_dispatch_args)
 
-            pallas_layout, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
+            pallas_dispatch_result, _ = _time_block("dispatch/mosaic_gpu", run_pallas_dispatch)
+            if args.dispatch_copy_mode == "scratch_ready":
+                pallas_layout, pallas_ready_count = pallas_dispatch_result
+            else:
+                pallas_layout = pallas_dispatch_result
             if args.bench_iters > 0:
                 pallas_dispatch_steady_ms = _measure_steady_state(
                     "dispatch/mosaic_gpu",
@@ -741,6 +860,15 @@ def main() -> None:
                 "dispatch_metadata_errors: "
                 f"valid={valid_err_int} local_expert={expert_err_int} src_rank={src_rank_err_int}"
             )
+            if pallas_ready_count is not None:
+                expected_ready_count = _sharded(
+                    mesh, _expected_ready_count(prepacked, recv_capacity), P("expert", None, None)
+                )
+                ready_count_err = jnp.max(jnp.abs(pallas_ready_count - expected_ready_count))
+                ready_count_err_int = int(ready_count_err)
+                print(f"dispatch_ready_count_max_abs_error: {ready_count_err_int}")
+                if ready_count_err_int != 0:
+                    raise AssertionError(f"dispatch ready-count mismatch: max_abs={ready_count_err_int}")
             _check_error("dispatch_max_abs_error", dispatch_err_float, args.dispatch_atol)
             if valid_err_int != 0 or expert_err_int != 0 or src_rank_err_int != 0:
                 raise AssertionError(
