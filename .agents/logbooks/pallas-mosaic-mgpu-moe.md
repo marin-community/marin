@@ -1225,3 +1225,91 @@
   substrate, but shift the next implementation attempt toward a collective
   ring/all-gather schedule or built-in GMM path that can overlap transport with
   W13 instead of relying on per-row arbitrary peer async copies.
+
+### 2026-06-24 10:55 PT - Ring/all-gather transport with Mosaic W13
+
+- Hypothesis: The compact source/expert shape fix was necessary, but the
+  arbitrary peer-copy transport is the wrong primitive. Reusing the Grug
+  ring/all-gather dispatch layout and feeding it to the tuned Mosaic W13 kernel
+  should isolate whether the collective substrate is close enough for overlap.
+- Changes:
+  - Added `--run-ring-gather-mosaic-dispatch-up` to the benchmark harness.
+  - The new path calls `_dispatch_up_ep_ring_local`, then runs
+    `compute_moe_up_mosaic_gpu_local` on `dispatch.x_dispatch` and
+    `dispatch.group_sizes`.
+  - Large candidate runs with this flag now participate in the
+    `--skip-reference-checks` prepack skip path.
+- Commands:
+  - Syntax: `uv run --package marin-levanter python -m py_compile lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py`
+  - H128 validation: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-ring-mosaic-h128 -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --run-ring-gather-mosaic-dispatch-up --bench-iters 1 --warmup-steps 1`
+  - Target comparison: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-ring-mosaic-target --env-vars JAX_OPTIMIZATION_LEVEL O1 --env-vars XLA_FLAGS "--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true" -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --run-ring-gather-dispatch-up --run-ring-gather-mosaic-dispatch-up --skip-reference-checks --bench-iters 3 --warmup-steps 1`
+- Result:
+  - H128 ring+ragged: steady `0.315 ms`, max abs error `1.90735e-06`.
+  - H128 ring+Mosaic: steady `0.359 ms`, max abs error `0.0078125`.
+  - Target ring+ragged: steady mean `1.889 ms`, min `1.843`, max `1.917`,
+    dropped `0`.
+  - Target ring+Mosaic: steady mean `2.221 ms`, min `2.199`, max `2.254`,
+    dropped `0`.
+- Interpretation: The collective/ring substrate is the right next direction.
+  Ring+Mosaic is much faster than compact peer-copy Mosaic (`3.722 ms`) and is
+  within `0.221 ms` of the `<2 ms` goal, while ring+ragged remains below target.
+  This supports moving the overlap work toward the ring/all-gather schedule
+  rather than generic arbitrary peer refs.
+- Next action: Sweep Mosaic W13 tile/schedule choices on the ring transport
+  layout; if one gets below `2 ms`, promote that as the current Mosaic
+  dispatch-up target path.
+
+### 2026-06-24 11:25 PT - Compact source/expert all-to-all Mosaic path
+
+- Direction update: The Mosaic-facing subkernel should not consume the old
+  destination-major `[dst, T*K, H]` prepack. The compact shape is
+  `[dst, local_expert, source_expert_capacity, H]` on the sender and
+  `[src, local_expert, source_expert_capacity, H]` on the receiver. For the
+  target shape, balanced source/expert rows are `4096 * 4 / 256 = 64`, so a
+  25% buffer uses `source_expert_capacity=80` instead of `T*K=16384`.
+- Changes:
+  - Added a diagnostic `--run-compact-a2a-mosaic-dispatch-up` path.
+  - The path builds the compact source/expert prepack, exchanges compact
+    groups with `lax.all_to_all`, runs Mosaic W13 over padded
+    `(source, local_expert)` groups, then scatters the compact result back to
+    the destination-major layout only for correctness comparison.
+  - Added `compute_moe_up_mosaic_gpu_source_expert_padded_local`, which indexes
+    local W13 weights by `group_id % local_experts` so compact source/expert
+    groups do not require an 8x weight materialization.
+- H128 correctness:
+  - First H128 attempt `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-h128` failed
+    before running the kernel because `_print_source_expert_load_stats` assumed
+    the old prepack type.
+  - Rerun `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-h128-capmax` succeeded with
+    inferred `source_expert_capacity=4`, zero overflow, max abs error
+    `0.0078125`, and steady `0.390 ms`.
+  - Tiny H128 has balanced source/expert rows `1` but max count `4`; therefore
+    the usual 1.25x/2x caps intentionally overflow this synthetic routing and
+    are not appropriate for correctness.
+- Target command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-compact-a2a-mosaic-target-cap80 --env-vars JAX_OPTIMIZATION_LEVEL O1 --env-vars XLA_FLAGS "--xla_gpu_triton_gemm_any=True --xla_gpu_enable_latency_hiding_scheduler=true" -- python lib/levanter/scripts/bench/bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 4096 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --recv-capacity-factor 1.25 --source-expert-capacity 80 --block-m 64 --block-n 128 --block-k 64 --num-stages 4 --grid-block-n 1 --run-compact-a2a-mosaic-dispatch-up --skip-reference-checks --bench-iters 3 --warmup-steps 1`
+- Target results:
+  - `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-target-cap80` succeeded with cap
+    `80`, zero overflow, and steady `15.351 ms`. This path scattered the
+    compact W13 output back into the old destination-major layout.
+  - `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-target-cap80-compactout` skipped
+    the destination-major scatter but still used 256 padded source/expert W13
+    groups; steady was `14.273 ms`. The scatter was not the primary issue.
+  - `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-target-cap80-merge` merged source
+    groups per local expert before W13, giving cap `80`, zero overflow, and
+    steady mean `2.706 ms` (min `2.147`, max `3.013`).
+  - `/dlwh/dlwh-6597-moe-compact-a2a-mosaic-target-cap64-merge` used 0% buffer
+    with cap `64`, zero overflow for the deterministic Grug-style routing, and
+    steady mean `2.399 ms` (min `1.864`, max `2.559`).
+- Interpretation: Compact all-to-all plus merged local-expert W13 is the right
+  compact substrate shape. It preserves the source/expert capacity win and gets
+  near the ring+Mosaic diagnostic, but it is not stably below `2 ms` without
+  overlap. Running W13 directly on 256 `(source, expert)` groups is
+  pathological; W13 should consume merged local-expert groups or a pipelined
+  equivalent.
+- Next action: Read the target result. If compact all-to-all plus compact
+  Mosaic W13 is near the ring+Mosaic `2.221 ms` result, use it as the substrate
+  for overlap. The immediate overlap implementation should keep
+  source/expert-capacity transport but feed merged local-expert W13 tiles as
+  each source chunk arrives, instead of materializing all compact chunks and
+  then launching W13.

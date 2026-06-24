@@ -1564,6 +1564,133 @@ def compute_moe_up_mosaic_gpu_local(
     return jnp.where(valid_rows[:, None], out, jnp.zeros((), dtype=out.dtype))
 
 
+def compute_moe_up_mosaic_gpu_source_expert_padded_local(
+    compact_x: jax.Array,
+    rows_per_source_expert: jax.Array,
+    w_gate_up_local: jax.Array,
+    *,
+    block_m: int = 64,
+    block_n: int = 64,
+    block_k: int = 64,
+    max_concurrent_steps: int = 2,
+    grid_block_n: int = 1,
+) -> jax.Array:
+    """Local W13/SiLU over padded source/expert groups without duplicating weights."""
+
+    _require_mgpu_runtime()
+    if compact_x.ndim != 2:
+        raise ValueError(f"compact_x must have shape [R, D], got {compact_x.shape}")
+    if rows_per_source_expert.ndim != 1:
+        raise ValueError(
+            "rows_per_source_expert must have shape [source_expert_groups], " f"got {rows_per_source_expert.shape}"
+        )
+    if w_gate_up_local.ndim != 3:
+        raise ValueError(f"w_gate_up_local must have shape [EL, D, 2I], got {w_gate_up_local.shape}")
+    recv_capacity, hidden = compact_x.shape
+    local_experts, hidden_2, gate_up = w_gate_up_local.shape
+    source_expert_groups = rows_per_source_expert.shape[0]
+    if source_expert_groups % local_experts != 0:
+        raise ValueError(
+            "source/expert group count must be divisible by local expert count; "
+            f"got {source_expert_groups} groups and {local_experts} local experts"
+        )
+    if hidden != hidden_2:
+        raise ValueError(f"compact_x hidden={hidden} must match w_gate_up_local hidden={hidden_2}")
+    if gate_up % 2 != 0:
+        raise ValueError(f"w_gate_up_local last dimension must be even, got {gate_up}")
+    if hidden % block_k != 0:
+        raise ValueError(f"hidden={hidden} must be divisible by block_k={block_k}")
+    intermediate = gate_up // 2
+
+    def kernel_body(rows_per_source_expert_gmem, compact_x_gmem, w_gate_up_gmem, out_gmem):
+        grid_m = pl.cdiv(recv_capacity, block_m) + source_expert_groups - 1
+        grid_n = pl.cdiv(intermediate, block_n)
+        grid = (grid_m * grid_n,)
+
+        @plgpu.nd_loop(grid, collective_axes="sm")
+        def mn_loop(loop_info: plgpu.NDLoopInfo):
+            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
+            group_info = GroupInfo.create(rows_per_source_expert_gmem, block_m, mi)
+            local_expert = group_info.group_id % local_experts
+
+            def acc_scope(gate_acc_ref, up_acc_ref):
+                def pipeline_body(_, x_smem, gate_w_smem, up_w_smem):
+                    plgpu.wgmma(gate_acc_ref, x_smem, gate_w_smem)
+                    plgpu.wgmma(up_acc_ref, x_smem, up_w_smem)
+
+                gate_w_ref = w_gate_up_gmem.at[local_expert, :, pl.ds(0, intermediate)]
+                up_w_ref = w_gate_up_gmem.at[local_expert, :, pl.ds(intermediate, intermediate)]
+                plgpu.emit_pipeline(
+                    pipeline_body,
+                    grid=(hidden // block_k,),
+                    in_specs=[
+                        plgpu.BlockSpec(
+                            (block_m, block_k),
+                            lambda k: (group_info.block, k),
+                            delay_release=1,
+                        ),
+                        plgpu.BlockSpec(
+                            (block_k, block_n),
+                            lambda k: (k, ni),
+                            delay_release=1,
+                        ),
+                        plgpu.BlockSpec(
+                            (block_k, block_n),
+                            lambda k: (k, ni),
+                            delay_release=1,
+                        ),
+                    ],
+                    max_concurrent_steps=max_concurrent_steps,
+                )(compact_x_gmem, gate_w_ref, up_w_ref)
+                return gate_acc_ref[...], up_acc_ref[...]
+
+            gate_acc, up_acc = pl.run_scoped(
+                acc_scope,
+                plgpu.ACC((block_m, block_n), jnp.float32),
+                plgpu.ACC((block_m, block_n), jnp.float32),
+            )
+
+            @functools.partial(pl.run_scoped, out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype))
+            def store_scope(out_smem):
+                activated = jax.nn.silu(gate_acc) * up_acc
+                out_smem[...] = activated.astype(out_smem.dtype)
+                plgpu.commit_smem()
+
+                smem_start = group_info.start_within_block
+                remaining_rows = min(block_m, recv_capacity)
+                while remaining_rows > 0:
+                    const_rows_len = 1 << int(math.log2(remaining_rows))
+                    remaining_rows //= 2
+
+                    @pl.when(group_info.actual_size & const_rows_len != 0)
+                    def _():
+                        out_smem_slice = out_smem.at[pl.ds(smem_start, const_rows_len)]
+                        out_gmem_slice = out_gmem.at[
+                            pl.ds(group_info.block_start + smem_start, const_rows_len),
+                            pl.ds(ni * block_n, block_n),
+                        ]
+                        plgpu.copy_smem_to_gmem(out_smem_slice, out_gmem_slice)
+
+                    smem_start += group_info.actual_size & const_rows_len
+                plgpu.wait_smem_to_gmem(0, wait_read_only=True)
+
+    num_sms = jax.local_devices()[0].core_count
+    kernel = plgpu.kernel(
+        kernel_body,
+        out_shape=jax.ShapeDtypeStruct((recv_capacity, intermediate), compact_x.dtype),
+        grid=(num_sms,),
+        grid_names=("sm",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup,
+        ),
+    )
+    out = kernel(rows_per_source_expert, compact_x, w_gate_up_local)
+    valid_rows = jnp.arange(recv_capacity, dtype=jnp.int32) < jnp.minimum(
+        jnp.sum(rows_per_source_expert, dtype=jnp.int32), recv_capacity
+    )
+    return jnp.where(valid_rows[:, None], out, jnp.zeros((), dtype=out.dtype))
+
+
 def compute_moe_up_mosaic_gpu_ready_local(
     recv_x: jax.Array,
     ready_count: jax.Array,
