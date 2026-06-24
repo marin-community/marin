@@ -181,8 +181,22 @@ def _grug_scale_with_muon(
         else:
             updates = buf
 
-        def transform_array(x, param):
-            if not hasattr(x, "ndim") or x.ndim not in (2, 3):
+        def _is_fused_gate_up_path(path) -> bool:
+            # Detect a fused MoE gate+up leaf by its pytree path attribute name.
+            # When MoEExpertMlp has split_w_gate_up=False, the (E, D, 2I) leaf
+            # is stored as w_gate_up; we want per-half NS by reshaping to
+            # (E, D, 2, I) and vmapping over both leading dims so the math
+            # matches what split_w_gate_up=True would do.
+            for entry in path:
+                name = getattr(entry, "name", None)
+                if name == "w_gate_up":
+                    return True
+            return False
+
+        ns_fn = lambda m: _zeropower_via_newtonschulz_replicated(m, steps, muon_eps, coefficient_type, None)
+
+        def transform_array(path, x, param):
+            if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
                 return x
             if x.ndim == 2:
                 updated = _zeropower_via_newtonschulz_replicated(
@@ -192,29 +206,102 @@ def _grug_scale_with_muon(
                     coefficient_type,
                     None,
                 )
+            elif x.ndim == 4:
+                # Stacked + MoE 4D leaf, shape (L, E, D, I) for w_gate/w_up
+                # or (L, E, I, D) for w_down. The "one matrix per chip"
+                # plan: bf16 cast, free-merge (L, E) into LE (replicated),
+                # explicit all-to-all reshard to put LE on data axis (each
+                # chip ends up with merged/num_chips full matrices), local
+                # NS, then reverse. Splits the cross-axis sharding migration
+                # from the axis merge so XLA does each cheaply rather than
+                # together (which has been triggering 87 GB materializations).
+                mesh = jax.sharding.get_abstract_mesh()
+                if mesh.empty:
+                    return x
+                mesh_shape_items = [(n, s) for n, s in mesh.shape.items() if s > 1]
+                if not mesh_shape_items:
+                    return x
+                batch_shards = 1
+                for _, s in mesh_shape_items:
+                    batch_shards *= s
+                layers, expert_count, d, last = x.shape
+                merged = layers * expert_count
+                if merged % batch_shards != 0:
+                    return x
+                batch_axes = tuple(n for n, _ in mesh_shape_items)
+
+                # Detect whether this leaf is w_down (path attribute) so the
+                # intermediate 3D / 4D specs reflect the actual axis order.
+                is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+                if is_w_down:
+                    # (L, E, I, D) → merged (LE, I, D), data axis stays on D.
+                    intermediate_3d_spec = PartitionSpec(None, "model", "data")
+                    orig_4d_spec = PartitionSpec(None, "expert", "model", "data")
+                else:
+                    # (L, E, D, I) → merged (LE, D, I), data axis stays on D.
+                    intermediate_3d_spec = PartitionSpec(None, "data", "model")
+                    orig_4d_spec = PartitionSpec(None, "expert", "data", "model")
+
+                target_3d_spec = (
+                    PartitionSpec(batch_axes[0], None, None)
+                    if len(batch_axes) == 1
+                    else PartitionSpec(batch_axes, None, None)
+                )
+
+                # 1) bf16 cast — preserves sharding, halves the bytes for
+                #    the all-to-all that follows.
+                x_bf16 = x.astype(jnp.bfloat16)
+
+                # 2) Free reshape: only merges axes that are size-1-mapped
+                #    on the mesh (L=replicated, E=on expert axis size 1).
+                #    Sharding stays on the data axis. No data movement.
+                x_flat = jax.lax.reshape(x_bf16, (merged, d, last), out_sharding=intermediate_3d_spec)
+
+                # 3) Explicit all-to-all reshard: move sharding from the
+                #    data-side axis to the leading batch axis. After this,
+                #    each chip holds merged/batch_shards full matrices.
+                x_distributed = jax.sharding.reshard(x_flat, target_3d_spec)
+
+                # 4) Local NS: each chip processes its matrices without any
+                #    further resharding. vmap over the leading axis runs NS
+                #    on each (D, I) (or (I, D)) matrix the chip owns.
+                local_ns = lambda matrix: _zeropower_via_newtonschulz_local(matrix, steps, muon_eps, coefficient_type)
+                updated_distributed = jax.vmap(local_ns)(x_distributed)
+
+                # 5) Reverse all-to-all: put sharding back on the data axis.
+                updated_flat = jax.sharding.reshard(updated_distributed, intermediate_3d_spec)
+
+                # 6) Free reverse reshape back to 4D.
+                updated_bf16 = jax.lax.reshape(
+                    updated_flat,
+                    (layers, expert_count, d, last),
+                    out_sharding=orig_4d_spec,
+                )
+
+                # 7) Cast back to the input dtype so the downstream optax
+                #    chain (kimi scaling, etc.) sees the same dtype.
+                updated = updated_bf16.astype(x.dtype)
+            elif _is_fused_gate_up_path(path):
+                # Per-half NS on a fused (E, D, 2I) tensor: reshape to
+                # (E, D, 2, I), double-vmap NS, reshape back. Reshapes are
+                # free stride changes on TPU.
+                e, d, two_i = x.shape
+                assert two_i % 2 == 0, f"fused gate_up trailing dim must be even, got {two_i}"
+                i_half = two_i // 2
+                x_split = x.reshape(e, d, 2, i_half)
+                updated_split = jax.vmap(
+                    jax.vmap(ns_fn, in_axes=2, out_axes=2),
+                    in_axes=0,
+                    out_axes=0,
+                )(x_split)
+                updated = updated_split.reshape(e, d, two_i)
             else:
                 if orthogonalization_layout == VMAP_REPLICATED:
-                    updated = jax.vmap(
-                        lambda matrix: _zeropower_via_newtonschulz_replicated(
-                            matrix,
-                            steps,
-                            muon_eps,
-                            coefficient_type,
-                            None,
-                        )
-                    )(x)
+                    updated = jax.vmap(ns_fn)(x)
                 else:
                     stack_target_pspec = _batch_sharded_stack_target_pspec(param)
                     if stack_target_pspec is None:
-                        updated = jax.vmap(
-                            lambda matrix: _zeropower_via_newtonschulz_replicated(
-                                matrix,
-                                steps,
-                                muon_eps,
-                                coefficient_type,
-                                None,
-                            )
-                        )(x)
+                        updated = jax.vmap(ns_fn)(x)
                     else:
                         updated = _zeropower_via_newtonschulz_batched_stack_sharded(
                             x,
@@ -233,9 +320,9 @@ def _grug_scale_with_muon(
             return updated
 
         if params is None:
-            updates = jax.tree.map(lambda x: transform_array(x, None), updates)
+            updates = jax.tree_util.tree_map_with_path(lambda path, x: transform_array(path, x, None), updates)
         else:
-            updates = jax.tree.map(transform_array, updates, params)
+            updates = jax.tree_util.tree_map_with_path(transform_array, updates, params)
 
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
@@ -267,6 +354,47 @@ def _match_update_sharding():
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+def _zeropower_via_newtonschulz_local(
+    X: jax.Array,
+    steps: int = 5,
+    eps: float = 1e-7,
+    coefficient_type: CoefficientType = "quintic",
+) -> jax.Array:
+    """Newton-Schulz that assumes X is already fully local to one chip.
+
+    Unlike ``_zeropower_via_newtonschulz_replicated``, this variant does NOT
+    do an internal ``reshard(X, P(None, None))`` to gather the matrix to all
+    chips. Callers are responsible for setting up sharding so that each chip
+    already holds the matrices it needs to process locally — useful when
+    NS is being run on per-chip-owned matrices (one or many) via vmap over
+    a leading batch axis sharded on the data axis.
+    """
+    assert X.ndim == 2
+
+    # Run NS in bf16 to halve memory and double matmul throughput on TPU.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
+
+    coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
+    X = X / (jnp.linalg.norm(X) + eps)
+
+    transpose = False
+    if X.shape[0] > X.shape[1]:
+        X = X.T
+        transpose = True
+
+    for i in range(steps):
+        a, b, c = coeffs[i % len(coeffs)]
+        A = jnp.einsum("ik,jk->ij", X, X)
+        B = b * A + c * jnp.einsum("ik,kj->ij", A, A)
+        X = a * X + jnp.einsum("ik,kj->ij", B, X)
+
+    if transpose:
+        X = X.T
+
+    return X.astype(orig_dtype)
+
+
 def _zeropower_via_newtonschulz_replicated(
     X: jax.Array,
     steps: int = 5,
@@ -283,6 +411,11 @@ def _zeropower_via_newtonschulz_replicated(
     P = PartitionSpec
     assert X.ndim == 2
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
+
+    # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
+    # cast back to the param dtype on exit so optimizer state stays fp32.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
@@ -305,7 +438,7 @@ def _zeropower_via_newtonschulz_replicated(
     if transpose:
         X = X.T
 
-    return X
+    return X.astype(orig_dtype)
 
 
 def _zeropower_via_newtonschulz_batched_stack_sharded(
@@ -317,6 +450,11 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
 ) -> jax.Array:
     """Run Newton-Schulz on a stacked batch of matrices with only the batch axis sharded."""
     assert X.ndim == 3
+
+    # Run NS in bf16 to halve all-gather bytes and double matmul throughput;
+    # cast back to the param dtype on exit so optimizer state stays fp32.
+    orig_dtype = X.dtype
+    X = X.astype(jnp.bfloat16)
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]
     has_mesh = not jax.sharding.get_abstract_mesh().empty
@@ -343,4 +481,4 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
     if transpose:
         X = jnp.swapaxes(X, -1, -2)
 
-    return X
+    return X.astype(orig_dtype)

@@ -41,7 +41,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import Block, GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
@@ -69,6 +69,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    model_axis_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -260,10 +261,20 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
             model,
             new_biases,
         )
+    if model.stacked_pairs is not None:
+        # Alternating dense+routed: qb_betas has one row per (num_layers) layer
+        # with zeros on the dense rows (even indices). Routed layers are at odd
+        # indices; slice out their rows to match the stacked LayerPair shape.
+        routed_biases = new_biases[1::2]
+        return eqx.tree_at(
+            lambda t: t.stacked_pairs.stacked.routed.mlp.router_bias,
+            model,
+            routed_biases,
+        )
     assert model.blocks is not None
     new_blocks = list(model.blocks)
     for i, block in enumerate(model.blocks):
-        if block.mlp is None:
+        if not isinstance(block, Block) or block.mlp is None:
             continue
         new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_biases[i])
         new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
@@ -407,6 +418,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        model_axis_size=config.trainer.model_axis_size,
     )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule

@@ -151,11 +151,20 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             save_interval=timedelta(minutes=10),
             keep=config.checkpoint_keep,
         ),
-        load_checkpoint=config.load_checkpoint_path is not None,
+        # load_checkpoint=None lets levanter auto-detect existing checkpoints
+        # under the configured output_path on restart, so iris preemption
+        # restarts resume from the latest temp/permanent checkpoint instead of
+        # silently starting over at step 0. An explicit load_checkpoint_path
+        # still forces a load from that path.
+        load_checkpoint=None,
         load_checkpoint_path=config.load_checkpoint_path,
     )
 
-    grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
+    grug_trainer = dataclasses.replace(
+        config.grug_trainer,
+        trainer=trainer,
+        expert_axis_size=config.expert_parallel,
+    )
 
     run_config = GrugRunConfig(
         model=config.model,

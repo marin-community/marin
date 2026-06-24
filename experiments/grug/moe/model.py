@@ -123,6 +123,30 @@ class GrugModelConfig:
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
+    replicate_attn_weights: bool = False
+    """If True, store w_q/w_k/w_v/w_o fully replicated (P(None, None)) instead
+    of FSDP-sharded across the data axis. Attention weights are small (~128 KB
+    per layer per chip after FSDP), so replicating them is cheap on HBM but
+    eliminates the per-layer FSDP all-gather for the QKVO matmuls. MFU probe
+    knob to isolate whether attention collectives matter."""
+    split_w_gate_up: bool = True
+    """If True (default), store MoE w_gate and w_up as separate pytree leaves
+    so MuonH's Newton-Schulz orthogonalises each half independently. If False,
+    fuse them into a single (E, D, 2I) tensor at init time, eliminating the
+    per-forward concat temp (~6.7 GB at d=2560, BS=4096) and running one
+    bigger NS call per expert. Changes NS semantics; use only for throughput
+    probes unless you're OK with the different optimization target."""
+    alternating_dense_moe: bool = False
+    """When True, layers alternate dense (even index) and routed MoE (odd
+    index). Even layers use a single DenseMLP with intermediate
+    ``dense_intermediate_dim`` (typically 3 * hidden_dim) and no router;
+    odd layers use the usual MoE with ``num_experts`` / ``num_experts_per_token``
+    / ``intermediate_dim``. Requires ``use_array_stacked_blocks=False``
+    (the heterogeneous block shapes can't be stacked) and
+    ``shared_expert_intermediate_dim == 0`` (no shared expert)."""
+    dense_intermediate_dim: int = 0
+    """Intermediate dim for the dense layers when ``alternating_dense_moe=True``.
+    Typically ``3 * hidden_dim``. Ignored otherwise."""
     use_array_stacked_blocks: bool = False
     """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
@@ -253,11 +277,13 @@ class CausalSelfAttention(eqx.Module):
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        in_spec = P(None, None) if cfg.replicate_attn_weights else P("data", "model")
+        out_spec = P(None, None) if cfg.replicate_attn_weights else P("model", "data")
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), in_spec),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), in_spec),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), in_spec),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), out_spec),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -547,7 +573,7 @@ class MoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-                split_w_gate_up=True,  # store w_gate / w_up separately so MuonH NS sees each half as its own leaf
+                split_w_gate_up=cfg.split_w_gate_up,
             ),
             cfg=cfg,
         )
@@ -678,15 +704,116 @@ def _long_layer_schedule(num_layers: int) -> jax.Array:
     return ((idx % 4) == 3) | (idx == num_layers - 1)
 
 
+def _zero_router_stats(num_experts: int) -> dict[str, jax.Array]:
+    """Dummy router stats for non-routed (dense) layers, shape-compatible with
+    MoEMLP's output so per-layer stacking across heterogeneous blocks doesn't
+    change shape. Reported router metrics will read 0 on dense layers.
+
+    Shapes mirror what MoEMLP produces:
+    - routing_counts, qb_beta: (num_experts,)
+    - all other entries: scalar.
+    """
+    return {
+        "routing_counts": jnp.zeros((num_experts,), dtype=jnp.float32),
+        "routing_entropy": jnp.float32(0.0),
+        "load_balancing_loss": jnp.float32(0.0),
+        "router_z_loss": jnp.float32(0.0),
+        "qb_beta": jnp.zeros((num_experts,), dtype=jnp.float32),
+        "capacity_overflow": jnp.float32(0.0),
+    }
+
+
+class DenseBlock(eqx.Module):
+    """Block variant whose FFN is a single DenseMLP — no router, no shared expert.
+
+    Used when ``alternating_dense_moe=True``: even-indexed layers are DenseBlock
+    (FFN width = ``dense_intermediate_dim``, typically 3x hidden_dim) and odd
+    layers are the standard MoE Block. Same attention + norms as Block.
+    Returns zero router stats so per-layer stacking across mixed block types
+    stays shape-consistent.
+    """
+
+    rms_attn: RMSNorm
+    attn_gated_norm: GatedNorm
+    attn: CausalSelfAttention
+    rms_mlp: RMSNorm
+    mlp_gated_norm: GatedNorm
+    mlp: DenseMLP
+    num_experts: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "DenseBlock":
+        attn_key, mlp_key, gn_attn_key, gn_mlp_key = random.split(key, 4)
+        if cfg.dense_intermediate_dim <= 0:
+            raise ValueError("DenseBlock requires cfg.dense_intermediate_dim > 0; " f"got {cfg.dense_intermediate_dim}")
+        return DenseBlock(
+            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp=DenseMLP.init(cfg.hidden_dim, cfg.dense_intermediate_dim, cfg.initializer_std, key=mlp_key),
+            num_experts=cfg.num_experts,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool,
+        use_pko: bool = False,
+        disable_long_rope: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_out = jax.lax.cond(
+            jnp.asarray(use_long_mask, dtype=jnp.bool_),
+            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope, is_long_layer=True),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, is_long_layer=False),
+            operand=None,
+        )
+        x = x + attn_out
+        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_out = self.mlp(mlp_in, activation=ActivationFunctionEnum.silu)
+        x = x + mlp_out
+        return x, _zero_router_stats(self.num_experts)
+
+
+class LayerPair(eqx.Module):
+    """A (DenseBlock, MoE Block) pair used when ``alternating_dense_moe=True``.
+
+    Stacking 13 pairs into one ``ArrayStacked[LayerPair]`` works even though
+    DenseBlock and MoE Block have different shapes (the heterogeneity is
+    inside the pair, not across pairs). One scan iteration applies the dense
+    half then the routed half, so the scanned sequence is dense, routed,
+    dense, routed, ...
+    """
+
+    dense: DenseBlock
+    routed: Block
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "LayerPair":
+        dense_key, routed_key = random.split(key, 2)
+        return LayerPair(
+            dense=DenseBlock.init(cfg, key=dense_key),
+            routed=Block.init(cfg, key=routed_key),
+        )
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    # Exactly one of `blocks` / `stacked_blocks` is populated, selected by
-    # `GrugModelConfig.use_array_stacked_blocks`.
+    # Exactly one of `blocks` / `stacked_blocks` / `stacked_pairs` is populated:
+    #   - `blocks`: per-block path (use_array_stacked_blocks=False)
+    #   - `stacked_blocks`: standard stacked path (homogeneous Block, lax.scan)
+    #   - `stacked_pairs`: alternating dense+MoE stacked path
     blocks: tuple[Block, ...] | None
     stacked_blocks: ArrayStacked[Block] | None
+    stacked_pairs: ArrayStacked[LayerPair] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -698,7 +825,26 @@ class Transformer(eqx.Module):
                 "use_array_stacked_blocks=True currently requires disable_pko=True "
                 "because CausalSelfAttention reads use_pko at trace time."
             )
-        keys = random.split(key, cfg.num_layers + 4)
+        if cfg.alternating_dense_moe:
+            if not cfg.use_array_stacked_blocks:
+                raise ValueError(
+                    "alternating_dense_moe currently requires use_array_stacked_blocks=True "
+                    "(paired blocks are stacked into one ArrayStacked[LayerPair])."
+                )
+            if cfg.shared_expert_intermediate_dim != 0:
+                raise ValueError(
+                    "alternating_dense_moe requires shared_expert_intermediate_dim=0 "
+                    "(the dense layers stand in for the shared expert role)."
+                )
+            if cfg.num_layers % 2 != 0:
+                raise ValueError(f"alternating_dense_moe requires num_layers to be even; got {cfg.num_layers}.")
+            if cfg.dense_intermediate_dim <= 0:
+                raise ValueError("alternating_dense_moe requires dense_intermediate_dim > 0.")
+
+        num_pairs = cfg.num_layers // 2 if cfg.alternating_dense_moe else 0
+        # 4 module-level keys + per-layer / per-pair keys.
+        num_block_keys = num_pairs if cfg.alternating_dense_moe else cfg.num_layers
+        keys = random.split(key, num_block_keys + 4)
         embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
         block_keys = keys[4:]
         token_embed = reshard(
@@ -708,12 +854,19 @@ class Transformer(eqx.Module):
 
         blocks: tuple[Block, ...] | None
         stacked_blocks: ArrayStacked[Block] | None
-        if cfg.use_array_stacked_blocks:
+        stacked_pairs: ArrayStacked[LayerPair] | None
+        if cfg.alternating_dense_moe:
+            blocks = None
+            stacked_blocks = None
+            stacked_pairs = ArrayStacked.init(num_pairs, LayerPair)(cfg=cfg, key=block_keys)
+        elif cfg.use_array_stacked_blocks:
             blocks = None
             stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+            stacked_pairs = None
         else:
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
             stacked_blocks = None
+            stacked_pairs = None
 
         return Transformer(
             token_embed=token_embed,
@@ -722,6 +875,7 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
+            stacked_pairs=stacked_pairs,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -773,6 +927,53 @@ class Transformer(eqx.Module):
                 "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
                 "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
                 "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            }
+        elif self.stacked_pairs is not None:
+            # Alternating dense+MoE: one scan over LayerPair, each iteration
+            # applies the dense half then the routed half. The 26-layer mask
+            # schedule is reshaped to (num_pairs, 2) so each iteration gets one
+            # mask per half.
+            num_pairs = cfg.num_layers // 2
+            mask_schedule = _long_layer_schedule(cfg.num_layers).reshape(num_pairs, 2)
+
+            def _scan_pairs(
+                carry_hidden: Float[Array, "B S D"],
+                scan_inputs: tuple[LayerPair, Bool[Array, "2"]],
+            ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
+                pair, masks_for_pair = scan_inputs
+                dense_long = masks_for_pair[0]
+                routed_long = masks_for_pair[1]
+                carry_hidden, dense_stats = eqx.filter_checkpoint(pair.dense, policy=remat_policy)(
+                    carry_hidden, short_mask, long_mask, dense_long, False, cfg.disable_long_rope
+                )
+                carry_hidden, routed_stats = eqx.filter_checkpoint(pair.routed, policy=remat_policy)(
+                    carry_hidden, short_mask, long_mask, routed_long, False, cfg.disable_long_rope
+                )
+                return carry_hidden, (dense_stats, routed_stats)
+
+            hidden, (dense_stats_per_pair, routed_stats_per_pair) = jax.lax.scan(
+                _scan_pairs,
+                hidden,
+                xs=(self.stacked_pairs.stacked, mask_schedule),
+            )
+
+            # Interleave (num_pairs, ...) + (num_pairs, ...) -> (cfg.num_layers, ...).
+            def _interleave(dense_v: jax.Array, routed_v: jax.Array) -> jax.Array:
+                # stack along axis=1 then reshape so dense=row 0, routed=row 1 within each pair.
+                stacked = jnp.stack([dense_v, routed_v], axis=1)
+                new_shape = (cfg.num_layers, *stacked.shape[2:])
+                return stacked.reshape(new_shape)
+
+            router_metrics = {
+                f"{key}_per_layer": _interleave(dense_stats_per_pair[key], routed_stats_per_pair[key])
+                for key in (
+                    "routing_entropy",
+                    "routing_counts",
+                    "load_balancing_loss",
+                    "router_z_loss",
+                    "qb_beta",
+                    "capacity_overflow",
+                )
             }
         else:
             assert self.stacked_blocks is not None
