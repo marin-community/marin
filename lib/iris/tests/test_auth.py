@@ -7,16 +7,16 @@ from connectrpc.errors import ConnectError
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import (
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.server_auth import (
     AuthRequest,
     StaticTokenVerifier,
     build_request_authenticators,
     is_trusted_loopback,
     resolve_auth,
 )
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.version import client_revision_date
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
 from .conftest import _make_controller_only_config
 

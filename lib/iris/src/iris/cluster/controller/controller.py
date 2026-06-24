@@ -22,6 +22,7 @@ import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
 from finelog.embedded import require_embedded_server
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.server_auth import RequestAuthPolicy, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -89,7 +90,6 @@ from iris.cluster.types import (
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import ControllerAuthPolicy, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +393,7 @@ class Controller:
             host=config.host,
             port=config.port,
             auth_provider=config.auth_provider,
-            auth_policy=ControllerAuthPolicy.from_verifiers(
+            auth_policy=RequestAuthPolicy.from_verifiers(
                 verifier=config.auth_verifier,
                 optional=config.auth.optional if config.auth else False,
                 iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,

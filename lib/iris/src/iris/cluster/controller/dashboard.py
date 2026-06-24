@@ -31,6 +31,12 @@ from urllib.parse import urlparse
 import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.server_auth import (
+    NullAuthInterceptor,
+    RequestAuthPolicy,
+    extract_bearer_token,
+    identity_scope,
+)
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -53,14 +59,7 @@ from iris.cluster.dashboard_common import (
 )
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import (
-    SESSION_COOKIE,
-    ControllerAuthPolicy,
-    NullAuthInterceptor,
-    authorize_method,
-    extract_bearer_token,
-    identity_scope,
-)
+from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
@@ -93,7 +92,7 @@ async def _enforce_http_auth(
     scope: Scope,
     receive: Receive,
     send: Send,
-    policy: ControllerAuthPolicy,
+    policy: RequestAuthPolicy,
 ) -> bool:
     """Resolve auth for an ASGI scope; on failure send a 401 and return False.
 
@@ -103,7 +102,7 @@ async def _enforce_http_auth(
     (which intercepts before any route can match).
     """
     headers = _scope_headers(scope)
-    token = extract_bearer_token(headers)
+    token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
     try:
         identity = policy.resolve(
             token,
@@ -131,7 +130,7 @@ class _RouteAuthMiddleware:
     so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(self, app: Starlette, policy: ControllerAuthPolicy):
+    def __init__(self, app: Starlette, policy: RequestAuthPolicy):
         self._app = app
         self._policy = policy
         self._router = app.router
@@ -235,15 +234,15 @@ class _DashboardAuthInterceptor:
     - no token + required → rejected
     """
 
-    def __init__(self, policy: ControllerAuthPolicy):
+    def __init__(self, policy: RequestAuthPolicy):
         self._policy = policy
-        self._null = NullAuthInterceptor(verifier=policy.verifier)
+        self._null = NullAuthInterceptor(verifier=policy.verifier, cookie_name=SESSION_COOKIE)
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
 
         headers = ctx.request_headers()
-        token = extract_bearer_token(headers)
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
         try:
             identity = self._policy.resolve(
                 token,
@@ -342,7 +341,7 @@ class _SubdomainProxyMiddleware:
         app: ASGIApp,
         *,
         endpoint_proxy: EndpointProxy,
-        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
+        auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
@@ -398,7 +397,7 @@ class ControllerDashboard:
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_provider: str | None = None,
-        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
+        auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._service = service
         self._host = host
@@ -429,7 +428,7 @@ class ControllerDashboard:
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
-            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier)
+            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier, cookie_name=SESSION_COOKIE)
         controller_interceptors = [auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
