@@ -727,6 +727,9 @@ def zb_build(
                     worker.close()
 
             if _TRACE:
+                # Enqueue time = the Python dispatch loop alone (no wait); the gap to ``sched``
+                # is the GPU-completion tail. Splits dispatch-bound from compute-bound.
+                _t["enqueue"] = time.perf_counter()
                 jax.block_until_ready((ce_mb, z_mb, g_head_mb, g_embed_mb, w_grads))
                 _t["sched"] = time.perf_counter()
 
@@ -819,9 +822,12 @@ def zb_build(
             total = (now - _t["start"]) * 1e3
             if use_schedule:
                 sched = (_t["sched"] - _t["start"]) * 1e3
+                enqueue = (_t["enqueue"] - _t["start"]) * 1e3
+                tail = sched - enqueue
+                shape = f"M={num_microbatches} P={num_stages} ops={len(op_order)}"
                 print(
-                    f"TRACE {schedule.value} wavefront dispatch+exec={sched:.0f}ms reduce={total - sched:.0f}ms "
-                    f"total={total:.0f}ms (M={num_microbatches} P={num_stages} ops={len(op_order)})"
+                    f"TRACE {schedule.value} wavefront={sched:.0f}ms (enqueue={enqueue:.0f}ms gpu_tail={tail:.0f}ms) "
+                    f"reduce={total - sched:.0f}ms total={total:.0f}ms ({shape})"
                 )
             else:
                 fwd, bwd = (_t["fwd"] - _t["start"]) * 1e3, (now - _t["fwd"]) * 1e3
