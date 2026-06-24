@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 from collections.abc import Iterator
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +78,20 @@ def _strict_mode() -> bool:
     return os.environ.get(_STRICT_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
+# Construction sites already warned about, so the same module-level step factory
+# does not spam one line per import. Process-global by design (construction has no
+# shared object to hang the cache on); tests clear it between cases.
 _warned_sites: set[tuple[str, int]] = set()
 
 
-def _construction_site() -> tuple[str, int, str]:
-    """Return ``(filename, lineno, function)`` of the nearest construction frame
-    outside the execution package.
+class ConstructionSite(NamedTuple):
+    filename: str
+    lineno: int
+    function: str
+
+
+def _construction_site() -> ConstructionSite:
+    """Return the nearest construction frame outside the execution package.
 
     Walks ``f_back`` directly (no source-line reads) so the contextless path
     stays cheap even when many module-level constructions fire during import.
@@ -91,9 +100,9 @@ def _construction_site() -> tuple[str, int, str]:
     while frame is not None:
         filename = frame.f_code.co_filename
         if not filename.startswith("<") and not filename.startswith(_EXECUTION_PKG):
-            return filename, frame.f_lineno, frame.f_code.co_name
+            return ConstructionSite(filename, frame.f_lineno, frame.f_code.co_name)
         frame = frame.f_back
-    return "<unknown>", 0, "<unknown>"
+    return ConstructionSite("<unknown>", 0, "<unknown>")
 
 
 def check_build_context(kind: str, name: str) -> None:
@@ -108,17 +117,17 @@ def check_build_context(kind: str, name: str) -> None:
     if _active_context.get() is not None:
         return
 
-    filename, lineno, function = _construction_site()
+    site = _construction_site()
     message = (
-        f"{kind} {name!r} constructed at {filename}:{lineno} (in {function}) outside an "
-        f"executor_context(). Build steps inside a build_steps()/executor_main flow rather "
-        f"than at module-import scope, so import-time constants (e.g. the region from "
+        f"{kind} {name!r} constructed at {site.filename}:{site.lineno} (in {site.function}) "
+        f"outside an executor_context(). Build steps inside a build_steps()/executor_main flow "
+        f"rather than at module-import scope, so import-time constants (e.g. the region from "
         f"marin_prefix()) are not frozen into the pipeline."
     )
     if _strict_mode():
         raise RuntimeError(message)
 
-    site = (filename, lineno)
-    if site not in _warned_sites:
-        _warned_sites.add(site)
+    key = (site.filename, site.lineno)
+    if key not in _warned_sites:
+        _warned_sites.add(key)
         logger.warning(message)

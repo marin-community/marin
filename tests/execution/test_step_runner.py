@@ -333,11 +333,11 @@ def test_step_spec_as_executor_step_round_trip():
 def test_as_executor_step_prefixless_override_is_region_relative(monkeypatch):
     """A prefix-less StepSpec must hand the executor a *relative* override.
 
-    Regression for marin-community/marin#6614: building a download-style step
-    (no ``output_path_prefix``, relative ``override_output_path``) under one
-    region used to freeze that region into the ExecutorStep, so a run in another
-    region tripped the cross-region guard. The override must stay relative so the
-    Executor anchors it under the *run* prefix.
+    A download-style step (no ``output_path_prefix``, relative
+    ``override_output_path``) must not freeze the build region into the
+    ExecutorStep, or a run in another region trips the cross-region guard. The
+    override stays relative so the Executor anchors it under the *run* prefix,
+    while ``output_path`` stays absolute for direct ``StepRunner`` use.
     """
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
     step = StepSpec(name="raw/dolma", override_output_path="raw/dolma")
@@ -352,7 +352,7 @@ def test_as_executor_step_prefixless_override_is_region_relative(monkeypatch):
 
 
 def test_as_executor_step_resolves_under_run_prefix_not_build_prefix(monkeypatch):
-    """End-to-end #6614: a step built in us-west4 resolves under the us-central1 run."""
+    """A step built in us-west4 resolves under the us-central1 run, not the build region."""
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-west4")
     build_step = StepSpec(name="raw/dolma", override_output_path="raw/dolma").as_executor_step()
 

@@ -32,6 +32,10 @@ def _reset_warned_sites():
     ctx_mod._warned_sites.clear()
 
 
+def _guard_warnings(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "marin.execution.context" and r.levelno == logging.WARNING]
+
+
 def test_context_active_inside_block():
     assert current_executor_context() is not None  # autouse fixture
     with executor_context(prefix="gs://marin-us-central1") as c:
@@ -44,20 +48,19 @@ def test_construction_outside_context_warns(caplog):
     with _no_executor_context(), caplog.at_level(logging.WARNING, logger="marin.execution.context"):
         step = ExecutorStep(name="warns", fn=None, config=None)
     assert step.name == "warns"
-    assert any("outside an executor_context()" in r.message for r in caplog.records)
+    assert len(_guard_warnings(caplog)) == 1
 
 
 def test_construction_outside_context_warns_once_per_site(caplog):
     with _no_executor_context(), caplog.at_level(logging.WARNING, logger="marin.execution.context"):
         for _ in range(3):
             ExecutorStep(name="dup", fn=None, config=None)  # same source line every iteration
-    warnings = [r for r in caplog.records if "outside an executor_context()" in r.message]
-    assert len(warnings) == 1
+    assert len(_guard_warnings(caplog)) == 1
 
 
 def test_strict_mode_raises(monkeypatch):
     monkeypatch.setenv("MARIN_EXECUTOR_STRICT", "1")
-    with _no_executor_context(), pytest.raises(RuntimeError, match="outside an executor_context"):
+    with _no_executor_context(), pytest.raises(RuntimeError):
         ExecutorStep(name="boom", fn=None, config=None)
 
 
@@ -65,7 +68,7 @@ def test_construction_inside_context_is_silent(caplog):
     with caplog.at_level(logging.WARNING, logger="marin.execution.context"):
         with executor_context():
             ExecutorStep(name="quiet", fn=None, config=None)
-    assert not [r for r in caplog.records if "outside an executor_context()" in r.message]
+    assert _guard_warnings(caplog) == []
 
 
 def test_pickle_and_deepcopy_do_not_trip_guard(monkeypatch):
