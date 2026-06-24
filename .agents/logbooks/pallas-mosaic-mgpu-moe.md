@@ -480,3 +480,47 @@
 - Next action: Replace the full-kernel ready marking with a row/block
   coordinator that signals block readiness as soon as each receive block is
   complete, then run W13 from the block-ready schedule.
+
+### 2026-06-24 - Block-ready W13 consumer
+
+- Hypothesis: A W13/SiLU consumer that still schedules expert-major blocks but
+  masks stores with `ready_block_count[recv_block]` should preserve the fast
+  non-fragmented Mosaic W13 schedule while testing the consumer-side
+  block-readiness contract.
+- Commands:
+  - Local validation:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/kernels/test_pallas_moe_dispatch_up.py -q`
+  - H128 smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-block-ready-w13-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --w13-impl mosaic_gpu_block_ready --bench-iters 1 --warmup-steps 1`
+  - H2560 relevant-shape smoke: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 2400 --job-name dlwh-6597-moe-block-ready-w13-h2560-grug -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode scratch_ready --w13-impl mosaic_gpu_block_ready --bench-iters 2 --warmup-steps 1`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, Grug-truncated weights, top-k 4, `T/rank=8`, capacity factor 1.25.
+  This matches the normal 10-25% imbalance buffer; use
+  `--recv-capacity-factor 1.0` when probing the no-buffer case.
+- Result:
+  - Local tests passed (`11 passed`), and `./infra/pre-commit.py
+    --changed-files --fix` passed.
+  - H128: dispatch max error 0, metadata errors 0, source/expert ready-count
+    max error 0, block-ready-count max error 0. Block-ready W13/SiLU
+    steady-state mean 0.210 ms versus 0.169 ms reference JIT, with max abs
+    error 0.0078125.
+  - H2560: dispatch max error 0, metadata errors 0, source/expert ready-count
+    max error 0, block-ready-count max error 0. Dispatch steady-state mean
+    1.680 ms versus 0.772 ms reference JIT. Block-ready W13/SiLU
+    steady-state mean 0.610 ms versus 8.514 ms reference JIT, with max abs
+    error 0.015625.
+  - H2560 roofline summary for this small-token probe: 256 routed rows,
+    dispatch payload 1280 KiB, W13 work 6710.886 MFLOP, arithmetic intensity
+    1.000 flop/byte, measured W13 11.00 TFLOP/s, estimated HBM-bound W13
+    roofline 26.79 TFLOP/s.
+- Interpretation: The block-ready consumer fixes the fragmentation regression
+  from source/expert range scheduling and returns W13 to the expected
+  expert-major Mosaic speed on the relevant H2560 shape. This is still not the
+  overlapped kernel: readiness is produced after the full dispatch barrier. The
+  result does say that overlap should be built around coalesced block readiness
+  and a non-fragmented W13 consumer. For production, the built-in grouped
+  matmul path remains the better consumer target unless we need custom
+  synchronization inside the W13 kernel itself.
+- Next action: Implement the actual overlapped path by signaling block
+  readiness at receive-block completion and feeding a non-fragmented W13
+  consumer. Keep benchmark capacity factors at 1.0 for no-buffer probes and
+  1.1-1.25 for realistic imbalance.
