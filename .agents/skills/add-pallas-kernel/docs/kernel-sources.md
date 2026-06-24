@@ -61,7 +61,7 @@ Benchmark and tuning scripts:
 Tokamax kernels are useful references for API and kernel structure comparisons.
 
 - Typical install path in this repo's uv environment:
-  `.venv/lib/python3.11/site-packages/tokamax/_src/ops`
+  `.venv/lib/python3.12/site-packages/tokamax/_src/ops`
 - Compare numerics/perf on identical shapes/dtypes before drawing conclusions.
 - Parse `absl.flags` before accessing Tokamax modules that depend on flags.
 - Tokamax Mosaic kernels can OOM VMEM at larger shapes; reduce shape/tile sizes
