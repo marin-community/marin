@@ -615,3 +615,21 @@
 - Next action: Prototype block/coalesced remote movement for expert-major
   receive blocks. Do not spend more H100 time on row-wise scratch or direct
   final-row transport at T/rank=4096+ unless the transport changes.
+
+### 2026-06-24 - Failed direct block-copy lowering
+
+- Hypothesis: A `direct_ready` fast path that copies a contiguous
+  `[rows_per_program, hidden]` slice when send rows map to contiguous
+  destination rows could reduce row-wise remote write overhead without changing
+  the layout contract.
+- Command: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 128GB --disk 50GB --extra gpu --timeout 1800 --job-name dlwh-6597-moe-direct-ready-blockcopy-h128 -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 4 --top-k 4 --hidden 128 --intermediate 64 --dtype bf16 --weight-init grug_truncated --run-pallas --dispatch-copy-mode direct_ready --dispatch-rows-per-program 16 --w13-impl mosaic_gpu_block_ready --bench-iters 1 --warmup-steps 1`
+- Result: The candidate failed during Mosaic lowering before dispatch timing:
+  `ValueError: Layout inference failed to find a solution`. The failing
+  fast-path code was not kept.
+- Interpretation: Naively assigning dynamic remote GMEM slices for
+  `[rows_per_program, hidden]` blocks is not enough; the coalesced transport
+  likely needs explicit layout annotations or a structure closer to the
+  existing collective matmul pipeline.
+- Next action: Revisit block movement with a minimal standalone remote block
+  copy kernel or an all-gather-style pipeline before reintroducing it into the
+  MoE dispatch benchmark.
