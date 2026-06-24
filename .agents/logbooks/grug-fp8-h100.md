@@ -1016,3 +1016,54 @@ confirms the path.
   3.12-main lag will block any H100 job off current main until the task image is rebuilt.
 - **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk 64GB
   -- bash lib/levanter/scripts/bench/_s5_tune_grid.sh` (from a 3.11-compatible bundle until the image updates).
+
+### 2026-06-24 — GFP8-022: S5 H100 — Mosaic-GPU genuine f8 wgmma grouped GEMM BEATS bf16 (forward)
+- **Why:** GFP8-020/021 closed the door on the *pallas-triton* backend (quantize-around can't beat bf16;
+  f8 backward hits two backend walls). The open path was "a kernel with direct MMA-dtype control". JAX
+  0.10.0 ships exactly that: `jax.experimental.pallas.ops.gpu.ragged_dot_mgpu` — a production Mosaic-GPU
+  grouped GEMM that calls `plgpu.wgmma` directly, and Hopper wgmma accepts `float8_e4m3fn` operands with
+  f32 accumulation (`mosaic/gpu/wgmma.py`). So a genuine f8 tensor-core grouped GEMM is runnable with no
+  kernel-writing — feed f8 into the stock kernel.
+- **Two real obstacles, both surmounted in the bench (`bench_ragged_mosaic_f8.py`):**
+  1. **f8 wgmma forbids operand transposes.** `wgmma.py:146-149`: `supports_transpose = bytewidth==2`, so
+     any `a_transpose`/`b_transpose` raises `"Only f16 WGMMA supports transposes"`. The stock kernel's
+     default (G,K,N) RHS layout is N-major → `b_transpose=True` → f8 rejected. Fix: store RHS **K-major**
+     (G,N,K) and drive `transpose_rhs=True`; the kernel then uses a *logical* `transpose_ref` (not a
+     hardware transpose) → `b_fastest==K` → `b_transpose=False` → f8 legal. Weights are pre-transposed
+     once, so this is free. With this, **f8 compiles identically to bf16** — the GFP8-020 "backend wall"
+     was triton+layout-specific, not fundamental to f8 on Hopper.
+  2. **Cluster GPU image has a broken XLA-mosaic toolchain.** Mosaic compiles PTX→SASS via XLA (triton
+     bundles its own, so it was masked). The image's CUDA wheels are split/non-standard: `ptxas` +
+     `libdevice.10.bc` live under `nvidia/cu13/...` but jax 0.10.0 only auto-discovers the `*-cu12`
+     layout, and mosaic's libdevice lookup ignores `--xla_gpu_cuda_data_dir` (falls back to a cwd-relative
+     `./libdevice.10.bc`). The bench's `_ensure_cuda_toolchain()` (runs before `import jax`) locates both
+     pieces on sys.path, assembles a synthetic CUDA root (symlinked `bin/` + `nvvm/`), sets
+     `XLA_FLAGS=--xla_gpu_cuda_data_dir`, `CUDA_DIR/HOME/PATH`, AND drops a cwd `./libdevice.10.bc` symlink.
+     All three are needed; with them mosaic compiles cleanly. Job `/matt/iris-run-bench_ragged_mosaic_f8-20260624-213109`.
+- **Result — autotuned forward, same mosaic kernel, bf16 vs f8e4m3 (per-GEMM TF/s, real trial regime hidden=1024 F=512):**
+
+  | bucket | gemm | bf16 | f8e4m3 | f8/bf16 |
+  |--------|------|------|--------|---------|
+  | ep8 (8exp)  | gateup (K1024 N1024) | 389.1 | **580.3** | **1.49×** |
+  | ep8         | down   (K512  N1024) | 263.5 | **370.8** | **1.41×** |
+  | dp64 (64exp)| gateup               | 309.5 | **419.1** | **1.35×** |
+  | dp64        | down                 | 204.6 | **244.0** | **1.19×** |
+
+  f8's best configs are all `block_k=128` vs bf16's `block_k=64`: f8's 1-byte operands let a 2× larger
+  K-tile fit the ~228KB smem budget, which is part of the win (bigger K-tiles → better MMA efficiency).
+  `relfrob=0` here is a correctness guard only (f8-kernel vs f8-XLA reference, both f8 → exact match);
+  the f8-vs-bf16 precision is rel_frob ≈ 0.066 from GFP8-021 (same per-tensor quant math).
+- **Verdict — (a) is VALIDATED on the forward.** A genuine Hopper f8 wgmma grouped GEMM beats bf16 by
+  **1.19–1.49×** on the forward at the real trial-model regime — the opposite of the triton result, and
+  the reversal is attributable entirely to the backend (mosaic's real f8 wgmma vs triton's). Note mosaic
+  bf16 per-GEMM (389/309) already ≥ the S5 triton bf16 forward (342/253), so mosaic is a strong baseline
+  and f8 extends the lead. **Caveats / not yet done:** (1) forward only — the backward is two more grouped
+  GEMMs (dgrad dY@W, wgrad Xᵀ@dY) with e5m2 grads; wgmma still forbids mixed e4m3×e5m2 (`wgmma.py:359`),
+  so the backward needs same-f8-type operands or a cast, and must beat the bf16 fwd+bwd bar to count;
+  (2) per-GEMM, not the fused MLP / end-to-end; (3) cross-kernel (mosaic-vs-triton) needs a like-for-like
+  rerun. Next: build the mosaic f8 backward and integrate as a `haliax.nn.ragged_dot` implementation with
+  per-tensor delayed scaling + custom_vjp.
+- **Repro:** re-pin to the 3.11 dep context (cluster image is still 3.11.14, GFP8-021 infra note), then
+  `… job run --gpu H100x1 --enable-extra-resources --extra gpu --memory 24GB --disk 32GB
+  -- python lib/levanter/scripts/bench/bench_ragged_mosaic_f8.py`. The bench self-heals the ptxas/libdevice
+  toolchain; no XLA_FLAGS needed on the command line.
