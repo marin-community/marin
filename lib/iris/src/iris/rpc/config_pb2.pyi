@@ -486,18 +486,20 @@ class IapAuthConfig(_message.Message):
     def __init__(self, url: _Optional[str] = ..., oauth_client_id: _Optional[str] = ..., oauth_client_secret: _Optional[str] = ..., audiences: _Optional[_Iterable[str]] = ..., signed_header_audience: _Optional[str] = ...) -> None: ...
 
 class AuthConfig(_message.Message):
-    __slots__ = ("gcp", "static", "iap", "admin_users", "optional")
+    __slots__ = ("gcp", "static", "iap", "admin_users", "optional", "allow_unauthenticated_elevated_profiles")
     GCP_FIELD_NUMBER: _ClassVar[int]
     STATIC_FIELD_NUMBER: _ClassVar[int]
     IAP_FIELD_NUMBER: _ClassVar[int]
     ADMIN_USERS_FIELD_NUMBER: _ClassVar[int]
     OPTIONAL_FIELD_NUMBER: _ClassVar[int]
+    ALLOW_UNAUTHENTICATED_ELEVATED_PROFILES_FIELD_NUMBER: _ClassVar[int]
     gcp: GcpAuthConfig
     static: StaticAuthConfig
     iap: IapAuthConfig
     admin_users: _containers.RepeatedScalarFieldContainer[str]
     optional: bool
-    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., iap: _Optional[_Union[IapAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ...) -> None: ...
+    allow_unauthenticated_elevated_profiles: bool
+    def __init__(self, gcp: _Optional[_Union[GcpAuthConfig, _Mapping]] = ..., static: _Optional[_Union[StaticAuthConfig, _Mapping]] = ..., iap: _Optional[_Union[IapAuthConfig, _Mapping]] = ..., admin_users: _Optional[_Iterable[str]] = ..., optional: _Optional[bool] = ..., allow_unauthenticated_elevated_profiles: _Optional[bool] = ...) -> None: ...
 
 class WorkerProviderConfig(_message.Message):
     __slots__ = ()

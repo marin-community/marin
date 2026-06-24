@@ -759,6 +759,7 @@ class TaskAttempt:
             entrypoint=rt_ep,
             env=env,
             resources=self.request.resources if self.request.HasField("resources") else None,
+            container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             workdir_host_path=self.workdir,

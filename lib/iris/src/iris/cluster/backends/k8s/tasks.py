@@ -70,6 +70,7 @@ from iris.cluster.runtime.profile import (
 from iris.cluster.types import JobName, TaskAttempt, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -495,6 +496,45 @@ def _build_pdb_manifest(
     }
 
 
+def _security_context(profile: int, has_tpu: bool) -> dict:
+    """Build the container ``securityContext`` for a container security profile.
+
+    DOCKER_ACCESS is rejected: k8s nodes run containerd, not a docker daemon, so
+    there is no host docker socket to mount. Silently returning a weaker context
+    would fake nested-container isolation the pod does not have, so we fail fast.
+    """
+    resolved = resolve_container_profile(profile)
+
+    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+        raise ValueError(
+            "container profile DOCKER_ACCESS is not supported on the Kubernetes backend "
+            "(nodes run containerd, not dockerd, so there is no host docker socket); use "
+            "the docker worker backend, or PRIVILEGED with an in-pod runtime"
+        )
+
+    if resolved == job_pb2.CONTAINER_PROFILE_RESTRICTED:
+        # Hardened ("restricted-ish"): drop all caps, block privilege escalation,
+        # RuntimeDefault seccomp. Not full PSS Restricted (runAsNonRoot is not
+        # forced, since many task images run as root). Device caps are NOT added,
+        # so RESTRICTED+TPU loses the SYS_RESOURCE memlock cap — RESTRICTED is not
+        # intended for TPU tasks.
+        return {
+            "capabilities": {"drop": ["ALL"], "add": []},
+            "allowPrivilegeEscalation": False,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
+
+    # DEFAULT and PRIVILEGED keep the profiling cap; TPU adds the memlock cap.
+    capabilities = ["SYS_PTRACE"]
+    if has_tpu:
+        capabilities.append("SYS_RESOURCE")
+    ctx: dict = {"capabilities": {"add": capabilities}}
+    if resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED:
+        ctx["privileged"] = True
+        ctx["allowPrivilegeEscalation"] = True
+    return ctx
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -590,11 +630,10 @@ def _build_pod_manifest(
     if config.env_secret_name:
         container["envFrom"] = [{"secretRef": {"name": config.env_secret_name, "optional": True}}]
 
-    # SYS_PTRACE for profiling; SYS_RESOURCE for TPU memlock ulimits.
-    capabilities = ["SYS_PTRACE"]
-    if has_tpu:
-        capabilities.append("SYS_RESOURCE")
-    container["securityContext"] = {"capabilities": {"add": capabilities}}
+    # Container security profile -> securityContext (capabilities, privileged).
+    # DEFAULT keeps today's SYS_PTRACE (+SYS_RESOURCE on TPU); RESTRICTED hardens;
+    # PRIVILEGED elevates. DOCKER_ACCESS is rejected on this backend.
+    container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
 
     if resources:
         container["resources"] = resources

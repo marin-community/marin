@@ -29,6 +29,7 @@ from iris.cluster.backends.k8s.tasks import (
     _pod_group_name,
     _pod_name,
     _sanitize_label_value,
+    _security_context,
     _task_hash,
     _task_update_from_pod,
 )
@@ -553,6 +554,59 @@ def test_sys_ptrace_capability():
     manifest = _build_pod_manifest(req, pod_config())
     container = manifest["spec"]["containers"][0]
     assert "SYS_PTRACE" in container["securityContext"]["capabilities"]["add"]
+
+
+# ---------------------------------------------------------------------------
+# Container security profiles
+# ---------------------------------------------------------------------------
+
+
+def test_default_profile_matches_baseline():
+    """UNSPECIFIED resolves to DEFAULT: today's SYS_PTRACE-only context."""
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_UNSPECIFIED, has_tpu=False)
+    assert ctx == {"capabilities": {"add": ["SYS_PTRACE"]}}
+
+
+def test_restricted_profile_drops_all_caps():
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=False)
+    assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}
+    assert ctx["allowPrivilegeEscalation"] is False
+    assert ctx["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert "privileged" not in ctx
+
+
+def test_restricted_profile_omits_tpu_cap():
+    """RESTRICTED must not leak the SYS_RESOURCE device cap, even on TPU."""
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_RESTRICTED, has_tpu=True)
+    assert ctx["capabilities"] == {"drop": ["ALL"], "add": []}
+
+
+def test_privileged_profile_sets_privileged():
+    ctx = _security_context(job_pb2.CONTAINER_PROFILE_PRIVILEGED, has_tpu=False)
+    assert ctx["privileged"] is True
+    assert ctx["allowPrivilegeEscalation"] is True
+    assert "SYS_PTRACE" in ctx["capabilities"]["add"]
+
+
+def test_docker_access_rejected_on_k8s():
+    """DOCKER_ACCESS has no host docker socket on k8s nodes; fail fast."""
+    with pytest.raises(ValueError, match="DOCKER_ACCESS is not supported"):
+        _security_context(job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS, has_tpu=False)
+
+
+def test_privileged_profile_applied_to_pod_manifest():
+    """A PRIVILEGED RunTaskRequest produces a privileged container securityContext."""
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_PRIVILEGED
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["containers"][0]["securityContext"]["privileged"] is True
+
+
+def test_docker_access_pod_manifest_raises():
+    req = make_run_req("/my-job/task-0")
+    req.container_profile = job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+    with pytest.raises(ValueError, match="DOCKER_ACCESS is not supported"):
+        _build_pod_manifest(req, pod_config())
 
 
 # ---------------------------------------------------------------------------

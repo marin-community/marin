@@ -98,7 +98,13 @@ from iris.rpc.auth import (
     get_verified_identity,
     require_identity,
 )
-from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
+from iris.rpc.proto_display import (
+    container_profile_is_elevated,
+    container_profile_name,
+    job_state_friendly,
+    priority_band_name,
+    task_state_friendly,
+)
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -1088,6 +1094,34 @@ class ControllerServiceImpl:
                     f"either to be added to the researcher list or to confirm your username is "
                     f"registered correctly.",
                 )
+
+        # Container security profile authorization.
+        #
+        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent,
+        # so they are gated harder than priority bands:
+        # - With an auth provider configured, they require admin (loopback
+        #   callers resolve to admin, the intended host-trust path).
+        # - In null-auth mode they are rejected by default — unlike PRODUCTION
+        #   priority, whose blast radius is only a scheduling band. An operator
+        #   running a trusted single-tenant null-auth cluster opts in via
+        #   AuthConfig.allow_unauthenticated_elevated_profiles.
+        # RESTRICTED and DEFAULT are unprivileged and need no authorization.
+        if container_profile_is_elevated(request.container_profile):
+            if self._auth.provider:
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            elif not self._auth.allow_unauthenticated_elevated_profiles:
+                raise ConnectError(
+                    Code.PERMISSION_DENIED,
+                    f"Container profile {container_profile_name(request.container_profile)} is "
+                    "elevated (host-root-equivalent) and cannot be used on a controller without "
+                    "an auth provider. Configure authentication, or set "
+                    "auth.allow_unauthenticated_elevated_profiles for a trusted single-tenant cluster.",
+                )
+            logger.info(
+                "Job %s authorized for elevated container profile %s",
+                job_id.to_wire(),
+                container_profile_name(request.container_profile),
+            )
 
         # Cap the number of non-terminal tasks a single user may hold at once.
         # A burst of eval submissions once materialized enough tasks to OOM the

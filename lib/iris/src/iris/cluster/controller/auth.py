@@ -287,6 +287,10 @@ class ControllerAuth:
     # Verifies IAP's signed-header assertion to authenticate tokenless callers
     # behind IAP (only when an IAP signed_header_audience is set).
     iap_assertion_verifier: IapAssertionVerifier | None = None
+    # Allow elevated container profiles (DOCKER_ACCESS, PRIVILEGED) when no auth
+    # provider is configured. Consulted only in null-auth mode; with a provider,
+    # elevated profiles are gated on the admin role instead.
+    allow_unauthenticated_elevated_profiles: bool = False
 
 
 # How long a resolved IAP email->role mapping is cached before re-reading the
@@ -341,9 +345,16 @@ def create_controller_auth(
 
             worker_token = _create_worker_jwt(db, jwt_mgr, now)
             logger.info("Authentication disabled — null-auth mode (workers use JWT)")
-            return ControllerAuth(verifier=jwt_mgr, worker_token=worker_token, jwt_manager=jwt_mgr)
+            return ControllerAuth(
+                verifier=jwt_mgr,
+                worker_token=worker_token,
+                jwt_manager=jwt_mgr,
+                allow_unauthenticated_elevated_profiles=auth_config.allow_unauthenticated_elevated_profiles,
+            )
         logger.info("Authentication disabled — null-auth mode, no DB")
-        return ControllerAuth()
+        return ControllerAuth(
+            allow_unauthenticated_elevated_profiles=auth_config.allow_unauthenticated_elevated_profiles
+        )
 
     provider = auth_config.WhichOneof("provider")
     now = Timestamp.now()
@@ -422,6 +433,7 @@ def create_controller_auth(
         jwt_manager=jwt_mgr,
         optional=optional,
         iap_assertion_verifier=iap_assertion_verifier,
+        allow_unauthenticated_elevated_profiles=auth_config.allow_unauthenticated_elevated_profiles,
     )
 
 

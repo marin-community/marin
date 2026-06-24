@@ -586,6 +586,21 @@ enum PriorityBand {
   PRIORITY_BAND_BATCH = 3;        // opportunistic, preemptible
 }
 
+// Named container security posture. Selects a bundle of container/pod security
+// settings instead of exposing individual docker/k8s knobs. The two elevated
+// profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent and require
+// authorization at submission (see service.LaunchJob); RESTRICTED and DEFAULT
+// are unprivileged and need none. Numeric order is used only to detect
+// elevation (rank > DEFAULT), not as a relative-danger ladder: DOCKER_ACCESS
+// and PRIVILEGED are distinct dangerous capabilities, neither implies the other.
+enum ContainerProfile {
+  CONTAINER_PROFILE_UNSPECIFIED = 0;    // resolves to DEFAULT
+  CONTAINER_PROFILE_RESTRICTED = 1;     // hardened: drop ALL caps, no-new-privileges, default seccomp
+  CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
+  CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
+  CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
+}
+
 // ============================================================================
 // TASK RUNTIME TYPES (shared between controller and worker)
 // ============================================================================
@@ -626,4 +641,11 @@ message RunTaskRequest {
   // Effective priority band for the owning job, used to select the Kueue
   // WorkloadPriorityClass on the K8s direct path. UNSPECIFIED => INTERACTIVE.
   PriorityBand priority = 14;
+
+  // Container security profile for the owning job. Stamped by the controller
+  // from the persisted (and authorized) job row; the worker trusts this value
+  // and applies the matching docker/pod security settings. UNSPECIFIED =>
+  // DEFAULT. Never set directly by a client — clients request a profile via
+  // LaunchJobRequest.container_profile, which the controller authorizes.
+  ContainerProfile container_profile = 15;
 }

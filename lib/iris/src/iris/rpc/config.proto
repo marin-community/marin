@@ -489,6 +489,14 @@ message AuthConfig {
   // docs/auth-loopback-transition.md. Loopback origin is verified from the
   // transport peer and cannot be spoofed via X-Forwarded-For.
   bool optional = 4;
+
+  // Allow elevated container profiles (DOCKER_ACCESS, PRIVILEGED) on a
+  // controller with no auth provider configured. These profiles are
+  // host-root-equivalent, so they are rejected by default in null-auth mode;
+  // set this only for a trusted single-tenant cluster. When an auth provider
+  // IS configured, elevated profiles are gated on the admin role instead and
+  // this flag is ignored.
+  bool allow_unauthenticated_elevated_profiles = 6;
 }
 
 // ============================================================================
