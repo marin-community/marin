@@ -40,6 +40,7 @@ from haliax.partitioning import set_mesh
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES
+from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS
 
 from experiments.grug.moe import model as grug_model
 from experiments.grug.moe.model import Transformer
@@ -51,6 +52,46 @@ from experiments.grug.moe_pp.pipeline_manual import (
 )
 
 _REPLICATED = P()
+# Muon's production quintic Newton-Schulz coefficients (levanter.optim.util). The
+# levanter helper pins a ``with_sharding_constraint`` that asserts (not reshards) under
+# Explicit-axis meshes, so the iteration is inlined here; the math is identical.
+_MUON_QUINTIC = NEWTON_SCHULZ_COEFFICIENTS["quintic"]
+
+
+def _newton_schulz(x: jax.Array, eps: float = 1e-7) -> jax.Array:
+    """Orthogonalize a 2D matrix via Muon's 5-step quintic Newton-Schulz iteration."""
+    x = x / (jnp.linalg.norm(x) + eps)
+    transpose = x.shape[0] > x.shape[1]
+    if transpose:
+        x = x.T
+    for a, b, c in _MUON_QUINTIC:
+        gram = x @ x.T
+        x = a * x + (b * gram + c * (gram @ gram)) @ x
+    return x.T if transpose else x
+
+
+def _orthogonalize(g: jax.Array) -> jax.Array:
+    """Muon-orthogonalize a weight-grad over its last two dims (the optimizer's heavy op).
+
+    Vmaps any leading stack/expert dims; leaves of rank < 2 (norm scales, biases -- the
+    adamw side of Muon) pass through. The iteration's ``x @ x.T`` matmuls contract a
+    dimension that is sharded under a data-sharded (FSDP) mesh, so XLA inserts the
+    cross-device reduction every step; under a single-device stage sub-mesh the same
+    matmuls are local. Orthogonalizing the per-stage grads on each stage's own devices --
+    instead of all-gathering the full model's grads -- is the cost the pipeline amortizes.
+    """
+    if g.ndim < 2:
+        return g
+    if g.ndim == 2:
+        return _newton_schulz(g)
+    flat = g.reshape((-1, *g.shape[-2:]))
+    return jax.vmap(_newton_schulz)(flat).reshape(g.shape)
+
+
+def orthogonalize_tree(tree):
+    """Muon-orthogonalize every rank>=2 array leaf of a grad pytree (rank<2 passes through)."""
+    return jax.tree_util.tree_map(_orthogonalize, tree)
+
 
 # Diagnostic: when MOE_PP_TRACE=1, step() blocks after the forward sweep and again after
 # the backward sweep and logs each wall time, to see whether a sweep overlaps stages or runs
@@ -208,6 +249,7 @@ def zb_build(
     data_per_stage: int = 1,
     schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
+    muon: bool = False,
 ):
     """Place params on per-stage sub-meshes and compile the stage fns ONCE.
 
@@ -216,6 +258,11 @@ def zb_build(
     compiled stage fns across calls. Hoisting this setup out of the step is what makes
     the pipeline timeable (and usable in a real training loop) instead of recompiling
     every iteration. See :class:`Schedule` for the op-order variants.
+
+    With ``muon`` each block's weight-grad is Muon-orthogonalized (Newton-Schulz) on its
+    own stage's devices as part of the step, so the optimizer's heavy matmuls pipeline
+    across stages with no cross-stage all-gather -- the FSDP grad-exchange the pipeline
+    is meant to amortize.
 
     Stages own disjoint device slices of ``expert_per_stage * data_per_stage`` devices
     each (so ``num_stages * expert_per_stage * data_per_stage == device_count``).
@@ -278,6 +325,7 @@ def zb_build(
     split_w = schedule is Schedule.ZERO_BUBBLE
     use_schedule = schedule is not Schedule.GPIPE
     op_order = pipeline_schedule(num_stages, num_microbatches, split_w=split_w) if use_schedule else []
+    muon_fn = jax.jit(orthogonalize_tree) if muon else None
 
     def step(token_ids: jax.Array, loss_weight: jax.Array) -> tuple[jax.Array, tuple, list]:
         """Run one pipelined forward+backward over the global batch; returns ``(loss, g_eh, g_blocks)``.
@@ -417,6 +465,17 @@ def zb_build(
                     (g_embed_m,) = embed_bwd(eh0, tok_mb[m], d_hidden)
                 g_eh = _accum_embed_head(g_embed_m, g_head_m, g_eh)
 
+        # Muon optimizer: orthogonalize each block's weight-grad on its own stage's
+        # devices. Dispatched block-major (round-robin across stages) so all P stages
+        # run Newton-Schulz concurrently -- no all-gather, unlike FSDP where each weight's
+        # grad must be gathered across the data axis first.
+        if muon_fn is not None:
+            for j in range(lps):
+                for s in range(num_stages):
+                    layer = s * lps + j
+                    with set_mesh(submeshes[s]):
+                        g_blocks[layer] = muon_fn(g_blocks[layer])
+
         # Loss (deferred reduction; the backward seeds are constants, so this never gates it).
         per_mb_loss = []
         for m in range(num_microbatches):
@@ -457,6 +516,7 @@ def zb_value_and_grad(
     data_per_stage: int = 1,
     schedule: Schedule = Schedule.ZERO_BUBBLE,
     remat: bool = True,
+    muon: bool = False,
 ) -> tuple[jax.Array, tuple, list]:
     """One-shot ``(loss, embed_head_grads, block_grads)`` (builds + steps once).
 
@@ -471,5 +531,6 @@ def zb_value_and_grad(
         data_per_stage=data_per_stage,
         schedule=schedule,
         remat=remat,
+        muon=muon,
     )
     return step(token_ids, loss_weight)
