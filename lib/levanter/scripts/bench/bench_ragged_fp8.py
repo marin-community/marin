@@ -48,6 +48,7 @@ from haliax.quantization import Fp8RaggedDotOp
 # Triton kernel tuning knobs (env-driven; see haliax.nn.ragged_dot). Echoed into
 # result_json so each swept arm is self-attributing.
 _TUNE_ENV_KEYS = (
+    "RAGGED_DOT_BLOCK_M",
     "RAGGED_DOT_BLOCK_K",
     "RAGGED_DOT_BLOCK_N",
     "RAGGED_DOT_NUM_WARPS",

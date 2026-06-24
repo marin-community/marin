@@ -40,6 +40,7 @@ except (ImportError, ModuleNotFoundError):
 Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
+_TRITON_DEFAULT_BLOCK_M = 128
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
 _TRITON_DEFAULT_BLOCK_K = 32
@@ -166,7 +167,7 @@ def _triton_ragged_dot_kernel(
 
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
-    block_m = min(128, int(pl.next_power_of_2(m)))
+    block_m = min(_env_int("RAGGED_DOT_BLOCK_M", _TRITON_DEFAULT_BLOCK_M), int(pl.next_power_of_2(m)))
     default_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
     block_n = min(_env_int("RAGGED_DOT_BLOCK_N", default_block_n), int(pl.next_power_of_2(n)))
     block_k = min(_env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K), int(pl.next_power_of_2(k)))
@@ -250,7 +251,7 @@ def _triton_ragged_contracting_dim_pallas_call(
     k, m = lhs.shape
     _, n = rhs.shape
 
-    block_m = min(128, int(pl.next_power_of_2(m)))
+    block_m = min(_env_int("RAGGED_DOT_BLOCK_M", _TRITON_DEFAULT_BLOCK_M), int(pl.next_power_of_2(m)))
     block_n = min(_env_int("RAGGED_DOT_BLOCK_N", _TRITON_DEFAULT_BLOCK_N), int(pl.next_power_of_2(n)))
     block_k = min(_env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K), int(pl.next_power_of_2(k)))
 
