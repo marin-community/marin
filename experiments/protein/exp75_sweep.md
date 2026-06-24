@@ -474,18 +474,25 @@ _Append wave summaries and the per-epoch confirmed optima here as runs finish._
   E4 center & 4 axis-neighbors + 5e-4/0.05) run interactive and serve all search goals.
 - Grid (final-step `eval/contacts-v1-val/loss`):
 
-  | wd \ lr | 5e-4 | 7e-4 | 1e-3 |
-  |---|---|---|---|
-  | **0.05** | 2.962 | 2.949 | **2.924** |
-  | **0.1**  | 2.958 | 2.937 | 2.942 |
-  | **0.2**  | 2.949 | 2.938 | 2.934 |
-  _(E4 base 3×3 COMPLETE 9/9. Min = 1e-3/wd0.05=2.924 on the high-LR/low-WD corner; 1e-3 col
-  wd0.05<wd0.2<wd0.1. Corner extensions 1.5e-3/0.05, 2e-3/0.05, 1e-3/0.02 running to test it.)_
+  | wd \ lr | 5e-4 | 7e-4 | 1e-3 | 1.5e-3 | 2e-3 |
+  |---|---|---|---|---|---|
+  | **0.02** | | | 2.931 | | |
+  | **0.05** | 2.962 | 2.949 | **2.924** | 2.955 | 2.968\* |
+  | **0.1**  | 2.958 | 2.937 | 2.942 | | |
+  | **0.2**  | 2.949 | 2.938 | 2.934 | | |
+  _(\* 2e-3/0.05 crashed at 77%, last eval 2.968 — not final, but already worse and redundant:
+  the immediate LR-above neighbor 1.5e-3/0.05=2.955 already brackets 1e-3. E4 base 3×3 + corner
+  extensions COMPLETE for the optimum check.)_
 
-- Confirmed optimum: `lr=…, wd=…`, loss=…; neighbors all worse? ☐ — **8/9 in (only 1e-3/0.2
-  still running, mid 2.960). New min = `1e-3/0.05` FINISHED at 2.924 (~23:15Z)** — beats the
-  center 7e-4/0.1=2.937. **The min sits on the high-LR + low-WD CORNER (double edge), NOT
-  interior.** Key structure — an LR×WD interaction:
+- ✅ **CONFIRMED optimum: `lr=1e-3, wd=0.05`, loss=2.924; all 4 axis neighbors worse.**
+  (~2026-06-24) The two corner-extension finals landed on v5p-64, both worse, closing both
+  open edges: LR-above `1.5e-3/0.05=2.955` ✓ and WD-below `1e-3/0.02=2.931` ✓ (LR-below
+  `7e-4/0.05=2.949` ✓ and WD-above `1e-3/0.1=2.942` ✓ were already in). 1e-3/0.05 is now a
+  bracketed interior min on both axes. `2e-3/0.05` (crashed 77%, eval 2.968) is redundant —
+  the immediate neighbor 1.5e-3 already brackets, and LR is monotone up past 1e-3
+  (2.924→2.955→2.968). **E4 DONE. Whole sweep (E1/E2/E4/E8) now complete.**
+  _History (the corner finding): new min = `1e-3/0.05` FINISHED at 2.924 (~23:15Z 06-21)_ — beats
+  the center 7e-4/0.1=2.937. The min sat on the high-LR + low-WD CORNER (double edge):
   - 5e-4 col: WD↑ helps (0.05/0.1/0.2 = 2.962/2.958/2.949)
   - 7e-4 col: flat min at wd0.1 (2.949/2.937/2.938)
   - 1e-3 col: WD↓ helps (2.924/2.942/~2.96) ← opposite slope; best overall at low WD
