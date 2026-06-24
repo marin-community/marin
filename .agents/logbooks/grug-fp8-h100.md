@@ -850,3 +850,39 @@ confirms the path.
   transpose fusions, so trust the operand-layout dtypes (arm 5 full HLO), not the flag alone.
 - **Repro:** `uv run iris --cluster=cw-us-east-02a job run --gpu H100x1 --enable-extra-resources --extra gpu
   --cpu 4 --memory 64GB -- bash lib/levanter/scripts/bench/_s5_ragged_validate.sh`.
+
+### 2026-06-24 — GFP8-018: independent review TEMPERS GFP8-017 — "B required" is premature; retune+dtype-fix first
+- **Method:** two independent reviewers (codex; opencode/glm-5.2) given the raw GFP8-017 evidence (result_json
+  numbers, verbatim HLO operand layouts, the backward traceback) + repo read access + a neutral, symmetric A/B
+  framing with my interpretation withheld and contradiction explicitly invited.
+- **Both reviewers verified the facts** independently: flop model `6·T·D·F` correct (TFLOP/s reproduced
+  exactly); f8e4m3 operands genuinely reach the Triton GEMM (operand_layout_constraints `f8e4m3fn[…]` → bf16
+  out — not upcast before the kernel); fwd 241 vs 411 TFLOP/s (0.59×) is real and outside noise; numerics 6.6%
+  are an acceptable cold-start snapshot, not the blocker.
+- **Correction 1 — the backward crash is NOT fundamental.** Both reviewers: `jnp.result_type(e5m2, e4m3)` is a
+  localized kernel dtype bug, not a math/hardware limit. The dense path already runs mixed E5M2×E4M3 grad dots
+  via `lax.dot_general` (fp8.py:306-323, validated fwd+bwd `$f8` in GFP8-016); the Pallas kernel just needs to
+  stop asking JAX for implicit f8 promotion (cast to an explicit compute dtype). XLA backward already works
+  (CPU tests pass). GFP8-017 over-weighted this as a co-equal "B driver"; it is a small fix.
+- **Correction 2 — the forward slowdown is most plausibly UNTUNED TILING, not proven f8-MMA failure.** The
+  kernel hardcodes `block_k=32`, `num_warps=4`, `num_stages=4` with **no autotuning** (ragged_dot.py:117-122,
+  145). f8 halves operand bytes, so a 32-wide K-block starves the f8 MMA; the bf16 arm is itself only 42% MFU,
+  i.e. the defaults are generally untuned. **We have not shown the f8 tensor-core MMA fails to engage** — that
+  needs a block-size sweep and/or Triton-IR/SASS (the `ir=` HLO blob is encoded). GFP8-017's "non-f8-rate MMA"
+  phrasing asserted more than the evidence supports.
+- **Where the reviewers diverge (priors, not facts):** glm-5.2 — evidence does *not* mandate B; the gap is
+  "fully explained by untuned tiling + a dtype bug," both tweaks *within* the existing kernel; escalate to a
+  rewrite only if f8 still loses after retuning. codex — leans that a real win likely needs kernel-level f8
+  design (tile shapes, possibly separate fwd/dlhs/drhs paths), "not merely change result_type and tune one
+  constant"; medium confidence on how extensive. Both gate the same next step.
+- **Revised verdict (supersedes GFP8-017's "B required"):** Approach A's *plumbing* is sound and proven
+  (f8 → GEMM → bf16, numerics fine). Approach A *as implemented on the unmodified kernel* does not win. But the
+  binary A-vs-B was too coarse: the evidence points first to a **"B-lite"** middle — (1) replace the kernel's
+  `jnp.result_type` mixed-f8 cast with an explicit compute dtype (unblocks backward); (2) autotune/widen
+  `block_k` (and warps/stages) for the f8 tile. A from-scratch f8-aware rewrite is justified **only if** f8
+  still loses bf16 after (1)+(2). Not yet earned.
+- **Decisive next experiment:** at the real shape, sweep `block_k ∈ {32,64,128,256}` × warps/stages for f8
+  fwd (and re-run the same forced blocks for bf16 to isolate tiling), fix the `result_type` dtype handling and
+  re-run the fwd+bwd arm, and dump readable Triton IR (`.ttgir`) to confirm `pl.dot(f8,f8)` emits an f8 `tl.dot`
+  rather than an upcast. If tuned f8 crosses bf16 → stay in A(+tuning); if not → escalate to B with the
+  bottleneck identified.
