@@ -90,8 +90,8 @@ def test_fa4_frontend_rejects_mismatched_q_kv_segment_ids():
         jax.block_until_ready(gpu_fa4_cute_attention(q, k, v, mask))
 
 
-@pytest.mark.parametrize(("q_heads", "kv_heads"), [(4, 1), (2, 2)])
-def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads):
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])
+def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
     pytest.importorskip("cutlass")
@@ -99,9 +99,9 @@ def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
     key = jax.random.PRNGKey(4)
     q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
-    q = jax.random.normal(q_key, (1, 64, q_heads, 64), dtype=jnp.bfloat16)
-    k = jax.random.normal(k_key, (1, 64, kv_heads, 64), dtype=jnp.bfloat16)
-    v = jax.random.normal(v_key, (1, 64, kv_heads, 64), dtype=jnp.bfloat16)
+    q = jax.random.normal(q_key, (1, 64, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 64, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 64, kv_heads, head_dim), dtype=jnp.bfloat16)
     segment_ids = jnp.array(
         [[37] * 17 + [42] * 23 + [43] * 21 + [-1] * 3],
         dtype=jnp.int32,

@@ -1491,12 +1491,16 @@ def _allow_tuple_aux_tensors_for_nested_sm90(backward_cls: Any) -> None:
     # rejects the Grug lower_bounds/valid pair before codegen. Relaxing only this
     # annotation keeps upstream's kernel body intact while allowing the two aux
     # arrays to flow through the nested mask_mod call.
+    patched = False
     for method_name in ("__call__", "kernel"):
         method = getattr(backward_cls, method_name, None)
         for target in (method, getattr(method, "__wrapped__", None)):
             annotations = getattr(target, "__annotations__", None)
             if annotations is not None and "aux_tensors" in annotations:
                 annotations["aux_tensors"] = Any
+                patched = True
+    if not patched:
+        raise RuntimeError("Installed SM90 backward kernel no longer exposes an aux_tensors annotation to patch.")
 
 
 def _patch_jax_array_list_tvm_ffi_converter() -> None:
