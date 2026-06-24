@@ -4,6 +4,7 @@
 """Validate the experimental MoE dispatch-up Mosaic GPU subkernel."""
 
 import argparse
+import math
 import time
 from collections.abc import Callable
 
@@ -119,6 +120,8 @@ def _make_inputs(
     hidden: int,
     intermediate: int,
     dtype: jnp.dtype,
+    weight_init: str,
+    weight_std: float | None,
 ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     num_experts = ep_size * experts_per_rank
     k_x, k_w = jax.random.split(jax.random.key(6597))
@@ -131,7 +134,14 @@ def _make_inputs(
         jnp.arange(ep_size * tokens_per_rank * top_k, dtype=jnp.float32).reshape(ep_size, tokens_per_rank, top_k),
         axis=-1,
     ).astype(dtype)
-    w_gate_up = jax.random.normal(k_w, (ep_size, experts_per_rank, hidden, 2 * intermediate), dtype=dtype)
+    w_shape = (ep_size, experts_per_rank, hidden, 2 * intermediate)
+    if weight_init == "grug_truncated":
+        std = 0.5 / math.sqrt(hidden) if weight_std is None else weight_std
+        w_gate_up = (std * jax.random.truncated_normal(k_w, -3, 3, w_shape)).astype(dtype)
+    elif weight_init == "standard_normal":
+        w_gate_up = jax.random.normal(k_w, w_shape, dtype=dtype)
+    else:
+        raise ValueError(f"unknown weight_init={weight_init!r}")
     return x_by_rank, expert_ids, router_weights, w_gate_up
 
 
@@ -294,6 +304,28 @@ def _print_error_debug(
     )
 
 
+def _print_error_summary(label: str, actual: jax.Array, expected: jax.Array) -> None:
+    actual_f32 = actual.astype(jnp.float32)
+    expected_f32 = expected.astype(jnp.float32)
+    abs_err = jnp.abs(actual_f32 - expected_f32)
+    denom = jnp.maximum(jnp.abs(expected_f32), 1.0)
+    rel_err = abs_err / denom
+    max_abs = jnp.max(abs_err)
+    max_mask = abs_err == max_abs
+    expected_abs_at_max = jnp.max(jnp.where(max_mask, jnp.abs(expected_f32), 0.0))
+    actual_abs_at_max = jnp.max(jnp.where(max_mask, jnp.abs(actual_f32), 0.0))
+    print(
+        f"{label}_error_summary: "
+        f"max_abs={float(max_abs):.6g} "
+        f"mean_abs={float(jnp.mean(abs_err)):.6g} "
+        f"rms_abs={float(jnp.sqrt(jnp.mean(abs_err * abs_err))):.6g} "
+        f"max_rel={float(jnp.max(rel_err)):.6g} "
+        f"mean_rel={float(jnp.mean(rel_err)):.6g} "
+        f"expected_abs_at_max={float(expected_abs_at_max):.6g} "
+        f"actual_abs_at_max={float(actual_abs_at_max):.6g}"
+    )
+
+
 def _check_error(label: str, value: float, tolerance: float) -> None:
     if value > tolerance:
         raise AssertionError(f"{label}={value:.6g} exceeds tolerance {tolerance:.6g}")
@@ -307,6 +339,18 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=4)
     parser.add_argument("--hidden", type=int, default=64)
     parser.add_argument("--intermediate", type=int, default=64)
+    parser.add_argument(
+        "--weight-init",
+        choices=("standard_normal", "grug_truncated"),
+        default="standard_normal",
+        help="Random expert weight distribution for W13/SiLU validation.",
+    )
+    parser.add_argument(
+        "--weight-std",
+        type=float,
+        default=None,
+        help="Override expert weight std. Defaults to 0.5/sqrt(hidden) for grug_truncated.",
+    )
     parser.add_argument("--block-m", type=int, default=64)
     parser.add_argument("--block-n", type=int, default=64)
     parser.add_argument("--block-k", type=int, default=64)
@@ -331,7 +375,8 @@ def main() -> None:
     print(
         "shape: "
         f"EP={args.ep_size} T/rank={args.tokens_per_rank} E/rank={args.experts_per_rank} "
-        f"K={args.top_k} H={args.hidden} I={args.intermediate} dtype={args.dtype}"
+        f"K={args.top_k} H={args.hidden} I={args.intermediate} dtype={args.dtype} "
+        f"weight_init={args.weight_init} weight_std={args.weight_std}"
     )
 
     x_by_rank, expert_ids, router_weights, w_gate_up = _make_inputs(
@@ -342,6 +387,8 @@ def main() -> None:
         hidden=args.hidden,
         intermediate=args.intermediate,
         dtype=dtype,
+        weight_init=args.weight_init,
+        weight_std=args.weight_std,
     )
     recv_capacity = args.ep_size * args.tokens_per_rank * args.top_k
     num_experts = args.ep_size * args.experts_per_rank
@@ -468,6 +515,7 @@ def main() -> None:
         h_err = jnp.max(jnp.abs(pallas_h.astype(jnp.float32) - ref_h.astype(jnp.float32)))
         h_err_float = float(h_err)
         print(f"w13_silu_max_abs_error: {h_err_float:.6g}")
+        _print_error_summary("w13_silu", pallas_h, ref_h)
         if args.debug_errors:
             _print_error_debug("w13_silu", pallas_h, ref_h, pallas_layout, w_gate_up)
         _check_error("w13_silu_max_abs_error", h_err_float, args.w13_atol)

@@ -173,3 +173,30 @@
 - Next action: Keep W13/SiLU as the viable fast subkernel and prioritize tiled
   SMEM-staged remote dispatch. Rerun the integrated shape after dispatch no
   longer lowers as a hidden-dimension scalar loop.
+
+### 2026-06-23 - Grug-consistent W13 correctness check
+
+- Hypothesis: The previous relevant-shape W13/SiLU max error of 128 may be an
+  artifact of using unrealistic standard-normal expert weights instead of the
+  Grug MoE initialization scale.
+- Command: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --gpu H100x8 --enable-extra-resources --cpu 16 --memory 160GB --disk 80GB --extra gpu --timeout 1800 --job-name 6597-moe-w13-gruginit-h2560-i2560-e256-summary -- ... bench_moe_dispatch_up_mosaic_gpu.py --ep-size 8 --tokens-per-rank 8 --experts-per-rank 32 --top-k 4 --hidden 2560 --intermediate 2560 --dtype bf16 --weight-init grug_truncated --run-pallas --pallas-w13-from-reference-layout --bench-iters 5 --warmup-steps 2`
+- Config: Single-node CoreWeave `cw-us-east-02a`, H100x8, explicit `expert`
+  mesh, bf16, `H=2560`, `I=2560`, `T/rank=8`, top-k 4, 32 local experts per
+  rank, 256 global experts. Expert weights used the Grug MoE distribution:
+  truncated normal in `[-3, 3] * (0.5 / sqrt(2560))`.
+- Result:
+  - JIT W13/SiLU steady-state mean 10.524 ms.
+  - Mosaic GPU W13/SiLU steady-state mean 0.640 ms, min 0.637 ms, max 0.648 ms,
+    or 16.44x faster than the JIT W13/SiLU baseline.
+  - Error summary: max abs 0.015625, mean abs 2.28e-05, RMS abs 1.77e-04,
+    max relative 0.0141, mean relative 2.27e-05. The max-error element had
+    expected abs 2.015625 and actual abs 2.0.
+  - Roofline summary, using the benchmark's H100 SXM assumptions: measured W13
+    10.48 TFLOP/s, estimated HBM-bound W13 roofline 26.79 TFLOP/s.
+- Interpretation: The prior max abs error of 128 was caused by the deliberately
+  unrealistic standard-normal weight scale. With Grug-consistent weight scale,
+  the W13/SiLU error is at bf16 rounding scale for this probe. The subkernel
+  still needs broader numerical sweeps before production use, but this run does
+  not indicate a routing or matmul correctness bug.
+- Next action: Keep Grug-style random inputs as the default comparison for
+  relevant-shape correctness claims, and continue prioritizing tiled dispatch.
