@@ -72,7 +72,8 @@ class CurvatureMuonConfig(OptimizerConfig):
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
     curvature_alpha: float = 1.0  # α ≥ 1, multiplier on the √e_max shift (α=1 = boundary PSD)
     curv_power: str = "linear"  # "linear" (C = P/√e_max) or "sqrt" (C = P^{1/2})
-    mudam_init: bool = False  # sqrt mode: warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction) vs msign(N)
+    mudam_init: bool = False  # warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k) vs msign(N)
+    mudam_steps: int = 5  # coupled-NS steps for the Mudam warm-start (kept small — stable only under-converged)
     inner_steps: int = 1  # K, inner fixed-point iterations
     power_iters: int = 8  # power-iteration steps for e_max(P) (warm-started) + Newton-Schulz steps for P^{1/2}
     # If set, the curvature strength tracks the LR schedule: lambda_t = curvature_lambda * lr_t / peak_lr.
@@ -101,6 +102,7 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.curvature_alpha,
                         self.curv_power,
                         self.mudam_init,
+                        self.mudam_steps,
                         self.inner_steps,
                         self.power_iters,
                         self.learning_rate,
@@ -158,8 +160,6 @@ class ScaleByCurvatureMuonState(NamedTuple):
 
 
 _EMAX_MARGIN = 1.05  # inflate the (lower-bound) Rayleigh e_max estimate so the operator stays strictly PSD
-_SQRT_FLOOR = 1e-2  # floor the normalized spectrum before the matrix-sqrt NS so its Z~A^{-1/2} stays bounded
-#                    (P is low-rank early on → near-zero eigenvalues would blow up the coupled iteration)
 
 
 def _matrix_sqrt_ns(a, iters):
@@ -179,6 +179,39 @@ def _matrix_sqrt_ns(a, iters):
     return y, z
 
 
+_MUON_NS_COEFFS = (3.4445, -4.7750, 2.0315)
+
+
+def _mudam_direction(n_t, p, steps, eps):
+    """polar( P^{-1/2}_coarse · N ) via the Mudam coupled-NS product form (Muon coeffs, eigh-free).
+
+    Ports levanter.optim.mudam.ns_generalized (muon branch + another_muon): never materializes P^{-1/2};
+    the few-step, under-converged Muon-coeff iteration SATURATES, giving the stable q_k inverse-sqrt of
+    PR #6588 (= the Mudam inner direction). Used as the optional warm start X⁰ for the curvature fixed
+    point. `steps` is kept small (~5) — the iteration is only stable while under-converged.
+    """
+    a, b, c = _MUON_NS_COEFFS
+    m = p.shape[0]
+    eye = jnp.eye(m, dtype=p.dtype)
+    x = n_t  # [M, N]
+    pp = p - x @ x.T  # so A₀ = X Xᵀ + P = p (the curvature); +εI below guards indefiniteness
+    nf = jnp.sqrt(jnp.sqrt(jnp.trace(pp @ pp) + eps) + eps + jnp.linalg.norm(x) ** 2)
+    x = x / nf
+    pp = pp / (nf * nf) + eps * eye
+    for _ in range(int(steps)):
+        amat = x @ x.T + pp
+        bmat = b * amat + c * (amat @ amat)
+        x = a * x + bmat @ x
+        pp = a * a * pp + a * (bmat @ pp + pp @ bmat) + bmat @ pp @ bmat
+    # another_muon: re-orthogonalize (msign) the whitened direction
+    x = x / (jnp.linalg.norm(x) + eps)
+    for _ in range(int(steps)):
+        amat = x @ x.T
+        bmat = b * amat + c * (amat @ amat)
+        x = a * x + bmat @ x
+    return x
+
+
 def _curv_direction_2d(
     g,
     n,
@@ -196,14 +229,15 @@ def _curv_direction_2d(
     power_iters,
     curv_power,
     mudam_init,
+    mudam_steps,
 ):
     """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
 
     Inner fixed point X = msign( N + λ·(α√e_max·I − C)·X ), curvature term C = P/√e_max (curv_power="linear",
     penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", ∝ √p_i). C has max eigenvalue √e_max ⟹ α√e_max·I − C is PSD
     for α≥1 ⟹ stable. lam_static gates on/off; lam_coef is the (possibly LR-tracked) coefficient. e_max(P)
-    via warm-started power iteration. mudam_init (sqrt mode only): warm-start X⁰ = msign(P^{-1/2} N) (the
-    Mudam direction, using the floored-NS inverse-sqrt iterate) instead of msign(N).
+    via warm-started power iteration. mudam_init: warm-start X⁰ = msign(P^{-1/2} N) (the Mudam direction,
+    via the safe coupled-NS q_k product form, `mudam_steps` iterations) instead of msign(N).
     """
     out, inn = g.shape
     transpose = out < inn
@@ -220,26 +254,22 @@ def _curv_direction_2d(
     se = jnp.sqrt(emax) + eps
     eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
 
-    # Curvature term C (and, in sqrt mode, the inverse-sqrt iterate for the optional Mudam warm start).
+    # Curvature term C.
     if curv_power == "sqrt":
         # Normalize by trace(P) ≥ λ_max(P) (sum of nonneg eigenvalues), so P/tr has spectrum ≤ 1 and the
         # coupled-NS sqrt CANNOT diverge. (Normalizing by the power-iteration e_max — a LOWER bound on
         # λ_max — let P/e_max exceed 1 when the estimate lagged, blowing up the NS → NaN loss.)
         tr = jnp.trace(new_p) + eps
-        s_tr = jnp.sqrt(tr)
         y_half, _ = _matrix_sqrt_ns(new_p / tr, power_iters)
-        curv = s_tr * y_half  # = P^{1/2}, exact regardless of the (over-)normalization constant
-        if mudam_init:
-            # Inverse-sqrt iterate needs a spectrum floor (Z ~ A^{-1/2} blows up near 0) ⟹ separate floored NS.
-            _, z_inv = _matrix_sqrt_ns(new_p / tr + _SQRT_FLOOR * eye, power_iters)
-            x0_arg = z_inv @ n_t  # ∝ (P + floor·tr·I)^{-1/2} N; msign scale-invariant
-        else:
-            x0_arg = n_t
+        curv = jnp.sqrt(tr) * y_half  # = P^{1/2}, exact regardless of the (over-)normalization constant
     else:
         curv = new_p / se  # P/√e_max
-        x0_arg = n_t
 
-    x = zeropower_via_newtonschulz5(x0_arg, steps=steps, eps=eps, coefficient_type=ctype)
+    # Warm start: Mudam direction msign(P^{-1/2} N) via the safe coupled-NS q_k (PR #6588), else msign(N).
+    if mudam_init:
+        x = _mudam_direction(n_t, new_p, mudam_steps, eps)
+    else:
+        x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
     if lam_static > 0.0:
         operator = lam_coef * (alpha * se * eye - curv)  # PSD for α≥1: λ(α√e_max I − C)
         for _ in range(int(inner_steps)):
@@ -261,6 +291,7 @@ def scale_with_curvature_muon(
     curvature_alpha=1.0,
     curv_power="linear",
     mudam_init=False,
+    mudam_steps=5,
     inner_steps=1,
     power_iters=8,
     peak_lr=0.02,
@@ -273,6 +304,7 @@ def scale_with_curvature_muon(
     alpha = float(curvature_alpha)
     cpow = str(curv_power)
     mudam = bool(mudam_init)
+    mudam_k = int(mudam_steps)
     peak_lr = float(peak_lr)
     tracks_lr = bool(lambda_tracks_lr)
 
@@ -346,6 +378,7 @@ def scale_with_curvature_muon(
                 power_iters=power_iters,
                 curv_power=cpow,
                 mudam_init=mudam,
+                mudam_steps=mudam_k,
             )
             new_p, new_q, x = jax.vmap(fn)(g, n, p, q) if g.ndim == 3 else fn(g, n, p, q)
             new_w = dataclasses.replace(n_layer.weight, array=x)
