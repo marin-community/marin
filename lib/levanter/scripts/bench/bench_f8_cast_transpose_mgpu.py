@@ -108,23 +108,20 @@ def main():
 
         print(f"=== {name} [{m},{k}]  read-bound floor {floor_ms:.4f}ms ===")
 
-        # Correctness + timing for each kernel mode.
-        for mode in ("reg", "ref"):
-            try:
-                fn = lambda xx: cast_transpose_mgpu(
-                    xx, scale, block_m=args.block_m, block_k=args.block_k, transpose_mode=mode
-                )
-                q, qt = jax.block_until_ready(jax.jit(fn)(x))
-                ok_q = np.array_equal(np.asarray(q).view(np.uint8), np.asarray(q_ref).view(np.uint8))
-                ok_qt = np.array_equal(np.asarray(qt).view(np.uint8), np.asarray(qt_ref).view(np.uint8))
-                t = _time(fn, x, steps=args.steps, warmup=args.warmup)
-                print(
-                    f"  mosaic[{mode}]   {t*1e3:.4f}ms  ({floor_ms/(t*1e3)*100:.0f}% of floor)  "
-                    f"q_exact={ok_q} qt_exact={ok_qt}"
-                )
-                print("row " + json.dumps({"case": name, "impl": f"mosaic_{mode}", "ms": t * 1e3, "q_exact": bool(ok_q), "qt_exact": bool(ok_qt)}))
-            except Exception as e:
-                print(f"  mosaic[{mode}]   FAILED: {type(e).__name__}: {str(e)[:200]}")
+        # Correctness + timing for the fused kernel.
+        try:
+            fn = lambda xx: cast_transpose_mgpu(xx, scale, block_m=args.block_m, block_k=args.block_k)
+            q, qt = jax.block_until_ready(jax.jit(fn)(x))
+            ok_q = np.array_equal(np.asarray(q).view(np.uint8), np.asarray(q_ref).view(np.uint8))
+            ok_qt = np.array_equal(np.asarray(qt).view(np.uint8), np.asarray(qt_ref).view(np.uint8))
+            t = _time(fn, x, steps=args.steps, warmup=args.warmup)
+            print(
+                f"  mosaic         {t*1e3:.4f}ms  ({floor_ms/(t*1e3)*100:.0f}% of floor)  "
+                f"q_exact={ok_q} qt_exact={ok_qt}"
+            )
+            print("row " + json.dumps({"case": name, "impl": "mosaic", "ms": t * 1e3, "q_exact": bool(ok_q), "qt_exact": bool(ok_qt)}))
+        except Exception as e:
+            print(f"  mosaic         FAILED: {type(e).__name__}: {str(e)[:240]}")
 
         # XLA baselines.
         t_tr = _time(lambda xx: (quantize(xx, _E4M3, scale, jnp.bfloat16), jnp.swapaxes(quantize(xx, _E4M3, scale, jnp.bfloat16), 0, 1)), x, steps=args.steps, warmup=args.warmup)

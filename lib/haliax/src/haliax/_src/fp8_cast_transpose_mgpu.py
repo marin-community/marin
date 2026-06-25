@@ -21,12 +21,6 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 
-# Transpose strategies, A/B'd on H100 (the transposed store is the perf risk per GFP8-033):
-#   "reg":  register-level transpose then a plain SMEM store (qt_smem[...] = q.T)
-#   "ref":  write q into a transposed SMEM view (transpose_ref(qt_smem)[...] = q) — SMEM-level transpose
-_TRANSPOSE_MODES = ("reg", "ref")
-
-
 def cast_transpose_mgpu(
     x: jax.Array,  # [M, K] bf16/f32
     scale: jax.Array,  # (1,) per-tensor scale
@@ -35,29 +29,30 @@ def cast_transpose_mgpu(
     compute_dtype: jnp.dtype = jnp.bfloat16,
     block_m: int = 128,
     block_k: int = 128,
-    transpose_mode: str = "ref",
 ) -> tuple[jax.Array, jax.Array]:
     """One read of ``x`` -> ``(q[M,K], qT[K,M])`` in ``out_dtype`` (Mosaic-GPU, Hopper f8).
 
     ``q`` is ``quantize(x, out_dtype, scale, compute_dtype)``; ``qT`` is its transpose, produced by a
-    coalesced SMEM transpose rather than a second cast or an XLA f8 transpose.
+    coalesced SMEM transpose (a store into a ``transpose_ref`` view) rather than a second cast or an
+    XLA f8 transpose.
     """
     if x.ndim != 2:
         raise ValueError(f"cast_transpose expects a 2D array, got shape {x.shape}")
-    if transpose_mode not in _TRANSPOSE_MODES:
-        raise ValueError(f"transpose_mode must be one of {_TRANSPOSE_MODES}, got {transpose_mode!r}")
     m, k = x.shape
     if m % block_m != 0:
         raise ValueError(f"m={m} must be a multiple of block_m={block_m}")
     if k % block_k != 0:
         raise ValueError(f"k={k} must be a multiple of block_k={block_k}")
 
+    # Match the reference quantize bit-for-bit: divide + clip in compute_dtype, then cast to f8. The
+    # bf16->f8 cast isn't supported directly in Mosaic ("cast to f32 first"); bf16->f32->f8 is the
+    # same value (f32 represents every bf16 exactly; f32->f8 uses the same round-to-nearest-even).
     dtype_max = jnp.finfo(out_dtype).max.astype(compute_dtype)
 
     def body(scale_gmem, x_gmem, q_gmem, qt_gmem):
         grid_m = pl.cdiv(m, block_m)
         grid_k = pl.cdiv(k, block_k)
-        inv_scale = (1.0 / scale_gmem[0]).astype(compute_dtype)
+        scale_c = scale_gmem[0].astype(compute_dtype)
 
         @plgpu.nd_loop((grid_m * grid_k,), collective_axes="sm")
         def mk_loop(loop_info: plgpu.NDLoopInfo):
@@ -81,7 +76,8 @@ def cast_transpose_mgpu(
                 plgpu.barrier_wait(barrier)
 
                 x_tile = x_smem[...].astype(compute_dtype)
-                q = jnp.clip(x_tile * inv_scale, -dtype_max, dtype_max).astype(out_dtype)
+                scaled = jnp.clip(x_tile / scale_c, -dtype_max, dtype_max)
+                q = scaled.astype(jnp.float32).astype(out_dtype)
 
                 # Rowwise store: q[bm,bk] -> q_gmem[m_i, k_i].
                 q_smem[...] = q
@@ -90,11 +86,9 @@ def cast_transpose_mgpu(
                     q_smem, q_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)]
                 )
 
-                # Transposed store: q.T[bk,bm] -> qt_gmem[k_i, m_i].
-                if transpose_mode == "reg":
-                    qt_smem[...] = q.T
-                else:
-                    plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
+                # Transposed store: write q[bm,bk] into a transposed SMEM view so qt_smem physically
+                # holds q.T[bk,bm] (an SMEM-level transpose, coalesced), then TMA to qt_gmem[k_i, m_i].
+                plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
                 plgpu.commit_smem()
                 plgpu.copy_smem_to_gmem(
                     qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
