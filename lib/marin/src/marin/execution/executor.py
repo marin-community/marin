@@ -84,13 +84,11 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 
@@ -117,6 +115,7 @@ from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
 )
+from marin.execution.provenance import created_now, get_git_commit, get_user
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner, worker_id
 from marin.execution.step_spec import StepSpec, _is_relative_path
@@ -1415,7 +1414,7 @@ class Executor:
         self.executor_info = ExecutorInfo(
             git_commit=get_git_commit(),
             caller_path=path,
-            created_date=datetime.now().isoformat(),
+            created_date=created_now(),
             user=get_user(),
             worker_id=worker_id(),
             prefix=self.prefix,
@@ -1483,14 +1482,6 @@ def get_fn_name(fn: ExecutorFunction, short: bool = False):
         return str(fn)
 
 
-def get_git_commit() -> str | None:
-    """Return the git commit of the current branch (if it can be found)"""
-    if os.path.exists(".git"):
-        return os.popen("git rev-parse HEAD").read().strip()
-    else:
-        return None
-
-
 def get_caller_path() -> str:
     """Return the path of the file that called this function.
 
@@ -1503,10 +1494,6 @@ def get_caller_path() -> str:
             return frame_info.filename
     # All frames are synthetic (shouldn't happen in practice) — fall back to argv.
     return sys.argv[0]
-
-
-def get_user() -> str | None:
-    return subprocess.check_output("whoami", shell=True).strip().decode("utf-8")
 
 
 ############################################################

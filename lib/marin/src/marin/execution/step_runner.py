@@ -43,6 +43,7 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
+from marin.execution.registry import enforce_immutability
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
@@ -268,9 +269,12 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
+        # Build-once immutability guard; mutable (dev) artifacts always rebuild.
+        mutable = enforce_immutability(step)
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
-        if status == STATUS_SUCCESS:
+        if status == STATUS_SUCCESS and not mutable:
             logger.info(f"Skip {step_name}: already succeeded")
             return None
 
@@ -325,13 +329,16 @@ def run_step(step: StepSpec) -> None:
     output_path = step.output_path
     step_label = step.name_with_hash
 
+    # Build-once immutability guard; mutable (dev) artifacts always rebuild.
+    mutable = enforce_immutability(step)
+
     # 1. Cache check
-    if check_cache(output_path):
+    if not mutable and check_cache(output_path):
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     try:
-        with step_lock(output_path, step_label) as status_file:
+        with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
             # 3. Run the function
             try:
                 t0 = time.monotonic()

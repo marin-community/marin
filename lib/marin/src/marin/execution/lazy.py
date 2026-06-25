@@ -45,6 +45,8 @@ from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
 from marin.execution.executor import Executor
+from marin.execution.provenance import created_now, get_git_commit, get_user
+from marin.execution.registry import FINGERPRINT_KEY, VERSION_KEY, ArtifactRecord, write_record
 from marin.execution.step_spec import StepSpec, _is_relative_path
 from marin.execution.types import ExecutorStep
 from marin.utilities.json_encoder import CustomJsonEncoder
@@ -162,23 +164,45 @@ def lower(artifact: Artifact) -> StepSpec:
     embedded legacy ``ExecutorStep`` placeholders). The concrete config is rebuilt
     inside ``fn`` using the runner's ``marin_prefix()``, so dependency paths
     resolve region-locally rather than capturing the build environment's prefix.
-    Identity is the explicit ``{name}/{version}`` (or the pin); the fingerprint
-    rides in ``hash_attrs`` for the (later) immutability guard, not the path.
+    Identity is the explicit ``{name}/{version}`` (or the pin); the fingerprint and
+    version ride in ``hash_attrs`` so the runner can apply the immutability guard
+    before serving a cached output. On success the step writes an
+    :class:`~marin.execution.registry.ArtifactRecord` (recipe fingerprint + launch
+    provenance); a pinned artifact references existing external data and writes none.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
+    fingerprint = artifact.fingerprint()
+    dep_refs = [f"{d.name}@{d.version}" for d in artifact.recipe.deps]
+
+    # Provenance is captured in the launching process (which holds the git checkout)
+    # and closed over, so a step that runs remotely still records the launch commit.
+    record_provenance = artifact.override_path is None
+    git_commit = get_git_commit() if record_provenance else None
+    user = get_user() if record_provenance else None
 
     def fn(output_path: str, _artifact: Artifact = artifact) -> Any:
         ctx = BuildContext.for_run(out=output_path, prefix=marin_prefix())
-        return _artifact.recipe.fn(_artifact.recipe.build_config(ctx))
+        result = _artifact.recipe.fn(_artifact.recipe.build_config(ctx))
+        if record_provenance:
+            write_record(
+                ArtifactRecord(
+                    name=_artifact.name,
+                    version=_artifact.version,
+                    fingerprint=fingerprint,
+                    output_path=output_path,
+                    git_commit=git_commit,
+                    user=user,
+                    created_at=created_now(),
+                    deps=dep_refs,
+                )
+            )
+        return result
 
     return StepSpec(
         name=artifact.name,
         override_output_path=_output_path_spec(artifact),
         deps=dep_specs,
-        hash_attrs={
-            "fingerprint": artifact.fingerprint(),
-            "deps": [f"{d.name}@{d.version}" for d in artifact.recipe.deps],
-        },
+        hash_attrs={FINGERPRINT_KEY: fingerprint, VERSION_KEY: artifact.version, "deps": dep_refs},
         fn=fn,
         resources=artifact.recipe.resources,
     )
