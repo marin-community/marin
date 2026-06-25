@@ -158,10 +158,10 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
-# https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...04321f0f01b8e60d577a85a1b1af688e4433e7e0
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04321f0f01b8e60d577a85a1b1af688e4433e7e0" }
-# https://github.com/marin-community/tpu-inference/compare/0045517c4ba75b1d624dba3be8b77e16c18b1a1e...4c38590e29d33451f2b4375a78ad8f70cacd7b98
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c38590e29d33451f2b4375a78ad8f70cacd7b98" }
+# https://github.com/marin-community/vllm/compare/e6e3b6b10c1d44936306be3a67c709d763f89e48...7557e69ddb2e28b287d0729b4aee4d7de8de18f9
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "7557e69ddb2e28b287d0729b4aee4d7de8de18f9" }
+# https://github.com/marin-community/tpu-inference/compare/c0c901b2b5f3617f5250881c3458d58f4b20b10d...217fc45b078b1030bfcb5b704ed1169b448a5808
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "217fc45b078b1030bfcb5b704ed1169b448a5808" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
