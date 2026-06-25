@@ -40,7 +40,6 @@ MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
 def benchmark_arrow_flight_with_llama():
     """Benchmark Arrow Flight weight transfer with a Llama 1B model."""
-    # Load model config from HuggingFace
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     model_config = LlamaConfig.from_hf_config(hf_config)
 
@@ -48,12 +47,10 @@ def benchmark_arrow_flight_with_llama():
     num_devices = len(devices)
     print(f"Found {num_devices} TPU devices")
 
-    # Use tensor parallelism and FSDP like in exp1247_rl_async.py
     mesh = Mesh(np.array(devices).reshape(-1, 4), axis_names=("data", "model"))
     print(f"Mesh created with shape {mesh.shape}: {mesh.devices}")
 
-    # Create axis mapping for sharding - match the pattern from rollout_worker.py
-    # FSDP on embed, TP on mlp and heads
+    # FSDP on embed, tensor parallelism on mlp and heads.
     axis_mapping = {
         "embed": "data",  # FSDP
         "mlp": "model",  # TP
@@ -63,7 +60,6 @@ def benchmark_arrow_flight_with_llama():
         "layers": None,
     }
 
-    # Create weight transfer config
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
@@ -97,7 +93,6 @@ def benchmark_arrow_flight_with_llama():
         return jax.tree.map(lambda x: x + jnp.ones_like(x) * 0.001, params)
 
     try:
-        # Test weight transfer
         print("Starting weight transfer test...")
         for i in range(10):
             print(f"Transfer iteration {i}")
@@ -137,7 +132,6 @@ def benchmark_arrow_flight_transfer_to_vllm():
     )
     print(f"Mesh created with shape {mesh.shape}: {mesh.devices}")
 
-    # Create weight transfer config
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
@@ -164,7 +158,6 @@ def benchmark_arrow_flight_transfer_to_vllm():
     converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
     converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
 
-    # Load pretrained weights from HuggingFace
     with hax.partitioning.set_mesh(mesh):
         model = converter.load_pretrained(
             model_config.model_type,
@@ -177,7 +170,6 @@ def benchmark_arrow_flight_transfer_to_vllm():
 
     llm = LLM(MODEL_NAME, gpu_memory_utilization=0.50)
     try:
-        # Test weight transfer
         print("Starting weight transfer test to vllm...")
         print("Transfer iteration 0")
         server.serve_weights(0, model)
