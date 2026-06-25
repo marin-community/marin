@@ -1672,3 +1672,15 @@ activations; the backward `cast_transpose`s the output grad into `q_g`/`q_g_t`; 
   lib/levanter/scripts/bench/_s5_mosaic_f8wgrad_parity.sh`.
 - **Open (M3 close-out):** flip the mosaic wgrad default to f8 + retire the `RAGGED_F8_WGRAD` env toggle
   (a shipped-recipe + complexity call — the bf16 hybrid is ~4% slower but simpler). Pending user sign-off.
+
+### 2026-06-25 — GFP8-033 M3 close-out: f8 wgrad ships as an opt-in config param (default bf16); env toggle retired
+Per the ship decision (keep opt-in, default the bf16 hybrid), replaced the `RAGGED_F8_WGRAD` env var with
+an explicit `MosaicWgradMode` StrEnum (`BF16` default / `FP8`) threaded `Fp8RaggedDotOp(mosaic_wgrad=)` ->
+`fp8_scaled_ragged_dot` -> `quantized_ragged_dot` (nondiff arg). The f8 cast-transpose wgrad code ships but
+is dormant unless `mosaic_wgrad=FP8` is requested; bf16 hybrid stays the default recipe. Re-ran the 3-arm
+e2e through the config param (`--mosaic-wgrad {bf16,fp8}`, H100, job `…-231322`) — reproduces the win
+exactly: bf16 3.753 ms; mosaic bf16-wgrad 2.909 ms (1.290×); **mosaic f8-wgrad 2.814 ms (1.334×)**, dw13/dw2
+7.16e-2 / 6.42e-2 (unchanged). 25 CPU tests green. **GFP8-033 (M1–M3) complete:** the fused cast-transpose
+f8 wgrad is implemented, bit-exact, e2e-validated at 1.33×, and shipped as a clean opt-in. The PR-extraction
+plan (`.agents/projects/2026-06-25_haliax_fp8_ragged_dot_pr.md`) should now INCLUDE the f8 wgrad (it is a
+real win, no longer "dead on arrival") behind the `mosaic_wgrad` param.
