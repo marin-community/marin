@@ -46,7 +46,7 @@ iris --config=cluster.yaml cluster controller restore-checkpoint --checkpoint 17
 
 **Rollback cost.** Jobs and state created *after* the chosen checkpoint are dropped. Workers on separate VMs and other infrastructure are unaffected — they re-register with the recovered controller. Checkpoints live at `{remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst`.
 
-**Safety.** The command refuses if it can't reach the controller VM or the checkpoint is missing. The previous local DB is preserved on the controller VM at `/var/cache/iris/controller/db.bloated.bak.<epoch_ms>`; if the restore script or post-restart health check fails, the container is left stopped and that backup is named in the error so you can investigate or move it back. Not supported on local or K8s/CoreWeave controllers.
+**Safety.** The command refuses if it can't reach the controller VM or the checkpoint is missing. The restore runs inside the controller's *own* container image, so it first probes that image for the restore entrypoint and refuses — before stopping the controller or moving its DB — if the running image predates this feature (rebuild + restart the controller image first). The previous local DB is preserved on the controller VM at `/var/cache/iris/controller/db.bloated.bak.<epoch_ms>`; if the restore script or post-restart health check fails, the container is left stopped and that backup is named in the error so you can investigate or move it back. Not supported on local or K8s/CoreWeave controllers.
 
 ## Job Management
 

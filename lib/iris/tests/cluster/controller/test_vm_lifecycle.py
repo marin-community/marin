@@ -41,6 +41,7 @@ from iris.cluster.backends.types import (
 from iris.cluster.backends.vm_lifecycle import (
     _build_controller_vm_config,
     build_restore_checkpoint_script,
+    build_restore_preflight_script,
     restore_controller_checkpoint,
     start_controller,
     stop_controller,
@@ -403,8 +404,21 @@ def test_build_restore_checkpoint_script_orders_steps():
     assert "rm -rf" not in script
 
 
+def test_build_restore_preflight_script_probes_entrypoint():
+    """The preflight script inspects the running image and probes the restore entrypoint."""
+    script = build_restore_preflight_script()
+
+    assert "docker inspect" in script
+    assert "iris-controller" in script
+    # Probes for the restore entrypoint added by this change; an older image fails it.
+    assert "_cli_main" in script
+    # Read-only: never stops the container or touches the DB.
+    assert "docker stop" not in script
+    assert "mv " not in script
+
+
 def test_restore_controller_checkpoint_runs_script_and_returns_address(config):
-    """Happy path: runs the restore script, health-checks, returns the address."""
+    """Happy path: preflights, runs the restore script, health-checks, returns the address."""
     vm = RecordingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1")
     platform = FakePlatform(existing_vms=[vm])
 
@@ -415,10 +429,29 @@ def test_restore_controller_checkpoint_runs_script_and_returns_address(config):
     )
 
     assert address == "http://10.0.0.1:10000"
+    # Preflight runs before the destructive stop.
+    assert any("_cli_main" in c for c in vm.commands)
     assert any("docker stop iris-controller" in c for c in vm.commands)
     assert any("1717000000000" in c for c in vm.commands)
     # remote_state_dir is derived from config.storage, not threaded as a parameter.
     assert any('--remote-state-dir "gs://bucket/iris/state"' in c for c in vm.commands)
+
+
+def test_restore_controller_checkpoint_refuses_old_image_without_touching_db(config):
+    """An image lacking the restore entrypoint is refused before stop/move."""
+    vm = RecordingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1", fail_on="_cli_main")
+    platform = FakePlatform(existing_vms=[vm])
+
+    with pytest.raises(RuntimeError, match="does not support checkpoint restore"):
+        restore_controller_checkpoint(
+            platform,
+            config,
+            checkpoint_dir="gs://bucket/iris/state/controller-state/1717000000000",
+        )
+
+    # The controller must be left running: no stop, no DB move.
+    assert not any("docker stop" in c for c in vm.commands)
+    assert not any("mv " in c for c in vm.commands)
 
 
 def test_restore_controller_checkpoint_no_vm_raises(config):
