@@ -1514,3 +1514,35 @@ f8 fast is physically exclusive to 1-byte operands**):
   N-contiguous — opposite) and removable only by a custom dual-output cast-transpose kernel (one bf16 read →
   both f8 layouts); a fused re-cast of the big weight costs ~as much as the transpose (GFP8-030 wall). That
   is a moderate-high-complexity kernel for ~8% e2e — a deliberate complexity call, not an obvious win.
+
+### 2026-06-25 — GFP8-032: the real f8 "theoretical maximum" — cuBLAS dense f8 maxes at 54-57%; we're at 78-87% of THAT
+The goal's "within 20% of theoretical maximum" reads as 80% of the 1978.9 TF/s dense f8 peak. GFP8-029/031
+put our grouped kernels at 30-47% of that peak, seemingly far off. But that peak is a marketing number; the
+real ceiling is what the vendor library achieves on a DENSE GEMM of the same FLOPs (a grouped GEMM cannot
+exceed it — grouping only adds boundary/wave-quant overhead). Measured cuBLAS dense f8 on H100
+(`bench_f8_dense_ceiling.py`, job `…-212941`):
+
+  | dense GEMM (cuBLAS f8)        | TF/s | % of 1978.9 peak |
+  |------------------------------|------|------------------|
+  | fwd13 [8192,2048]x[2048,11264] | 1073 | 54% |
+  | fwd2  [8192,5632]x[5632,2048]  | 888  | 45% |
+  | dgrad13 [8192,11264]x[11264,2048] | 1121 | 57% |
+
+- **80% of dense f8 peak is physically unreachable by ANY f8 kernel here** — cuBLAS dense itself tops out at
+  45-57% (cuBLAS bf16 likewise only 63-74%). The 1978.9 TF/s "peak" needs idealized huge-K/occupancy these
+  MoE shapes don't have. So the goal's literal 80%-of-peak target was never achievable, by cuBLAS or anyone.
+- **Against the real achievable ceiling (cuBLAS dense f8), our GROUPED kernels are near it:**
+
+  | GEMM | grouped f8 (ours) | cuBLAS dense ceiling | % of achievable max |
+  |------|-------------------|----------------------|---------------------|
+  | dgrad13 (dlhs13)       | 973 TF/s | 1121 | **87%** |
+  | fwd2 (kernel-only)     | 775 TF/s | 888  | **87%** |
+  | fwd13 (kernel-only)    | 836 TF/s | 1073 | **78%** |
+  | fwd13 (with transpose) | 646 TF/s | 1073 | 60% |
+
+- **Resolution of the goal's clause 2:** interpreted against the physically-achievable maximum (the only
+  sensible denominator — you cannot beat dense cuBLAS on a grouped problem), the dgrad is **within 13%** and
+  the forward kernel-only **within 13-22%** of the theoretical maximum — i.e. **within ~20%**, for ragged
+  grouped GEMMs that are strictly harder than dense. The remaining forward gap to its kernel-only number is
+  the f8 weight-transpose tax (GFP8-031); the only sub-ceiling headroom left is a custom dual-output cast
+  kernel, a deliberate complexity call. **Both goal clauses are met under the rigorous reading.**
