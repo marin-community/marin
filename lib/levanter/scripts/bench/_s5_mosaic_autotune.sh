@@ -11,11 +11,20 @@ set +e
 B=lib/levanter/scripts/bench/bench_ragged_mosaic_autotune.py
 
 SITE=$(uv run --no-sync python -c 'import site; print(site.getsitepackages()[0])')
-export LD_LIBRARY_PATH="$(ls -d "$SITE"/nvidia/*/lib 2>/dev/null | paste -sd: -)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# cuDNN ordering matters: jax[cuda13]==0.10.0 was built against cuDNN 9.12, but the monolithic
+# nvidia/cu13/lib bundles an older 9.10.2. The alphabetical glob lists cu13/lib before cudnn/lib,
+# so the loader picks the stale 9.10.2 -> XLA nulls dnn_support -> `RET_CHECK dnn_support !=
+# nullptr` on the first GPU op. Put the dedicated nvidia/cudnn/lib FIRST so 9.12 wins.
+CUDNN_LIB=$(ls -d "$SITE"/nvidia/cudnn/lib 2>/dev/null)
+REST_LIBS=$(ls -d "$SITE"/nvidia/*/lib 2>/dev/null | grep -v '/cudnn/lib$' | paste -sd: -)
+export LD_LIBRARY_PATH="${CUDNN_LIB:+$CUDNN_LIB:}${REST_LIBS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+echo "cudnn libs found:"; ls -1 "$SITE"/nvidia/*/lib/libcudnn.so* 2>/dev/null
 export GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null)"
 
 echo "### MOSAIC FP8 BLOCK AUTOTUNE (curated grid, real Grug shapes)"
 uv run --no-sync python -u "$B"
+RC=$?
 
-echo "### DONE"
+echo "### DONE rc=$RC"
+exit $RC
