@@ -77,7 +77,7 @@ def _vfio_lsof_diagnostic() -> dict[str, Any]:
     return diagnostic
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def no_active_xdist(request: pytest.FixtureRequest) -> None:
     _require_no_active_xdist(request)
 
