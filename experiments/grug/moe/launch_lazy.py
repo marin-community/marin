@@ -51,6 +51,11 @@ from experiments.pretraining_datasets.simple_lazy import proofpile_dataset, star
 # Tokenization runs as its own Fray job (keeps the launcher pod light).
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 
+# The TPU the training job is dispatched onto. A run-arg, not part of the config's
+# identity: re-running on a different TPU is the same checkpoint, so it must not fork
+# the artifact. The launcher step itself runs inline (run_grug dispatches its own job).
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8")
+
 # 1e18 compute budget, d1024 — model/optimizer/batch/steps derived from the heuristic.
 _BUDGET = 1e18
 _HIDDEN_DIM = 1024
@@ -68,9 +73,14 @@ def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
     return Checkpoint(
         name="grug/4_10_baseline_moe",
         version=version,
-        # resources live in the config (run_grug dispatches its own Fray TPU job),
-        # so the launcher step itself runs inline — matching baseline_moe.
-        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, resources=None),
+        # The launcher step runs inline (resources=None); run_grug dispatches its own
+        # Fray TPU job onto the train_resources run-arg.
+        recipe=Recipe(
+            fn=run_grug_moe_trial,
+            build_config=build_config,
+            resources=None,
+            run_args={"train_resources": _TRAIN_RESOURCES},
+        ),
     )
 
 
@@ -81,7 +91,7 @@ def _grug_launch_config(ctx, model, optimizer, batch_size, steps, *, data):
         data=data,
         output_path=ctx.out,
         run_id=RESOLVED_RUN_ID,
-        resources=ResourceConfig.with_tpu("v5p-8"),
+        resources=ctx.run_arg("train_resources"),
         steps=steps,
         batch_size=batch_size,
         seed=0,
@@ -119,7 +129,13 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
     return Checkpoint(
         name="grug/4_10_baseline_moe_slim",
         version=version,
-        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, deps=(slim,), resources=None),
+        recipe=Recipe(
+            fn=run_grug_moe_trial,
+            build_config=build_config,
+            deps=(slim,),
+            resources=None,
+            run_args={"train_resources": _TRAIN_RESOURCES},
+        ),
     )
 
 
@@ -158,7 +174,13 @@ def grug_moe_baseline_pure(*, version: str = "v1") -> Checkpoint:
     return Checkpoint(
         name="grug/4_10_baseline_moe_pure",
         version=version,
-        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, deps=(*train, *validation), resources=None),
+        recipe=Recipe(
+            fn=run_grug_moe_trial,
+            build_config=build_config,
+            deps=(*train, *validation),
+            resources=None,
+            run_args={"train_resources": _TRAIN_RESOURCES},
+        ),
     )
 
 

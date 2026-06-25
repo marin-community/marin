@@ -132,7 +132,9 @@ def tokenized(
 def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
     """Build a Levanter mixture component for ``dataset``, rooted at its resolved path."""
     cache_path = ctx.path(dataset)
-    config = dataset.recipe.build_config(RunContext.for_run(out=cache_path, prefix=ctx.prefix))
+    config = dataset.recipe.build_config(
+        RunContext.for_run(out=cache_path, prefix=ctx.prefix, run_args=dataset.recipe.run_args)
+    )
     if not isinstance(config, TokenizeConfigBase):
         raise TypeError(f"{dataset.name}: mixture component must be a tokenize dataset, got {type(config).__name__}")
     source = config.as_lm_dataset_source_config(cache_path)
@@ -140,7 +142,7 @@ def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
 
 
 def _tokenizer_of(dataset: Dataset) -> str:
-    return dataset.recipe.build_config(RunContext.for_fingerprint()).tokenizer
+    return dataset.recipe.build_config(RunContext.for_fingerprint(dataset.recipe.run_args.keys())).tokenizer
 
 
 def mixture(

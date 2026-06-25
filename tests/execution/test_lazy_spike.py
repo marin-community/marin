@@ -157,6 +157,50 @@ def test_resources_do_not_affect_identity():
     assert on(ResourceConfig.with_tpu("v5p-8")).fingerprint() == on(ResourceConfig.with_tpu("v6e-8")).fingerprint()
 
 
+def test_run_arg_is_live_at_run_but_not_in_identity():
+    """A run-arg is declared on the recipe and pulled via ``ctx.run_arg()``: it reaches
+    the config at run time, but is a ``<key>`` placeholder at fingerprint time. So an
+    execution choice the config must carry (e.g. the TPU a dispatched job uses) reaches
+    the step without forking identity when it changes."""
+
+    def on(tpu: str) -> Checkpoint:
+        return Checkpoint(
+            name="checkpoints/dclm_1b",
+            version="v3",
+            recipe=Recipe(
+                fn=_run_train,
+                # `data` here stands in for any config field fed by a run-arg.
+                build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
+                run_args={"tpu": tpu},
+            ),
+        )
+
+    # Live at run time: the materialized config carries the declared value.
+    assert materialized_config(on("v5p-8"), "gs://b").data == "v5p-8"
+    # ...but excluded from identity: a different TPU is the same artifact.
+    assert on("v5p-8").fingerprint() == on("v6e-8").fingerprint()
+
+
+def test_pulling_an_undeclared_run_arg_fails_loudly():
+    """Pulling a run-arg the recipe never declared is a loud KeyError, not a silent
+    miss — the run-args a config reads and the run-args it declares must agree."""
+    art = Checkpoint(
+        name="checkpoints/dclm_1b",
+        version="v3",
+        recipe=Recipe(
+            fn=_run_train,
+            build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
+            # note: no run_args declared
+        ),
+    )
+    try:
+        art.fingerprint()
+    except KeyError as e:
+        assert "tpu" in str(e)
+    else:
+        raise AssertionError("expected a KeyError for the undeclared run-arg")
+
+
 def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 

@@ -10,19 +10,21 @@ The model:
 
 - An :class:`Artifact` is a lazy handle: ``(name, version, recipe)``. Building one
   runs nothing.
-- A :class:`Recipe` is ``(fn, build_config, deps, resources)``. ``build_config`` is
-  a pure function of a :class:`RunContext`, the live run environment it pulls from:
-  ``ctx.out`` (this artifact's output path), ``ctx.path(dep)`` (a dependency's
-  output path), ``ctx.prefix``/``ctx.region``/``ctx.resources`` (the live storage
-  prefix, GCP region, and resolved compute). This replaces ``THIS_OUTPUT_PATH`` and
+- A :class:`Recipe` is ``(fn, build_config, deps, resources, run_args)``.
+  ``build_config`` is a pure function of a :class:`RunContext`, which draws the line
+  between identity and execution: values written as literals (model, hyperparameters)
+  bear identity, while values *pulled* from the context — ``ctx.out``,
+  ``ctx.path(dep)``, ``ctx.prefix``, ``ctx.region``, ``ctx.run_arg(key)`` — are
+  where/how the step runs and never do. This replaces ``THIS_OUTPUT_PATH`` and
   ``InputName``/``.cd()`` with plain typed calls.
 - ``fn(config) -> result`` is the step function. The config already carries its
   output path (``ctx.out``), matching the existing ``ExecutorStep`` fn convention.
 - Identity is the explicit ``{prefix}/{name}/{version}`` path — no hash.
 - The *recipe fingerprint* is the config built with dependency **versions** in
-  place of paths (so it captures hyperparameters + dep identities but not
-  region-specific paths). It is recorded for the build-once-immutability guard,
-  never in the path.
+  place of paths and context placeholders for everything pulled from ``ctx`` (so it
+  captures hyperparameters + dep identities, but not the region, prefix, or the TPU
+  a job runs on). It is recorded for the build-once-immutability guard, never in the
+  path.
 
 Two ways to materialize:
 
@@ -38,8 +40,8 @@ Two ways to materialize:
 
 import hashlib
 import json
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from fray.types import ResourceConfig
@@ -60,46 +62,77 @@ def _artifact_path(name: str, version: str, prefix: str) -> str:
 
 @dataclass(frozen=True)
 class RunContext:
-    """The *runtime-only* environment a recipe resolves its config against.
+    """What a recipe resolves its config against — and the dividing line for identity.
 
-    The context carries only what cannot be known until the step actually runs —
-    chiefly the live storage location and region. Compute (TPU type, etc.) is
-    *not* here: it is known at authoring time and is part of the execution
-    *description* (``Recipe.resources``), not something to discover at run time
-    (a single recipe may even dispatch several jobs with different resources).
+    A config has two kinds of inputs, and the context is how they are kept apart:
 
-    A recipe's ``build_config`` *pulls* what it needs:
+    - **Identity-bearing** values are written as literals in ``build_config`` (the
+      model, hyperparameters, dep *versions*). They define the artifact, so they
+      enter the fingerprint.
+    - **Non-identity** values are *pulled from the context* — the output path, the
+      storage prefix, the region, and recipe-declared *run-args* (compute, etc.).
+      They are where/how the step runs, not what it computes, so they must never
+      fork identity.
+
+    The rule is uniform: *pulled from ``ctx`` ⇒ not in the fingerprint; written as a
+    literal ⇒ in the fingerprint.* :meth:`for_run` binds the context to the live
+    environment at lazy-evaluation time; :meth:`for_fingerprint` substitutes
+    placeholders, which is what realizes the exclusion (a region move, a prefix
+    move, or a different TPU never re-fingerprints).
+
+    Pull points:
 
     - ``ctx.out`` — this artifact's output path
     - ``ctx.path(dep)`` — a dependency's resolved (region-local) output path
     - ``ctx.prefix`` — the live storage prefix (resolve raw input globs against it)
     - ``ctx.region`` — the live GCP region (unknown until run time)
-
-    :meth:`for_run` binds these to the live environment at lazy-evaluation time.
-    :meth:`for_fingerprint` supplies placeholders, so an artifact's identity stays
-    independent of where it runs (a region or prefix move never re-fingerprints).
+    - ``ctx.run_arg(key)`` — a recipe-declared run-arg, e.g. the TPU a dispatched
+      job runs on
     """
 
     out: str
     prefix: str
     region: str | None
     _dep_ref: Callable[["Artifact"], str]
+    _run_args: Mapping[str, Any]
 
     def path(self, dep: "Artifact") -> str:
         return self._dep_ref(dep)
 
-    @staticmethod
-    def for_run(out: str, prefix: str, *, region: str | None = None) -> "RunContext":
-        return RunContext(out=out, prefix=prefix, region=region, _dep_ref=lambda d: d.path(prefix))
+    def run_arg(self, key: str) -> Any:
+        """A recipe-declared run-arg: its real value at run time, a ``<key>``
+        placeholder at fingerprint time. Pull execution choices (e.g. the TPU a
+        dispatched job uses) through here so they reach the step but never bear on
+        its identity."""
+        try:
+            return self._run_args[key]
+        except KeyError:
+            raise KeyError(
+                f"run-arg {key!r} is not declared in the recipe's run_args {sorted(self._run_args)}"
+            ) from None
 
     @staticmethod
-    def for_fingerprint() -> "RunContext":
-        return RunContext(out="<out>", prefix="<prefix>", region="<region>", _dep_ref=lambda d: f"{d.name}@{d.version}")
+    def for_run(
+        out: str, prefix: str, *, region: str | None = None, run_args: Mapping[str, Any] | None = None
+    ) -> "RunContext":
+        return RunContext(
+            out=out, prefix=prefix, region=region, _dep_ref=lambda d: d.path(prefix), _run_args=run_args or {}
+        )
+
+    @staticmethod
+    def for_fingerprint(run_arg_keys: Iterable[str] = ()) -> "RunContext":
+        return RunContext(
+            out="<out>",
+            prefix="<prefix>",
+            region="<region>",
+            _dep_ref=lambda d: f"{d.name}@{d.version}",
+            _run_args={key: f"<{key}>" for key in run_arg_keys},
+        )
 
 
 @dataclass(frozen=True)
 class Recipe:
-    """How to build an artifact: the step fn, a config builder, deps, resources."""
+    """How to build an artifact: the step fn, a config builder, deps, resources, run-args."""
 
     fn: Callable[[Any], Any]
     """``fn(config) -> result``. The config carries its output path; result is persisted."""
@@ -107,6 +140,12 @@ class Recipe:
     """``build_config(ctx) -> config``. Pulls paths and live attributes from the RunContext."""
     deps: tuple["Artifact", ...] = ()
     resources: ResourceConfig | None = None
+    """Compute the *step itself* runs on (scheduled by the runner). Excluded from
+    identity. ``None`` for an inline step (e.g. a launcher that dispatches its own job)."""
+    run_args: Mapping[str, Any] = field(default_factory=dict)
+    """Execution choices the config pulls via ``ctx.run_arg(key)`` — e.g. the TPU a
+    dispatched job uses. Excluded from the fingerprint, so changing one never forks
+    identity. A recipe may declare several (it may dispatch several jobs)."""
 
 
 # eq=False gives handles object identity (hashable despite the unhashable
@@ -131,7 +170,7 @@ class Artifact:
         """Stable id of *how* this artifact is built: the config with dependency
         versions in place of paths. Changes iff a config value or a dep version
         changes; independent of the storage prefix/region."""
-        config = self.recipe.build_config(RunContext.for_fingerprint())
+        config = self.recipe.build_config(RunContext.for_fingerprint(self.recipe.run_args.keys()))
         payload = json.dumps(config, sort_keys=True, cls=CustomJsonEncoder)
         return hashlib.md5(payload.encode()).hexdigest()[:8]
 
@@ -162,7 +201,9 @@ def materialized_config(artifact: Artifact, prefix: str) -> Any:
     the config (the bridge case) are left unresolved here — :func:`to_executor_step`
     resolves those through the ``Executor``.
     """
-    return artifact.recipe.build_config(RunContext.for_run(out=artifact.path(prefix), prefix=prefix))
+    return artifact.recipe.build_config(
+        RunContext.for_run(out=artifact.path(prefix), prefix=prefix, run_args=artifact.recipe.run_args)
+    )
 
 
 def _output_path_spec(artifact: Artifact) -> str:
@@ -195,7 +236,9 @@ def lower(artifact: Artifact) -> StepSpec:
     user = get_user() if record_provenance else None
 
     def fn(output_path: str, _artifact: Artifact = artifact) -> Any:
-        ctx = RunContext.for_run(out=output_path, prefix=marin_prefix(), region=marin_region())
+        ctx = RunContext.for_run(
+            out=output_path, prefix=marin_prefix(), region=marin_region(), run_args=_artifact.recipe.run_args
+        )
         result = _artifact.recipe.fn(_artifact.recipe.build_config(ctx))
         if record_provenance:
             write_record(
@@ -237,7 +280,12 @@ def to_executor_step(artifact: Artifact, prefix: str | None = None) -> ExecutorS
         )
     resolved_prefix = prefix or marin_prefix()
     config = artifact.recipe.build_config(
-        RunContext.for_run(out=artifact.path(resolved_prefix), prefix=resolved_prefix, region=marin_region())
+        RunContext.for_run(
+            out=artifact.path(resolved_prefix),
+            prefix=resolved_prefix,
+            region=marin_region(),
+            run_args=artifact.recipe.run_args,
+        )
     )
     return ExecutorStep(
         name=artifact.name,
