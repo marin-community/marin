@@ -109,11 +109,11 @@ def main():
 
         print(f"=== {name} [{m},{k}]  read-bound floor {floor_ms:.4f}ms ===")
 
-        # Correctness + timing for the fused kernel, both transposed-store strategies.
-        for strat in ("smem_swz", "smem_plain"):
+        # Correctness + timing for the fused kernel (register-layout-cast transpose), both src layouts.
+        for strat in ("wgmma", "wgmma8"):
             try:
                 fn = lambda xx: cast_transpose_mgpu(
-                    xx, scale, block_m=args.block_m, block_k=args.block_k, store_strategy=strat
+                    xx, scale, block_m=args.block_m, block_k=args.block_k, src_layout=strat
                 )
                 q, qt = jax.block_until_ready(jax.jit(fn)(x))
                 ok_q = np.array_equal(np.asarray(q).view(np.uint8), np.asarray(q_ref).view(np.uint8))
