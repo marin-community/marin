@@ -250,12 +250,10 @@ message TaskStatus {
   reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
 
-  // Authoritative per-task retry counters. failure_count counts genuine
-  // application failures (non-zero exit / setup error); preemption_count counts
-  // worker-loss, kills, and preemptions. The list view attaches only the latest
-  // failed attempt per task, so these carry the true counts for display.
+  // Genuine application failures (non-zero exit / setup error) for this task.
+  // The list view attaches only the latest failed attempt, so this carries the
+  // true count for the dashboard's failure badge.
   int32 failure_count = 23;
-  int32 preemption_count = 24;
 }
 
 // Record of a single task execution attempt

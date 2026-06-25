@@ -310,7 +310,6 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
         failure_count=task.failure_count,
-        preemption_count=task.preemption_count,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -469,22 +468,12 @@ _LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
     """Load tasks for the list view with their current and latest-failed attempts.
 
-    Each task carries its current attempt (for ``started_at_ms`` and worker
-    resolution) plus the *most recent* attempt in each genuine-failure state
-    (``_LISTING_FAILURE_STATES``). A task that failed and was then retried keeps
-    that failure visible even though its current attempt is now running or
-    pending, so the dashboard can list recently-failed tasks without a per-task
-    ``GetTaskStatus`` fan-out.
-
-    Only the latest failed attempt per state is attached — at most two extra
-    rows per task — so a task stuck in a long retry loop adds a bounded payload
-    rather than thousands of rows. The authoritative retry counts ride on
-    ``TaskStatus.failure_count`` / ``preemption_count`` instead. Preemptions and
-    cosched cancellations are excluded entirely to keep the failures unburied;
-    full history stays available via ``get_task_status``.
-
-    Attempts are returned ascending by ``attempt_id`` so the current attempt —
-    always the highest id — stays last, which ``_current_attempt`` relies on.
+    Each task carries its current attempt plus the most recent attempt in each
+    genuine-failure state (``_LISTING_FAILURE_STATES``), so a failure stays
+    visible after the task is retried back into a running/pending state. Only the
+    latest per state is attached, keeping the payload bounded for tasks with long
+    retry histories. Attempts are ascending by ``attempt_id`` so the current
+    attempt (the highest id) stays last.
     """
     job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     with db.read_snapshot() as tx:
