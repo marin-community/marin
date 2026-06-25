@@ -1,14 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Golden test: the inline-protocol DCLM experiment must resolve to the same
-executor config as the ``default_train`` version.
+"""The inline-protocol DCLM experiment must resolve to the same executor config
+as the ``default_train`` version, so readable inline code and the executed config
+cannot drift.
 
-This is the anti-drift guarantee for the experiment-redesign Stage 1: readable
-inline code and the executed config provably cannot diverge. We compare the
-executor's *content version* (the hashed output path), which is what determines
-cache identity and is immune to callable identity — comparing the configs with
-``==`` would spuriously fail on freshly-built closures.
+We compare the executor's *content version* (the hashed output path), which is
+what determines cache identity and is immune to callable identity — comparing the
+configs with ``==`` would spuriously fail on freshly-built closures.
 """
 
 from fray.cluster import ResourceConfig
