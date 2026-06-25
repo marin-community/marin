@@ -20,6 +20,7 @@ import click
 import humanfriendly
 import yaml
 from google.protobuf import json_format
+from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -51,7 +52,6 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
-from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,

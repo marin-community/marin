@@ -27,9 +27,9 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import config_pb2, controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.connect import proxy_path
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -1050,7 +1050,7 @@ def test_static_auth_rpc_access():
         unauth_client.close()
 
         # Wrong token: should be rejected
-        wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
+        wrong_injector = BearerTokenInjector(StaticTokenProvider("wrong-token"), "authorization")
         wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
         with pytest.raises(ConnectError, match=r"(?i)authenticat"):
             wrong_client.list_workers(list_req)
@@ -1058,7 +1058,7 @@ def test_static_auth_rpc_access():
 
         # Exchange static token for JWT, then use JWT
         jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
-        valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
+        valid_injector = BearerTokenInjector(StaticTokenProvider(jwt_token), "authorization")
         valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
         response = valid_client.list_workers(list_req)
         assert response is not None
@@ -1090,7 +1090,7 @@ def test_static_auth_job_ownership():
         jwt_b = _login_for_jwt(url, _TOKEN_B)
 
         # User A submits a job (stays PENDING since no workers)
-        injector_a = AuthTokenInjector(StaticTokenProvider(jwt_a))
+        injector_a = BearerTokenInjector(StaticTokenProvider(jwt_a), "authorization")
         client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
 
         entrypoint = Entrypoint.from_callable(TestJobs.quick)
@@ -1104,7 +1104,7 @@ def test_static_auth_job_ownership():
         job_id = resp.job_id
 
         # User B tries to terminate user A's job — should fail
-        injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
+        injector_b = BearerTokenInjector(StaticTokenProvider(jwt_b), "authorization")
         client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
         with pytest.raises(ConnectError, match="cannot access resources owned by"):
             client_b.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id))

@@ -26,7 +26,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
+from rigging.server_auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
 

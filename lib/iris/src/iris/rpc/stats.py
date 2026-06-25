@@ -30,9 +30,9 @@ from connectrpc.request import RequestContext
 from google.protobuf.json_format import MessageToJson
 from google.protobuf.message import Message
 from rigging.redaction import redact_json_text
+from rigging.server_auth import get_verified_identity
 
 from iris.rpc import stats_pb2, time_pb2
-from iris.rpc.auth import get_verified_identity
 
 logger = logging.getLogger(__name__)
 

@@ -20,6 +20,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
@@ -43,7 +44,6 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.token_store import store_token
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
@@ -260,7 +260,7 @@ class LocalCluster:
             )
 
         cluster_name = self._config.name or "local"
-        store_token(cluster_name, url, jwt_token)
+        save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url, app_token=jwt_token))
         self._auto_login_token = jwt_token
 
         return url

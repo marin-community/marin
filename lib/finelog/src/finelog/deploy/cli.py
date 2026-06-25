@@ -29,7 +29,7 @@ import fsspec
 import pyarrow as pa
 from rigging.auth import IapLoginRequired
 from rigging.connect import IapAuth, connect, disconnect
-from rigging.iap_login import provider_for
+from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
 from rigging.tunnel import open_tunnel
 
@@ -45,10 +45,13 @@ _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generator[LogClient, None, None]:
     """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
     if cfg.client_url:
+        provider = iap_edge_provider(name)
+        if provider is None:
+            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
         client = connect(
             cfg.client_url,
             lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),
-            auth=IapAuth(provider_for(name)),
+            auth=IapAuth(provider),
             connect_timeout=tunnel_timeout,
         )
         try:

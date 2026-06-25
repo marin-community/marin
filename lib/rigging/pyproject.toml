@@ -13,18 +13,14 @@ dependencies = [
     "gcsfs>=2024.0.0",
     "google-auth>=2.0.0",
     "pyyaml>=6.0",
+    "requests>=2.0.0",
     "s3fs>=2024.0.0",
 ]
 
 [project.optional-dependencies]
-# Interactive desktop-OAuth login for IAP (the `marin-login` command /
-# run_iap_desktop_login). Only the human login path needs it; servers and
-# workers never import it.
+# Interactive desktop-OAuth login for IAP (run_iap_desktop_login). Only the
+# human login path needs it; servers and workers never import it.
 iap = ["google-auth-oauthlib>=1.0.0"]
-
-[project.scripts]
-# One shared IAP login for every Marin client tool; see rigging.iap_login_cli.
-marin-login = "rigging.iap_login_cli:main"
 
 [dependency-groups]
 dev = [

@@ -15,6 +15,14 @@ import time
 from collections.abc import Callable, Sequence
 
 import jwt
+from rigging.server_auth import (
+    GcpAccessTokenVerifier,
+    IapAssertionVerifier,
+    IapIdTokenVerifier,
+    StaticTokenVerifier,
+    TokenVerifier,
+    VerifiedIdentity,
+)
 from rigging.timing import Timestamp
 from sqlalchemy import Row, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -23,15 +31,7 @@ from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
-from iris.rpc.auth import (
-    DASHBOARD_ROLE,
-    GcpAccessTokenVerifier,
-    IapAssertionVerifier,
-    IapIdTokenVerifier,
-    StaticTokenVerifier,
-    TokenVerifier,
-    VerifiedIdentity,
-)
+from iris.rpc.auth import DASHBOARD_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -402,7 +402,7 @@ def create_controller_auth(
         # provisioned). Without a DB the resolver defaults to dashboard.
         signed_header_audience = auth_config.iap.signed_header_audience
         if signed_header_audience:
-            role_resolver = _make_iap_role_resolver(db) if db else None
+            role_resolver = _make_iap_role_resolver(db) if db else (lambda _email: DASHBOARD_ROLE)
             iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_resolver)
 
     optional = auth_config.optional

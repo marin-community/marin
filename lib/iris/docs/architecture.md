@@ -60,7 +60,7 @@ the placement-constraint system (`constraints.py`), config loading/validation
 + provider/autoscaler factories (`config.py`), the pure proto→dict serializer
 (`config_serde.py`, a leaf both `config` and provider bootstrap depend on),
 content-addressed bundles (`bundle.py`), endpoint URI resolution, and small
-shared concerns (`redaction`, `service_mode`, `log_keys`, `token_store`,
+shared concerns (`redaction`, `service_mode`, `log_keys`,
 `process_status`, `dashboard_common`).
 
 **Execution substrate.** `backends/` covers two distinct abstractions:

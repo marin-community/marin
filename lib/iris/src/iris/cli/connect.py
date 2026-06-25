@@ -14,13 +14,11 @@ import logging
 from pathlib import Path
 
 import click
-from rigging.auth import IapRefreshTokenProvider
-from rigging.iap_login import load_iap_credentials
+from rigging.credentials import ClientCredentials
 
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import IrisConfig
 from iris.rpc import config_pb2
-from iris.rpc.auth import ClientCredentials
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -112,19 +110,6 @@ def iap_config(config: config_pb2.IrisClusterConfig | None) -> config_pb2.IapAut
     if config.auth.WhichOneof("provider") != "iap":
         return None
     return config.auth.iap
-
-
-def build_iap_provider(cluster_name: str) -> IapRefreshTokenProvider | None:
-    """Build an IAP ID-token provider from the shared ``marin-login`` cache, or None.
-
-    Returns None when no credentials are cached yet (i.e. before ``marin-login``),
-    so pre-login commands degrade to a clear UNAUTHENTICATED error rather than
-    crashing on a missing credential.
-    """
-    credentials = load_iap_credentials(cluster_name)
-    if credentials is None:
-        return None
-    return IapRefreshTokenProvider(credentials.client_id, credentials.client_secret, credentials.refresh_token)
 
 
 def require_controller_url(ctx: click.Context) -> str:
