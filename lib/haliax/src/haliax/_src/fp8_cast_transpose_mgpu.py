@@ -25,10 +25,11 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 
-# Register layout the transposed store reads `q` in before writing it to the transposed SMEM view.
-# Tried on H100: WGMMA + WGMMA_TRANSPOSED is the (128,128) tensor-core transpose pair (the f8 quant is
-# computed in this layout). WGMMA_8BIT is f8's native wgmma-operand layout — A/B'd to see which lowers.
-_SRC_LAYOUTS = ("wgmma", "wgmma8")
+# Where the WGMMA->WGMMA_TRANSPOSED register transpose happens relative to the f8 cast. The layout cast
+# is only defined for same-dtype WGMMA<->WGMMA_TRANSPOSED (JAX's test_transposed_load_store), and f8 has
+# its own packed WGMMA_8BIT tiling that won't convert — so transpose the f32 quant, then cast f32->f8 at
+# the store ("f32t"). "f8t" transposes the f8 directly (kept to show it can't convert).
+_TRANSPOSE_DTYPES = ("f32t", "f8t")
 
 
 def cast_transpose_mgpu(
@@ -39,7 +40,7 @@ def cast_transpose_mgpu(
     compute_dtype: jnp.dtype = jnp.bfloat16,
     block_m: int = 128,
     block_k: int = 128,
-    src_layout: str = "wgmma",
+    transpose_dtype: str = "f32t",
 ) -> tuple[jax.Array, jax.Array]:
     """One read of ``x`` -> ``(q[M,K], qT[K,M])`` in ``out_dtype`` (Mosaic-GPU, Hopper f8).
 
@@ -49,8 +50,8 @@ def cast_transpose_mgpu(
     """
     if x.ndim != 2:
         raise ValueError(f"cast_transpose expects a 2D array, got shape {x.shape}")
-    if src_layout not in _SRC_LAYOUTS:
-        raise ValueError(f"src_layout must be one of {_SRC_LAYOUTS}, got {src_layout!r}")
+    if transpose_dtype not in _TRANSPOSE_DTYPES:
+        raise ValueError(f"transpose_dtype must be one of {_TRANSPOSE_DTYPES}, got {transpose_dtype!r}")
     m, k = x.shape
     if m % block_m != 0:
         raise ValueError(f"m={m} must be a multiple of block_m={block_m}")
@@ -63,7 +64,6 @@ def cast_transpose_mgpu(
     # the division is exact (e.g. power-of-two scales); for other scales it differs by at most an f8 ULP.
     del compute_dtype
     dtype_max = float(jnp.finfo(out_dtype).max)  # plain float bound (no f8 promotion in clip)
-    load_layout = plgpu.Layout.WGMMA if src_layout == "wgmma" else plgpu.Layout.WGMMA_8BIT
 
     def body(scale_gmem, x_gmem, q_gmem, qt_gmem):
         grid_m = pl.cdiv(m, block_m)
@@ -92,22 +92,26 @@ def cast_transpose_mgpu(
                 plgpu.barrier_wait(barrier)
 
                 # Load + quantize in the WGMMA register layout so the transpose is a layout cast.
-                x_tile = plgpu.load(x_smem, (), layout=load_layout, optimized=False).astype(jnp.float32)
-                q = jnp.clip(x_tile / scale_f, -dtype_max, dtype_max).astype(out_dtype)
+                x_tile = plgpu.load(x_smem, (), layout=plgpu.Layout.WGMMA, optimized=False).astype(jnp.float32)
+                qf = jnp.clip(x_tile / scale_f, -dtype_max, dtype_max)  # f32, WGMMA layout (not yet f8)
 
                 # Rowwise store: q[bm,bk] -> q_gmem[m_i, k_i].
-                q_smem[...] = q
+                q_smem[...] = qf.astype(out_dtype)
                 plgpu.commit_smem()
                 plgpu.copy_smem_to_gmem(
                     q_smem, q_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)]
                 )
 
-                # Transposed store -> qt_gmem[k_i, m_i]: cast q to the TRANSPOSED register layout and
-                # write it into a transposed view of a PLAIN qt_smem (the pre-transposed register data
-                # matches the strided view, so the store lowers without a swizzle); qt_smem then
-                # physically holds q.T contiguously, and the TMA stores it plainly.
+                # Transposed store -> qt_gmem[k_i, m_i]: transpose via the WGMMA->WGMMA_TRANSPOSED layout
+                # cast (defined for same-dtype, so on the f32 quant), cast f32->f8, and write into a
+                # transposed view of a PLAIN qt_smem (pre-transposed register data matches the strided
+                # view, so it lowers without a swizzle). qt_smem then holds q.T contiguously for the TMA.
                 qt_view = plgpu.transpose_ref(qt_smem, (1, 0))  # [bk,bm] smem -> [bm,bk] logical view
-                qt_view[...] = plgpu.layout_cast(q, plgpu.Layout.WGMMA_TRANSPOSED)
+                if transpose_dtype == "f32t":
+                    qf_t = plgpu.layout_cast(qf, plgpu.Layout.WGMMA_TRANSPOSED)
+                    qt_view[...] = qf_t.astype(out_dtype)
+                else:
+                    qt_view[...] = plgpu.layout_cast(qf.astype(out_dtype), plgpu.Layout.WGMMA_TRANSPOSED)
                 plgpu.commit_smem()
                 plgpu.copy_smem_to_gmem(
                     qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
