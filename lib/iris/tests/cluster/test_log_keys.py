@@ -5,7 +5,7 @@
 
 import pytest
 from finelog.rpc import logging_pb2
-from iris.cluster.log_classify import classify_log_level
+from iris.cluster.log_keys import classify_log_level
 
 
 @pytest.mark.parametrize(

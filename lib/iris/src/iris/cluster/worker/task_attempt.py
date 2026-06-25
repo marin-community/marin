@@ -25,8 +25,7 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.log_classify import classify_log_level
-from iris.cluster.log_keys import task_log_key
+from iris.cluster.log_keys import classify_log_level, task_log_key
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (

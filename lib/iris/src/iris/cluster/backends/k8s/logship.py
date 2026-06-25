@@ -35,7 +35,7 @@ from finelog.rpc import logging_pb2
 from rigging.timing import Timestamp
 
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
-from iris.cluster.log_classify import classify_log_level
+from iris.cluster.log_keys import classify_log_level
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
