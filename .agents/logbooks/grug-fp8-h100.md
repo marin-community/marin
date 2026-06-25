@@ -1122,3 +1122,38 @@ no dissent). The backward's mixed e4m3×e5m2 GEMM is NOT a hardware wall:
 - **Next (M0 step 2):** wire a `"mosaic"` branch into `_ragged_dot_layout` dispatching the three grouped
   GEMMs to the stock kernels (fwd/dgrad → `ragged_dot_mgpu`; wgrad → `transposed_ragged_dot_mgpu`), then
   the end-to-end fwd+bwd speed run on H100 (the only thing left that needs the GPU).
+
+### 2026-06-25 — GFP8-024: M0 step 2 — f8 fwd+dgrad win ~1.5×; wgrad blocked by f8 transpose wall (but not needed for the win)
+- **Result (per-GEMM TF/s, all-E4M3 vs bf16, real Grug regime; jobs ...050243 / ...053431):**
+
+  | bucket | gemm | fwd bf16/f8 | dgrad bf16/f8 | wgrad bf16/f8 |
+  |--------|------|-------------|---------------|---------------|
+  | ep8  | gateup | 370 / **565** (1.53×) | 385 / **574** (1.49×) | 510 / **FAIL** |
+  | ep8  | down   | ~250 / **351** | ~290 / **455** | 380 / **FAIL** |
+  | dp64 | gateup | 255 / **371** | 307 / **439** | 410 / **FAIL** |
+  | dp64 | down   | 185 / **224** | 258 / **335** | 295 / **FAIL** |
+
+  fwd & dgrad map to `ragged_dot_mgpu` (transpose_rhs=True) and win ~1.4–1.5× in f8 at every shape
+  (relerr 0.027, validated vs lax). wgrad maps to `transposed_ragged_dot_mgpu`.
+- **wgrad f8 — three masking conversion walls, then the real one:** the kernel masks ragged group
+  boundaries on the lhs (zeroing adjacent experts' tokens in the 2 boundary blocks of each group, since
+  the *contraction* axis is the ragged token axis). Stock mask = `(i1).astype(lhs_dtype)*lhs`. For f8 this
+  hit, in order: (1) `i1->f8` cast unsupported; (2) pointwise ops on 8-bit unsupported (→ use jnp.where);
+  (3) `f8->bf16` conversion unsupported on Hopper (only f8->f16) → **mediate via f32**. f32 masking
+  compiles — but then exposes the genuine wall: the kernel does `wgmma(acc, transpose_ref(lhs), rhs)`, and
+  **f8 wgmma forbids operand transposes** (`wgmma.py:147`, `supports_transpose = bytewidth==2` — a HW
+  limit, f8 tensor cores only consume the TN/K-contiguous layout). Same-type e4m3 doesn't help; the
+  transpose itself is the problem.
+- **Fix requires real kernel work (the DeepSeek backward-transpose):** wgrad contracts the token axis, but
+  both X and dY arrive token-major (feature-contiguous), so f8 wgmma (which needs the contraction
+  contiguous) can't consume them without a transpose. The fix is to feed **token-contiguous** operands —
+  pre-transpose X/dY (DeepSeek explicitly transposes the activation 1×128→128×1 for the backward) or a
+  transposing TMA load. Not a patch.
+- **KEY: we don't need f8 wgrad to win.** Blending f8 fwd + f8 dgrad + **bf16 wgrad** (the stock kernel
+  works fine in bf16, ~500 TF/s) vs all-bf16: time ∝ 1/565+1/574+1/510 = 5.49e-3 vs 1/370+1/385+1/510 =
+  7.26e-3 → **~1.32× fwd+bwd**. Making wgrad f8 too only lifts it to ~1.38×. So M0 can ship the hybrid
+  (f8 fwd/dgrad, bf16 wgrad) for a ~1.3× end-to-end win with NO wgrad surgery; f8 wgrad is a ~5% future
+  optimization.
+- **Verdict:** M0 step 2 done. Mosaic FP8 fwd+bwd beats bf16 ~1.3× with f8 fwd/dgrad alone; the wgrad
+  transpose wall is real but optional. Next: either (a) wire the hybrid into the haliax op (M0 step 3) and
+  measure end-to-end, or (b) build the token-transposed f8 wgrad for the extra ~5%.

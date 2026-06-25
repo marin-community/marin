@@ -76,8 +76,8 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 from jax import lax  # noqa: E402
+import _transposed_ragged_dot_f8 as transposed_ragged_dot_mgpu  # noqa: E402  (vendored + f8 mask patch)
 from jax.experimental.pallas.ops.gpu import ragged_dot_mgpu  # noqa: E402
-from jax.experimental.pallas.ops.gpu import transposed_ragged_dot_mgpu  # noqa: E402
 
 _HIDDEN = 1024
 _INTERMEDIATE = 512
