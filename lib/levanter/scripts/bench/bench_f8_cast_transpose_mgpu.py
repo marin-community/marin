@@ -109,35 +109,26 @@ def main():
 
         print(f"=== {name} [{m},{k}]  read-bound floor {floor_ms:.4f}ms ===")
 
-        # Correctness + timing for the fused kernel (register-layout-cast transpose), both src layouts.
-        for strat in ("f32t", "f8t"):
-            try:
-                fn = lambda xx: cast_transpose_mgpu(
-                    xx, scale, block_m=args.block_m, block_k=args.block_k, transpose_dtype=strat
+        # Correctness + timing for the fused kernel (register-layout-cast transpose).
+        try:
+            fn = lambda xx: cast_transpose_mgpu(xx, scale, block_m=args.block_m, block_k=args.block_k)
+            q, qt = jax.block_until_ready(jax.jit(fn)(x))
+            ok_q = np.array_equal(np.asarray(q).view(np.uint8), np.asarray(q_ref).view(np.uint8))
+            ok_qt = np.array_equal(np.asarray(qt).view(np.uint8), np.asarray(qt_ref).view(np.uint8))
+            t = _time(fn, x, steps=args.steps, warmup=args.warmup)
+            print(
+                f"  mosaic         {t*1e3:.4f}ms  ({floor_ms/(t*1e3)*100:.0f}% of floor)  "
+                f"q_exact={ok_q} qt_exact={ok_qt}"
+            )
+            print(
+                "row "
+                + json.dumps(
+                    {"case": name, "impl": "mosaic", "ms": t * 1e3, "q_exact": bool(ok_q), "qt_exact": bool(ok_qt)}
                 )
-                q, qt = jax.block_until_ready(jax.jit(fn)(x))
-                ok_q = np.array_equal(np.asarray(q).view(np.uint8), np.asarray(q_ref).view(np.uint8))
-                ok_qt = np.array_equal(np.asarray(qt).view(np.uint8), np.asarray(qt_ref).view(np.uint8))
-                t = _time(fn, x, steps=args.steps, warmup=args.warmup)
-                print(
-                    f"  mosaic[{strat}] {t*1e3:.4f}ms  ({floor_ms/(t*1e3)*100:.0f}% of floor)  "
-                    f"q_exact={ok_q} qt_exact={ok_qt}"
-                )
-                print(
-                    "row "
-                    + json.dumps(
-                        {
-                            "case": name,
-                            "impl": f"mosaic_{strat}",
-                            "ms": t * 1e3,
-                            "q_exact": bool(ok_q),
-                            "qt_exact": bool(ok_qt),
-                        }
-                    )
-                )
-            except Exception as e:
-                print(f"  mosaic[{strat}] FAILED: {type(e).__name__}")
-                print("\n".join("    " + ln for ln in traceback.format_exc().splitlines()[-14:]))
+            )
+        except Exception as e:
+            print(f"  mosaic         FAILED: {type(e).__name__}")
+            print("\n".join("    " + ln for ln in traceback.format_exc().splitlines()[-14:]))
 
         # Baselines. The real tax the kernel removes is the f8->f8 swapaxes of an ALREADY-quantized
         # operand (what _mosaic_pallas_call does today), not a re-quantize. Measure all three.

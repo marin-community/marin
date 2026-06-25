@@ -12,15 +12,28 @@ reads the source **once** and writes **both** the rowwise and transposed f8 quan
 transposed copy then costs ~one extra f8 write rather than a re-cast.
 
 This module holds the vanilla-JAX reference (the bit-exact correctness oracle) and the public
-``cast_transpose`` wrapper. A Mosaic-GPU fused fast path was attempted (``fp8_cast_transpose_mgpu.py``)
-but does NOT lower on jax 0.10.0 — a coalesced transposed store is not expressible there (logbook
-GFP8-033). The wrapper therefore delegates to the reference; revisit the fast path on a jax bump.
+``cast_transpose`` wrapper. On H100 the wrapper routes to the fused Mosaic-GPU kernel
+(``fp8_cast_transpose_mgpu.py``), which produces the transpose via the ``WGMMA -> WGMMA_TRANSPOSED``
+register layout cast and is bit-exact to the reference (logbook GFP8-033); elsewhere (CPU/TPU, odd
+shapes, or no Pallas) it delegates to the reference.
 """
 
 import jax
 import jax.numpy as jnp
 
 from haliax._src.fp8 import quantize
+
+# Guard the Mosaic-GPU cast-transpose kernel: H100-only (Hopper wgmma layouts), absent on TPU/CPU.
+_has_pallas_mosaic = False
+try:
+    from haliax._src.fp8_cast_transpose_mgpu import cast_transpose_mgpu  # type: ignore[assignment]
+
+    _has_pallas_mosaic = True
+except (ImportError, ModuleNotFoundError):
+    pass
+
+# The Mosaic kernel tiles 128x128; non-conforming shapes fall back to the reference.
+_MOSAIC_BLOCK = 128
 
 __all__ = ["cast_transpose", "cast_transpose_reference"]
 
@@ -57,6 +70,18 @@ def cast_transpose(
     quantized values, not by a second independent cast. ``scale`` is an input (delayed scaling: the
     step's scale comes from the previous amax history, known before the cast).
 
-    Delegates to the reference: the Mosaic-GPU fused kernel does not lower on jax 0.10.0 (GFP8-033).
+    Uses the fused Mosaic-GPU kernel on H100 for 128-tileable shapes; otherwise the reference.
     """
+    m, k = x.shape if x.ndim == 2 else (0, 0)
+    use_mosaic = (
+        _has_pallas_mosaic
+        and jax.default_backend() == "gpu"
+        and x.ndim == 2
+        and m % _MOSAIC_BLOCK == 0
+        and k % _MOSAIC_BLOCK == 0
+    )
+    if use_mosaic:
+        return cast_transpose_mgpu(
+            x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype, block_m=_MOSAIC_BLOCK, block_k=_MOSAIC_BLOCK
+        )
     return cast_transpose_reference(x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)

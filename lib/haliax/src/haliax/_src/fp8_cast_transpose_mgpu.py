@@ -11,11 +11,16 @@ tile of the high-precision source **once**, quantizes it, and TMA-stores both th
 ``WGMMA`` -> ``WGMMA_TRANSPOSED`` layout cast (the tensor-core register transpose), so the SMEM store
 stays coalesced.
 
-The naive ``transpose_ref(qt_smem, (1,0))`` SMEM store does NOT lower (it moves the swizzled minor dim:
-"Can't transpose the swizzled dimension"); the working idiom is to put the data in a transposed
-*register layout* and store that — same as JAX's own ``test_transposed_load_store``. H100-only (Hopper,
-Warpgroup). The bit-exact reference + the public dispatcher live in ``fp8_cast_transpose.py``. See
-logbook GFP8-033.
+Lowering notes (jax 0.10.0, hard-won — logbook GFP8-033):
+- The transpose must be a *register layout cast*, not a memref transpose. ``transpose_ref(qt_smem,(1,0))``
+  on a swizzled SMEM fails ("Can't transpose the swizzled dimension"); a transposed GMEM TMA descriptor
+  is unimplemented; a register ``q.T`` is unimplemented in Warpgroup semantics.
+- ``layout_cast(.., WGMMA_TRANSPOSED)`` is only defined for the *same dtype*, and f8 has its own packed
+  WGMMA_8BIT tiling that won't convert — so the cast is done on the **f32** quant, then f32->f8 at the
+  store. The store target ``qt_smem`` is PLAIN (no swizzle): the pre-transposed register layout matches
+  the transposed view, so it lowers; the TMA then stores the now-contiguous ``qt_smem``.
+This is the same idiom as JAX's own ``test_transposed_load_store``. H100-only (Hopper, Warpgroup). The
+bit-exact reference + the public dispatcher live in ``fp8_cast_transpose.py``.
 """
 
 import functools
@@ -24,12 +29,6 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
-
-# Where the WGMMA->WGMMA_TRANSPOSED register transpose happens relative to the f8 cast. The layout cast
-# is only defined for same-dtype WGMMA<->WGMMA_TRANSPOSED (JAX's test_transposed_load_store), and f8 has
-# its own packed WGMMA_8BIT tiling that won't convert — so transpose the f32 quant, then cast f32->f8 at
-# the store ("f32t"). "f8t" transposes the f8 directly (kept to show it can't convert).
-_TRANSPOSE_DTYPES = ("f32t", "f8t")
 
 
 def cast_transpose_mgpu(
@@ -40,18 +39,15 @@ def cast_transpose_mgpu(
     compute_dtype: jnp.dtype = jnp.bfloat16,
     block_m: int = 128,
     block_k: int = 128,
-    transpose_dtype: str = "f32t",
 ) -> tuple[jax.Array, jax.Array]:
     """One read of ``x`` -> ``(q[M,K], qT[K,M])`` in ``out_dtype`` (Mosaic-GPU, Hopper f8).
 
     ``q`` is ``quantize(x, out_dtype, scale, compute_dtype)``; ``qT`` is its transpose, produced by the
-    ``WGMMA`` -> ``WGMMA_TRANSPOSED`` register layout cast rather than a second cast or an XLA f8
-    transpose.
+    ``WGMMA`` -> ``WGMMA_TRANSPOSED`` register layout cast (on the f32 quant, since the cast is only
+    defined for same-dtype layouts) rather than a second cast or an XLA f8 transpose.
     """
     if x.ndim != 2:
         raise ValueError(f"cast_transpose expects a 2D array, got shape {x.shape}")
-    if transpose_dtype not in _TRANSPOSE_DTYPES:
-        raise ValueError(f"transpose_dtype must be one of {_TRANSPOSE_DTYPES}, got {transpose_dtype!r}")
     m, k = x.shape
     if m % block_m != 0:
         raise ValueError(f"m={m} must be a multiple of block_m={block_m}")
@@ -107,11 +103,8 @@ def cast_transpose_mgpu(
                 # transposed view of a PLAIN qt_smem (pre-transposed register data matches the strided
                 # view, so it lowers without a swizzle). qt_smem then holds q.T contiguously for the TMA.
                 qt_view = plgpu.transpose_ref(qt_smem, (1, 0))  # [bk,bm] smem -> [bm,bk] logical view
-                if transpose_dtype == "f32t":
-                    qf_t = plgpu.layout_cast(qf, plgpu.Layout.WGMMA_TRANSPOSED)
-                    qt_view[...] = qf_t.astype(out_dtype)
-                else:
-                    qt_view[...] = plgpu.layout_cast(qf.astype(out_dtype), plgpu.Layout.WGMMA_TRANSPOSED)
+                qf_t = plgpu.layout_cast(qf, plgpu.Layout.WGMMA_TRANSPOSED)
+                qt_view[...] = qf_t.astype(out_dtype)
                 plgpu.commit_smem()
                 plgpu.copy_smem_to_gmem(
                     qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
