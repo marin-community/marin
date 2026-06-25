@@ -24,14 +24,22 @@ from paper_plot_style import GRP_COLOR, PAPER_AXIS, PAPER_GRID, PAPER_MUTED, PAP
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMG_DIR = SCRIPT_DIR / "img"
 SOURCE_CSV = SCRIPT_DIR / "data" / "two_phase_starcoder_combined_143_from_wandb.csv"
+REPEAT_METRICS_CSV = (
+    SCRIPT_DIR.parent
+    / "reference_outputs"
+    / "starcoder_heteroskedastic_snr_20260523"
+    / "collected_train_only_metrics_live.csv"
+)
 
 TARGET = "eval/paloma/dolma_100_programing_languages/bpb"
 LANDSCAPE_OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_landscape"
+LANDSCAPE_ERROR_BARS_OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_landscape_anchor_error_bars"
 SLICE_OUTPUT_STEM = IMG_DIR / "starcoder_two_phase_slice"
 
 LANDSCAPE_FIGSIZE = (4.7, 4.3)
 SLICE_FIGSIZE = (4.7, 3.85)
 DPI = 300
+PROPORTIONAL_GOLD = "#FFD700"
 
 
 def _projected_marker(
@@ -42,6 +50,7 @@ def _projected_marker(
     *,
     marker: str,
     markersize: float,
+    color: str = UNIFORM_COLOR,
 ) -> None:
     """Overlay a 2D marker at the projected location of a 3D point."""
     projected_x, projected_y, _ = proj3d.proj_transform(x, y, z, ax.get_proj())
@@ -50,8 +59,8 @@ def _projected_marker(
         [projected_y],
         marker=marker,
         linestyle="",
-        color=UNIFORM_COLOR,
-        markerfacecolor=UNIFORM_COLOR,
+        color=color,
+        markerfacecolor=color,
         markeredgecolor="white",
         markeredgewidth=0.9,
         markersize=markersize,
@@ -69,6 +78,46 @@ def _completed_frame() -> pd.DataFrame:
     if frame.empty:
         raise ValueError(f"No completed rows with {TARGET} in {SOURCE_CSV}")
     return frame
+
+
+def _proportional_anchor() -> pd.Series:
+    """Return the repeated proportional anchor for the target benchmark."""
+    frame = pd.read_csv(REPEAT_METRICS_CSV)
+    final_step = int(frame["latest_step"].dropna().max())
+    rows = frame[
+        frame["latest_step"].eq(final_step) & frame["anchor_id"].eq("proportional") & frame[TARGET].notna()
+    ].copy()
+    if rows.empty:
+        raise ValueError(f"No proportional repeat-anchor rows with {TARGET} in {REPEAT_METRICS_CSV}")
+    return pd.Series(
+        {
+            "phase_0_starcoder": float(rows["phase_0_starcoder"].iloc[0]),
+            "phase_1_starcoder": float(rows["phase_1_starcoder"].iloc[0]),
+            TARGET: float(rows[TARGET].mean()),
+        }
+    )
+
+
+def _anchor_noise_summary() -> pd.DataFrame:
+    """Return repeat-anchor mean and standard deviation for the target benchmark."""
+    frame = pd.read_csv(REPEAT_METRICS_CSV)
+    final_step = int(frame["latest_step"].dropna().max())
+    rows = frame[frame["latest_step"].eq(final_step) & frame[TARGET].notna()].copy()
+    if rows.empty:
+        raise ValueError(f"No repeat-anchor rows with {TARGET} in {REPEAT_METRICS_CSV}")
+    grouped = (
+        rows.groupby("anchor_id", as_index=False)
+        .agg(
+            phase_0_starcoder=("phase_0_starcoder", "first"),
+            phase_1_starcoder=("phase_1_starcoder", "first"),
+            mean=(TARGET, "mean"),
+            std=(TARGET, "std"),
+            count=(TARGET, "count"),
+        )
+        .sort_values(["phase_0_starcoder", "phase_1_starcoder", "anchor_id"])
+        .reset_index(drop=True)
+    )
+    return grouped
 
 
 def _phase_1_starcoder_epoch_multiplier(frame: pd.DataFrame) -> float:
@@ -119,10 +168,44 @@ def _style_3d_axis(ax: Axes3D) -> None:
     ax.tick_params(axis="z", colors=PAPER_TEXT, labelsize=8.8, pad=3)
 
 
-def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -> None:
+def _plot_anchor_error_bars(ax: Axes3D, anchors: pd.DataFrame) -> None:
+    """Overlay ±1 std vertical error bars for repeated anchors."""
+    cap_width = 0.018
+    for row in anchors.itertuples(index=False):
+        x = float(row.phase_0_starcoder)
+        y = float(row.phase_1_starcoder)
+        mean = float(row.mean)
+        std = float(row.std)
+        lower = mean - std
+        upper = mean + std
+        ax.plot([x, x], [y, y], [lower, upper], color=PAPER_TEXT, linewidth=1.25, alpha=0.84)
+        ax.plot([x - cap_width, x + cap_width], [y, y], [lower, lower], color=PAPER_TEXT, linewidth=1.05, alpha=0.84)
+        ax.plot([x - cap_width, x + cap_width], [y, y], [upper, upper], color=PAPER_TEXT, linewidth=1.05, alpha=0.84)
+        ax.scatter(
+            [x],
+            [y],
+            [mean],
+            s=38,
+            color="white",
+            edgecolors=PAPER_TEXT,
+            linewidths=0.65,
+            depthshade=False,
+            alpha=0.98,
+        )
+
+
+def _plot_landscape(
+    ax: Axes3D,
+    frame: pd.DataFrame,
+    slice_rows: pd.DataFrame,
+    *,
+    show_anchor_error_bars: bool = False,
+) -> None:
     """Plot the full two-phase landscape as a 3D scatter view."""
     global_min = frame.loc[frame[TARGET].idxmin()]
     slice_min = slice_rows.loc[slice_rows[TARGET].idxmin()]
+    proportional = _proportional_anchor()
+    anchors = _anchor_noise_summary() if show_anchor_error_bars else pd.DataFrame()
     x = frame["phase_0_starcoder"].to_numpy(dtype=float)
     y = frame["phase_1_starcoder"].to_numpy(dtype=float)
     z = frame[TARGET].to_numpy(dtype=float)
@@ -158,6 +241,8 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
         depthshade=False,
     )
     ax.plot(slice_x, slice_y, slice_z, color=UNIFORM_COLOR, linewidth=1.6, alpha=0.95)
+    if show_anchor_error_bars:
+        _plot_anchor_error_bars(ax, anchors)
     legend = ax.legend(
         handles=[
             Line2D(
@@ -170,7 +255,8 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
                 markeredgewidth=0.75,
                 markersize=6.3,
                 label=rf"global min: $p^{{(0)}}={global_min['phase_0_starcoder']:.2f}$, "
-                rf"$p^{{(1)}}={global_min['phase_1_starcoder']:.2f}$",
+                rf"$p^{{(1)}}={global_min['phase_1_starcoder']:.2f}$; "
+                rf"BPB={float(global_min[TARGET]):.3f}",
             ),
             Line2D(
                 [0],
@@ -181,7 +267,39 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
                 markeredgecolor="white",
                 markeredgewidth=0.75,
                 markersize=10.5,
-                label=rf"$p^{{(0)}}=0$ slice min: $p^{{(1)}}={slice_min['phase_1_starcoder']:.2f}$",
+                label=rf"$p^{{(0)}}=0$ slice min: $p^{{(1)}}={slice_min['phase_1_starcoder']:.2f}$; "
+                rf"BPB={float(slice_min[TARGET]):.3f}",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="",
+                markerfacecolor=PROPORTIONAL_GOLD,
+                markeredgecolor="white",
+                markeredgewidth=0.75,
+                markersize=6.5,
+                label=rf"proportional: $p^{{(0)}}=p^{{(1)}}={proportional['phase_0_starcoder']:.2f}$; "
+                rf"BPB={float(proportional[TARGET]):.3f}",
+            ),
+            *(
+                [
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="o",
+                        linestyle="-",
+                        color=PAPER_TEXT,
+                        markerfacecolor="white",
+                        markeredgecolor=PAPER_TEXT,
+                        markeredgewidth=0.65,
+                        linewidth=1.25,
+                        markersize=4.8,
+                        label=r"repeat anchors: mean $\pm 1$ std",
+                    )
+                ]
+                if show_anchor_error_bars
+                else []
             ),
         ],
         loc="upper left",
@@ -224,6 +342,32 @@ def _plot_landscape(ax: Axes3D, frame: pd.DataFrame, slice_rows: pd.DataFrame) -
         float(slice_min[TARGET]),
         marker="*",
         markersize=13.5,
+    )
+    _projected_marker(
+        ax,
+        float(proportional["phase_0_starcoder"]),
+        float(proportional["phase_1_starcoder"]),
+        float(proportional[TARGET]),
+        marker="o",
+        markersize=8.2,
+        color=PROPORTIONAL_GOLD,
+    )
+    projected_x, projected_y, _ = proj3d.proj_transform(
+        float(proportional["phase_0_starcoder"]),
+        float(proportional["phase_1_starcoder"]),
+        float(proportional[TARGET]),
+        ax.get_proj(),
+    )
+    ax.text2D(
+        projected_x + 0.018,
+        projected_y + 0.01,
+        "proportional",
+        transform=ax.transData,
+        fontsize=6.2,
+        color=PAPER_TEXT,
+        bbox={"boxstyle": "round,pad=0.12", "facecolor": "white", "edgecolor": "none", "alpha": 0.72},
+        zorder=1001,
+        clip_on=False,
     )
 
 
@@ -317,6 +461,16 @@ def main() -> None:
     landscape_figure.savefig(LANDSCAPE_OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.24)
     plt.close(landscape_figure)
 
+    error_bar_figure = plt.figure(figsize=LANDSCAPE_FIGSIZE, constrained_layout=False)
+    error_bar_figure.subplots_adjust(left=0.02, right=0.98, bottom=0.09, top=0.96)
+    error_bar_axis = error_bar_figure.add_subplot(1, 1, 1, projection="3d")
+    _plot_landscape(error_bar_axis, frame, slice_rows, show_anchor_error_bars=True)
+    error_bar_figure.savefig(
+        LANDSCAPE_ERROR_BARS_OUTPUT_STEM.with_suffix(".png"), dpi=DPI, bbox_inches="tight", pad_inches=0.24
+    )
+    error_bar_figure.savefig(LANDSCAPE_ERROR_BARS_OUTPUT_STEM.with_suffix(".pdf"), bbox_inches="tight", pad_inches=0.24)
+    plt.close(error_bar_figure)
+
     slice_figure, slice_axis = plt.subplots(figsize=SLICE_FIGSIZE, constrained_layout=True)
     _plot_slice(slice_axis, slice_rows, starcoder_epoch_multiplier)
     _style_axis(slice_axis)
@@ -326,6 +480,8 @@ def main() -> None:
 
     print(f"Wrote {LANDSCAPE_OUTPUT_STEM.with_suffix('.png')}")
     print(f"Wrote {LANDSCAPE_OUTPUT_STEM.with_suffix('.pdf')}")
+    print(f"Wrote {LANDSCAPE_ERROR_BARS_OUTPUT_STEM.with_suffix('.png')}")
+    print(f"Wrote {LANDSCAPE_ERROR_BARS_OUTPUT_STEM.with_suffix('.pdf')}")
     print(f"Wrote {SLICE_OUTPUT_STEM.with_suffix('.png')}")
     print(f"Wrote {SLICE_OUTPUT_STEM.with_suffix('.pdf')}")
     print(f"Completed rows: {len(frame)}; slice rows: {len(slice_rows)}")
