@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import atexit
 from collections.abc import Callable, Sequence
 from functools import lru_cache
 import hashlib
@@ -14,6 +13,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
+from rigging.filesystem import marin_prefix
 
 from levanter.kernels.pallas import autotune_cache_utils, autotune_utils
 
@@ -53,12 +53,13 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
+_AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
 
 
 class _NoViableCandidate:
-    """Value stored for a key whose autotune sweep found no viable candidate."""
+    """Marks a key whose autotune sweep found no viable block size."""
 
 
 _NO_VIABLE_CANDIDATE = _NoViableCandidate()
@@ -90,110 +91,58 @@ def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
     return None
 
 
+def _autotune_cache_url() -> str:
+    """Region-local JSON file holding this kernel's tuned block sizes."""
+    root = marin_prefix().rstrip("/")
+    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_FILENAME}"
+
+
 class AutotuneBlockSizeCache:
-    """In-memory autotune results keyed by an opaque cache key, backed by a JSON file.
+    """Tuned block sizes keyed by an opaque string, persisted to a JSON file."""
 
-    Loads lazily on first access and writes updates back on a background thread,
-    so a sweep never blocks on (possibly remote) cache I/O. ``put`` coalesces a
-    burst of writes into a single flush; a final flush runs at process exit. A
-    ``_NoViableCandidate`` value marks a key whose sweep found no viable block
-    size. When no cache URL resolves the cache is purely in-memory and warns
-    once that results will not persist.
-    """
-
-    def __init__(self, *, url_fn: Callable[[], str | None], flush_delay: float = 1.0) -> None:
+    def __init__(self, url_fn: Callable[[], str | None] = _autotune_cache_url) -> None:
         self._url_fn = url_fn
-        self._flush_delay = flush_delay
-        self._entries: dict[str, _AutotuneCacheEntry] = {}
         self._lock = threading.Lock()
-        self._loaded = False
-        self._dirty = threading.Event()
-        self._no_url_warned = False
-        self._worker: threading.Thread | None = None
+        self._entries: dict[str, _AutotuneCacheEntry] | None = None
 
     def get(self, key: str) -> _AutotuneCacheEntry | None:
-        """Return the cached entry for ``key``, or None if absent."""
-        self._ensure_loaded()
         with self._lock:
-            return self._entries.get(key)
+            return self._loaded_entries().get(key)
 
     def put(self, key: str, value: _AutotuneCacheEntry) -> None:
-        """Store an entry and schedule a background flush to the cache file."""
-        self._ensure_loaded()
         with self._lock:
-            self._entries[key] = value
-        self._schedule_flush()
+            entries = self._loaded_entries()
+            entries[key] = value
+            self._write(entries)
 
-    def clear(self) -> None:
-        """Drop all in-memory entries and force a reload on next access (tests)."""
-        with self._lock:
-            self._entries.clear()
-            self._loaded = False
-            self._dirty.clear()
-
-    def flush(self) -> None:
-        """Synchronously write pending entries to the cache file."""
-        if not self._dirty.is_set():
-            return
-        self._dirty.clear()
+    def _loaded_entries(self) -> dict[str, _AutotuneCacheEntry]:
+        if self._entries is not None:
+            return self._entries
+        self._entries = {}
         url = self._url_fn()
         if url is None:
-            return
-        with self._lock:
-            payload = {key: _encode_autotune_entry(value) for key, value in self._entries.items()}
-        try:
-            autotune_cache_utils.write_json(url, payload)
-        except Exception as exc:
-            logger.debug("Unable to persist fused CE autotune cache to %s: %s", url, exc)
-
-    def _ensure_loaded(self) -> None:
-        with self._lock:
-            if self._loaded:
-                return
-            self._loaded = True
-        url = self._url_fn()
-        if url is None:
-            return
+            return self._entries
         try:
             payload = autotune_cache_utils.load_json(url)
         except Exception as exc:
-            logger.debug("Unable to load fused CE autotune cache from %s: %s", url, exc)
+            logger.warning("Unable to load fused CE autotune cache from %s: %s", url, exc)
+            return self._entries
+        for key, raw in payload.items():
+            if isinstance(key, str) and isinstance(raw, dict):
+                entry = _decode_autotune_entry(raw)
+                if entry is not None:
+                    self._entries[key] = entry
+        return self._entries
+
+    def _write(self, entries: dict[str, _AutotuneCacheEntry]) -> None:
+        url = self._url_fn()
+        if url is None:
             return
-        decoded = {
-            key: entry
-            for key, raw in payload.items()
-            if isinstance(key, str) and isinstance(raw, dict) and (entry := _decode_autotune_entry(raw)) is not None
-        }
-        with self._lock:
-            for key, entry in decoded.items():
-                self._entries.setdefault(key, entry)
-        logger.debug("Loaded %d fused CE autotune entries from %s.", len(decoded), url)
-
-    def _schedule_flush(self) -> None:
-        if self._url_fn() is None:
-            self._warn_no_url()
-            return
-        self._dirty.set()
-        with self._lock:
-            if self._worker is None or not self._worker.is_alive():
-                self._worker = threading.Thread(target=self._flush_loop, name="ce-autotune-flush", daemon=True)
-                self._worker.start()
-
-    def _flush_loop(self) -> None:
-        while self._dirty.wait():
-            time.sleep(self._flush_delay)  # coalesce a burst of puts into one write
-            self.flush()
-
-    def _warn_no_url(self) -> None:
-        with self._lock:
-            if self._no_url_warned:
-                return
-            self._no_url_warned = True
-        logger.warning(
-            "Fused CE autotune is sweeping but no JAX compilation cache dir is configured "
-            "(jax_compilation_cache_dir / JAX_COMPILATION_CACHE_DIR unset); results will not persist "
-            "and every process will re-sweep on startup."
-        )
+        payload = {key: _encode_autotune_entry(value) for key, value in entries.items()}
+        try:
+            autotune_cache_utils.write_json(url, payload)
+        except Exception as exc:
+            logger.warning("Unable to persist fused CE autotune cache to %s: %s", url, exc)
 
 
 _CANONICAL_BACKEND_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -283,15 +232,7 @@ def _autotune_enabled() -> bool:
     return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-def _kernel_autotune_cache_url() -> str | None:
-    return autotune_cache_utils.kernel_autotune_cache_url(
-        kernel_name=_AUTOTUNE_KERNEL_NAME,
-        filename=_AUTOTUNE_CACHE_FILENAME,
-    )
-
-
-_AUTOTUNE_CACHE = AutotuneBlockSizeCache(url_fn=_kernel_autotune_cache_url)
-atexit.register(_AUTOTUNE_CACHE.flush)
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache()
 
 
 def _autotune_jaxpr_hash(

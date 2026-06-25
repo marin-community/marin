@@ -1,9 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import logging
-import os
-import time
 import warnings
 from typing import cast
 
@@ -12,7 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
@@ -1462,65 +1458,27 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
 
 
 def test_autotune_cache_round_trips_winner_and_negative_entries(tmp_path):
-    """Winner and no-viable-candidate entries persist via flush() and reload as equal values."""
+    """put() persists winner and no-viable-candidate entries; a fresh cache reloads them as equal values."""
     url = str(tmp_path / "block_sizes.json")
-    winner_key = "winner-key"
-    negative_key = "negative-key"
     winner = fused_api.BlockSizes(b_block_size=128, h_block_size=256, v_block_size=512)
 
     cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
-    cache.put(winner_key, winner)
-    cache.put(negative_key, fused_api._NO_VIABLE_CANDIDATE)
-    cache.flush()
+    cache.put("winner-key", winner)
+    cache.put("negative-key", fused_api._NO_VIABLE_CANDIDATE)
 
     reloaded = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
-    assert reloaded.get(winner_key) == winner
-    assert reloaded.get(negative_key) is fused_api._NO_VIABLE_CANDIDATE
+    assert reloaded.get("winner-key") == winner
+    assert reloaded.get("negative-key") is fused_api._NO_VIABLE_CANDIDATE
     assert reloaded.get("absent-key") is None
 
 
-def test_autotune_cache_background_thread_persists_without_explicit_flush(tmp_path):
-    """put() alone eventually writes the cache file via the background flush thread."""
-    url = str(tmp_path / "block_sizes.json")
-    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url, flush_delay=0.01)
-    cache.put("k", fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256))
-
-    deadline = time.monotonic() + 5.0
-    while not os.path.exists(url) and time.monotonic() < deadline:
-        time.sleep(0.02)
-
-    assert os.path.exists(url), "background thread did not flush the cache file"
-    reloaded = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
-    assert reloaded.get("k") == fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
-
-
-def test_autotune_cache_warns_once_without_cache_url(caplog):
-    """With no cache URL, the cache stays in-memory and warns exactly once across many puts."""
-    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: None)
-    winner = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
-
-    with caplog.at_level(logging.WARNING, logger=fused_api.__name__):
-        cache.put("k1", winner)
-        cache.put("k2", winner)
-
-    # Still served from memory despite no persistence.
-    assert cache.get("k1") == winner
-    warnings_logged = [r for r in caplog.records if "no JAX compilation cache dir" in r.getMessage()]
-    assert len(warnings_logged) == 1
-
-
-def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        autotune_cache_utils,
-        "get_jax_compilation_cache_dir",
-        lambda: "gs://my-cache-root/compiled",
-    )
-
-    cache_url = fused_api._kernel_autotune_cache_url()
+def test_autotune_cache_url_is_region_local(monkeypatch: pytest.MonkeyPatch):
+    """The cache lives under marin_prefix(), with the trailing slash normalized away."""
+    monkeypatch.setattr(fused_api, "marin_prefix", lambda: "gs://my-region-bucket/")
 
     assert (
-        cache_url
-        == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
+        fused_api._autotune_cache_url()
+        == "gs://my-region-bucket/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
     )
 
 
