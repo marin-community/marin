@@ -98,6 +98,10 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  // Authoritative per-task retry counters. The list view attaches only the
+  // latest failed attempt, so these carry the true counts.
+  failureCount?: number
+  preemptionCount?: number
 }
 
 // -- Jobs --

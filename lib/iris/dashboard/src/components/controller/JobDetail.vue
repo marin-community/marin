@@ -541,36 +541,56 @@ const taskCounts = computed(() => {
   return counts
 })
 
-const MAX_FAILURE_EXAMPLES = 5
+const MAX_FAILURE_EXAMPLES = 8
 
-interface AttemptSummary {
+interface TaskFailureSummary {
   taskId: string
   taskIndex: string
-  attemptId: number
+  attemptId: number     // most recent failed attempt of this state
   error: string
   finishedAtMs: number
+  failureCount: number  // failed attempts of this state for the task
 }
 
-function collectAttemptsByState(stateName: string): AttemptSummary[] {
-  const results: AttemptSummary[] = []
+// One entry per task — its most recent failed attempt plus the authoritative
+// retry count — so a single task that fails repeatedly doesn't crowd out other
+// failing tasks. ListTasks attaches only the latest failed attempt per state
+// (not the full history), so the failure stays visible after the task is
+// retried back into a running/pending state without shipping every attempt; the
+// ``count`` for the badge comes from the per-task counter on the TaskStatus.
+function collectFailuresByState(stateName: string, count: (t: TaskStatus) => number): TaskFailureSummary[] {
+  const out: TaskFailureSummary[] = []
   for (const task of tasks.value) {
+    let latest: { attemptId: number; error: string; finishedAtMs: number } | null = null
     for (const attempt of task.attempts ?? []) {
       if (stateToName(attempt.state) !== stateName) continue
-      results.push({
-        taskId: task.taskId,
-        taskIndex: taskIndex(task.taskId),
-        attemptId: attempt.attemptId,
-        error: attempt.error ?? '',
-        finishedAtMs: timestampMs(attempt.finishedAt),
-      })
+      const finishedAtMs = timestampMs(attempt.finishedAt)
+      if (!latest || finishedAtMs >= latest.finishedAtMs) {
+        latest = { attemptId: attempt.attemptId, error: attempt.error ?? '', finishedAtMs }
+      }
     }
+    if (!latest) continue
+    out.push({
+      taskId: task.taskId,
+      taskIndex: taskIndex(task.taskId),
+      attemptId: latest.attemptId,
+      error: latest.error,
+      finishedAtMs: latest.finishedAtMs,
+      failureCount: count(task),
+    })
   }
-  results.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
-  return results
+  return out.sort((a, b) => b.finishedAtMs - a.finishedAtMs)
 }
 
-const recentTaskFailures = computed<AttemptSummary[]>(() => collectAttemptsByState('failed'))
-const recentPreemptions = computed<AttemptSummary[]>(() => collectAttemptsByState('worker_failed'))
+const recentTaskFailures = computed<TaskFailureSummary[]>(() =>
+  collectFailuresByState('failed', t => t.failureCount ?? 0),
+)
+// Worker failures share the preemption budget with kills/preemptions, so there
+// is no clean per-task "worker failure" counter; surface the latest one without
+// a count badge.
+const recentWorkerFailures = computed<TaskFailureSummary[]>(() =>
+  collectFailuresByState('worker_failed', () => 0),
+)
 
 const acceleratorDisplay = computed(() => {
   const j = job.value
@@ -808,18 +828,21 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <pre class="mt-2 p-3 bg-surface rounded text-xs font-mono whitespace-pre-wrap">{{ job.pendingReason }}</pre>
       </div>
 
-      <!-- Recent task attempt failures callout -->
+      <!-- Failed tasks callout: genuine task failures (non-zero exit). Shows each
+           task's most recent failed attempt — surfaced even after the task has
+           been retried back into a running/pending state — with its total
+           failure count. One row per task. -->
       <div
         v-if="recentTaskFailures.length > 0"
         class="mb-4 px-4 py-3 bg-status-danger-bg border border-status-danger-border rounded-lg"
       >
         <span class="font-semibold text-status-danger text-sm">
-          {{ recentTaskFailures.length }} failed task attempt{{ recentTaskFailures.length !== 1 ? 's' : '' }}
+          {{ recentTaskFailures.length }} task{{ recentTaskFailures.length !== 1 ? 's' : '' }} with failed attempts
         </span>
         <div class="mt-2 flex flex-col gap-1">
           <div
             v-for="f in recentTaskFailures.slice(0, MAX_FAILURE_EXAMPLES)"
-            :key="`${f.taskId}-${f.attemptId}`"
+            :key="f.taskId"
             class="text-xs text-text-secondary"
           >
             <RouterLink
@@ -829,6 +852,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               task {{ f.taskIndex }}
             </RouterLink>
             <span class="text-text-muted"> attempt {{ f.attemptId }}</span>
+            <span v-if="f.failureCount > 1" class="text-status-danger"> ·&times;{{ f.failureCount }}</span>
             <span v-if="f.finishedAtMs" class="text-text-muted"> · {{ formatRelativeTime(f.finishedAtMs) }}</span>
             <span v-if="f.error" class="text-status-danger"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
           </div>
@@ -841,18 +865,19 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
-      <!-- Recent preemption failures callout -->
+      <!-- Worker-failure callout: tasks whose attempt died with the worker
+           (infra death), as opposed to a genuine non-zero exit. -->
       <div
-        v-if="recentPreemptions.length > 0"
+        v-if="recentWorkerFailures.length > 0"
         class="mb-4 px-4 py-3 bg-status-warning-bg border border-status-warning-border rounded-lg"
       >
         <span class="font-semibold text-status-warning text-sm">
-          {{ recentPreemptions.length }} preempted attempt{{ recentPreemptions.length !== 1 ? 's' : '' }}
+          {{ recentWorkerFailures.length }} task{{ recentWorkerFailures.length !== 1 ? 's' : '' }} with worker failures
         </span>
         <div class="mt-2 flex flex-col gap-1">
           <div
-            v-for="f in recentPreemptions.slice(0, MAX_FAILURE_EXAMPLES)"
-            :key="`${f.taskId}-${f.attemptId}`"
+            v-for="f in recentWorkerFailures.slice(0, MAX_FAILURE_EXAMPLES)"
+            :key="f.taskId"
             class="text-xs text-text-secondary"
           >
             <RouterLink
@@ -866,10 +891,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span v-if="f.error" class="text-status-warning"> · {{ f.error.length > 120 ? f.error.slice(0, 120) + '…' : f.error }}</span>
           </div>
           <span
-            v-if="recentPreemptions.length > MAX_FAILURE_EXAMPLES"
+            v-if="recentWorkerFailures.length > MAX_FAILURE_EXAMPLES"
             class="text-xs text-text-muted"
           >
-            … and {{ recentPreemptions.length - MAX_FAILURE_EXAMPLES }} more
+            … and {{ recentWorkerFailures.length - MAX_FAILURE_EXAMPLES }} more
           </span>
         </div>
       </div>

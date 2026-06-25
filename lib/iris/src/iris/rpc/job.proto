@@ -249,6 +249,13 @@ message TaskStatus {
   string container_id = 19;           // Platform container identifier (Docker container ID, K8s pod name)
   reserved 20;                        // was: repeated ResourceUsage resource_history (now in iris.task stats)
   reserved 21, 22;                    // was: status_text_detail_md, status_text_summary_md (now in iris.task_status stats)
+
+  // Authoritative per-task retry counters. failure_count counts genuine
+  // application failures (non-zero exit / setup error); preemption_count counts
+  // worker-loss, kills, and preemptions. The list view attaches only the latest
+  // failed attempt per task, so these carry the true counts for display.
+  int32 failure_count = 23;
+  int32 preemption_count = 24;
 }
 
 // Record of a single task execution attempt
