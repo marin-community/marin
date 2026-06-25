@@ -66,14 +66,20 @@ class MosaicBlockConfig:
 
     The kernel exposes no defaults, so every call supplies one of these. ``block_k`` must
     divide the contraction dim K; ``block_m``/``block_n`` tile the token and output axes.
-    Pass an explicit config to autotune in-process; the module default is a conservative
-    value that divides 512-multiple K. A tuned table keyed by shape bucket lives in
-    ``infer_mosaic_block_config`` (see add-pallas-kernel skill).
+    Pass an explicit config to autotune in-process.
+
+    The default ``128/128/256`` won the GFP8-027 sweep at the real Grug regime
+    (T=8192/D=2048/F=5632/E=8): it is the single best config across all four mosaic-served
+    GEMMs (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by 1.09x/1.00x on the
+    forward and 1.59x/1.67x on the dgrad. ``block_k`` is the dominant knob — the prior default
+    ``block_k=64`` ranked 4th and lost end-to-end (GFP8-026); ``block_k=512`` would exceed H100
+    shared memory at this ``block_m``/``block_n``. Since one config wins everywhere, no
+    per-shape tuned table is needed here.
     """
 
     block_m: int = 128
     block_n: int = 128
-    block_k: int = 64
+    block_k: int = 256
     max_concurrent_steps: int = 2
     grid_block_n: int = 1
 

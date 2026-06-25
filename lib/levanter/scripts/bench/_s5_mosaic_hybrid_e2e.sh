@@ -12,6 +12,11 @@ set +e
 B=lib/levanter/scripts/bench/bench_ragged_mosaic_hybrid_e2e.py
 
 SITE=$(uv run --no-sync python -c 'import site; print(site.getsitepackages()[0])')
+# The synced gpu env now resolves nvidia-cudnn-cu13 to 9.10.2, which jaxlib 0.10.0 (built
+# against 9.12) rejects -> dnn_support null -> RET_CHECK on the first GPU op (GFP8-027).
+# Upgrade cuDNN in place so the all-nvidia-libs LD_LIBRARY_PATH finds 9.12.
+VENV_PY=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
+uv pip install --python "$VENV_PY" 'nvidia-cudnn-cu13==9.12.0.46'
 export LD_LIBRARY_PATH="$(ls -d "$SITE"/nvidia/*/lib 2>/dev/null | paste -sd: -)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 
