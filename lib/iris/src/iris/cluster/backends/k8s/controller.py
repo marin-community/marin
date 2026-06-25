@@ -568,7 +568,7 @@ class K8sControllerProvider:
                     # objects at startup so pods can be stamped without manual setup.
                     "apiGroups": ["scheduling.k8s.io"],
                     "resources": ["priorityclasses"],
-                    "verbs": ["get", "create", "update", "patch"],
+                    "verbs": ["get", "create", "update", "patch", "delete"],
                 },
             ],
         }
