@@ -193,11 +193,11 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
 
 
 def test_wandb_tracker_writes_replicate_file_when_finish_raises(tmp_path, monkeypatch):
-    """A wedged run.finish() must not drop tracker_metrics.jsonl (issue #6364).
+    """A wedged run.finish() must not drop the tracker_metrics.jsonl replicate.
 
     The canary metrics gate reads the replicate file, so a W&B upload hiccup at
-    teardown (which surfaced as HandleAbandonedError) must not skip the write for
-    an otherwise healthy run.
+    teardown (which surfaces as a raised finish) must not skip the write for an
+    otherwise healthy run.
     """
     monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
 
