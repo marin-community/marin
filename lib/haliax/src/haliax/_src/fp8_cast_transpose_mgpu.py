@@ -49,7 +49,7 @@ def cast_transpose_mgpu(
     # f32 and cast f32->f8. Inputs are bf16 (exact in f32), so this matches the bf16 reference whenever
     # the division is exact (e.g. power-of-two scales); for other scales it differs by at most an f8 ULP.
     del compute_dtype
-    dtype_max = jnp.finfo(out_dtype).max  # f32
+    dtype_max = float(jnp.finfo(out_dtype).max)  # plain float bound (no f8 promotion in clip)
 
     def body(scale_gmem, x_gmem, q_gmem, qt_gmem):
         grid_m = pl.cdiv(m, block_m)
