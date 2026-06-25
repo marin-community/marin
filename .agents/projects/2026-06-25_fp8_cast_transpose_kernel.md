@@ -23,8 +23,10 @@ wgrad-only, amax deferred (per user). Branch: `research/grug-fp8-h100`.
   (1.333×)**, dw13/dw2 7.16e-2 / 6.42e-2 (in-band). Gate (< 2.94 ms, in-band) met. Reverses the
   GFP8-028/029 "f8 wgrad is a net e2e loss" verdict. Gated on `RAGGED_F8_WGRAD` (mosaic only); 33 CPU tests
   green. Full evidence: logbook GFP8-033 M3.
-- **Remaining (M3 close-out, pending user sign-off):** flip the mosaic wgrad default to f8 + retire the
-  `RAGGED_F8_WGRAD` env toggle (a ~4%-gain-vs-complexity call; the bf16 hybrid stays simpler).
+- **M3 close-out ✅ (shipped opt-in):** f8 wgrad ships behind a `MosaicWgradMode` StrEnum config param
+  (`Fp8RaggedDotOp(mosaic_wgrad=BF16|FP8)`, default BF16); the `RAGGED_F8_WGRAD` env var is retired. Per
+  the ship decision: default the bf16 hybrid (simpler), f8 wgrad opt-in (the ~4% win is there when wanted).
+  Re-confirmed via `--mosaic-wgrad fp8`: 2.814 ms / 1.334×. **GFP8-033 M1–M3 complete.**
 
 ---
 
