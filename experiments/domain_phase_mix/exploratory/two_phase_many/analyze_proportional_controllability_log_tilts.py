@@ -20,14 +20,13 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 PCTRL_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_controllability_300m_20260520"
 BASE_MATRIX_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_controllability_downstream_matrix_20260529"
 OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_controllability_log_tilt_analysis_20260609"
 COLLECT_DIR = OUTPUT_DIR / "collected"
-PROPORTIONAL_NOISE_MATRIX = SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / (
-    "raw_metric_matrix_300m_with_proportional_noise.csv"
+PROPORTIONAL_NOISE_MATRIX = (
+    SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / ("raw_metric_matrix_300m_with_proportional_noise.csv")
 )
 
 ALPHA = 0.10
@@ -162,11 +161,24 @@ def is_metric_column(column: str) -> bool:
 
 
 def lower_is_better(metric: str) -> bool:
-    kind = metric_kind(metric)
-    return kind in {"bpb", "loss", "nll"} or "perplexity" in kind
+    kind = metric_kind(metric).lower()
+    return (
+        kind in {"bpb", "loss", "nll"}
+        or kind.endswith("_bpb")
+        or kind.endswith("_loss")
+        or kind.endswith("_nll")
+        or "perplexity" in kind
+    )
+
+
+def has_ambiguous_direction(metric: str) -> bool:
+    kind = metric_kind(metric).lower()
+    return any(token in kind for token in ("minus", "diff", "delta", "ratio", "gain", "reduction", "improvement"))
 
 
 def is_reportable_metric(metric: str) -> bool:
+    if has_ambiguous_direction(metric):
+        return False
     kind = metric_kind(metric)
     if kind in {"bpb", "acc", "acc_norm", "logprob", "choice_logprob", "choice_logprob_norm"}:
         return True
@@ -174,7 +186,7 @@ def is_reportable_metric(metric: str) -> bool:
         return True
     if "exact_match" in kind or "pass@" in kind:
         return True
-    if kind in {"success_macro_bpb", "coderforge_success_macro_bpb", "failed_macro_bpb", "success_minus_failed_bpb"}:
+    if kind in {"success_macro_bpb", "coderforge_success_macro_bpb", "failed_macro_bpb"}:
         return True
     return False
 
@@ -219,17 +231,17 @@ def merge_final_matrix() -> tuple[pd.DataFrame, dict[str, Any]]:
         added_metrics = [column for column in metric_columns if column in add_columns]
         coverage[family] = {
             "path": str(path),
-            "rows": int(len(collected)),
+            "rows": len(collected),
             "status_counts": {str(key): int(value) for key, value in status_counts.items()},
-            "added_metric_columns": int(len(added_metrics)),
+            "added_metric_columns": len(added_metrics),
             "rows_with_all_added_metrics": int(matrix[added_metrics].notna().all(axis=1).sum()) if added_metrics else 0,
         }
 
     metric_columns = [column for column in matrix.columns if is_metric_column(column)]
     coverage["final_matrix"] = {
-        "rows": int(len(matrix)),
-        "columns": int(len(matrix.columns)),
-        "metric_columns": int(len(metric_columns)),
+        "rows": len(matrix),
+        "columns": len(matrix.columns),
+        "metric_columns": len(metric_columns),
         "complete_metric_columns": int(sum(matrix[column].notna().all() for column in metric_columns)),
     }
     return matrix, coverage
@@ -320,7 +332,7 @@ def noise_stats(noise_matrix: pd.DataFrame | None, metric: str) -> dict[str, flo
     signal_sd = float(signal_values.std(ddof=1)) if len(signal_values) >= 2 else math.nan
     noise_sd = float(noise_values.std(ddof=1)) if len(noise_values) >= 2 else math.nan
     return {
-        "proportional_noise_n": int(len(noise_values)),
+        "proportional_noise_n": len(noise_values),
         "proportional_noise_sd": noise_sd,
         "proportional_signal_sd": signal_sd,
         "proportional_signal_to_noise": signal_sd / noise_sd if noise_sd > 0.0 else math.nan,
@@ -389,7 +401,7 @@ def fit_gradient(
         "metric_kind": metric_kind(metric),
         "lower_is_better": lower_is_better(metric),
         "reportable_metric": is_reportable_metric(metric),
-        "n_direction_pairs": int(len(d)),
+        "n_direction_pairs": len(d),
         "gradient_rank": int(np.linalg.matrix_rank(a)) if len(d) else 0,
         "projected_gradient_norm": gradient_norm,
         "projected_gradient_norm_se_prop_noise": gradient_se,
@@ -407,7 +419,9 @@ def fit_gradient(
         "swarm_utility_sd_117": swarm_sd,
         "tilt_endpoint_utility_sd_78": tilt_endpoint_sd,
         "alpha_gradient_over_swarm_sd": alpha_gradient / swarm_sd if swarm_sd > 0.0 else math.nan,
-        "alpha_gradient_over_tilt_endpoint_sd": alpha_gradient / tilt_endpoint_sd if tilt_endpoint_sd > 0.0 else math.nan,
+        "alpha_gradient_over_tilt_endpoint_sd": (
+            alpha_gradient / tilt_endpoint_sd if tilt_endpoint_sd > 0.0 else math.nan
+        ),
         "alpha_directional_rms_over_swarm_sd": alpha_directional_rms / swarm_sd if swarm_sd > 0.0 else math.nan,
         "alpha_directional_rms_over_tilt_endpoint_sd": (
             alpha_directional_rms / tilt_endpoint_sd if tilt_endpoint_sd > 0.0 else math.nan
@@ -477,10 +491,10 @@ def estimate_all(matrix: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
         advantages.extend(q_rows)
     metadata = {
         "domain_count": len(geometry.domains),
-        "direction_count": int(len(geometry.domains)),
-        "central_log_tilt_rows": int(len(matrix[matrix["intervention_type"].eq("central_log_tilt")])),
-        "metric_columns": int(len(metric_columns)),
-        "complete_tilt_metric_columns": int(len(complete_metric_columns)),
+        "direction_count": len(geometry.domains),
+        "central_log_tilt_rows": len(matrix[matrix["intervention_type"].eq("central_log_tilt")]),
+        "metric_columns": len(metric_columns),
+        "complete_tilt_metric_columns": len(complete_metric_columns),
         "proportional_noise_matrix": str(PROPORTIONAL_NOISE_MATRIX) if noise_matrix is not None else None,
     }
     return pd.DataFrame(summaries), pd.DataFrame(derivatives), pd.DataFrame(advantages), metadata
@@ -521,8 +535,7 @@ def plot_top_metrics(summary: pd.DataFrame) -> None:
 def plot_noise_vs_controllability(summary: pd.DataFrame) -> None:
     rows = summary[
         summary["reportable_metric"]
-        &
-        summary["alpha_gradient_over_proportional_noise_sd"].notna()
+        & summary["alpha_gradient_over_proportional_noise_sd"].notna()
         & summary["proportional_signal_to_noise"].notna()
     ].copy()
     fig = px.scatter(
@@ -610,7 +623,9 @@ def write_report(summary: pd.DataFrame, coverage: dict[str, Any], metadata: dict
     top_standardized = reportable.sort_values("alpha_gradient_over_swarm_sd", ascending=False).head(15)
     top_typical = reportable.sort_values("alpha_directional_rms_over_swarm_sd", ascending=False).head(15)
     top_noise = reportable.sort_values("alpha_gradient_over_proportional_noise_sd", ascending=False).head(15)
-    curated = summary[summary["metric"].isin(CURATED_METRICS)].sort_values("alpha_gradient_over_swarm_sd", ascending=False)
+    curated = summary[summary["metric"].isin(CURATED_METRICS)].sort_values(
+        "alpha_gradient_over_swarm_sd", ascending=False
+    )
     report_lines = [
         "# Proportional Controllability 300M Log-Tilt Analysis",
         "",

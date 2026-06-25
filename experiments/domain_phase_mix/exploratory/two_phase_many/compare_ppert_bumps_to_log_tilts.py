@@ -3,7 +3,7 @@
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy", "pandas", "plotly"]
+# dependencies = ["numpy", "pandas", "plotly", "scipy", "tabulate"]
 # ///
 """Compare 300M +5pp proportional bumps against paired central log-tilts.
 
@@ -31,9 +31,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -41,13 +41,12 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 PPERT_DIR = SCRIPT_DIR / "metric_registry" / "proportional_perturbation_scale_transfer"
 PPERT_REFERENCE_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_perturbation_scale_transfer_20260507"
 TILT_DIR = SCRIPT_DIR / "reference_outputs" / "proportional_controllability_log_tilt_analysis_20260609"
-RAW_300M_BASELINE_MATRIX = SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / (
-    "raw_metric_matrix_300m_with_proportional_noise.csv"
+RAW_300M_BASELINE_MATRIX = (
+    SCRIPT_DIR / "metric_registry" / "raw_metric_matrix_300m" / ("raw_metric_matrix_300m_with_proportional_noise.csv")
 )
 OUT_DIR = SCRIPT_DIR / "reference_outputs" / "ppert_bump_vs_log_tilt_comparison_20260614"
 
@@ -141,8 +140,14 @@ def is_metric_column(column: str) -> bool:
 
 
 def lower_is_better(metric: str) -> bool:
-    kind = metric_kind(metric)
-    return kind in {"bpb", "loss", "nll"} or "perplexity" in kind
+    kind = metric_kind(metric).lower()
+    return (
+        kind in {"bpb", "loss", "nll"}
+        or kind.endswith("_bpb")
+        or kind.endswith("_loss")
+        or kind.endswith("_nll")
+        or "perplexity" in kind
+    )
 
 
 def utility(values: pd.Series, metric: str) -> pd.Series:
@@ -622,7 +627,11 @@ def build_dropdown_scatter(comparison: pd.DataFrame, metrics: list[str]) -> go.F
         visible = metric_index == 0
         group_indices: list[int] = []
         ranges = [
-            finite_range(frame["bump_utility_delta"], frame["log_tilt_predicted_bump_delta"], frame["local_gradient_predicted_bump_delta"]),
+            finite_range(
+                frame["bump_utility_delta"],
+                frame["log_tilt_predicted_bump_delta"],
+                frame["local_gradient_predicted_bump_delta"],
+            ),
             finite_range(
                 frame["bump_implied_directional_derivative"],
                 frame["directional_derivative"],
@@ -784,7 +793,12 @@ def build_summary_plot(summary: pd.DataFrame, metrics: list[str]) -> go.Figure:
             x=frame["directional_sign_agreement"],
             y=frame["metric"].astype(str),
             orientation="h",
-            marker={"color": frame["directional_sign_agreement"], "colorscale": UTILITY_COLORSCALE, "cmin": 0, "cmax": 1},
+            marker={
+                "color": frame["directional_sign_agreement"],
+                "colorscale": UTILITY_COLORSCALE,
+                "cmin": 0,
+                "cmax": 1,
+            },
             text=frame["directional_sign_agreement"].map(lambda value: f"{value:.2f}" if pd.notna(value) else ""),
             hovertemplate="%{y}<br>sign agreement=%{x:.3f}<extra></extra>",
             showlegend=False,
@@ -831,9 +845,7 @@ def local_gradient_frame(comparison: pd.DataFrame, metrics: list[str]) -> pd.Dat
         "q_gap_log_tilt_minus_bump",
         "lower_is_better",
     ]
-    frame = comparison[comparison["metric"].isin(metrics)][columns].drop_duplicates(
-        ["metric", "target_domain"]
-    )
+    frame = comparison[comparison["metric"].isin(metrics)][columns].drop_duplicates(["metric", "target_domain"])
     return frame.copy()
 
 
@@ -845,21 +857,17 @@ def build_local_gradient_heatmap(comparison: pd.DataFrame, metrics: list[str]) -
         .sort_values("base_mass", ascending=False)["target_domain"]
         .tolist()
     )
-    matrix = (
-        frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q")
-        .reindex(index=metrics, columns=domain_order)
+    matrix = frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q").reindex(
+        index=metrics, columns=domain_order
     )
-    z_scores = (
-        frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q_z_prop_noise")
-        .reindex(index=metrics, columns=domain_order)
+    z_scores = frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q_z_prop_noise").reindex(
+        index=metrics, columns=domain_order
     )
-    base_mass = (
-        frame.pivot(index="metric", columns="target_domain", values="base_mass")
-        .reindex(index=metrics, columns=domain_order)
+    base_mass = frame.pivot(index="metric", columns="target_domain", values="base_mass").reindex(
+        index=metrics, columns=domain_order
     )
-    alpha_q = (
-        frame.pivot(index="metric", columns="target_domain", values="alpha_domain_advantage")
-        .reindex(index=metrics, columns=domain_order)
+    alpha_q = frame.pivot(index="metric", columns="target_domain", values="alpha_domain_advantage").reindex(
+        index=metrics, columns=domain_order
     )
     custom = np.dstack([base_mass.to_numpy(), z_scores.to_numpy(), alpha_q.to_numpy()])
     zmax = float(np.nanpercentile(np.abs(matrix.to_numpy()), 98))
@@ -1025,17 +1033,14 @@ def build_domain_ablation_heatmap(comparison: pd.DataFrame, metrics: list[str]) 
         .sort_values("base_mass", ascending=False)["target_domain"]
         .tolist()
     )
-    matrix = (
-        frame.pivot(index="metric", columns="target_domain", values="domain_deletion_utility_delta")
-        .reindex(index=metrics, columns=domain_order)
+    matrix = frame.pivot(index="metric", columns="target_domain", values="domain_deletion_utility_delta").reindex(
+        index=metrics, columns=domain_order
     )
-    predicted = (
-        frame.pivot(index="metric", columns="target_domain", values="local_gradient_predicted_deletion_delta")
-        .reindex(index=metrics, columns=domain_order)
-    )
-    q = (
-        frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q")
-        .reindex(index=metrics, columns=domain_order)
+    predicted = frame.pivot(
+        index="metric", columns="target_domain", values="local_gradient_predicted_deletion_delta"
+    ).reindex(index=metrics, columns=domain_order)
+    q = frame.pivot(index="metric", columns="target_domain", values="domain_advantage_q").reindex(
+        index=metrics, columns=domain_order
     )
     mass = frame.pivot(index="metric", columns="target_domain", values="base_mass").reindex(
         index=metrics, columns=domain_order
@@ -1082,9 +1087,7 @@ def build_domain_ablation_bars(comparison: pd.DataFrame, metrics: list[str]) -> 
     trace_groups: list[list[int]] = []
     ranges: dict[str, list[float]] = {}
     for metric_index, metric in enumerate(metrics):
-        metric_frame = frame[frame["metric"] == metric].sort_values(
-            "domain_deletion_utility_delta", ascending=False
-        )
+        metric_frame = frame[frame["metric"] == metric].sort_values("domain_deletion_utility_delta", ascending=False)
         visible = metric_index == 0
         ranges[metric] = finite_range(
             metric_frame["domain_deletion_utility_delta"],
@@ -1345,10 +1348,10 @@ def write_report(
     ranked = curated.sort_values("directional_spearman", ascending=False)
     deletion_ranked = deletion_curated.sort_values("deletion_delta_spearman", ascending=False)
     payload = {
-        "comparison_rows": int(len(comparison)),
+        "comparison_rows": len(comparison),
         "common_metrics": int(summary["metric"].nunique()),
         "common_reportable_metrics": int(summary["reportable_metric"].fillna(False).sum()),
-        "domain_ablation_comparison_rows": int(len(deletion_comparison)),
+        "domain_ablation_comparison_rows": len(deletion_comparison),
         "domain_ablation_common_metrics": int(deletion_summary["metric"].nunique()),
         "domain_ablation_common_reportable_metrics": int(deletion_summary["reportable_metric"].fillna(False).sum()),
         "domain_count_min": int(summary["n_domains"].min()),
