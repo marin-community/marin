@@ -448,24 +448,6 @@ def _controller_state_dir(config: config_pb2.IrisClusterConfig) -> str:
     return configured.rstrip("/") if configured else DEFAULT_CONTROLLER_STATE_DIR
 
 
-def build_restore_preflight_script(container_name: str = CONTROLLER_CONTAINER_NAME) -> str:
-    """Return a bash script that verifies the controller image supports restore.
-
-    Restore reuses the controller container's own image to run the in-container
-    restore entrypoint. An image built before that entrypoint existed runs the
-    module as a no-op that exits 0, which would skip the restore and then let the
-    controller reload the latest (bloated) checkpoint on start. This probe exits
-    non-zero on such an image so the caller refuses before stopping the
-    controller or moving its DB.
-    """
-    return f"""set -euo pipefail
-IMAGE="$(sudo docker inspect --format='{{{{.Config.Image}}}}' {container_name})"
-echo "[restore-checkpoint] controller image: $IMAGE"
-sudo docker run --rm "$IMAGE" .venv/bin/python -c \\
-    'import iris.cluster.controller.checkpoint as c; raise SystemExit(0 if hasattr(c, "_cli_main") else 1)'
-"""
-
-
 def build_restore_checkpoint_script(
     *,
     checkpoint_dir: str,
@@ -535,19 +517,6 @@ def restore_controller_checkpoint(
     vm = _discover_controller_vm(platform, label_prefix)
     if vm is None:
         raise RuntimeError("No controller VM found. Cannot restore checkpoint without a running controller VM.")
-
-    # Refuse before any destructive action if the running controller image is too
-    # old to perform the restore (see build_restore_preflight_script): otherwise
-    # the no-op restore would leave the DB moved aside and the controller would
-    # reload the latest bloated checkpoint on start.
-    preflight = vm.run_command(build_restore_preflight_script(), timeout=Duration.from_seconds(120))
-    if preflight.returncode != 0:
-        raise RuntimeError(
-            "Controller image does not support checkpoint restore: it lacks the "
-            "`python -m iris.cluster.controller.checkpoint` entrypoint. Rebuild and restart "
-            "the controller on a current image, then retry. The controller was left running "
-            f"and its DB untouched.\nstdout:\n{preflight.stdout}\nstderr:\n{preflight.stderr}"
-        )
 
     state_dir = _controller_state_dir(config)
     backup_path = f"{state_dir}/db.bloated.bak.{Timestamp.now().epoch_ms()}"
