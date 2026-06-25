@@ -26,8 +26,8 @@ export GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null)"
 echo "### cuDNN sanity"
 uv run --no-sync python -c "import jax, jax.numpy as jnp; print('ok', jax.jit(lambda a: (a+1).sum())(jnp.arange(8)))" || { echo "### cuDNN sanity FAILED"; exit 1; }
 
-echo "### MOSAIC FP8 BLOCK AUTOTUNE (curated grid, real Grug shapes)"
-uv run --no-sync python -u "$B"
+echo "### MOSAIC FP8 BLOCK AUTOTUNE (real Grug shapes) args=$*"
+uv run --no-sync python -u "$B" "$@"
 RC=$?
 
 echo "### DONE rc=$RC"

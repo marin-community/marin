@@ -1392,3 +1392,62 @@ grid probing the depth×block_k corner (job `/matt/iris-run-job-20260625-203848`
   (≈80% of f8 peak) is likely past what the Mosaic ragged_dot kernel can reach on these ragged grouped
   shapes (the well-tuned bf16 Triton kernel itself only hits 46%); the honest target is to keep closing the
   MFU gap. Next: refinement sweep around the winner (`--refine`: deeper steps at gbn2, larger tiles, gbn4).
+
+### 2026-06-25 — GFP8-029 (refinement): deeper pipeline `steps=6 gbn=4` — another ~4% off the GEMM time
+Refinement sweep around the GFP8-029 winner (`--refine`, job `/matt/iris-run-job-20260625-204918`),
+probing deeper steps + gbn4 + larger tiles. Note: `block_n=64` (and the wgrad's `block_k=64`) raises
+`cuTensorMapEncodeTiled: misaligned address` — a HARD CUDA error (not a catchable lowering failure) that
+poisons the whole in-process sweep (an earlier `--refine` died rc=134 on the first such config). Fix:
+keep the swizzled-contiguous tile dim a multiple of 128. Picking the best **single global** config by
+total time across the four GEMMs (per-role tuning buys only ~1% more — not worth a lookup table):
+
+  | config (bm/bn/bk steps gbn)  | Σ4 GEMM time | fwd13 | fwd2  | dlhs13 | dlhs2 |
+  |------------------------------|--------------|-------|-------|--------|-------|
+  | 128/128/128 **steps6 gbn4**  | **1.565 ms** | 0.575 | 0.327 | 0.406  | 0.257 |
+  | 128/128/128 steps4 gbn4      | 1.566 ms     | 0.569 | 0.330 | 0.409  | 0.258 |
+  | 128/128/128 steps5 gbn2      | 1.584 ms     | 0.571 | 0.335 | 0.422  | 0.255 |
+  | 128/128/128 steps4 gbn2 (prev default) | 1.632 ms | 0.572 | 0.348 | 0.449 | 0.262 |
+
+- **New default `128/128/128 steps=6 gbn=4`**: −4% total GEMM time vs `steps4 gbn2`, driven by dlhs13
+  (−10%, now 47% of f8 roofline / 2.83×) and fwd2 (−6%, 1.49×). `steps=6` at block_k=128 is ~224KB smem
+  (just under the H100's ~228KB), the deepest pipeline that fits. `256x*` tiles are far slower here
+  (f32-acc register pressure), and `block_m=64` regresses too — `128/128/128` is the sweet spot.
+- This is a pure 5-integer config change (no new machinery), so it clears the "complexity must earn its
+  gain" bar. e2e confirmation batched with the wgrad-sweep outcome next.
+
+### 2026-06-25 — GFP8-029 (wgrad): deeper pipeline FLIPS the f8 wgrad kernel to a win — but transpose tax keeps f8_full a net loss
+Applied the same depth lever to the f8 cast-transpose wgrad kernel (`WgradBlockConfig`, `--sweep`, job
+`/matt/iris-run-job-20260625-205128`). This reverses the GFP8-028 "kernel loses" finding — that deficit
+was the untuned `steps=2` default, exactly as the GFP8-028 correction hypothesized (maturity, not
+structure). Best `128/128/128 steps=6 gbn=2` (steps=8 overflows smem, 262KB>232KB):
+
+  | wgrad GEMM | bf16 ref | f8 kernel-only (was steps2) | kernel/bf16 |
+  |------------|----------|-----------------------------|-------------|
+  | wgrad13    | 0.756 ms | 0.577 ms (was 0.895, 1.18×) | **0.76×** (1.31× faster) |
+  | wgrad2     | 0.409 ms | 0.333 ms (was 0.533, 1.30×) | **0.81×** (1.23× faster) |
+
+- **But the cast-transpose tax still sinks f8_full.** Definitive 3-arm e2e with both tuned configs
+  (`_s5_mosaic_f8wgrad_parity.sh`, job `…-205508`):
+  - bf16 baseline: **3.732 ms** (456 TF/s)
+  - mosaic hybrid (f8 fwd/dgrad steps6/gbn4 + **bf16** wgrad): **2.943 ms = 1.27×** (578 TF/s) — shipped
+  - mosaic + **f8** wgrad (tuned steps6/gbn2): **3.060 ms = 1.22×** — still ~4% slower than the bf16-wgrad
+    hybrid. The kernel wins but kernel+transpose (~0.74 / 0.47 ms) ≥ bf16, and XLA does not fuse the f8
+    cast-transpose into the operand quant in the e2e graph.
+- **Decision: keep `RAGGED_F8_WGRAD` OFF** — enabling it regresses e2e ~4% (rejected per the
+  "complexity/regression must earn its gain" rule). The tuned `WgradBlockConfig=steps6/gbn2` is committed
+  as the parked path's default (it's the right config for Blackwell / the future transpose-fusion lever).
+  Shipped recipe stays f8 fwd/dgrad + bf16 wgrad. Numerics unchanged (fwd 7.95e-2, dw13 6.38e-2, dw2 6.10e-2).
+- **Session net: e2e 1.06× → 1.27×** from pure block-config tuning (zero added machinery). The only
+  remaining wgrad lever is fusing the cast-transpose into the quant sites (~0.2 ms / ~7% e2e, moderate
+  complexity) — deferred as a future EV call.
+
+### 2026-06-25 — GFP8-029 roofline status vs the "within 20% of theoretical max" goal
+Honest standing against the goal. All four mosaic GEMMs are compute-bound at the Grug shape (bf16 output;
+roofline ≈ f8 peak 1978.9 TF/s). Best single-config achieved fraction of f8 peak: fwd13 34%, fwd2 29%,
+dlhs13 **47%**, dlhs2 37% (dgrad is closest). The well-tuned bf16-Triton baseline itself only reaches ~46%
+of its (2×-lower) bf16 peak, so f8 already wins decisively on wall-clock (1.27× e2e; 1.47–2.83× per GEMM)
+while sitting at ~30–47% of the f8 roofline. Closing the remaining gap to ~80% of peak is a
+kernel-architecture problem (warp specialization / TMA multicast / a DeepGEMM-style grouped kernel), not a
+config problem — high complexity for diminishing returns over the zero-complexity 1.27× already banked, so
+it is out of scope under the complexity/gain rule. "Beat bf16 + exhaust the high-EV config lever" is met;
+"within 20% of f8 peak" is not reachable on these ragged grouped GEMMs without a kernel rewrite.

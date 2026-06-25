@@ -14,8 +14,8 @@ export LD_LIBRARY_PATH="$(ls -d "$SITE"/nvidia/*/lib 2>/dev/null | paste -sd: -)
 echo "### cuDNN sanity"
 uv run --no-sync python -c "import jax, jax.numpy as jnp; print('ok', jax.jit(lambda a: (a+1).sum())(jnp.arange(8)))" || { echo "### cuDNN sanity FAILED"; exit 1; }
 
-echo "### WGRAD DIAGNOSTIC (transpose vs kernel vs bf16 ref, real Grug shapes)"
-uv run --no-sync python -u "$B"
+echo "### WGRAD DIAGNOSTIC (transpose vs kernel vs bf16 ref, real Grug shapes) args=$*"
+uv run --no-sync python -u "$B" "$@"
 RC=$?
 echo "### DONE rc=$RC"
 exit $RC

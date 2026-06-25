@@ -84,6 +84,63 @@ def _time_call(fn, *args, steps, warmup):
     return compile_time, (time.perf_counter() - start) / steps
 
 
+# Config grid for the f8 wgrad kernel: same deeper-pipeline lever that flipped fwd/dgrad (GFP8-029).
+# block_k tiles the ragged token (contraction) axis — it is the wgmma operands' CONTIGUOUS axis, so
+# keep block_k a multiple of 128 (f8 swizzle-128 TMA misaligns below that, a hard CUDA error that
+# poisons the in-process sweep). steps/grid_block_n are the depth/L2 knobs that flipped fwd/dgrad.
+_WGRAD_CONFIGS = [
+    (128, 128, 128, 2, 1),  # current WgradBlockConfig default
+    (128, 128, 128, 4, 1),
+    (128, 128, 128, 4, 2),
+    (128, 128, 128, 6, 2),
+    (128, 128, 128, 6, 1),
+    (128, 128, 128, 8, 2),
+    (128, 128, 256, 2, 1),
+    (128, 128, 256, 3, 1),
+    (256, 128, 128, 4, 1),
+    (128, 256, 128, 4, 1),
+    (64, 128, 128, 6, 1),
+]
+
+
+def _sweep(label, lhs, grad, gs, steps, warmup):
+    """Sweep WgradBlockConfig for one wgrad GEMM; report kernel-only time vs bf16 ref per config."""
+    lhs_bf, grad_bf = lhs.astype(jnp.bfloat16), grad.astype(jnp.bfloat16)
+    lhs_t, grad_t = jnp.swapaxes(lhs, 0, 1), jnp.swapaxes(grad, 0, 1)
+    _, bf16_ref = _time_call(
+        lambda a, b: _triton_pallas_call(a, b, gs, _DRHS_DIM_NUMS, out_dtype=jnp.bfloat16),
+        lhs_bf,
+        grad_bf,
+        steps=steps,
+        warmup=warmup,
+    )
+    print(f"=== {label} sweep (bf16_ref={bf16_ref*1e3:.4f}ms) ===")
+    best = None
+    for bm, bn, bk, st, gbn in _WGRAD_CONFIGS:
+        cfg = WgradBlockConfig(block_m=bm, block_n=bn, block_k=bk, max_concurrent_steps=st, grid_block_n=gbn)
+        tag = f"{bm}x{bn}x{bk}_steps{st}_gbn{gbn}"
+        try:
+            _, kt = _time_call(
+                lambda a, b: transposed_ragged_dot(a, b, gs, out_dtype=jnp.bfloat16, config=cfg),
+                lhs_t,
+                grad_t,
+                steps=steps,
+                warmup=warmup,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {tag:24} FAIL {type(exc).__name__}: {str(exc)[:100]}")
+            continue
+        ratio = kt / bf16_ref
+        print(f"  {tag:24} kernel={kt*1e3:.4f}ms  kernel/bf16={ratio:.3f}x")
+        print(
+            "row " + json.dumps({"gemm": label, "config": tag, "kernel_s": kt, "bf16_ref_s": bf16_ref, "ratio": ratio})
+        )
+        if best is None or kt < best[1]:
+            best = (tag, kt, ratio)
+    if best:
+        print(f"  -> {label} BEST {best[0]} kernel={best[1]*1e3:.4f}ms kernel/bf16={best[2]:.3f}x")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokens", type=int, default=8192)
@@ -92,6 +149,7 @@ def main():
     ap.add_argument("--experts", type=int, default=8)
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--warmup", type=int, default=5)
+    ap.add_argument("--sweep", action="store_true", help="sweep WgradBlockConfig per wgrad GEMM")
     args = ap.parse_args()
     T, D, F, E = args.tokens, args.hidden, args.intermediate, args.experts
     two_f = 2 * F
@@ -109,6 +167,11 @@ def main():
         ("wgrad13", f8((T, D)), f8((T, two_f))),  # dW13[E,D,2F] = x^T @ dout13
         ("wgrad2", f8((T, F)), f8((T, D))),  # dW2[E,F,D] = g^T @ dout2
     ]
+
+    if args.sweep:
+        for label, lhs, grad in gemms:
+            _sweep(label, lhs, grad, gs, args.steps, args.warmup)
+        return
 
     for label, lhs, grad in gemms:
         lhs_bf, grad_bf = lhs.astype(jnp.bfloat16), grad.astype(jnp.bfloat16)
@@ -149,8 +212,10 @@ def main():
         for n in ("transpose_only", "kernel_only", "f8_full", "bf16_ref"):
             print(f"  {n:16} {ms(rows[n])}")
         if rows["kernel_only"] and rows["bf16_ref"]:
-            print(f"  -> kernel_only/bf16_ref = {rows['kernel_only'] / rows['bf16_ref']:.2f}x "
-                  f"(<1 means f8 kernel beats bf16 ref; transpose headroom = {ms(rows['transpose_only'])})")
+            print(
+                f"  -> kernel_only/bf16_ref = {rows['kernel_only'] / rows['bf16_ref']:.2f}x "
+                f"(<1 means f8 kernel beats bf16 ref; transpose headroom = {ms(rows['transpose_only'])})"
+            )
         print("row " + json.dumps({"gemm": label, **{k: rows[k] for k in rows}}))
 
 

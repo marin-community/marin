@@ -75,22 +75,22 @@ class MosaicBlockConfig:
     divide the contraction dim K; ``block_m``/``block_n`` tile the token and output axes.
     Pass an explicit config to autotune in-process.
 
-    The default ``128/128/128 steps=4 grid_block_n=2`` won the GFP8-029 sweep at the real Grug
-    regime (T=8192/D=2048/F=5632/E=8): single best config across all four mosaic-served GEMMs
-    (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by 1.47x/1.40x on the forward and
-    2.57x/2.21x on the dgrad (28-43% of f8 roofline). It supersedes the GFP8-027 winner
+    The default ``128/128/128 steps=6 grid_block_n=4`` won the GFP8-029 sweep at the real Grug
+    regime (T=8192/D=2048/F=5632/E=8): lowest total time across all four mosaic-served GEMMs
+    (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by ~1.47x/1.49x on the forward and
+    2.83x/2.30x on the dgrad (29-47% of f8 roofline). It supersedes the GFP8-027 winner
     ``128/128/256 steps=2``: at f8 (1B) a ``block_k=256`` tile is ~64KB smem/stage, capping the
-    pipeline at ~3 stages, whereas ``block_k=128`` (~32KB/stage) frees smem for ``steps=4`` — the
-    deeper pipeline hides operand-load latency and is the dominant MFU lever here. ``grid_block_n=2``
-    adds L2 reuse via the planar-snake tile order. Since one config wins everywhere, no per-shape
-    tuned table is needed.
+    pipeline at ~3 stages, whereas ``block_k=128`` (~32KB/stage) frees smem for a deep ``steps=6``
+    pipeline (~224KB) — hiding operand-load latency is the dominant MFU lever here. ``grid_block_n=4``
+    adds L2 reuse via the planar-snake tile order. A single global config is within ~1% of a
+    per-role tuned table here, so no per-shape table is kept.
     """
 
     block_m: int = 128
     block_n: int = 128
     block_k: int = 128
-    max_concurrent_steps: int = 4
-    grid_block_n: int = 2
+    max_concurrent_steps: int = 6
+    grid_block_n: int = 4
 
 
 _DEFAULT_MOSAIC_CONFIG = MosaicBlockConfig()

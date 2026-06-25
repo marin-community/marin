@@ -139,6 +139,10 @@ _FULL_GRID_AXES = {
 
 # Refinement grid around the GFP8-029 winner (128/128/128 steps4 gbn2): push pipeline depth at
 # gbn2, larger tiles, and gbn4 — the corners the broad curated grid only sampled at gbn1.
+# block_n stays a multiple of 128: f8 swizzle-128 TMA needs the trailing tile >=128 elements, so
+# block_n=64 raises cuTensorMapEncodeTiled misaligned-address (a HARD CUDA error that poisons the
+# in-process context for every later config, not a catchable lowering failure). 256x256 dropped
+# (f32 acc register-bound). Keep to the known-lowerable shape family the broad sweep validated.
 _REFINE_CONFIGS = [
     (128, 128, 128, 4, 2),  # GFP8-029 winner (control)
     (128, 128, 128, 5, 2),
@@ -151,11 +155,9 @@ _REFINE_CONFIGS = [
     (128, 256, 128, 4, 2),
     (64, 128, 128, 6, 2),
     (64, 128, 128, 8, 2),
-    (128, 64, 128, 6, 2),
-    (128, 64, 128, 8, 2),
     (128, 128, 64, 6, 2),
     (128, 128, 64, 8, 2),
-    (256, 256, 128, 2, 2),
+    (256, 128, 64, 6, 2),
 ]
 
 

@@ -1,4 +1,5 @@
 # Copyright The Levanter Authors
+#
 # SPDX-License-Identifier: Apache-2.0
 #
 # Adapted from jax.experimental.pallas.ops.gpu.transposed_ragged_dot_mgpu (Apache-2.0, The JAX
@@ -37,11 +38,16 @@ class WgradBlockConfig:
     output ``(K=hidden, N=out)``. Default is a starting point; M2 autotunes it at the Grug shape.
     """
 
+    # GFP8-029 wgrad sweep: deeper pipeline (steps=6, the max that fits ~224KB smem at block_k=128;
+    # steps=8 overflows) + grid_block_n=2 flips the f8 wgrad KERNEL from 1.2-1.3x slower than bf16
+    # (the old steps=2 default) to 0.76x/0.81x — i.e. 1.2-1.3x FASTER. The cast-transpose tax still
+    # leaves f8_full (kernel+transpose) a slight net loss vs the bf16 wgrad, so it stays behind
+    # RAGGED_F8_WGRAD; this tuned config is what that flag now runs.
     block_m: int = 128
     block_n: int = 128
     block_k: int = 128
-    max_concurrent_steps: int = 2
-    grid_block_n: int = 1
+    max_concurrent_steps: int = 6
+    grid_block_n: int = 2
 
 
 _DEFAULT_WGRAD_CONFIG = WgradBlockConfig()
