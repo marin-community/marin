@@ -44,15 +44,17 @@ def cast_transpose_mgpu(
     if k % block_k != 0:
         raise ValueError(f"k={k} must be a multiple of block_k={block_k}")
 
-    # Match the reference quantize bit-for-bit: divide + clip in compute_dtype, then cast to f8. The
-    # bf16->f8 cast isn't supported directly in Mosaic ("cast to f32 first"); bf16->f32->f8 is the
-    # same value (f32 represents every bf16 exactly; f32->f8 uses the same round-to-nearest-even).
-    dtype_max = jnp.finfo(out_dtype).max.astype(compute_dtype)
+    # Quantize in f32: Mosaic supports only f16->f8 / f32->f8 casts (a bf16->f8 cast errors, and it
+    # collapses an explicit bf16->f32->f8 back to the unsupported bf16->f8), so the divide/clip run in
+    # f32 and cast f32->f8. Inputs are bf16 (exact in f32), so this matches the bf16 reference whenever
+    # the division is exact (e.g. power-of-two scales); for other scales it differs by at most an f8 ULP.
+    del compute_dtype
+    dtype_max = jnp.finfo(out_dtype).max  # f32
 
     def body(scale_gmem, x_gmem, q_gmem, qt_gmem):
         grid_m = pl.cdiv(m, block_m)
         grid_k = pl.cdiv(k, block_k)
-        scale_c = scale_gmem[0].astype(compute_dtype)
+        scale_f = scale_gmem[0].astype(jnp.float32)
 
         @plgpu.nd_loop((grid_m * grid_k,), collective_axes="sm")
         def mk_loop(loop_info: plgpu.NDLoopInfo):
@@ -75,9 +77,8 @@ def cast_transpose_mgpu(
                 )
                 plgpu.barrier_wait(barrier)
 
-                x_tile = x_smem[...].astype(compute_dtype)
-                scaled = jnp.clip(x_tile / scale_c, -dtype_max, dtype_max)
-                q = scaled.astype(jnp.float32).astype(out_dtype)
+                x_tile = x_smem[...].astype(jnp.float32)
+                q = jnp.clip(x_tile / scale_f, -dtype_max, dtype_max).astype(out_dtype)
 
                 # Rowwise store: q[bm,bk] -> q_gmem[m_i, k_i].
                 q_smem[...] = q
