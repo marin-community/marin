@@ -428,6 +428,17 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.CLUSTER_ROLES, cluster_role_name)
         logger.info("Controller resources deleted (including RBAC %s)", cluster_role_name)
 
+    def restore_checkpoint(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        *,
+        checkpoint_dir: str,
+    ) -> str:
+        raise NotImplementedError(
+            "restore-checkpoint is not supported on the K8s/CoreWeave controller. "
+            "Recover by editing the controller deployment to restore the checkpoint."
+        )
+
     def stop_all(
         self,
         config: config_pb2.IrisClusterConfig,

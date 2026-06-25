@@ -40,6 +40,8 @@ from iris.cluster.backends.types import (
 )
 from iris.cluster.backends.vm_lifecycle import (
     _build_controller_vm_config,
+    build_restore_checkpoint_script,
+    restore_controller_checkpoint,
     start_controller,
     stop_controller,
 )
@@ -201,6 +203,7 @@ def _make_config(
     config.controller.image = "ghcr.io/test/iris:latest"
     config.platform.label_prefix = label_prefix
     config.defaults.ssh.user = "root"
+    config.storage.remote_state_dir = "gs://bucket/iris/state"
     return config
 
 
@@ -350,6 +353,97 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
+
+
+# ============================================================================
+# restore_controller_checkpoint
+# ============================================================================
+
+
+class RecordingWorkerHandle(FakeWorkerHandle):
+    """FakeWorkerHandle that records run_command invocations.
+
+    ``fail_on`` makes run_command return a non-zero exit for any command
+    containing that substring, so tests can simulate the restore script failing
+    while leaving the later health-check commands succeeding.
+    """
+
+    def __init__(self, *args, fail_on: str | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.commands: list[str] = []
+        self._fail_on = fail_on
+
+    def run_command(self, command, timeout=None, on_line=None):
+        self.commands.append(command)
+        if self._fail_on is not None and self._fail_on in command:
+            return CommandResult(returncode=1, stdout="", stderr="boom")
+        return super().run_command(command, timeout, on_line)
+
+
+def test_build_restore_checkpoint_script_orders_steps():
+    """The generated script stops, backs up, restores, then starts -- in order."""
+    script = build_restore_checkpoint_script(
+        checkpoint_dir="gs://bucket/iris/state/controller-state/1717000000000",
+        remote_state_dir="gs://bucket/iris/state",
+        state_dir="/var/cache/iris/controller",
+        backup_path="/var/cache/iris/controller/db.bloated.bak.123",
+    )
+
+    stop = script.index("docker stop iris-controller")
+    backup = script.index('mv "/var/cache/iris/controller/db" "/var/cache/iris/controller/db.bloated.bak.123"')
+    restore = script.index("iris.cluster.controller.checkpoint")
+    start = script.index("docker start iris-controller")
+    assert stop < backup < restore < start
+
+    # Restore targets the chosen checkpoint and db dir, using ambient creds.
+    assert '--checkpoint-dir "gs://bucket/iris/state/controller-state/1717000000000"' in script
+    assert '--db-dir "/var/cache/iris/controller/db"' in script
+    assert '--remote-state-dir "gs://bucket/iris/state"' in script
+    # Never deletes the live DB.
+    assert "rm -rf" not in script
+
+
+def test_restore_controller_checkpoint_runs_script_and_returns_address(config):
+    """Happy path: runs the restore script, health-checks, returns the address."""
+    vm = RecordingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1")
+    platform = FakePlatform(existing_vms=[vm])
+
+    address = restore_controller_checkpoint(
+        platform,
+        config,
+        checkpoint_dir="gs://bucket/iris/state/controller-state/1717000000000",
+    )
+
+    assert address == "http://10.0.0.1:10000"
+    assert any("docker stop iris-controller" in c for c in vm.commands)
+    assert any("1717000000000" in c for c in vm.commands)
+    # remote_state_dir is derived from config.storage, not threaded as a parameter.
+    assert any('--remote-state-dir "gs://bucket/iris/state"' in c for c in vm.commands)
+
+
+def test_restore_controller_checkpoint_no_vm_raises(config):
+    """No controller VM -- refuse rather than guess."""
+    platform = FakePlatform(existing_vms=[])
+
+    with pytest.raises(RuntimeError, match="No controller VM found"):
+        restore_controller_checkpoint(
+            platform,
+            config,
+            checkpoint_dir="gs://bucket/iris/state/controller-state/1",
+        )
+
+
+def test_restore_controller_checkpoint_script_failure_preserves_backup(config):
+    """When the restore script fails, the error names the preserved backup path."""
+    vm = RecordingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1", fail_on="docker stop")
+    platform = FakePlatform(existing_vms=[vm])
+
+    with pytest.raises(RuntimeError, match=r"db\.bloated\.bak"):
+        restore_controller_checkpoint(
+            platform,
+            config,
+            checkpoint_dir="gs://bucket/iris/state/controller-state/1",
+        )
 
 
 def test_gcp_controller_vm_config_defaults_to_500gb_disk():

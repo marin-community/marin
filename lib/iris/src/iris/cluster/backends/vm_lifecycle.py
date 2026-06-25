@@ -28,9 +28,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer, Timestamp
 
 from iris.cluster.backends.gcp.bootstrap import (
+    CONTROLLER_CACHE_DIR,
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.backends.gcp.ssh import OS_LOGIN_METADATA
@@ -40,6 +41,7 @@ from iris.cluster.backends.types import (
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
 )
+from iris.cluster.controller.checkpoint import DB_SUBDIR, DEFAULT_CONTROLLER_STATE_DIR
 from iris.cluster.inject_env import with_injected_task_env
 from iris.rpc import config_pb2
 
@@ -438,6 +440,111 @@ def restart_controller(
 
     logger.info("Controller container restarted at %s", address)
     return address, vm
+
+
+def _controller_state_dir(config: config_pb2.IrisClusterConfig) -> str:
+    """Host path of the controller local state dir (parent of the db dir)."""
+    configured = config.storage.local_state_dir
+    return configured.rstrip("/") if configured else DEFAULT_CONTROLLER_STATE_DIR
+
+
+def build_restore_checkpoint_script(
+    *,
+    checkpoint_dir: str,
+    remote_state_dir: str,
+    state_dir: str,
+    backup_path: str,
+    container_name: str = CONTROLLER_CONTAINER_NAME,
+    cache_mount: str = CONTROLLER_CACHE_DIR,
+) -> str:
+    """Return a bash script that rolls the controller VM back to ``checkpoint_dir``.
+
+    The script stops the container (freeing RAM), moves the current db dir to
+    ``backup_path`` instead of deleting it, repopulates the db dir from the
+    checkpoint via a one-shot container reusing the VM's ambient GCS
+    credentials, and starts the container again.
+    """
+    db_dir = f"{state_dir}/{DB_SUBDIR}"
+    # docker inspect's Go-template needs literal {{.Config.Image}}; in this
+    # f-string each brace is doubled, so it is written as {{{{...}}}}.
+    return f"""set -euo pipefail
+echo "[restore-checkpoint] stopping container {container_name} (frees RAM)..."
+sudo docker stop {container_name}
+
+IMAGE="$(sudo docker inspect --format='{{{{.Config.Image}}}}' {container_name})"
+echo "[restore-checkpoint] controller image: $IMAGE"
+
+if [ -e "{db_dir}" ]; then
+    echo "[restore-checkpoint] moving current DB aside: {db_dir} -> {backup_path}"
+    sudo mv "{db_dir}" "{backup_path}"
+else
+    echo "[restore-checkpoint] no existing db dir at {db_dir}, nothing to back up"
+fi
+
+echo "[restore-checkpoint] restoring checkpoint {checkpoint_dir} into {db_dir}"
+sudo docker run --rm --network=host \\
+    -v {cache_mount}:{cache_mount} \\
+    "$IMAGE" \\
+    .venv/bin/python -m iris.cluster.controller.checkpoint \\
+        --remote-state-dir "{remote_state_dir}" \\
+        --db-dir "{db_dir}" \\
+        --checkpoint-dir "{checkpoint_dir}"
+
+echo "[restore-checkpoint] starting container {container_name}..."
+sudo docker start {container_name}
+echo "[restore-checkpoint] container started; verifying health..."
+"""
+
+
+def restore_controller_checkpoint(
+    platform: WorkerInfraProvider,
+    config: config_pb2.IrisClusterConfig,
+    *,
+    checkpoint_dir: str,
+    health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
+) -> str:
+    """Roll the controller back to a specific checkpoint in-place on its VM.
+
+    Discovers the controller VM, runs the restore script over SSH, and waits for
+    the controller to answer health checks again. The current local DB is moved
+    aside (never deleted) so the rollback is reversible. Returns the controller
+    address. Raises if the VM is unreachable or the controller fails to recover.
+    """
+    label_prefix = config.platform.label_prefix or "iris"
+    port = _controller_port(config)
+    remote_state_dir = config.storage.remote_state_dir
+
+    vm = _discover_controller_vm(platform, label_prefix)
+    if vm is None:
+        raise RuntimeError("No controller VM found. Cannot restore checkpoint without a running controller VM.")
+
+    state_dir = _controller_state_dir(config)
+    backup_path = f"{state_dir}/db.bloated.bak.{Timestamp.now().epoch_ms()}"
+    script = build_restore_checkpoint_script(
+        checkpoint_dir=checkpoint_dir,
+        remote_state_dir=remote_state_dir,
+        state_dir=state_dir,
+        backup_path=backup_path,
+    )
+
+    logger.info("Restoring controller checkpoint %s on VM %s", checkpoint_dir, vm.vm_id)
+    result = vm.run_command(script, timeout=Duration.from_seconds(600))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Checkpoint restore script failed (exit {result.returncode}). "
+            f"The previous DB is preserved at {backup_path} on the controller VM.\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    logger.info("Restore script output:\n%s", result.stdout)
+
+    address = f"http://{vm.internal_address}:{port}"
+    if not wait_healthy(vm, port, timeout=health_check_timeout):
+        raise RuntimeError(
+            f"Controller at {address} did not become healthy after restore. "
+            f"The previous DB is preserved at {backup_path} on the controller VM."
+        )
+    logger.info("Controller healthy at %s after checkpoint restore", address)
+    return address
 
 
 def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisClusterConfig) -> None:

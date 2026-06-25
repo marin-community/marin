@@ -28,6 +28,7 @@ from iris.cluster.backends.types import (
     wait_for_port,
 )
 from iris.cluster.backends.vm_lifecycle import restart_controller as vm_restart_controller
+from iris.cluster.backends.vm_lifecycle import restore_controller_checkpoint as vm_restore_checkpoint
 from iris.cluster.backends.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.backends.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.service_mode import ServiceMode
@@ -85,6 +86,14 @@ class GcpControllerProvider:
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         vm_stop_controller(self.worker_provider, config)
+
+    def restore_checkpoint(
+        self,
+        config: config_pb2.IrisClusterConfig,
+        *,
+        checkpoint_dir: str,
+    ) -> str:
+        return vm_restore_checkpoint(self.worker_provider, config, checkpoint_dir=checkpoint_dir)
 
     def stop_all(
         self,
