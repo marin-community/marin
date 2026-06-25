@@ -35,6 +35,7 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
+from experiments.pretraining_datasets.nemotron_lazy import nemotron_components
 
 # Tokenization runs as its own Fray job (keeps the launcher pod light).
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -112,6 +113,31 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
     )
 
 
+def grug_moe_baseline_nemotron(*, version: str = "v1") -> Checkpoint:
+    """The grug-moe baseline on the Nemotron CC splits, authored fully in the
+    artifact model. The splits are pinned ``Dataset`` handles (existing tokenized
+    data), so the whole graph lowers via ``lower()`` with the Executor out of the
+    path and nothing re-tokenizes.
+
+    (The full ``baseline_moe`` mixture also blends starcoder/proofpile and the
+    default validation sets; those are unpinned content-addressed caches and need
+    their existing paths discovered before they can join this pure graph.)
+    """
+    model, optimizer, batch_size, steps = build_from_heuristic(
+        budget=_BUDGET, hidden_dim=_HIDDEN_DIM, target_steps=_TARGET_STEPS
+    )
+    components = nemotron_components(tokenizer=llama3_tokenizer)
+
+    def build_config(ctx: BuildContext) -> GrugMoeLaunchConfig:
+        return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=mixture(ctx, components))
+
+    return Checkpoint(
+        name="grug/4_10_baseline_moe_nemotron",
+        version=version,
+        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, deps=tuple(components), resources=None),
+    )
+
+
 if __name__ == "__main__":
-    # Pure lazy graph (tokenize -> train), run by StepRunner with no Executor.
-    StepRunner().run([lower(grug_moe_slimpajama())])
+    # Pure lazy graph (nemotron splits -> train), run by StepRunner with no Executor.
+    StepRunner().run([lower(grug_moe_baseline_nemotron())])

@@ -45,7 +45,7 @@ from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
 from marin.execution.executor import Executor
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_spec import StepSpec, _is_relative_path
 from marin.execution.types import ExecutorStep
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -59,13 +59,14 @@ def _artifact_path(name: str, version: str, prefix: str) -> str:
 class BuildContext:
     """Resolves the path references a recipe's config can need.
 
-    ``for_run`` yields real output paths (used to build the concrete config).
-    ``for_fingerprint`` yields dependency ``name@version`` strings instead of
-    paths, so the fingerprint captures dependency *identity* without baking in a
-    region-specific prefix.
+    ``for_run`` yields real output paths (used to build the concrete config) and
+    the storage ``prefix`` (so a recipe can resolve raw input globs). ``for_fingerprint``
+    yields dependency ``name@version`` strings and a placeholder prefix, so the
+    fingerprint captures dependency *identity* without baking in a region-specific path.
     """
 
     out: str
+    prefix: str
     _dep_ref: Callable[["Artifact"], str]
 
     def path(self, dep: "Artifact") -> str:
@@ -73,11 +74,11 @@ class BuildContext:
 
     @staticmethod
     def for_run(out: str, prefix: str) -> "BuildContext":
-        return BuildContext(out=out, _dep_ref=lambda d: _artifact_path(d.name, d.version, prefix))
+        return BuildContext(out=out, prefix=prefix, _dep_ref=lambda d: d.path(prefix))
 
     @staticmethod
     def for_fingerprint() -> "BuildContext":
-        return BuildContext(out="<out>", _dep_ref=lambda d: f"{d.name}@{d.version}")
+        return BuildContext(out="<out>", prefix="<prefix>", _dep_ref=lambda d: f"{d.name}@{d.version}")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,12 @@ class Artifact:
     name: str
     version: str
     recipe: Recipe
+    override_path: str | None = None
+    """Pin the artifact to an existing location instead of ``{name}/{version}``.
+
+    Used to reference already-materialized data (e.g. a content-addressed tokenize
+    cache) without recomputing it. A relative pin is resolved against the prefix; an
+    absolute one is used as-is. The pin does not affect identity/fingerprint."""
 
     def fingerprint(self) -> str:
         """Stable id of *how* this artifact is built: the config with dependency
@@ -113,7 +120,12 @@ class Artifact:
         return hashlib.md5(payload.encode()).hexdigest()[:8]
 
     def path(self, prefix: str | None = None) -> str:
-        return _artifact_path(self.name, self.version, prefix or marin_prefix())
+        resolved_prefix = prefix or marin_prefix()
+        if self.override_path is not None:
+            if _is_relative_path(self.override_path):
+                return f"{resolved_prefix}/{self.override_path}"
+            return self.override_path
+        return _artifact_path(self.name, self.version, resolved_prefix)
 
 
 @dataclass(frozen=True, eq=False)
@@ -134,8 +146,13 @@ def materialized_config(artifact: Artifact, prefix: str) -> Any:
     the config (the bridge case) are left unresolved here — :func:`to_executor_step`
     resolves those through the ``Executor``.
     """
-    out = _artifact_path(artifact.name, artifact.version, prefix)
-    return artifact.recipe.build_config(BuildContext.for_run(out=out, prefix=prefix))
+    return artifact.recipe.build_config(BuildContext.for_run(out=artifact.path(prefix), prefix=prefix))
+
+
+def _output_path_spec(artifact: Artifact) -> str:
+    """The relative output path StepSpec/ExecutorStep should use: the pin if set,
+    else the explicit ``{name}/{version}``."""
+    return artifact.override_path or f"{artifact.name}/{artifact.version}"
 
 
 def lower(artifact: Artifact) -> StepSpec:
@@ -145,8 +162,8 @@ def lower(artifact: Artifact) -> StepSpec:
     embedded legacy ``ExecutorStep`` placeholders). The concrete config is rebuilt
     inside ``fn`` using the runner's ``marin_prefix()``, so dependency paths
     resolve region-locally rather than capturing the build environment's prefix.
-    Identity is the explicit ``{name}/{version}``; the fingerprint rides in
-    ``hash_attrs`` for the (later) immutability guard, not the path.
+    Identity is the explicit ``{name}/{version}`` (or the pin); the fingerprint
+    rides in ``hash_attrs`` for the (later) immutability guard, not the path.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
 
@@ -156,7 +173,7 @@ def lower(artifact: Artifact) -> StepSpec:
 
     return StepSpec(
         name=artifact.name,
-        override_output_path=f"{artifact.name}/{artifact.version}",
+        override_output_path=_output_path_spec(artifact),
         deps=dep_specs,
         hash_attrs={
             "fingerprint": artifact.fingerprint(),
@@ -181,13 +198,14 @@ def to_executor_step(artifact: Artifact, prefix: str | None = None) -> ExecutorS
             "use lower() for pure handle graphs."
         )
     resolved_prefix = prefix or marin_prefix()
-    out = _artifact_path(artifact.name, artifact.version, resolved_prefix)
-    config = artifact.recipe.build_config(BuildContext.for_run(out=out, prefix=resolved_prefix))
+    config = artifact.recipe.build_config(
+        BuildContext.for_run(out=artifact.path(resolved_prefix), prefix=resolved_prefix)
+    )
     return ExecutorStep(
         name=artifact.name,
         fn=artifact.recipe.fn,
         config=config,
-        override_output_path=f"{artifact.name}/{artifact.version}",
+        override_output_path=_output_path_spec(artifact),
         resources=artifact.recipe.resources,
     )
 
