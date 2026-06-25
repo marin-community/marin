@@ -21,6 +21,7 @@ import shutil
 import sys
 import tempfile
 import time
+import traceback
 
 
 def _ensure_cuda_toolchain() -> bool:
@@ -122,10 +123,19 @@ def main():
                     f"  mosaic[{strat}] {t*1e3:.4f}ms  ({floor_ms/(t*1e3)*100:.0f}% of floor)  "
                     f"q_exact={ok_q} qt_exact={ok_qt}"
                 )
-                print("row " + json.dumps({"case": name, "impl": f"mosaic_{strat}", "ms": t * 1e3, "q_exact": bool(ok_q), "qt_exact": bool(ok_qt)}))
+                print(
+                    "row "
+                    + json.dumps(
+                        {
+                            "case": name,
+                            "impl": f"mosaic_{strat}",
+                            "ms": t * 1e3,
+                            "q_exact": bool(ok_q),
+                            "qt_exact": bool(ok_qt),
+                        }
+                    )
+                )
             except Exception as e:
-                import traceback
-
                 print(f"  mosaic[{strat}] FAILED: {type(e).__name__}")
                 print("\n".join("    " + ln for ln in traceback.format_exc().splitlines()[-14:]))
 
@@ -133,7 +143,15 @@ def main():
         # operand (what _mosaic_pallas_call does today), not a re-quantize. Measure all three.
         t_floor = _time(lambda xx: quantize(xx, _E4M3, scale, jnp.bfloat16), x, steps=args.steps, warmup=args.warmup)
         t_f8tr = _time(lambda qq: jnp.swapaxes(qq, 0, 1), q_ref, steps=args.steps, warmup=args.warmup)
-        t_sep = _time(lambda xx: (quantize(xx, _E4M3, scale, jnp.bfloat16), jnp.swapaxes(quantize(xx, _E4M3, scale, jnp.bfloat16), 0, 1)), x, steps=args.steps, warmup=args.warmup)
+        t_sep = _time(
+            lambda xx: (
+                quantize(xx, _E4M3, scale, jnp.bfloat16),
+                jnp.swapaxes(quantize(xx, _E4M3, scale, jnp.bfloat16), 0, 1),
+            ),
+            x,
+            steps=args.steps,
+            warmup=args.warmup,
+        )
         print(f"  cast_floor     {t_floor*1e3:.4f}ms  (quantize only)")
         print(f"  f8_swapaxes    {t_f8tr*1e3:.4f}ms  (transpose of already-f8 operand — the current tax)")
         print(f"  xla_separate   {t_sep*1e3:.4f}ms  (quantize + swapaxes(quantize), CSE-dependent)")

@@ -2,16 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mosaic-GPU FP8 cast-transpose: one read of a bf16/f32 tile -> rowwise + transposed f8 stores.
+"""Mosaic-GPU FP8 cast-transpose — PARKED: does NOT lower on jax 0.10.0 (logbook GFP8-033).
 
-The f8 weight-gradient consumes token-contiguous (transposed) f8 operands. Producing that transpose
-through XLA (``swapaxes`` on the f8 result) is an uncoalesced 1-byte transpose; producing it through
-a second ``quantize`` re-reads the bf16 source (logbook GFP8-030). This kernel reads each tile of the
-high-precision source **once**, quantizes it, and TMA-stores both the rowwise tile (``q[M,K]``) and
-its transpose (``qT[K,M]``) — the transpose is a coalesced shared-memory store, the cast is fused in.
+Intent: read a bf16 tile once, quantize, and TMA-store both the rowwise f8 (``q[M,K]``) and its
+transpose (``qT[K,M]``), killing the uncoalesced XLA f8 ``swapaxes`` that taxes the f8 weight-gradient.
 
-H100-only (Hopper, Warpgroup lowering). The bit-exact reference and the public dispatcher live in
-``fp8_cast_transpose.py``. See logbook GFP8-033.
+Status: a coalesced *transposed store* is not expressible in Pallas Mosaic-GPU on jax 0.10.0. Every
+formulation hits a distinct lowering wall — register transpose is unimplemented in Warpgroup semantics;
+a plain transposed SMEM view fails ``memref.collapse_shape`` (column-major/strided); TMA rejects a
+transposed GMEM descriptor ("Non-indexing transforms on GMEM refs"); and a swizzled SMEM (the only TMA-
+legal layout) rejects transposing the swizzled dim ("Can't transpose the swizzled dimension"). Mosaic's
+``transpose_ref`` is a logical relabel only a wgmma operand may consume, not a materializable store.
+
+Kept as a research artifact + the lowering-wall record; revisit on a jax bump (the newer transposed-
+store ``BlockSpec(transforms=...)`` path). NOT wired into the public ``cast_transpose``, which delegates
+to the bit-exact reference in ``fp8_cast_transpose.py``. H100-only. See logbook GFP8-033.
 """
 
 import functools

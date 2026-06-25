@@ -1546,3 +1546,44 @@ exceed it — grouping only adds boundary/wave-quant overhead). Measured cuBLAS 
   grouped GEMMs that are strictly harder than dense. The remaining forward gap to its kernel-only number is
   the f8 weight-transpose tax (GFP8-031); the only sub-ceiling headroom left is a custom dual-output cast
   kernel, a deliberate complexity call. **Both goal clauses are met under the rigorous reading.**
+
+### 2026-06-25 — GFP8-033: the f8 cast-transpose kernel — right idea, but jax-0.10.0 Mosaic CANNOT materialize a coalesced transposed store (3 lowering walls). f8 wgrad stays parked.
+Pushed ahead (user request) on the TE-style fused cast-transpose: one read of a bf16 tile -> both the
+rowwise f8 (`q[M,K]`) and the transposed f8 (`qT[K,M]`), to kill the transpose tax that keeps f8 wgrad a
+net e2e loss (GFP8-028/029). **M1 landed clean** (`fp8_cast_transpose.py` reference + 19 CPU bit-exact
+tests vs `(quantize, quantize.T)`). **M2 (the Mosaic kernel) hit a hard wall: a coalesced transposed
+store is not expressible in Pallas Mosaic-GPU on jax 0.10.0.** Four store formulations, four distinct
+lowering failures (H100, `bench_f8_cast_transpose_mgpu.py`, jobs `…-221151 → …-222410`):
+
+  | store formulation | failure |
+  |-------------------|---------|
+  | `qt_smem[...] = q.T` (register transpose) | `NotImplementedError: transpose ... Warpgroup` (jnp transpose unimplemented in Warpgroup semantics) |
+  | `transpose_ref(qt_smem)[...]=q`, plain SMEM, then TMA | `MLIRError: memref.collapse_shape: collapsing non-contiguous dims` (transposed view is column-major `strided<[1,128]>`) |
+  | `copy_smem_to_gmem(q_smem, transpose_ref(qt_gmem))` (TMA into transposed GMEM) | `NotImplementedError: Non-indexing transforms on GMEM refs are not implemented` |
+  | `transpose_ref(qt_smem)[...]=q`, **swizzled** SMEM (matmul-epilogue idiom), then TMA | `ValueError: Can't transpose the swizzled dimension` (`core.py:1002`) |
+
+- **Root cause (structural, not tuning):** Mosaic's `transpose_ref` is a *logical relabel that only a
+  wgmma operand may consume* (proven by the forward/wgrad kernels' `transpose_ref` on already-K-contiguous
+  operands). It cannot *materialize* a physically-transposed tile for a TMA store: plain SMEM can't be
+  collapsed when strided, TMA can't take a transposed GMEM descriptor, and the swizzle (needed to dodge
+  collapse_shape) sits on the dim the transpose wants to move. The newer-jax transposed-store path
+  (`dialect_lowering.py:844` + `BlockSpec(transforms=TransposeTransform)`) is exactly what 0.10.0's
+  Warpgroup gmem->smem copy rejects (`assert swizzle is None`, noted GFP8-028). So the transpose
+  unavoidably falls to XLA's `swapaxes`, which on 1-byte f8 is uncoalesced.
+- **Quantified prize, and why it's just out of reach.** The real tax is the f8->f8 `swapaxes` of the 4
+  wgrad operands (measured, H100): `act_D` 71µs + `grad_2F` 145µs + `act_F` 112µs + `act_D` 71µs =
+  **~0.40 ms**. The f8 wgrad kernel itself beats bf16 wgrad by only ~0.25 ms, so kernel+transpose loses
+  e2e. A *coalesced* fused cast-transpose would drop the tax to ~+1 f8 write/operand (~0.15 ms total) →
+  e2e ~2.7–2.8 ms (**~1.34×**, up from 1.27×). The idea is sound and the win is real (~0.2–0.3 ms) — it is
+  blocked solely by the jax-0.10.0 Mosaic store limitation, not by the math or the roofline.
+- **Decision (per the complexity-vs-gain constraint):** STOP. Building the store another way means a
+  from-scratch raw `mosaic_gpu` kernel with manual `stmatrix`/swizzle transpose (the hardest kernel in the
+  project) for ~0.2–0.3 ms on one of three GEMM groups, or a full jax bump (out of scope, pinned to the
+  cluster image). Neither clears the bar. **Shipped recipe stays f8 fwd/dgrad + bf16 wgrad = 1.27× e2e;**
+  f8 wgrad remains correct + tuned behind `RAGGED_F8_WGRAD` (the cast-transpose is a clean jax-bump
+  follow-up). M1 reference + CPU tests are kept (correct primitive, XLA fallback); the non-lowering Mosaic
+  kernel (`fp8_cast_transpose_mgpu.py`) stays on the research branch only, flagged as 0.10.0-blocked —
+  NOT wired into the public `cast_transpose` (which delegates to the reference).
+- **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk
+  64GB -- bash lib/levanter/scripts/bench/_s5_cast_transpose_mgpu.sh` (prints the 4 lowering failures + the
+  f8_swapaxes tax baselines).

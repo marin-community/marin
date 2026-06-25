@@ -12,8 +12,9 @@ reads the source **once** and writes **both** the rowwise and transposed f8 quan
 transposed copy then costs ~one extra f8 write rather than a re-cast.
 
 This module holds the vanilla-JAX reference (the bit-exact correctness oracle) and the public
-``cast_transpose`` wrapper. The Mosaic-GPU fast path that actually fuses the two stores lands in a
-follow-up (logbook GFP8-033, M2).
+``cast_transpose`` wrapper. A Mosaic-GPU fused fast path was attempted (``fp8_cast_transpose_mgpu.py``)
+but does NOT lower on jax 0.10.0 — a coalesced transposed store is not expressible there (logbook
+GFP8-033). The wrapper therefore delegates to the reference; revisit the fast path on a jax bump.
 """
 
 import jax
@@ -56,6 +57,6 @@ def cast_transpose(
     quantized values, not by a second independent cast. ``scale`` is an input (delayed scaling: the
     step's scale comes from the previous amax history, known before the cast).
 
-    Currently delegates to the reference; the Mosaic-GPU fused kernel lands in M2 (GFP8-033).
+    Delegates to the reference: the Mosaic-GPU fused kernel does not lower on jax 0.10.0 (GFP8-033).
     """
     return cast_transpose_reference(x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)
