@@ -194,6 +194,10 @@ def transposed_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((g, m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
+        # Warpgroup lowering semantics (as in the upstream forward/transposed kernels): the wgmma,
+        # transpose_ref, and emit_pipeline are warpgroup-level ops; the default Lane semantics also
+        # lacks `multiple_of`. The vendored f8 copy dropped this — it never lowered this far.
+        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
     return kernel(
         group_sizes,
