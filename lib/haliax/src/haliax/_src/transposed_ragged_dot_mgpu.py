@@ -173,9 +173,12 @@ def transposed_ragged_dot(
 
             acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
 
+            # No swizzle transforms on the output SMEM: `transforms` is the f8 input-operand tiling
+            # (itemsize 1), which doesn't fit the f32/bf16 output. The forward ragged_dot_mgpu store
+            # is likewise a plain SMEM->GMEM copy; only the wgmma operand loads need the swizzle.
             @functools.partial(
                 pl.run_scoped,
-                o_smem=plgpu.SMEM((block_m, block_n), dtype=o_gmem.dtype, transforms=transforms),
+                o_smem=plgpu.SMEM((block_m, block_n), dtype=o_gmem.dtype),
             )
             def store_scope(o_smem):
                 o_smem[...] = acc.astype(o_smem.dtype)
