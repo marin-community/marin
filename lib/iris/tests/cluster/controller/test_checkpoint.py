@@ -3,12 +3,9 @@
 
 """Tests for controller checkpoint: remote-only write and download-before-create restore."""
 
-import pytest
 from iris.cluster.controller.checkpoint import (
     download_checkpoint_to_local,
-    list_checkpoints,
     prune_old_checkpoints,
-    resolve_checkpoint_dir,
     write_checkpoint,
 )
 from iris.cluster.controller.db import ControllerDB
@@ -245,62 +242,3 @@ def test_prune_keeps_recent_checkpoints(tmp_path):
 
     pruned = prune_old_checkpoints(remote_dir, max_age=Duration.from_hours(24))
     assert pruned == 0
-
-
-def _make_checkpoint(prefix, epoch_ms: int, db_bytes: bytes) -> None:
-    """Create a fake checkpoint dir with a compressed main DB of the given bytes."""
-    ckpt = prefix / str(epoch_ms)
-    ckpt.mkdir(parents=True)
-    (ckpt / "controller.sqlite3.zst").write_bytes(db_bytes)
-
-
-def test_list_checkpoints_newest_first_with_sizes(tmp_path):
-    """list_checkpoints returns numeric checkpoint dirs newest-first with DB sizes."""
-    remote_dir = f"file://{tmp_path}/remote"
-    prefix = tmp_path / "remote" / "controller-state"
-    _make_checkpoint(prefix, 1000, b"a")
-    _make_checkpoint(prefix, 3000, b"ccc")
-    _make_checkpoint(prefix, 2000, b"bb")
-    # A non-numeric sibling must be ignored.
-    (prefix / "scratch").mkdir()
-
-    infos = list_checkpoints(remote_dir)
-
-    assert [i.epoch_ms for i in infos] == [3000, 2000, 1000]
-    assert [i.db_size_bytes for i in infos] == [3, 2, 1]
-    assert infos[0].checkpoint_dir.endswith("/controller-state/3000")
-    assert infos[0].has_db
-
-
-def test_list_checkpoints_empty_when_missing(tmp_path):
-    """No controller-state dir yields an empty list, not an error."""
-    assert list_checkpoints(f"file://{tmp_path}/remote") == []
-
-
-def test_resolve_checkpoint_dir_latest_and_explicit(tmp_path):
-    """resolve_checkpoint_dir maps 'latest' and an epoch_ms to concrete dirs."""
-    remote_dir = f"file://{tmp_path}/remote"
-    prefix = tmp_path / "remote" / "controller-state"
-    _make_checkpoint(prefix, 1000, b"a")
-    _make_checkpoint(prefix, 3000, b"ccc")
-
-    assert resolve_checkpoint_dir(remote_dir, "latest").endswith("/controller-state/3000")
-    assert resolve_checkpoint_dir(remote_dir, "1000").endswith("/controller-state/1000")
-
-
-def test_resolve_checkpoint_dir_rejects_unknown(tmp_path):
-    """resolve_checkpoint_dir raises for a missing epoch_ms or bad selector."""
-    remote_dir = f"file://{tmp_path}/remote"
-    prefix = tmp_path / "remote" / "controller-state"
-    _make_checkpoint(prefix, 1000, b"a")
-
-    with pytest.raises(ValueError, match="not found"):
-        resolve_checkpoint_dir(remote_dir, "9999")
-    with pytest.raises(ValueError, match="epoch_ms"):
-        resolve_checkpoint_dir(remote_dir, "notanumber")
-
-
-def test_resolve_checkpoint_dir_no_checkpoints(tmp_path):
-    """resolve_checkpoint_dir raises when no checkpoints exist at all."""
-    with pytest.raises(ValueError, match="No controller checkpoints"):
-        resolve_checkpoint_dir(f"file://{tmp_path}/remote", "latest")

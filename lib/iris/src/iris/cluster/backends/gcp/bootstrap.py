@@ -340,11 +340,6 @@ def build_worker_bootstrap_script(
 
 CONTROLLER_CONTAINER_NAME = "iris-controller"
 
-# Host directory bind-mounted into the controller container (holds the SQLite
-# state dir and the log store). Reused by checkpoint-restore tooling so a
-# one-shot restore container mounts the same path.
-CONTROLLER_CACHE_DIR = "/var/cache/iris"
-
 CONTROLLER_BOOTSTRAP_SCRIPT = """
 set -e
 
@@ -459,7 +454,7 @@ if sudo docker ps -a --format '{{.Names}}' | grep -q "^{{ container_name }}$"; t
 fi
 
 # Create cache directory
-sudo mkdir -p {{ cache_dir }}
+sudo mkdir -p /var/cache/iris
 
 # Start controller container with restart policy.
 # Raise the open-file soft limit so the controller can handle many concurrent
@@ -469,7 +464,7 @@ sudo docker run -d --name {{ container_name }} \\
     --restart=unless-stopped \\
     --ulimit nofile=65536:524288 \\
     --ulimit core=0:0 \\
-    -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v /var/cache/iris:/var/cache/iris \\
     {{ config_volume }} \\
     {{ docker_image }} \\
     .venv/bin/python -m iris.cluster.controller.main serve \\
@@ -567,7 +562,6 @@ def build_controller_bootstrap_script(
         CONTROLLER_BOOTSTRAP_SCRIPT,
         docker_image=docker_image,
         container_name=CONTROLLER_CONTAINER_NAME,
-        cache_dir=CONTROLLER_CACHE_DIR,
         port=port,
         config_setup=config_setup,
         config_volume=config_volume,

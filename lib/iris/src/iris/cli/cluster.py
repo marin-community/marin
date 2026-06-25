@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
-import humanfriendly
 import uvicorn
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -42,7 +41,6 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     build_worker_config_for_group,
     prepare_slice_config,
 )
-from iris.cluster.controller.checkpoint import list_checkpoints, resolve_checkpoint_dir
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import run_controller_serve
 from iris.cluster.dashboard_common import VUE_DIST_DIR
@@ -1014,83 +1012,6 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo(f"Failed to restart controller: {e}", err=True)
         raise SystemExit(1) from e
     click.echo(f"Controller restarted at {address}")
-
-
-@controller.command("restore-checkpoint")
-@click.option(
-    "--checkpoint",
-    default=None,
-    help="Checkpoint to restore: an epoch_ms timestamp (from --list) or 'latest'.",
-)
-@click.option("--list", "list_only", is_flag=True, default=False, help="List available checkpoints and exit.")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
-@click.pass_context
-def controller_restore_checkpoint(ctx, checkpoint: str | None, list_only: bool, yes: bool):
-    """Roll the controller back to a specific checkpoint (wedged/OOM recovery).
-
-    Use when the controller is wedged from a bloated DB (e.g. controller-VM OOM
-    after a large job backlog) and a plain restart just reloads the same bloated
-    DB and re-wedges. This stops the controller container, moves the current
-    local DB aside (never deletes it), restores the chosen checkpoint, restarts,
-    and verifies the controller answers health checks.
-
-    Rollback cost: jobs/state created after the chosen checkpoint are dropped.
-    Workers on separate VMs and other infrastructure are unaffected.
-
-    List available checkpoints (timestamp + DB size — size is a good proxy for
-    backlog/health when choosing one)::
-
-        iris --config=cluster.yaml cluster controller restore-checkpoint --list
-
-    Restore a specific checkpoint::
-
-        iris --config=cluster.yaml cluster controller restore-checkpoint --checkpoint 1717000000000
-    """
-    config = ctx.obj.get("config")
-    if not config:
-        raise click.ClickException("--config is required for restore-checkpoint")
-
-    remote_state_dir = config.storage.remote_state_dir
-    if not remote_state_dir:
-        raise click.ClickException("storage.remote_state_dir is not set in the cluster config")
-
-    if list_only:
-        checkpoints = list_checkpoints(remote_state_dir)
-        if not checkpoints:
-            click.echo(f"No checkpoints found under {remote_state_dir}/controller-state/")
-            return
-        click.echo(f"Available controller checkpoints (newest first) under {remote_state_dir}/controller-state/:")
-        click.echo(f"  {'EPOCH_MS':<16}  {'TIMESTAMP':<27}  DB SIZE")
-        for info in checkpoints:
-            size = humanfriendly.format_size(info.db_size_bytes) if info.has_db else "MISSING"
-            click.echo(f"  {info.epoch_ms:<16}  {info.created_at.as_formatted_date():<27}  {size}")
-        return
-
-    if not checkpoint:
-        raise click.ClickException("Pass --checkpoint <epoch_ms|latest>, or --list to see options.")
-
-    try:
-        checkpoint_dir = resolve_checkpoint_dir(remote_state_dir, checkpoint)
-    except ValueError as e:
-        raise click.ClickException(str(e)) from e
-
-    is_local = config.controller.WhichOneof("controller") == "local"
-    if is_local:
-        raise click.ClickException("restore-checkpoint is not supported for local clusters.")
-
-    click.echo(f"Will restore controller from checkpoint:\n  {checkpoint_dir}")
-    click.echo("Jobs/state created after this checkpoint will be dropped. Workers are unaffected.")
-    if not yes:
-        click.confirm("Proceed?", abort=True)
-
-    iris_config = IrisConfig(config)
-    bundle = iris_config.provider_bundle()
-    try:
-        address = bundle.controller.restore_checkpoint(config, checkpoint_dir=checkpoint_dir)
-    except Exception as e:
-        click.echo(f"Checkpoint restore failed: {e}", err=True)
-        raise SystemExit(1) from e
-    click.echo(f"Controller restored and healthy at {address}")
 
 
 @controller.command("worker-restart")

@@ -40,7 +40,6 @@ from iris.cluster.backends.types import (
 )
 from iris.cluster.backends.vm_lifecycle import (
     _build_controller_vm_config,
-    restore_controller_checkpoint,
     start_controller,
     stop_controller,
 )
@@ -202,7 +201,6 @@ def _make_config(
     config.controller.image = "ghcr.io/test/iris:latest"
     config.platform.label_prefix = label_prefix
     config.defaults.ssh.user = "root"
-    config.storage.remote_state_dir = "gs://bucket/iris/state"
     return config
 
 
@@ -352,57 +350,6 @@ def test_stop_controller_duplicate_vms_raises(config):
 
     with pytest.raises(RuntimeError, match="Multiple controller VMs found"):
         stop_controller(platform, config)
-
-
-# ============================================================================
-# restore_controller_checkpoint
-# ============================================================================
-
-
-class FailingWorkerHandle(FakeWorkerHandle):
-    """FakeWorkerHandle whose run_command fails for any command containing ``fail_on``.
-
-    Lets a test drive the restore script to a non-zero exit while later
-    health-check commands still succeed.
-    """
-
-    def __init__(self, *args, fail_on: str | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._fail_on = fail_on
-
-    def run_command(self, command, timeout=None, on_line=None):
-        if self._fail_on is not None and self._fail_on in command:
-            return CommandResult(returncode=1, stdout="", stderr="boom")
-        return super().run_command(command, timeout, on_line)
-
-
-def test_restore_controller_checkpoint_returns_address_on_success(config):
-    """A reachable controller and a successful restore yield the controller address."""
-    vm = FailingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1")
-    platform = FakePlatform(existing_vms=[vm])
-
-    address = restore_controller_checkpoint(
-        platform, config, checkpoint_dir="gs://bucket/iris/state/controller-state/1717000000000"
-    )
-
-    assert address == "http://10.0.0.1:10000"
-
-
-def test_restore_controller_checkpoint_no_vm_raises(config):
-    """No controller VM -- refuse rather than guess."""
-    platform = FakePlatform(existing_vms=[])
-
-    with pytest.raises(RuntimeError, match="No controller VM found"):
-        restore_controller_checkpoint(platform, config, checkpoint_dir="gs://bucket/iris/state/controller-state/1")
-
-
-def test_restore_controller_checkpoint_script_failure_preserves_backup(config):
-    """When the restore script fails, the error names the preserved backup path."""
-    vm = FailingWorkerHandle(vm_id="ctrl", internal_address="10.0.0.1", fail_on="docker stop")
-    platform = FakePlatform(existing_vms=[vm])
-
-    with pytest.raises(RuntimeError, match=r"db\.bloated\.bak"):
-        restore_controller_checkpoint(platform, config, checkpoint_dir="gs://bucket/iris/state/controller-state/1")
 
 
 def test_gcp_controller_vm_config_defaults_to_500gb_disk():

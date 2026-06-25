@@ -28,7 +28,7 @@ from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.checkpoint import DB_SUBDIR, DEFAULT_CONTROLLER_STATE_DIR, download_checkpoint_to_local
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
@@ -38,7 +38,7 @@ from iris.time_proto import duration_from_proto
 logger = logging.getLogger(__name__)
 
 
-LOCAL_STATE_DIR_DEFAULT = Path(DEFAULT_CONTROLLER_STATE_DIR)
+LOCAL_STATE_DIR_DEFAULT = Path("/var/cache/iris/controller")
 DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
@@ -207,7 +207,7 @@ def run_controller_serve(
 
     # --- Restore or reuse local DB ---
     local_state_dir.mkdir(parents=True, exist_ok=True)
-    db_dir = local_state_dir / DB_SUBDIR
+    db_dir = local_state_dir / "db"
     db_path = db_dir / ControllerDB.DB_FILENAME
     auth_db_path = db_dir / ControllerDB.AUTH_DB_FILENAME
     if fresh:
