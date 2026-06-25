@@ -83,9 +83,11 @@ import numpy as np  # noqa: E402
 
 from haliax.nn.ragged_dot import (  # noqa: E402
     _DEFAULT_DIM_NUMS,
+    _DEFAULT_MOSAIC_CONFIG,
     _DLHS_DIM_NUMS,
     MosaicBlockConfig,
     _mosaic_pallas_call,
+    _mosaic_ragged_dot,
     _triton_pallas_call,
 )
 
@@ -219,6 +221,113 @@ def _time_call(fn, *args, steps, warmup):
     return compile_time, (time.perf_counter() - start) / steps
 
 
+def _fairness(roles, group_sizes, tokens, steps, warmup):
+    """Attribution pass at the tuned default config: isolate the f8 *dtype* benefit from the *kernel*
+    benefit, and the forward's weight-transpose tax.
+
+      f8_mosaic     : f8 operands, Mosaic kernel (the shipped f8 path)
+      bf16_mosaic   : bf16 operands, SAME Mosaic kernel + SAME config (dtype-only isolation)
+      bf16_triton   : bf16 operands, production Triton kernel (the deployed bf16 baseline)
+      f8_kernel_only: forward roles only — Mosaic f8 with the weight pre-swapped K-major, so the
+                      `swapaxes(rhs)` transpose the forward pays is OUTSIDE the timed region.
+    """
+    cfg = _DEFAULT_MOSAIC_CONFIG
+    # bf16 operands are 2B, so the f8-tuned deep pipeline (block_k=128 steps=6 = ~393KB smem) overflows
+    # the H100. Give bf16-on-mosaic its OWN feasible config set (shallower / smaller block_k, all <=228KB)
+    # and take its best — a fair same-kernel dtype comparison rather than forcing the f8 config.
+    bf16_cfgs = [
+        MosaicBlockConfig(128, 128, 128, 3, 4),
+        MosaicBlockConfig(128, 128, 128, 2, 4),
+        MosaicBlockConfig(128, 128, 64, 6, 4),
+        MosaicBlockConfig(128, 128, 64, 4, 4),
+        MosaicBlockConfig(128, 128, 64, 4, 2),
+    ]
+    print(f"=== fairness @ tuned default {cfg} (bf16-mosaic gets its own feasible config) ===")
+    for label, lhs, rhs, dim_nums, contract, out_n in roles:
+        flops = 2 * tokens * contract * out_n
+        lhs_b, rhs_b = lhs.astype(jnp.bfloat16), rhs.astype(jnp.bfloat16)
+        row = {"role": label}
+        try:
+            _, row["f8_mosaic"] = _time_call(
+                lambda a, b, gs: _mosaic_pallas_call(a, b, gs, dim_nums, config=cfg),
+                lhs,
+                rhs,
+                group_sizes,
+                steps=steps,
+                warmup=warmup,
+            )
+        except Exception as exc:  # noqa: BLE001
+            row["f8_mosaic"] = None
+            print(f"  {label} f8_mosaic: FAILED {str(exc)[:120]}")
+        # bf16 on the SAME Mosaic kernel, best of its feasible configs (dtype-isolated comparison).
+        bf16_best = None
+        for bc in bf16_cfgs:
+            try:
+                _, st = _time_call(
+                    lambda a, b, gs: _mosaic_pallas_call(a, b, gs, dim_nums, config=bc),
+                    lhs_b,
+                    rhs_b,
+                    group_sizes,
+                    steps=steps,
+                    warmup=warmup,
+                )
+                bf16_best = st if bf16_best is None else min(bf16_best, st)
+            except Exception:  # noqa: BLE001
+                continue
+        row["bf16_mosaic"] = bf16_best
+        try:
+            _, row["bf16_triton"] = _time_call(
+                lambda a, b, gs: _triton_pallas_call(a, b, gs, dim_nums),
+                lhs_b,
+                rhs_b,
+                group_sizes,
+                steps=steps,
+                warmup=warmup,
+            )
+        except Exception as exc:  # noqa: BLE001
+            row["bf16_triton"] = None
+            print(f"  {label} bf16_triton: FAILED {str(exc)[:120]}")
+        # Forward roles pay a real f8 weight transpose inside _mosaic_pallas_call; measure the kernel
+        # with the weight pre-swapped (transpose excluded) to size that tax. dlhs uses rhs natural.
+        if dim_nums == _DEFAULT_DIM_NUMS:
+            rhs_kmajor = jnp.swapaxes(rhs, 1, 2)
+            try:
+                _, st = _time_call(
+                    lambda a, b, gs: _mosaic_ragged_dot(a, b, gs, cfg),
+                    lhs,
+                    rhs_kmajor,
+                    group_sizes,
+                    steps=steps,
+                    warmup=warmup,
+                )
+                row["f8_kernel_only"] = st
+            except Exception:  # noqa: BLE001
+                row["f8_kernel_only"] = None
+
+        def tf(t):
+            return flops / t / 1e12 if t else float("nan")
+
+        def ms(t):
+            return t * 1e3 if t else float("nan")
+
+        f8, bm, bt = row.get("f8_mosaic"), row.get("bf16_mosaic"), row.get("bf16_triton")
+        print(
+            f"  {label:7} f8_mosaic={ms(f8):.3f}ms({tf(f8):.0f}TF)  bf16_mosaic={ms(bm):.3f}ms({tf(bm):.0f}TF)  "
+            f"bf16_triton={ms(bt):.3f}ms({tf(bt):.0f}TF)"
+        )
+        spt = f"{bt/f8:.2f}x" if (f8 and bt) else "n/a"
+        spm = f"{bm/f8:.2f}x" if (f8 and bm) else "n/a"
+        ko = row.get("f8_kernel_only")
+        kostr = f"  f8_kernel_only={ms(ko):.3f}ms (transpose tax={ms(f8)-ms(ko):.3f}ms)" if ko else ""
+        print(f"          -> f8 vs bf16_triton(deployed)={spt}  f8 vs bf16_mosaic(dtype-only)={spm}{kostr}")
+        print(
+            "row "
+            + json.dumps(
+                {k: row.get(k) for k in ("role", "f8_mosaic", "bf16_mosaic", "bf16_triton", "f8_kernel_only")}
+            )
+        )
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tokens", type=int, default=8192)
@@ -229,7 +338,14 @@ def main():
     ap.add_argument("--warmup", type=int, default=3)
     ap.add_argument("--full-grid", action="store_true", help="full cross-product instead of curated set")
     ap.add_argument("--refine", action="store_true", help="refinement grid around the GFP8-029 winner")
+    ap.add_argument("--fairness", action="store_true", help="dtype-isolated f8-vs-bf16 + forward transpose tax")
     args = ap.parse_args()
+
+    if args.fairness:
+        group_sizes, roles = _roles(args.tokens, args.hidden, args.intermediate, args.experts)
+        print(f"hardware: {jax.devices()[0].device_kind}")
+        _fairness(roles, group_sizes, args.tokens, args.steps, args.warmup)
+        return
 
     if args.full_grid:
         configs = [c for c in itertools.product(*_FULL_GRID_AXES.values())]

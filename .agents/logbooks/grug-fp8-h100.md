@@ -1486,3 +1486,31 @@ fuses into the bf16->f8 cast**: producing `transpose(cast(x))` costs only +0.002
   itself only hits 46% of its peak) — high complexity, poor gain ratio, out of scope under the addendum.
   **"Beat bf16 + exhaust the high-EV levers" is met; "within 20% of f8 peak" is a kernel-architecture
   ceiling, not a config-reachable target.**
+
+### 2026-06-25 — GFP8-031: fairness attribution — is the bf16 baseline fairly tuned? (dtype-only f8 = ~1.5-1.8×)
+Sanity-checking the GFP8-029 speedups (`--fairness`, jobs `…-212023` / `…-212317`): the deployed baseline
+is bf16-Triton (production kernel), NOT bf16 on the same autotuned Mosaic kernel. Isolating dtype from
+kernel at the tuned default config (bf16-mosaic given its own feasible config, since the f8 deep pipeline
+`block_k=128 steps=6` = ~393KB smem OVERFLOWS at 2B/elt — itself a finding: **the deep pipeline that makes
+f8 fast is physically exclusive to 1-byte operands**):
+
+  | GEMM   | f8-mosaic | bf16-mosaic(same kernel) | bf16-Triton(deployed) | dtype-only | deployed |
+  |--------|-----------|--------------------------|-----------------------|------------|----------|
+  | fwd13  | 0.585 ms  | 1.009 ms                 | 0.836 ms              | 1.72×      | 1.43×    |
+  | fwd2   | 0.323 ms  | 0.538 ms                 | 0.484 ms              | 1.67×      | 1.50×    |
+  | dlhs13 | 0.388 ms  | 0.715 ms                 | 1.148 ms              | **1.84×**  | 2.96×    |
+  | dlhs2  | 0.263 ms  | 0.396 ms                 | 0.589 ms              | **1.51×**  | 2.24×    |
+
+- **The dgrad's 2.85× headline was inflated** by the `.mT`-hobbled bf16-Triton dgrad (329 TF). Honest f8
+  dtype benefit is **1.51-1.84×** there. For the forward, bf16's *best* kernel is Triton (bf16-mosaic is
+  worse — can't use the deep pipeline), so the fair forward number is f8-vs-Triton = **1.43-1.50×**.
+- **Net: the pure f8 dtype advantage is a consistent ~1.5-1.8× per GEMM — real, not an artifact.** A
+  best-of-both-kernels bf16 baseline (Triton forward + Mosaic dgrad ≈ 3.6 ms) still loses to the f8 hybrid
+  (2.94 ms) by **~1.2× e2e** (vs 1.27× against the shipped bf16-Triton). The win survives a fair baseline.
+- **Forward is now the laggard, and ~25% of its time is the f8 weight transpose** (`swapaxes(rhs)` in
+  `_mosaic_pallas_call`): kernel-only fwd13 0.452 ms (transpose tax **0.133 ms**), fwd2 0.244 ms (tax
+  **0.079 ms**) — 0.21 ms total, ~8% e2e. Kernel-only the forward is 42% MFU, ≈ the dgrad's 47%; the deficit
+  is the transpose, not the kernel. It is intrinsic to f8 (forward needs K-contiguous weights, dgrad needs
+  N-contiguous — opposite) and removable only by a custom dual-output cast-transpose kernel (one bf16 read →
+  both f8 layouts); a fused re-cast of the big weight costs ~as much as the transpose (GFP8-030 wall). That
+  is a moderate-high-complexity kernel for ~8% e2e — a deliberate complexity call, not an obvious win.
