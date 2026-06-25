@@ -92,7 +92,11 @@ class Recipe:
     resources: ResourceConfig | None = None
 
 
-@dataclass(frozen=True)
+# eq=False gives handles object identity (hashable despite the unhashable
+# ResourceConfig in their recipe), so a handle can key a mixture dict. Identity is
+# the right model anyway: two handles are "the same" iff they are the same object;
+# value-equality lives in name@version and the fingerprint.
+@dataclass(frozen=True, eq=False)
 class Artifact:
     """A lazy, content-free handle to a versioned artifact."""
 
@@ -112,12 +116,12 @@ class Artifact:
         return _artifact_path(self.name, self.version, prefix or marin_prefix())
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Dataset(Artifact):
     """A tokenized dataset handle (routes to dataset consumers)."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Checkpoint(Artifact):
     """A Levanter checkpoint handle (routes to ``initialize_from_checkpoint_path``)."""
 
