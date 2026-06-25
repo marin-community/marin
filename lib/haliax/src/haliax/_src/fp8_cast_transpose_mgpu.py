@@ -65,10 +65,6 @@ def cast_transpose_mgpu(
     dtype_max = float(jnp.finfo(out_dtype).max)  # plain float bound (no f8 promotion in clip)
     load_layout = plgpu.Layout.WGMMA if src_layout == "wgmma" else plgpu.Layout.WGMMA_8BIT
 
-    swizzle = plgpu.find_swizzle(block_m * jnp.dtype(out_dtype).itemsize * 8)
-    swizzle_elems = swizzle // jnp.dtype(out_dtype).itemsize
-    qt_transforms = (plgpu.TilingTransform((8, swizzle_elems)), plgpu.SwizzleTransform(swizzle))
-
     def body(scale_gmem, x_gmem, q_gmem, qt_gmem):
         grid_m = pl.cdiv(m, block_m)
         grid_k = pl.cdiv(k, block_k)
@@ -84,7 +80,7 @@ def cast_transpose_mgpu(
                 pl.run_scoped,
                 x_smem=plgpu.SMEM((block_m, block_k), dtype=x.dtype),
                 q_smem=plgpu.SMEM((block_m, block_k), dtype=out_dtype),
-                qt_smem=plgpu.SMEM((block_k, block_m), dtype=out_dtype, transforms=qt_transforms),
+                qt_smem=plgpu.SMEM((block_k, block_m), dtype=out_dtype),
                 barrier=plgpu.Barrier(),
             )
             def scope(x_smem, q_smem, qt_smem, barrier):
@@ -107,7 +103,9 @@ def cast_transpose_mgpu(
                 )
 
                 # Transposed store -> qt_gmem[k_i, m_i]: cast q to the TRANSPOSED register layout and
-                # write it into a transposed view of qt_smem (which then physically holds q.T), then TMA.
+                # write it into a transposed view of a PLAIN qt_smem (the pre-transposed register data
+                # matches the strided view, so the store lowers without a swizzle); qt_smem then
+                # physically holds q.T contiguously, and the TMA stores it plainly.
                 qt_view = plgpu.transpose_ref(qt_smem, (1, 0))  # [bk,bm] smem -> [bm,bk] logical view
                 qt_view[...] = plgpu.layout_cast(q, plgpu.Layout.WGMMA_TRANSPOSED)
                 plgpu.commit_smem()
