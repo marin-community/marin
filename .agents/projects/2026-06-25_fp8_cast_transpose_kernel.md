@@ -1,23 +1,25 @@
 # Plan: Pallas FP8 cast-transpose kernel (TE-style) to land the f8 wgrad win
 
-Status: **CLOSED — M1 done, M2 blocked by jax 0.10.0 (GFP8-033).** Decision: Mosaic backend,
+Status: **M1 + M2 DONE on jax 0.10.0 (no bump). M3 (e2e wiring) is next.** Decision: Mosaic backend,
 wgrad-only, amax deferred (per user). Branch: `research/grug-fp8-h100`.
 
 ## Outcome (2026-06-25, GFP8-033)
 - **M1 ✅** `haliax/_src/fp8_cast_transpose.py` reference + 19 CPU bit-exact tests (vs `(quantize,
   quantize.T)`), committed.
-- **M2 ❌ BLOCKED** A coalesced transposed store is **not expressible in Pallas Mosaic-GPU on jax
-  0.10.0.** Four store formulations → four distinct lowering walls (register transpose unimplemented in
-  Warpgroup; `memref.collapse_shape` on strided/column-major SMEM; "Non-indexing transforms on GMEM
-  refs"; "Can't transpose the swizzled dimension"). `transpose_ref` is a logical relabel only a wgmma
-  operand may consume, never a materializable HBM store. Measured tax (f8 `swapaxes`, 4 wgrad operands):
-  **~0.40 ms > the f8 wgrad kernel's ~0.25 ms edge**, so f8 wgrad stays a net e2e loss. A coalesced fused
-  kernel WOULD win (~0.2–0.3 ms → ~1.34×) — sound idea, blocked only by the jax version.
-- **Decision (complexity-vs-gain):** STOP. Ship the proven **1.27× hybrid (f8 fwd/dgrad + bf16 wgrad)**;
-  keep f8 wgrad behind `RAGGED_F8_WGRAD`. Revisit the cast-transpose on a jax bump (the newer
-  `BlockSpec(transforms=TransposeTransform)` store path). Non-lowering kernel
-  `fp8_cast_transpose_mgpu.py` kept as a research artifact, flagged 0.10.0-blocked, not wired into the
-  public `cast_transpose`. Full evidence: logbook GFP8-033.
+- **M2 ✅ WORKS on jax 0.10.0 — no bump needed.** The fused Mosaic kernel lowers and is **bit-exact**
+  (q_exact/qt_exact on all wgrad shapes). The earlier "blocked, needs a jax bump" call was wrong: it used
+  the wrong idiom (a *memref* transpose of the swizzled store). The working idiom is a **register layout
+  cast** (JAX's `test_transposed_load_store`): transpose the **f32** quant via
+  `layout_cast(qf, WGMMA_TRANSPOSED)` (same-dtype only; f8's WGMMA_8BIT won't convert), `astype(f8)` at
+  the store, into a **plain (non-swizzled)** `transpose_ref(qt_smem,(1,0))`. All machinery
+  (`Layout.WGMMA_TRANSPOSED`, `WGMMA_8BIT`, `layout_cast`, `handle_transposes`, `memref_transpose`) is in
+  0.10.0 already (April-2025). Perf: across the 4 wgrad cast-transposes ~0.61–0.68 ms (fused) vs ~0.95 ms
+  (quantize+swapaxes) → **saves ~0.27 ms** → flips f8 wgrad from a ~0.12 ms e2e loss to ~1.34×. Kernel
+  cleaned + wired into the public `cast_transpose` (H100 + 128-tileable → Mosaic, else reference).
+- **M3 ⏳ NEXT** Wire `cast_transpose` into `fp8_ragged` fwd/bwd: forward stores `q_lhs`/`q_lhs_t`,
+  backward `q_g`/`q_g_t`, wgrad consumes the transposed residuals directly (drop the `swapaxes` in
+  `_mosaic_pallas_call` `_DRHS`). Rerun the 3-arm e2e, confirm ~1.34×, flip the f8 wgrad default on and
+  remove `RAGGED_F8_WGRAD`. Full evidence: logbook GFP8-033.
 
 ---
 
