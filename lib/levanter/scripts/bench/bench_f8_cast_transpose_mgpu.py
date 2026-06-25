@@ -109,7 +109,7 @@ def main():
         print(f"=== {name} [{m},{k}]  read-bound floor {floor_ms:.4f}ms ===")
 
         # Correctness + timing for the fused kernel, both transposed-store strategies.
-        for strat in ("smem_t", "gmem_t"):
+        for strat in ("smem_swz", "smem_plain"):
             try:
                 fn = lambda xx: cast_transpose_mgpu(
                     xx, scale, block_m=args.block_m, block_k=args.block_k, store_strategy=strat

@@ -22,9 +22,12 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 
 # Transposed-store strategies, A/B'd on H100 (the transposed store is the perf/lowering risk):
-#   "smem_t": transpose in SMEM (transpose_ref(qt_smem)[...] = q) then a plain TMA store
-#   "gmem_t": store the rowwise tile q[bm,bk] into a transposed TMA view of the GMEM destination
-_STORE_STRATEGIES = ("smem_t", "gmem_t")
+#   "smem_swz":   transpose into a SWIZZLED qt_smem then TMA store (the matmul-epilogue idiom: the
+#                 tiling+swizzle transforms let the store use the dialect transpose path instead of
+#                 the collapse_shape that rejects a strided/transposed plain SMEM view)
+#   "smem_plain": transpose into a plain (un-transformed) qt_smem — known to fail lowering; kept to
+#                 confirm the swizzle transforms are what unlock the store
+_STORE_STRATEGIES = ("smem_swz", "smem_plain")
 
 
 def cast_transpose_mgpu(
@@ -35,7 +38,7 @@ def cast_transpose_mgpu(
     compute_dtype: jnp.dtype = jnp.bfloat16,
     block_m: int = 128,
     block_k: int = 128,
-    store_strategy: str = "smem_t",
+    store_strategy: str = "smem_swz",
 ) -> tuple[jax.Array, jax.Array]:
     """One read of ``x`` -> ``(q[M,K], qT[K,M])`` in ``out_dtype`` (Mosaic-GPU, Hopper f8).
 
@@ -71,17 +74,21 @@ def cast_transpose_mgpu(
             m_i = tile // grid_k
             k_i = tile % grid_k
 
-            # qt_smem only needed for the SMEM-transpose strategy.
-            scratch = dict(
+            # qt_smem holds the transpose q.T[bk,bm]. A swizzle transform makes its TMA store legal.
+            qt_transforms = ()
+            if store_strategy == "smem_swz":
+                swizzle = plgpu.find_swizzle(block_m * jnp.dtype(out_dtype).itemsize * 8)
+                swizzle_elems = swizzle // jnp.dtype(out_dtype).itemsize
+                qt_transforms = (plgpu.TilingTransform((8, swizzle_elems)), plgpu.SwizzleTransform(swizzle))
+
+            @functools.partial(
+                pl.run_scoped,
                 x_smem=plgpu.SMEM((block_m, block_k), dtype=x.dtype),
                 q_smem=plgpu.SMEM((block_m, block_k), dtype=out_dtype),
+                qt_smem=plgpu.SMEM((block_k, block_m), dtype=out_dtype, transforms=qt_transforms),
                 barrier=plgpu.Barrier(),
             )
-            if store_strategy == "smem_t":
-                scratch["qt_smem"] = plgpu.SMEM((block_k, block_m), dtype=out_dtype)
-
-            @functools.partial(pl.run_scoped, **scratch)
-            def scope(x_smem, q_smem, barrier, qt_smem=None):
+            def scope(x_smem, q_smem, qt_smem, barrier):
                 plgpu.copy_gmem_to_smem(
                     x_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)],
                     x_smem,
@@ -99,18 +106,13 @@ def cast_transpose_mgpu(
                     q_smem, q_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)]
                 )
 
-                # Transposed store -> qt_gmem[k_i, m_i] (a [bk, bm] tile holding q.T).
-                if store_strategy == "smem_t":
-                    # Write q[bm,bk] into a transposed SMEM view so qt_smem physically holds q.T, then TMA.
-                    plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
-                    plgpu.commit_smem()
-                    plgpu.copy_smem_to_gmem(
-                        qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
-                    )
-                else:
-                    # TMA the rowwise tile q[bm,bk] into a transposed view of the GMEM destination.
-                    dst = qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
-                    plgpu.copy_smem_to_gmem(q_smem, plgpu.transpose_ref(dst, (1, 0)))
+                # Transposed store -> qt_gmem[k_i, m_i] (a [bk, bm] tile holding q.T): write q[bm,bk]
+                # into a transposed view of qt_smem so it physically holds q.T, then TMA.
+                plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
+                plgpu.commit_smem()
+                plgpu.copy_smem_to_gmem(
+                    qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
+                )
                 plgpu.wait_smem_to_gmem(0, wait_read_only=True)
 
     num_sms = jax.devices()[0].core_count
