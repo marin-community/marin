@@ -8,12 +8,14 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree_util
 import numpy as np
+import pytest
 from chex import assert_trees_all_close
 
 import haliax as hax
 from haliax._src.fp8 import compute_scale
 from haliax.nn import Linear
 from haliax.quantization import (
+    Fp8DirectDotGeneralOp,
     Fp8DotGeneralOp,
     QuantizationConfig,
     apply_updates,
@@ -22,14 +24,13 @@ from haliax.quantization import (
 )
 
 
-def test_fp8_is_reasonable():
+@pytest.mark.parametrize("dot_general_cls", [Fp8DotGeneralOp, Fp8DirectDotGeneralOp])
+def test_fp8_is_reasonable(dot_general_cls):
     In = hax.Axis("In", 8)
     Out = hax.Axis("Out", 8)
     linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=0.1)
 
-    fp8_linear = Linear.init(
-        In, Out, key=jrandom.PRNGKey(0), dot_general=hax.quantization.Fp8DotGeneralOp.init(), init_scale=0.1
-    )
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=dot_general_cls.init(), init_scale=0.1)
 
     input = hax.random.normal(jrandom.PRNGKey(3), In)
     output = linear(input)
@@ -41,13 +42,70 @@ def test_fp8_is_reasonable():
     assert_trees_all_close(output.array, fp8_output.array, atol=2e-2, rtol=5e-2)
 
 
+def _all_dot_general_eqns(jaxpr):
+    """Recursively collect dot_general equations, descending into nested jaxprs
+    (the forward dot lives inside the custom_vjp call's call_jaxpr)."""
+
+    def _as_jaxprs(param):
+        for c in param if isinstance(param, (list, tuple)) else [param]:
+            inner = getattr(c, "jaxpr", c)  # unwrap ClosedJaxpr -> Jaxpr
+            if hasattr(inner, "eqns"):
+                yield inner
+
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == "dot_general":
+            yield eqn
+        for param in eqn.params.values():
+            for sub in _as_jaxprs(param):
+                yield from _all_dot_general_eqns(sub)
+
+
+def test_fp8_direct_feeds_fp8_operands_to_dot():
+    # The point of the direct op (vs the QDQ Fp8DotGeneralOp) is that the matmul
+    # sees genuine fp8 operands rather than dequantized bf16 ones. Assert that
+    # the lowered jaxpr contains a dot_general whose operands are float8.
+    In = hax.Axis("In", 16)
+    Out = hax.Axis("Out", 8)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init())
+    input = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    jaxpr = jax.make_jaxpr(lambda m, x: m(x).array)(fp8_linear, input)
+    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
+    assert dot_eqns, "expected a dot_general in the lowered op"
+    assert any(
+        all(v.aval.dtype == jnp.float8_e4m3fn for v in eqn.invars) for eqn in dot_eqns
+    ), "forward dot_general should contract two float8_e4m3fn operands"
+
+
+def test_fp8_direct_grads_match_reference():
+    In = hax.Axis("In", 32)
+    Out = hax.Axis("Out", 16)
+    ref = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=1.0)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init(), init_scale=1.0)
+
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    def loss(model):
+        return hax.sum(model(x) ** 2).scalar()
+
+    ref_grad = eqx.filter_grad(loss)(ref).weight.array
+    fp8_grad = eqx.filter_grad(loss)(fp8_linear).weight.array
+
+    rel = np.linalg.norm(fp8_grad - ref_grad) / np.linalg.norm(ref_grad)
+    assert rel < 0.1, f"weight-grad relative error {rel} too large"
+
+
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
-def test_fp_loop():
+# The QDQ and direct ops carry the same delayed-scaling state and update it with
+# the same TE formula on the same amax sources (input, kernel, output grad), so
+# the same manual reference computation validates both.
+@pytest.mark.parametrize("dot_general_cls", [Fp8DotGeneralOp, Fp8DirectDotGeneralOp])
+def test_fp_loop(dot_general_cls):
     key, init_key, random_key = jrandom.split(jrandom.PRNGKey(seed=123), 3)
     Batch = hax.Axis("Batch", 16)
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 32)
-    linear = Linear.init(In, Out, key=init_key, dot_general=Fp8DotGeneralOp.init())
+    linear = Linear.init(In, Out, key=init_key, dot_general=dot_general_cls.init())
 
     def _roll_and_update(amax_h, update):
         return jnp.roll(amax_h, shift=-1, axis=0).at[0].set(update)
