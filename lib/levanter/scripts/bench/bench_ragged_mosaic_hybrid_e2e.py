@@ -78,6 +78,7 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 import numpy as np  # noqa: E402
 
+from haliax._src.fp8_ragged import MosaicWgradMode  # noqa: E402
 from haliax.nn.ragged_dot import ragged_dot  # noqa: E402
 from haliax.quantization import Fp8RaggedDotOp  # noqa: E402
 
@@ -106,16 +107,15 @@ def _make_inputs(tokens, hidden, intermediate, experts, dtype, seed=0):
     return x, w13, w2, jnp.asarray(counts, jnp.int32)
 
 
-def _build_dots(path, compute_dtype, grad_dtype):
+def _build_dots(path, compute_dtype, grad_dtype, mosaic_wgrad):
     """(w13, w2) grouped-matmul callables. bf16 is the baseline ragged_dot; the f8 paths wrap
     each GEMM in its own Fp8RaggedDotOp (independent delayed-scaling state per projection)."""
     if path == "bf16":
         dot = lambda a, b, gs: ragged_dot(a, b, gs, implementation="auto")  # noqa: E731
         return dot, dot
     impl = "mosaic" if path == "mosaic" else "triton"
-    op13 = Fp8RaggedDotOp.init(compute_dtype=compute_dtype, implementation=impl, grad_dtype=grad_dtype)
-    op2 = Fp8RaggedDotOp.init(compute_dtype=compute_dtype, implementation=impl, grad_dtype=grad_dtype)
-    return op13, op2
+    kw = dict(compute_dtype=compute_dtype, implementation=impl, grad_dtype=grad_dtype, mosaic_wgrad=mosaic_wgrad)
+    return Fp8RaggedDotOp.init(**kw), Fp8RaggedDotOp.init(**kw)
 
 
 def _rel_frob(a, b):
@@ -144,6 +144,12 @@ def main():
     ap.add_argument("--experts", type=int, default=8, help="number of experts E")
     ap.add_argument("--path", choices=("bf16", "mosaic", "triton"), default="mosaic")
     ap.add_argument("--grad-dtype", choices=("e4m3", "e5m2"), default="e4m3")
+    ap.add_argument(
+        "--mosaic-wgrad",
+        choices=("bf16", "fp8"),
+        default="bf16",
+        help="mosaic weight-gradient: bf16 hybrid (default) or the f8 cast-transpose wgrad (GFP8-033 M3)",
+    )
     ap.add_argument("--dtype", default="bfloat16")
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--warmup", type=int, default=5)
@@ -156,10 +162,14 @@ def main():
 
     dtype = jnp.dtype(args.dtype)
     grad_dtype = _GRAD_DTYPES[args.grad_dtype]
+    mosaic_wgrad = MosaicWgradMode(args.mosaic_wgrad)
     x, w13, w2, group_sizes = _make_inputs(args.tokens, args.hidden, args.intermediate, args.experts, dtype)
-    dot13, dot2 = _build_dots(args.path, dtype, grad_dtype)
+    dot13, dot2 = _build_dots(args.path, dtype, grad_dtype, mosaic_wgrad)
 
-    print(f"hardware: {[d.device_kind for d in jax.devices()]}  path={args.path}  grad_dtype={args.grad_dtype}")
+    print(
+        f"hardware: {[d.device_kind for d in jax.devices()]}  path={args.path}  "
+        f"grad_dtype={args.grad_dtype}  mosaic_wgrad={args.mosaic_wgrad}"
+    )
 
     def expert_out(x, w13, w2):
         return _expert_mlp(x, w13, w2, group_sizes, dot13=dot13, dot2=dot2)
@@ -172,7 +182,7 @@ def main():
     # Numerics vs the bf16 reference (same shapes/inputs/backend): forward output and all grads.
     fwd_rel_frob = grad_rel_frob = None
     if args.path != "bf16":
-        bf13, bf2 = _build_dots("bf16", dtype, grad_dtype)
+        bf13, bf2 = _build_dots("bf16", dtype, grad_dtype, mosaic_wgrad)
         ref_out = jax.jit(lambda x, w13, w2: _expert_mlp(x, w13, w2, group_sizes, dot13=bf13, dot2=bf2))
         ref_grad = jax.grad(
             lambda x, w13, w2: _expert_mlp(x, w13, w2, group_sizes, dot13=bf13, dot2=bf2).astype(jnp.float32).sum(),
@@ -202,6 +212,7 @@ def main():
     result = {
         "path": args.path,
         "grad_dtype": args.grad_dtype,
+        "mosaic_wgrad": args.mosaic_wgrad,
         "tokens": args.tokens,
         "hidden": args.hidden,
         "intermediate": args.intermediate,

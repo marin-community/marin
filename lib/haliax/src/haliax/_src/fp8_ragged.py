@@ -13,7 +13,7 @@ path. Each contraction is dispatched to the production ragged-dot backend (Trito
 GPU, XLA fallback) via the same layout dimension-numbers the bf16 backward uses.
 """
 
-import os
+from enum import StrEnum
 from functools import partial
 
 import jax
@@ -38,19 +38,23 @@ from haliax.nn.ragged_dot import (
 # `haliax.nn.ragged_dot.ragged_dot`; keeps the fp8 path's shape semantics identical to bf16.
 _RAGGED_PAD_MULTIPLE = 512
 
-# Compute dtype for the mosaic-hybrid weight-gradient (drhs) fallback. With RAGGED_F8_WGRAD=0 (default)
-# the "mosaic" backend runs the wgrad in bf16 on the dequantized f8 operands (the shipped ~1.27× hybrid).
-# RAGGED_F8_WGRAD=1 routes the wgrad through the fused f8 cast-transpose (GFP8-033 M3): the activations
-# and output-grad are cast-transposed once each (in_q_transpose / cast_transpose) and the token-contiguous
-# operands feed `_mosaic_wgrad_transposed` directly — no XLA `swapaxes`. TEMPORARY toggle for the A/B e2e;
-# removed once f8 wgrad is the proven default.
 _WGRAD_FALLBACK_DTYPE = jnp.bfloat16
-_MOSAIC_F8_WGRAD = os.environ.get("RAGGED_F8_WGRAD", "0") == "1"
 
 
-def _f8_wgrad_active(implementation: Implementation) -> bool:
-    """f8 cast-transpose weight-gradient path: mosaic backend with the RAGGED_F8_WGRAD toggle on."""
-    return implementation == "mosaic" and _MOSAIC_F8_WGRAD
+class MosaicWgradMode(StrEnum):
+    """Weight-gradient strategy for the Mosaic FP8 ragged backward (the ``mosaic`` implementation only).
+
+    Hopper f8 ``wgmma`` cannot transpose the contraction (token) axis in-kernel, so the wgrad needs
+    token-contiguous f8 operands. The two ways to get the weight gradient:
+    """
+
+    BF16 = "bf16"  # dequantize the f8 operands and run the wgrad in bf16 (default; simpler, ~1.27× e2e)
+    FP8 = "fp8"  # fused cast-transpose -> genuine f8 wgmma weight-gradient (~1.33× e2e; GFP8-033 M3)
+
+
+def _f8_wgrad_active(implementation: Implementation, mosaic_wgrad: MosaicWgradMode) -> bool:
+    """The f8 cast-transpose weight-gradient runs only on the mosaic backend in FP8 mode."""
+    return implementation == "mosaic" and mosaic_wgrad == MosaicWgradMode.FP8
 
 
 def _ragged_dot_layout(
@@ -100,7 +104,7 @@ def _ragged_dot_layout(
     raise RuntimeError(f"No ragged_dot implementation selected (last error: {last_exc})")
 
 
-@partial(custom_vjp, nondiff_argnums=(10, 11, 12))
+@partial(custom_vjp, nondiff_argnums=(10, 11, 12, 13))
 def quantized_ragged_dot(
     lhs,
     q_lhs,
@@ -115,6 +119,7 @@ def quantized_ragged_dot(
     preferred_element_type,
     implementation,
     grad_dtype,
+    mosaic_wgrad,
 ):
     """Forward f8 grouped matmul on already-quantized operands; the custom_vjp carries the
     ``grad_dtype`` output-grad backward. Full-precision ``lhs``/``rhs`` are passed only to route
@@ -149,6 +154,7 @@ def quantized_ragged_dot_fwd(
     preferred_element_type,
     implementation,
     grad_dtype,
+    mosaic_wgrad,
 ):
     out = _ragged_dot_layout(
         q_lhs,
@@ -171,7 +177,7 @@ def quantized_ragged_dot_fwd(
     return out, res
 
 
-def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, res, g):
+def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, mosaic_wgrad, res, g):
     (
         q_lhs,
         q_lhs_t,
@@ -187,7 +193,7 @@ def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype,
         g, grad_dtype, out_grad_scale, out_grad_amax_history
     )
 
-    f8_wgrad = _f8_wgrad_active(implementation)
+    f8_wgrad = _f8_wgrad_active(implementation, mosaic_wgrad)
     if f8_wgrad:
         # Cast-transpose the output grad once -> rowwise q_g (for dlhs) + token-contiguous q_g_t (for
         # the f8 wgrad), no separate XLA transpose (GFP8-033 M3).
@@ -249,6 +255,7 @@ def fp8_scaled_ragged_dot(
     quantize_compute_type,
     grad_dtype=jnp.float8_e5m2,
     implementation: Implementation = "auto",
+    mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.BF16,
 ):
     """``ragged_dot`` drop-in for per-tensor delayed-scaling FP8 (direct quantization).
 
@@ -264,6 +271,9 @@ def fp8_scaled_ragged_dot(
         grad_dtype: backward output-grad format — ``float8_e5m2`` (hybrid recipe, default) or
             ``float8_e4m3fn`` (all-E4M3 recipe).
         implementation: ragged-dot backend (see :func:`haliax.nn.ragged_dot.ragged_dot`).
+        mosaic_wgrad: weight-gradient strategy for the ``mosaic`` backend — ``BF16`` (default; the
+            wgrad runs in bf16 on the dequantized operands) or ``FP8`` (fused cast-transpose f8 wgrad,
+            ~1.33× e2e; requires ``grad_dtype=float8_e4m3fn`` so both wgrad operands share one f8 type).
 
     Returns:
         ``[tokens, out]`` activations. Scale/amax state is returned as gradients of the
@@ -274,7 +284,7 @@ def fp8_scaled_ragged_dot(
     if pad:
         lhs = jax.lax.pad(lhs, jnp.zeros((), dtype=lhs.dtype), [(0, pad, 0), (0, 0, 0)])
 
-    if _f8_wgrad_active(implementation):
+    if _f8_wgrad_active(implementation, mosaic_wgrad):
         # One read of the activations -> rowwise q_lhs (forward GEMM) + token-contiguous q_lhs_t
         # (f8 weight-gradient), no separate XLA transpose (GFP8-033 M3).
         q_lhs, q_lhs_t, new_lhs_scale = in_q_transpose(quantize_compute_type, lhs, lhs_scale, lhs_amax_history)
@@ -296,6 +306,7 @@ def fp8_scaled_ragged_dot(
         preferred_element_type,
         implementation,
         grad_dtype,
+        mosaic_wgrad,
     )
     y = out_dq(preferred_element_type, new_lhs_scale, new_rhs_scale, y)
     if pad:

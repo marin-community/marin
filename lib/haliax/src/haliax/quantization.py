@@ -26,7 +26,7 @@ from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
 from ._src.fp8 import dot_general_with_precision, fp8_scaled_dot_general, in_qdq, out_qdq
-from ._src.fp8_ragged import fp8_scaled_ragged_dot
+from ._src.fp8_ragged import fp8_scaled_ragged_dot, MosaicWgradMode
 from .nn.ragged_dot import Implementation
 from .axis import Axis
 from .core import NamedArray
@@ -295,6 +295,8 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     implementation: Implementation = eqx.field(static=True, default="auto")
     # Backward output-grad format: E5M2 (Transformer-Engine hybrid, default) or E4M3 (all-E4M3).
     grad_dtype: DTypeLike = eqx.field(static=True, default=jnp.float8_e5m2)
+    # Weight-gradient strategy on the mosaic backend: bf16 (default) or the f8 cast-transpose wgrad.
+    mosaic_wgrad: MosaicWgradMode = eqx.field(static=True, default=MosaicWgradMode.BF16)
 
     @classmethod
     def init(
@@ -303,6 +305,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         compute_dtype: DTypeLike | None = None,
         implementation: Implementation = "auto",
         grad_dtype: DTypeLike = jnp.float8_e5m2,
+        mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.BF16,
     ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
@@ -314,6 +317,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             compute_dtype=compute_dtype,
             implementation=implementation,
             grad_dtype=grad_dtype,
+            mosaic_wgrad=mosaic_wgrad,
         )
 
     def __call__(self, lhs, rhs, group_sizes):
@@ -333,6 +337,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             quantize_compute_type=comp_dtype,
             grad_dtype=self.grad_dtype,
             implementation=self.implementation,
+            mosaic_wgrad=self.mosaic_wgrad,
         )
 
 
