@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 import logging
 import os
@@ -59,16 +60,25 @@ _TRITON_DEFAULT_BLOCK_K = 32
 _TRITON_DEFAULT_NUM_WARPS = 4
 _TRITON_DEFAULT_NUM_STAGES = 4
 
-# Default Mosaic-GPU block config. The kernel takes no defaults; these are conservative
-# values that divide the trial-model K (512/1024, padded to 512-multiples) and won the
-# GFP8-024 autotune sweep across the ep8/dp64 × gateup/down regime. A tuned table keyed by
-# (shape bucket) is a follow-up (see add-pallas-kernel skill); these get a correct first
-# end-to-end datapoint.
-_MOSAIC_BLOCK_M = 128
-_MOSAIC_BLOCK_N = 128
-_MOSAIC_BLOCK_K = 64
-_MOSAIC_MAX_CONCURRENT_STEPS = 2
-_MOSAIC_GRID_BLOCK_N = 1
+@dataclasses.dataclass(frozen=True)
+class MosaicBlockConfig:
+    """Block/scheduling config for the Mosaic-GPU ragged-dot kernel.
+
+    The kernel exposes no defaults, so every call supplies one of these. ``block_k`` must
+    divide the contraction dim K; ``block_m``/``block_n`` tile the token and output axes.
+    Pass an explicit config to autotune in-process; the module default is a conservative
+    value that divides 512-multiple K. A tuned table keyed by shape bucket lives in
+    ``infer_mosaic_block_config`` (see add-pallas-kernel skill).
+    """
+
+    block_m: int = 128
+    block_n: int = 128
+    block_k: int = 64
+    max_concurrent_steps: int = 2
+    grid_block_n: int = 1
+
+
+_DEFAULT_MOSAIC_CONFIG = MosaicBlockConfig()
 
 
 def _env_int(name: str, default: int) -> int:
@@ -394,19 +404,22 @@ def _triton_pallas_call(
 
 
 def _mosaic_ragged_dot(
-    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    config: MosaicBlockConfig = _DEFAULT_MOSAIC_CONFIG,
 ) -> jax.Array:
     """Raw Mosaic-GPU ragged dot in the K-contiguous (``transpose_rhs``) layout the f8 wgmma
-    requires, with the default block config."""
+    requires, with the given block config."""
     return _ragged_dot_mgpu.ragged_dot(
         lhs,
         rhs,
         group_sizes=group_sizes,
-        block_m=_MOSAIC_BLOCK_M,
-        block_n=_MOSAIC_BLOCK_N,
-        block_k=_MOSAIC_BLOCK_K,
-        max_concurrent_steps=_MOSAIC_MAX_CONCURRENT_STEPS,
-        grid_block_n=_MOSAIC_GRID_BLOCK_N,
+        block_m=config.block_m,
+        block_n=config.block_n,
+        block_k=config.block_k,
+        max_concurrent_steps=config.max_concurrent_steps,
+        grid_block_n=config.grid_block_n,
         transpose_rhs=True,
     )
 
@@ -417,6 +430,7 @@ def _mosaic_pallas_call(
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
     out_dtype: jnp.dtype | None = None,
+    config: MosaicBlockConfig = _DEFAULT_MOSAIC_CONFIG,
 ) -> jax.Array:
     """Genuine f8 Mosaic-GPU grouped GEMM for the forward and dlhs layouts (H100 only).
 
@@ -433,9 +447,9 @@ def _mosaic_pallas_call(
             "Mosaic-GPU ragged-dot backend is not available (H100-only)"
         )
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
-        out = _mosaic_ragged_dot(lhs, jnp.swapaxes(rhs, 1, 2), group_sizes)
+        out = _mosaic_ragged_dot(lhs, jnp.swapaxes(rhs, 1, 2), group_sizes, config)
     elif ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
-        out = _mosaic_ragged_dot(lhs, rhs, group_sizes)
+        out = _mosaic_ragged_dot(lhs, rhs, group_sizes, config)
     elif ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
         raise NotImplementedError(
             "Mosaic f8 ragged weight-gradient (drhs) is unsupported: Hopper f8 wgmma forbids the "
@@ -598,4 +612,4 @@ def ragged_dot(
     return out
 
 
-__all__ = ["Implementation", "ragged_dot"]
+__all__ = ["Implementation", "MosaicBlockConfig", "ragged_dot"]
