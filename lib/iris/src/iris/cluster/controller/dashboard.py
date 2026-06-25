@@ -38,7 +38,6 @@ from rigging.server_auth import (
     identity_scope,
 )
 from starlette.applications import Starlette
-from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Match, Mount, Route
@@ -64,7 +63,7 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
-from iris.rpc.stats_connect import StatsServiceWSGIApplication
+from iris.rpc.stats_connect import StatsServiceASGIApplication
 from iris.rpc.stats_service import RpcStatsService
 
 logger = logging.getLogger(__name__)
@@ -441,12 +440,11 @@ class ControllerDashboard:
         # StatsService: reuses the auth interceptor (so non-admins can't read
         # sampled request previews) but skips RequestTimingInterceptor so the
         # stats endpoint itself doesn't pollute the numbers it reports.
-        stats_wsgi_app = StatsServiceWSGIApplication(
-            service=RpcStatsService(self._stats_collector),
+        stats_app = StatsServiceASGIApplication(
+            service=AsyncServiceAdapter(RpcStatsService(self._stats_collector)),
             interceptors=[auth_interceptor],
             compressions=IRIS_RPC_COMPRESSIONS,
         )
-        stats_app = WSGIMiddleware(stats_wsgi_app)
 
         self._endpoint_proxy = EndpointProxy(self._service.resolve_endpoint)
 
@@ -513,7 +511,7 @@ class ControllerDashboard:
                 methods=["POST"],
             ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
-            Mount(stats_wsgi_app.path, app=stats_app),
+            Mount(stats_app.path, app=stats_app),
         ]
         routes.append(static_files_mount())
 
