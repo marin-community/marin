@@ -1157,3 +1157,66 @@ no dissent). The backward's mixed e4m3×e5m2 GEMM is NOT a hardware wall:
 - **Verdict:** M0 step 2 done. Mosaic FP8 fwd+bwd beats bf16 ~1.3× with f8 fwd/dgrad alone; the wgrad
   transpose wall is real but optional. Next: either (a) wire the hybrid into the haliax op (M0 step 3) and
   measure end-to-end, or (b) build the token-transposed f8 wgrad for the extra ~5%.
+
+### 2026-06-25 — GFP8-025: how the field does fp8 wgrad — no library hands us a Hopper fp8 wgrad; TE/DeepSeek use an out-of-kernel cast-transpose
+Before accepting the bf16-wgrad compromise (GFP8-024), surveyed how upstream fp8-on-Hopper trainers handle
+the MoE weight-gradient GEMM (contraction over the ragged token axis) and whether any library hands us a
+working fp8 wgrad. **Finding: none do on Hopper.** The bf16-wgrad hybrid is a reasonable v1 but is a
+gap-vs-field, not parity — the production stacks keep wgrad in fp8 via a transpose performed *outside* the
+wgmma, which is exactly the kernel work GFP8-024 flagged.
+
+- **Flax — no fp8 ragged_dot at all (dense-only).** `flax/linen/fp8_ops.py` exposes only dense wrappers
+  (`Fp8DotGeneralOp`/`Fp8DirectDotGeneralOp`/`Fp8Einsum`) over `lax.dot_general`/`jnp.einsum`; no
+  `ragged_dot`/`group_sizes`/grouped/MoE primitive. The fp8 guide's MoE advice is literally "replace
+  `jnp.einsum` with `fp8_ops.Fp8Einsum`" — a dense batched einsum, not a ragged contraction. Its *dense*
+  backward does quantize both dgrad+wgrad in fp8 (`q_g = quantize(g, float8_e5m2)`; `dot_general_transpose_
+  lhs`/`_rhs`), but there is no ragged path to inherit that. This is the lineage haliax's `_src/fp8.py`
+  copied. Sources: github `google/flax` → `flax/linen/fp8_ops.py`; flax docs `guides/quantization/fp8_basics`.
+- **Transformer Engine — keeps fp8 wgrad via cast-transpose / "columnwise" copy.** TE materialises a
+  separately-quantized transposed (columnwise) fp8 copy of operands so fwd uses the rowwise version and
+  wgrad uses the columnwise one, with **no in-kernel transpose**. Explicit C/C++ APIs `nvte_cast_transpose`,
+  `nvte_cast_transpose_dbias`, `nvte_fp8_transpose_dbias`. Its blockwise-scaling docs have a "Handling
+  transposes" section stating a 1D-quantized tensor *cannot* be transposed (rowwise vs columnwise blocks
+  cover different elements with different scales), so the two orientations are quantized independently from
+  the high-precision input. Sources: NVIDIA TE docs `user-guide/examples/advanced_optimizations.html`
+  (cast-transpose APIs); `user-guide/features/low_precision_training/fp8_blockwise_scaling/` ("Handling
+  transposes").
+- **DeepSeek-V3 / DeepGEMM — fp8 wgrad, via dequant→transpose→requantize.** DeepSeek-V3 runs all three
+  Linear GEMMs (Fprop, Dgrad, **Wgrad**) in fp8; "the fp8 Wgrad GEMM allows activations to be stored in fp8
+  for use in the backward pass." Forward activations are stored as 1×128 fp8 tiles; in backward the matrix
+  is "read out, dequantized, transposed, re-quantized into 128×1 tiles, and stored in HBM" before a
+  dedicated K-axis-grouped fp8 wgrad kernel (`k_grouped_fp8_gemm_tn_contiguous` /
+  `k_grouped_wgrad_gemm_fp8_fp8_fp32_nt`, fp8 in / fp32 accumulate). Tellingly, **SM90 supports only the NT
+  layout** — the same Hopper operand-transpose restriction we hit. Sources: DeepSeek-V3 Tech Report
+  arXiv:2412.19437 §3.3 (Fig 6) + hardware-design-recommendation section; github `deepseek-ai/DeepGEMM`
+  README + PR #95 ("Weight gradient kernels for dense and MoE models").
+- **Qwix — injection front-end, delegates the matmul to XLA; no fp8 ragged on GPU.** Qwix rewrites a model
+  to wrap `lax.dot_general`/`lax.ragged_dot` with `custom_vjp` quant rules (`qwix/_src/core/dot_general_qt.py`,
+  `ragged_dot_qt.py` quantise the gradient and emit *both* backward GEMMs) but ships **no GPU kernels** —
+  every matmul goes to `jax.lax.{dot_general,ragged_dot}` → XLA. So fp8 wgrad reduces to XLA's lowering, and
+  **XLA's ragged_dot has no fp8 path**: a JAX maintainer states "XLA `RaggedDot` doesn't yet support the
+  `DotAlgorithmPreset` algorithms" (so fp8 accumulation presets are downgraded to DEFAULT). Sources: github
+  `google/qwix` core sources; JAX issue `jax-ml/jax#32207`.
+- **Tokamax — no fp8×fp8 ragged_dot on Hopper (and not a clean dep).** In `tokamax 0.0.12`,
+  `tokamax/_src/ops/ragged_dot/pallas_mosaic_gpu.py` (`_fwd`, sm90 branch) explicitly dequantises a QArray
+  lhs ("sm90 doesn't support lhs to be QArray"); the only sm90 "quant" kernels are weight-only and **cast
+  the weights up to the scale dtype before wgmma** (`w_ = w[:,ks].astype(w_scales.dtype); wgmma(acc, w_,
+  x_smem.T)` in `pallas_mosaic_gpu_kernel_sm90_quant.py`), i.e. a bf16×bf16 matmul; the non-quant sm90
+  kernel rejects anything but bf16/f16 (`check_bf16xbf16_or_f16xf16`, `pallas_mosaic_gpu_common.py`). The
+  only fp8 tensor-core kernel anywhere is **Blackwell (sm100) fp8_e4m3fn × int4** (docstring "fp8xint4
+  ragged dot", `pallas_mosaic_gpu_kernel_sm100_fp8_quant.py`; requires `lhs.qtype==float8_e4m3fn` &
+  `rhs.qtype==int4`), an inference/weight-quant kernel whose VJP is `skipTest("Not supported")` — never
+  fp8×fp8, no fp8 backward. Dependency cost is also real: `0.0.12` "heavily under development", `jax>=0.9.2`,
+  a hard `typeguard==2.13.3` pin, and `qwix`/`pydantic`; vendoring just the op is a ~7.1k-LOC coupled
+  subtree (18 files), not a single-file lift. Sources: PyPI `tokamax 0.0.12` wheel — `tokamax/_src/ops/
+  ragged_dot/*.py` and `tokamax-0.0.12.dist-info/METADATA`.
+- **Conclusion.** No off-the-shelf library gives us fp8 wgrad on Hopper: flax is dense-only, qwix delegates
+  to an XLA ragged_dot that has no fp8 GPU lowering, and tokamax's Hopper ragged path is bf16 (fp8 only on
+  Blackwell, and only fp8×int4). The standard mechanism that *does* keep MoE wgrad in fp8 (TE, DeepSeek/
+  DeepGEMM) is an **out-of-kernel cast-transpose**: produce a transposed fp8 copy of the token-axis operand
+  (columnwise cache, or dequant→transpose→requantize to the opposite 1×128↔128×1 orientation) so the
+  K(token)-contracting wgrad runs in fp8 without the forbidden in-kernel f8 transpose. So the GFP8-024 plan
+  holds, now grounded: **ship the hybrid (f8 fwd/dgrad + bf16 wgrad, ~1.3×) as M0**, and treat fp8 wgrad as
+  a scoped, self-authored cast-transpose fast-follow (the ~5% of GFP8-024) — not something a dependency
+  hands us. See [[fp8-scaling-causal-invariant]] for why the 1×128↔128×1 (per-token, channel-tiled)
+  orientation is also the causally-safe one.
