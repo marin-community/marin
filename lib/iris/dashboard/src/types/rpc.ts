@@ -182,6 +182,11 @@ export interface LaunchJobRequest {
   replicas?: number
   priorityBand?: string
   submitArgv?: string[]
+  // Job aborts once more than this many tasks fail terminally (default 0).
+  maxTaskFailures?: number
+  // Per-task retry budget on failure (default 0) and on preemption.
+  maxRetriesFailure?: number
+  maxRetriesPreemption?: number
 }
 
 export interface GetTaskStatusResponse {

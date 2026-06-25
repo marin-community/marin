@@ -572,6 +572,25 @@ function collectAttemptsByState(stateName: string): AttemptSummary[] {
 const recentTaskFailures = computed<AttemptSummary[]>(() => collectAttemptsByState('failed'))
 const recentPreemptions = computed<AttemptSummary[]>(() => collectAttemptsByState('worker_failed'))
 
+// Failure / preemption budgets from the launch request. The reconstructed
+// request always carries these int32 fields, but proto3 omits zero defaults
+// from the JSON, so coalesce to 0. maxTaskFailures is the job-level abort
+// threshold (terminally-failed tasks tolerated); the retry budgets are per task.
+const maxTaskFailures = computed(() => jobRequest.value?.maxTaskFailures ?? 0)
+const maxRetriesFailure = computed(() => jobRequest.value?.maxRetriesFailure ?? 0)
+const maxRetriesPreemption = computed(() => jobRequest.value?.maxRetriesPreemption ?? 0)
+
+const failuresTitle = computed(() =>
+  `${job.value?.failureCount ?? 0} failed task attempts (including retries). `
+  + `Each task retries up to ${maxRetriesFailure.value}× on failure; `
+  + `the job fails once more than ${maxTaskFailures.value} tasks fail.`,
+)
+
+const preemptionsTitle = computed(() =>
+  `${job.value?.preemptionCount ?? 0} task preemptions (including retries). `
+  + `Each task retries up to ${maxRetriesPreemption.value}× on preemption.`,
+)
+
 const acceleratorDisplay = computed(() => {
   const j = job.value
   const req = jobRequest.value
@@ -890,7 +909,14 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span class="font-mono">{{ jobDuration(job) }}</span>
           </InfoRow>
           <InfoRow label="Failures">
-            {{ job.failureCount ?? 0 }}
+            <span :title="failuresTitle">
+              {{ job.failureCount ?? 0 }}<span class="text-text-muted"> / (max {{ maxTaskFailures }})</span>
+            </span>
+          </InfoRow>
+          <InfoRow label="Preemptions">
+            <span :title="preemptionsTitle">
+              {{ job.preemptionCount ?? 0 }}<span class="text-text-muted"> / (max {{ maxRetriesPreemption }}/task)</span>
+            </span>
           </InfoRow>
           <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
             <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
