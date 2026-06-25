@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
-from marin.execution.context import check_build_context
 from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
 
@@ -45,6 +44,11 @@ class StepSpec:
     StepSpec is a pure data object: it describes *what* to run, not *how*.
     Caching, locking, heartbeats, and status writes are handled explicitly
     by the step runner.
+
+    A StepSpec freezes nothing at construction: ``output_path`` resolves
+    ``marin_prefix()`` lazily and ``fn`` pulls the live environment (prefix,
+    region) from a ``RunContext`` at run time. So it is safe to build anywhere —
+    it needs no executor build phase, unlike the eager ``ExecutorStep``.
     """
 
     # Identity
@@ -78,9 +82,6 @@ class StepSpec:
     :class:`~marin.execution.remote.RemoteCallable` is submitted via Fray; a
     plain callable runs inline in the runner thread.
     """
-
-    def __post_init__(self):
-        check_build_context("StepSpec", self.name)
 
     @cached_property
     def dep_paths(self) -> list[str]:

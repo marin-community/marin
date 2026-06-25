@@ -7,7 +7,6 @@ tokenized data), the paloma/uncheatable validation suites tokenize fresh, the
 mixture resolves every component to its path, and the Executor is out of the path.
 """
 
-from marin.execution.executor import executor_context
 from marin.execution.lazy import lower, materialized_config
 
 from experiments.evals.uncheatable_lazy import UNCHEATABLE_SUBSETS
@@ -26,8 +25,7 @@ _PINNED_TRAIN = {
 
 def test_baseline_lowers_to_pure_graph():
     ckpt = grug_moe_baseline_pure()
-    with executor_context():
-        spec = lower(ckpt)
+    spec = lower(ckpt)
 
     n_train = len(NEMOTRON_DATASETS) + 2  # nemotron splits + starcoder + proofpile
     n_validation = len(PALOMA_DATASETS_TO_DIR) + len(UNCHEATABLE_SUBSETS)

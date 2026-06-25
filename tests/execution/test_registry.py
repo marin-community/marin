@@ -9,7 +9,6 @@ exercised exactly as it fires in production (before a cached SUCCESS is served).
 
 import pytest
 from marin.execution.artifact import Artifact as ArtifactIO
-from marin.execution.executor import executor_context
 from marin.execution.lazy import Dataset, Recipe, lower
 from marin.execution.registry import ImmutableArtifactError, read_record
 from marin.execution.step_runner import StepRunner
@@ -28,8 +27,7 @@ def _toy(version: str, payload: str) -> Dataset:
 
 
 def _run(artifact: Dataset) -> None:
-    with executor_context():
-        StepRunner().run([lower(artifact)])
+    StepRunner().run([lower(artifact)])
 
 
 def test_records_provenance_on_success(tmp_path, monkeypatch):

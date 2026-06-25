@@ -14,7 +14,6 @@ from dataclasses import dataclass
 
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact as ArtifactIO
-from marin.execution.executor import executor_context
 from marin.execution.lazy import Checkpoint, Dataset, Recipe, RunContext, lower, materialized_config
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
@@ -205,8 +204,7 @@ def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     ckpt = dclm_1b()
-    with executor_context():
-        spec = lower(ckpt)
+    spec = lower(ckpt)
 
     StepRunner().run([spec])
 

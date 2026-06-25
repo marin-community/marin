@@ -30,7 +30,6 @@ import sys
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.context import executor_context
 from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, pretokenized, tokenized
@@ -180,6 +179,11 @@ _MINI_BUDGET = 1e15
 _MINI_BATCH = 32
 _MINI_STEPS = 20
 
+# v5p lives in us-east5 / us-central1; the smoke's data cache is in us-east5. Pin the
+# region so the dispatched TPU job runs region-local with the data instead of
+# inheriting the launcher pod's (arbitrary) region, which may have no v5p at all.
+_MINI_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8", regions=["us-east5"])
+
 
 def grug_moe_fineweb_mini(*, version: str = "v1") -> Checkpoint:
     """A tiny, fast grug-moe smoke on the prebuilt fineweb-edu 10M cache.
@@ -219,7 +223,7 @@ def grug_moe_fineweb_mini(*, version: str = "v1") -> Checkpoint:
             fn=run_grug_moe_trial,
             build_config=build_config,
             deps=(fineweb,),
-            run_args={"train_resources": _TRAIN_RESOURCES},
+            run_args={"train_resources": _MINI_TRAIN_RESOURCES},
         ),
     )
 
@@ -235,6 +239,4 @@ if __name__ == "__main__":
     # Lower the chosen variant to a pure StepSpec graph and run it (no Executor).
     # `python -m experiments.grug.moe.launch_lazy [slimpajama|pure|mini]`, default pure.
     selected = sys.argv[1] if len(sys.argv) > 1 else "pure"
-    with executor_context():
-        spec = lower(_VARIANTS[selected]())
-    StepRunner().run([spec])
+    StepRunner().run([lower(_VARIANTS[selected]())])

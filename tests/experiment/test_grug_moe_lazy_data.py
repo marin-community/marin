@@ -7,7 +7,6 @@
 path entirely.
 """
 
-from marin.execution.executor import executor_context
 from marin.execution.lazy import Dataset, lower, materialized_config
 from marin.execution.remote import RemoteCallable
 
@@ -16,8 +15,7 @@ from experiments.grug.moe.launch_lazy import grug_moe_slimpajama
 
 def test_slimpajama_lowers_to_pure_stepspec_graph():
     ckpt = grug_moe_slimpajama()
-    with executor_context():
-        spec = lower(ckpt)
+    spec = lower(ckpt)
 
     # train step + one tokenize dependency, both addressed by explicit name@version
     assert spec.name == "grug/4_10_baseline_moe_slim"
