@@ -9,9 +9,8 @@ version of the ``starcoderdata`` / ``proofpile_2`` entries in ``simple.py``'s
 ``tokenized`` dict.
 """
 
-from levanter.data.text import TextLmDatasetFormat
 from marin.execution.lazy import Dataset
-from marin.experiment.data import tokenize
+from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
 
@@ -26,24 +25,22 @@ _PROOFPILE_LLAMA3_PIN = "tokenized/proofpile_2-4a35c7/"
 
 def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
     """StarCoder as a tokenized ``Dataset`` handle (text lives under the ``content`` key)."""
-    pinned = _STARCODER_LLAMA3_PIN if tokenizer == llama3_tokenizer else None
-    return tokenize(
-        "tokenized/starcoderdata",
-        "llama3",
-        train_paths=[_STARCODER_RAW],
+    return tokenized(
+        "starcoderdata",
         tokenizer=tokenizer,
-        format=TextLmDatasetFormat(text_key="content"),
-        pinned_path=pinned,
+        version="llama3",
+        paths=[_STARCODER_RAW],
+        text_key="content",
+        pin=_STARCODER_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
     )
 
 
 def proofpile_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
     """Proof-Pile 2 as a tokenized ``Dataset`` handle."""
-    pinned = _PROOFPILE_LLAMA3_PIN if tokenizer == llama3_tokenizer else None
-    return tokenize(
-        "tokenized/proofpile_2",
-        "llama3",
-        train_paths=[_PROOFPILE_RAW],
+    return tokenized(
+        "proofpile_2",
         tokenizer=tokenizer,
-        pinned_path=pinned,
+        version="llama3",
+        paths=[_PROOFPILE_RAW],
+        pin=_PROOFPILE_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
     )

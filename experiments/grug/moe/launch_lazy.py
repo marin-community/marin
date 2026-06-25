@@ -4,10 +4,14 @@
 """grug-moe baseline, authored as a lazy artifact.
 
 This is the same run as ``baseline_moe`` in ``launch.py``, written in the
-artifact model: a zero-arg function returns a typed :class:`Checkpoint` handle
-addressed by an explicit ``name@version``. The experiment file contains no
-``ExecutorStep``, ``executor_main``, ``versioned()``, or ``this_output_path()`` —
-the decisions are stated inline, and the output path is ``ctx.out``.
+artifact model: a function returns a typed :class:`Checkpoint` handle addressed by
+an explicit ``name@version``. The experiment file contains no ``ExecutorStep``,
+``executor_main``, ``versioned()``, or ``this_output_path()`` — the decisions are
+stated inline, and the output path is ``ctx.out``.
+
+The data mixture reads as a flat table: the catalog modules provide dataset
+*handles* (mechanism); this experiment states the *weights* (policy). The Nemotron
+weights are the corpus's TiB proportions.
 
 Three variants show the migration arc:
 
@@ -18,17 +22,19 @@ Three variants show the migration arc:
   materialized config as ``baseline_moe``.
 - ``grug_moe_slimpajama`` builds its data from a single :class:`Dataset` handle,
   the minimal fully-lazy demo.
-- ``grug_moe_baseline_pure`` assembles the full baseline training mixture
-  (Nemotron CC + starcoder + proofpile) from pinned :class:`Dataset` handles, so
-  the whole graph lowers via ``lower()`` with the ``Executor`` out of the path.
+- ``grug_moe_baseline_pure`` assembles the full baseline mixture — Nemotron CC +
+  starcoder + proofpile, plus the paloma/uncheatable validation suites at weight 0
+  — from handles, so the whole graph lowers via ``lower()`` with the ``Executor``
+  out of the path.
 """
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import BuildContext, Checkpoint, Recipe, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture, tokenize
+from marin.experiment.data import mixture, tokenized
 
+from experiments.evals.uncheatable_lazy import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
@@ -38,12 +44,9 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets.nemotron_lazy import nemotron_components
+from experiments.paloma_lazy import paloma_validation
+from experiments.pretraining_datasets.nemotron_lazy import nemotron_datasets
 from experiments.pretraining_datasets.simple_lazy import proofpile_dataset, starcoder_dataset
-
-# Code/math blend folded into the baseline training mixture (weights from `nemotron_mix`).
-_STARCODER_WEIGHT = 0.25
-_PROOFPILE_WEIGHT = 0.055
 
 # Tokenization runs as its own Fray job (keeps the launcher pod light).
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -103,9 +106,8 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
     model, optimizer, batch_size, steps = build_from_heuristic(
         budget=_BUDGET, hidden_dim=_HIDDEN_DIM, target_steps=_TARGET_STEPS
     )
-    slim = tokenize(
-        "tokenized/slimpajama-6b",
-        "v1",
+    slim = tokenized(
+        "slimpajama-6b",
         source="DKYoon/SlimPajama-6B",
         tokenizer=llama3_tokenizer,
         resources=_TOKENIZE_RESOURCES,
@@ -121,43 +123,45 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
     )
 
 
-def _baseline_training_components() -> dict:
-    """The full baseline training mixture as pinned ``Dataset`` handles: the seven
-    Nemotron CC splits plus starcoder and proofpile, all on llama3 and pinned to
-    their existing tokenized locations so nothing re-tokenizes."""
-    return {
-        **nemotron_components(tokenizer=llama3_tokenizer),
-        starcoder_dataset(tokenizer=llama3_tokenizer): _STARCODER_WEIGHT,
-        proofpile_dataset(tokenizer=llama3_tokenizer): _PROOFPILE_WEIGHT,
-    }
-
-
 def grug_moe_baseline_pure(*, version: str = "v1") -> Checkpoint:
-    """The full grug-moe baseline training mixture, authored entirely in the artifact
-    model. Every component is a pinned ``Dataset`` handle (existing tokenized data),
-    so the whole graph lowers via ``lower()`` with the Executor, InputName,
-    this_output_path, and content-addressing all out of the path and nothing
-    re-tokenizes.
+    """The full grug-moe baseline, authored entirely in the artifact model. Every
+    component is a :class:`Dataset` handle, so the whole graph lowers via ``lower()``
+    with the Executor, InputName, this_output_path, and content-addressing all out of
+    the path. Pinned components (nemotron/starcoder/proofpile) never re-tokenize.
 
-    (``baseline_moe`` additionally blends the default paloma/uncheatable validation
-    sets at weight 0; those small eval caches are content-addressed and join here as
-    fresh-version handles once wired — they are not part of the training mixture.)
+    The mixture is a flat table: catalog modules supply the dataset handles, and the
+    weights (policy) are stated here. Nemotron weights are the corpus's TiB proportions;
+    the paloma/uncheatable suites are validation (weight 0).
     """
     model, optimizer, batch_size, steps = build_from_heuristic(
         budget=_BUDGET, hidden_dim=_HIDDEN_DIM, target_steps=_TARGET_STEPS
     )
-    components = _baseline_training_components()
+
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {
+        nem["hq_actual"]: 0.91351,
+        nem["hq_synth"]: 2.72,
+        nem["medium_high"]: 0.82471,
+        nem["medium"]: 3.38,
+        nem["medium_low"]: 1.54,
+        nem["low_actual"]: 0.70123,
+        nem["low_synth"]: 0.62771,
+        starcoder_dataset(tokenizer=llama3_tokenizer): 0.25,
+        proofpile_dataset(tokenizer=llama3_tokenizer): 0.055,
+    }
+    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
 
     def build_config(ctx: BuildContext) -> GrugMoeLaunchConfig:
-        return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=mixture(ctx, components))
+        data = mixture(ctx, train, validation=validation)
+        return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=data)
 
     return Checkpoint(
         name="grug/4_10_baseline_moe_pure",
         version=version,
-        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, deps=tuple(components), resources=None),
+        recipe=Recipe(fn=run_grug_moe_trial, build_config=build_config, deps=(*train, *validation), resources=None),
     )
 
 
 if __name__ == "__main__":
-    # Pure lazy graph (nemotron + starcoder + proofpile -> train), run by StepRunner with no Executor.
+    # Pure lazy graph (training mixture + validation suites -> train), run by StepRunner with no Executor.
     StepRunner().run([lower(grug_moe_baseline_pure())])

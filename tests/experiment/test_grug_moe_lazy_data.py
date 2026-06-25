@@ -21,10 +21,10 @@ def test_slimpajama_lowers_to_pure_stepspec_graph():
     # train step + one tokenize dependency, both addressed by explicit name@version
     assert spec.name == "grug/4_10_baseline_moe_slim"
     assert spec.override_output_path == "grug/4_10_baseline_moe_slim/v1"
-    assert [dep.name for dep in spec.deps] == ["tokenized/slimpajama-6b"]
+    assert [dep.name for dep in spec.deps] == ["slimpajama-6b"]
 
     tok = spec.deps[0]
-    assert tok.override_output_path == "tokenized/slimpajama-6b/v1"
+    assert tok.override_output_path == "slimpajama-6b/v1"
     # tokenization runs as its own Fray job; the launcher step runs inline.
     assert tok.resources is not None
     assert spec.resources is None
@@ -38,10 +38,10 @@ def test_mixture_resolves_dependency_path_without_executor():
 
     # The mixture component's cache_dir is a concrete string resolved via
     # ctx.path(dataset) — no InputName, no executor-computed content hash.
-    component = config.data.components["tokenized/slimpajama-6b"]
-    assert component.cache_dir == f"{prefix}/tokenized/slimpajama-6b/v1"
+    component = config.data.components["slimpajama-6b"]
+    assert component.cache_dir == f"{prefix}/slimpajama-6b/v1"
     assert config.output_path == f"{prefix}/grug/4_10_baseline_moe_slim/v1"
 
     # The tokenize step itself writes its cache at the same explicit path.
     slim: Dataset = ckpt.recipe.deps[0]
-    assert materialized_config(slim, prefix).cache_path == f"{prefix}/tokenized/slimpajama-6b/v1"
+    assert materialized_config(slim, prefix).cache_path == f"{prefix}/slimpajama-6b/v1"

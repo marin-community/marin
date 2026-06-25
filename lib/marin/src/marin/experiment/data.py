@@ -1,34 +1,42 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lazy data primitives: tokenized datasets and mixtures as artifact handles.
+"""Lazy data builders: tokenized datasets and mixtures as artifact handles.
 
-``tokenize`` returns a :class:`~marin.execution.lazy.Dataset` handle that produces
-a tokenized cache; ``mixture`` assembles a Levanter ``LmDataConfig`` from those
-handles, resolving each component's cache path with ``ctx.path(dataset)``.
+The library provides *mechanism* — concise builders — while an experiment states
+the *policy*: which datasets, at what weights. The split is deliberate, so mixture
+weights live in the experiment that chose them, not buried in a catalog constant.
 
-This replaces the ``ExecutorStep`` + ``this_output_path()`` + ``InputName`` dataset
-catalog: the tokenize step's ``cache_path`` is ``ctx.out``, raw input globs resolve
-against ``ctx.prefix``, and a consumer wires a dependency by passing the handle to
-``mixture`` (which reads ``ctx.path(handle)``). ``pinned_path`` references already
-tokenized data at its existing location instead of recomputing it.
+- :func:`tokenized` returns a :class:`~marin.execution.lazy.Dataset` handle. Its raw
+  input is one of: ``source`` (a HuggingFace id or single path), ``paths`` (raw globs
+  resolved against the run prefix), or ``raw=`` a download handle + ``glob`` within it
+  (a download -> tokenize dependency). ``pin`` references already-tokenized data at an
+  existing location instead of recomputing it.
+- :func:`raw_download` wraps a download function as a raw-data handle that
+  :func:`tokenized` can depend on.
+- :func:`mixture` assembles a Levanter ``LmDataConfig`` from ``{handle: weight}``
+  training components plus weight-0 ``validation`` handles, resolving each cache path
+  with ``ctx.path(handle)``.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
+from fray.types import ResourceConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
     DatasetComponent,
     LmDataConfig,
-    LmDatasetFormatBase,
     TextLmDatasetFormat,
 )
 
 from marin.execution.lazy import BuildContext, Dataset, Recipe
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
-from marin.processing.tokenize.tokenize import tokenize as _tokenize
+from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
+
+DEFAULT_VERSION = "v1"
 
 
 def _looks_like_hf_id(source: str) -> bool:
@@ -41,60 +49,83 @@ def _resolve(prefix: str, path: str) -> str:
     return f"{prefix}/{path}" if _is_relative_path(path) else path
 
 
-def _build_tokenize_config(
-    ctx: BuildContext,
+def raw_download(
+    name: str,
     *,
-    source: str | None,
-    train_paths: Sequence[str] | None,
-    tokenizer: str,
-    format: LmDatasetFormatBase,  # noqa: A002 (matches default_tokenize's public arg name)
-    tags: Sequence[str],
-) -> TokenizeConfigBase:
-    if source is not None and _looks_like_hf_id(source):
-        return HfTokenizeConfig(id=source, cache_path=ctx.out, tokenizer=tokenizer, format=format, tags=[*tags])
-    raw = [source] if source is not None else list(train_paths or [])
-    return TokenizeConfig(
-        train_paths=[_resolve(ctx.prefix, p) for p in raw],
-        validation_paths=[],
-        cache_path=ctx.out,
-        tokenizer=tokenizer,
-        format=format,
-        tags=[*tags],
+    fn: Callable[[Any], Any],
+    build_config: Callable[[BuildContext], Any],
+    version: str = DEFAULT_VERSION,
+    pin: str | None = None,
+    resources: ResourceConfig | None = None,
+) -> Dataset:
+    """A raw-data download handle: ``build_config(ctx)`` writes the download to ``ctx.out``.
+
+    Returned as a :class:`Dataset` so :func:`tokenized` can depend on it; it is not a
+    tokenized cache itself.
+    """
+    return Dataset(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=fn, build_config=build_config, resources=resources),
+        override_path=pin,
     )
 
 
-def tokenize(
+def tokenized(
     name: str,
-    version: str,
     *,
-    source: str | None = None,
-    train_paths: Sequence[str] | None = None,
     tokenizer: str,
-    format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa: A002
+    source: str | None = None,
+    paths: Sequence[str] | None = None,
+    raw: Dataset | None = None,
+    glob: str | None = None,
+    validation: bool = False,
+    pin: str | None = None,
+    text_key: str = "text",
+    version: str = DEFAULT_VERSION,
     tags: Sequence[str] = (),
-    resources=None,
-    pinned_path: str | None = None,
+    resources: ResourceConfig | None = None,
 ) -> Dataset:
     """A tokenized-dataset handle.
 
-    Provide either ``source`` (a HuggingFace id ``org/name`` or a single raw path)
-    or ``train_paths`` (raw globs, resolved against ``ctx.prefix``). The tokenized
-    cache is written at ``ctx.out``. ``pinned_path`` references already-tokenized
-    data at an existing location instead of recomputing it.
+    Provide exactly one raw input: ``source`` (a HuggingFace id ``org/name`` or a single
+    raw path), ``paths`` (raw globs resolved against the run prefix), or ``raw`` + ``glob``
+    (a download handle and a subpath glob within it). ``validation=True`` routes the data
+    to the cache's validation split. ``pin`` references already-tokenized data at an existing
+    location instead of recomputing it.
     """
-    if (source is None) == (train_paths is None):
-        raise ValueError(f"{name}: provide exactly one of source or train_paths")
+    if sum(x is not None for x in (source, paths, raw)) != 1:
+        raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
+    if (raw is None) != (glob is None):
+        raise ValueError(f"{name}: raw and glob must be given together")
+
+    fmt = TextLmDatasetFormat(text_key=text_key)
 
     def build_config(ctx: BuildContext) -> TokenizeConfigBase:
-        return _build_tokenize_config(
-            ctx, source=source, train_paths=train_paths, tokenizer=tokenizer, format=format, tags=tags
+        if source is not None and _looks_like_hf_id(source):
+            return HfTokenizeConfig(id=source, cache_path=ctx.out, tokenizer=tokenizer, format=fmt, tags=[*tags])
+        if raw is not None:
+            resolved = [f"{ctx.path(raw)}/{glob}"]
+        elif paths is not None:
+            resolved = [_resolve(ctx.prefix, p) for p in paths]
+        else:
+            resolved = [_resolve(ctx.prefix, source)]
+        return TokenizeConfig(
+            train_paths=[] if validation else resolved,
+            validation_paths=resolved if validation else [],
+            cache_path=ctx.out,
+            tokenizer=tokenizer,
+            format=fmt,
+            tags=[*tags],
         )
 
     return Dataset(
         name=name,
         version=version,
-        recipe=Recipe(fn=_tokenize, build_config=build_config, resources=resources),
-        override_path=pinned_path,
+        recipe=Recipe(
+            fn=_tokenize_fn, build_config=build_config, deps=(raw,) if raw is not None else (), resources=resources
+        ),
+        override_path=pin,
     )
 
 
@@ -114,37 +145,37 @@ def _tokenizer_of(dataset: Dataset) -> str:
 
 def mixture(
     ctx: BuildContext,
-    components: Mapping[Dataset, float],
+    train: Mapping[Dataset, float],
     *,
-    validation: Mapping[str, Dataset] | None = None,
+    validation: Sequence[Dataset] = (),
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
 ) -> LmDataConfig:
     """Assemble an ``LmDataConfig`` from dataset handles.
 
-    Each training component's cache path is resolved with ``ctx.path(dataset)``;
-    validation handles are added with weight 0. Call this inside a consumer's
-    ``build_config`` and pass the same handles as the recipe's ``deps`` so they are
-    materialized first.
+    ``train`` maps each handle to its mixture weight; ``validation`` handles are added at
+    weight 0. Each component's cache path is resolved with ``ctx.path(handle)``; the
+    component key is the handle's ``name``. Call this inside a consumer's ``build_config``
+    and pass the same handles as the recipe's ``deps`` so they materialize first.
     """
-    component_configs: dict[str, DatasetComponent] = {}
+    components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
     tokenizers: set[str] = set()
 
-    for dataset, weight in components.items():
-        component_configs[dataset.name] = _component_for(dataset, ctx)
+    for dataset, weight in train.items():
+        components[dataset.name] = _component_for(dataset, ctx)
         weights[dataset.name] = weight
         tokenizers.add(_tokenizer_of(dataset))
 
-    for name, dataset in (validation or {}).items():
-        component_configs[name] = _component_for(dataset, ctx)
-        weights[name] = 0.0
+    for dataset in validation:
+        components[dataset.name] = _component_for(dataset, ctx)
+        weights[dataset.name] = 0.0
         tokenizers.add(_tokenizer_of(dataset))
 
     if len(tokenizers) != 1:
         raise ValueError(f"mixture components must share one tokenizer, got {sorted(tokenizers)}")
 
     return LmDataConfig(
-        components=component_configs,
+        components=components,
         train_weights=weights,
         tokenizer=tokenizers.pop(),
         cache_dir=None,
