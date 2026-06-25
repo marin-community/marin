@@ -1611,3 +1611,37 @@ follow-up, not a dead end.
   GEMM group. So: **ship the 1.27× hybrid now; revisit the cast-transpose (tiled-layout store) when the
   stack naturally lands on a jax with this machinery.** The kernel skeleton + the exact HEAD idiom are
   recorded here so the follow-up is a small, well-scoped change.
+
+### 2026-06-25 — GFP8-033 CORRECTION: M2 WORKS on jax 0.10.0 (no bump). The earlier "blocked" verdict was wrong — wrong idiom, not a missing feature.
+Re-checked whether a jax bump was needed to land the cast-transpose. **It is not** — jax 0.10.0 already
+ships `Layout.WGMMA_TRANSPOSED`, `Layout.WGMMA_8BIT`, `layout_cast`, `handle_transposes`, and
+`memref_transpose` (the April-2025 transpose machinery predates the 0.10.0 release). My earlier four
+"lowering walls" all came from the WRONG idiom (a *memref* transpose of the swizzled store), not an
+absent capability. The working idiom is JAX's own `test_transposed_load_store`: a **register layout
+cast**, not a memref transpose.
+- **What lowers (the fix):** load + quantize in `Layout.WGMMA` and keep the **f32** quant; transpose it
+  with `layout_cast(qf, WGMMA_TRANSPOSED)` (the cast is defined only for *same-dtype* layouts, and f8's
+  packed WGMMA_8BIT tiling won't convert — so transpose f32, then `astype(f8)` at the store); write into
+  `transpose_ref(qt_smem,(1,0))` where **qt_smem is PLAIN (no swizzle)** — the pre-transposed register
+  layout matches the strided view so it lowers, and the now-contiguous qt_smem TMA-stores normally.
+  (Swizzling qt_smem reintroduces "Can't transpose the swizzled dimension"; transposing the f8 directly
+  hits "Cannot convert TiledLayout ... to ..." — both confirmed on H100.)
+- **Result (H100, `bench_f8_cast_transpose_mgpu.py`, job `…-224833`):** the fused kernel lowers and is
+  **bit-exact** (`q_exact=qt_exact=True`) on all wgrad shapes. Times (mosaic fused vs quantize-only vs the
+  f8 swapaxes tax):
+
+  | operand | fused q+qT | quantize (cast_floor) | f8 swapaxes (today's tax) |
+  |---------|-----------|------------------------|----------------------------|
+  | act_D [8192,2048]  | 0.105 ms | 0.086 ms | 0.073 ms |
+  | grad_2F [8192,11264] | 0.242 ms | 0.176 ms | 0.134 ms |
+  | act_F [8192,5632]  | 0.160 ms | 0.123 ms | 0.101 ms |
+
+  Across the 4 wgrad cast-transposes (act_D+grad_2F+act_F+act_D): **fused ≈0.61–0.68 ms vs
+  quantize+swapaxes ≈0.95 ms → saves ~0.27 ms** (the fused kernel does the transpose for ~+0.02–0.07 ms
+  over the quantize it replaces, vs the ~0.07–0.13 ms uncoalesced f8 swapaxes). That ~0.27 ms is enough
+  to flip the f8 wgrad from a ~0.12 ms e2e loss to a ~1.34× win, the GFP8-033 target.
+- **Status:** kernel cleaned to the single working path, wired into the public `cast_transpose`
+  (H100 + 128-tileable → Mosaic; else reference), CPU fallback tests green (19/19). **Supersedes the two
+  earlier GFP8-033 "blocked" entries.** Next: M3 — wire `cast_transpose` into `fp8_ragged` fwd/bwd
+  (store q_lhs_t / q_g_t residuals, drop the `swapaxes` in `_mosaic_pallas_call` `_DRHS`) and rerun the
+  3-arm e2e to confirm the ~1.34× and flip the f8 wgrad default on.
