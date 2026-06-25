@@ -30,7 +30,7 @@ Three variants show the migration arc:
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import BuildContext, Checkpoint, Recipe, lower
+from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
 
@@ -62,7 +62,7 @@ def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
         budget=_BUDGET, hidden_dim=_HIDDEN_DIM, target_steps=_TARGET_STEPS
     )
 
-    def build_config(ctx: BuildContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
         return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION)
 
     return Checkpoint(
@@ -113,7 +113,7 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
         resources=_TOKENIZE_RESOURCES,
     )
 
-    def build_config(ctx: BuildContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
         return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=mixture(ctx, {slim: 1.0}))
 
     return Checkpoint(
@@ -151,7 +151,7 @@ def grug_moe_baseline_pure(*, version: str = "v1") -> Checkpoint:
     }
     validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
 
-    def build_config(ctx: BuildContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
         data = mixture(ctx, train, validation=validation)
         return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=data)
 

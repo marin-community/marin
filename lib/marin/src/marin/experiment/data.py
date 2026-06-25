@@ -31,7 +31,7 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 
-from marin.execution.lazy import BuildContext, Dataset, Recipe
+from marin.execution.lazy import Dataset, Recipe, RunContext
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
 from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
@@ -53,7 +53,7 @@ def raw_download(
     name: str,
     *,
     fn: Callable[[Any], Any],
-    build_config: Callable[[BuildContext], Any],
+    build_config: Callable[[RunContext], Any],
     version: str = DEFAULT_VERSION,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
@@ -101,7 +101,7 @@ def tokenized(
 
     fmt = TextLmDatasetFormat(text_key=text_key)
 
-    def build_config(ctx: BuildContext) -> TokenizeConfigBase:
+    def build_config(ctx: RunContext) -> TokenizeConfigBase:
         if source is not None and _looks_like_hf_id(source):
             return HfTokenizeConfig(id=source, cache_path=ctx.out, tokenizer=tokenizer, format=fmt, tags=[*tags])
         if raw is not None:
@@ -129,10 +129,10 @@ def tokenized(
     )
 
 
-def _component_for(dataset: Dataset, ctx: BuildContext) -> DatasetComponent:
+def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
     """Build a Levanter mixture component for ``dataset``, rooted at its resolved path."""
     cache_path = ctx.path(dataset)
-    config = dataset.recipe.build_config(BuildContext.for_run(out=cache_path, prefix=ctx.prefix))
+    config = dataset.recipe.build_config(RunContext.for_run(out=cache_path, prefix=ctx.prefix))
     if not isinstance(config, TokenizeConfigBase):
         raise TypeError(f"{dataset.name}: mixture component must be a tokenize dataset, got {type(config).__name__}")
     source = config.as_lm_dataset_source_config(cache_path)
@@ -140,11 +140,11 @@ def _component_for(dataset: Dataset, ctx: BuildContext) -> DatasetComponent:
 
 
 def _tokenizer_of(dataset: Dataset) -> str:
-    return dataset.recipe.build_config(BuildContext.for_fingerprint()).tokenizer
+    return dataset.recipe.build_config(RunContext.for_fingerprint()).tokenizer
 
 
 def mixture(
-    ctx: BuildContext,
+    ctx: RunContext,
     train: Mapping[Dataset, float],
     *,
     validation: Sequence[Dataset] = (),

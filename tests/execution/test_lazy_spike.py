@@ -12,9 +12,10 @@ lock → run pipeline works with explicit ``name@version`` identity.
 import dataclasses
 from dataclasses import dataclass
 
+from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact as ArtifactIO
 from marin.execution.executor import executor_context
-from marin.execution.lazy import Checkpoint, Dataset, Recipe, lower, materialized_config
+from marin.execution.lazy import Checkpoint, Dataset, Recipe, RunContext, lower, materialized_config
 from marin.execution.step_runner import StepRunner
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -123,6 +124,37 @@ def test_dep_version_bump_changes_consumer_fingerprint():
         )
 
     assert bumped_ckpt().fingerprint() != before
+
+
+def test_region_is_pulled_live_at_run_time():
+    """The region is a runtime-only attribute: ``build_config`` reads it from the
+    ``RunContext``, so one recipe resolves against whatever region the step runs in."""
+
+    def build_config(ctx: RunContext) -> TokenizeCfg:
+        return TokenizeCfg(out=ctx.out, source=f"gs://raw-{ctx.region}/dclm", tokenizer="llama3")
+
+    recipe = Recipe(fn=_run_tokenize, build_config=build_config)
+    east = recipe.build_config(RunContext.for_run(out="o", prefix="p", region="us-east5"))
+    central = recipe.build_config(RunContext.for_run(out="o", prefix="p", region="us-central2"))
+    assert (east.source, central.source) == ("gs://raw-us-east5/dclm", "gs://raw-us-central2/dclm")
+
+
+def test_resources_do_not_affect_identity():
+    """Compute is part of the execution *description* (``Recipe.resources``), not the
+    logical config: changing the TPU a recipe runs on must not change its fingerprint."""
+
+    def on(resources: ResourceConfig) -> Checkpoint:
+        return Checkpoint(
+            name="checkpoints/dclm_1b",
+            version="v3",
+            recipe=Recipe(
+                fn=_run_train,
+                build_config=lambda ctx: TrainCfg(out=ctx.out, data="gs://d", lr=3e-3, steps=10),
+                resources=resources,
+            ),
+        )
+
+    assert on(ResourceConfig.with_tpu("v5p-8")).fingerprint() == on(ResourceConfig.with_tpu("v6e-8")).fingerprint()
 
 
 def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
