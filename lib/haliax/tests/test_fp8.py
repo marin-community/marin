@@ -12,7 +12,7 @@ import pytest
 from chex import assert_trees_all_close
 
 import haliax as hax
-from haliax._src.fp8 import compute_scale
+from haliax._src.fp8 import compute_scale, fp8_scaled_dot_general
 from haliax.nn import Linear
 from haliax.quantization import (
     Fp8DirectDotGeneralOp,
@@ -93,6 +93,68 @@ def test_fp8_direct_grads_match_reference():
 
     rel = np.linalg.norm(fp8_grad - ref_grad) / np.linalg.norm(ref_grad)
     assert rel < 0.1, f"weight-grad relative error {rel} too large"
+
+
+def test_fp8_direct_backward_uses_distinct_operand_scales():
+    # quantized_dot_bwd dequantizes grad_lhs with rhs_scale and grad_rhs with
+    # lhs_scale. With the single-step defaults every scale is exactly 1.0, so a
+    # swapped assignment would be invisible. Give the operands very different
+    # magnitudes and pre-seed their amax histories so input and kernel get
+    # distinct, non-unit scales (here ~32x apart), then check both gradients
+    # against an fp32 reference (the gradient of the exact matmul -- an oracle
+    # independent of the fp8 implementation). A swap would be off by ~32x.
+    M, K, N = 8, 16, 4
+    lhs = jrandom.normal(jrandom.PRNGKey(0), (M, K))
+    rhs = jrandom.normal(jrandom.PRNGKey(1), (K, N)) * 32.0
+    cot = jrandom.normal(jrandom.PRNGKey(2), (M, N))
+    dimension_numbers = (((1,), (0,)), ((), ()))
+
+    n = 16
+    one = jnp.ones(1, jnp.float32)
+    lhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(lhs)))
+    rhs_hist = jnp.zeros(n, jnp.float32).at[0].set(jnp.max(jnp.abs(rhs)))
+    grad_hist = jnp.zeros(n, jnp.float32)
+
+    def fp8_matmul(lhs, rhs):
+        return fp8_scaled_dot_general(
+            lhs,
+            rhs,
+            dimension_numbers,
+            preferred_element_type=jnp.float32,
+            lhs_scale=one,
+            rhs_scale=one,
+            grad_scale=one,
+            lhs_amax_history=lhs_hist,
+            rhs_amax_history=rhs_hist,
+            grad_amax_history=grad_hist,
+        )
+
+    _, vjp_fn = jax.vjp(fp8_matmul, lhs, rhs)
+    grad_lhs, grad_rhs = vjp_fn(cot)
+
+    def rel(a, b):
+        return np.linalg.norm(a - b) / np.linalg.norm(b)
+
+    assert rel(grad_lhs, cot @ rhs.T) < 0.2, f"grad_lhs rel err {rel(grad_lhs, cot @ rhs.T)}"
+    assert rel(grad_rhs, lhs.T @ cot) < 0.2, f"grad_rhs rel err {rel(grad_rhs, lhs.T @ cot)}"
+
+
+def test_fp8_direct_backward_quantizes_grad_to_e5m2():
+    # Mirror of the forward fp8-operand check for the backward pass: the output
+    # gradient must reach the gradient GEMMs as float8_e5m2.
+    In = hax.Axis("In", 16)
+    Out = hax.Axis("Out", 8)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init())
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    def loss(model, x):
+        return hax.sum(model(x) ** 2).scalar()
+
+    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
+    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
+    assert any(
+        any(v.aval.dtype == jnp.float8_e5m2 for v in eqn.invars) for eqn in dot_eqns
+    ), "a backward dot_general should contract a float8_e5m2 output-gradient operand"
 
 
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
