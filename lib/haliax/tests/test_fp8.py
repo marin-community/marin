@@ -2,8 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import chex
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree_util
@@ -75,6 +78,46 @@ def test_fp8_direct_feeds_fp8_operands_to_dot():
     assert any(
         all(v.aval.dtype == jnp.float8_e4m3fn for v in eqn.invars) for eqn in dot_eqns
     ), "forward dot_general should contract two float8_e4m3fn operands"
+
+
+@pytest.mark.skipif(
+    jax.default_backend() != "gpu",
+    reason="cuBLASLt fp8 kernels require a CUDA GPU (Hopper/sm90)",
+)
+def test_fp8_direct_emits_cublas_fp8_kernel_on_gpu():
+    # On Hopper the direct op's forward matmul must run as a genuine fp8 GEMM on
+    # tensor cores. Depending on shape, XLA's autotuner lowers it either to a
+    # cuBLASLt fp8 kernel (__cublas$lt$matmul$f8) or to a Triton fp8 gemm fusion
+    # (__triton_nested_gemm_fusion) -- both consume fp8 (e4m3) operands. The
+    # legacy QDQ op's forward instead falls back to a bf16 __cublas$lt$matmul
+    # with the operands dequantized (no fp8 reaching the matmul).
+    Batch = hax.Axis("Batch", 512)
+    In = hax.Axis("In", 512)
+    Out = hax.Axis("Out", 512)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), use_bias=False, dot_general=Fp8DirectDotGeneralOp.init())
+    # Run in bf16 (the training compute dtype); fp8 state stays float32.
+    fp8_linear = dataclasses.replace(fp8_linear, weight=fp8_linear.weight.astype(jnp.bfloat16))
+    x = hax.random.normal(jrandom.PRNGKey(1), (Batch, In)).astype(jnp.bfloat16)
+
+    # Partition so jax.jit sees only arrays (the static module part is closed
+    # over); this also yields a real Compiled whose as_text() is the optimized HLO.
+    params, static = eqx.partition(fp8_linear, eqx.is_array)
+
+    def forward(params, x):
+        return eqx.combine(params, static)(x).array
+
+    hlo = jax.jit(forward).lower(params, x).compile().as_text()
+
+    # fp8 operands must reach the matmul (a bf16 fallback dequantizes them first).
+    assert "f8e4m3" in hlo, "forward should quantize operands to fp8 (e4m3) before the matmul"
+    # ... fed to a real fp8 GEMM kernel: cuBLASLt fp8 or a Triton fp8 gemm fusion.
+    assert (
+        "__cublas$lt$matmul$f8" in hlo or "__triton_nested_gemm_fusion" in hlo
+    ), "forward should lower to an fp8 GEMM (cuBLASLt fp8 or Triton fp8 fusion)"
+    # ... and not to a bf16 cuBLASLt fallback (every cuBLAS matmul must be the $f8 variant).
+    assert hlo.count("__cublas$lt$matmul") == hlo.count(
+        "__cublas$lt$matmul$f8"
+    ), "forward must not fall back to a bf16 __cublas$lt$matmul"
 
 
 def test_fp8_direct_grads_match_reference():
