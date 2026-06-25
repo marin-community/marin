@@ -3,12 +3,11 @@
 
 """Assign a finelog ``LogLevel`` to a captured task log line.
 
-A line's level comes from its content when it carries a recognizable level
-prefix — the glog-style ``I20260102 12:34:56 ...`` format that rigging's logging
-emits, parsed by :func:`rigging.log_setup.parse_log_level`. Lines without a
-prefix (raw user ``print`` output, tracebacks, third-party tool chatter) take a
-default from the stream they were captured on: ``stdout`` is informational,
-``stderr`` and iris's own injected failure lines are errors.
+A line carrying a recognizable level prefix (the glog-style ``I20260102
+12:34:56 ...`` format) keeps that level. A line without one — raw user
+``print`` output, tracebacks, third-party tool chatter — takes a default from
+the stream it was captured on: ``stdout`` is informational, ``stderr`` and
+iris's own injected failure lines are errors.
 
 This keeps mundane stdout (boot diagnostics, ``sys.path`` dumps) out of the
 ``min_level``-filtered error view: an ``INFO`` line is excluded by an ``ERROR``
