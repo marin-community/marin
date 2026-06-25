@@ -22,6 +22,7 @@ from marin.execution.remote import RemoteCallable
 
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness, evaluate_lm_evaluation_harness
 from experiments.evals.olmo_base_easy_overlap import (
+    OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_KEYS,
     OLMO_BASE_EASY_OVERLAP_TASKS,
     add_olmo_base_easy_overlap_metrics,
 )
@@ -295,8 +296,29 @@ def test_add_olmo_base_easy_overlap_metrics_derives_mmlu_category_bpbs_and_macro
     assert derived["lm_eval/mmlu_humanities_5shot/bpb"] == pytest.approx(1.6)
     assert derived["lm_eval/mmlu_social_sciences_5shot/bpb"] == pytest.approx(2.0)
     assert derived["lm_eval/mmlu_other_5shot/bpb"] == pytest.approx(2.4)
-    assert derived["lm_eval/olmo_base_easy_overlap/task_count"] == pytest.approx(14.0)
-    assert derived["lm_eval/olmo_base_easy_overlap/macro_bpb"] == pytest.approx(1.4785714285714284)
+    assert derived["lm_eval/olmo_base_easy_overlap/task_count"] == pytest.approx(
+        float(len(OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_KEYS))
+    )
+    assert derived["lm_eval/olmo_base_easy_overlap/macro_bpb"] == pytest.approx(1.42)
+
+
+def test_add_olmo_base_easy_overlap_metrics_omits_macro_when_supported_bpb_coverage_is_partial():
+    flat_metrics = {
+        "lm_eval/mmlu_stem_5shot/bpb": 1.2,
+        "lm_eval/mmlu_humanities_5shot/bpb": 1.6,
+        "lm_eval/mmlu_social_sciences_5shot/bpb": 2.0,
+        "lm_eval/mmlu_other_5shot/bpb": 2.4,
+        "lm_eval/arc_easy_5shot/bpb": 0.9,
+        "lm_eval/arc_challenge_5shot/bpb": 1.0,
+        "lm_eval/csqa_5shot/bpb": 1.1,
+        "lm_eval/hellaswag_5shot/bpb": 1.2,
+        "lm_eval/winogrande_5shot/bpb": 1.3,
+    }
+
+    derived = add_olmo_base_easy_overlap_metrics(flat_metrics)
+
+    assert derived["lm_eval/olmo_base_easy_overlap/task_count"] == pytest.approx(9.0)
+    assert "lm_eval/olmo_base_easy_overlap/macro_bpb" not in derived
 
 
 def test_evaluate_levanter_lm_evaluation_harness_dispatches_remotely_and_preserves_cache_dependency():

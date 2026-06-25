@@ -1007,6 +1007,10 @@ def test_smoke_task_uses_true_bpb_variant_order():
     assert olmo_sc.SMOKE_TASKS == ("arc_easy:olmo3base:bpb",)
 
 
+def test_csqa_bpb_suite_uses_true_bpb_variant_order():
+    assert olmo_sc.task_args("csqa_bpb") == ["-t", "csqa:olmo3base:bpb"]
+
+
 def test_olmo_eval_fanout_patcher_is_idempotent(tmp_path):
     olmo_eval_dir = tmp_path / "OLMo-Eval"
     runner = olmo_eval_dir / "src" / "olmo_eval" / "runners" / "asynq" / "runner.py"
@@ -1027,8 +1031,7 @@ def test_olmo_eval_fanout_patcher_is_idempotent(tmp_path):
         + "\n"
         + olmo_patch.BASIC_DATASOURCE_OLD
     )
-    olmobase.write_text(
-        """
+    olmobase.write_text("""
 make_suite(
     name="arc:bpb:olmo3base",
     tasks=("arc_challenge:bpb:olmo3base", "arc_easy:bpb:olmo3base"),
@@ -1038,12 +1041,12 @@ make_suite(
     name="olmobase:easy:qa:bpb",
     tasks=(
         get_suite("arc:bpb:olmo3base"),
+        "csqa:bpb:olmo3base",
         "piqa:bpb:olmo3base",
     ),
     aggregation=AggregationStrategy.AVERAGE_OF_AVERAGES,
 )
-"""
-    )
+""")
 
     dry_run = olmo_patch.apply_patches(olmo_eval_dir, dry_run=True)
     assert dry_run == {str(runner): True, str(basic): True, str(olmobase): True}
@@ -1059,6 +1062,7 @@ make_suite(
     olmobase_text = olmobase.read_text()
     assert '"arc_challenge:olmo3base:bpb"' in olmobase_text
     assert '"arc_easy:olmo3base:bpb"' in olmobase_text
+    assert '"csqa:olmo3base:bpb"' in olmobase_text
     assert '"piqa:olmo3base:bpb"' in olmobase_text
 
 

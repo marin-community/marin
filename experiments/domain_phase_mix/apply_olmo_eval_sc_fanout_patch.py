@@ -140,6 +140,10 @@ OLMOBASE_PIQA_BPB_OLD = """"piqa:bpb:olmo3base","""
 
 OLMOBASE_PIQA_BPB_NEW = """"piqa:olmo3base:bpb","""
 
+OLMOBASE_CSQA_BPB_OLD = """"csqa:bpb:olmo3base","""
+
+OLMOBASE_CSQA_BPB_NEW = """"csqa:olmo3base:bpb","""
+
 
 def replace_once(text: str, old: str, new: str, *, file: Path) -> str:
     """Replace one exact block; return unchanged text when the patch is already present."""
@@ -193,6 +197,7 @@ def apply_patches(olmo_eval_dir: Path, *, dry_run: bool = False) -> dict[str, bo
             olmobase,
             [
                 (OLMOBASE_ARC_BPB_OLD, OLMOBASE_ARC_BPB_NEW),
+                (OLMOBASE_CSQA_BPB_OLD, OLMOBASE_CSQA_BPB_NEW),
                 (OLMOBASE_PIQA_BPB_OLD, OLMOBASE_PIQA_BPB_NEW),
             ],
         ),

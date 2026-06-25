@@ -23,17 +23,16 @@ from typing import Any
 import fsspec
 import pandas as pd
 from fray.cluster import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
     InputName,
     executor_main,
     output_path_of,
-    this_output_path,
-    versioned,
 )
 from marin.execution.remote import remote
-from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.types import this_output_path, versioned
 
 from experiments.domain_phase_mix.launch_300m_english_lite_evals import _checkpoint_region
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
@@ -504,9 +503,11 @@ def build_state_rows(
         for task_mode in _modes_for_aliases(requested_aliases):
             mode_aliases = tuple(alias for alias in requested_aliases if task_by_alias(alias).mode == task_mode)
             existing_mode_tasks = [alias for alias in existing_tasks if alias in mode_aliases]
-            missing_tasks = list(mode_aliases) if force_launch else [
-                alias for alias in mode_aliases if alias not in existing_mode_tasks
-            ]
+            missing_tasks = (
+                list(mode_aliases)
+                if force_launch
+                else [alias for alias in mode_aliases if alias not in existing_mode_tasks]
+            )
             has_all_tasks = not missing_tasks
             eligible, decision = _launch_decision(
                 checkpoint_root=candidate.checkpoint_root,
@@ -640,9 +641,7 @@ def _ensure_eval_dataset_cache_manifest(eval_datasets_cache_path: str) -> None:
     manifest_path = f"{eval_datasets_cache_path.rstrip('/')}/.eval_datasets_manifest.json"
     fs, _, _ = fsspec.get_fs_token_paths(manifest_path)
     if not fs.exists(manifest_path):
-        raise FileNotFoundError(
-            f"Requested existing eval dataset cache is missing its manifest: {manifest_path}"
-        )
+        raise FileNotFoundError(f"Requested existing eval dataset cache is missing its manifest: {manifest_path}")
 
 
 def write_retry_state_from_prefix(
@@ -801,7 +800,9 @@ def write_smooth_gapfill_state_from_results(
         for _, row in results.iterrows()
         if _string_value(row.get("checkpoint_root")).rstrip("/")
     }
-    requested_aliases = set(task_aliases) if task_aliases is not None else set(dclm_core_task_aliases(mode=DCLMEvalMode.SMOOTH))
+    requested_aliases = (
+        set(task_aliases) if task_aliases is not None else set(dclm_core_task_aliases(mode=DCLMEvalMode.SMOOTH))
+    )
     gapfill_rows: list[DCLMEvalSpec] = []
     for row in state_rows:
         if row.mode not in LEVENTER_DCLM_SMOOTH_MODES:
@@ -939,9 +940,7 @@ def _existing_metric_records_for_roots(roots: set[str]) -> list[dict[str, Any]]:
         if "checkpoint_root" not in frame.columns:
             continue
         metric_columns = [
-            column
-            for column in _metric_columns(frame)
-            if not str(column).startswith(DCLM_DERIVED_METRIC_PREFIX)
+            column for column in _metric_columns(frame) if not str(column).startswith(DCLM_DERIVED_METRIC_PREFIX)
         ]
         if not metric_columns:
             continue

@@ -25,8 +25,8 @@ from marin.execution.executor import (
     InputName,
     executor_main,
     output_path_of,
-    this_output_path,
 )
+from marin.execution.types import this_output_path
 from marin.rl.placement import marin_prefix_for_region
 
 logger = logging.getLogger(__name__)

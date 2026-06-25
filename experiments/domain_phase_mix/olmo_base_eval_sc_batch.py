@@ -53,6 +53,8 @@ FULL_SUITE_TASKS = (
     "olmobase:easy:code:bpb",
 )
 SMOKE_TASKS = ("arc_easy:olmo3base:bpb",)
+CSQA_BPB_TASKS = ("csqa:olmo3base:bpb",)
+SUITE_CHOICES = ("full", "smoke", "csqa_bpb")
 UPLOAD_MANIFEST_COLUMNS = {
     "panel",
     "scale",
@@ -515,9 +517,16 @@ def worker_environment(work_dir: Path) -> dict[str, str]:
     return env
 
 
-def task_args(suite: Literal["full", "smoke"]) -> list[str]:
+def task_args(suite: Literal["full", "smoke", "csqa_bpb"]) -> list[str]:
     """Return OLMo-Eval task CLI arguments."""
-    tasks = FULL_SUITE_TASKS if suite == "full" else SMOKE_TASKS
+    if suite == "full":
+        tasks = FULL_SUITE_TASKS
+    elif suite == "smoke":
+        tasks = SMOKE_TASKS
+    elif suite == "csqa_bpb":
+        tasks = CSQA_BPB_TASKS
+    else:
+        raise ValueError(f"Unknown OLMo-Eval suite: {suite}")
     args: list[str] = []
     for task in tasks:
         args.extend(["-t", task])
@@ -530,7 +539,7 @@ def run_olmo_eval(
     model_dir: Path,
     output_dir: Path,
     olmo_eval_dir: Path,
-    suite: Literal["full", "smoke"],
+    suite: Literal["full", "smoke", "csqa_bpb"],
     limit: int | None,
     env: dict[str, str] | None = None,
 ) -> Path:
@@ -933,7 +942,7 @@ def parse_args() -> argparse.Namespace:
     prewarm.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     prewarm.add_argument("--olmo-eval-dir", type=Path, default=DEFAULT_OLMO_EVAL_DIR)
     prewarm.add_argument("--output-dir", type=Path)
-    prewarm.add_argument("--suite", choices=("full", "smoke"), default="full")
+    prewarm.add_argument("--suite", choices=SUITE_CHOICES, default="full")
     prewarm.add_argument("--limit", type=int)
     prewarm.add_argument("--checkpoint-mode", choices=("download", "local-only"), default="local-only")
     prewarm.add_argument("--hf-revision")
@@ -956,7 +965,7 @@ def parse_args() -> argparse.Namespace:
     sbatch.add_argument("--cpus-per-task", type=int, default=8)
     sbatch.add_argument("--mem", default="64G")
     sbatch.add_argument("--time", default="12:00:00")
-    sbatch.add_argument("--suite", choices=("full", "smoke"), default="full")
+    sbatch.add_argument("--suite", choices=SUITE_CHOICES, default="full")
     sbatch.add_argument("--limit", type=int)
     sbatch.add_argument("--key-prefix", default=DEFAULT_KEY_PREFIX)
     sbatch.add_argument("--writeback-apply", action="store_true")
@@ -980,7 +989,7 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     run.add_argument("--olmo-eval-dir", type=Path, default=DEFAULT_OLMO_EVAL_DIR)
     run.add_argument("--writeback-script", type=Path, default=DEFAULT_WRITEBACK_SCRIPT)
-    run.add_argument("--suite", choices=("full", "smoke"), default="full")
+    run.add_argument("--suite", choices=SUITE_CHOICES, default="full")
     run.add_argument("--limit", type=int)
     run.add_argument("--key-prefix", default=DEFAULT_KEY_PREFIX)
     run.add_argument("--writeback-apply", action="store_true")

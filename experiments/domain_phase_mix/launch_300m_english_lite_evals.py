@@ -34,10 +34,9 @@ from marin.execution.executor import (
     InputName,
     executor_main,
     output_path_of,
-    this_output_path,
-    versioned,
 )
 from marin.execution.remote import remote
+from marin.execution.types import this_output_path, versioned
 
 from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
     DEFAULT_MAX_CONCURRENT,

@@ -32,8 +32,8 @@ from marin.execution.executor import (
     InputName,
     executor_main,
     output_path_of,
-    this_output_path,
 )
+from marin.execution.types import this_output_path
 from marin.rl.placement import marin_prefix_for_region
 
 from experiments.domain_phase_mix.launch_baseline_scaling_downstream_evals import (

@@ -21,6 +21,7 @@ grouping.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -40,6 +41,22 @@ OLMO_BASE_EASY_OVERLAP_TASKS = (
     EvalTaskConfig("lambada_openai", 0, task_alias="lambada_0shot"),
     EvalTaskConfig("medmcqa", 5, task_alias="medmcqa_5shot"),
 )
+
+OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_KEYS = (
+    "lm_eval/arc_easy_5shot/bpb",
+    "lm_eval/arc_challenge_5shot/bpb",
+    "lm_eval/mmlu_stem_5shot/bpb",
+    "lm_eval/mmlu_humanities_5shot/bpb",
+    "lm_eval/mmlu_social_sciences_5shot/bpb",
+    "lm_eval/mmlu_other_5shot/bpb",
+    "lm_eval/csqa_5shot/bpb",
+    "lm_eval/hellaswag_5shot/bpb",
+    "lm_eval/winogrande_5shot/bpb",
+    "lm_eval/piqa_5shot/bpb",
+)
+OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_TASK_COUNT = len(OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_KEYS)
+OLMO_BASE_EASY_OVERLAP_TASK_COUNT = "lm_eval/olmo_base_easy_overlap/task_count"
+OLMO_BASE_EASY_OVERLAP_MACRO_BPB = "lm_eval/olmo_base_easy_overlap/macro_bpb"
 
 # Copied from lm-eval's official MMLU subject grouping in
 # lm_eval.tasks.mmlu._generate_configs.SUBJECTS.
@@ -106,6 +123,15 @@ MMLU_SUBJECT_TO_CATEGORY = {
 MMLU_CATEGORY_ORDER = ("stem", "humanities", "social_sciences", "other")
 
 
+def _finite_metric_value(value: float | None) -> float | None:
+    if value is None:
+        return None
+    finite_value = float(value)
+    if math.isnan(finite_value):
+        return None
+    return finite_value
+
+
 def add_olmo_base_easy_overlap_metrics(flat_metrics: dict[str, float]) -> dict[str, float]:
     """Derive OLMoBaseEval-overlap aggregate metrics from flat eval outputs."""
     derived: dict[str, float] = {}
@@ -113,7 +139,7 @@ def add_olmo_base_easy_overlap_metrics(flat_metrics: dict[str, float]) -> dict[s
 
     for subject, category in MMLU_SUBJECT_TO_CATEGORY.items():
         metric_key = f"lm_eval/mmlu_{subject}_5shot/bpb"
-        value = flat_metrics.get(metric_key)
+        value = _finite_metric_value(flat_metrics.get(metric_key))
         if value is None:
             continue
         category_bpbs[category].append(value)
@@ -124,27 +150,17 @@ def add_olmo_base_easy_overlap_metrics(flat_metrics: dict[str, float]) -> dict[s
             continue
         derived[f"lm_eval/mmlu_{category}_5shot/bpb"] = float(sum(values) / len(values))
 
-    macro_metric_keys = [
-        "lm_eval/arc_easy_5shot/bpb",
-        "lm_eval/arc_challenge_5shot/bpb",
-        "lm_eval/mmlu_stem_5shot/bpb",
-        "lm_eval/mmlu_humanities_5shot/bpb",
-        "lm_eval/mmlu_social_sciences_5shot/bpb",
-        "lm_eval/mmlu_other_5shot/bpb",
-        "lm_eval/csqa_5shot/bpb",
-        "lm_eval/hellaswag_5shot/bpb",
-        "lm_eval/winogrande_5shot/bpb",
-        "lm_eval/socialiqa_5shot/bpb",
-        "lm_eval/piqa_5shot/bpb",
-        "lm_eval/sciq_5shot/bpb",
-        "lm_eval/lambada_0shot/bpb",
-        "lm_eval/medmcqa_5shot/bpb",
-    ]
+    macro_values = []
+    for key in OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_KEYS:
+        value = _finite_metric_value(flat_metrics.get(key))
+        if value is None:
+            value = _finite_metric_value(derived.get(key))
+        if value is not None:
+            macro_values.append(value)
 
-    macro_values = [flat_metrics.get(key, derived.get(key)) for key in macro_metric_keys]
-    macro_values = [value for value in macro_values if value is not None]
     if macro_values:
-        derived["lm_eval/olmo_base_easy_overlap/macro_bpb"] = float(sum(macro_values) / len(macro_values))
-        derived["lm_eval/olmo_base_easy_overlap/task_count"] = float(len(macro_values))
+        derived[OLMO_BASE_EASY_OVERLAP_TASK_COUNT] = float(len(macro_values))
+    if len(macro_values) == OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_TASK_COUNT:
+        derived[OLMO_BASE_EASY_OVERLAP_MACRO_BPB] = float(sum(macro_values) / len(macro_values))
 
     return derived
