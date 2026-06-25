@@ -398,30 +398,6 @@ def _tpu_regions_for_remote_callable(
     return _regions_for_tpu_variants_from_iris(variants, variant_region_cache=variant_region_cache)
 
 
-def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
-    """Infer allowed regions for TPU steps in this DAG, if any."""
-    tpu_region_intersection: set[str] | None = None
-    tpu_variant_region_cache: dict[str, set[str] | None] = {}
-
-    for step in steps:
-        step_fn = step.fn
-        if not isinstance(step_fn, RemoteCallable):
-            continue
-        step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=tpu_variant_region_cache)
-        if not step_regions:
-            continue
-
-        if tpu_region_intersection is None:
-            tpu_region_intersection = set(step_regions)
-        else:
-            tpu_region_intersection &= step_regions
-
-        if not tpu_region_intersection:
-            raise ValueError("No common region satisfies all TPU steps in this DAG.")
-
-    return sorted(tpu_region_intersection) if tpu_region_intersection else None
-
-
 def _step_dag_tpu_regions(
     steps: list["ExecutorStep"],
     dependencies: dict["ExecutorStep", list["ExecutorStep"]],
