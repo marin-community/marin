@@ -55,6 +55,11 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.st
     PacketData,
 )
 from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance, build_dataset_spec_from_frame
+from experiments.evals.olmo_base_easy_overlap import (
+    OLMO_BASE_EASY_OVERLAP_MACRO_BPB,
+    OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_TASK_COUNT,
+    OLMO_BASE_EASY_OVERLAP_TASK_COUNT,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TWO_PHASE_MANY_DIR = SCRIPT_DIR.parent
@@ -113,7 +118,6 @@ OLMO_BASE_EASY_OVERLAP_NO_MMLU_ACCURACY_MEAN = "olmo_base_easy_overlap_no_mmlu_a
 OLMO_BASE_EASY_OVERLAP_NO_MMLU_BPB_MEAN = "olmo_base_easy_overlap_no_mmlu_bpb_mean"
 ALL_SUITE_ACCURACY_MEAN = "all_suite_accuracy_mean"
 ALL_SUITE_BPB_MEAN = "all_suite_bpb_mean"
-OLMO_BASE_EASY_OVERLAP_MACRO_BPB = "lm_eval/olmo_base_easy_overlap/macro_bpb"
 OLMO_BASE_EASY_OVERLAP_ACCURACY_COLUMNS = (
     MMLU_ACC,
     "lm_eval/arc_easy_5shot/acc",
@@ -314,6 +318,35 @@ def _merge_metric_columns(frame: pd.DataFrame, metrics: pd.DataFrame) -> pd.Data
     return out
 
 
+def merge_overlap_metric_columns(
+    frame: pd.DataFrame,
+    overlap: pd.DataFrame,
+    overlap_metric_columns: list[str],
+) -> pd.DataFrame:
+    """Merge OLMoBase overlap rerun metrics, preferring rerun values over stale registry values."""
+    original_row_count = len(frame)
+    out = frame.merge(
+        overlap[["run_name", *overlap_metric_columns]].drop_duplicates(subset=["run_name"], keep="last"),
+        on="run_name",
+        how="left",
+        suffixes=("", "_overlap"),
+    )
+    if len(out) != original_row_count:
+        raise ValueError("Fit-swarm merge against OLMoBase easy-overlap results changed row count")
+    for metric_column in overlap_metric_columns:
+        overlap_column = f"{metric_column}_overlap"
+        if overlap_column not in out.columns:
+            continue
+        if metric_column in frame.columns:
+            out[metric_column] = out[overlap_column].combine_first(out[metric_column])
+        elif metric_column in out.columns and metric_column != overlap_column:
+            out[metric_column] = out[overlap_column].combine_first(out[metric_column])
+        else:
+            out[metric_column] = out[overlap_column]
+        out = out.drop(columns=[overlap_column])
+    return out
+
+
 def _load_olmo_base_easy_overlap_metrics() -> pd.DataFrame:
     qsplit_uris = sorted(_list_gcs_paths(OLMO_BASE_EASY_OVERLAP_RESULTS_GLOB))
     if len(qsplit_uris) != 8:
@@ -354,25 +387,7 @@ def _load_fit_swarm_metrics(downstream_results_csvs: list[str]) -> pd.DataFrame:
     overlap = _load_olmo_base_easy_overlap_metrics()
     missing_overlap = sorted(set(frame["run_name"]) - set(overlap["run_name"]))
     overlap_metric_columns = [column for column in overlap.columns if column.startswith(("eval/", "lm_eval/"))]
-    frame = frame.merge(
-        overlap[["run_name", *overlap_metric_columns]].drop_duplicates(subset=["run_name"], keep="last"),
-        on="run_name",
-        how="left",
-        suffixes=("", "_overlap"),
-    )
-    if len(frame) != len(fit):
-        raise ValueError("Fit-swarm merge against OLMoBase easy-overlap results changed row count")
-    for metric_column in overlap_metric_columns:
-        overlap_column = f"{metric_column}_overlap"
-        if overlap_column not in frame.columns:
-            continue
-        if metric_column in fit.columns:
-            frame[metric_column] = frame[metric_column].combine_first(frame[overlap_column])
-        elif metric_column in frame.columns and metric_column != overlap_column:
-            frame[metric_column] = frame[metric_column].combine_first(frame[overlap_column])
-        else:
-            frame[metric_column] = frame[overlap_column]
-        frame = frame.drop(columns=[overlap_column])
+    frame = merge_overlap_metric_columns(frame, overlap, overlap_metric_columns)
     frame["olmo_base_easy_overlap_missing"] = frame["run_name"].isin(missing_overlap)
 
     missing_keys = frame["registry_run_key"].isna()
@@ -383,6 +398,13 @@ def _load_fit_swarm_metrics(downstream_results_csvs: list[str]) -> pd.DataFrame:
 
 def _add_aggregate_targets(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
+    if OLMO_BASE_EASY_OVERLAP_MACRO_BPB in out.columns:
+        if OLMO_BASE_EASY_OVERLAP_TASK_COUNT in out.columns:
+            task_counts = pd.to_numeric(out[OLMO_BASE_EASY_OVERLAP_TASK_COUNT], errors="coerce")
+            complete_bpb_rows = task_counts.eq(float(OLMO_BASE_EASY_OVERLAP_SUPPORTED_BPB_TASK_COUNT))
+        else:
+            complete_bpb_rows = pd.Series(False, index=out.index)
+        out.loc[~complete_bpb_rows, OLMO_BASE_EASY_OVERLAP_MACRO_BPB] = np.nan
     out[GSM8K_HUMANEVAL_ACCURACY_MEAN] = out[[GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=False)
     out[BENCHMARK_ACCURACY_MEAN] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=False)
     out["benchmark_accuracy_available_mean"] = out[[MMLU_ACC, GSM8K_ACC, HUMANEVAL_PASS]].mean(axis=1, skipna=True)

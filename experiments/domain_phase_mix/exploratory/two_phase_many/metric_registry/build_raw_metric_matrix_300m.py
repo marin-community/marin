@@ -24,6 +24,7 @@ import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.build_eval_signal_to_noise_all_metrics_300m import (
     _default_extra_results_csvs,
+    _latest_eval_metrics_row,
     _load_noise_frame,
     _load_signal_frame,
     _metric_columns,
@@ -44,6 +45,7 @@ PROPORTIONAL_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
 )
 NOISE_SOURCE_RUN_ID = 97
 PROPORTIONAL_NOISE_ANCHOR_RUN_NAME = "baseline_proportional"
+TARGET_FINAL_CHECKPOINT_STEP = 22887
 REQUIRED_PROVENANCE_COLUMNS = (
     "registry_run_key",
     "run_name",
@@ -319,6 +321,27 @@ def _hydrate_noise_phase_weights(noise: pd.DataFrame, signal: pd.DataFrame) -> p
     return out
 
 
+def _hydrate_training_eval_metrics(frame: pd.DataFrame) -> pd.DataFrame:
+    """Fill training-time eval/* metrics from final checkpoint eval_metrics.jsonl."""
+    rows: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        out = row.to_dict()
+        checkpoint_root = row.get("checkpoint_root")
+        if not isinstance(checkpoint_root, str) or checkpoint_root.strip() == "":
+            raise ValueError(f"Missing checkpoint_root for proportional noise row {row.get('run_name')}")
+        metrics = _latest_eval_metrics_row(
+            f"{checkpoint_root.rstrip('/')}/checkpoints/eval_metrics.jsonl",
+            required_step=TARGET_FINAL_CHECKPOINT_STEP,
+        )
+        for key, value in metrics.items():
+            if not key.startswith("eval/") or not isinstance(value, int | float):
+                continue
+            if key not in out or pd.isna(out[key]):
+                out[key] = float(value)
+        rows.append(out)
+    return pd.DataFrame.from_records(rows)
+
+
 def main() -> None:
     args = _parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -379,6 +402,7 @@ def main() -> None:
             proportional_noise,
             subset_mode="proportional_variable",
         )
+        proportional_noise = _hydrate_training_eval_metrics(proportional_noise)
         proportional_noise["is_qsplit240_core"] = False
 
     noise_frames = [fixed_noise]
