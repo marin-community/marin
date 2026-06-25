@@ -1355,3 +1355,40 @@ why is wgrad slower?). The earlier "output-bound, structural" framing was too st
   to *beat* bf16 by >12% (a 30%+ swing). And the wgrad is 2/6 GEMMs, so even a 1.2× wgrad win adds only
   ~1–2% e2e. Substantial kernel-optimization work for a couple-percent ceiling, uncertain ⇒ low EV ⇒ stop.
   Correct framing: low expected value, **not** structurally impossible.
+
+### 2026-06-25 — GFP8-029: deeper-pipeline autotune → e2e 1.06×→1.26×, forward flips to a real win
+Goal reset (S5): push fp8 fwd/wgrad/dgrad to beat bf16 and approach the H100 roofline, benchmarking
+each iteration on H100 with consistent methodology. First lever: the GFP8-027 block sweep capped
+`max_concurrent_steps` at 4 and every deep config used `block_k>=256` — at f8 (1B) that is ~64KB
+smem/stage (`m*k+n*k`), so `block_k=256` caps the pipeline at ~3 stages before overflowing the H100's
+~228KB smem. Hypothesis: smaller `block_k` frees smem for deeper pipelines (the dominant latency-hiding
+lever on these staged Mosaic kernels). Extended `bench_ragged_mosaic_autotune.py` with per-GEMM H100
+roofline reporting (f8 peak 1978.9 TF/s, HBM 3.35 TB/s → `pct_of_roofline`/`pct_of_peak`) and a 22-config
+grid probing the depth×block_k corner (job `/matt/iris-run-job-20260625-203848`).
+- **New global winner `128/128/128 steps=4 grid_block_n=2`** — single best across all four mosaic GEMMs,
+  beating the GFP8-027 winner (`128/128/256 steps=2`) everywhere. Both hypotheses confirmed: `block_k=128`
+  (~32KB/stage) lets `steps=4` fit, and `grid_block_n=2` adds L2 reuse via the planar-snake tile order.
+
+  | gemm   | bf16-Triton | f8 mosaic | speedup (was) | f8 %roofline |
+  |--------|-------------|-----------|---------------|--------------|
+  | fwd13  | 0.822 ms    | 0.559 ms  | 1.47× (1.09×) | 34%          |
+  | fwd2   | 0.474 ms    | 0.339 ms  | 1.40× (1.00×) | 28%          |
+  | dlhs13 | 1.137 ms    | 0.443 ms  | 2.57× (1.59×) | 43%          |
+  | dlhs2  | 0.574 ms    | 0.260 ms  | 2.21× (1.67×) | 37%          |
+
+- **E2e re-measure** (`_s5_mosaic_f8wgrad_parity.sh`, job `…-204236`), real Grug MLP, numerics unchanged
+  (fwd 7.95e-2, dx 8.12e-2, dw13 6.38e-2, dw2 6.10e-2):
+  - bf16 baseline: **3.755 ms** (453 TF/s, MFU 0.458)
+  - mosaic hybrid (f8 fwd/dgrad + bf16 wgrad): **2.978 ms = 1.26×** (was 1.06× at the old config), 571 TF/s
+  - mosaic + f8 wgrad: 3.592 ms = 0.95× (improved from 0.90× as fwd/dgrad sped up, but still loses; the
+    wgrad kernel has its own untuned `WgradBlockConfig`, not retuned here — separate follow-up).
+  The forward is no longer the laggard: at the old config bf16 saturated the forward (break-even), but the
+  deeper pipeline lifts f8 fwd to 1.40–1.47×, so the win is now broad-based (forward + dgrad), not
+  dgrad-only. **Set `_DEFAULT_MOSAIC_CONFIG = 128/128/128 steps=4 gbn=2`** (commit).
+- **Roofline framing (the goal's "theoretical max").** All four GEMMs are compute-bound at this shape
+  (bf16 output; rooflines ≈ f8 peak 1979 TF/s). f8 mosaic now sits at 28–43% of f8 peak; the bf16-Triton
+  baseline runs at ~46% of its (2×-lower) bf16 peak. So f8 already wins decisively on wall-clock, but in
+  MFU terms there is still headroom to bf16's efficiency and well beyond. "Within 20% of theoretical max"
+  (≈80% of f8 peak) is likely past what the Mosaic ragged_dot kernel can reach on these ragged grouped
+  shapes (the well-tuned bf16 Triton kernel itself only hits 46%); the honest target is to keep closing the
+  MFU gap. Next: refinement sweep around the winner (`--refine`: deeper steps at gbn2, larger tiles, gbn4).

@@ -91,34 +91,90 @@ from haliax.nn.ragged_dot import (  # noqa: E402
 
 _E4M3 = jnp.float8_e4m3fn
 
+# H100 SXM5 roofline constants. Dense (no 2:4 sparsity) tensor-core peak and HBM3 bandwidth — the
+# ceiling "theoretical maximum" the goal measures against. f8 (e4m3) peak is ~2x the bf16 peak.
+_H100_F8_PEAK_TFLOPS = 1978.9
+_H100_BF16_PEAK_TFLOPS = 989.4
+_H100_HBM_BW_BYTES_PER_S = 3.35e12
+
 # Curated bounded config space (block_m, block_n, block_k, max_concurrent_steps, grid_block_n).
-# Spans the knobs that matter for f8 wgmma grouped GEMM on H100 without a full cross-product;
-# expand around the winner with --full-grid if the best sits on a boundary.
+# GFP8-027 found 128/128/256/steps2 best across all four GEMMs, but that sweep capped
+# max_concurrent_steps at 4 and every deep config used block_k>=256 — at f8 1B that is ~64KB
+# smem/stage (m*k+n*k), so block_k=256 caps pipeline depth at ~3 stages before overflowing the
+# H100's ~228KB smem. Smaller block_k frees smem for deeper pipelines (steps 6-8), the usual
+# dominant MFU lever on these staged Mosaic kernels — the unexplored corner this sweep probes.
 _CURATED_CONFIGS = [
-    (128, 128, 64, 2, 1),  # GFP8-024 default (baseline)
-    (128, 256, 64, 2, 1),
-    (256, 128, 64, 2, 1),
-    (256, 256, 64, 2, 1),
-    (128, 128, 128, 2, 1),
-    (128, 256, 128, 2, 1),
-    (256, 128, 128, 2, 1),
-    (256, 256, 128, 2, 1),
-    (128, 256, 64, 4, 1),
-    (256, 256, 64, 4, 1),
-    (128, 256, 128, 4, 1),
-    (256, 256, 128, 4, 1),
-    (128, 256, 64, 2, 2),
-    (256, 256, 64, 2, 2),
-    (128, 128, 256, 2, 1),
+    # Region A — GFP8-027 winner neighborhood (block_k=256, shallow depth, smem-capped).
+    (128, 128, 256, 2, 1),  # GFP8-027 winner / current default
+    (128, 128, 256, 3, 1),
+    (128, 128, 256, 2, 2),
+    (64, 128, 256, 2, 1),
+    (64, 128, 256, 3, 1),
     (256, 128, 256, 2, 1),
+    # Region B — block_k=128, push pipeline depth (the unexplored corner).
+    (128, 128, 128, 3, 1),
+    (128, 128, 128, 4, 1),
+    (128, 128, 128, 6, 1),
+    (128, 128, 128, 4, 2),
+    (64, 128, 128, 4, 1),
+    (64, 128, 128, 6, 1),
+    (64, 128, 128, 8, 1),
+    (256, 128, 128, 3, 1),
+    (256, 128, 128, 4, 1),
+    (128, 256, 128, 3, 1),
+    (128, 256, 128, 4, 1),
+    # Region C — block_k=64, deepest pipelines (latency-hiding extreme).
+    (128, 128, 64, 4, 1),
+    (128, 128, 64, 6, 1),
+    (128, 128, 64, 8, 1),
+    (64, 128, 64, 8, 1),
 ]
 _FULL_GRID_AXES = {
     "block_m": (64, 128, 256),
     "block_n": (128, 256),
     "block_k": (64, 128, 256),
-    "max_concurrent_steps": (2, 4),
+    "max_concurrent_steps": (2, 4, 6),
     "grid_block_n": (1, 2),
 }
+
+# Refinement grid around the GFP8-029 winner (128/128/128 steps4 gbn2): push pipeline depth at
+# gbn2, larger tiles, and gbn4 — the corners the broad curated grid only sampled at gbn1.
+_REFINE_CONFIGS = [
+    (128, 128, 128, 4, 2),  # GFP8-029 winner (control)
+    (128, 128, 128, 5, 2),
+    (128, 128, 128, 6, 2),
+    (128, 128, 128, 4, 4),
+    (128, 128, 128, 6, 4),
+    (256, 128, 128, 3, 2),
+    (256, 128, 128, 4, 2),
+    (128, 256, 128, 3, 2),
+    (128, 256, 128, 4, 2),
+    (64, 128, 128, 6, 2),
+    (64, 128, 128, 8, 2),
+    (128, 64, 128, 6, 2),
+    (128, 64, 128, 8, 2),
+    (128, 128, 64, 6, 2),
+    (128, 128, 64, 8, 2),
+    (256, 256, 128, 2, 2),
+]
+
+
+def _roofline(tokens, contract, out_n, experts, impl):
+    """Per-GEMM roofline ceiling (TFLOP/s) on H100 for the given GEMM and dtype.
+
+    Returns (roofline_tflops, peak_tflops, bound) where ``bound`` is "compute" or "memory".
+    FLOPs = 2*M*K*N; bytes = lhs(M*K) + weight(E*K*N) + out(M*N), inputs 1B (f8) / 2B (bf16),
+    output 2B (bf16 accumulation target in both paths).
+    """
+    in_bytes = 1 if impl == "mosaic" else 2
+    flops = 2.0 * tokens * contract * out_n
+    byts = (tokens * contract + experts * contract * out_n) * in_bytes + tokens * out_n * 2
+    peak = _H100_F8_PEAK_TFLOPS if impl == "mosaic" else _H100_BF16_PEAK_TFLOPS
+    compute_time = flops / (peak * 1e12)
+    memory_time = byts / _H100_HBM_BW_BYTES_PER_S
+    if compute_time >= memory_time:
+        return flops / compute_time / 1e12, peak, "compute"
+    return flops / memory_time / 1e12, peak, "memory"
 
 
 def _roles(tokens, hidden, intermediate, experts, seed=0):
@@ -170,13 +226,13 @@ def main():
     ap.add_argument("--steps", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=3)
     ap.add_argument("--full-grid", action="store_true", help="full cross-product instead of curated set")
+    ap.add_argument("--refine", action="store_true", help="refinement grid around the GFP8-029 winner")
     args = ap.parse_args()
 
     if args.full_grid:
-        configs = [
-            c
-            for c in itertools.product(*_FULL_GRID_AXES.values())
-        ]
+        configs = [c for c in itertools.product(*_FULL_GRID_AXES.values())]
+    elif args.refine:
+        configs = list(_REFINE_CONFIGS)
     else:
         configs = list(_CURATED_CONFIGS)
 
@@ -190,6 +246,7 @@ def main():
     def emit(impl, role, block_sizes, compile_time, steady, contract, out_n, error=""):
         flops = 2 * args.tokens * contract * out_n
         tflops = (flops / steady / 1e12) if (steady and not error) else None
+        roof_tflops, peak_tflops, bound = _roofline(args.tokens, contract, out_n, args.experts, impl)
         row = {
             "kernel": "ragged_dot_mosaic_f8",
             "implementation": impl,
@@ -203,6 +260,10 @@ def main():
             "compile_time": compile_time,
             "steady_state_time": steady,
             "achieved_tflops_per_s": tflops,
+            "roofline_tflops_per_s": roof_tflops,
+            "roofline_bound": bound,
+            "pct_of_roofline": (tflops / roof_tflops) if tflops else None,
+            "pct_of_peak": (tflops / peak_tflops) if tflops else None,
             "error": error,
             "git_sha": git_sha,
             "xla_flags": xla_flags,
@@ -236,7 +297,16 @@ def main():
             block_sizes = f"{bm}x{bn}x{bk}_steps{steps_}_gbn{gbn}"
             if contract % bk != 0:
                 rows.append(
-                    emit("mosaic", label, block_sizes, None, None, contract, out_n, error=f"block_k {bk} !| contract {contract}")
+                    emit(
+                        "mosaic",
+                        label,
+                        block_sizes,
+                        None,
+                        None,
+                        contract,
+                        out_n,
+                        error=f"block_k {bk} !| contract {contract}",
+                    )
                 )
                 continue
             cfg = MosaicBlockConfig(block_m=bm, block_n=bn, block_k=bk, max_concurrent_steps=steps_, grid_block_n=gbn)
@@ -264,9 +334,21 @@ def main():
         best = min(ok, key=lambda r: r["steady_state_time"])
         base = baselines.get(label)
         speedup = (base / best["steady_state_time"]) if base else None
-        summary[label] = {"best_config": best["block_sizes"], "mosaic_time_s": best["steady_state_time"], "bf16_time_s": base, "speedup_vs_bf16": speedup}
+        summary[label] = {
+            "best_config": best["block_sizes"],
+            "mosaic_time_s": best["steady_state_time"],
+            "bf16_time_s": base,
+            "speedup_vs_bf16": speedup,
+            "f8_pct_of_roofline": best["pct_of_roofline"],
+            "f8_pct_of_peak": best["pct_of_peak"],
+            "roofline_bound": best["roofline_bound"],
+        }
         sp = f"{speedup:.3f}x" if speedup else "n/a"
-        print(f"  {label:7} best={best['block_sizes']:24} mosaic={best['steady_state_time']*1e3:.3f}ms bf16={base*1e3 if base else float('nan'):.3f}ms speedup={sp}")
+        roof = f"{best['pct_of_roofline']*100:.0f}%roof" if best["pct_of_roofline"] else "n/a"
+        print(
+            f"  {label:7} best={best['block_sizes']:24} mosaic={best['steady_state_time']*1e3:.3f}ms "
+            f"bf16={base*1e3 if base else float('nan'):.3f}ms speedup={sp} f8={roof}({best['roofline_bound']})"
+        )
     print("summary_json " + json.dumps(summary))
 
 

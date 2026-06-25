@@ -75,20 +75,22 @@ class MosaicBlockConfig:
     divide the contraction dim K; ``block_m``/``block_n`` tile the token and output axes.
     Pass an explicit config to autotune in-process.
 
-    The default ``128/128/256`` won the GFP8-027 sweep at the real Grug regime
-    (T=8192/D=2048/F=5632/E=8): it is the single best config across all four mosaic-served
-    GEMMs (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by 1.09x/1.00x on the
-    forward and 1.59x/1.67x on the dgrad. ``block_k`` is the dominant knob — the prior default
-    ``block_k=64`` ranked 4th and lost end-to-end (GFP8-026); ``block_k=512`` would exceed H100
-    shared memory at this ``block_m``/``block_n``. Since one config wins everywhere, no
-    per-shape tuned table is needed here.
+    The default ``128/128/128 steps=4 grid_block_n=2`` won the GFP8-029 sweep at the real Grug
+    regime (T=8192/D=2048/F=5632/E=8): single best config across all four mosaic-served GEMMs
+    (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by 1.47x/1.40x on the forward and
+    2.57x/2.21x on the dgrad (28-43% of f8 roofline). It supersedes the GFP8-027 winner
+    ``128/128/256 steps=2``: at f8 (1B) a ``block_k=256`` tile is ~64KB smem/stage, capping the
+    pipeline at ~3 stages, whereas ``block_k=128`` (~32KB/stage) frees smem for ``steps=4`` — the
+    deeper pipeline hides operand-load latency and is the dominant MFU lever here. ``grid_block_n=2``
+    adds L2 reuse via the planar-snake tile order. Since one config wins everywhere, no per-shape
+    tuned table is needed.
     """
 
     block_m: int = 128
     block_n: int = 128
-    block_k: int = 256
-    max_concurrent_steps: int = 2
-    grid_block_n: int = 1
+    block_k: int = 128
+    max_concurrent_steps: int = 4
+    grid_block_n: int = 2
 
 
 _DEFAULT_MOSAIC_CONFIG = MosaicBlockConfig()
