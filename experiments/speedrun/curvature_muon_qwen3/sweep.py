@@ -63,6 +63,8 @@ LAMBDAS: tuple[float, ...] = _floats("LAMBDAS", "0.0,0.1,1.0")
 KS: tuple[int, ...] = _ints("KS", "1,2")
 ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.2")  # multiplier on the sqrt(e_max) shift
 CURV_POWER: str = os.environ.get("CURV_POWER", "sqrt")  # "sqrt" (P^{1/2}, default) or "linear" (P/sqrt(e_max))
+# two-sided curvature P_L^{1/4} X P_R^{1/4} + Shampoo warm-start msign(P_L^{-1/4} N P_R^{-1/4}).
+TWO_SIDED: bool = os.environ.get("TWO_SIDED", "false").lower() in ("1", "true", "yes")
 # warm-start X0 = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k) instead of msign(N); default on.
 MUDAM_INIT: bool = os.environ.get("MUDAM_INIT", "true").lower() in ("1", "true", "yes")
 POWER_ITERS: int = int(os.environ.get("POWER_ITERS", "8"))  # power-iteration steps for e_max(P)
@@ -146,6 +148,7 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         curvature_lambda=lam,
         curvature_alpha=alpha,
         curv_power=CURV_POWER,
+        two_sided=TWO_SIDED,
         mudam_init=MUDAM_INIT,
         inner_steps=k,
         power_iters=POWER_ITERS,
@@ -164,7 +167,7 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         optimizer_config=optimizer,
     )
     cf = {"polar_express": "pe", "quintic": "qx", "simple": "sm", "aol": "aol"}.get(COEFF_TYPE, COEFF_TYPE)
-    cp = "sq" if CURV_POWER == "sqrt" else "lin"
+    cp = "2s" if TWO_SIDED else ("sq" if CURV_POWER == "sqrt" else "lin")
     mi = "_mi" if MUDAM_INIT else ""
     tag = f"_{cp}{mi}_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
     if lam == 0.0:

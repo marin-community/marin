@@ -71,7 +71,10 @@ class CurvatureMuonConfig(OptimizerConfig):
     curvature_beta: float = 0.95  # ρ, EMA decay of P = EMA(G Gᵀ)
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
     curvature_alpha: float = 1.0  # α ≥ 1, multiplier on the √e_max shift (α=1 = boundary PSD)
-    curv_power: str = "sqrt"  # "sqrt" (C = P^{1/2}, default) or "linear" (C = P/√e_max)
+    curv_power: str = "sqrt"  # "sqrt" (C = P^{1/2}, default) or "linear" (C = P/√e_max); ignored if two_sided
+    two_sided: bool = (
+        False  # two-sided curvature P_L^{1/4} X P_R^{1/4} + Shampoo warm-start msign(P_L^{-1/4} N P_R^{-1/4})
+    )
     mudam_init: bool = True  # warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k); default on
     mudam_steps: int = 5  # coupled-NS steps for the Mudam warm-start (kept small — stable only under-converged)
     inner_steps: int = 1  # K, inner fixed-point iterations
@@ -101,6 +104,7 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.curvature_lambda,
                         self.curvature_alpha,
                         self.curv_power,
+                        self.two_sided,
                         self.mudam_init,
                         self.mudam_steps,
                         self.inner_steps,
@@ -155,11 +159,14 @@ class CurvatureMuonConfig(OptimizerConfig):
 
 class ScaleByCurvatureMuonState(NamedTuple):
     momentum_buffer: optax.Updates  # B, full param tree
-    curvature: optax.Updates  # P, flattened-linear tree of [..., M, M] (M = max(out, in))
-    power_vec: optax.Updates  # q, flattened-linear tree of [..., M]
+    curvature: optax.Updates  # P_L (left Gram), flattened-linear tree of [..., M, M] (M = max(out, in))
+    power_vec: optax.Updates  # q_L, flattened-linear tree of [..., M]
+    curvature_r: optax.Updates  # P_R (right Gram), flattened-linear tree of [..., N, N] (N = min(out, in))
+    power_vec_r: optax.Updates  # q_R, flattened-linear tree of [..., N]
 
 
 _EMAX_MARGIN = 1.05  # inflate the (lower-bound) Rayleigh e_max estimate so the operator stays strictly PSD
+_POW4_FLOOR = 1e-2  # spectrum floor for the inverse-4th-root NS (two-sided warm start) so it stays bounded
 
 
 def _matrix_sqrt_ns(a, iters):
@@ -177,6 +184,22 @@ def _matrix_sqrt_ns(a, iters):
         y = y @ t
         z = t @ z
     return y, z
+
+
+def _pow4_inv_quarter(p, iters, floor, eps):
+    """(P^{1/4}, P^{-1/4}) for SPD P, via two trace-normalized coupled-sqrt-NS passes (matmul-only).
+
+    A = P/trace(P) has spectrum ≤ 1 (trace ≥ λ_max), so neither sqrt-NS pass can diverge. First pass →
+    A^{1/2}; second pass on A^{1/2} → A^{1/4} (Y) and, with a spectrum floor, the bounded/saturating
+    A^{-1/4} (Z). Rescale by trace^{±1/4}. The 4th-root inverse is gentler than P^{-1/2} (smaller exponent).
+    """
+    tr = jnp.trace(p) + eps
+    a = p / tr
+    eye = jnp.eye(p.shape[0], dtype=p.dtype)
+    a_half, _ = _matrix_sqrt_ns(a, iters)  # A^{1/2}
+    a_quarter, _ = _matrix_sqrt_ns(a_half, iters)  # A^{1/4} (forward; no floor needed)
+    _, a_inv_quarter = _matrix_sqrt_ns(a_half + floor * eye, iters)  # ≈ A^{-1/4}, floored ⟹ bounded
+    return tr**0.25 * a_quarter, tr**-0.25 * a_inv_quarter
 
 
 _MUON_NS_COEFFS = (3.4445, -4.7750, 2.0315)
@@ -212,11 +235,20 @@ def _mudam_direction(n_t, p, steps, eps):
     return x
 
 
+def _power_iter(mat, q, iters, eps):
+    for _ in range(int(iters)):
+        mq = mat @ q
+        q = mq / (jnp.linalg.norm(mq) + eps)
+    return q, jnp.dot(q, mat @ q) * _EMAX_MARGIN  # (updated q, inflated Rayleigh ≈ λ_max)
+
+
 def _curv_direction_2d(
     g,
     n,
     p,
     q,
+    p_r,
+    q_r,
     *,
     rho,
     lam_static,
@@ -230,53 +262,60 @@ def _curv_direction_2d(
     curv_power,
     mudam_init,
     mudam_steps,
+    two_sided,
+    floor,
 ):
-    """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
+    """One matrix. g, n: [out, in]; p/q = left Gram P_L [M,M] + power vec; p_r/q_r = right Gram P_R [N,N] + vec.
 
-    Inner fixed point X = msign( N + λ·(α√e_max·I − C)·X ), curvature term C = P/√e_max (curv_power="linear",
-    penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", ∝ √p_i). C has max eigenvalue √e_max ⟹ α√e_max·I − C is PSD
-    for α≥1 ⟹ stable. lam_static gates on/off; lam_coef is the (possibly LR-tracked) coefficient. e_max(P)
-    via warm-started power iteration. mudam_init: warm-start X⁰ = msign(P^{-1/2} N) (the Mudam direction,
-    via the safe coupled-NS q_k product form, `mudam_steps` iterations) instead of msign(N).
+    one-sided (two_sided=False): X = msign(N + λ(α√e_max·I − C)X), C = P_L^{1/2} (sqrt) or P_L/√e_max (linear);
+    warm start msign(P_L^{-1/2} N) (Mudam q_k).
+    two-sided (two_sided=True): X = msign(N + λ(α(e_L·e_R)^{1/4}·X − P_L^{1/4} X P_R^{1/4})); warm start the
+    Shampoo direction msign(P_L^{-1/4} N P_R^{-1/4}). 1/4+1/4 = 1/2 total power ⟹ same ~G units, λ dimensionless.
+    Returns (new_p, new_q, new_p_r, new_q_r, x).
     """
     out, inn = g.shape
     transpose = out < inn
     g_t = g.T if transpose else g  # [M, N], M ≥ N
     n_t = n.T if transpose else n
 
-    new_p = rho * p + (1.0 - rho) * (g_t @ g_t.T)  # [M, M]
-    new_q = q
-    for _ in range(int(power_iters)):
-        pq = new_p @ new_q
-        new_q = pq / (jnp.linalg.norm(pq) + eps)
-    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so α√e_max·I − C is strictly PSD.
-    emax = jnp.dot(new_q, new_p @ new_q) * _EMAX_MARGIN
-    se = jnp.sqrt(emax) + eps
+    new_p = rho * p + (1.0 - rho) * (g_t @ g_t.T)  # P_L [M, M]
+    new_q, emax = _power_iter(new_p, q, power_iters, eps)
     eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
 
-    # Curvature term C.
+    if two_sided:
+        new_p_r = rho * p_r + (1.0 - rho) * (g_t.T @ g_t)  # P_R [N, N]
+        new_q_r, emax_r = _power_iter(new_p_r, q_r, power_iters, eps)
+        pl4, plinv4 = _pow4_inv_quarter(new_p, power_iters, floor, eps)  # P_L^{1/4}, P_L^{-1/4}
+        pr4, prinv4 = _pow4_inv_quarter(new_p_r, power_iters, floor, eps)  # P_R^{1/4}, P_R^{-1/4}
+        if mudam_init:
+            x = zeropower_via_newtonschulz5(plinv4 @ n_t @ prinv4, steps=steps, eps=eps, coefficient_type=ctype)
+        else:
+            x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
+        if lam_static > 0.0:
+            shift2 = alpha * (emax * emax_r) ** 0.25  # = max singular value of X ↦ P_L^{1/4} X P_R^{1/4}
+            for _ in range(int(inner_steps)):
+                arg = n_t + lam_coef * (shift2 * x - pl4 @ x @ pr4)
+                x = zeropower_via_newtonschulz5(arg, steps=steps, eps=eps, coefficient_type=ctype)
+        return new_p, new_q, new_p_r, new_q_r, (x.T if transpose else x)
+
+    # --- one-sided ---
+    se = jnp.sqrt(emax) + eps
     if curv_power == "sqrt":
-        # Normalize by trace(P) ≥ λ_max(P) (sum of nonneg eigenvalues), so P/tr has spectrum ≤ 1 and the
-        # coupled-NS sqrt CANNOT diverge. (Normalizing by the power-iteration e_max — a LOWER bound on
-        # λ_max — let P/e_max exceed 1 when the estimate lagged, blowing up the NS → NaN loss.)
+        # Normalize by trace(P) ≥ λ_max (sum of nonneg eigenvalues) ⟹ P/tr spectrum ≤ 1 ⟹ NS sqrt can't diverge.
         tr = jnp.trace(new_p) + eps
         y_half, _ = _matrix_sqrt_ns(new_p / tr, power_iters)
-        curv = jnp.sqrt(tr) * y_half  # = P^{1/2}, exact regardless of the (over-)normalization constant
+        curv = jnp.sqrt(tr) * y_half  # = P^{1/2}
     else:
         curv = new_p / se  # P/√e_max
-
-    # Warm start: Mudam direction msign(P^{-1/2} N) via the safe coupled-NS q_k (PR #6588), else msign(N).
     if mudam_init:
         x = _mudam_direction(n_t, new_p, mudam_steps, eps)
     else:
         x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
     if lam_static > 0.0:
-        operator = lam_coef * (alpha * se * eye - curv)  # PSD for α≥1: λ(α√e_max I − C)
+        operator = lam_coef * (alpha * se * eye - curv)  # PSD for α≥1
         for _ in range(int(inner_steps)):
             x = zeropower_via_newtonschulz5(n_t + operator @ x, steps=steps, eps=eps, coefficient_type=ctype)
-
-    x_out = x.T if transpose else x
-    return new_p, new_q, x_out
+    return new_p, new_q, p_r, q_r, (x.T if transpose else x)  # p_r/q_r passthrough
 
 
 def scale_with_curvature_muon(
@@ -290,6 +329,7 @@ def scale_with_curvature_muon(
     curvature_lambda=0.0,
     curvature_alpha=1.0,
     curv_power="sqrt",
+    two_sided=False,
     mudam_init=True,
     mudam_steps=5,
     inner_steps=1,
@@ -303,6 +343,7 @@ def scale_with_curvature_muon(
     lam = float(curvature_lambda)  # static peak strength (also the on/off switch)
     alpha = float(curvature_alpha)
     cpow = str(curv_power)
+    two_side = bool(two_sided)
     mudam = bool(mudam_init)
     mudam_k = int(mudam_steps)
     peak_lr = float(peak_lr)
@@ -329,9 +370,28 @@ def scale_with_curvature_muon(
             m = max(a.shape[-2], a.shape[-1])
             return jnp.broadcast_to(jnp.ones(m, dtype=a.dtype) / jnp.sqrt(m), a.shape[:-2] + (m,))
 
-        curvature = haliax.tree_util.tree_map(to_p, flat, is_leaf=_is_linear_weight)
-        power_vec = haliax.tree_util.tree_map(to_q, flat, is_leaf=_is_linear_weight)
-        return ScaleByCurvatureMuonState(momentum_buffer=momentum_buffer, curvature=curvature, power_vec=power_vec)
+        def to_p_r(layer):  # right Gram P_R [..., N, N], N = min(out, in)
+            if not _is_linear_weight(layer):
+                return layer
+            a = layer.weight.array
+            nn = min(a.shape[-2], a.shape[-1])
+            return jnp.broadcast_to(muon_eps * jnp.eye(nn, dtype=a.dtype), a.shape[:-2] + (nn, nn))
+
+        def to_q_r(layer):
+            if not _is_linear_weight(layer):
+                return layer
+            a = layer.weight.array
+            nn = min(a.shape[-2], a.shape[-1])
+            return jnp.broadcast_to(jnp.ones(nn, dtype=a.dtype) / jnp.sqrt(nn), a.shape[:-2] + (nn,))
+
+        tm = haliax.tree_util.tree_map
+        return ScaleByCurvatureMuonState(
+            momentum_buffer=momentum_buffer,
+            curvature=tm(to_p, flat, is_leaf=_is_linear_weight),
+            power_vec=tm(to_q, flat, is_leaf=_is_linear_weight),
+            curvature_r=tm(to_p_r, flat, is_leaf=_is_linear_weight),
+            power_vec_r=tm(to_q_r, flat, is_leaf=_is_linear_weight),
+        )
 
     def update_fn(updates, state, params=None):
         # Momentum buffer + scale-preserving Nesterov signal N = (1-μ)G + μB.
@@ -357,16 +417,18 @@ def scale_with_curvature_muon(
         # Effective coefficient: tracks the LR schedule when requested (traced scalar), else the static peak.
         lam_coef = lam * (learning_rate / peak_lr) if tracks_lr else lam
 
-        def per_layer(g_layer, n_layer, p, q):
+        def per_layer(g_layer, n_layer, p, q, p_r, q_r):
             if not _is_linear_weight(g_layer):
                 return n_layer  # passthrough (these are routed to adam/adamh anyway)
             g = g_layer.weight.array
             n = n_layer.weight.array
-            fn = lambda gg, nn, pp, qq: _curv_direction_2d(
+            fn = lambda gg, nn, pp, qq, ppr, qqr: _curv_direction_2d(
                 gg,
                 nn,
                 pp,
                 qq,
+                ppr,
+                qqr,
                 rho=rho,
                 lam_static=lam,
                 lam_coef=lam_coef,
@@ -379,19 +441,33 @@ def scale_with_curvature_muon(
                 curv_power=cpow,
                 mudam_init=mudam,
                 mudam_steps=mudam_k,
+                two_sided=two_side,
+                floor=_POW4_FLOOR,
             )
-            new_p, new_q, x = jax.vmap(fn)(g, n, p, q) if g.ndim == 3 else fn(g, n, p, q)
+            if g.ndim == 3:
+                new_p, new_q, new_p_r, new_q_r, x = jax.vmap(fn)(g, n, p, q, p_r, q_r)
+            else:
+                new_p, new_q, new_p_r, new_q_r, x = fn(g, n, p, q, p_r, q_r)
             new_w = dataclasses.replace(n_layer.weight, array=x)
-            return (dataclasses.replace(n_layer, weight=new_w), new_p, new_q)  # type: ignore
+            return (dataclasses.replace(n_layer, weight=new_w), new_p, new_q, new_p_r, new_q_r)  # type: ignore
 
         combined = haliax.tree_util.tree_map(
-            per_layer, flat_grad, flat_signal, state.curvature, state.power_vec, is_leaf=_is_linear_weight
+            per_layer,
+            flat_grad,
+            flat_signal,
+            state.curvature,
+            state.power_vec,
+            state.curvature_r,
+            state.power_vec_r,
+            is_leaf=_is_linear_weight,
         )
 
-        is_triple = lambda c: isinstance(c, tuple) and len(c) == 3
-        flat_dir = jax.tree.map(lambda c: c[0] if is_triple(c) else c, combined, is_leaf=is_triple)
-        new_curvature = jax.tree.map(lambda c: c[1] if is_triple(c) else c, combined, is_leaf=is_triple)
-        new_power = jax.tree.map(lambda c: c[2] if is_triple(c) else c, combined, is_leaf=is_triple)
+        is_tup = lambda c: isinstance(c, tuple) and len(c) == 5
+        flat_dir = jax.tree.map(lambda c: c[0] if is_tup(c) else c, combined, is_leaf=is_tup)
+        new_curvature = jax.tree.map(lambda c: c[1] if is_tup(c) else c, combined, is_leaf=is_tup)
+        new_power = jax.tree.map(lambda c: c[2] if is_tup(c) else c, combined, is_leaf=is_tup)
+        new_curvature_r = jax.tree.map(lambda c: c[3] if is_tup(c) else c, combined, is_leaf=is_tup)
+        new_power_r = jax.tree.map(lambda c: c[4] if is_tup(c) else c, combined, is_leaf=is_tup)
         direction = unflatten_linear_layers(signal, flat_dir)
 
         # Hyperball: constant-Frobenius-norm scale-invariant update (identical to MuonH).
@@ -413,7 +489,11 @@ def scale_with_curvature_muon(
             scale_invariant_update, params, direction, is_leaf=lambda x: x is None
         )
         return hyperball_updates, ScaleByCurvatureMuonState(
-            momentum_buffer=buf, curvature=new_curvature, power_vec=new_power
+            momentum_buffer=buf,
+            curvature=new_curvature,
+            power_vec=new_power,
+            curvature_r=new_curvature_r,
+            power_vec_r=new_power_r,
         )
 
     return optax.GradientTransformation(init_fn, update_fn)
