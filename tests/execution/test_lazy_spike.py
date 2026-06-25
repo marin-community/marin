@@ -35,11 +35,11 @@ class TrainCfg:
     steps: int
 
 
-def _run_tokenize(output_path: str, config: TokenizeCfg) -> dict:
+def _run_tokenize(config: TokenizeCfg) -> dict:
     return {**dataclasses.asdict(config), "kind": "tokens"}
 
 
-def _run_train(output_path: str, config: TrainCfg) -> dict:
+def _run_train(config: TrainCfg) -> dict:
     return {**dataclasses.asdict(config), "kind": "ckpt"}
 
 
