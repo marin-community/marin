@@ -85,10 +85,6 @@ def transposed_ragged_dot(
     # kernel so the slice start is provably block_k-aligned without pl.multiple_of (unimplemented).
     group_block_start_blocks = group_starts // block_k
 
-    swizzle = plgpu.find_swizzle(block_k * jnp.dtype(lhs.dtype).itemsize * 8)
-    swizzle_elems = swizzle // jnp.dtype(lhs.dtype).itemsize
-    transforms = (plgpu.TilingTransform((8, swizzle_elems)), plgpu.SwizzleTransform(swizzle))
-
     def body(
         group_sizes_gmem,
         group_starts_gmem,
@@ -160,13 +156,11 @@ def transposed_ragged_dot(
                                 (block_m, block_k),
                                 lambda k_i: (m_i, gstart_block + k_i),
                                 delay_release=1 if max_concurrent_steps > 1 else 0,
-                                transforms=transforms,
                             ),
                             plgpu.BlockSpec(
                                 (block_n, block_k),
                                 lambda k_i: (n_i, gstart_block + k_i),
                                 delay_release=1 if max_concurrent_steps > 1 else 0,
-                                transforms=transforms,
                             ),
                         ],
                         max_concurrent_steps=max_concurrent_steps,
