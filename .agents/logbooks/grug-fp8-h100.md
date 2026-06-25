@@ -1220,3 +1220,26 @@ wgmma, which is exactly the kernel work GFP8-024 flagged.
   a scoped, self-authored cast-transpose fast-follow (the ~5% of GFP8-024) — not something a dependency
   hands us. See [[fp8-scaling-causal-invariant]] for why the 1×128↔128×1 (per-token, channel-tiled)
   orientation is also the causally-safe one.
+
+### 2026-06-25 — GFP8-026: M0 step 3 — mosaic hybrid wired into Fp8RaggedDotOp; integration correct, H100 e2e LOSES with default blocks
+Wired a `"mosaic"` backend into the FP8 grouped-dot path (haliax): `_mosaic_pallas_call` sends fwd
+(`_DEFAULT`) and dgrad (`_DLHS`) to jax's f8 `ragged_dot_mgpu` (transpose_rhs / K-contiguous), and the
+backward runs wgrad (`_DRHS`) in bf16 on the dequantized f8 operands (Hopper f8 transpose wall, GFP8-025).
+`Fp8RaggedDotOp.init(implementation="mosaic")` selects it; mosaic requires `grad_dtype=e4m3` (Mosaic rejects
+mixed e4m3×e5m2 wgmma). CPU-verified (pyrefly clean, fp8-ragged + dispatch tests pass).
+- **H100 e2e validation** (`bench_ragged_mosaic_hybrid_e2e.py`, real Grug regime T=8192/D=2048/F=5632/E=8,
+  job `/matt/iris-run-job-20260625-174318`):
+  - **Numerics (mosaic vs bf16, rel-frob):** forward 7.95e-2, dx 8.12e-2, dw13 6.38e-2, dw2 6.10e-2.
+    ~6–8% — expected for coarse per-tensor E4M3 at cold-start (no fine-grained scaling); confirms the path is
+    numerically correct (a layout bug reads >25%) and the f8-dgrad + bf16-wgrad backward is sane.
+  - **Speed — mosaic LOSES:** fwd+bwd bf16 **454 TF/s** (3.75ms) vs mosaic **328 TF/s** (5.18ms) = **0.72×**;
+    fwd-only bf16 **421 TF/s** vs mosaic **238 TF/s** = **0.57×**. The ~1.3× per-GEMM projection (GFP8-024)
+    did NOT translate.
+- **Why it lost (hypothesis):** the block config is hardcoded `block_m/n/k=128/128/64, steps=2, grid_block_n=1`
+  — the GFP8-024 autotune winner for a **4× smaller** regime (D1024/F512). At the real shape (D2048/F5632)
+  it's badly suboptimal (mosaic achieves 328 TF/s, *below* both bf16 454 and the f8 per-GEMM 565/574). The
+  e2e path also carries quantization overhead (in_q/out_dq/dequant) the per-GEMM bench omitted.
+- **Verdict:** integration is correct but **not yet competitive**. Next: autotune the mosaic block config at
+  the real Grug regime (per the add-pallas-kernel autotuning workflow) and re-measure before any win claim.
+  Open: even tuned, the bf16 baseline here is the well-tuned Triton kernel; the f8 fwd/dgrad must clear it
+  *plus* amortize quant overhead. See [[mosaic-gpu-cluster-toolchain]] for the cu13 launch fixes this needed.
