@@ -197,11 +197,6 @@ def _transport(x: jax.Array, mesh: Mesh, spec: P = grug_model._batch_spec()) -> 
     return _make_global(full if pid in dst_procs else None, mesh, spec, x.shape, x.dtype)
 
 
-def _tree_sum(trees: list):
-    """Sum a non-empty list of like-structured pytrees leafwise."""
-    return functools.reduce(lambda a, b: jax.tree_util.tree_map(jnp.add, a, b), trees)
-
-
 def _mesh_procs(mesh: Mesh) -> frozenset[int]:
     return frozenset(int(d.process_index) for d in mesh.devices.flat)
 
@@ -603,18 +598,29 @@ def zb_build(
 
         # Activation/cotangent buffers, indexed [microbatch][stage]. ``saved_x`` is each
         # stage's block INPUT (embed output for stage 0); ``saved_dy`` the cotangent fed
-        # into its backward (head seed for the last stage). Both are kept for every
-        # microbatch so the W ops can reuse them whenever the schedule defers them.
+        # into its backward (head seed for the last stage). Each entry is dropped the moment
+        # its last consumer runs (the W op under split_w, else the combined backward), so peak
+        # activation memory tracks the ~P in-flight microbatches rather than all M.
         saved_x: list = [[None] * num_stages for _ in range(num_microbatches)]
         saved_dy: list = [[None] * num_stages for _ in range(num_microbatches)]
         head_h: list = [None] * num_microbatches
         ce_mb: list = [None] * num_microbatches
         z_mb: list = [[None] * num_stages for _ in range(num_microbatches)]
-        w_grads: list = [[None] * num_stages for _ in range(num_microbatches)]
-        g_embed_mb: list = [None] * num_microbatches
-        g_head_mb: list = [None] * num_microbatches
+        # Weight-grads are summed into g_blocks (and the embed/head grads into running totals)
+        # as each backward/W op produces them. Holding one running sum per stage instead of one
+        # buffer per microbatch keeps peak HBM independent of M: weight-grads are param-sized and
+        # do not shrink with op size, so stashing all M is what made memory grow with microbatching.
+        g_embed_acc = None
+        g_head_acc = None
         g_eh = None
         g_blocks: list = [None] * num_layers
+
+        def _accum(prev, g):
+            return g if prev is None else jax.tree_util.tree_map(jnp.add, prev, g)
+
+        def _accum_blocks(base: int, g_slice) -> None:
+            for j, g in enumerate(g_slice):
+                g_blocks[base + j] = _accum(g_blocks[base + j], g)
 
         # Multi-host: every process walks the full op_order in lockstep, but COMPUTE for a
         # stage runs only on the process owning its sub-mesh; other processes supply a
@@ -699,29 +705,41 @@ def zb_build(
                         if s == num_stages - 1:
                             if _local(meshL):
                                 with set_mesh(meshL):
-                                    g_head_mb[m], dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
+                                    g_head_m, dy = head_bwd(ehL, head_h[m], labels_mb[m], weight_mb[m], inv_m)
                                 saved_dy[m][s] = dy
+                                head_h[m] = None
                             else:
-                                g_head_mb[m], saved_dy[m][s] = ehL, _act_ph(meshL)
+                                g_head_m, saved_dy[m][s] = ehL, _act_ph(meshL)
+                            g_head_acc = _accum(g_head_acc, g_head_m)
                         if _local(submeshes[s]):
                             x_s, dy_s = _resolve(saved_x[m][s]), _resolve(saved_dy[m][s])
                             with set_mesh(submeshes[s]):
                                 if split_w:
                                     dx = stage_fns[s].b(stage_params[s], x_s, dy_s, dz)
                                 else:
-                                    w_grads[m][s], dx = stage_fns[s].backward(stage_params[s], x_s, dy_s, dz)
+                                    g_slice, dx = stage_fns[s].backward(stage_params[s], x_s, dy_s, dz)
+                            if not split_w:
+                                # combined backward is the last reader of this microbatch's saved x/dy
+                                _accum_blocks(s * lps, g_slice)
+                                saved_x[m][s] = None
+                                saved_dy[m][s] = None
                         else:
                             dx = _act_ph(submeshes[s])
                         if s > 0:
                             saved_dy[m][s - 1] = _send(dx, submeshes[s - 1], submeshes[s], s, s - 1)
                         elif _local(mesh0):
                             with set_mesh(mesh0):
-                                (g_embed_mb[m],) = embed_bwd(eh0, tok_mb[m], dx)
+                                (g_embed_m,) = embed_bwd(eh0, tok_mb[m], dx)
+                            g_embed_acc = _accum(g_embed_acc, g_embed_m)
                     else:  # _W (emitted only when split_w)
                         if _local(submeshes[s]):
                             x_s, dy_s = _resolve(saved_x[m][s]), _resolve(saved_dy[m][s])
                             with set_mesh(submeshes[s]):
-                                w_grads[m][s] = stage_fns[s].w(stage_params[s], x_s, dy_s, dz)
+                                g_slice = stage_fns[s].w(stage_params[s], x_s, dy_s, dz)
+                            # the W op is the last reader of this microbatch's saved x/dy under split_w
+                            _accum_blocks(s * lps, g_slice)
+                            saved_x[m][s] = None
+                            saved_dy[m][s] = None
             finally:
                 if worker is not None:
                     worker.close()
@@ -730,22 +748,13 @@ def zb_build(
                 # Enqueue time = the Python dispatch loop alone (no wait); the gap to ``sched``
                 # is the GPU-completion tail. Splits dispatch-bound from compute-bound.
                 _t["enqueue"] = time.perf_counter()
-                jax.block_until_ready((ce_mb, z_mb, g_head_mb, g_embed_mb, w_grads))
+                jax.block_until_ready((ce_mb, z_mb, g_head_acc, g_embed_acc, g_blocks))
                 _t["sched"] = time.perf_counter()
 
-            # Sum the embed/head weight-grads across microbatches LOCALLY, then cross the host
-            # boundary once. The head grad is the [hidden, vocab] unembedding (~hundreds of MB);
-            # accumulating per microbatch would broadcast it num_microbatches times.
-            g_eh = _accum_embed_head(_tree_sum(g_embed_mb), _tree_sum(g_head_mb), None)
-            for s in range(num_stages):
-                if not _local(submeshes[s]):
-                    continue
-                base = s * lps
-                acc = list(w_grads[0][s])
-                for m in range(1, num_microbatches):
-                    acc = [jax.tree_util.tree_map(jnp.add, a, b) for a, b in zip(acc, w_grads[m][s], strict=True)]
-                for j, g in enumerate(acc):
-                    g_blocks[base + j] = g
+            # Embed/head grads were summed into running totals as each microbatch's backward ran;
+            # cross the head grad to stage 0's host once here. g_blocks already holds the per-stage
+            # weight-grad sums (filled by _accum_blocks at each backward/W op).
+            g_eh = _accum_embed_head(g_embed_acc, g_head_acc, None)
         else:
             # GPipe baseline: full forward sweep, then a combined-vjp backward (B and W
             # fused, so dx waits on the weight-grad and nothing fills the bubble).
@@ -765,11 +774,6 @@ def zb_build(
             if _TRACE:
                 jax.block_until_ready((head_h, saved_x))
                 _t["fwd"] = time.perf_counter()
-
-            def _accum_blocks(base, g_slice):
-                for j, g in enumerate(g_slice):
-                    cur = g_blocks[base + j]
-                    g_blocks[base + j] = g if cur is None else jax.tree_util.tree_map(jnp.add, cur, g)
 
             for m in range(num_microbatches):
                 with set_mesh(meshL):
