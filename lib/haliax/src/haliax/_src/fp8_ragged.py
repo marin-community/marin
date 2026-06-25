@@ -13,6 +13,7 @@ path. Each contraction is dispatched to the production ragged-dot backend (Trito
 GPU, XLA fallback) via the same layout dimension-numbers the bf16 backward uses.
 """
 
+import os
 from functools import partial
 
 import jax
@@ -35,10 +36,13 @@ from haliax.nn.ragged_dot import (
 # `haliax.nn.ragged_dot.ragged_dot`; keeps the fp8 path's shape semantics identical to bf16.
 _RAGGED_PAD_MULTIPLE = 512
 
-# Compute dtype for the mosaic-hybrid weight-gradient (drhs) fallback. The Mosaic f8 fwd/dgrad
-# win, but f8 wgrad hits the Hopper operand-transpose wall (GFP8-025), so under the "mosaic"
-# backend the wgrad runs in bf16 on the dequantized f8 operands — the ~1.3× hybrid recipe.
+# Compute dtype for the mosaic-hybrid weight-gradient (drhs) fallback. f8 wgrad needs the
+# cast-transpose kernel (GFP8-028); until it passes H100 parity the "mosaic" backend runs wgrad in
+# bf16 on the dequantized f8 operands (the shipped ~1.3× hybrid). Set RAGGED_F8_WGRAD=1 to instead
+# route mosaic drhs through the f8 cast-transpose kernel for the A/B parity test. TEMPORARY: this
+# toggle is removed once f8 wgrad is the proven default.
 _WGRAD_FALLBACK_DTYPE = jnp.bfloat16
+_MOSAIC_F8_WGRAD = os.environ.get("RAGGED_F8_WGRAD", "0") == "1"
 
 
 def _ragged_dot_layout(
@@ -79,17 +83,13 @@ def _ragged_dot_layout(
                     ragged_dot_dimension_numbers=dimension_numbers,
                     preferred_element_type=preferred_element_type,
                 )
-            raise NotImplementedError(
-                f"FP8 ragged dot does not support implementation {impl!r}"
-            )
+            raise NotImplementedError(f"FP8 ragged dot does not support implementation {impl!r}")
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":
                 last_exc = exc
                 continue
             raise
-    raise RuntimeError(
-        f"No ragged_dot implementation selected (last error: {last_exc})"
-    )
+    raise RuntimeError(f"No ragged_dot implementation selected (last error: {last_exc})")
 
 
 @partial(custom_vjp, nondiff_argnums=(9, 10, 11))
@@ -158,9 +158,7 @@ def quantized_ragged_dot_fwd(
     return out, res
 
 
-def quantized_ragged_dot_bwd(
-    preferred_element_type, implementation, grad_dtype, res, g
-):
+def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, res, g):
     (
         q_lhs,
         lhs_scale,
@@ -177,25 +175,21 @@ def quantized_ragged_dot_bwd(
     q_g = quantize(g, grad_dtype, new_out_grad_scale, preferred_element_type)
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (f8 operands, dequantized by the rhs and grad scales)
-    grad_lhs = _ragged_dot_layout(
-        q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation
-    )
-    grad_lhs = dequantize(
-        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
-    )
+    grad_lhs = _ragged_dot_layout(q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation)
+    grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N], contracting the ragged token axis.
-    if implementation == "mosaic":
-        # f8 wgrad hits the Hopper operand-transpose wall (GFP8-025): run the GEMM in bf16 on the
-        # dequantized f8 operands. Dequantizing here folds in lhs_scale/grad_scale, so the result is
-        # already in real units — no further output dequant (unlike the f8 branch below).
+    if implementation == "mosaic" and not _MOSAIC_F8_WGRAD:
+        # bf16 reference fallback (GFP8-028): until the f8 cast-transpose wgrad passes H100 parity,
+        # run the GEMM in bf16 on the dequantized f8 operands. Dequantizing here folds in
+        # lhs_scale/grad_scale, so the result is already in real units — no further output dequant
+        # (unlike the f8 branch below).
         lhs_b = dequantize(q_lhs, _WGRAD_FALLBACK_DTYPE, lhs_scale)
         g_b = dequantize(q_g, _WGRAD_FALLBACK_DTYPE, new_out_grad_scale)
-        grad_rhs = _ragged_dot_layout(
-            lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto"
-        )
+        grad_rhs = _ragged_dot_layout(lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto")
     else:
-        # f8 operands, dequantized by the lhs and grad scales.
+        # f8 operands, dequantized by the lhs and grad scales. For "mosaic" with RAGGED_F8_WGRAD=1
+        # this routes through the f8 cast-transpose kernel (`_transposed_ragged_dot`).
         grad_rhs = _ragged_dot_layout(
             q_lhs,
             q_g,
@@ -204,9 +198,7 @@ def quantized_ragged_dot_bwd(
             preferred_element_type,
             implementation,
         )
-        grad_rhs = dequantize(
-            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
-        )
+        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
 
     return (
         grad_lhs,
