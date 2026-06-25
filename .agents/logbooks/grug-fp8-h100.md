@@ -1337,3 +1337,21 @@ regression per real wgrad GEMM into transpose vs kernel cost (`bench_ragged_wgra
   reach a wgrad break-even worth only ~5% e2e, starting from −15%; low EV. Shipped recipe stays f8
   fwd/dgrad + bf16 wgrad (1.06×). f8 wgrad is correct + behind `RAGGED_F8_WGRAD` for regimes where it wins
   (Blackwell native f8 / compute-bound wgrad shapes). M1+M2 of the wgrad plan are closed.
+
+### 2026-06-25 — GFP8-028 M2 correction: the wgrad f8 deficit is intensity + kernel-maturity, not purely "structural"
+Refining the M2-diagnostic conclusion after a fair challenge (forward and wgrad are *both* f8 wgmmas — so
+why is wgrad slower?). The earlier "output-bound, structural" framing was too strong. Honest picture:
+- **Different kernels.** Forward = JAX's production `ragged_dot_mgpu`; wgrad = our first-pass
+  `transposed_ragged_dot_mgpu` (untuned config, f32 boundary masking, no explicit swizzle, 6-iter bring-up).
+  Some of the 17–29% is implementation maturity, not physics — not separable from one measurement.
+- **Real structural headwind = contraction length K.** Arithmetic intensity ≈ 2K when the output dominates
+  memory traffic. wgrad contracts the **ragged token axis** (~1024/group — the *shortest* K of any GEMM,
+  vs fwd K=D=2048, dgrad K=2F=11264) AND it's variable-length (boundary masking). Shortest K ⇒ lowest
+  intensity ⇒ least compute-bound ⇒ least f8 headroom; short K also under-fills the wgmma pipeline. (NOT a
+  clean K-monotonic law across all GEMMs: the dgrad's 1.6× is partly its `.mT`-hobbled bf16 baseline, not
+  just long K.)
+- **Why stop still holds (EV, not impossibility).** Even if a fully-optimized f8 wgrad reached bf16 *parity*,
+  f8_full = parity + transpose(~0.14ms) is still slightly slower; to net-win the wgrad needs the f8 kernel
+  to *beat* bf16 by >12% (a 30%+ swing). And the wgrad is 2/6 GEMMs, so even a 1.2× wgrad win adds only
+  ~1–2% e2e. Substantial kernel-optimization work for a couple-percent ceiling, uncertain ⇒ low EV ⇒ stop.
+  Correct framing: low expected value, **not** structurally impossible.
