@@ -27,10 +27,10 @@ from rigging.timing import Timestamp
 from sqlalchemy import Row, delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from iris.cluster.config import AuthConfig, StaticAuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
-from iris.rpc import config_pb2
 from iris.rpc.auth import DASHBOARD_ROLE
 
 logger = logging.getLogger(__name__)
@@ -320,15 +320,17 @@ def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
 
 
 def create_controller_auth(
-    auth_config: config_pb2.AuthConfig,
+    auth_config: AuthConfig | None,
     db: ControllerDB | None = None,
 ) -> ControllerAuth:
-    """Build a ``ControllerAuth`` from the config proto.
+    """Build a ``ControllerAuth`` from the auth config.
 
     Signs JWTs with a persistent key in ``controller_secrets``; ``api_keys``
     rows exist for audit and revocation, but verification never hits the DB.
+
+    A ``None`` config (or one with no provider selected) runs in null-auth mode.
     """
-    if not auth_config.HasField("provider"):
+    if auth_config is None or auth_config.provider_kind() is None:
         if db:
             now = Timestamp.now()
             with db.transaction() as _tx:
@@ -345,7 +347,7 @@ def create_controller_auth(
         logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
-    provider = auth_config.WhichOneof("provider")
+    provider = auth_config.provider_kind()
     now = Timestamp.now()
 
     jwt_mgr: JwtTokenManager | None = None
@@ -426,7 +428,7 @@ def create_controller_auth(
 
 
 def _preload_static_tokens(
-    static_config: config_pb2.StaticAuthConfig,
+    static_config: StaticAuthConfig,
     db: ControllerDB,
     now: Timestamp,
 ) -> None:

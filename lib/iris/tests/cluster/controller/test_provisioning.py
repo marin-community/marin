@@ -17,7 +17,7 @@ from iris.cluster.controller.autoscaler.provisioning import (
 )
 from iris.cluster.controller.autoscaler.runtime import _ScaleUpOutcome, _ScaleUpRequest
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.rpc import config_pb2
+from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
 
 from tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle
@@ -40,16 +40,15 @@ def group():
         name="tpu_v6e-preemptible_8-us-east5-b",
         accelerator_variant="v6e",
         zones=["us-east5-b"],
-        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        capacity_type=CapacityType.PREEMPTIBLE,
     )
     return ScalingGroup(config, make_mock_platform())
 
 
 @pytest.fixture
 def autoscaler_with_sink(group):
-    autoscaler = make_autoscaler({group.name: group})
     table = FakeTable()
-    autoscaler.set_provisioning_sink(table)
+    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
     yield autoscaler, table
     autoscaler.shutdown()
 
@@ -145,9 +144,8 @@ def test_runtime_worker_loss_records_preempted():
     group = ScalingGroup(config, make_mock_platform(slices_to_discover=[handle]))
     group.reconcile()
     mark_discovered_ready(group, [handle])
-    autoscaler = make_autoscaler({group.name: group})
     table = FakeTable()
-    autoscaler.set_provisioning_sink(table)
+    autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
     try:
         autoscaler.terminate_slices_for_workers(["slice-001-vm-0"])
     finally:

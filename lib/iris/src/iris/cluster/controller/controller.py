@@ -16,12 +16,9 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import uvicorn
-from finelog.client import LogClient, RemoteLogHandler
-from finelog.embedded import require_embedded_server
-from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from finelog.client import RemoteLogHandler
 from rigging.server_auth import RequestAuthPolicy, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
@@ -33,7 +30,6 @@ from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
-from iris.cluster.controller.autoscaler.provisioning import PROVISIONING_NAMESPACE, IrisProvisioning
 from iris.cluster.controller.backend import (
     AutoscaleResult,
     BackendCapability,
@@ -50,6 +46,7 @@ from iris.cluster.controller.checkpoint import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
     apply_dispatch_updates,
@@ -77,7 +74,6 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
     PendingTask,
@@ -87,7 +83,6 @@ from iris.cluster.types import (
     WorkerStatusMap,
     WorkerUsability,
 )
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 
@@ -233,32 +228,10 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
-    log_service_address: str | None = None
-    """Address of an externally-hosted log server (e.g. http://localhost:10001).
-    When set, the controller connects to the existing server. When None, the
-    Controller starts an in-process native ``finelog_server`` server on a free
-    port (used by tests and local-mode runs). In production this address is
-    sourced from `endpoints["/system/log-server"]` and passed in here by the
-    daemon entrypoint."""
-
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
-
-
-def _log_client_interceptors(config: "ControllerConfig") -> tuple:
-    """Return Connect interceptors for controller-originated LogService RPCs.
-
-    When auth is configured, attach the worker JWT as a bearer token so the
-    log server accepts PushLogs/FetchLogs. The worker token is signed with
-    the same key the log server verifies against; no separate admin token
-    is required for controller-initiated pushes.
-    """
-    token = config.auth.worker_token if config.auth and config.auth.worker_token else None
-    if not token:
-        return ()
-    return (BearerTokenInjector(StaticTokenProvider(token), "authorization"),)
 
 
 class Controller:
@@ -294,6 +267,7 @@ class Controller:
         self,
         config: ControllerConfig,
         provider: TaskBackend,
+        log_stack: LogStack,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
     ):
@@ -332,40 +306,12 @@ class Controller:
 
         self._threads = threads if threads is not None else get_thread_container()
 
-        # --- Log service setup ---
-        # The log server is always accessed via RPC. In production the
-        # controller's main() starts a subprocess; in tests/local mode the
-        # Controller spins up an in-process native finelog server
-        # (finelog_server). After the server is running, all access goes
-        # through RPC clients — no branching on hosting mode.
-        self._log_server: Any = None  # finelog_server.EmbeddedServer when started locally
-
-        if config.log_service_address:
-            self._log_service_address = config.log_service_address
-        else:
-            self._log_service_address = self._start_local_log_server()
-
-        log_client_interceptors = _log_client_interceptors(config)
-        # A single log client serves both the controller's own logs and any backend
-        # that collects logs out-of-process.
-        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-
-        # Backends without a worker daemon push per-task resource/profile samples to the
-        # log server directly; daemon-backed backends (RPC) ignore the sink.
-        self._task_backend.set_log_sink(
-            self._log_client,
-            self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-            self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
-        )
-
-        # The autoscaler emits slice provisioning outcomes to iris.provisioning;
-        # wire its sink now that the log client is up (no-op backends have none).
-        # TODO(#6520): thread the log client through the constructor and drop this
-        # delayed-sink wiring.
-        autoscaler = self._task_backend.autoscaler
-        if autoscaler is not None:
-            autoscaler.set_provisioning_sink(self._log_client.get_table(PROVISIONING_NAMESPACE, IrisProvisioning))
-
+        # The log client and its tables are built before the backend and autoscaler
+        # (their finelog handles are constructor args), so the controller only holds
+        # the stack for its own logging and shuts it down at stop().
+        self._log_stack = log_stack
+        self._log_client = log_stack.client
+        self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
@@ -496,28 +442,6 @@ class Controller:
         """Whether the controller loops have been started."""
         return self._started
 
-    def _start_local_log_server(self) -> str:
-        """Start a bundled in-process log + stats server and return its address.
-
-        Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). Backed by the native
-        ``finelog_server`` module (the same engine the ``finelog-server`` binary
-        runs), storing segments under ``local_state_dir/log-server`` so written
-        logs are queryable: the engine's in-memory mode spawns no maintenance
-        task, so its RAM buffer never flushes to a readable segment — only a
-        disk-backed store serves reads. The server is bound and ready when the
-        constructor returns. For any deployment that needs scale or durability
-        beyond the controller's local disk, run ``finelog-server`` out-of-band
-        and point ``endpoints["/system/log-server"]`` at it.
-        """
-        log_dir = self._config.local_state_dir / "log-server"
-        embedded_server_cls = require_embedded_server()
-        self._log_server = embedded_server_cls(log_dir=str(log_dir), host=self._config.host)
-
-        address = f"http://{self.external_host}:{self._log_server.port}"
-        logger.info("Local log server ready at %s (log_dir=%s)", address, log_dir)
-        return address
-
     def start(self) -> None:
         """Start the dashboard server and the control + housekeeping threads.
 
@@ -631,9 +555,7 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_client.close()
-        if self._log_server is not None:
-            self._log_server.stop()
+        self._log_stack.close()
         self._db.close()
         self._bundle_store.close()
 

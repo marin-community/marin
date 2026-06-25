@@ -6,7 +6,7 @@
 import humanfriendly
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
-from iris.rpc import config_pb2, job_pb2, vm_pb2
+from iris.rpc import job_pb2, vm_pb2
 
 
 def _enum_name(enum_wrapper: EnumTypeWrapper, value: int) -> str:
@@ -42,23 +42,6 @@ def task_state_friendly(state: int) -> str:
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
 
 
-def accelerator_type_name(accel_type: int) -> str:
-    """Return enum name like 'ACCELERATOR_TYPE_TPU'."""
-    return _enum_name(config_pb2.AcceleratorType, accel_type)
-
-
-def accelerator_type_friendly(accel_type: int) -> str:
-    """Return human-friendly accelerator type name.
-
-    Examples:
-        ACCELERATOR_TYPE_UNSPECIFIED (0) -> "unspecified"
-        ACCELERATOR_TYPE_CPU (1) -> "cpu"
-        ACCELERATOR_TYPE_GPU (2) -> "gpu"
-        ACCELERATOR_TYPE_TPU (3) -> "tpu"
-    """
-    return accelerator_type_name(accel_type).removeprefix("ACCELERATOR_TYPE_").lower()
-
-
 def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     """Format a ResourceSpec proto as a compact comma-separated summary.
 
@@ -86,15 +69,15 @@ def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     return ", ".join(parts) if parts else "-"
 
 
-def format_accelerator_display(accel_type: int, variant: str = "") -> str:
-    """Format accelerator type and variant for display.
+def format_accelerator_display(device_type: str, variant: str = "") -> str:
+    """Format an accelerator device type and variant for display.
 
     Examples:
-        format_accelerator_display(3, "v5litepod-16") -> "tpu (v5litepod-16)"
-        format_accelerator_display(2, "A100") -> "gpu (A100)"
-        format_accelerator_display(1, "") -> "cpu"
+        format_accelerator_display("tpu", "v5litepod-16") -> "tpu (v5litepod-16)"
+        format_accelerator_display("gpu", "A100") -> "gpu (A100)"
+        format_accelerator_display("cpu", "") -> "cpu"
     """
-    friendly = accelerator_type_friendly(accel_type)
+    friendly = device_type or "unspecified"
     if variant:
         return f"{friendly} ({variant})"
     return friendly

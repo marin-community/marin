@@ -38,25 +38,10 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
+from iris.cluster.config import ScaleGroupResources
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.rpc import config_pb2, job_pb2
-
-
-class WellKnownAttribute(StrEnum):
-    """Canonical attribute keys for constraint-based scheduling."""
-
-    DEVICE_TYPE = "device-type"
-    DEVICE_VARIANT = "device-variant"
-    PREEMPTIBLE = "preemptible"
-    REGION = "region"
-    ZONE = "zone"
-    TPU_NAME = "tpu-name"
-    TPU_WORKER_ID = "tpu-worker-id"
-    TPU_TOPOLOGY = "tpu-topology"
-    TPU_VM_COUNT = "tpu-vm-count"
-    GPU_VARIANT = "gpu-variant"
-    GPU_COUNT = "gpu-count"
-
+from iris.cluster.types import AcceleratorType, CapacityType, WellKnownAttribute
+from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # Step 1 types: core constraint primitives (depend only on job_pb2)
@@ -923,17 +908,11 @@ def infer_preemptible_constraint(
     return None
 
 
-def accelerator_type_to_string(accel_type: int) -> str:
-    """Convert AcceleratorType proto enum value to a scheduling string."""
-    if accel_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
+def accelerator_type_to_string(accel_type: AcceleratorType | None) -> str:
+    """Convert an AcceleratorType to a scheduling string (unset → "cpu")."""
+    if accel_type is None:
         return "cpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_CPU:
-        return "cpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_GPU:
-        return "gpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_TPU:
-        return "tpu"
-    raise ValueError(f"Unknown accelerator type: {accel_type}")
+    return accel_type.value
 
 
 def _compare_ordered(
@@ -1227,7 +1206,7 @@ def check_resource_fit(
     return None
 
 
-def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) -> dict[str, str]:
+def worker_attributes_from_resources(resources: ScaleGroupResources) -> dict[str, str]:
     """Derive well-known worker attributes from scale group resources config.
 
     This ensures local workers advertise the same device-type, device-variant,
@@ -1237,6 +1216,6 @@ def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) 
     attrs[WellKnownAttribute.DEVICE_TYPE] = accelerator_type_to_string(resources.device_type)
     if resources.device_variant:
         attrs[WellKnownAttribute.DEVICE_VARIANT] = resources.device_variant.lower()
-    is_preemptible = resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    is_preemptible = resources.capacity_type == CapacityType.PREEMPTIBLE
     attrs[WellKnownAttribute.PREEMPTIBLE] = str(is_preemptible).lower()
     return attrs

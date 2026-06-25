@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import ClassVar
 
 from finelog.client.log_client import Table
-from finelog.types import LogWriterProtocol
 from rigging.timing import Timestamp
 
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
@@ -1422,12 +1421,13 @@ class K8sTaskProvider:
     # when it has gang work for Kueue. Empty disables the feature; see
     # _evict_preemptible_blockers for the safety guards.
     preempt_namespaces: list[str] = field(default_factory=list)
-    # Pre-resolved iris.task Table handle. The controller injects this after
-    # constructing the LogClient (see controller.py); when None — e.g. tests
-    # without finelog — the resource collector is disabled.
+    # Pre-resolved iris.task Table handle, built from the controller's log client
+    # and passed in by the composer; when None — e.g. tests without finelog — the
+    # resource collector is disabled. K8s pods ship their own logs via the
+    # log-shipper sidecar, so the backend needs only the tables, not the client.
     task_stats_table: Table | None = None
-    # Pre-resolved iris.profile Table handle injected by the controller
-    # alongside task_stats_table. None in test mode.
+    # Pre-resolved iris.profile Table handle, passed alongside task_stats_table.
+    # None in test mode.
     profile_table: Table | None = None
     # Resource-usage poll cadence. Defaults to the metrics-server scrape
     # resolution (15s) — sampling faster only re-reads the same value. One bulk
@@ -1641,23 +1641,6 @@ class K8sTaskProvider:
         request: job_pb2.GetProcessStatusRequest,
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("K8s backend does not support per-process status")
-
-    def set_log_sink(
-        self,
-        log_client: LogWriterProtocol,
-        task_stats_table: Table,
-        profile_table: Table,
-    ) -> None:
-        """Inject the finelog handles the controller resolves after connecting.
-
-        K8s task pods ship their own logs via the log-shipper sidecar rather than
-        through a worker daemon, so ``log_client`` is unused here: the sidecar
-        resolves its own connection to the log server (which performs no auth).
-        The backend writes per-pod resource samples + profiles to the injected
-        tables directly.
-        """
-        self.task_stats_table = task_stats_table
-        self.profile_table = profile_table
 
     def close(self) -> None:
         if self._resource_collector is not None:

@@ -232,7 +232,7 @@ def _find_closest(value: str, known: set[str]) -> str | None:
 
 
 def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
-    """Extract known regions and zones from an IrisClusterConfig proto.
+    """Extract known regions and zones from an IrisClusterConfig.
 
     Returns:
         (regions, zones) sets derived from scale group worker attributes.

@@ -11,19 +11,19 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig, validate_config
-from iris.rpc import config_pb2
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IrisClusterConfig, validate_config
 
 
 @contextmanager
-def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
+def connect_cluster(config: IrisClusterConfig) -> Iterator[str]:
     """Start controller, open tunnel, yield address, stop on exit.
 
     Local mode uses LocalCluster directly (in-process controller + workers).
     Remote modes delegate controller lifecycle to the platform (GCP, CoreWeave, etc.).
     """
     validate_config(config)
-    is_local = config.controller.WhichOneof("controller") == "local"
+    is_local = config.controller.controller_kind() == "local"
 
     if is_local:
         cluster = LocalCluster(config)
@@ -33,8 +33,7 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
         finally:
             cluster.close()
     else:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         address = bundle.controller.start_controller(config)
         try:
             with bundle.controller.tunnel(address) as tunnel_url:

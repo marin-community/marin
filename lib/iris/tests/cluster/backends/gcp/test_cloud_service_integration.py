@@ -24,7 +24,7 @@ from iris.cluster.backends.gcp.service import (
     operation_error,
 )
 from iris.cluster.backends.types import QuotaExhaustedError
-from iris.rpc import config_pb2
+from iris.cluster.types import CapacityType
 
 logger = logging.getLogger(__name__)
 
@@ -361,7 +361,7 @@ def test_tpu_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"iris-managed": "true", "env": "test"},
             metadata={"startup-script": "#!/bin/bash\necho bootstrap"},
             service_account="worker@test.iam.gserviceaccount.com",
@@ -416,7 +416,7 @@ def test_tpu_create_across_zones(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"managed": "true"},
         )
     )
@@ -426,7 +426,7 @@ def test_tpu_create_across_zones(svc: CloudGcpService, backend: GcpFakeBackend):
             zone=ZONE_US,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+            capacity_type=CapacityType.PREEMPTIBLE,
             labels={"managed": "true"},
         )
     )
@@ -457,7 +457,7 @@ def test_tpu_metadata_and_network_config(svc: CloudGcpService, backend: GcpFakeB
             zone=ZONE_EU,
             accelerator_type="v5litepod-16",
             runtime_version="v2-alpha-tpuv5-lite",
-            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+            capacity_type=CapacityType.ON_DEMAND,
             labels={},
             metadata={"startup-script": large_script, "other-key": "other-value"},
             network="projects/test/global/networks/default",

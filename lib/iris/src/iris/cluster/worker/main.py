@@ -3,7 +3,6 @@
 
 """Click-based CLI for the Iris worker daemon."""
 
-import json
 import logging
 import os
 import shutil
@@ -11,14 +10,14 @@ import subprocess
 from pathlib import Path
 
 import click
-from google.protobuf.json_format import ParseDict
 from rigging.log_setup import configure_logging
 
 from iris.cluster.backends.factory import create_provider_bundle
+from iris.cluster.config import SshConfig
+from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
-from iris.cluster.worker.worker import Worker, worker_config_from_proto
-from iris.rpc import config_pb2
+from iris.cluster.worker.worker import Worker, worker_config_from_wire
 
 
 def _configure_docker_ar_auth(ar_host: str) -> None:
@@ -52,24 +51,24 @@ def serve(worker_config: str):
     logger.info("Iris worker starting (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
     with open(worker_config) as f:
-        wc_proto = ParseDict(json.load(f), config_pb2.WorkerConfig())
+        wire = WorkerWireConfig.model_validate_json(f.read())
 
     bundle = create_provider_bundle(
-        platform_config=wc_proto.platform,
-        worker_port=wc_proto.port,
-        ssh_config=config_pb2.SshConfig(),
+        platform_config=wire.platform,
+        worker_port=wire.port,
+        ssh_config=SshConfig(),
     )
     zone = detect_gcp_zone()
 
     def resolve_image(image: str) -> str:
         return bundle.controller.resolve_image(image, zone=zone)
 
-    if wc_proto.default_task_image:
-        resolved = resolve_image(wc_proto.default_task_image)
-        if resolved != wc_proto.default_task_image and "-docker.pkg.dev/" in resolved:
+    if wire.default_task_image:
+        resolved = resolve_image(wire.default_task_image)
+        if resolved != wire.default_task_image and "-docker.pkg.dev/" in resolved:
             _configure_docker_ar_auth(resolved.split("/")[0])
 
-    config = worker_config_from_proto(wc_proto, resolve_image=resolve_image)
+    config = worker_config_from_wire(wire, resolve_image=resolve_image)
 
     container_runtime = DockerRuntime(cache_dir=config.cache_dir, capacity_type=config.capacity_type)
 

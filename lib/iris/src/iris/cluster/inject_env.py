@@ -5,21 +5,21 @@
 
 Resolves the environment variable names a cluster declares against the
 operator's shell at `iris cluster start` and folds them toward tasks. This lives
-in its own module (importing only the proto) so the controller backends can use
-it without the `config` → `backends.factory` import cycle.
+in its own module (importing only the config model) so the controller backends
+can use it without the `config` → `backends.factory` import cycle.
 """
 
 import os
 from collections.abc import Sequence
 
-from iris.rpc import config_pb2
+from iris.cluster.config import IrisClusterConfig
 
 # Secret holding the cluster default env (S3 storage auth + operator-injected
 # vars), projected into task pods and the controller via envFrom on Kubernetes.
 TASK_ENV_SECRET_NAME = "iris-task-env"
 
 
-def projects_task_env_secret(config: config_pb2.IrisClusterConfig) -> bool:
+def projects_task_env_secret(config: IrisClusterConfig) -> bool:
     """Whether the cluster populates the iris-task-env Secret.
 
     True when S3 storage auth must be injected or operator env is declared. The
@@ -55,7 +55,7 @@ def collect_inject_env(names: Sequence[str]) -> dict[str, str]:
 
 
 def merge_injected_into_task_env(
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     injected: dict[str, str],
 ) -> None:
     """Fold operator-injected values into task_env in place (GCP/RPC path).
@@ -63,7 +63,7 @@ def merge_injected_into_task_env(
     Injected values are *defaults*: existing literal ``task_env`` entries win, so
     a cluster config that pins e.g. MARIN_PREFIX is not overridden by the
     operator's shell. Mirrors the values into ``worker.task_env`` so they reach
-    workers through the bootstrap config (the same channel apply_defaults uses).
+    workers through the bootstrap config.
     """
     for name, value in injected.items():
         if name not in config.defaults.task_env:
@@ -72,7 +72,7 @@ def merge_injected_into_task_env(
             config.defaults.worker.task_env[name] = value
 
 
-def with_injected_task_env(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClusterConfig:
+def with_injected_task_env(config: IrisClusterConfig) -> IrisClusterConfig:
     """Return a copy of config with operator-injected env folded into task_env.
 
     Used by the VM bootstrap path (GCP/manual), where the shipped config is the
@@ -83,7 +83,6 @@ def with_injected_task_env(config: config_pb2.IrisClusterConfig) -> config_pb2.I
     if not config.defaults.inject_env:
         return config
     injected = collect_inject_env(config.defaults.inject_env)
-    merged = config_pb2.IrisClusterConfig()
-    merged.CopyFrom(config)
+    merged = config.model_copy(deep=True)
     merge_injected_into_task_env(merged, injected)
     return merged

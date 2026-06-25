@@ -13,20 +13,21 @@ import pytest
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import CloudSliceState, QuotaExhaustedError
+from iris.cluster.config import GcpPlatformConfig, GcpSliceConfig, SliceConfig, WorkerConfig
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
+from iris.cluster.types import AcceleratorType
 
 
-def _make_gcp_config(zone: str = "us-central2-b") -> config_pb2.GcpPlatformConfig:
-    return config_pb2.GcpPlatformConfig(project_id="test-project", zones=[zone])
+def _make_gcp_config(zone: str = "us-central2-b") -> GcpPlatformConfig:
+    return GcpPlatformConfig(project_id="test-project", zones=[zone])
 
 
-def _make_slice_config(name: str = "test", zone: str = "us-central2-b") -> config_pb2.SliceConfig:
-    return config_pb2.SliceConfig(
+def _make_slice_config(name: str = "test", zone: str = "us-central2-b") -> SliceConfig:
+    return SliceConfig(
         name_prefix=name,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_type=AcceleratorType.TPU,
         accelerator_variant="v5litepod-8",
-        gcp=config_pb2.GcpSliceConfig(zone=zone, runtime_version="v2-alpha-tpuv5-lite"),
+        gcp=GcpSliceConfig(zone=zone, runtime_version="v2-alpha-tpuv5-lite"),
     )
 
 
@@ -60,9 +61,7 @@ def test_tpu_init_stuck():
     # Bootstrap-monitored slice (worker_config) with the bootstrap thread
     # suppressed: bootstrap never reports healthy, so the slice must not present
     # as READY while the node sits in CREATING.
-    wc = config_pb2.WorkerConfig(
-        docker_image="img:latest", port=10001, controller_address="c:10000", cache_dir="/var/cache/iris"
-    )
+    wc = WorkerConfig(docker_image="img:latest", port=10001, controller_address="c:10000", cache_dir="/var/cache/iris")
     with unittest.mock.patch("iris.cluster.backends.gcp.workers.threading.Thread"):
         handle = platform.create_slice(_make_slice_config("stuck"), worker_config=wc)
 

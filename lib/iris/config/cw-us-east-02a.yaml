@@ -71,8 +71,6 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-    startup_grace_period:
-      milliseconds: 2400000    # 40 min — covers cold bare-metal provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.

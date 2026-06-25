@@ -17,6 +17,7 @@ from iris.cli.job import (
     validate_extra_resources,
     validate_region_zone,
 )
+from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -24,19 +25,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.rpc import config_pb2
 from iris.rpc import job_pb2 as _job_pb2
 
 
-def _make_config_with_zones(zones: list[str]) -> config_pb2.IrisClusterConfig:
+def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
     """Build a minimal IrisClusterConfig with scale groups for the given zones."""
-    config = config_pb2.IrisClusterConfig()
+    scale_groups: dict[str, ScaleGroupConfig] = {}
     for zone in zones:
         region = zone.rsplit("-", 1)[0]
-        sg = config.scale_groups[f"sg-{zone}"]
-        sg.worker.attributes["zone"] = zone
-        sg.worker.attributes["region"] = region
-    return config
+        scale_groups[f"sg-{zone}"] = ScaleGroupConfig(worker=WorkerSettings(attributes={"zone": zone, "region": region}))
+    return IrisClusterConfig(scale_groups=scale_groups)
 
 
 def test_validate_region_zone_valid_region():
