@@ -81,6 +81,9 @@ def transposed_ragged_dot(
     group_block_starts = group_starts // block_k * block_k
     group_block_ends = -(group_ends // -block_k) * block_k
     group_num_blocks = (group_block_ends - group_block_starts) // block_k
+    # Block-aligned start in units of block_k; multiplied back by the static block_k inside the
+    # kernel so the slice start is provably block_k-aligned without pl.multiple_of (unimplemented).
+    group_block_start_blocks = group_starts // block_k
 
     swizzle = plgpu.find_swizzle(block_k * jnp.dtype(lhs.dtype).itemsize * 8)
     swizzle_elems = swizzle // jnp.dtype(lhs.dtype).itemsize
@@ -91,7 +94,7 @@ def transposed_ragged_dot(
         group_starts_gmem,
         group_ends_gmem,
         group_num_blocks_gmem,
-        group_block_starts_gmem,
+        group_block_start_blocks_gmem,
         lhs_gmem,
         rhs_gmem,
         o_gmem,
@@ -106,7 +109,7 @@ def transposed_ragged_dot(
 
             # Token (contraction) slice for this group, aligned down to block_k. Potentially out of
             # bounds at the tail, but emit_pipeline never reads the out-of-bounds part.
-            group_block_start = pl.multiple_of(group_block_starts_gmem[g_i], block_k)
+            group_block_start = group_block_start_blocks_gmem[g_i] * block_k
             gmem_slice = pl.ds(group_block_start, k)
 
             def acc_scope(acc_ref):
@@ -204,7 +207,7 @@ def transposed_ragged_dot(
         group_starts,
         group_ends,
         group_num_blocks,
-        group_block_starts,
+        group_block_start_blocks,
         lhs,
         rhs,
     )
