@@ -72,6 +72,7 @@ class CurvatureMuonConfig(OptimizerConfig):
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
     curvature_alpha: float = 1.0  # α ≥ 1, multiplier on the √e_max shift (α=1 = boundary PSD)
     curv_power: str = "linear"  # "linear" (C = P/√e_max) or "sqrt" (C = P^{1/2})
+    mudam_init: bool = False  # sqrt mode: warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction) vs msign(N)
     inner_steps: int = 1  # K, inner fixed-point iterations
     power_iters: int = 8  # power-iteration steps for e_max(P) (warm-started) + Newton-Schulz steps for P^{1/2}
     # If set, the curvature strength tracks the LR schedule: lambda_t = curvature_lambda * lr_t / peak_lr.
@@ -99,6 +100,7 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.curvature_lambda,
                         self.curvature_alpha,
                         self.curv_power,
+                        self.mudam_init,
                         self.inner_steps,
                         self.power_iters,
                         self.learning_rate,
@@ -161,9 +163,10 @@ _SQRT_FLOOR = 1e-2  # floor the normalized spectrum before the matrix-sqrt NS so
 
 
 def _matrix_sqrt_ns(a, iters):
-    """A^{1/2} for SPD A with spectrum in (0, 1], via the coupled Newton-Schulz (Denman–Beavers) Y-iterate.
+    """A^{1/2} and A^{-1/2} for SPD A with spectrum in (0, 1], via the coupled Newton-Schulz (Denman–Beavers).
 
-    Y → A^{1/2}, stable (Y stays bounded; we never read the inverse-sqrt Z). Matmul-only, no eigh.
+    Returns (Y, Z), Y → A^{1/2}, Z → A^{-1/2}. Matmul-only, no eigh. Stable as long as A's spectrum is
+    floored away from 0 (else Z blows up). Z is used for the optional Mudam-style P^{-1/2} N warm start.
     """
     n = a.shape[0]
     eye = jnp.eye(n, dtype=a.dtype)
@@ -173,18 +176,34 @@ def _matrix_sqrt_ns(a, iters):
         t = 1.5 * eye - 0.5 * (z @ y)
         y = y @ t
         z = t @ z
-    return y
+    return y, z
 
 
 def _curv_direction_2d(
-    g, n, p, q, *, rho, lam_static, lam_coef, alpha, steps, eps, ctype, inner_steps, power_iters, curv_power
+    g,
+    n,
+    p,
+    q,
+    *,
+    rho,
+    lam_static,
+    lam_coef,
+    alpha,
+    steps,
+    eps,
+    ctype,
+    inner_steps,
+    power_iters,
+    curv_power,
+    mudam_init,
 ):
     """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
 
-    Inner fixed point X = msign( N + λ·(√e_max·I − C)·X ), where the curvature term C is either
-    P/√e_max (curv_power="linear", penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", penalty ∝ √p_i). Both
-    have max eigenvalue √e_max ⟹ √e_max·I − C is PSD ⟹ stable. lam_static gates on/off; lam_coef is the
-    coefficient (traced when it tracks the LR schedule). e_max(P) via warm-started power iteration.
+    Inner fixed point X = msign( N + λ·(α√e_max·I − C)·X ), curvature term C = P/√e_max (curv_power="linear",
+    penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", ∝ √p_i). C has max eigenvalue √e_max ⟹ α√e_max·I − C is PSD
+    for α≥1 ⟹ stable. lam_static gates on/off; lam_coef is the (possibly LR-tracked) coefficient. e_max(P)
+    via warm-started power iteration. mudam_init (sqrt mode only): warm-start X⁰ = msign(P^{-1/2} N) (the
+    Mudam direction, using the floored-NS inverse-sqrt iterate) instead of msign(N).
     """
     out, inn = g.shape
     transpose = out < inn
@@ -196,18 +215,23 @@ def _curv_direction_2d(
     for _ in range(int(power_iters)):
         pq = new_p @ new_q
         new_q = pq / (jnp.linalg.norm(pq) + eps)
-    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so √e_max·I − C is strictly PSD.
+    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so α√e_max·I − C is strictly PSD.
     emax = jnp.dot(new_q, new_p @ new_q) * _EMAX_MARGIN
     se = jnp.sqrt(emax) + eps
+    eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
 
-    x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
+    # Curvature term C (and, in sqrt mode, the inverse-sqrt iterate for the optional Mudam warm start).
+    if curv_power == "sqrt":
+        a_norm = new_p / (emax + eps) + _SQRT_FLOOR * eye  # floored to [_SQRT_FLOOR, <1]; +eps guards P≈0
+        y_half, z_inv = _matrix_sqrt_ns(a_norm, power_iters)
+        curv = se * y_half  # ≈ (P + _SQRT_FLOOR·e_max·I)^{1/2}
+        x0_arg = (z_inv @ n_t) if mudam_init else n_t  # z_inv ∝ (P + floor)^{-1/2}; msign scale-invariant
+    else:
+        curv = new_p / se  # P/√e_max
+        x0_arg = n_t
+
+    x = zeropower_via_newtonschulz5(x0_arg, steps=steps, eps=eps, coefficient_type=ctype)
     if lam_static > 0.0:
-        eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
-        if curv_power == "sqrt":
-            a_norm = new_p / (emax + eps) + _SQRT_FLOOR * eye  # floored to [_SQRT_FLOOR, <1]; +eps guards P≈0
-            curv = se * _matrix_sqrt_ns(a_norm, power_iters)  # ≈ (P + _SQRT_FLOOR·e_max·I)^{1/2}
-        else:
-            curv = new_p / se  # P/√e_max
         operator = lam_coef * (alpha * se * eye - curv)  # PSD for α≥1: λ(α√e_max I − C)
         for _ in range(int(inner_steps)):
             x = zeropower_via_newtonschulz5(n_t + operator @ x, steps=steps, eps=eps, coefficient_type=ctype)
@@ -227,6 +251,7 @@ def scale_with_curvature_muon(
     curvature_lambda=0.0,
     curvature_alpha=1.0,
     curv_power="linear",
+    mudam_init=False,
     inner_steps=1,
     power_iters=8,
     peak_lr=0.02,
@@ -238,6 +263,7 @@ def scale_with_curvature_muon(
     lam = float(curvature_lambda)  # static peak strength (also the on/off switch)
     alpha = float(curvature_alpha)
     cpow = str(curv_power)
+    mudam = bool(mudam_init)
     peak_lr = float(peak_lr)
     tracks_lr = bool(lambda_tracks_lr)
 
@@ -310,6 +336,7 @@ def scale_with_curvature_muon(
                 inner_steps=inner_steps,
                 power_iters=power_iters,
                 curv_power=cpow,
+                mudam_init=mudam,
             )
             new_p, new_q, x = jax.vmap(fn)(g, n, p, q) if g.ndim == 3 else fn(g, n, p, q)
             new_w = dataclasses.replace(n_layer.weight, array=x)

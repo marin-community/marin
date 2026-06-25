@@ -63,6 +63,8 @@ LAMBDAS: tuple[float, ...] = _floats("LAMBDAS", "0.0,0.1,1.0")
 KS: tuple[int, ...] = _ints("KS", "1,2")
 ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.2")  # multiplier on the sqrt(e_max) shift
 CURV_POWER: str = os.environ.get("CURV_POWER", "linear")  # "linear" (P/sqrt(e_max)) or "sqrt" (P^{1/2})
+# sqrt mode: warm-start X0 = msign(P^{-1/2} N) (Mudam direction) instead of msign(N).
+MUDAM_INIT: bool = os.environ.get("MUDAM_INIT", "false").lower() in ("1", "true", "yes")
 POWER_ITERS: int = int(os.environ.get("POWER_ITERS", "8"))  # power-iteration steps for e_max(P)
 # lambda tracks the LR schedule: lambda_t = (swept lambda = peak) * lr_t / peak_lr.
 LAMBDA_TRACKS_LR: bool = os.environ.get("LAMBDA_TRACKS_LR", "false").lower() in ("1", "true", "yes")
@@ -144,6 +146,7 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
         curvature_lambda=lam,
         curvature_alpha=alpha,
         curv_power=CURV_POWER,
+        mudam_init=MUDAM_INIT,
         inner_steps=k,
         power_iters=POWER_ITERS,
         lambda_tracks_lr=LAMBDA_TRACKS_LR,
@@ -162,7 +165,8 @@ def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
     )
     cf = {"polar_express": "pe", "quintic": "qx", "simple": "sm", "aol": "aol"}.get(COEFF_TYPE, COEFF_TYPE)
     cp = "sq" if CURV_POWER == "sqrt" else "lin"
-    tag = f"_{cp}_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
+    mi = "_mi" if MUDAM_INIT else ""
+    tag = f"_{cp}{mi}_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
     if lam == 0.0:
         clabel = "_lam0"  # MuonH control (alpha/K irrelevant)
     else:
