@@ -12,8 +12,6 @@ from levanter.tracker import Tracker
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils.jax_utils import jnp_to_python
 
-logger = logging.getLogger(__name__)
-
 
 def _to_jsonable(value: Any):
     """Recursively convert ``value`` to something JSON serializable."""
@@ -62,10 +60,7 @@ class JsonLoggerTracker(Tracker):
                 "hparams": hparams,
             }
         )
-        try:
-            self.logger.info(json.dumps(record))
-        except TypeError as e:
-            logger.info(f"Oh noes... {e}")
+        self.logger.info(json.dumps(record))
 
     def log(self, metrics: Mapping[str, Any], *, step: Optional[int], commit: Optional[bool] = None):
         del commit
