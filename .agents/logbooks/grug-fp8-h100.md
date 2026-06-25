@@ -1281,3 +1281,39 @@ the bf16-Triton baseline the bf16 e2e actually runs (`bench_ragged_mosaic_autotu
   bf16 wgrad is now the largest remaining bf16 fraction of the backward and the main headroom. (2) is the
   next phase. Cluster note: the synced gpu env regressed to cuDNN 9.10.2 (jaxlib 0.10.0 needs 9.12) — see
   [[mosaic-gpu-cluster-toolchain]]; the launchers now upgrade cuDNN in place.
+
+### 2026-06-25 — GFP8-028: M1 — f8 cast-transpose wgrad WORKS (numerically in-band) but LOSES on speed
+The fp8-wgrad milestone: convert the M0 hybrid's last bf16 GEMM (the weight-gradient / drhs, contracting
+the ragged token axis) to f8. The wall (GFP8-024/025): the wgrad operands arrive token-major, but Hopper
+f8 wgmma forbids the in-kernel operand transpose the stock `transposed_ragged_dot_mgpu` uses
+(`mosaic/gpu/wgmma.py:147 supports_transpose = bytewidth==2`). Fix = the TE/DeepSeek **cast-transpose**:
+feed token-CONTIGUOUS f8 operands so the wgmma needs no real transpose.
+- **Kernel** (`haliax/_src/transposed_ragged_dot_mgpu.py`, adapted from JAX's `transposed_ragged_dot_mgpu`):
+  operands `lhs[K=hid,M=tok]`, `g[N=out,M=tok]` with tok contiguous (last axis); `wgmma(acc, lhs_smem,
+  transpose_ref(g_smem))` — the *free* relabel of K-contiguous data, the same shape the forward's
+  transpose_rhs uses (proven f8-legal, GFP8-022). Inherits the group head/tail boundary masking (via f32)
+  + empty-group skip. Output stored in `out_dtype` (f32/bf16), not f8.
+- **Wired** the `_DRHS` branch of `_mosaic_pallas_call` (cast-transpose both operands via swapaxes, call
+  kernel). Gated behind `RAGGED_F8_WGRAD` (default off) so the shipped bf16 wgrad stays the reference.
+- **6 H100 iterations to lower** (each a piece the vendored f8 copy had dropped vs upstream, jax 0.10.0):
+  (1) output SMEM reused f8 input swizzle → drop transforms on output; (2) missing Warpgroup lowering
+  semantics; (3) `pl.multiple_of` unimplemented → give alignment via `block_idx*block_k`; (4/5) dynamic
+  gmem slice on the contiguous token axis → offset via block-granular `index_map` (gstart_block+k_i);
+  (6) Warpgroup gmem→smem copy asserts `swizzle is None` → drop explicit BlockSpec transforms (the
+  forward kernel passes none and lets Mosaic auto-swizzle). The f8 `wgmma(transpose_ref)` lowered clean
+  every iteration — **the transpose wall is genuinely cleared**.
+- **Result (job …-200204, real Grug T8192/D2048/F5632/E8, all-E4M3):**
+  | arm | steady | vs bf16 | dw13 | dw2 |
+  |-----|--------|---------|------|-----|
+  | bf16 baseline | 3.752 ms | 1.00× | — | — |
+  | f8 fwd/dgrad + **bf16** wgrad (shipped hybrid) | 3.543 ms | **1.06×** | 6.38e-2 | 6.10e-2 |
+  | f8 fwd/dgrad + **f8** wgrad (new) | 4.159 ms | **0.90×** | 7.16e-2 | 6.42e-2 |
+- **Verdict: correctness ✓, speed ✗.** f8 wgrad is numerically in-band (the +0.8e-2/+0.3e-2 on dw13/dw2 is
+  the expected extra E4M3 error) but **adds ~0.62 ms** — switching bf16→f8 wgrad regresses e2e 1.06×→0.90×.
+  The stock bf16 transposed kernel is already well-tuned; the f8 path pays the cast-transpose (2 f8
+  transposes × 2 wgrads) + an untuned kernel, and the wgrad's f8 compute edge is small. This is exactly
+  GFP8-024's caution (the ~5% prize eaten by the transpose) going net-negative. **bf16 wgrad stays the
+  default** (now empirically justified, not just provisional). Open (M2): per-GEMM breakdown to split
+  transpose vs kernel cost, autotune the kernel, fuse the cast-transpose into the quant sites — but the
+  ceiling is low, so f8 wgrad may simply not be worth it at this shape. Toggle `RAGGED_F8_WGRAD=1` keeps
+  it available for future shapes / Blackwell. Plan: `.agents/projects/2026-06-25_fp8_ragged_wgrad_cast_transpose.md`.
