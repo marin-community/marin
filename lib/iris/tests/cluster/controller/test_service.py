@@ -1122,6 +1122,14 @@ _INT32_MAX = (1 << 31) - 1
             {"/test-user/alpha-job"},
             id="job_id_prefix_matches_user_and_name",
         ),
+        # A username-only prefix ("/<user>") matches every job that user owns:
+        # the wire-form job_id is "/<user>/<name>", so the anchored LIKE catches
+        # all of them. This is the common "show me all of tim's jobs" query.
+        pytest.param(
+            {"job_id_prefix": "/test-user"},
+            {"/test-user/alpha-job", "/test-user/beta-job"},
+            id="job_id_prefix_username_only",
+        ),
         # The bare "%" in a prefix must be treated literally; without escaping
         # this would degenerate into "LIKE '%a%'" and match every job.
         pytest.param({"job_id_prefix": "%a"}, set(), id="job_id_prefix_escapes_sql_wildcards"),

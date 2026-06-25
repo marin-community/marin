@@ -13,6 +13,7 @@ from iris.cli.job import (
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    list_jobs,
     run,
     validate_extra_resources,
     validate_region_zone,
@@ -222,6 +223,36 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
     assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
     assert captured["controller_url"] == "http://controller.test"
     assert captured["entrypoint"].command == ["python", "train.py"]
+
+
+def test_job_list_cli_forwards_username_only_prefix(monkeypatch):
+    """A username-only --prefix ('/tim') reaches the client verbatim.
+
+    Regresses the crash where the CLI parsed --prefix into a JobName, which
+    rejected single-segment values like '/tim' (the canonical form needs a
+    '/<user>/<job>' shape) before any RPC could be made.
+    """
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        def list_jobs(self, *, state=None, prefix=None):
+            captured["state"] = state
+            captured["prefix"] = prefix
+            return []
+
+    def fake_remote(controller_url, *, workspace, credentials=None):
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+
+    result = CliRunner().invoke(
+        list_jobs,
+        ["--prefix", "/tim"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["prefix"] == "/tim"
 
 
 # --tpu multi-variant parsing
