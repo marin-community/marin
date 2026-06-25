@@ -24,8 +24,8 @@ from marin.execution.executor import executor_main
 
 from experiments.defaults import default_train
 from experiments.llama import compute_num_parameters, llama3_tokenizer_vocab_size, llama_150m
+from experiments.pretraining_datasets import nemotron_mix
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tootsie.exp1295_32b import nemotron_mix
 
 # ---------------------------
 # Daily ferry policy defaults

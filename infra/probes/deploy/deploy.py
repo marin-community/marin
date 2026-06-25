@@ -14,8 +14,6 @@ Run with ``uv run deploy/deploy.py <command>`` (click resolves from the project
 venv), or ``python deploy/deploy.py <command>`` if click is on the path.
 """
 
-from __future__ import annotations
-
 import logging
 import subprocess
 from pathlib import Path

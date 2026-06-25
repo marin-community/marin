@@ -10,8 +10,6 @@ clear error on auth/permission failures) and the page loop, so each backend
 only maps its buckets to :class:`CostEvent`.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator, Mapping
 from typing import Any
 

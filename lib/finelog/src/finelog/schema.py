@@ -15,8 +15,6 @@ on-disk persistence. The client only needs to declare schemas, encode
 them for the wire, and build Arrow tables, so that is all that lives here.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import pyarrow as pa

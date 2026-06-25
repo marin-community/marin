@@ -3,8 +3,6 @@
 
 """Regression tracking utilities for profile-summary before/after loops."""
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from dataclasses import dataclass

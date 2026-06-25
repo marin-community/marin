@@ -4,8 +4,7 @@
 """Generated protobuf package for Iris RPC types."""
 
 # Import order matters for proto descriptor pool: each module must be loaded
-# after its dependencies. Chain: time → config → vm → query → job → controller/worker.
-from iris.rpc import config_pb2 as config_pb2
+# after its dependencies. Chain: time → vm → query → job → controller/worker.
 from iris.rpc import controller_pb2 as controller_pb2
 from iris.rpc import job_pb2 as job_pb2
 from iris.rpc import query_pb2 as query_pb2

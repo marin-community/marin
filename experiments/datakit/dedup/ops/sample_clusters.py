@@ -34,8 +34,6 @@ Submit on iris (us-central2 pinned by the worker's MARIN_PREFIX):
         -- python experiments/datakit/dedup/ops/sample_clusters.py
 """
 
-from __future__ import annotations
-
 import logging
 
 import pyarrow as pa

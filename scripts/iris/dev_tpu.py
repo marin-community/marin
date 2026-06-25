@@ -4,8 +4,6 @@
 
 """Allocate and use development TPUs on Iris-managed clusters."""
 
-from __future__ import annotations
-
 import atexit
 import getpass
 import json
@@ -27,7 +25,8 @@ from urllib.parse import urlsplit
 import click
 import yaml
 from iris.client import IrisClient, JobAlreadyExists
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.rpc import controller_pb2, job_pb2
@@ -82,7 +81,7 @@ class DevTpuState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevTpuState:
+    def from_json(cls, raw: str) -> "DevTpuState":
         data = json.loads(raw)
         workers = [
             DevTpuWorker(
@@ -296,8 +295,8 @@ def save_state(path: Path, state: DevTpuState) -> None:
     path.write_text(state.to_json())
 
 
-def _require_gcp_platform(config) -> str:
-    if not config.platform.HasField("gcp"):
+def _require_gcp_platform(config: IrisClusterConfig) -> str:
+    if config.platform.platform_kind() != "gcp":
         raise click.ClickException("Iris dev TPU currently supports only GCP-backed clusters.")
     project = config.platform.gcp.project_id or gcp.get_project_id()
     if not project:
@@ -315,13 +314,13 @@ def find_workspace_root(start: Path) -> Path | None:
 
 @contextmanager
 def controller_client(config_file: str) -> Iterable[IrisClient]:
-    iris_config = IrisConfig.load(config_file)
+    iris_config = load_config(config_file)
     controller_address = iris_config.controller_address()
-    providers = iris_config.provider_bundle()
+    providers = provider_bundle(iris_config)
     controller = providers.controller
     workspace = find_workspace_root(Path.cwd())
     if not controller_address:
-        controller_address = controller.discover_controller(iris_config.proto.controller)
+        controller_address = controller.discover_controller(iris_config.controller)
     with controller.tunnel(address=controller_address) as tunneled:
         client = IrisClient.remote(tunneled, workspace=workspace)
         try:
@@ -734,8 +733,8 @@ def allocate(
             f"Dev TPU session '{session_name}' already exists. Use release first or choose a new --tpu-name."
         )
 
-    iris_config = IrisConfig.load(ctx.obj.config_file)
-    project = _require_gcp_platform(iris_config.proto)
+    iris_config = load_config(ctx.obj.config_file)
+    project = _require_gcp_platform(iris_config)
     client_cm = None
     client: IrisClient | None = None
     job = None

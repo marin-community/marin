@@ -8,8 +8,6 @@ for the Autoscaler and ScalingGroup. Manages GCE instances (standalone VMs)
 and TPU slices via GcpService.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time
@@ -55,10 +53,18 @@ from iris.cluster.backends.types import (
     SliceHandle,
     generate_slice_suffix,
 )
+from iris.cluster.config import (
+    GcpPlatformConfig,
+    GcpSliceConfig,
+    SliceConfig,
+    SshConfig,
+    VmConfig,
+    WorkerConfig,
+)
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from iris.cluster.worker.env_probe import construct_worker_id
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -187,14 +193,14 @@ def _gcp_instance_metadata(metadata: dict[str, str] | None = None) -> dict[str, 
     return result
 
 
-def _slice_external_ip_enabled(gcp: config_pb2.GcpSliceConfig) -> bool:
+def _slice_external_ip_enabled(gcp: GcpSliceConfig) -> bool:
     """Return enable_external_ip from a GcpSliceConfig, defaulting to True for unset/legacy configs."""
-    if not gcp.HasField("enable_external_ip"):
+    if gcp.enable_external_ip is None:
         return True
     return gcp.enable_external_ip
 
 
-def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
+def _validate_slice_config(config: SliceConfig) -> None:
     """Validate required fields on a SliceConfig before creating a GCP slice.
 
     Raises ValueError listing all missing fields so operators can fix config
@@ -204,14 +210,14 @@ def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
     violations: list[str] = []
     if not config.gcp.zone:
         missing.append("gcp.zone")
-    if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+    if config.gcp.mode == GcpSliceMode.VM:
         if not config.gcp.machine_type:
             missing.append("gcp.machine_type")
         if config.num_vms != 1:
             violations.append("GCP VM slice mode requires num_vms=1")
-        if config.capacity_type != config_pb2.CAPACITY_TYPE_ON_DEMAND:
+        if config.capacity_type != CapacityType.ON_DEMAND:
             violations.append("GCP VM slice mode only supports capacity_type on-demand")
-        if config.accelerator_type != config_pb2.ACCELERATOR_TYPE_CPU:
+        if config.accelerator_type != AcceleratorType.CPU:
             violations.append("GCP VM slice mode requires accelerator_type=cpu")
         if config.accelerator_variant:
             violations.append("GCP VM slice mode does not support accelerator_variant")
@@ -228,7 +234,7 @@ def _validate_slice_config(config: config_pb2.SliceConfig) -> None:
         raise ValueError("; ".join(errors))
 
 
-def _validate_vm_config(config: config_pb2.VmConfig) -> None:
+def _validate_vm_config(config: VmConfig) -> None:
     """Validate required fields on a VmConfig before creating a GCE instance."""
     missing: list[str] = []
     if not config.name:
@@ -249,10 +255,10 @@ class GcpWorkerProvider:
 
     def __init__(
         self,
-        gcp_config: config_pb2.GcpPlatformConfig,
+        gcp_config: GcpPlatformConfig,
         label_prefix: str,
         worker_port: int,
-        ssh_config: config_pb2.SshConfig | None = None,
+        ssh_config: SshConfig | None = None,
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
@@ -280,7 +286,7 @@ class GcpWorkerProvider:
         return self._iris_labels
 
     @property
-    def ssh_config(self) -> config_pb2.SshConfig | None:
+    def ssh_config(self) -> SshConfig | None:
         return self._ssh_config
 
     def resolve_image(self, image: str, zone: str | None = None) -> str:
@@ -324,7 +330,7 @@ class GcpWorkerProvider:
             raise ValueError(f"Worker {worker_id!r} not found in slice {slice_id!r}")
         raise ValueError(f"Slice {slice_id!r} not found in zone {zone!r}")
 
-    def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
+    def create_vm(self, config: VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
         gcp = config.gcp
@@ -374,8 +380,8 @@ class GcpWorkerProvider:
 
     def create_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a GCP-backed slice (TPU pod or single VM).
 
@@ -385,14 +391,14 @@ class GcpWorkerProvider:
         if self._gcp.mode == ServiceMode.LOCAL:
             return self._create_local_slice(config, worker_config)
         _validate_slice_config(config)
-        if config.gcp.mode == config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM:
+        if config.gcp.mode == GcpSliceMode.VM:
             return self._create_vm_slice(config, worker_config)
         return self._create_tpu_slice(config, worker_config)
 
     def _create_local_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a local slice via InMemoryGcpService(LOCAL)."""
         slice_id = _build_gce_resource_name(config.name_prefix, generate_slice_suffix())
@@ -400,22 +406,22 @@ class GcpWorkerProvider:
 
     def _create_tpu_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> GcpSliceHandle:
         """Create a TPU slice via GcpService.
 
         Routes to the queued resources API for reserved capacity, or the
         standard tpu-vm create API for preemptible/on-demand.
         """
-        if config.capacity_type == config_pb2.CAPACITY_TYPE_RESERVED:
+        if config.capacity_type == CapacityType.RESERVED:
             return self._create_reserved_tpu_slice(config, worker_config)
         return self._create_standard_tpu_slice(config, worker_config)
 
     def _create_standard_tpu_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> GcpSliceHandle:
         """Create a TPU slice via gcloud compute tpus tpu-vm create."""
         gcp = config.gcp
@@ -474,8 +480,8 @@ class GcpWorkerProvider:
 
     def _create_reserved_tpu_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> GcpSliceHandle:
         """Create a TPU slice via gcloud alpha compute tpus queued-resources create."""
         gcp = config.gcp
@@ -551,8 +557,8 @@ class GcpWorkerProvider:
 
     def _create_vm_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> GcpVmSliceHandle:
         """Create a single GCE VM that behaves as a one-worker slice.
 

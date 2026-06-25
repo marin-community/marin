@@ -28,8 +28,7 @@ def _make_req(
     attempt_id: int = 0,
     num_tasks: int = 1,
     bundle_id: str = "bundle-abc",
-    extras: list[str] | None = None,
-    pip_packages: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
     user_env: dict[str, str] | None = None,
     tpu: bool = False,
     tpu_variant: str = "v4",
@@ -45,10 +44,8 @@ def _make_req(
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
     req.resources.cpu_millicores = 1000
     req.resources.memory_bytes = 4 * 1024**3
-    if extras:
-        req.environment.extras.extend(extras)
-    if pip_packages:
-        req.environment.pip_packages.extend(pip_packages)
+    if setup_scripts:
+        req.environment.setup_scripts.extend(setup_scripts)
     if user_env:
         for k, v in user_env.items():
             req.environment.env_vars[k] = v
@@ -94,7 +91,7 @@ _PARITY_CASES = [
     "tpu",
     "tpu_multislice",
     "gpu",
-    "extras",
+    "setup_scripts",
     "user_env",
     "ports",
     "controller",
@@ -116,8 +113,8 @@ def parity_req_and_ctrl(request):
         req = _make_req(tpu=True, tpu_variant="v6e-8", tpu_count=8, num_tasks=2)
     elif case == "gpu":
         req = _make_req(gpu_count=8)
-    elif case == "extras":
-        req = _make_req(extras=["tpu", "eval"], pip_packages=["torch", "jax"])
+    elif case == "setup_scripts":
+        req = _make_req(setup_scripts=["uv sync\n", "echo done\n"])
     elif case == "user_env":
         req = _make_req(user_env={"WANDB_API_KEY": "secret", "MY_FLAG": "1"})
     elif case == "ports":
@@ -246,14 +243,9 @@ def test_no_device_no_jax_platforms():
     assert "JAX_PLATFORMS" not in env
 
 
-def test_extras_serialized():
-    env = _common_env(_make_req(extras=["tpu", "eval"]))
-    assert json.loads(env["IRIS_JOB_EXTRAS"]) == ["tpu", "eval"]
-
-
-def test_pip_packages_serialized():
-    env = _common_env(_make_req(pip_packages=["torch"]))
-    assert json.loads(env["IRIS_JOB_PIP_PACKAGES"]) == ["torch"]
+def test_setup_scripts_serialized():
+    env = _common_env(_make_req(setup_scripts=["uv sync\n"]))
+    assert json.loads(env["IRIS_JOB_SETUP_SCRIPTS"]) == ["uv sync\n"]
 
 
 def test_user_env_serialized_as_iris_job_env():
@@ -261,9 +253,11 @@ def test_user_env_serialized_as_iris_job_env():
     assert json.loads(env["IRIS_JOB_ENV"]) == {"FOO": "bar"}
 
 
-def test_empty_extras_omitted():
+def test_setup_scripts_serialized_when_empty():
+    # Always set (even empty) so a child can tell a no-setup parent from a
+    # top-level submission with no parent at all.
     env = _common_env(_make_req())
-    assert "IRIS_JOB_EXTRAS" not in env
+    assert json.loads(env["IRIS_JOB_SETUP_SCRIPTS"]) == []
 
 
 def test_empty_user_env_omitted():

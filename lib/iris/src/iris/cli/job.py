@@ -20,6 +20,7 @@ import click
 import humanfriendly
 import yaml
 from google.protobuf import json_format
+from rigging.credentials import ClientCredentials
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -51,8 +52,8 @@ from iris.cluster.types import (
     tpu_device,
 )
 from iris.rpc import job_pb2
-from iris.rpc.auth import ClientCredentials
 from iris.rpc.proto_display import (
+    CONTAINER_PROFILE_NAMES,
     PRIORITY_BAND_NAMES,
     job_state_friendly,
     priority_band_value,
@@ -231,7 +232,7 @@ def _find_closest(value: str, known: set[str]) -> str | None:
 
 
 def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
-    """Extract known regions and zones from an IrisClusterConfig proto.
+    """Extract known regions and zones from an IrisClusterConfig.
 
     Returns:
         (regions, zones) sets derived from scale group worker attributes.
@@ -553,6 +554,8 @@ def run_iris_job(
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
     terminate_on_exit: bool = True,
     regions: tuple[str, ...] | None = None,
     zone: str | None = None,
@@ -561,6 +564,7 @@ def run_iris_job(
     priority: str | None = None,
     preemptible: bool | None = None,
     task_image: str | None = None,
+    container_profile: str | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -644,6 +648,11 @@ def run_iris_job(
         priority_band = priority_band_value(priority)
         logger.info(f"Priority band: {priority}")
 
+    profile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+    if container_profile is not None:
+        profile = job_pb2.ContainerProfile.Value(container_profile)
+        logger.info(f"Container profile: {container_profile}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -655,11 +664,14 @@ def run_iris_job(
         timeout=timeout,
         wait=wait,
         extras=extras,
+        setup_scripts=setup_scripts,
+        sync_packages=sync_packages,
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
         user=user,
         priority_band=priority_band,
+        container_profile=profile,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -678,11 +690,14 @@ def _submit_and_wait_job(
     timeout: int,
     wait: bool,
     extras: list[str] | None = None,
+    setup_scripts: list[str] | None = None,
+    sync_packages: list[str] | None = None,
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -700,7 +715,9 @@ def _submit_and_wait_job(
         entrypoint=entrypoint,
         name=job_name,
         resources=resources,
-        environment=EnvironmentSpec(env_vars=env_vars, extras=extras or []),
+        environment=EnvironmentSpec(
+            env_vars=env_vars, extras=extras or [], setup_scripts=setup_scripts, sync_packages=sync_packages or []
+        ),
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
@@ -708,6 +725,7 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         priority_band=priority_band,
+        container_profile=container_profile,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -824,6 +842,19 @@ Examples:
 @click.option("--zone", type=str, help="Restrict to zone (e.g., --zone us-central2-b).")
 @click.option("--extra", multiple=True, help="UV extras to install (e.g., --extra cpu). Can be repeated.")
 @click.option(
+    "--sync-package",
+    multiple=True,
+    help=(
+        "Scope the default `uv sync` to specific workspace members instead of "
+        "syncing all of them (e.g., --sync-package marin-core). Can be repeated."
+    ),
+)
+@click.option(
+    "--no-sync",
+    is_flag=True,
+    help="Skip environment setup entirely: run the command in the task image as-is (no uv sync).",
+)
+@click.option(
     "--reserve",
     multiple=True,
     help=(
@@ -860,6 +891,15 @@ Examples:
     ),
 )
 @click.option(
+    "--container-profile",
+    type=click.Choice(CONTAINER_PROFILE_NAMES, case_sensitive=False),
+    default=None,
+    help=(
+        "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
+        "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
+    ),
+)
+@click.option(
     "--terminate-on-exit/--no-terminate-on-exit",
     default=True,
     help="Terminate the job on Ctrl+C (default: terminate). Tunnel failures never kill the job.",
@@ -884,10 +924,13 @@ def run(
     region: tuple[str, ...],
     zone: str | None,
     extra: tuple[str, ...],
+    sync_package: tuple[str, ...],
+    no_sync: bool,
     reserve: tuple[str, ...],
     priority: str | None,
     preemptible: bool | None,
     task_image: str | None,
+    container_profile: str | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -897,6 +940,8 @@ def run(
     dashboard_url = config.dashboard_url if config else None
     validate_extra_resources(tpu, gpu, memory, disk, enable_extra_resources)
     validate_region_zone(region or None, zone, ctx.obj.get("config"))
+    if no_sync and sync_package:
+        raise click.UsageError("--no-sync skips setup entirely; it cannot be combined with --sync-package.")
 
     command = list(cmd)
     if not command:
@@ -934,6 +979,8 @@ def run(
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),
+            setup_scripts=[] if no_sync else None,
+            sync_packages=list(sync_package),
             terminate_on_exit=terminate_on_exit,
             regions=region or None,
             zone=zone,
@@ -941,6 +988,7 @@ def run(
             priority=priority,
             preemptible=preemptible,
             task_image=task_image,
+            container_profile=container_profile,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

@@ -12,8 +12,6 @@ Its own module so the runner and the sinks can share it without importing the
 ``python -m`` entrypoint (which would re-import it as a second ``__main__`` copy).
 """
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from datetime import datetime
@@ -40,7 +38,7 @@ class Sample:
     collected_at: datetime | None = None
 
     @classmethod
-    def of(cls, metric: str, value: float, /, **labels: str) -> Sample:
+    def of(cls, metric: str, value: float, /, **labels: str) -> "Sample":
         """Build an unstamped Sample with JSON-encoded labels.
 
         The runner stamps ``collected_at`` with the cycle's start time so all

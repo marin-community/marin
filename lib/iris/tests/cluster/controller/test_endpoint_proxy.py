@@ -9,8 +9,6 @@ round-trip: method, path suffix, query string, headers, and streaming
 bodies.
 """
 
-from __future__ import annotations
-
 import asyncio
 import socket
 import time

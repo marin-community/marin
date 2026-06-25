@@ -300,6 +300,7 @@ job_config_table = Table(
     Column("task_image", String, nullable=False, server_default="''"),
     Column("submit_argv_json", JSONList(), nullable=False, server_default="'[]'"),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
+    Column("container_profile", Integer, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
 )
 

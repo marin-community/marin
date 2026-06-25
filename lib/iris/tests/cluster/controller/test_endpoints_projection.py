@@ -3,8 +3,6 @@
 
 """Tests for ``EndpointsProjection`` — write-through cache over the ``endpoints`` table."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

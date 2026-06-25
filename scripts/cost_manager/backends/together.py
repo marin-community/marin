@@ -16,8 +16,6 @@ usage/cost API, but until then ``fetch`` raises :class:`CostFetchError` rather
 than guess at a schema.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any
 

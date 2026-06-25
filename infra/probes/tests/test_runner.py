@@ -5,8 +5,6 @@
 tests assert on it via caplog and on the samples delivered to a recording sink.
 asyncio.wait_for bounds duration."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

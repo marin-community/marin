@@ -15,8 +15,6 @@ I/O (the bounded finelog query) is separated from the pure ``aggregate`` so the
 windowing/rollup logic is unit-testable without a live controller.
 """
 
-from __future__ import annotations
-
 import math
 import time
 from collections import defaultdict

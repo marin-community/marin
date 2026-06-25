@@ -320,14 +320,12 @@ export interface SliceInfo {
   capacityStatus?: string
 }
 
-export interface ScaleGroupConfig {
-  quotaPool?: string
-  allocationTier?: number
-}
-
 export interface ScaleGroupStatus {
   name: string
-  config?: ScaleGroupConfig
+  deviceType?: string
+  deviceVariant?: string
+  quotaPool?: string
+  allocationTier?: number
   currentDemand?: number
   peakDemand?: number
   backoffUntil?: ProtoTimestamp

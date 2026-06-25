@@ -3,11 +3,9 @@
 
 """E2E tests for environment variable propagation across real job execution.
 
-These tests boot a real local cluster and execute jobs to verify that env vars,
-extras, and pip_packages propagate correctly through job hierarchies.
+These tests boot a real local cluster and execute jobs to verify that env vars
+and the parent's resolved setup propagate correctly through job hierarchies.
 """
-
-from __future__ import annotations
 
 import json
 import time
@@ -73,18 +71,19 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
     """Job that dumps its JobInfo state and optionally submits a child.
 
     Args:
-        output_file: Path to write JSON with {"env": ..., "extras": ..., "pip_packages": ...}
+        output_file: Path to write JSON with {"env": ..., "setup_scripts": ...}.
         child_spec: If not None, submit a child job with keys:
             - output_file: str — child's output path
-            - extras: list[str] | None — extras for the child's EnvironmentSpec
+            - extras: list[str] | None — if set, the child builds its own setup
+              with these extras (taking control of its environment); otherwise the
+              child inherits the parent's resolved setup
             - child_spec: dict | None — recursive spec for the grandchild
     """
 
     info = get_job_info()
     state = {
         "env": dict(info.env) if info else {},
-        "extras": list(info.extras) if info else [],
-        "pip_packages": list(info.pip_packages) if info else [],
+        "setup_scripts": list(info.setup_scripts) if info and info.setup_scripts is not None else None,
     }
     with open(output_file, "w") as f:
         json.dump(state, f)
@@ -104,15 +103,16 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
 
 @pytest.mark.timeout(120)
 def test_env_propagates_through_job_chain(tmp_path):
-    """E2E: env vars and extras propagate A → B → C; child overrides parent."""
+    """E2E: env vars and the parent's resolved setup propagate A → B → C."""
     out_a = str(tmp_path / "a.json")
     out_b = str(tmp_path / "b.json")
     out_c = str(tmp_path / "c.json")
 
     # Chain: A → B → C
-    # C: leaf job, no children (inherits B's extras)
-    # B: submits C with extras=["extra-from-b"] (overrides parent extras)
-    # A: submits B with no explicit extras (B inherits A's extras)
+    # A: built with extras=["extra-from-a"], so its setup references that extra.
+    # B: submitted with no environment, so it inherits A's resolved setup verbatim.
+    # C: submitted with extras=["extra-from-b"], so it builds its own setup and
+    #    does not inherit A's.
     chain_spec = {
         "output_file": out_b,
         "extras": None,
@@ -151,11 +151,14 @@ def test_env_propagates_through_job_chain(tmp_path):
         assert "PATH" not in state["env"]
         assert "HOME" not in state["env"]
 
-    # A was launched with extras=["extra-from-a"]
-    assert state_a["extras"] == ["extra-from-a"]
+    # A built its setup from extras=["extra-from-a"]
+    assert state_a["setup_scripts"] is not None
+    assert any("extra-from-a" in s for s in state_a["setup_scripts"])
 
-    # B was launched without explicit extras, so it inherits A's extras
-    assert state_b["extras"] == ["extra-from-a"]
+    # B specified no environment, so it inherits A's resolved setup verbatim
+    assert state_b["setup_scripts"] == state_a["setup_scripts"]
 
-    # C was launched by B with extras=["extra-from-b"], which overrides parent extras
-    assert state_c["extras"] == ["extra-from-b"]
+    # C specified its own extras, so it builds its own setup instead of inheriting A's
+    assert state_c["setup_scripts"] is not None
+    assert any("extra-from-b" in s for s in state_c["setup_scripts"])
+    assert not any("extra-from-a" in s for s in state_c["setup_scripts"])

@@ -4,6 +4,7 @@
     {
       "bundle_id": "",
       "constraints_json": null,
+      "container_profile": 0,
       "coscheduling_group_by": "task_index",
       "entrypoint_json": "{\"run_command\": {\"argv\": [\"python\", \"-c\", \"pass\"]}}",
       "environment_json": "{}",

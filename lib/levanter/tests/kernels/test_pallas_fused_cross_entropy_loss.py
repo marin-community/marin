@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.kernels.pallas import autotune_cache_utils
 from levanter.kernels.pallas.fused_cross_entropy_loss import batched_xla
 from levanter.kernels.pallas.fused_cross_entropy_loss import api as fused_api
 from levanter.kernels.pallas.fused_cross_entropy_loss import pallas_tpu
@@ -1190,7 +1189,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
 
     def run_from_shard_map(x_shard, y_shard, w_shard):
         return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -1360,8 +1359,7 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
 
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_ensure_autotune_cache_loaded", lambda: None)
-    monkeypatch.setattr(fused_api, "_persist_autotune_cache", lambda: None)
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",
@@ -1374,7 +1372,6 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
         return 1.0 if candidate.v_block_size == 256 else 2.0
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
-    fused_api._AUTOTUNE_BLOCK_SIZE_CACHE.clear()
 
     def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
         del x_raw, labels_raw, w_raw, kwargs
@@ -1410,18 +1407,78 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert calls["bench"] == 3
 
 
-def test_fused_ce_autotune_cache_url_uses_jax_cache_subdir(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        autotune_cache_utils,
-        "get_jax_compilation_cache_dir",
-        lambda: "gs://my-cache-root/compiled",
+def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, vocab), dtype=jnp.float32)
+    y = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
+
+    def fake_impl(x_raw, labels_raw, w_raw, **kwargs):
+        del labels_raw, kwargs
+        logits = jnp.einsum("bh,hv->bv", x_raw, w_raw)
+        return jnp.sum(logits, axis=-1), jnp.zeros((x_raw.shape[0],), dtype=jnp.float32)
+
+    return fused_api._autotune_block_sizes_on_miss(
+        impl_name=impl_name,
+        fn=fake_impl,
+        x=x,
+        labels=y,
+        w=w,
+        inferred=inferred,
+        dtype=jnp.float32,
+        logit_soft_cap=None,
+        precision=None,
+        return_argmax=False,
     )
 
-    cache_url = fused_api._kernel_autotune_cache_url()
+
+def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest.MonkeyPatch):
+    """A sweep where every candidate fails is negative-cached, so a second call does not re-sweep."""
+    calls = {"bench": 0}
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(url_fn=lambda: None))
+    monkeypatch.setattr(
+        fused_api,
+        "_candidate_block_sizes",
+        lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes],
+    )
+
+    def failing_benchmark(**kwargs):
+        calls["bench"] += 1
+        raise RuntimeError("candidate cannot compile on this backend")
+
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", failing_benchmark)
+
+    for _ in range(2):
+        with pytest.raises(ExceptionGroup, match="no viable block-size candidates"):
+            _run_autotune_miss()
+
+    # Second call short-circuits on the negative cache instead of re-sweeping.
+    assert calls["bench"] == 1
+
+
+def test_autotune_cache_round_trips_winner_and_negative_entries(tmp_path):
+    """put() persists winner and no-viable-candidate entries; a fresh cache reloads them as equal values."""
+    url = str(tmp_path / "block_sizes.json")
+    winner = fused_api.BlockSizes(b_block_size=128, h_block_size=256, v_block_size=512)
+
+    cache = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
+    cache.put("winner-key", winner)
+    cache.put("negative-key", fused_api._NO_VIABLE_CANDIDATE)
+
+    reloaded = fused_api.AutotuneBlockSizeCache(url_fn=lambda: url)
+    assert reloaded.get("winner-key") == winner
+    assert reloaded.get("negative-key") is fused_api._NO_VIABLE_CANDIDATE
+    assert reloaded.get("absent-key") is None
+
+
+def test_autotune_cache_url_is_region_local(monkeypatch: pytest.MonkeyPatch):
+    """The cache lives under marin_prefix(), with the trailing slash normalized away."""
+    monkeypatch.setattr(fused_api, "marin_prefix", lambda: "gs://my-region-bucket/")
 
     assert (
-        cache_url
-        == "gs://my-cache-root/compiled/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
+        fused_api._autotune_cache_url()
+        == "gs://my-region-bucket/levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v1.json"
     )
 
 

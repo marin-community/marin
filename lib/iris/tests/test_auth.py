@@ -7,17 +7,16 @@ from connectrpc.errors import ConnectError
 from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import (
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
+from rigging.server_auth import (
     AuthRequest,
-    AuthTokenInjector,
-    StaticTokenProvider,
     StaticTokenVerifier,
     build_request_authenticators,
     is_trusted_loopback,
     resolve_auth,
 )
-from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.version import client_revision_date
 
 from .conftest import _make_controller_only_config
 
@@ -57,14 +56,14 @@ def test_static_auth_rpc_access():
         assert unauth_client.list_workers(list_req) is not None
         unauth_client.close()
 
-        wrong_injector = AuthTokenInjector(StaticTokenProvider("wrong-token"))
+        wrong_injector = BearerTokenInjector(StaticTokenProvider("wrong-token"), "authorization")
         wrong_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[wrong_injector])
         with pytest.raises(ConnectError, match=r"(?i)authenticat"):
             wrong_client.list_workers(list_req)
         wrong_client.close()
 
         jwt_token = _login_for_jwt(url, _AUTH_TOKEN)
-        valid_injector = AuthTokenInjector(StaticTokenProvider(jwt_token))
+        valid_injector = BearerTokenInjector(StaticTokenProvider(jwt_token), "authorization")
         valid_client = ControllerServiceClientSync(address=url, timeout_ms=5000, interceptors=[valid_injector])
         response = valid_client.list_workers(list_req)
         assert response is not None
@@ -89,7 +88,7 @@ def test_static_auth_job_ownership():
         jwt_a = _login_for_jwt(url, _TOKEN_A)
         jwt_b = _login_for_jwt(url, _TOKEN_B)
 
-        injector_a = AuthTokenInjector(StaticTokenProvider(jwt_a))
+        injector_a = BearerTokenInjector(StaticTokenProvider(jwt_a), "authorization")
         client_a = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_a])
 
         entrypoint = Entrypoint.from_callable(_quick)
@@ -102,7 +101,7 @@ def test_static_auth_job_ownership():
         resp = client_a.launch_job(launch_req)
         job_id = resp.job_id
 
-        injector_b = AuthTokenInjector(StaticTokenProvider(jwt_b))
+        injector_b = BearerTokenInjector(StaticTokenProvider(jwt_b), "authorization")
         client_b = ControllerServiceClientSync(address=url, timeout_ms=10000, interceptors=[injector_b])
         with pytest.raises(ConnectError, match="cannot access resources owned by"):
             client_b.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id))
@@ -249,7 +248,7 @@ def test_token_user_owner_pinned_to_principal():
     try:
         jwt = _login_for_jwt(url, "carol-token")
         client = ControllerServiceClientSync(
-            address=url, timeout_ms=10000, interceptors=[AuthTokenInjector(StaticTokenProvider(jwt))]
+            address=url, timeout_ms=10000, interceptors=[BearerTokenInjector(StaticTokenProvider(jwt), "authorization")]
         )
         launch_req = controller_pb2.Controller.LaunchJobRequest(
             name="/bob/impersonated-job",

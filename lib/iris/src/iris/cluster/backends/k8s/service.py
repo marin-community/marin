@@ -3,8 +3,6 @@
 
 """K8sService protocol and CloudK8sService (kubernetes DynamicClient) implementation."""
 
-from __future__ import annotations
-
 import logging
 import os
 import socket
@@ -185,10 +183,10 @@ class CloudK8sService:
     namespace: str
     kubeconfig_path: str | None = None
     timeout: float = DEFAULT_TIMEOUT
-    _api_client: kubernetes.client.ApiClient = field(init=False, repr=False)
-    _dyn: DynamicClient = field(init=False, repr=False)
-    _core_v1: kubernetes.client.CoreV1Api = field(init=False, repr=False)
-    _custom: kubernetes.client.CustomObjectsApi = field(init=False, repr=False)
+    _api_client: "kubernetes.client.ApiClient" = field(init=False, repr=False)
+    _dyn: "DynamicClient" = field(init=False, repr=False)
+    _core_v1: "kubernetes.client.CoreV1Api" = field(init=False, repr=False)
+    _custom: "kubernetes.client.CustomObjectsApi" = field(init=False, repr=False)
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -209,7 +207,7 @@ class CloudK8sService:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
 
-    def create_api_client(self) -> kubernetes.client.ApiClient:
+    def create_api_client(self) -> "kubernetes.client.ApiClient":
         if self.kubeconfig_path:
             return kubernetes.config.new_client_from_config(
                 config_file=self.kubeconfig_path,

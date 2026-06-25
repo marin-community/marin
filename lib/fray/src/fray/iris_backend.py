@@ -8,8 +8,6 @@ Handles type conversion between fray types and Iris types, actor hosting
 via submitted jobs, and deferred actor handle resolution.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import sys
@@ -159,6 +157,8 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
         extras=list(env.extras) if env is not None else [],
+        setup_scripts=list(env.setup_scripts) if env is not None and env.setup_scripts is not None else None,
+        sync_packages=list(env.sync_packages) if env is not None else [],
     )
 
 
@@ -318,7 +318,7 @@ class IrisActorHandle:
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
             return self._client
 
-    def __getattr__(self, method_name: str) -> _IrisActorMethod:
+    def __getattr__(self, method_name: str) -> "_IrisActorMethod":
         if method_name.startswith("_"):
             raise AttributeError(method_name)
         return _IrisActorMethod(self, method_name)
@@ -568,7 +568,7 @@ class FrayIrisClient:
         self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
-    def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
+    def from_iris_client(iris_client: IrisClientLib) -> "FrayIrisClient":
         """Create a FrayIrisClient by wrapping an existing IrisClient.
 
         This avoids creating a new connection when we already have an IrisClient

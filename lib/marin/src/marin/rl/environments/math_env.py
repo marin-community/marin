@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field

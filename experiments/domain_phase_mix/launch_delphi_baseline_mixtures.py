@@ -4,10 +4,9 @@
 """Train Delphi-scale objective-agnostic data-mixing baselines.
 
 This launcher is the issue #6607 training half: proportional and UniMax-8 over
-the Dolma3/Dolmino top-level buckets at a small Delphi scaling ladder.  It
-intentionally keeps the CompletedAdamH/Delphi model, optimizer, and mesh logic
-from ``experiments/exp1337_delphi_suite.py`` while only replacing the training
-data mixture.
+the Dolma3/Dolmino top-level buckets at a small Delphi scaling ladder.  It uses
+the CompletedAdamH/Delphi model, optimizer, and mesh logic while only replacing
+the training data mixture.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
@@ -59,11 +57,6 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     build_top_level_domains,
 )
 from experiments.domain_phase_mix.weight_sampler import compute_unimax_weights
-from experiments.isoflop_sweep import (
-    MARIN_SCALING_SUITES,
-    IsoFlopAnalysisConfig,
-    run_isoflop_analysis_step,
-)
 from experiments.llama import llama3_tokenizer
 from experiments.scaling_law_sweeps.completed_adamh import completed_adamh_heuristic
 
@@ -75,6 +68,9 @@ LOCAL_ARTIFACT_DIR = (
 )
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_baseline_mixtures_issue6607_20260623"
+DEFAULT_ANALYSIS_OUTPUT_PATH = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_mixtures_issue6607_20260623/analysis-af9355"
+)
 LABEL = "adamh_scaling_v6"
 SEQ_LEN_DELPHI = 4096
 PHASE_SCHEDULE = PhaseSchedule.uniform(2)
@@ -94,9 +90,6 @@ TARGET_BUDGETS: dict[float, tuple[str, int]] = {
     3e20: ("v5p-32", 256),
     1e21: ("v5p-64", 512),
 }
-
-adamh_training, _ = MARIN_SCALING_SUITES["nemotron-completed-adamh"]
-
 
 class DelphiBaselineMixture(StrEnum):
     """Objective-agnostic baseline mixtures for issue #6607."""
@@ -236,12 +229,6 @@ def _read_scaling_fits(analysis_output_path: str) -> dict[str, ScalingFit]:
             raise ValueError(f"Expected 2 scaling fit values for {key!r}, got {len(value)}")
         scaling_fits[key] = ScalingFit(float(value[0]), float(value[1]))
     return scaling_fits
-
-
-def run_delphi_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> PathMetadata:
-    """Run isoflop analysis and return a JSON-serializable executor artifact."""
-    run_isoflop_analysis_step(config)
-    return PathMetadata(path=config.output_path)
 
 
 def _tensor_parallel_size(hidden_dim: int, tpu_type: str) -> int:
@@ -559,13 +546,6 @@ def _selected_target_budgets(values: tuple[str, ...]) -> dict[float, tuple[str, 
     return selected
 
 
-def _completed_adamh_metric_sources() -> list:
-    # These are historical isoflop runs used only as metric sources for fitting
-    # the Delphi scaling law. They must not become executable dependencies of
-    # this east5 baseline launcher.
-    return [run.as_input_name().nonblocking() for run in adamh_training]
-
-
 def build_launch_artifacts(
     *,
     analysis_output_path: str,
@@ -684,9 +664,7 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
-        "--analysis-output-path", help="Use an existing analysis output for --dry-run manifest resolution."
-    )
+    parser.add_argument("--analysis-output-path", default=DEFAULT_ANALYSIS_OUTPUT_PATH)
     return parser.parse_known_args()
 
 
@@ -710,9 +688,10 @@ def main() -> None:
         name: step_to_lm_mixture_component(step, include_raw_paths=False) for name, step in validation_steps.items()
     }
 
+    if not args.analysis_output_path:
+        raise ValueError("--analysis-output-path must be set; do not rerun isoflop analysis in this parent")
+
     if args.dry_run:
-        if not args.analysis_output_path:
-            raise ValueError("--dry-run requires --analysis-output-path so model/token predictions are concrete")
         run_specs = _write_local_dry_run_manifest(
             analysis_output_path=args.analysis_output_path,
             mixtures=mixtures,
@@ -723,18 +702,7 @@ def main() -> None:
         logger.info("Wrote %d dry-run specs under %s", len(run_specs), LOCAL_ARTIFACT_DIR)
         return
 
-    analysis_step: ExecutorStep | None = None
     analysis_output_path = args.analysis_output_path
-    if analysis_output_path is None:
-        analysis_step = ExecutorStep(
-            name=f"{EXPERIMENT_NAME}/analysis",
-            fn=run_delphi_isoflop_analysis_step,
-            config=IsoFlopAnalysisConfig(
-                training_runs=_completed_adamh_metric_sources(),
-                output_path=this_output_path(),
-            ),
-        )
-        analysis_output_path = analysis_step.as_input_name()
     artifacts = build_launch_artifacts(
         analysis_output_path=analysis_output_path,
         validation_configs=validation_configs,
@@ -744,8 +712,6 @@ def main() -> None:
         tpu_zone=args.tpu_zone,
     )
     steps = [*artifacts.steps]
-    if analysis_step is not None:
-        steps.insert(0, analysis_step)
     if os.getenv("CI") is not None:
         logger.info(
             "Built Delphi baseline-mixture graph with %d training steps; skipping executor launch.",

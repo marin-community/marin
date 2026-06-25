@@ -6,11 +6,11 @@
 import json
 
 import click
+from rigging.auth import GcpAccessTokenProvider, TokenProvider
 
 from iris.actor import ActorClient, ProxyResolver
 from iris.actor.resolver import ResolveResult
 from iris.cli.connect import require_controller_url
-from iris.rpc.auth import GcpAccessTokenProvider, TokenProvider
 
 
 class _AuthProxyResolver(ProxyResolver):

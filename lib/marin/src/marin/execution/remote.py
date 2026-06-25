@@ -15,8 +15,6 @@ Usage::
     def train(...): ...             # explicit resources
 """
 
-from __future__ import annotations
-
 import dataclasses
 import re
 import uuid
@@ -57,7 +55,7 @@ class RemoteCallable(Generic[P, R]):
     pip_dependency_groups: list[str] | None = None
     name: str | None = None
 
-    def named(self, name: str) -> RemoteCallable:
+    def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
         if self.name:
             return self

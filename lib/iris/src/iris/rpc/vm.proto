@@ -17,7 +17,6 @@ edition = "2023";
 package iris.vm;
 
 import "time.proto";
-import "config.proto";
 
 // VM lifecycle states
 enum VmState {
@@ -129,7 +128,13 @@ message ScalingDecision {
 // Runtime state of a scale group (for status API)
 message ScaleGroupStatus {
   string name = 1;
-  iris.config.ScaleGroupConfig config = 2;
+  // Config summary surfaced to clients (the full cluster config is not on the
+  // wire). device_type is "cpu"|"gpu"|"tpu"|"".
+  string device_type = 80;
+  string device_variant = 81;
+  string quota_pool = 82;
+  int32 allocation_tier = 83;
+  string region = 84;
 
   // Current demand
   int32 current_demand = 20;

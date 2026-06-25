@@ -7,8 +7,6 @@ Manages the controller Deployment, Service, ConfigMap, RBAC, NodePools, and
 S3 credential Secrets. Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import logging
@@ -32,9 +30,8 @@ from iris.cluster.backends.k8s.tasks import (
 )
 from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
-from iris.cluster.config_serde import config_to_dict
+from iris.cluster.config import ControllerVmConfig, CoreweavePlatformConfig, IrisClusterConfig, config_to_dict
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -70,16 +67,17 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
     return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
 
 
-def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
+def configure_client_s3(config: IrisClusterConfig) -> None:
     """Configure S3 env vars for fsspec access on CoreWeave (R2 → AWS mapping).
 
     Maps R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY to their AWS equivalents and
     sets FSSPEC_S3 with the correct endpoint and addressing style. No-op if the
     config has no CoreWeave object storage endpoint.
     """
-    endpoint = config.platform.coreweave.object_storage_endpoint
-    if not endpoint:
+    coreweave = config.platform.coreweave
+    if coreweave is None or not coreweave.object_storage_endpoint:
         return
+    endpoint = coreweave.object_storage_endpoint
 
     r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
     r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
@@ -244,7 +242,7 @@ class K8sControllerProvider:
 
     def __init__(
         self,
-        config: config_pb2.CoreweavePlatformConfig,
+        config: CoreweavePlatformConfig,
         label_prefix: str,
         poll_interval: float = _DEFAULT_POLL_INTERVAL,
         kubectl: K8sService | None = None,
@@ -285,13 +283,13 @@ class K8sControllerProvider:
 
     # -- ControllerProvider protocol methods -----------------------------------
 
-    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         cw = controller_config.coreweave
         service_name = cw.service_name or "iris-controller-svc"
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
 
         Fully idempotent: always applies ConfigMap, Deployment, and Service
@@ -389,24 +387,29 @@ class K8sControllerProvider:
 
         return self.discover_controller(config.controller)
 
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:
-        """Delete the controller Deployment and wait until it's fully gone."""
+        """Wait for the old controller to completely be stopped so we can reuse the PV."""
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
         deadline = Deadline.from_seconds(_DEPLOYMENT_DELETE_TIMEOUT)
         while not self._shutdown_event.is_set():
-            if self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None:
-                logger.info("Controller Deployment iris-controller deleted")
+            deployment_gone = self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+            pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
+            if deployment_gone and not pods:
+                logger.info("Controller Deployment iris-controller and its Pods deleted")
                 return
             if deadline.expired():
+                pod_names = [p.get("metadata", {}).get("name", "") for p in pods]
                 raise InfraError(
-                    f"Controller Deployment iris-controller did not delete within {_DEPLOYMENT_DELETE_TIMEOUT}s"
+                    f"Controller Deployment iris-controller did not fully delete within "
+                    f"{_DEPLOYMENT_DELETE_TIMEOUT}s (deployment_gone={deployment_gone}, "
+                    f"pods still present: {pod_names})"
                 )
             self._shutdown_event.wait(self._poll_interval)
 
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+    def stop_controller(self, config: IrisClusterConfig) -> None:
         cw = config.controller.coreweave
         service_name = cw.service_name or "iris-controller-svc"
 
@@ -425,7 +428,7 @@ class K8sControllerProvider:
 
     def stop_all(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
@@ -591,7 +594,7 @@ class K8sControllerProvider:
 
     # -- Kueue ------------------------------------------------------------------
 
-    def ensure_kueue_queues(self, config: config_pb2.IrisClusterConfig) -> None:
+    def ensure_kueue_queues(self, config: IrisClusterConfig) -> None:
         """Reconcile the namespaced Kueue LocalQueue this cluster dispatches into.
 
         The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
@@ -658,7 +661,7 @@ class K8sControllerProvider:
         # NodePool metadata.name must be a valid RFC 1123 subdomain (lowercase alphanumeric, '-', '.')
         return f"{self._label_prefix}-{scale_group}".replace("_", "-").lower()
 
-    def ensure_nodepools(self, config: config_pb2.IrisClusterConfig) -> None:
+    def ensure_nodepools(self, config: IrisClusterConfig) -> None:
         """Create shared NodePools for all scale groups and delete stale ones.
 
         Idempotent. After creating/verifying expected NodePools, any managed
@@ -759,7 +762,7 @@ class K8sControllerProvider:
 
     # -- Storage Detection ----------------------------------------------------
 
-    def uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
+    def uses_s3_storage(self, config: IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
         return config.storage.remote_state_dir.startswith("s3://")
 
@@ -975,7 +978,7 @@ class K8sControllerProvider:
 
     # -- Internal helpers ------------------------------------------------------
 
-    def _config_json_for_configmap(self, config: config_pb2.IrisClusterConfig) -> str:
+    def _config_json_for_configmap(self, config: IrisClusterConfig) -> str:
         """Serialize cluster config to JSON for the in-cluster ConfigMap."""
         config_dict = config_to_dict(config)
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})

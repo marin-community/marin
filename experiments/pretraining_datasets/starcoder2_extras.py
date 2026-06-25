@@ -13,7 +13,7 @@ from marin.datakit.normalize import normalize_step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.tokenization import default_tokenize
 
 

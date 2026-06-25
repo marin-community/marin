@@ -86,6 +86,7 @@ class ContainerConfig:
     env: dict[str, str]
     workdir: str = "/app"
     resources: job_pb2.ResourceSpecProto | None = None
+    container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host

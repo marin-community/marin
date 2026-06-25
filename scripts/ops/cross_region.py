@@ -14,8 +14,6 @@ This script:
 The default mode analyzes the last 24 hours.
 """
 
-from __future__ import annotations
-
 import csv
 import datetime as dt
 import json
@@ -32,7 +30,7 @@ import click
 import duckdb
 import fsspec
 from finelog.deploy.config import load_finelog_config
-from iris.cluster.config import IrisConfig
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
 
@@ -330,10 +328,10 @@ def validate_parquet_files(paths: list[Path]) -> list[Path]:
     return good
 
 
-def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
-    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.proto.storage.remote_state_dir)
+def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
+    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.storage.remote_state_dir)
     if chosen is None:
-        raise RuntimeError(f"No checkpoint found under {config.proto.storage.remote_state_dir}")
+        raise RuntimeError(f"No checkpoint found under {config.storage.remote_state_dir}")
     # Key the local cache on the remote checkpoint id so reruns that pick up
     # a newer checkpoint don't collide with a stale one.
     checkpoint_id = chosen.rstrip("/").rsplit("/", 1)[-1]
@@ -344,7 +342,7 @@ def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | 
         logging.info(f"Checkpoint {checkpoint_id} already cached at {db_path}")
         return db_path
     logging.info(f"Downloading checkpoint {chosen}")
-    ok = download_checkpoint_to_local(config.proto.storage.remote_state_dir, checkpoint_outdir, chosen)
+    ok = download_checkpoint_to_local(config.storage.remote_state_dir, checkpoint_outdir, chosen)
     if not ok:
         raise RuntimeError(f"Failed to download checkpoint from {chosen}")
     if not db_path.exists():
@@ -904,15 +902,15 @@ def main(
     logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     logging.info(f"Output directory: {out_path}")
 
-    cfg = IrisConfig.load(config)
-    if not cfg.proto.log_server_config:
+    cfg = load_config(config)
+    if not cfg.log_server_config:
         raise click.ClickException(
             f"Iris config {config!r} has no log_server_config; cross-region analysis "
             "requires logs shipped via finelog."
         )
-    finelog_cfg = load_finelog_config(cfg.proto.log_server_config)
+    finelog_cfg = load_finelog_config(cfg.log_server_config)
     if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.proto.log_server_config!r} has no remote_log_dir.")
+        raise click.ClickException(f"finelog config {cfg.log_server_config!r} has no remote_log_dir.")
     remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
 
     log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)

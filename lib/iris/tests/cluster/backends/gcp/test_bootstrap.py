@@ -3,8 +3,6 @@
 
 """Tests for worker bootstrap script generation."""
 
-from __future__ import annotations
-
 import pytest
 from iris.cluster.backends.gcp.bootstrap import (
     build_worker_bootstrap_script,
@@ -14,12 +12,12 @@ from iris.cluster.backends.gcp.bootstrap import (
 )
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
+from iris.cluster.config import GcpPlatformConfig, WorkerConfig
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
 
 
-def _worker_config(**overrides: object) -> config_pb2.WorkerConfig:
-    cfg = config_pb2.WorkerConfig(
+def _worker_config(**overrides: object) -> WorkerConfig:
+    cfg = WorkerConfig(
         docker_image="gcr.io/test/iris-worker:latest",
         port=10001,
         cache_dir="/var/cache/iris",
@@ -116,7 +114,7 @@ def _make_gcp_worker_provider(project_id: str = "my-proj"):
     """Build a GcpWorkerProvider backed by InMemoryGcpService for testing."""
 
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id=project_id)
-    gcp_config = config_pb2.GcpPlatformConfig(project_id=project_id)
+    gcp_config = GcpPlatformConfig(project_id=project_id)
     return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
 

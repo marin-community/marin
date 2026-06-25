@@ -102,10 +102,6 @@ conflicts = [
         { extra = "cpu" },
     ],
     [
-        { extra = "vllm" },
-        { extra = "cpu" },
-    ],
-    [
         # The vllm extra builds vLLM for TPUs from source, so it must use CPU
         # torch rather than the cu128-pinned torch from the gpu extra.
         { extra = "vllm" },

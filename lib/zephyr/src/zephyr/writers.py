@@ -3,8 +3,6 @@
 
 """Writers for common output formats."""
 
-from __future__ import annotations
-
 import itertools
 import logging
 import os
@@ -366,7 +364,7 @@ class ThreadedBatchWriter:
         if self._error is not None:
             raise self._error
 
-    def __enter__(self) -> ThreadedBatchWriter:
+    def __enter__(self) -> "ThreadedBatchWriter":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:

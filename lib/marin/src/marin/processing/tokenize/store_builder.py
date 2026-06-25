@@ -22,8 +22,6 @@ be removed — those subdirectories are the cache. Downstream readers load via
 ``TreeCache.load`` (or ``UrlDatasetSourceConfig``), which transparently
 dispatches on the sharded layout.
 """
-from __future__ import annotations
-
 import dataclasses
 import json
 import logging

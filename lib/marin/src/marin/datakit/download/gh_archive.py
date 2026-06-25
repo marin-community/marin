@@ -3,8 +3,6 @@
 
 """Download and normalize held-out GH Archive event slices for PPL/gap evals."""
 
-from __future__ import annotations
-
 import gzip
 import io
 import json

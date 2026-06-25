@@ -73,6 +73,14 @@ class PriorityBand(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PRIORITY_BAND_PRODUCTION: _ClassVar[PriorityBand]
     PRIORITY_BAND_INTERACTIVE: _ClassVar[PriorityBand]
     PRIORITY_BAND_BATCH: _ClassVar[PriorityBand]
+
+class ContainerProfile(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    CONTAINER_PROFILE_UNSPECIFIED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_RESTRICTED: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_DEFAULT: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_DOCKER_ACCESS: _ClassVar[ContainerProfile]
+    CONTAINER_PROFILE_PRIVILEGED: _ClassVar[ContainerProfile]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -117,6 +125,11 @@ PRIORITY_BAND_UNSPECIFIED: PriorityBand
 PRIORITY_BAND_PRODUCTION: PriorityBand
 PRIORITY_BAND_INTERACTIVE: PriorityBand
 PRIORITY_BAND_BATCH: PriorityBand
+CONTAINER_PROFILE_UNSPECIFIED: ContainerProfile
+CONTAINER_PROFILE_RESTRICTED: ContainerProfile
+CONTAINER_PROFILE_DEFAULT: ContainerProfile
+CONTAINER_PROFILE_DOCKER_ACCESS: ContainerProfile
+CONTAINER_PROFILE_PRIVILEGED: ContainerProfile
 
 class Empty(_message.Message):
     __slots__ = ()
@@ -580,7 +593,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("pip_packages", "env_vars", "extras", "python_version", "dockerfile")
+    __slots__ = ("env_vars", "setup_scripts")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -588,17 +601,11 @@ class EnvironmentConfig(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
-    PIP_PACKAGES_FIELD_NUMBER: _ClassVar[int]
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
-    EXTRAS_FIELD_NUMBER: _ClassVar[int]
-    PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
-    DOCKERFILE_FIELD_NUMBER: _ClassVar[int]
-    pip_packages: _containers.RepeatedScalarFieldContainer[str]
+    SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
-    extras: _containers.RepeatedScalarFieldContainer[str]
-    python_version: str
-    dockerfile: str
-    def __init__(self, pip_packages: _Optional[_Iterable[str]] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Iterable[str]] = ..., python_version: _Optional[str] = ..., dockerfile: _Optional[str] = ...) -> None: ...
+    setup_scripts: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)
@@ -714,7 +721,7 @@ class WorkerMetadata(_message.Message):
     def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., git_hash: _Optional[str] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
-    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority")
+    __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     NUM_TASKS_FIELD_NUMBER: _ClassVar[int]
     ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
@@ -729,6 +736,7 @@ class RunTaskRequest(_message.Message):
     ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
     COSCHEDULING_FIELD_NUMBER: _ClassVar[int]
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
+    CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     num_tasks: int
     entrypoint: RuntimeEntrypoint
@@ -743,4 +751,5 @@ class RunTaskRequest(_message.Message):
     attempt_uid: str
     coscheduling: CoschedulingConfig
     priority: PriorityBand
-    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ...) -> None: ...
+    container_profile: ContainerProfile
+    def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ..., coscheduling: _Optional[_Union[CoschedulingConfig, _Mapping]] = ..., priority: _Optional[_Union[PriorityBand, str]] = ..., container_profile: _Optional[_Union[ContainerProfile, str]] = ...) -> None: ...

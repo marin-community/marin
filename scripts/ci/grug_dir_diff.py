@@ -3,8 +3,6 @@
 
 """Generate an HTML side-by-side diff report for two code directories."""
 
-from __future__ import annotations
-
 import argparse
 import difflib
 import html

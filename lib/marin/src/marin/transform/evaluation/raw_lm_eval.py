@@ -3,8 +3,6 @@
 
 """Stage small LM-eval-style HF datasets into raw text for PPL probes."""
 
-from __future__ import annotations
-
 import json
 import posixpath
 from dataclasses import dataclass, field

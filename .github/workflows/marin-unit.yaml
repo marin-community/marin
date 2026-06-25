@@ -60,7 +60,7 @@ jobs:
           uv sync --package marin-core --extra cpu --extra dedup --group test --frozen
 
       - name: Set up Node.js 20.10.0
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20.10.0"
 

@@ -247,6 +247,7 @@ def submit(
         existing_job_policy=int(request.existing_job_policy),
         priority_band=int(request.priority_band),
         task_image=request.task_image,
+        container_profile=int(request.container_profile),
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )

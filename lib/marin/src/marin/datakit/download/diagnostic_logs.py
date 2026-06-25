@@ -3,8 +3,6 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -341,7 +339,7 @@ class _DocumentIdentityPseudonymizer:
     username_ids: dict[str, str]
 
     @classmethod
-    def from_text(cls, text: str) -> _DocumentIdentityPseudonymizer:
+    def from_text(cls, text: str) -> "_DocumentIdentityPseudonymizer":
         pseudonymizer = cls(identity_ids={}, username_ids={})
         for match in _EMAIL_RE.finditer(text):
             pseudonymizer._register_email(match.group(0))

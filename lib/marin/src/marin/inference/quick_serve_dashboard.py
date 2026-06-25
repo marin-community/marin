@@ -13,8 +13,6 @@ absolute path like ``/v1/chat/completions`` would escape the prefix.
 streamed back verbatim, so server-sent-event token streaming works end to end.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import importlib.resources
 import logging

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
@@ -10,10 +12,15 @@ import pytest
 
 pytest.importorskip("jax")
 
+import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.jax_init import (
+    _poll_for_coordinator,
+    configure_jax_compilation_cache,
+    initialize_jax,
+)
 
 
 @dataclass
@@ -205,6 +212,49 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+
+
+@contextmanager
+def _isolated_jax_cache_config():
+    """Restore ``jax.config`` and a clean ``JAX_COMPILATION_CACHE_DIR`` around a test."""
+    original = jax.config.jax_compilation_cache_dir
+    jax.config.update("jax_compilation_cache_dir", None)
+    try:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+            yield
+    finally:
+        jax.config.update("jax_compilation_cache_dir", original)
+
+
+def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
+    """With nothing set, the cache dir is ``marin_prefix()`` + subdir, written to env and jax.config."""
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="gs://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://marin-eu/marin/compilation-cache"
+        assert jax.config.jax_compilation_cache_dir == "gs://marin-eu/marin/compilation-cache"
+
+
+@pytest.mark.parametrize("source", ["env", "jax_config"])
+def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
+    """An explicit cache dir (env var or jax.config) is preserved; the prefix default is not derived."""
+    with _isolated_jax_cache_config():
+        if source == "env":
+            os.environ["JAX_COMPILATION_CACHE_DIR"] = "gs://explicit/cache"
+        else:
+            jax.config.update("jax_compilation_cache_dir", "gs://explicit/cache")
+
+        with patch("iris.runtime.jax_init.marin_prefix") as mock_prefix:
+            configure_jax_compilation_cache()
+
+        mock_prefix.assert_not_called()
+        if source == "env":
+            assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
+        else:
+            assert jax.config.jax_compilation_cache_dir == "gs://explicit/cache"
+            assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
 
 
 def test_poll_for_coordinator_default_interval() -> None:

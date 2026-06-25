@@ -17,8 +17,6 @@ Zephyr ``group_by``) rather than as a list field on a single row (a
 per-row ``flat_map``).
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 from fray import ResourceConfig

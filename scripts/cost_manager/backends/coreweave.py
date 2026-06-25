@@ -22,8 +22,6 @@ UTC day approximates resource-hours, which times ``unit_rate`` ($/unit/hour)
 gives the estimated daily cost. Series are grouped by ``detail_label``.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import logging
 from collections import defaultdict

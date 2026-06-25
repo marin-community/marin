@@ -16,8 +16,6 @@ temp prefix. Output path is provided by the caller; suggested layout::
     gs://marin-us-central1/tmp/ttl=3d/datakit-tier2-skew-v1/data/part-NNNNN.parquet
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import secrets

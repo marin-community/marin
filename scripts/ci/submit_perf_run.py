@@ -25,8 +25,6 @@ The status JSON path is the standard ``FERRY_STATUS_PATH`` contract (see
 ``marin_prefix`` there on completion.
 """
 
-from __future__ import annotations
-
 import argparse
 import dataclasses
 import datetime

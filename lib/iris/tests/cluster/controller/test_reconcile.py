@@ -14,8 +14,6 @@ Three layers, exercised in order:
    tick's reconcile phase (``reconcile_once``).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -1135,9 +1133,6 @@ class _ScriptedProvider:
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler
 
-    def set_log_sink(self, *_args, **_kwargs):
-        pass
-
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
@@ -1327,9 +1322,6 @@ class _UnreachableProvider:
 
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
-
-    def set_log_sink(self, *_args, **_kwargs):
-        pass
 
     def close(self):
         pass

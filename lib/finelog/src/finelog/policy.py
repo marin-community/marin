@@ -18,8 +18,6 @@ whose ``created_at_ms`` is older than ``now - max_age_seconds``, on
 top of the existing size / count caps.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
