@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import logging
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
@@ -214,69 +214,47 @@ def test_initialize_jax_poll_timeout(
     mock_jax_init.assert_not_called()
 
 
-def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
-    """With nothing configured, the cache defaults to a MARIN_PREFIX subdir, set as a remote URL directly."""
+@contextmanager
+def _isolated_jax_cache_config():
+    """Restore ``jax.config`` and a clean ``JAX_COMPILATION_CACHE_DIR`` around a test."""
     original = jax.config.jax_compilation_cache_dir
     jax.config.update("jax_compilation_cache_dir", None)
-    try:
-        with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
-            os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
-            os.environ["MARIN_PREFIX"] = "gs://marin-eu/marin"
-
-            configure_jax_compilation_cache()
-
-            assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://marin-eu/marin/compilation-cache"
-            mock_update.assert_called_once_with("jax_compilation_cache_dir", "gs://marin-eu/marin/compilation-cache")
-    finally:
-        jax.config.update("jax_compilation_cache_dir", original)
-
-
-def test_configure_compilation_cache_respects_existing_env_dir() -> None:
-    """An existing JAX_COMPILATION_CACHE_DIR wins; the MARIN_PREFIX default is not applied."""
-    with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
-        os.environ["JAX_COMPILATION_CACHE_DIR"] = "gs://explicit/cache"
-        os.environ["MARIN_PREFIX"] = "s3://marin-na/marin"
-
-        configure_jax_compilation_cache()
-
-        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
-        mock_update.assert_not_called()
-
-
-def test_configure_compilation_cache_respects_jax_config_dir() -> None:
-    """A cache dir set only via jax.config (e.g. by the trainer) is not overridden by the default."""
-    original = jax.config.jax_compilation_cache_dir
-    jax.config.update("jax_compilation_cache_dir", "gs://trainer/cache")
     try:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
-            os.environ["MARIN_PREFIX"] = "s3://marin-na/marin"
+            yield
+    finally:
+        jax.config.update("jax_compilation_cache_dir", original)
 
+
+def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
+    """With nothing set, the cache dir is ``marin_prefix()`` + subdir, written to env and jax.config."""
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="gs://marin-eu/marin/"):
             configure_jax_compilation_cache()
 
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://marin-eu/marin/compilation-cache"
+        assert jax.config.jax_compilation_cache_dir == "gs://marin-eu/marin/compilation-cache"
+
+
+@pytest.mark.parametrize("source", ["env", "jax_config"])
+def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
+    """An explicit cache dir (env var or jax.config) is preserved; the prefix default is not derived."""
+    with _isolated_jax_cache_config():
+        if source == "env":
+            os.environ["JAX_COMPILATION_CACHE_DIR"] = "gs://explicit/cache"
+        else:
+            jax.config.update("jax_compilation_cache_dir", "gs://explicit/cache")
+
+        with patch("iris.runtime.jax_init.marin_prefix") as mock_prefix:
+            configure_jax_compilation_cache()
+
+        mock_prefix.assert_not_called()
+        if source == "env":
+            assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
+        else:
+            assert jax.config.jax_compilation_cache_dir == "gs://explicit/cache"
             assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
-            assert jax.config.jax_compilation_cache_dir == "gs://trainer/cache"
-    finally:
-        jax.config.update("jax_compilation_cache_dir", original)
-
-
-def test_configure_compilation_cache_warns_when_unconfigured(caplog: pytest.LogCaptureFixture) -> None:
-    """With neither cache dir nor MARIN_PREFIX set, the silent disable is surfaced as a warning."""
-    original = jax.config.jax_compilation_cache_dir
-    jax.config.update("jax_compilation_cache_dir", None)
-    try:
-        with patch.dict(os.environ, {}, clear=False), patch("jax.config.update") as mock_update:
-            os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
-            os.environ.pop("MARIN_PREFIX", None)
-
-            with caplog.at_level(logging.WARNING, logger="iris.runtime.jax_init"):
-                configure_jax_compilation_cache()
-
-            assert "JAX compilation cache disabled" in caplog.text
-            assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
-            mock_update.assert_not_called()
-    finally:
-        jax.config.update("jax_compilation_cache_dir", original)
 
 
 def test_poll_for_coordinator_default_interval() -> None:

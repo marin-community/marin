@@ -16,6 +16,7 @@ import logging
 import os
 import time
 
+from rigging.filesystem import marin_prefix
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -63,28 +64,20 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
 
 
 def configure_jax_compilation_cache() -> None:
-    """Default the JAX compilation cache to a region-local ``MARIN_PREFIX`` subdir.
+    """Default the JAX compilation cache to a subdir of the active Marin prefix.
 
-    Without this, jobs that set no cache dir re-run XLA compilation and kernel
-    autotune sweeps on every process start. The cache dir may be local or a
-    remote URL — JAX writes ``gs://``/``s3://`` paths directly. An existing
-    setting (env var or ``jax.config``) wins; a missing ``MARIN_PREFIX`` is
-    logged so the disabled cache is diagnosable.
+    Without a cache dir, every process re-runs XLA compilation and kernel
+    autotune sweeps at startup. An explicit setting (``JAX_COMPILATION_CACHE_DIR``
+    or ``jax.config``) wins; otherwise the cache lands under the cluster's
+    region-local storage prefix, which may be a ``gs://``/``s3://`` URL that JAX
+    writes directly.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
     if os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir:
         return
 
-    marin_prefix = os.environ.get("MARIN_PREFIX")
-    if not marin_prefix:
-        logger.warning(
-            "JAX compilation cache disabled: neither JAX_COMPILATION_CACHE_DIR nor MARIN_PREFIX is set. "
-            "XLA compilation and kernel autotune results will not persist across runs."
-        )
-        return
-
-    cache_dir = f"{marin_prefix.rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
+    cache_dir = f"{marin_prefix().rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
     os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
     jax.config.update("jax_compilation_cache_dir", cache_dir)
     logger.info("JAX compilation cache: %s", cache_dir)
