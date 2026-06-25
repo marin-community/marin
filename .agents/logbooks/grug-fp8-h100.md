@@ -1451,3 +1451,38 @@ kernel-architecture problem (warp specialization / TMA multicast / a DeepGEMM-st
 config problem — high complexity for diminishing returns over the zero-complexity 1.27× already banked, so
 it is out of scope under the complexity/gain rule. "Beat bf16 + exhaust the high-EV config lever" is met;
 "within 20% of f8 peak" is not reachable on these ragged grouped GEMMs without a kernel rewrite.
+
+### 2026-06-25 — GFP8-030: fused cast-transpose for f8 wgrad — fusion is real in isolation but a NET LOSS e2e (reverted)
+Tried to eliminate the cast-transpose tax that keeps f8 wgrad parked (GFP8-029): produce the
+token-contiguous f8 wgrad operands via a fused `swapaxes(quantize(x))` instead of a standalone f8
+transpose. Microbench (`bench_f8_cast_transpose_fusion.py`, job `…-210520`) confirmed the **transpose
+fuses into the bf16->f8 cast**: producing `transpose(cast(x))` costs only +0.002ms (x[8192,2048]) /
++0.015ms (dout[8192,11264]) over the cast alone, vs a 0.075 / 0.142ms standalone f8 transpose. Promising.
+- **Implemented** the fused path (forward emits `q_lhs_t`, bwd emits `q_g_t`, both via fused
+  cast-transpose; `_mosaic_wgrad_pretransposed` skips the in-`_mosaic_pallas_call` swapaxes). CPU-validated
+  the vjp; numerics identical to the prior f8 wgrad (dw13 7.16e-2, dw2 6.42e-2).
+- **e2e (job `…-211359`): NO improvement.** f8-wgrad arm **3.077 ms vs bf16-wgrad hybrid 2.968 ms** —
+  still ~4% slower, unchanged from the pre-fusion 3.060 ms.
+- **Why the microbench misled:** the fused transpose is only ~free *on top of a cast we already pay*. But
+  in the real graph the natural f8 copy (`q_lhs` from `in_q`, `q_g` for the dlhs) is already materialized;
+  the transposed copy is a **redundant SECOND cast** of the same operand. So "cast+fused-transpose"
+  (~0.10 / 0.20 ms) costs *more* than the standalone f8->f8 transpose (~0.075 / 0.142 ms) it replaced —
+  net slightly worse. A truly-free dual layout needs a single quant op emitting both natural+transposed
+  in one pass (XLA won't auto-fuse that; a custom Pallas cast-transpose kernel would — high complexity).
+- **Decision: REVERTED** the fp8_ragged.py plumbing + `_mosaic_wgrad_pretransposed` (added complexity, no
+  gain — fails the "complexity must earn its gain" rule). Kept the microbench as the documented finding.
+  **Shipped recipe stays f8 fwd/dgrad + bf16 wgrad at 1.27× (GFP8-029).** f8 wgrad remains correct + tuned
+  behind `RAGGED_F8_WGRAD` for Blackwell / a future fused-dual-quant kernel.
+
+### Session summary (GFP8-029/030) — final standing
+- **e2e 1.06× → 1.27×** vs bf16 (fwd+bwd, real Grug MoE-MLP), entirely from block-config tuning (the
+  `128/128/128 steps6 gbn4` deeper pipeline) — zero added production complexity. All four mosaic GEMMs beat
+  bf16 (fwd 1.47×/1.49×, dgrad 2.83×/2.30×); the f8 wgrad kernel also flips to a win (1.2-1.3×) but stays
+  parked (transpose tax, GFP8-030).
+- **Roofline vs the goal's "within 20% of theoretical max":** best f8 GEMM is the dgrad at 47% of f8 peak;
+  the JAX `ragged_dot` config space is exhausted and the only two transpose-elimination levers (forward
+  weight, wgrad operands) are net-neutral/negative because of the redundant-cast issue. Reaching ~80% of f8
+  peak requires a from-scratch warp-specialized / TMA-multicast grouped kernel (the bf16-Triton reference
+  itself only hits 46% of its peak) — high complexity, poor gain ratio, out of scope under the addendum.
+  **"Beat bf16 + exhaust the high-EV levers" is met; "within 20% of f8 peak" is a kernel-architecture
+  ceiling, not a config-reachable target.**
