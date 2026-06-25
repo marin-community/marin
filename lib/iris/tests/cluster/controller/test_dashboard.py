@@ -42,7 +42,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
-from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.server_auth import RequestAuthPolicy, StaticTokenVerifier
 from rigging.timing import Timestamp
@@ -621,15 +621,8 @@ def mock_autoscaler():
         groups=[
             vm_pb2.ScaleGroupStatus(
                 name="test-group",
-                config=config_pb2.ScaleGroupConfig(
-                    name="test-group",
-                    buffer_slices=1,
-                    max_slices=5,
-                    resources=config_pb2.ScaleGroupResources(
-                        device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                        device_variant="v4-8",
-                    ),
-                ),
+                device_type="tpu",
+                device_variant="v4-8",
                 slices=[
                     vm_pb2.SliceInfo(
                         slice_id="slice-1",
@@ -715,7 +708,7 @@ def test_get_autoscaler_status_includes_slice_details(client_with_autoscaler):
         assert "sliceId" in slice_info
         assert "vms" in slice_info
         assert len(slice_info["vms"]) == 1
-    assert group["config"]["resources"]["deviceVariant"] == "v4-8"
+    assert group["deviceVariant"] == "v4-8"
 
 
 def test_get_autoscaler_status_populates_worker_id_for_unrostered_vm(client_with_autoscaler):

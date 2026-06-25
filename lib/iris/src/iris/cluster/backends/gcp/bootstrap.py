@@ -14,10 +14,8 @@ import re
 from collections.abc import Callable
 
 import yaml
-from google.protobuf.json_format import MessageToDict
 
-from iris.cluster.config_serde import config_to_dict
-from iris.rpc import config_pb2
+from iris.cluster.config import IrisClusterConfig, WorkerConfig, config_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +300,7 @@ exit 1
 
 
 def build_worker_bootstrap_script(
-    worker_config: config_pb2.WorkerConfig,
+    worker_config: WorkerConfig,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
@@ -319,7 +317,7 @@ def build_worker_bootstrap_script(
         raise ValueError("worker_config.cache_dir is required for worker bootstrap")
 
     worker_config_json = json.dumps(
-        MessageToDict(worker_config, preserving_proto_field_name=True),
+        worker_config.model_dump(mode="json", exclude_none=True),
         indent=2,
     )
 
@@ -569,7 +567,7 @@ def build_controller_bootstrap_script(
 
 
 def build_controller_bootstrap_script_from_config(
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
     fresh: bool = False,
 ) -> str:
@@ -582,12 +580,14 @@ def build_controller_bootstrap_script_from_config(
             it starts with an empty local database and skips checkpoint restore.
     """
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
-    port = config.controller.gcp.port or config.controller.manual.port or 10000
-    image = config.controller.image
-
     ctrl = config.controller
+    gcp_port = ctrl.gcp.port if ctrl.gcp is not None else 0
+    manual_port = ctrl.manual.port if ctrl.manual is not None else 0
+    port = gcp_port or manual_port or 10000
+    image = ctrl.image
+
     zone: str | None = None
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+    if ctrl.gcp is not None and ctrl.gcp.zone:
         zone = ctrl.gcp.zone
 
     image = resolve_image(image, zone)

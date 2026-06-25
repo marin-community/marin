@@ -51,7 +51,8 @@ import fsspec
 from fray import ResourceConfig
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, client_credentials, resolve_cluster_name
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.config_discovery import resolve_cluster_config
@@ -284,14 +285,14 @@ def _open_iris_client(cluster: str) -> tuple[IrisClient, object]:
     when finished (it backs the controller URL the client talks to).
     """
     config_path = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    iris_config = IrisConfig.load(config_path)
+    iris_config = load_config(config_path)
 
-    cluster_name = resolve_cluster_name(iris_config.proto, None, cluster)
-    credentials = client_credentials(iris_config.proto, cluster_name)
+    cluster_name = resolve_cluster_name(iris_config, None, cluster)
+    credentials = client_credentials(iris_config, cluster_name)
 
-    bundle = iris_config.provider_bundle()
+    bundle = provider_bundle(iris_config)
     controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.proto.controller
+        iris_config.controller
     )
 
     tunnel_cm = bundle.controller.tunnel(address=controller_address)

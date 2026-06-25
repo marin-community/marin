@@ -28,8 +28,8 @@ from iris.cluster.backends.types import (
 from iris.cluster.backends.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.backends.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.backends.vm_lifecycle import stop_controller as vm_stop_controller
+from iris.cluster.config import ControllerVmConfig, GcpControllerConfig, IrisClusterConfig, SshConfig
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +41,12 @@ class GcpControllerProvider:
     worker_provider: GcpWorkerProvider
     controller_service_account: str | None = None
 
-    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         """Discover controller by querying GCP for labeled controller VM.
 
         In LOCAL mode, returns the configured address directly without querying GCP.
         """
-        gcp = controller_config.gcp
+        gcp = controller_config.gcp or GcpControllerConfig()
         port = gcp.port or 10000
 
         if self.worker_provider.gcp_service.mode == ServiceMode.LOCAL:
@@ -64,7 +64,7 @@ class GcpControllerProvider:
             )
         return f"{vms[0].internal_address}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
@@ -73,7 +73,7 @@ class GcpControllerProvider:
         )
         return address
 
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         address, _vm = vm_restart_controller(
             self.worker_provider,
             config,
@@ -81,12 +81,12 @@ class GcpControllerProvider:
         )
         return address
 
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+    def stop_controller(self, config: IrisClusterConfig) -> None:
         vm_stop_controller(self.worker_provider, config)
 
     def stop_all(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
@@ -246,7 +246,7 @@ def _gcp_tunnel(
     gcp_service: GcpService,
     project: str,
     label_prefix: str,
-    ssh_config: config_pb2.SshConfig | None,
+    ssh_config: SshConfig | None,
     local_port: int | None = None,
     timeout: float = 60.0,
 ) -> Iterator[str]:

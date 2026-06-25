@@ -17,8 +17,8 @@ import click
 from rigging.credentials import ClientCredentials
 
 from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
-from iris.rpc import config_pb2
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IapAuthConfig, IrisClusterConfig
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -103,11 +103,11 @@ def rpc_client_for_ctx(
     return rpc_client(controller_url, obj.get("credentials"), timeout_ms=timeout_ms)
 
 
-def iap_config(config: config_pb2.IrisClusterConfig | None) -> config_pb2.IapAuthConfig | None:
+def iap_config(config: IrisClusterConfig | None) -> IapAuthConfig | None:
     """Return the IAP auth config if this cluster is IAP-fronted, else None."""
-    if config is None or not config.HasField("auth"):
+    if config is None or config.auth is None:
         return None
-    if config.auth.WhichOneof("provider") != "iap":
+    if config.auth.provider_kind() != "iap":
         return None
     return config.auth.iap
 
@@ -136,18 +136,17 @@ def require_controller_url(ctx: click.Context) -> str:
 
     # Lazy tunnel establishment from config
     if config:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         ctx.obj["provider_bundle"] = bundle
 
-        if iris_config.proto.controller.WhichOneof("controller") == "local":
-            cluster = LocalCluster(iris_config.proto)
+        if config.controller.controller_kind() == "local":
+            cluster = LocalCluster(config)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)
         else:
-            controller_address = iris_config.controller_address()
+            controller_address = config.controller_address()
             if not controller_address:
-                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
+                controller_address = bundle.controller.discover_controller(config.controller)
 
         # Establish tunnel and keep it alive for command duration
         try:

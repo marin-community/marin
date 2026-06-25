@@ -53,8 +53,9 @@ from iris.cluster.runtime.types import (
     MountKind,
     MountSpec,
 )
+from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
@@ -668,7 +669,7 @@ exec {quoted_cmd}
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
         if cpu_millicores:
-            if self.runtime.capacity_type == config_pb2.CAPACITY_TYPE_ON_DEMAND:
+            if self.runtime.capacity_type == CapacityType.ON_DEMAND:
                 # Soft weight: on-demand workers let containers burst onto idle
                 # host CPU; the scheduler still places by cpu_millicores.
                 shares = max(2, int(cpu_millicores * 1024 / 1000))
@@ -851,7 +852,7 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self, cache_dir: Path, capacity_type: int = 0) -> None:
+    def __init__(self, cache_dir: Path, capacity_type: CapacityType | None = None) -> None:
         self._cache_dir = cache_dir
         # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
         # weight (`--cpu-shares`). On-demand workers use soft weights so small

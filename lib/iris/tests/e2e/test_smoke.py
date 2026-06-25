@@ -21,12 +21,22 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import load_config, make_local_config
+from iris.cluster.config import (
+    AuthConfig,
+    IrisClusterConfig,
+    LocalSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    StaticAuthConfig,
+    load_config,
+    make_local_config,
+)
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
@@ -57,39 +67,41 @@ pytestmark = pytest.mark.requires_cluster
 # ---------------------------------------------------------------------------
 
 
-def _add_cpu_group(config: config_pb2.IrisClusterConfig, num_workers: int = 4) -> None:
+def _add_cpu_group(config: IrisClusterConfig, num_workers: int = 4) -> None:
     """CPU scale group with multiple workers for scheduling diversity and bin-packing."""
-    sg = config.scale_groups["local-cpu"]
-    sg.name = "local-cpu"
-    sg.num_vms = 1
-    sg.buffer_slices = num_workers
-    sg.max_slices = num_workers
-    sg.resources.cpu_millicores = 8000
-    sg.resources.memory_bytes = 16 * 1024**3
-    sg.resources.disk_bytes = 50 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.local.SetInParent()
+    config.scale_groups["local-cpu"] = ScaleGroupConfig(
+        name="local-cpu",
+        num_vms=1,
+        buffer_slices=num_workers,
+        max_slices=num_workers,
+        resources=ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            device_type=AcceleratorType.CPU,
+            capacity_type=CapacityType.ON_DEMAND,
+        ),
+        slice_template=SliceConfig(local=LocalSliceConfig()),
+    )
 
 
-def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
+def _add_coscheduling_group_4vm(config: IrisClusterConfig) -> None:
     """4-VM TPU coscheduling group for large-job tests."""
-    sg = config.scale_groups["tpu_cosched_4"]
-    sg.name = "tpu_cosched_4"
-    sg.num_vms = 4
-    sg.buffer_slices = 1
-    sg.max_slices = 1
-    sg.resources.cpu_millicores = 128000
-    sg.resources.memory_bytes = 128 * 1024**3
-    sg.resources.disk_bytes = 1024 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.resources.device_variant = "v5litepod-32"
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-    sg.slice_template.num_vms = 4
-    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.slice_template.accelerator_variant = "v5litepod-32"
-    sg.slice_template.local.SetInParent()
+    config.scale_groups["tpu_cosched_4"] = ScaleGroupConfig(
+        name="tpu_cosched_4",
+        num_vms=4,
+        buffer_slices=1,
+        max_slices=1,
+        resources=ScaleGroupResources(
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024**3,
+            disk_bytes=1024 * 1024**3,
+            device_type=AcceleratorType.TPU,
+            device_variant="v5litepod-32",
+            capacity_type=CapacityType.PREEMPTIBLE,
+        ),
+        slice_template=SliceConfig(num_vms=4, local=LocalSliceConfig()),
+    )
 
 
 # Total local-mode workers:
@@ -97,7 +109,7 @@ def _add_coscheduling_group_4vm(config: config_pb2.IrisClusterConfig) -> None:
 SMOKE_WORKER_COUNT = 8
 
 
-def _make_smoke_config() -> config_pb2.IrisClusterConfig:
+def _make_smoke_config() -> IrisClusterConfig:
     """Build a local config with CPU and TPU (coscheduling) workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
@@ -907,21 +919,24 @@ def test_workdir_file_offload(smoke_cluster):
 # ============================================================================
 
 
-def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
+def _make_controller_only_config() -> IrisClusterConfig:
     """Build a local config with no auto-scaled workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
-    sg = config.scale_groups["placeholder"]
-    sg.name = "placeholder"
-    sg.num_vms = 1
-    sg.buffer_slices = 0
-    sg.max_slices = 0
-    sg.resources.cpu_millicores = 1000
-    sg.resources.memory_bytes = 1 * 1024**3
-    sg.resources.disk_bytes = 10 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.local.SetInParent()
+    config.scale_groups["placeholder"] = ScaleGroupConfig(
+        name="placeholder",
+        num_vms=1,
+        buffer_slices=0,
+        max_slices=0,
+        resources=ScaleGroupResources(
+            cpu_millicores=1000,
+            memory_bytes=1 * 1024**3,
+            disk_bytes=10 * 1024**3,
+            device_type=AcceleratorType.CPU,
+            capacity_type=CapacityType.ON_DEMAND,
+        ),
+        slice_template=SliceConfig(local=LocalSliceConfig()),
+    )
     return make_local_config(config)
 
 
@@ -947,7 +962,7 @@ def test_dashboard_login_flow():
         pytest.skip("playwright not installed")
 
     config = _make_controller_only_config()
-    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    config.auth = AuthConfig(static=StaticAuthConfig(tokens={_AUTH_TOKEN: _AUTH_USER}))
     controller = LocalCluster(config)
     url = controller.start()
 
@@ -1036,7 +1051,7 @@ def test_static_auth_rpc_access():
     (loopback trust), wrong tokens are rejected, valid JWTs are accepted."""
 
     config = _make_controller_only_config()
-    config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
+    config.auth = AuthConfig(static=StaticAuthConfig(tokens={_AUTH_TOKEN: _AUTH_USER}))
     controller = LocalCluster(config)
     url = controller.start()
 
@@ -1079,8 +1094,7 @@ def test_static_auth_job_ownership():
     _TOKEN_B = "token-user-b"
 
     config = _make_controller_only_config()
-    config.auth.static.tokens[_TOKEN_A] = "user-a"
-    config.auth.static.tokens[_TOKEN_B] = "user-b"
+    config.auth = AuthConfig(static=StaticAuthConfig(tokens={_TOKEN_A: "user-a", _TOKEN_B: "user-b"}))
     controller = LocalCluster(config)
     url = controller.start()
 

@@ -29,7 +29,8 @@ import requests
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient, Job
 from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
@@ -82,15 +83,15 @@ def _resolve_controller(cluster: str | None, controller: str | None) -> tuple[Ab
     except FileNotFoundError as exc:
         raise click.ClickException(f"Unknown cluster {cluster!r}; run `iris cluster list`.") from exc
 
-    iris_config = IrisConfig.load(str(resolved))
-    dashboard_url = iris_config.proto.dashboard_url or None
-    bundle = iris_config.provider_bundle()
-    if iris_config.proto.controller.WhichOneof("controller") == "local":
-        controller_address = LocalCluster(iris_config.proto).start()
+    iris_config = load_config(str(resolved))
+    dashboard_url = iris_config.dashboard_url or None
+    bundle = provider_bundle(iris_config)
+    if iris_config.controller.controller_kind() == "local":
+        controller_address = LocalCluster(iris_config).start()
         return contextlib.nullcontext(controller_address), dashboard_url
 
     controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.proto.controller
+        iris_config.controller
     )
     click.echo(f"Opening SSH tunnel to controller {controller_address} …")
     return bundle.controller.tunnel(address=controller_address), dashboard_url

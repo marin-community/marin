@@ -19,9 +19,10 @@ from pathlib import Path
 import click
 from iris.client import IrisClient, JobAlreadyExists
 from iris.cluster.backends.k8s.tasks import _LABEL_TASK_ID, _sanitize_label_value
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, gpu_device
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -91,23 +92,24 @@ class DevGpuState:
         )
 
 
-def require_coreweave_platform(config: config_pb2.IrisClusterConfig) -> CoreweaveTarget:
+def require_coreweave_platform(config: IrisClusterConfig) -> CoreweaveTarget:
     """Resolve the kubectl target for a CoreWeave cluster, or fail fast.
 
     Inverts dev_tpu.py's GCP gate: this tool only works against
     CoreWeave/Kubernetes-backed clusters.
     """
-    if config.platform.WhichOneof("platform") != "coreweave":
+    if config.platform.platform_kind() != "coreweave":
         raise click.ClickException(
             "dev_gpu requires a CoreWeave/Kubernetes-backed cluster. "
             "For GCP TPU clusters use scripts/iris/dev_tpu.py."
         )
     # Namespace must come from kubernetes_provider: that is where Iris actually
-    # creates and lists task pods (config.make_provider: kp.namespace or "iris").
+    # creates and lists task pods (defaulting to "iris" when unset).
     # Kubeconfig comes from platform.coreweave: that is the operator's laptop
     # kubeconfig (kubernetes_provider.kubeconfig is the in-cluster controller's,
     # empty => in-cluster auth, which is wrong for a CLI running off-cluster).
-    namespace = config.kubernetes_provider.namespace or "iris"
+    kp = config.kubernetes_provider
+    namespace = (kp.namespace if kp is not None else "") or "iris"
     cw_kubeconfig = config.platform.coreweave.kubeconfig_path
     kubeconfig_path = os.path.expanduser(cw_kubeconfig) if cw_kubeconfig else ""
     return CoreweaveTarget(namespace=namespace, kubeconfig_path=kubeconfig_path)
@@ -158,13 +160,13 @@ def find_workspace_root(start: Path) -> Path | None:
 
 @contextmanager
 def controller_client(config_file: str) -> Iterable[IrisClient]:
-    iris_config = IrisConfig.load(config_file)
+    iris_config = load_config(config_file)
     controller_address = iris_config.controller_address()
-    providers = iris_config.provider_bundle()
+    providers = provider_bundle(iris_config)
     controller = providers.controller
     workspace = find_workspace_root(Path.cwd())
     if not controller_address:
-        controller_address = controller.discover_controller(iris_config.proto.controller)
+        controller_address = controller.discover_controller(iris_config.controller)
     with controller.tunnel(address=controller_address) as tunneled:
         client = IrisClient.remote(tunneled, workspace=workspace)
         try:
@@ -276,7 +278,7 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
             f"Dev GPU session '{session_name}' already exists. Use release first or choose a new --name."
         )
 
-    target = require_coreweave_platform(IrisConfig.load(ctx.obj.config_file).proto)
+    target = require_coreweave_platform(load_config(ctx.obj.config_file))
 
     state: DevGpuState | None = None
     with controller_client(ctx.obj.config_file) as client:

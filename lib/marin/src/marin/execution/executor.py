@@ -99,8 +99,6 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
-from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
@@ -334,22 +332,15 @@ def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
 
     regions: set[str] = set()
     for group in autoscaler_status.status.groups:
-        resources = group.config.resources
-        if resources.device_type != config_pb2.ACCELERATOR_TYPE_TPU:
+        if group.device_type != "tpu":
             continue
-        group_variant = resources.device_variant.lower().strip()
+        group_variant = group.device_variant.lower().strip()
         if group_variant and group_variant != variant:
             continue
 
-        attrs = group.config.worker.attributes
-        region = attrs.get(WellKnownAttribute.REGION, "").strip().lower()
+        region = group.region.strip().lower()
         if region:
             regions.add(region)
-            continue
-
-        zone = attrs.get(WellKnownAttribute.ZONE, "").strip().lower()
-        if zone and "-" in zone:
-            regions.add(zone.rsplit("-", 1)[0])
 
     return regions or None
 

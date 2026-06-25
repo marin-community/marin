@@ -16,7 +16,7 @@ from iris.cli.job import (
     run_iris_job,
 )
 from iris.cli.job import run as run_cmd
-from iris.cluster.config import IrisConfig
+from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -37,7 +37,7 @@ def test_load_env_vars_invalid_key():
 def test_iris_config_missing_file(tmp_path):
     """Test error on missing config file."""
     with pytest.raises(FileNotFoundError):
-        IrisConfig.load(tmp_path / "nonexistent.yaml")
+        load_config(tmp_path / "nonexistent.yaml")
 
 
 def test_iris_config_empty_file(tmp_path):
@@ -45,7 +45,7 @@ def test_iris_config_empty_file(tmp_path):
     bad_config = tmp_path / "bad.yaml"
     bad_config.write_text("")
     with pytest.raises(ValueError, match="Config file is empty"):
-        IrisConfig.load(bad_config)
+        load_config(bad_config)
 
 
 @pytest.mark.parametrize(

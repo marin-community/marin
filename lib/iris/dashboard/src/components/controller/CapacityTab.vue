@@ -248,7 +248,7 @@ const poolSections = computed<PoolSection[]>(() => {
   const unpooled: GroupRoutingStatus[] = []
 
   for (const gs of sortedGroupStatuses.value) {
-    const pool = groupIndex.value[gs.group]?.config?.quotaPool
+    const pool = groupIndex.value[gs.group]?.quotaPool
     if (pool) {
       if (!poolMap.has(pool)) poolMap.set(pool, [])
       poolMap.get(pool)!.push(gs)
@@ -260,8 +260,8 @@ const poolSections = computed<PoolSection[]>(() => {
   const sections: PoolSection[] = []
   for (const [pool, poolGroups] of poolMap) {
     poolGroups.sort((a, b) => {
-      const ta = groupIndex.value[a.group]?.config?.allocationTier ?? 0
-      const tb = groupIndex.value[b.group]?.config?.allocationTier ?? 0
+      const ta = groupIndex.value[a.group]?.allocationTier ?? 0
+      const tb = groupIndex.value[b.group]?.allocationTier ?? 0
       return ta - tb
     })
 
@@ -269,7 +269,7 @@ const poolSections = computed<PoolSection[]>(() => {
     for (const gs of poolGroups) {
       const group = groupIndex.value[gs.group]
       if (!group) continue
-      const tier = group.config?.allocationTier ?? 0
+      const tier = group.allocationTier ?? 0
       const status = group.availabilityStatus
       if (tier > 0 && (status === 'quota_exceeded' || status === 'backoff')) {
         if (blockedAtTier === null || tier < blockedAtTier) blockedAtTier = tier
@@ -286,12 +286,12 @@ const poolSections = computed<PoolSection[]>(() => {
 
 function isTierBlocked(gs: GroupRoutingStatus, section: PoolSection): boolean {
   if (!section.blockedAtTier) return false
-  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  const tier = groupIndex.value[gs.group]?.allocationTier ?? 0
   return tier > section.blockedAtTier
 }
 
 function tierLabel(gs: GroupRoutingStatus): string {
-  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  const tier = groupIndex.value[gs.group]?.allocationTier ?? 0
   return tier > 0 ? `T${tier}` : ''
 }
 
@@ -369,7 +369,7 @@ function groupAvailabilityBadge(g: ScaleGroupStatus, section?: PoolSection): Ava
   const now = Date.now()
 
   if (section?.blockedAtTier) {
-    const tier = g.config?.allocationTier ?? 0
+    const tier = g.allocationTier ?? 0
     if (tier > section.blockedAtTier) {
       return { label: 'tier-blocked', classes: 'bg-status-danger-bg text-status-danger border-status-danger-border opacity-60' }
     }

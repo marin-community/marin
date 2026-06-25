@@ -6,11 +6,12 @@
 from pathlib import Path
 
 import pytest
+from iris.cluster.config import UserBudgetTier
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.reads import UserBudget
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import text
 
@@ -107,8 +108,8 @@ def test_list_user_budgets_empty(db: ControllerDB) -> None:
 # --- reconcile_user_budget_tiers ------------------------------------------------
 
 
-def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> config_pb2.UserBudgetTier:
-    return config_pb2.UserBudgetTier(user_ids=user_ids, budget_limit=budget_limit, max_band=max_band)
+def _tier(user_ids: list[str], budget_limit: int, max_band: int) -> UserBudgetTier:
+    return UserBudgetTier(user_ids=user_ids, budget_limit=budget_limit, max_band=max_band)
 
 
 def test_reconcile_creates_rows_for_fresh_users(db: ControllerDB) -> None:

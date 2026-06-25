@@ -37,9 +37,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
-from finelog.client.log_client import Table
-from finelog.types import LogWriterProtocol
-
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
@@ -402,8 +399,8 @@ class TaskBackend(Protocol):
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Attach the Iris autoscaler that provisions capacity for this backend.
 
-        Called once by the controller's main() after construction (mirrors
-        :meth:`set_log_sink`). Only invoked on backends carrying
+        Called once by the composer after it builds the autoscaler from the
+        provider bundle. Only invoked on backends carrying
         :attr:`BackendCapability.IRIS_AUTOSCALER`; capacity-managing backends
         (k8s) never receive one.
         """
@@ -433,20 +430,6 @@ class TaskBackend(Protocol):
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Exec a command in a task's container. Raises ProviderUnsupportedError if N/A."""
-        ...
-
-    def set_log_sink(
-        self,
-        log_client: LogWriterProtocol,
-        task_stats_table: Table,
-        profile_table: Table,
-    ) -> None:
-        """Inject the finelog handles the controller resolves after connecting.
-
-        Backends without a worker daemon collect logs and write resource/profile
-        samples directly to finelog. Daemon-backed backends ignore these — the
-        worker writes its own rows.
-        """
         ...
 
     def close(self) -> None:

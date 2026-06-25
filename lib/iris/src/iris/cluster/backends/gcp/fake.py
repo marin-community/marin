@@ -40,14 +40,16 @@ from iris.cluster.backends.types import (
     find_free_port,
 )
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import SliceConfig
+from iris.cluster.config import WorkerConfig as WireWorkerConfig
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
+from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -415,8 +417,8 @@ class InMemoryGcpService:
     def create_local_slice(
         self,
         slice_id: str,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WireWorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Create a local slice, spawning real Worker threads if controller_address is set.
 
@@ -447,8 +449,8 @@ class InMemoryGcpService:
         self,
         slice_id: str,
         num_vms: int,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WireWorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice."""
         assert self._cache_path is not None
@@ -460,8 +462,8 @@ class InMemoryGcpService:
         addresses: list[str] = []
 
         worker_count = num_vms
-        is_tpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU
-        is_gpu = config.accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU
+        is_tpu = config.accelerator_type == AcceleratorType.TPU
+        is_gpu = config.accelerator_type == AcceleratorType.GPU
         if is_tpu and config.accelerator_variant:
             try:
                 topo = get_tpu_topology(config.accelerator_variant)
@@ -488,8 +490,8 @@ class InMemoryGcpService:
                 for k, v in worker_config.worker_attributes.items():
                     extra_attrs.setdefault(k, v)
 
-            # Use the canonical capacity_type from the slice config proto.
-            capacity_type_val = config.capacity_type or config_pb2.CAPACITY_TYPE_ON_DEMAND
+            # Use the canonical capacity_type from the slice config.
+            capacity_type_val = config.capacity_type or CapacityType.ON_DEMAND
 
             gpu_count = 0
             if is_gpu:

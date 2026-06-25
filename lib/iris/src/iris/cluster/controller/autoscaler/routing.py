@@ -36,8 +36,8 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.types import gpu_device, tpu_device
-from iris.rpc import config_pb2, job_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, gpu_device, tpu_device
+from iris.rpc import job_pb2
 
 # Synthetic task id stem for an availability probe (see availability_probe_entries).
 _AVAILABILITY_PROBE_TASK = "__availability_probe__"
@@ -128,7 +128,7 @@ def availability_probe_entries(
 def _availability_probe_entry(variant: str, group: ScalingGroup) -> DemandEntry:
     """One non-coscheduled demand entry shaped to scale a single slice of ``group``."""
     resources = group.resources
-    if resources is not None and resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU:
+    if resources is not None and resources.device_type == AcceleratorType.GPU:
         device = gpu_device(resources.device_variant, resources.device_count or 1)
     else:
         # tpu_device infers the per-VM chip count, which matches the group's per-VM
@@ -368,7 +368,8 @@ def _diagnose(
         preempt_matches = [
             g
             for g in device_matches
-            if (g.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == placement.preemptible
+            if (g.config.resources is not None and g.config.resources.capacity_type == CapacityType.PREEMPTIBLE)
+            == placement.preemptible
         ]
         if not preempt_matches:
             want = "preemptible" if placement.preemptible else "non-preemptible"
