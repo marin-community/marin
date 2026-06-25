@@ -16,10 +16,15 @@ wgrad-only, amax deferred (per user). Branch: `research/grug-fp8-h100`.
   0.10.0 already (April-2025). Perf: across the 4 wgrad cast-transposes ~0.61–0.68 ms (fused) vs ~0.95 ms
   (quantize+swapaxes) → **saves ~0.27 ms** → flips f8 wgrad from a ~0.12 ms e2e loss to ~1.34×. Kernel
   cleaned + wired into the public `cast_transpose` (H100 + 128-tileable → Mosaic, else reference).
-- **M3 ⏳ NEXT** Wire `cast_transpose` into `fp8_ragged` fwd/bwd: forward stores `q_lhs`/`q_lhs_t`,
-  backward `q_g`/`q_g_t`, wgrad consumes the transposed residuals directly (drop the `swapaxes` in
-  `_mosaic_pallas_call` `_DRHS`). Rerun the 3-arm e2e, confirm ~1.34×, flip the f8 wgrad default on and
-  remove `RAGGED_F8_WGRAD`. Full evidence: logbook GFP8-033.
+- **M3 ✅ DONE — f8 wgrad e2e 1.333× (beats the bf16 hybrid).** Wired `cast_transpose` into `fp8_ragged`:
+  forward `in_q_transpose` → `q_lhs`/`q_lhs_t` from one read; backward `cast_transpose(g)` → `q_g`/`q_g_t`;
+  the f8 wgrad calls `_mosaic_wgrad_transposed(q_lhs_t, q_g_t)` directly (no `swapaxes`). 3-arm e2e (H100,
+  grad_dtype=e4m3): bf16 3.738 ms; mosaic bf16-wgrad 2.926 ms (1.278×); **mosaic f8-wgrad 2.805 ms
+  (1.333×)**, dw13/dw2 7.16e-2 / 6.42e-2 (in-band). Gate (< 2.94 ms, in-band) met. Reverses the
+  GFP8-028/029 "f8 wgrad is a net e2e loss" verdict. Gated on `RAGGED_F8_WGRAD` (mosaic only); 33 CPU tests
+  green. Full evidence: logbook GFP8-033 M3.
+- **Remaining (M3 close-out, pending user sign-off):** flip the mosaic wgrad default to f8 + retire the
+  `RAGGED_F8_WGRAD` env toggle (a ~4%-gain-vs-complexity call; the bf16 hybrid stays simpler).
 
 ---
 
