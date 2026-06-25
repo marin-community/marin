@@ -73,12 +73,11 @@ def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
     return Checkpoint(
         name="grug/4_10_baseline_moe",
         version=version,
-        # The launcher step runs inline (resources=None); run_grug dispatches its own
-        # Fray TPU job onto the train_resources run-arg.
+        # The launcher fn runs inline; run_grug dispatches its own Fray TPU job onto
+        # the train_resources run-arg.
         recipe=Recipe(
             fn=run_grug_moe_trial,
             build_config=build_config,
-            resources=None,
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
     )
@@ -133,7 +132,6 @@ def grug_moe_slimpajama(*, version: str = "v1") -> Checkpoint:
             fn=run_grug_moe_trial,
             build_config=build_config,
             deps=(slim,),
-            resources=None,
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
     )
@@ -178,7 +176,6 @@ def grug_moe_baseline_pure(*, version: str = "v1") -> Checkpoint:
             fn=run_grug_moe_trial,
             build_config=build_config,
             deps=(*train, *validation),
-            resources=None,
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
     )

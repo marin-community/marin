@@ -32,11 +32,20 @@ from levanter.data.text import (
 )
 
 from marin.execution.lazy import Dataset, Recipe, RunContext
+from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
 from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
 
 DEFAULT_VERSION = "v1"
+
+
+def _on(fn: Callable[[Any], Any], resources: ResourceConfig | None) -> Callable[[Any], Any]:
+    """Run ``fn`` on Fray with ``resources`` (via :func:`remote`), or inline when None.
+
+    Resources ride with the function, so they stay off the step node and out of the
+    artifact fingerprint."""
+    return remote(fn, resources=resources) if resources is not None else fn
 
 
 def _looks_like_hf_id(source: str) -> bool:
@@ -66,7 +75,7 @@ def raw_download(
     return Dataset(
         name=name,
         version=version,
-        recipe=Recipe(fn=fn, build_config=build_config, resources=resources),
+        recipe=Recipe(fn=_on(fn, resources), build_config=build_config),
         override_path=pin,
     )
 
@@ -123,7 +132,7 @@ def tokenized(
         name=name,
         version=version,
         recipe=Recipe(
-            fn=_tokenize_fn, build_config=build_config, deps=(raw,) if raw is not None else (), resources=resources
+            fn=_on(_tokenize_fn, resources), build_config=build_config, deps=(raw,) if raw is not None else ()
         ),
         override_path=pin,
     )

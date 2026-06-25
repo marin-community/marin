@@ -9,6 +9,7 @@ path entirely.
 
 from marin.execution.executor import executor_context
 from marin.execution.lazy import Dataset, lower, materialized_config
+from marin.execution.remote import RemoteCallable
 
 from experiments.grug.moe.launch_lazy import grug_moe_slimpajama
 
@@ -25,9 +26,13 @@ def test_slimpajama_lowers_to_pure_stepspec_graph():
 
     tok = spec.deps[0]
     assert tok.override_output_path == "slimpajama-6b/v1"
-    # tokenization runs as its own Fray job; the launcher step runs inline.
-    assert tok.resources is not None
-    assert spec.resources is None
+
+    # Resources ride with the fn, never on the graph node: the tokenize handle's fn is
+    # wrapped in remote() (its own Fray job), while the grug launcher fn is plain (it
+    # dispatches its own training job). lower() puts no resources on the StepSpec.
+    slim = ckpt.recipe.deps[0]
+    assert isinstance(slim.recipe.fn, RemoteCallable)
+    assert not isinstance(ckpt.recipe.fn, RemoteCallable)
 
 
 def test_mixture_resolves_dependency_path_without_executor():

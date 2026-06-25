@@ -16,6 +16,7 @@ from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact as ArtifactIO
 from marin.execution.executor import executor_context
 from marin.execution.lazy import Checkpoint, Dataset, Recipe, RunContext, lower, materialized_config
+from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -140,17 +141,16 @@ def test_region_is_pulled_live_at_run_time():
 
 
 def test_resources_do_not_affect_identity():
-    """Compute is part of the execution *description* (``Recipe.resources``), not the
-    logical config: changing the TPU a recipe runs on must not change its fingerprint."""
+    """Compute rides with the fn (``remote(fn, resources=…)``), never the config or the
+    graph node, so changing the TPU a step runs on must not change its fingerprint."""
 
     def on(resources: ResourceConfig) -> Checkpoint:
         return Checkpoint(
             name="checkpoints/dclm_1b",
             version="v3",
             recipe=Recipe(
-                fn=_run_train,
+                fn=remote(_run_train, resources=resources),
                 build_config=lambda ctx: TrainCfg(out=ctx.out, data="gs://d", lr=3e-3, steps=10),
-                resources=resources,
             ),
         )
 

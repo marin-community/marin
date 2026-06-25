@@ -10,15 +10,19 @@ The model:
 
 - An :class:`Artifact` is a lazy handle: ``(name, version, recipe)``. Building one
   runs nothing.
-- A :class:`Recipe` is ``(fn, build_config, deps, resources, run_args)``.
-  ``build_config`` is a pure function of a :class:`RunContext`, which draws the line
-  between identity and execution: values written as literals (model, hyperparameters)
-  bear identity, while values *pulled* from the context — ``ctx.out``,
-  ``ctx.path(dep)``, ``ctx.prefix``, ``ctx.region``, ``ctx.run_arg(key)`` — are
-  where/how the step runs and never do. This replaces ``THIS_OUTPUT_PATH`` and
-  ``InputName``/``.cd()`` with plain typed calls.
+- A :class:`Recipe` is ``(fn, build_config, deps, run_args)``. ``build_config`` is a
+  pure function of a :class:`RunContext`, which draws the line between identity and
+  execution: values written as literals (model, hyperparameters) bear identity,
+  while values *pulled* from the context — ``ctx.out``, ``ctx.path(dep)``,
+  ``ctx.prefix``, ``ctx.region``, ``ctx.run_arg(key)`` — are where/how the step runs
+  and never do. This replaces ``THIS_OUTPUT_PATH`` and ``InputName``/``.cd()`` with
+  plain typed calls.
 - ``fn(config) -> result`` is the step function. The config already carries its
-  output path (``ctx.out``), matching the existing ``ExecutorStep`` fn convention.
+  output path (``ctx.out``), matching the existing ``ExecutorStep`` fn convention. To
+  run the step on an accelerator, ``fn`` is a
+  :class:`~marin.execution.remote.RemoteCallable` (``remote(fn, resources=…)``): the
+  compute rides with the function, so it never touches the graph node or the
+  fingerprint — there is no resources field on the step.
 - Identity is the explicit ``{prefix}/{name}/{version}`` path — no hash.
 - The *recipe fingerprint* is the config built with dependency **versions** in
   place of paths and context placeholders for everything pulled from ``ctx`` (so it
@@ -44,7 +48,6 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix, marin_region
 
 from marin.execution.executor import Executor
@@ -132,16 +135,16 @@ class RunContext:
 
 @dataclass(frozen=True)
 class Recipe:
-    """How to build an artifact: the step fn, a config builder, deps, resources, run-args."""
+    """How to build an artifact: the step fn, a config builder, deps, run-args."""
 
     fn: Callable[[Any], Any]
-    """``fn(config) -> result``. The config carries its output path; result is persisted."""
+    """``fn(config) -> result``, or a :class:`~marin.execution.remote.RemoteCallable`
+    (``remote(fn, resources=…)``) to run the step on Fray with those resources. The
+    config carries its output path; the result is persisted. Compute rides with the
+    function, never on the step node — so it does not enter the fingerprint."""
     build_config: Callable[[RunContext], Any]
     """``build_config(ctx) -> config``. Pulls paths and live attributes from the RunContext."""
     deps: tuple["Artifact", ...] = ()
-    resources: ResourceConfig | None = None
-    """Compute the *step itself* runs on (scheduled by the runner). Excluded from
-    identity. ``None`` for an inline step (e.g. a launcher that dispatches its own job)."""
     run_args: Mapping[str, Any] = field(default_factory=dict)
     """Execution choices the config pulls via ``ctx.run_arg(key)`` — e.g. the TPU a
     dispatched job uses. Excluded from the fingerprint, so changing one never forks
@@ -217,13 +220,17 @@ def lower(artifact: Artifact) -> StepSpec:
 
     For artifacts whose config references only ``ctx.out`` / ``ctx.path(dep)`` (no
     embedded legacy ``ExecutorStep`` placeholders). The concrete config is rebuilt
-    inside ``fn`` using the runner's ``marin_prefix()``, so dependency paths
+    inside the step body using the runner's ``marin_prefix()``, so dependency paths
     resolve region-locally rather than capturing the build environment's prefix.
     Identity is the explicit ``{name}/{version}`` (or the pin); the fingerprint and
     version ride in ``hash_attrs`` so the runner can apply the immutability guard
     before serving a cached output. On success the step writes an
     :class:`~marin.execution.registry.ArtifactRecord` (recipe fingerprint + launch
     provenance); a pinned artifact references existing external data and writes none.
+
+    ``lower`` is a pure graph transform: it never inspects ``recipe.fn``. To run a
+    step on an accelerator, the author wraps the fn (``remote(fn, resources=…)``);
+    the closure below calls it, and a ``RemoteCallable`` dispatches itself to Fray.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
     fingerprint = artifact.fingerprint()
@@ -261,7 +268,6 @@ def lower(artifact: Artifact) -> StepSpec:
         deps=dep_specs,
         hash_attrs={FINGERPRINT_KEY: fingerprint, VERSION_KEY: artifact.version, "deps": dep_refs},
         fn=fn,
-        resources=artifact.recipe.resources,
     )
 
 
@@ -292,7 +298,6 @@ def to_executor_step(artifact: Artifact, prefix: str | None = None) -> ExecutorS
         fn=artifact.recipe.fn,
         config=config,
         override_output_path=_output_path_spec(artifact),
-        resources=artifact.recipe.resources,
     )
 
 
