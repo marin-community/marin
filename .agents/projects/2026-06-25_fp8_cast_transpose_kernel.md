@@ -1,6 +1,28 @@
 # Plan: Pallas FP8 cast-transpose kernel (TE-style) to land the f8 wgrad win
 
-Status: DRAFT (not executed). Branch: `research/grug-fp8-h100` (continues GFP8-030/031).
+Status: **CLOSED — M1 done, M2 blocked by jax 0.10.0 (GFP8-033).** Decision: Mosaic backend,
+wgrad-only, amax deferred (per user). Branch: `research/grug-fp8-h100`.
+
+## Outcome (2026-06-25, GFP8-033)
+- **M1 ✅** `haliax/_src/fp8_cast_transpose.py` reference + 19 CPU bit-exact tests (vs `(quantize,
+  quantize.T)`), committed.
+- **M2 ❌ BLOCKED** A coalesced transposed store is **not expressible in Pallas Mosaic-GPU on jax
+  0.10.0.** Four store formulations → four distinct lowering walls (register transpose unimplemented in
+  Warpgroup; `memref.collapse_shape` on strided/column-major SMEM; "Non-indexing transforms on GMEM
+  refs"; "Can't transpose the swizzled dimension"). `transpose_ref` is a logical relabel only a wgmma
+  operand may consume, never a materializable HBM store. Measured tax (f8 `swapaxes`, 4 wgrad operands):
+  **~0.40 ms > the f8 wgrad kernel's ~0.25 ms edge**, so f8 wgrad stays a net e2e loss. A coalesced fused
+  kernel WOULD win (~0.2–0.3 ms → ~1.34×) — sound idea, blocked only by the jax version.
+- **Decision (complexity-vs-gain):** STOP. Ship the proven **1.27× hybrid (f8 fwd/dgrad + bf16 wgrad)**;
+  keep f8 wgrad behind `RAGGED_F8_WGRAD`. Revisit the cast-transpose on a jax bump (the newer
+  `BlockSpec(transforms=TransposeTransform)` store path). Non-lowering kernel
+  `fp8_cast_transpose_mgpu.py` kept as a research artifact, flagged 0.10.0-blocked, not wired into the
+  public `cast_transpose`. Full evidence: logbook GFP8-033.
+
+---
+
+(original plan below — superseded by the outcome above)
+
 Experiment IDs: **GFP8-033+**.
 
 ## Problem & goal
