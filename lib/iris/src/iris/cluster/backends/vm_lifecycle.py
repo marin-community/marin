@@ -21,8 +21,6 @@ uniformly across GCP and Manual providers.  For local mode, use LocalCluster
 directly (fundamentally different mechanism: in-process, no SSH/Docker).
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Callable

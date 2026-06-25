@@ -20,8 +20,6 @@ The push is unauthenticated: the finelog log service performs no auth, the same
 posture under which the controller writes its own logs.
 """
 
-from __future__ import annotations
-
 import glob
 import logging
 import os

@@ -6,8 +6,6 @@ per-region head count) and the job-state split into in-flight vs terminal-24h
 buckets. These exercise the pure ``aggregate_*`` over synthetic inputs, no live
 controller."""
 
-from __future__ import annotations
-
 import json
 
 import pytest

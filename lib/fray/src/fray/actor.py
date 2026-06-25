@@ -8,8 +8,6 @@ returns an ActorFuture, handle.method() calls synchronously. ActorGroup
 holds a set of actor handles with lifecycle tied to underlying jobs.
 """
 
-from __future__ import annotations
-
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -19,7 +17,7 @@ from typing import Any, Protocol
 class ActorHandle(Protocol):
     """Handle to a remote actor with .method.remote() calling convention."""
 
-    def __getattr__(self, method_name: str) -> ActorMethod: ...
+    def __getattr__(self, method_name: str) -> "ActorMethod": ...
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
+from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
@@ -91,13 +92,7 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.auth import (
-    AuthzAction,
-    authorize,
-    authorize_resource_owner,
-    get_verified_identity,
-    require_identity,
-)
+from iris.rpc.auth import AuthzAction, authorize, authorize_resource_owner
 from iris.rpc.proto_display import (
     job_state_friendly,
     priority_band_name,

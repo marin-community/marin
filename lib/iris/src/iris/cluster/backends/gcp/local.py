@@ -7,8 +7,6 @@ Provides LocalSliceHandle and worker handle classes used by InMemoryGcpService
 in LOCAL mode. Local testing uses GcpWorkerProvider + InMemoryGcpService(mode=ServiceMode.LOCAL).
 """
 
-from __future__ import annotations
-
 import logging
 import subprocess
 from collections.abc import Callable

@@ -13,8 +13,6 @@ a day into per-feature rows (e.g. a model's input/output tokens), which become
 the :class:`CostEvent` ``detail``. Amounts are already in dollars.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import logging
 from collections.abc import Mapping

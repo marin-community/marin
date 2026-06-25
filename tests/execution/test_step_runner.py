@@ -15,7 +15,7 @@ from fray.types import ResourceConfig
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
+from marin.execution.executor import Executor, _step_dag_tpu_regions, resolve_executor_step
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -1235,23 +1235,26 @@ def _two_tpu_steps(first_regions: list[str], second_regions: list[str]) -> list[
     ]
 
 
-def test_dag_tpu_regions_intersects_explicit_regions():
-    steps = _two_tpu_steps(["us-central2", "us-west4"], ["us-central2", "us-east1"])
-    assert _dag_tpu_regions(steps) == ["us-central2"]
+def test_step_dag_tpu_regions_narrows_producer_by_downstream_consumer():
+    """A producer's region set is intersected with its downstream TPU consumer's."""
+    producer, consumer = _two_tpu_steps(["us-central2", "us-west4"], ["us-central2", "us-east1"])
+    regions = _step_dag_tpu_regions([producer, consumer], {consumer: [producer]})
+    assert regions[producer] == ["us-central2"]
+    assert regions[consumer] == ["us-central2", "us-east1"]
 
 
 @pytest.mark.parametrize("set_override_env", [False, True], ids=["no_override", "with_override"])
-def test_dag_tpu_regions_raises_on_disjoint_explicit_regions(monkeypatch, set_override_env):
-    """Disjoint TPU pin sets must fail regardless of the override env var —
+def test_step_dag_tpu_regions_raises_on_disjoint_consumer(monkeypatch, set_override_env):
+    """Disjoint producer/consumer pin sets must fail regardless of the override env var —
     cross-region overrides do not silently broaden TPU placement."""
     if set_override_env:
         monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
-    steps = _two_tpu_steps(["us-west4"], ["us-central2"])
-    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
-        _dag_tpu_regions(steps)
+    producer, consumer = _two_tpu_steps(["us-west4"], ["us-central2"])
+    with pytest.raises(ValueError, match="No common region satisfies TPU consumers downstream"):
+        _step_dag_tpu_regions([producer, consumer], {consumer: [producer]})
 
 
-def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
+def test_step_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
     @remote(resources=ResourceConfig.with_tpu("v5p-8"))
     def first(_config):
         pass
@@ -1260,19 +1263,19 @@ def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
     def second(_config):
         pass
 
-    steps = [
-        ExecutorStep(name="first", fn=first, config=None),
-        ExecutorStep(name="second", fn=second, config=None),
-    ]
+    first_step = ExecutorStep(name="first", fn=first, config=None)
+    second_step = ExecutorStep(name="second", fn=second, config=None)
 
     with patch(
         "marin.execution.executor._regions_for_tpu_variant_from_iris",
         return_value={"us-central2", "us-west4"},
     ):
-        assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
+        regions = _step_dag_tpu_regions([first_step, second_step], {})
+    assert regions[first_step] == ["us-central2", "us-west4"]
+    assert regions[second_step] == ["us-central2", "us-west4"]
 
 
-def test_dag_tpu_regions_unions_device_alternative_regions():
+def test_step_dag_tpu_regions_unions_device_alternative_regions():
     @remote(resources=ResourceConfig.with_tpu(["v5p-8", "v6e-4"]))
     def first(_config):
         pass
@@ -1286,7 +1289,8 @@ def test_dag_tpu_regions_unions_device_alternative_regions():
             "v6e-4": {"us-east1"},
         }[variant],
     ):
-        assert _dag_tpu_regions([step]) == ["us-central2", "us-east1", "us-west4"]
+        regions = _step_dag_tpu_regions([step], {})
+    assert regions[step] == ["us-central2", "us-east1", "us-west4"]
 
 
 def test_step_without_remote_is_plain_fn():

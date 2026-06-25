@@ -8,8 +8,6 @@ Handles type conversion between fray types and Iris types, actor hosting
 via submitted jobs, and deferred actor handle resolution.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import sys
@@ -320,7 +318,7 @@ class IrisActorHandle:
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
             return self._client
 
-    def __getattr__(self, method_name: str) -> _IrisActorMethod:
+    def __getattr__(self, method_name: str) -> "_IrisActorMethod":
         if method_name.startswith("_"):
             raise AttributeError(method_name)
         return _IrisActorMethod(self, method_name)
@@ -570,7 +568,7 @@ class FrayIrisClient:
         self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
-    def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
+    def from_iris_client(iris_client: IrisClientLib) -> "FrayIrisClient":
         """Create a FrayIrisClient by wrapping an existing IrisClient.
 
         This avoids creating a new connection when we already have an IrisClient

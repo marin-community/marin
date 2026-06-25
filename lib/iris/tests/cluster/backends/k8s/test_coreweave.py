@@ -9,8 +9,6 @@ configuration. Worker/slice management is handled by K8sTaskProvider (not
 K8sControllerProvider).
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import threading

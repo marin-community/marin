@@ -43,8 +43,8 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
-from iris.rpc.auth import ControllerAuthPolicy, StaticTokenVerifier
 from iris.time_proto import timestamp_to_proto
+from rigging.server_auth import RequestAuthPolicy, StaticTokenVerifier
 from rigging.timing import Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
@@ -1401,7 +1401,7 @@ def test_auth_config_returns_enabled_when_verifier_set(service):
     dashboard = ControllerDashboard(
         service,
         auth_provider="gcp",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
     )
     authed_client = TestClient(dashboard.app)
 

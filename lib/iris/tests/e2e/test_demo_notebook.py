@@ -3,8 +3,6 @@
 
 """E2E tests verifying the demo notebook submission patterns work end-to-end."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

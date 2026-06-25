@@ -8,8 +8,6 @@ Tests exercise the Platform protocol contract through parameterized fixtures
 tests that cannot be expressed through the protocol are in dedicated sections.
 """
 
-from __future__ import annotations
-
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass

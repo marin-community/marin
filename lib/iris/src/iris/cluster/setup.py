@@ -125,6 +125,42 @@ def default_setup_script(
     return "\n".join(lines) + "\n"
 
 
+def wants_gpu_extra(extras: Sequence[str]) -> bool:
+    """Whether any requested extra is the ``gpu`` extra (``extra`` or ``package:extra``)."""
+    return any((e.split(":", 1)[1] if ":" in e else e) == "gpu" for e in extras)
+
+
+# The NVVM bitcode library JAX/XLA load to compile GPU kernels.
+_LIBDEVICE_FILE = "libdevice.10.bc"
+# XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
+_XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+
+
+def cuda_toolchain_setup_script() -> str:
+    """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
+
+    Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
+    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
+    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
+    run-phase changes. A no-op when the venv carries no CUDA toolchain.
+    """
+    return rf"""set -e
+cuda_bin=""
+for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
+  if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
+done
+if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
+echo 'staging CUDA toolchain'
+ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
+_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/{_LIBDEVICE_FILE}"
+if [ -f "$_libdevice" ]; then
+  mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
+fi
+"""
+
+
 def iris_runtime_setup_script(*, quiet: bool = True) -> str:
     """Render the script that installs iris's own runtime deps into ``$IRIS_VENV``.
 

@@ -9,8 +9,6 @@ Single-task jobs skip distributed init entirely — JAX defaults suffice.
 JAX is imported at call time — iris does not depend on jax.
 """
 
-from __future__ import annotations
-
 import atexit
 import logging
 import os

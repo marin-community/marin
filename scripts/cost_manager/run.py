@@ -20,8 +20,6 @@ Examples::
     uv run python -m scripts.cost_manager.run
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import logging
 import os

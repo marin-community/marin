@@ -10,8 +10,6 @@ completed runs:
     uv run python scripts/sample_v0_1_store.py [--output PATH] [--per-cluster N]
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import os

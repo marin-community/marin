@@ -9,8 +9,6 @@ in its own module (importing only the proto) so the controller backends can use
 it without the `config` → `backends.factory` import cycle.
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Sequence
 

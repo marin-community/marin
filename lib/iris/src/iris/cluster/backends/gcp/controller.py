@@ -7,8 +7,6 @@ Implements the ControllerProvider protocol: discover, start, restart, stop,
 stop_all, tunnel, resolve_image, debug_report.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import subprocess

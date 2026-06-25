@@ -3,8 +3,6 @@
 
 """Tests for K8s resource quantity parsers."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 
 import pytest

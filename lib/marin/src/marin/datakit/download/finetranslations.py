@@ -14,8 +14,6 @@ read English→original. The order is chosen deterministically from a content ha
 so the step is reproducible across re-runs.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 import dupekit

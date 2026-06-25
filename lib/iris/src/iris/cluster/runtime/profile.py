@@ -11,8 +11,6 @@ The module also provides `profile_local_process` for profiling the current
 interpreter process (used by the controller and worker for /system/process).
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import shutil

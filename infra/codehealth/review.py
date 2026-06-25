@@ -51,8 +51,6 @@ Requires a logged-in `claude` CLI (subscription auth) and W&B auth, plus
 `gh auth login` for the GitHub side. Designed to run as a daily GHA cron.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import json
 import logging

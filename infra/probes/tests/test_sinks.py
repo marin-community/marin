@@ -5,8 +5,6 @@
 upload + local delete). The GCS write (open_url) is the only I/O boundary and
 is stubbed to capture uploads in memory."""
 
-from __future__ import annotations
-
 import dataclasses
 import gzip
 import io

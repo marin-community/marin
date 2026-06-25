@@ -22,8 +22,6 @@ Usage::
     # canonical artifact consumers sample/tokenize off of.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step as _normalize_step
 from marin.execution.step_spec import StepSpec

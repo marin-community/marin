@@ -27,7 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import default_setup_script, setup_is_quiet
+from iris.cluster.setup import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -658,15 +658,20 @@ class EnvironmentSpec:
 
         if self.setup_scripts is None:
             py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            extras = list(self.extras or [])
             setup_scripts = [
                 default_setup_script(
-                    extras=list(self.extras or []),
+                    extras=extras,
                     pip_packages=list(self.pip_packages or []),
                     python_version=py_version,
                     packages=list(self.sync_packages or []) or None,
                     quiet=setup_is_quiet(merged_env_vars),
                 )
             ]
+            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
+            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
+            if wants_gpu_extra(extras):
+                setup_scripts.append(cuda_toolchain_setup_script())
         else:
             setup_scripts = [s for s in self.setup_scripts if s.strip()]
 

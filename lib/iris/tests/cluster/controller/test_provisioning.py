@@ -9,8 +9,6 @@ authoritative resource_type/zone/variant and the ready-only latency rule are
 covered without driving a live controller.
 """
 
-from __future__ import annotations
-
 import pytest
 from iris.cluster.backends.types import InfraError, QuotaExhaustedError
 from iris.cluster.controller.autoscaler.provisioning import (

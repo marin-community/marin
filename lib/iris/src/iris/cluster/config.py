@@ -10,8 +10,6 @@ Supports YAML config files for cluster management. This module provides:
 - IrisConfig high-level wrapper with component factories
 """
 
-from __future__ import annotations
-
 import copy
 import logging
 import os
@@ -1079,7 +1077,7 @@ class IrisConfig:
         self._proto = apply_defaults(proto)
 
     @classmethod
-    def load(cls, config_path: Path | str) -> IrisConfig:
+    def load(cls, config_path: Path | str) -> "IrisConfig":
         """Load IrisConfig from YAML file.
 
         Args:
@@ -1118,7 +1116,7 @@ class IrisConfig:
             ssh_config=self._proto.defaults.ssh,
         )
 
-    def as_local(self) -> IrisConfig:
+    def as_local(self) -> "IrisConfig":
         """Create local variant of this config.
 
         Returns:

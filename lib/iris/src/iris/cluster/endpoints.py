@@ -32,8 +32,6 @@ Example YAML:
           port: "10001"
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import subprocess

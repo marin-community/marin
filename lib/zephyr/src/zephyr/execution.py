@@ -11,8 +11,6 @@ up when the coordinator exits or is killed — preventing stale-coordinator
 bugs where orphaned coordinators and workers consume resources indefinitely.
 """
 
-from __future__ import annotations
-
 import enum
 import logging
 import os

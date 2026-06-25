@@ -12,8 +12,6 @@ Used by:
 
 Public API lives in those modules; helpers here are package-private.
 """
-from __future__ import annotations
-
 import json
 import logging
 import os

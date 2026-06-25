@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import pytest
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.k8s.fake import InMemoryK8sService

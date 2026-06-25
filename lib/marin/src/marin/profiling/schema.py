@@ -3,8 +3,6 @@
 
 """Versioned schema for agent-consumable profile summaries."""
 
-from __future__ import annotations
-
 import dataclasses
 import json
 import re
@@ -69,7 +67,7 @@ class DurationStats:
     max: float | None
 
     @classmethod
-    def from_values(cls, values: list[float]) -> DurationStats:
+    def from_values(cls, values: list[float]) -> "DurationStats":
         if not values:
             return cls(count=0, mean=None, median=None, p90=None, min=None, max=None)
 
@@ -95,7 +93,7 @@ class StepTimeSummary:
     warmup_steps_ignored: int
     all_steps: DurationStats
     steady_state_steps: DurationStats
-    classes: list[StepClassSummary] = field(default_factory=list)
+    classes: "list[StepClassSummary]" = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -275,7 +273,7 @@ class ProfileSummary:
         hierarchical_regions: list[RegionAggregate],
         gap_region_contexts: list[GapRegionContext],
         optimization_candidates: list[OptimizationCandidate],
-    ) -> ProfileSummary:
+    ) -> "ProfileSummary":
         """Create a summary with default schema version and timestamp."""
         generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         return cls(

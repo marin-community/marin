@@ -4,8 +4,6 @@
 
 """Allocate and use development GPU (CoreWeave H100) pods on Iris-managed clusters."""
 
-from __future__ import annotations
-
 import getpass
 import json
 import logging
@@ -81,7 +79,7 @@ class DevGpuState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevGpuState:
+    def from_json(cls, raw: str) -> "DevGpuState":
         data = json.loads(raw)
         return cls(
             session_name=data["session_name"],

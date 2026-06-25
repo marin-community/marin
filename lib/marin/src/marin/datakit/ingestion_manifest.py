@@ -3,8 +3,6 @@
 
 """Typed source manifests for small ingestion registries and sidecar metadata."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import posixpath

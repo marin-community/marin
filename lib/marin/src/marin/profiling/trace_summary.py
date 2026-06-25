@@ -8,8 +8,6 @@ Perfetto/Chrome trace ingester (`marin.profiling.ingest`) and the XPlane
 ingester (`marin.profiling.xplane`).
 """
 
-from __future__ import annotations
-
 import gzip
 import hashlib
 import json
