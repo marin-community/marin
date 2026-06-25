@@ -57,10 +57,12 @@ def _ints(env: str, default: str) -> tuple[int, ...]:
     return tuple(int(x) for x in os.environ.get(env, default).split(","))
 
 
-# Curvature sweep axes. Operator = lambda*(sqrt(e_max) I - P/sqrt(e_max)) (PSD, stable at any lambda;
-# lambda dimensionless). lambda=0 is the MuonH control (must reproduce 1.1661).
+# Curvature sweep axes. Operator = lambda*(alpha*sqrt(e_max) I - C), C = P/sqrt(e_max) [linear] or
+# P^{1/2} [sqrt]. PSD for alpha>=1, lambda dimensionless. lambda=0 is the MuonH control (reproduces 1.1661).
 LAMBDAS: tuple[float, ...] = _floats("LAMBDAS", "0.0,0.1,1.0")
 KS: tuple[int, ...] = _ints("KS", "1,2")
+ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.2")  # multiplier on the sqrt(e_max) shift
+CURV_POWER: str = os.environ.get("CURV_POWER", "linear")  # "linear" (P/sqrt(e_max)) or "sqrt" (P^{1/2})
 POWER_ITERS: int = int(os.environ.get("POWER_ITERS", "8"))  # power-iteration steps for e_max(P)
 # lambda tracks the LR schedule: lambda_t = (swept lambda = peak) * lr_t / peak_lr.
 LAMBDA_TRACKS_LR: bool = os.environ.get("LAMBDA_TRACKS_LR", "false").lower() in ("1", "true", "yes")
@@ -126,7 +128,7 @@ def _override_tracker(step: ExecutorStep) -> ExecutorStep:
     return dataclasses.replace(step, config=dataclasses.replace(pod, train_config=inner))
 
 
-def _build_step(lam: float, k: int) -> ExecutorStep:
+def _build_step(lam: float, k: int, alpha: float) -> ExecutorStep:
     optimizer = CurvatureMuonConfig(
         adam_lr=SIZE.adam_lr,
         momentum=0.95,
@@ -140,6 +142,8 @@ def _build_step(lam: float, k: int) -> ExecutorStep:
         coefficient_type=COEFF_TYPE,
         curvature_beta=0.95,
         curvature_lambda=lam,
+        curvature_alpha=alpha,
+        curv_power=CURV_POWER,
         inner_steps=k,
         power_iters=POWER_ITERS,
         lambda_tracks_lr=LAMBDA_TRACKS_LR,
@@ -157,12 +161,13 @@ def _build_step(lam: float, k: int) -> ExecutorStep:
         optimizer_config=optimizer,
     )
     cf = {"polar_express": "pe", "quintic": "qx", "simple": "sm", "aol": "aol"}.get(COEFF_TYPE, COEFF_TYPE)
-    tag = f"_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
+    cp = "sq" if CURV_POWER == "sqrt" else "lin"
+    tag = f"_{cp}_{cf}{BACKEND_STEPS}{('_' + RUN_TAG) if RUN_TAG else ''}"
     if lam == 0.0:
-        clabel = "_lam0"  # MuonH control (K irrelevant)
+        clabel = "_lam0"  # MuonH control (alpha/K irrelevant)
     else:
         tlabel = "_tl" if LAMBDA_TRACKS_LR else ""
-        clabel = f"_lam{_label(lam)}_K{k}{tlabel}"
+        clabel = f"_lam{_label(lam)}_a{_label(alpha)}_K{k}{tlabel}"
     run_id = f"qwen3_{SIZE.label}_curvmuon{clabel}{tag}_{SEQ_LEN}"
     step = default_train(
         name=run_id,
@@ -182,25 +187,28 @@ def main() -> None:
     if os.getenv("CI") is not None:
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
-    # lambda=0 control once; lambda>0 across K.
-    combos: list[tuple[float, int]] = []
+    # lambda=0 control once; lambda>0 across alpha x K.
+    combos: list[tuple[float, int, float]] = []
     seen_control = False
     for lam in LAMBDAS:
         if lam == 0.0:
             if not seen_control:
-                combos.append((0.0, 1))
+                combos.append((0.0, 1, ALPHAS[0]))
                 seen_control = True
             continue
-        for k in KS:
-            combos.append((lam, k))
-    steps = [_build_step(lam, k) for (lam, k) in combos]
+        for alpha in ALPHAS:
+            for k in KS:
+                combos.append((lam, k, alpha))
+    steps = [_build_step(lam, k, alpha) for (lam, k, alpha) in combos]
     logger.info(
-        "Curvature-Muon 130m sweep (coeff=%s@%d, tracks_lr=%s): %d runs lambdas=%s Ks=%s",
+        "Curvature-Muon 130m sweep (curv_power=%s coeff=%s@%d tracks_lr=%s): %d runs lambdas=%s alphas=%s Ks=%s",
+        CURV_POWER,
         COEFF_TYPE,
         BACKEND_STEPS,
         LAMBDA_TRACKS_LR,
         len(steps),
         LAMBDAS,
+        ALPHAS,
         KS,
     )
     executor_main(steps=steps, description="Qwen3-130m curvature-corrected Muon sweep: lambda x K.")

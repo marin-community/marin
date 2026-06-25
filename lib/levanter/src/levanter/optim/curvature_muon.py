@@ -63,15 +63,17 @@ class CurvatureMuonConfig(OptimizerConfig):
     max_grad_norm: float = 1.0
     coefficient_type: CoefficientType = "quintic"
     # --- curvature knobs ---
-    # Inner fixed point: X = msign( N + λ·(√e_max·I − P/√e_max)·X ), P = EMA(G Gᵀ), e_max = λ_max(P).
-    # The operator √e_max·I − P/√e_max is PSD (eigenvalues (e_max−p_i)/√e_max ≥ 0; 0 in the top-curvature
-    # direction, √e_max in flat ones), so the iteration is a contraction — stable at any λ (no α needed).
-    # P/√e_max has gradient units (P~G², so P/√e_max~G), matching N, so λ is dimensionless and its LR
-    # coupling is clean (no ‖N‖ factor). λ=0 ⟹ MuonH.
+    # Inner fixed point: X = msign( N + λ·(α·√e_max·I − C)·X ), P = EMA(G Gᵀ), e_max = λ_max(P), with the
+    # curvature term C = P/√e_max (curv_power="linear", penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", ∝ √p_i).
+    # C has max eigenvalue √e_max, so α·√e_max·I − C is PSD for α ≥ 1 (α=1 zeroes the top-curvature
+    # direction; α>1 leaves a strictly-positive floor — gentler). C has gradient units (P~G² ⟹ C~G),
+    # matching N, so λ is dimensionless and its LR coupling is clean (no ‖N‖ factor). λ=0 ⟹ MuonH.
     curvature_beta: float = 0.95  # ρ, EMA decay of P = EMA(G Gᵀ)
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
+    curvature_alpha: float = 1.0  # α ≥ 1, multiplier on the √e_max shift (α=1 = boundary PSD)
+    curv_power: str = "linear"  # "linear" (C = P/√e_max) or "sqrt" (C = P^{1/2})
     inner_steps: int = 1  # K, inner fixed-point iterations
-    power_iters: int = 8  # power-iteration steps for the e_max(P) estimate (warm-started from stored q)
+    power_iters: int = 8  # power-iteration steps for e_max(P) (warm-started) + Newton-Schulz steps for P^{1/2}
     # If set, the curvature strength tracks the LR schedule: lambda_t = curvature_lambda * lr_t / peak_lr.
     # So curvature is strongest at peak LR and fades during warmup / cosine decay (curvature_lambda = peak).
     lambda_tracks_lr: bool = False
@@ -95,6 +97,8 @@ class CurvatureMuonConfig(OptimizerConfig):
                         self.coefficient_type,
                         self.curvature_beta,
                         self.curvature_lambda,
+                        self.curvature_alpha,
+                        self.curv_power,
                         self.inner_steps,
                         self.power_iters,
                         self.learning_rate,
@@ -152,14 +156,35 @@ class ScaleByCurvatureMuonState(NamedTuple):
 
 
 _EMAX_MARGIN = 1.05  # inflate the (lower-bound) Rayleigh e_max estimate so the operator stays strictly PSD
+_SQRT_FLOOR = 1e-2  # floor the normalized spectrum before the matrix-sqrt NS so its Z~A^{-1/2} stays bounded
+#                    (P is low-rank early on → near-zero eigenvalues would blow up the coupled iteration)
 
 
-def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, steps, eps, ctype, inner_steps, power_iters):
+def _matrix_sqrt_ns(a, iters):
+    """A^{1/2} for SPD A with spectrum in (0, 1], via the coupled Newton-Schulz (Denman–Beavers) Y-iterate.
+
+    Y → A^{1/2}, stable (Y stays bounded; we never read the inverse-sqrt Z). Matmul-only, no eigh.
+    """
+    n = a.shape[0]
+    eye = jnp.eye(n, dtype=a.dtype)
+    y = a
+    z = eye
+    for _ in range(int(iters)):
+        t = 1.5 * eye - 0.5 * (z @ y)
+        y = y @ t
+        z = t @ z
+    return y
+
+
+def _curv_direction_2d(
+    g, n, p, q, *, rho, lam_static, lam_coef, alpha, steps, eps, ctype, inner_steps, power_iters, curv_power
+):
     """One matrix. g, n: [out, in] (gradient, Nesterov signal). p: [M, M], q: [M], M = max(out, in).
 
-    Inner fixed point X = msign( N + λ·(√e_max·I − P/√e_max)·X ). lam_static (python float) gates on/off;
-    lam_coef is the actual coefficient (a traced scalar when it tracks the LR schedule).
-    e_max(P) via a warm-started multi-step power iteration. Returns (new_p, new_q, x) in [out, in] orient.
+    Inner fixed point X = msign( N + λ·(√e_max·I − C)·X ), where the curvature term C is either
+    P/√e_max (curv_power="linear", penalty ∝ p_i) or P^{1/2} (curv_power="sqrt", penalty ∝ √p_i). Both
+    have max eigenvalue √e_max ⟹ √e_max·I − C is PSD ⟹ stable. lam_static gates on/off; lam_coef is the
+    coefficient (traced when it tracks the LR schedule). e_max(P) via warm-started power iteration.
     """
     out, inn = g.shape
     transpose = out < inn
@@ -171,14 +196,19 @@ def _curv_direction_2d(g, n, p, q, *, rho, lam_static, lam_coef, steps, eps, cty
     for _ in range(int(power_iters)):
         pq = new_p @ new_q
         new_q = pq / (jnp.linalg.norm(pq) + eps)
-    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so √e_max·I − P/√e_max is strictly PSD.
+    # Rayleigh quotient lower-bounds λ_max; inflate by the margin so √e_max·I − C is strictly PSD.
     emax = jnp.dot(new_q, new_p @ new_q) * _EMAX_MARGIN
     se = jnp.sqrt(emax) + eps
 
     x = zeropower_via_newtonschulz5(n_t, steps=steps, eps=eps, coefficient_type=ctype)
     if lam_static > 0.0:
         eye = jnp.eye(new_p.shape[0], dtype=new_p.dtype)
-        operator = lam_coef * (se * eye - new_p / se)  # PSD: λ(√e_max I − P/√e_max)
+        if curv_power == "sqrt":
+            a_norm = new_p / (emax + eps) + _SQRT_FLOOR * eye  # floored to [_SQRT_FLOOR, <1]; +eps guards P≈0
+            curv = se * _matrix_sqrt_ns(a_norm, power_iters)  # ≈ (P + _SQRT_FLOOR·e_max·I)^{1/2}
+        else:
+            curv = new_p / se  # P/√e_max
+        operator = lam_coef * (alpha * se * eye - curv)  # PSD for α≥1: λ(α√e_max I − C)
         for _ in range(int(inner_steps)):
             x = zeropower_via_newtonschulz5(n_t + operator @ x, steps=steps, eps=eps, coefficient_type=ctype)
 
@@ -195,6 +225,8 @@ def scale_with_curvature_muon(
     coefficient_type="quintic",
     curvature_beta=0.95,
     curvature_lambda=0.0,
+    curvature_alpha=1.0,
+    curv_power="linear",
     inner_steps=1,
     power_iters=8,
     peak_lr=0.02,
@@ -204,6 +236,8 @@ def scale_with_curvature_muon(
     mu = float(momentum)
     rho = float(curvature_beta)
     lam = float(curvature_lambda)  # static peak strength (also the on/off switch)
+    alpha = float(curvature_alpha)
+    cpow = str(curv_power)
     peak_lr = float(peak_lr)
     tracks_lr = bool(lambda_tracks_lr)
 
@@ -269,11 +303,13 @@ def scale_with_curvature_muon(
                 rho=rho,
                 lam_static=lam,
                 lam_coef=lam_coef,
+                alpha=alpha,
                 steps=steps,
                 eps=muon_eps,
                 ctype=coefficient_type,
                 inner_steps=inner_steps,
                 power_iters=power_iters,
+                curv_power=cpow,
             )
             new_p, new_q, x = jax.vmap(fn)(g, n, p, q) if g.ndim == 3 else fn(g, n, p, q)
             new_w = dataclasses.replace(n_layer.weight, array=x)
