@@ -25,6 +25,7 @@ from haliax.nn.ragged_dot import (
     _DEFAULT_DIM_NUMS,
     _DLHS_DIM_NUMS,
     _DRHS_DIM_NUMS,
+    _mosaic_pallas_call,
     _preferred_implementations,
     _triton_pallas_call,
     Implementation,
@@ -33,6 +34,11 @@ from haliax.nn.ragged_dot import (
 # Token dimension is padded to a multiple of this before the grouped GEMM, matching
 # `haliax.nn.ragged_dot.ragged_dot`; keeps the fp8 path's shape semantics identical to bf16.
 _RAGGED_PAD_MULTIPLE = 512
+
+# Compute dtype for the mosaic-hybrid weight-gradient (drhs) fallback. The Mosaic f8 fwd/dgrad
+# win, but f8 wgrad hits the Hopper operand-transpose wall (GFP8-025), so under the "mosaic"
+# backend the wgrad runs in bf16 on the dequantized f8 operands — the ~1.3× hybrid recipe.
+_WGRAD_FALLBACK_DTYPE = jnp.bfloat16
 
 
 def _ragged_dot_layout(
@@ -49,8 +55,22 @@ def _ragged_dot_layout(
     last_exc: Exception | None = None
     for impl in _preferred_implementations(implementation):
         try:
+            if impl == "mosaic":
+                return _mosaic_pallas_call(
+                    lhs,
+                    rhs,
+                    group_sizes,
+                    dimension_numbers,
+                    out_dtype=preferred_element_type,
+                )
             if impl == "triton":
-                return _triton_pallas_call(lhs, rhs, group_sizes, dimension_numbers, out_dtype=preferred_element_type)
+                return _triton_pallas_call(
+                    lhs,
+                    rhs,
+                    group_sizes,
+                    dimension_numbers,
+                    out_dtype=preferred_element_type,
+                )
             if impl == "xla":
                 return jax.lax.ragged_dot_general(
                     lhs,
@@ -59,13 +79,17 @@ def _ragged_dot_layout(
                     ragged_dot_dimension_numbers=dimension_numbers,
                     preferred_element_type=preferred_element_type,
                 )
-            raise NotImplementedError(f"FP8 ragged dot does not support implementation {impl!r}")
+            raise NotImplementedError(
+                f"FP8 ragged dot does not support implementation {impl!r}"
+            )
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":
                 last_exc = exc
                 continue
             raise
-    raise RuntimeError(f"No ragged_dot implementation selected (last error: {last_exc})")
+    raise RuntimeError(
+        f"No ragged_dot implementation selected (last error: {last_exc})"
+    )
 
 
 @partial(custom_vjp, nondiff_argnums=(9, 10, 11))
@@ -90,7 +114,14 @@ def quantized_ragged_dot(
     ``grad_dtype`` selects the backward gradient format: E5M2 (the Transformer-Engine hybrid
     recipe, default) or E4M3 (the all-E4M3 recipe; with coarse per-tensor scaling this is the
     DeepSeek-style format *without* its fine-grained scaling — see logbook GFP8-023)."""
-    return _ragged_dot_layout(q_lhs, q_rhs, group_sizes, _DEFAULT_DIM_NUMS, preferred_element_type, implementation)
+    return _ragged_dot_layout(
+        q_lhs,
+        q_rhs,
+        group_sizes,
+        _DEFAULT_DIM_NUMS,
+        preferred_element_type,
+        implementation,
+    )
 
 
 def quantized_ragged_dot_fwd(
@@ -107,13 +138,38 @@ def quantized_ragged_dot_fwd(
     implementation,
     grad_dtype,
 ):
-    out = _ragged_dot_layout(q_lhs, q_rhs, group_sizes, _DEFAULT_DIM_NUMS, preferred_element_type, implementation)
-    res = (q_lhs, lhs_scale, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history, group_sizes)
+    out = _ragged_dot_layout(
+        q_lhs,
+        q_rhs,
+        group_sizes,
+        _DEFAULT_DIM_NUMS,
+        preferred_element_type,
+        implementation,
+    )
+    res = (
+        q_lhs,
+        lhs_scale,
+        q_rhs,
+        rhs_scale,
+        out_grad_scale,
+        out_grad_amax_history,
+        group_sizes,
+    )
     return out, res
 
 
-def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, res, g):
-    q_lhs, lhs_scale, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history, group_sizes = res
+def quantized_ragged_dot_bwd(
+    preferred_element_type, implementation, grad_dtype, res, g
+):
+    (
+        q_lhs,
+        lhs_scale,
+        q_rhs,
+        rhs_scale,
+        out_grad_scale,
+        out_grad_amax_history,
+        group_sizes,
+    ) = res
 
     new_out_grad_scale, new_out_grad_amax_history = _new_scale_and_history(
         g, grad_dtype, out_grad_scale, out_grad_amax_history
@@ -121,14 +177,48 @@ def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype,
     q_g = quantize(g, grad_dtype, new_out_grad_scale, preferred_element_type)
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (f8 operands, dequantized by the rhs and grad scales)
-    grad_lhs = _ragged_dot_layout(q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation)
-    grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
+    grad_lhs = _ragged_dot_layout(
+        q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation
+    )
+    grad_lhs = dequantize(
+        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
+    )
 
-    # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]  (f8 operands, dequantized by the lhs and grad scales)
-    grad_rhs = _ragged_dot_layout(q_lhs, q_g, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, implementation)
-    grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
+    # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N], contracting the ragged token axis.
+    if implementation == "mosaic":
+        # f8 wgrad hits the Hopper operand-transpose wall (GFP8-025): run the GEMM in bf16 on the
+        # dequantized f8 operands. Dequantizing here folds in lhs_scale/grad_scale, so the result is
+        # already in real units — no further output dequant (unlike the f8 branch below).
+        lhs_b = dequantize(q_lhs, _WGRAD_FALLBACK_DTYPE, lhs_scale)
+        g_b = dequantize(q_g, _WGRAD_FALLBACK_DTYPE, new_out_grad_scale)
+        grad_rhs = _ragged_dot_layout(
+            lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto"
+        )
+    else:
+        # f8 operands, dequantized by the lhs and grad scales.
+        grad_rhs = _ragged_dot_layout(
+            q_lhs,
+            q_g,
+            group_sizes,
+            _DRHS_DIM_NUMS,
+            preferred_element_type,
+            implementation,
+        )
+        grad_rhs = dequantize(
+            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
+        )
 
-    return (grad_lhs, None, None, grad_rhs, None, None, new_out_grad_scale, new_out_grad_amax_history, None)
+    return (
+        grad_lhs,
+        None,
+        None,
+        grad_rhs,
+        None,
+        None,
+        new_out_grad_scale,
+        new_out_grad_amax_history,
+        None,
+    )
 
 
 quantized_ragged_dot.defvjp(quantized_ragged_dot_fwd, quantized_ragged_dot_bwd)
