@@ -14,6 +14,9 @@ weights live in the experiment that chose them, not buried in a catalog constant
   existing location instead of recomputing it.
 - :func:`raw_download` wraps a download function as a raw-data handle that
   :func:`tokenized` can depend on.
+- :func:`pretokenized` handles an already-tokenized Levanter cache hosted on
+  HuggingFace (e.g. the fineweb-edu prebuilt subcaches): it downloads rather than
+  re-tokenizes, and is consumed like any other tokenized :class:`Dataset`.
 - :func:`mixture` assembles a Levanter ``LmDataConfig`` from ``{handle: weight}``
   training components plus weight-0 ``validation`` handles, resolving each cache path
   with ``ctx.path(handle)``.
@@ -34,6 +37,7 @@ from levanter.data.text import (
 from marin.execution.lazy import Dataset, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
+from marin.processing.tokenize.download_pretokenized import PretokenizedCacheDownloadConfig, fetch_pretokenized_cache
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
 from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
 
@@ -134,6 +138,43 @@ def tokenized(
         recipe=Recipe(
             fn=_on(_tokenize_fn, resources), build_config=build_config, deps=(raw,) if raw is not None else ()
         ),
+        override_path=pin,
+    )
+
+
+def pretokenized(
+    name: str,
+    *,
+    repo_id: str,
+    tokenizer: str,
+    revision: str | None = None,
+    version: str = DEFAULT_VERSION,
+    pin: str | None = None,
+    tags: Sequence[str] = (),
+    resources: ResourceConfig | None = None,
+) -> Dataset:
+    """A handle to an already-tokenized Levanter cache hosted on HuggingFace.
+
+    ``build_config(ctx)`` downloads the HF dataset repo ``repo_id`` into ``ctx.out`` as
+    a Levanter cache; the handle then reads as a tokenized :class:`Dataset` with no
+    re-tokenization. Use it where a tokenizing :func:`tokenized` handle would be too
+    slow — e.g. the fineweb-edu prebuilt subcaches. ``pin`` references an
+    already-downloaded cache at an existing location instead of fetching it again.
+    """
+
+    def build_config(ctx: RunContext) -> PretokenizedCacheDownloadConfig:
+        return PretokenizedCacheDownloadConfig(
+            cache_path=ctx.out,
+            tokenizer=tokenizer,
+            hf_repo_id=repo_id,
+            hf_revision=revision,
+            tags=[*tags],
+        )
+
+    return Dataset(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=_on(fetch_pretokenized_cache, resources), build_config=build_config),
         override_path=pin,
     )
 

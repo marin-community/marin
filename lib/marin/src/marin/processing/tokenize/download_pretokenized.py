@@ -109,18 +109,16 @@ def download_pretokenized_cache(
 
     return ExecutorStep(
         name=os.path.join("tokenized", "subcache", output_cache_path_name),
-        fn=_actually_download_pretokenized_cache,
+        fn=fetch_pretokenized_cache,
         config=config,
     )
 
 
-def _actually_download_pretokenized_cache(
+def fetch_pretokenized_cache(
     cfg: PretokenizedCacheDownloadConfig,
 ) -> PretokenizedCacheDownloadConfig:
-    """
-    The function executed by the ExecutorStep to download the cache.
-    It uses the hf_download logic from operations.download.huggingface.download.
-    """
+    """Download the Levanter cache described by ``cfg`` from Hugging Face into
+    ``cfg.cache_path`` and return ``cfg``."""
     logger.info(
         f"Starting download of pretokenized cache '{cfg.hf_repo_id}' (revision: {cfg.hf_revision}) "
         f"to '{cfg.cache_path}'."

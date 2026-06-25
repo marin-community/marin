@@ -30,16 +30,8 @@ The model:
   a job runs on). It is recorded for the build-once-immutability guard, never in the
   path.
 
-Two ways to materialize:
-
-- :func:`lower` turns a pure handle graph into the existing :class:`StepSpec`
-  graph; the existing ``StepRunner`` runs it (cache → lock → run). This is the
-  target engine — no content-addressing.
-- :func:`run` / :func:`to_executor_step` is the **bridge** for configs whose data
-  still embeds legacy ``ExecutorStep``/``InputName`` placeholders (e.g. a
-  not-yet-migrated dataset catalog like ``nemotron_mix``). The top artifact keeps
-  its explicit ``name@version`` identity; its legacy dependency graph is resolved
-  by the existing ``Executor``. This bridge disappears as catalogs migrate.
+:func:`lower` turns a pure handle graph into the existing :class:`StepSpec` graph,
+which the existing ``StepRunner`` runs (cache → lock → run) — no content-addressing.
 """
 
 import hashlib
@@ -50,11 +42,9 @@ from typing import Any
 
 from rigging.filesystem import marin_prefix, marin_region
 
-from marin.execution.executor import Executor
 from marin.execution.provenance import created_now, get_git_commit, get_user
 from marin.execution.registry import FINGERPRINT_KEY, VERSION_KEY, ArtifactRecord, write_record
 from marin.execution.step_spec import StepSpec, _is_relative_path
-from marin.execution.types import ExecutorStep
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 
@@ -207,9 +197,7 @@ def materialized_config(artifact: Artifact, prefix: str) -> Any:
     """The concrete config a run would receive, for inspection/golden tests.
 
     Resolves ``ctx.out`` / ``ctx.path(dep)`` against ``prefix`` without running
-    anything. Note: legacy ``ExecutorStep``/``InputName`` placeholders embedded in
-    the config (the bridge case) are left unresolved here — :func:`to_executor_step`
-    resolves those through the ``Executor``.
+    anything.
     """
     return artifact.recipe.build_config(
         RunContext.for_run(out=artifact.path(prefix), prefix=prefix, run_args=artifact.recipe.run_args)
@@ -276,41 +264,3 @@ def lower(artifact: Artifact) -> StepSpec:
         hash_attrs={FINGERPRINT_KEY: fingerprint, VERSION_KEY: artifact.version, "deps": dep_refs},
         fn=fn,
     )
-
-
-def to_executor_step(artifact: Artifact, prefix: str | None = None) -> ExecutorStep:
-    """Bridge: build an ``ExecutorStep`` whose config may embed legacy placeholders.
-
-    The artifact keeps its explicit ``name@version`` identity via
-    ``override_output_path``; any ``ExecutorStep``/``InputName`` placeholders inside
-    the built config (e.g. a legacy dataset mixture's tokenize steps) are left for
-    the ``Executor`` to resolve. Used until those catalogs migrate to handles.
-    """
-    if artifact.recipe.deps:
-        raise ValueError(
-            f"{artifact.name}: to_executor_step is the legacy-dep bridge and does not lower handle deps; "
-            "use lower() for pure handle graphs."
-        )
-    resolved_prefix = prefix or marin_prefix()
-    config = artifact.recipe.build_config(
-        RunContext.for_run(
-            out=artifact.path(resolved_prefix),
-            prefix=resolved_prefix,
-            region=marin_region(),
-            run_args=artifact.recipe.run_args,
-        )
-    )
-    return ExecutorStep(
-        name=artifact.name,
-        fn=artifact.recipe.fn,
-        config=config,
-        override_output_path=_output_path_spec(artifact),
-    )
-
-
-def run(artifact: Artifact, *, prefix: str | None = None, **run_kwargs: Any) -> dict[ExecutorStep, str]:
-    """Materialize an artifact through the bridge: resolve its legacy dependency
-    graph and run it via the existing ``Executor``/``StepRunner``."""
-    resolved_prefix = prefix or marin_prefix()
-    executor = Executor(prefix=resolved_prefix, executor_info_base_path=f"{resolved_prefix}/experiments")
-    return executor.run([to_executor_step(artifact, resolved_prefix)], **run_kwargs)

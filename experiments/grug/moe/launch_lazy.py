@@ -13,43 +13,43 @@ The data mixture reads as a flat table: the catalog modules provide dataset
 *handles* (mechanism); this experiment states the *weights* (policy). The Nemotron
 weights are the corpus's TiB proportions.
 
-Three variants show the migration arc:
+Three variants:
 
-- ``grug_moe_baseline`` keeps the legacy ``nemotron_mix`` data catalog, so it
-  materializes through the bridge (``marin.execution.lazy.to_executor_step`` →
-  the existing ``Executor``). A golden test
-  (``tests/experiment/test_grug_moe_lazy_parity.py``) pins it to produce the same
-  materialized config as ``baseline_moe``.
 - ``grug_moe_slimpajama`` builds its data from a single :class:`Dataset` handle,
   the minimal fully-lazy demo.
 - ``grug_moe_baseline_pure`` assembles the full baseline mixture — Nemotron CC +
   starcoder + proofpile, plus the paloma/uncheatable validation suites at weight 0
   — from handles, so the whole graph lowers via ``lower()`` with the ``Executor``
   out of the path.
+- ``grug_moe_fineweb_mini`` is a tiny, fast smoke on the prebuilt fineweb-edu 10M
+  cache: it exercises the same lazy path (a download dependency, then one short TPU
+  training job) cheaply, for validating the model end to end on a real cluster.
 """
+
+import sys
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
+from marin.execution.context import executor_context
 from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture, tokenized
+from marin.experiment.data import mixture, pretokenized, tokenized
 
 from experiments.evals.uncheatable_lazy import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
-from experiments.grug.moe.launch import (
-    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-    RESOLVED_RUN_ID,
-    GrugMoeLaunchConfig,
-    run_grug_moe_trial,
-)
+from experiments.grug.moe.launch import RESOLVED_RUN_ID, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.paloma_lazy import paloma_validation
 from experiments.pretraining_datasets.nemotron_lazy import nemotron_datasets
 from experiments.pretraining_datasets.simple_lazy import proofpile_dataset, starcoder_dataset
 
 # Tokenization runs as its own Fray job (keeps the launcher pod light).
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
+
+# Downloading a prebuilt cache is light I/O — a small CPU job, not a tokenize.
+_DOWNLOAD_RESOURCES = ResourceConfig(ram="16g", disk="32g")
 
 # The TPU the training job is dispatched onto. A run-arg, not part of the config's
 # identity: re-running on a different TPU is the same checkpoint, so it must not fork
@@ -61,50 +61,42 @@ _BUDGET = 1e18
 _HIDDEN_DIM = 1024
 _TARGET_STEPS = 2**14
 
-
-def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
-    model, optimizer, batch_size, steps = build_from_heuristic(
-        budget=_BUDGET, hidden_dim=_HIDDEN_DIM, target_steps=_TARGET_STEPS
-    )
-
-    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
-        return _grug_launch_config(ctx, model, optimizer, batch_size, steps, data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION)
-
-    return Checkpoint(
-        name="grug/4_10_baseline_moe",
-        version=version,
-        # The launcher fn runs inline; run_grug dispatches its own Fray TPU job onto
-        # the train_resources run-arg.
-        recipe=Recipe(
-            fn=run_grug_moe_trial,
-            build_config=build_config,
-            run_args={"train_resources": _TRAIN_RESOURCES},
-        ),
-    )
+_STANDARD_EVAL = GrugEvalConfig(
+    eval_batch_size=512,
+    steps_per_eval=1000,
+    max_eval_batches=8,
+    eval_current=True,
+    eval_ema=False,
+)
 
 
-def _grug_launch_config(ctx, model, optimizer, batch_size, steps, *, data):
+def _grug_launch_config(
+    ctx,
+    model,
+    optimizer,
+    batch_size,
+    steps,
+    *,
+    data,
+    run_id=RESOLVED_RUN_ID,
+    eval_config=_STANDARD_EVAL,
+    wandb_group="moe-iter04",
+):
     """Shared GrugMoeLaunchConfig assembly for the lazy grug-moe runs."""
     return GrugMoeLaunchConfig(
         model=model,
         data=data,
         output_path=ctx.out,
-        run_id=RESOLVED_RUN_ID,
+        run_id=run_id,
         resources=ctx.run_arg("train_resources"),
         steps=steps,
         batch_size=batch_size,
         seed=0,
         mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=WandbConfig(project="marin_moe", tags=["moe"], group="moe-iter04", name=None),
+        tracker=WandbConfig(project="marin_moe", tags=["moe"], group=wandb_group, name=None),
         optimizer=optimizer,
         grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
-        eval=GrugEvalConfig(
-            eval_batch_size=512,
-            steps_per_eval=1000,
-            max_eval_batches=8,
-            eval_current=True,
-            eval_ema=False,
-        ),
+        eval=eval_config,
     )
 
 
@@ -181,6 +173,68 @@ def grug_moe_baseline_pure(*, version: str = "v1") -> Checkpoint:
     )
 
 
+# Mini smoke: tiny model, the prebuilt fineweb-edu 10M cache, a short run.
+_FINEWEB_EDU_10M_REPO = "marin-community/fineweb-edu-pretokenized-10M"
+_MINI_HIDDEN_DIM = 256
+_MINI_BUDGET = 1e15
+_MINI_BATCH = 32
+_MINI_STEPS = 20
+
+
+def grug_moe_fineweb_mini(*, version: str = "v1") -> Checkpoint:
+    """A tiny, fast grug-moe smoke on the prebuilt fineweb-edu 10M cache.
+
+    Exercises the full lazy path end to end — a download dependency materializes as
+    its own Fray job, then the launcher dispatches one short TPU training job —
+    without the cost of a real pretraining run. The model is sized down (``d256``,
+    ``batch=32``, 20 steps) so the whole graph runs in minutes.
+    """
+    model, optimizer, _, _ = build_from_heuristic(
+        budget=_MINI_BUDGET, hidden_dim=_MINI_HIDDEN_DIM, target_steps=_MINI_STEPS
+    )
+    fineweb = pretokenized(
+        "fineweb-edu-10M",
+        repo_id=_FINEWEB_EDU_10M_REPO,
+        tokenizer=marin_tokenizer,
+        resources=_DOWNLOAD_RESOURCES,
+    )
+
+    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
+        return _grug_launch_config(
+            ctx,
+            model,
+            optimizer,
+            _MINI_BATCH,
+            _MINI_STEPS,
+            data=mixture(ctx, {fineweb: 1.0}),
+            run_id="grug-moe-fineweb-mini",
+            eval_config=None,
+            wandb_group="mini-smoke",
+        )
+
+    return Checkpoint(
+        name="grug/moe_fineweb_mini",
+        version=version,
+        recipe=Recipe(
+            fn=run_grug_moe_trial,
+            build_config=build_config,
+            deps=(fineweb,),
+            run_args={"train_resources": _TRAIN_RESOURCES},
+        ),
+    )
+
+
+_VARIANTS = {
+    "slimpajama": grug_moe_slimpajama,
+    "pure": grug_moe_baseline_pure,
+    "mini": grug_moe_fineweb_mini,
+}
+
+
 if __name__ == "__main__":
-    # Pure lazy graph (training mixture + validation suites -> train), run by StepRunner with no Executor.
-    StepRunner().run([lower(grug_moe_baseline_pure())])
+    # Lower the chosen variant to a pure StepSpec graph and run it (no Executor).
+    # `python -m experiments.grug.moe.launch_lazy [slimpajama|pure|mini]`, default pure.
+    selected = sys.argv[1] if len(sys.argv) > 1 else "pure"
+    with executor_context():
+        spec = lower(_VARIANTS[selected]())
+    StepRunner().run([spec])
