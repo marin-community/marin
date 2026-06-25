@@ -21,6 +21,12 @@ import jax.numpy as jnp
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 
+# Transposed-store strategies, A/B'd on H100 (the transposed store is the perf/lowering risk):
+#   "smem_t": transpose in SMEM (transpose_ref(qt_smem)[...] = q) then a plain TMA store
+#   "gmem_t": store the rowwise tile q[bm,bk] into a transposed TMA view of the GMEM destination
+_STORE_STRATEGIES = ("smem_t", "gmem_t")
+
+
 def cast_transpose_mgpu(
     x: jax.Array,  # [M, K] bf16/f32
     scale: jax.Array,  # (1,) per-tensor scale
@@ -29,6 +35,7 @@ def cast_transpose_mgpu(
     compute_dtype: jnp.dtype = jnp.bfloat16,
     block_m: int = 128,
     block_k: int = 128,
+    store_strategy: str = "smem_t",
 ) -> tuple[jax.Array, jax.Array]:
     """One read of ``x`` -> ``(q[M,K], qT[K,M])`` in ``out_dtype`` (Mosaic-GPU, Hopper f8).
 
@@ -38,6 +45,8 @@ def cast_transpose_mgpu(
     """
     if x.ndim != 2:
         raise ValueError(f"cast_transpose expects a 2D array, got shape {x.shape}")
+    if store_strategy not in _STORE_STRATEGIES:
+        raise ValueError(f"store_strategy must be one of {_STORE_STRATEGIES}, got {store_strategy!r}")
     m, k = x.shape
     if m % block_m != 0:
         raise ValueError(f"m={m} must be a multiple of block_m={block_m}")
@@ -62,14 +71,17 @@ def cast_transpose_mgpu(
             m_i = tile // grid_k
             k_i = tile % grid_k
 
-            @functools.partial(
-                pl.run_scoped,
+            # qt_smem only needed for the SMEM-transpose strategy.
+            scratch = dict(
                 x_smem=plgpu.SMEM((block_m, block_k), dtype=x.dtype),
                 q_smem=plgpu.SMEM((block_m, block_k), dtype=out_dtype),
-                qt_smem=plgpu.SMEM((block_k, block_m), dtype=out_dtype),
                 barrier=plgpu.Barrier(),
             )
-            def scope(x_smem, q_smem, qt_smem, barrier):
+            if store_strategy == "smem_t":
+                scratch["qt_smem"] = plgpu.SMEM((block_k, block_m), dtype=out_dtype)
+
+            @functools.partial(pl.run_scoped, **scratch)
+            def scope(x_smem, q_smem, barrier, qt_smem=None):
                 plgpu.copy_gmem_to_smem(
                     x_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)],
                     x_smem,
@@ -87,13 +99,18 @@ def cast_transpose_mgpu(
                     q_smem, q_gmem.at[pl.ds(m_i * block_m, block_m), pl.ds(k_i * block_k, block_k)]
                 )
 
-                # Transposed store: write q[bm,bk] into a transposed SMEM view so qt_smem physically
-                # holds q.T[bk,bm] (an SMEM-level transpose, coalesced), then TMA to qt_gmem[k_i, m_i].
-                plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
-                plgpu.commit_smem()
-                plgpu.copy_smem_to_gmem(
-                    qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
-                )
+                # Transposed store -> qt_gmem[k_i, m_i] (a [bk, bm] tile holding q.T).
+                if store_strategy == "smem_t":
+                    # Write q[bm,bk] into a transposed SMEM view so qt_smem physically holds q.T, then TMA.
+                    plgpu.transpose_ref(qt_smem, (1, 0))[...] = q
+                    plgpu.commit_smem()
+                    plgpu.copy_smem_to_gmem(
+                        qt_smem, qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
+                    )
+                else:
+                    # TMA the rowwise tile q[bm,bk] into a transposed view of the GMEM destination.
+                    dst = qt_gmem.at[pl.ds(k_i * block_k, block_k), pl.ds(m_i * block_m, block_m)]
+                    plgpu.copy_smem_to_gmem(q_smem, plgpu.transpose_ref(dst, (1, 0)))
                 plgpu.wait_smem_to_gmem(0, wait_read_only=True)
 
     num_sms = jax.devices()[0].core_count
