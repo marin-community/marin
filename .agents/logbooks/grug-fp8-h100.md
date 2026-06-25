@@ -1587,3 +1587,27 @@ lowering failures (H100, `bench_f8_cast_transpose_mgpu.py`, jobs `…-221151 →
 - **Repro:** `… job run --gpu H100x1 --enable-extra-resources --extra gpu --cpu 4 --memory 64GB --disk
   64GB -- bash lib/levanter/scripts/bench/_s5_cast_transpose_mgpu.sh` (prints the 4 lowering failures + the
   f8_swapaxes tax baselines).
+
+### 2026-06-25 — GFP8-033 follow-up: the cast-transpose IS expressible on jax HEAD (tiled transpose); 0.10.0 is the only blocker
+Checked whether M2's wall is fundamental or version-specific by reading jax `main`. Verdict: **version-
+specific — a transposed SMEM→GMEM store works at HEAD**, so the cast-transpose kernel is a clean jax-bump
+follow-up, not a dead end.
+- **Two of my four 0.10.0 walls persist at HEAD** (unchanged): a transposed GMEM *destination* still raises
+  `Non-indexing transforms on GMEM refs are not implemented` (`primitives.py`), and a naive 2-D swizzled
+  `transpose_ref((1,0))` still raises `Can't transpose the swizzled dimension`
+  (`core.py UnswizzleRef.commute_transpose`: allowed iff `perm[-1]==len(perm)-1`, i.e. the minor/swizzled
+  dim stays minormost).
+- **What HEAD adds** (absent in 0.10.0): `_handle_transforms(..., handle_transposes=True)` for Warpgroup
+  semantics materializes a `TransposeTransform` via `mgpu.memref_transpose`, plus `WGMMA_TRANSPOSED_LAYOUT`.
+- **The working idiom** (HEAD `tests/pallas/mosaic_gpu_test.py::test_smem_gmem_transposed_copies`): use a
+  **tiled, higher-rank** ref and transpose the OUTER tile axes while keeping the swizzled minor dim fixed —
+  `smem=SMEM((2,2,64), transforms=(TilingTransform((32,)),)); transpose_ref(smem,(1,0,2));
+  copy_smem_to_gmem(smem, dst)` stores the transpose correctly. (Also `test_transposed_load_store`,
+  `test_warp_specialized_transpose` — all use the `(1,0,2)` minor-dim-fixed pattern.) So the f8 cast-
+  transpose store must be written against a `[M//t, K//s, (s)]`-style tiled layout, NOT my 2-D
+  `transpose_ref((1,0))`.
+- **Practical call unchanged:** we can't cheaply move this stack to jax HEAD (cluster image pinned; HEAD
+  Mosaic APIs change weekly; it would ripple through levanter/haliax/iris) just to bank ~0.2–0.3 ms on one
+  GEMM group. So: **ship the 1.27× hybrid now; revisit the cast-transpose (tiled-layout store) when the
+  stack naturally lands on a jax with this machinery.** The kernel skeleton + the exact HEAD idiom are
+  recorded here so the follow-up is a small, well-scoped change.
