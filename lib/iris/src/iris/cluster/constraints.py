@@ -32,8 +32,6 @@ A job's region requirement has three distinct states:
   ``region EXISTS`` would otherwise exclude workers/groups that advertise no region).
 """
 
-from __future__ import annotations
-
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -131,7 +129,7 @@ class AttributeValue:
         return proto
 
     @staticmethod
-    def from_proto(proto: job_pb2.AttributeValue) -> AttributeValue:
+    def from_proto(proto: job_pb2.AttributeValue) -> "AttributeValue":
         """Convert from protobuf representation."""
         if proto.HasField("string_value"):
             return AttributeValue(proto.string_value)
@@ -259,7 +257,7 @@ class Constraint:
         return proto
 
     @staticmethod
-    def from_proto(proto: job_pb2.Constraint) -> Constraint:
+    def from_proto(proto: job_pb2.Constraint) -> "Constraint":
         """Convert from protobuf representation.
 
         Normalization (strip/lowercase for strings) happens inside
@@ -284,7 +282,7 @@ class Constraint:
         value: str | int | float | None = None,
         values: Sequence[str | int | float] | None = None,
         mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED,
-    ) -> Constraint:
+    ) -> "Constraint":
         """Ergonomic factory: wraps raw scalars in AttributeValue automatically.
 
         - Singular ops (EQ/NE/GT/GE/LT/LE): pass ``value=``.
@@ -1099,7 +1097,7 @@ class ConstraintIndex:
     _entity_attributes: dict[str, dict[str, AttributeValue]]
 
     @classmethod
-    def build(cls, entities: dict[str, dict[str, AttributeValue]]) -> ConstraintIndex:
+    def build(cls, entities: dict[str, dict[str, AttributeValue]]) -> "ConstraintIndex":
         """Build index from entity_id -> attributes mapping."""
         discrete_lists: dict[str, dict[str | int | float, set[str]]] = {}
         for entity_id, attrs in entities.items():

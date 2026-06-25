@@ -23,8 +23,6 @@ separate so the ``python -m`` target is not also imported during ``zephyr``
 package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re

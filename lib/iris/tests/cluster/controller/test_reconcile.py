@@ -14,8 +14,6 @@ Three layers, exercised in order:
    tick's reconcile phase (``reconcile_once``).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 

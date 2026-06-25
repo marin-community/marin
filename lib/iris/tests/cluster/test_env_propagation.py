@@ -10,8 +10,6 @@ vars like TPU_NAME or PATH that happen to be in os.environ.
 The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from unittest.mock import patch
 

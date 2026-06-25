@@ -11,8 +11,6 @@ background threads, with stdout/stderr captured as pod logs and pod
 status updated automatically on completion.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import subprocess

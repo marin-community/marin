@@ -9,8 +9,6 @@ redeploy lands the exact image the tag points to right now — no node-cache
 staleness, and the rendered manifest records precisely what is running.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 

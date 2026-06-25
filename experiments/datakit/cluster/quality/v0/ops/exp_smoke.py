@@ -19,8 +19,6 @@ Submit (eu-west4 worker so we read marin-eu-west4 in-region):
         python -m experiments.datakit.cluster.quality.v0.ops.exp_smoke
 """
 
-from __future__ import annotations
-
 import logging
 import os
 

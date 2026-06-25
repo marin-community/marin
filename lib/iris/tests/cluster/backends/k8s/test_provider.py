@@ -3,8 +3,6 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 
 import pytest

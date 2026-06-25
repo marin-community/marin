@@ -7,8 +7,6 @@ Keys are plain strings on the finelog side; this module owns the mapping from
 iris-domain values (`JobName`, `TaskAttempt`) to those strings.
 """
 
-from __future__ import annotations
-
 from finelog.rpc import logging_pb2
 
 from iris.cluster.types import JobName, TaskAttempt

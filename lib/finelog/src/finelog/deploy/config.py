@@ -10,8 +10,6 @@ and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path

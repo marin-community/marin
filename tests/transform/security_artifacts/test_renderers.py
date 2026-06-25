@@ -3,8 +3,6 @@
 
 """Tests for deterministic security-artifact text renderers."""
 
-from __future__ import annotations
-
 import pytest
 from marin.transform.security_artifacts.renderers import (
     DEFAULT_ZEEK_EMPTY_FIELD,

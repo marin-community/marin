@@ -3,8 +3,6 @@
 
 """Shared data types for the k8s cluster layer."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -84,7 +82,7 @@ class K8sResource(Enum):
         return f"{self.collection_path(namespace)}/{name}"
 
     @classmethod
-    def from_kind(cls, kind: str) -> K8sResource:
+    def from_kind(cls, kind: str) -> "K8sResource":
         """Look up a resource by its manifest kind string."""
         for member in cls:
             if member.kind == kind:

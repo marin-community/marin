@@ -5,8 +5,6 @@
 runtime deaths (preemptions) kept out of the success rate, and latency from READY
 rows. These exercise the pure ``aggregate`` over synthetic iris.provisioning rows."""
 
-from __future__ import annotations
-
 import json
 
 import pytest

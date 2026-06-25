@@ -18,8 +18,6 @@ cache valid across Zephyr tasks.
 Counters: ``assign/docs_in``, ``assign/shards_in``.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile

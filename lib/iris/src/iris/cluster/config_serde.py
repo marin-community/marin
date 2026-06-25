@@ -3,8 +3,6 @@
 
 """Pure serialization for Iris cluster config: proto -> YAML-friendly dict."""
 
-from __future__ import annotations
-
 from google.protobuf.json_format import MessageToDict
 
 from iris.rpc import config_pb2

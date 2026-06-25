@@ -14,8 +14,6 @@ The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokeniz
 structure without touching GCS.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import os

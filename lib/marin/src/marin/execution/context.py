@@ -16,8 +16,6 @@ worker unpickling a step never trips the guard; only direct construction and
 ``dataclasses.replace`` do.
 """
 
-from __future__ import annotations
-
 import contextlib
 import contextvars
 import dataclasses

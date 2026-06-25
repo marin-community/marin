@@ -3,8 +3,6 @@
 
 """Tests for the log-shipper sidecar: CRI parsing, tailing, rotation, key derivation."""
 
-from __future__ import annotations
-
 import threading
 import time
 

@@ -13,8 +13,6 @@ This module holds the serving config and the in-job entrypoint that boots vLLM o
 the slice; the ``marin-serve`` launcher CLI is a separate module.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

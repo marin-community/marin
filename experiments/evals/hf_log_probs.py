@@ -15,8 +15,6 @@ network I/O; the config is read only when the step actually executes (which is
 also when the model itself is downloaded).
 """
 
-from __future__ import annotations
-
 import dataclasses
 from dataclasses import dataclass
 

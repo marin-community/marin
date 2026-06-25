@@ -3,8 +3,6 @@
 
 """Tests for worker bootstrap script generation."""
 
-from __future__ import annotations
-
 import pytest
 from iris.cluster.backends.gcp.bootstrap import (
     build_worker_bootstrap_script,

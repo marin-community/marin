@@ -8,8 +8,6 @@ cycle between ``executor`` and ``step_spec``. ``executor`` re-exports the
 symbols defined here for backwards compatibility with existing call sites.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import os
 from collections.abc import Callable
@@ -54,11 +52,11 @@ class ExecutorStep(Generic[ConfigT_co]):
     def __post_init__(self):
         check_build_context("ExecutorStep", self.name)
 
-    def cd(self, name: str) -> InputName:
+    def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
         return InputName(self, name=name)
 
-    def __truediv__(self, other: str) -> InputName:
+    def __truediv__(self, other: str) -> "InputName":
         """Alias for `cd`. That looks more Pythonic."""
         return InputName(self, name=other)
 
@@ -66,11 +64,11 @@ class ExecutorStep(Generic[ConfigT_co]):
         """Hash based on the ID (every object is different)."""
         return hash(id(self))
 
-    def with_output_path(self, output_path: str) -> ExecutorStep:
+    def with_output_path(self, output_path: str) -> "ExecutorStep":
         """Return a copy of the step with the given output_path."""
         return dataclasses.replace(self, override_output_path=output_path)
 
-    def as_input_name(self) -> InputName:
+    def as_input_name(self) -> "InputName":
         return InputName(step=self, name=None)
 
 
@@ -91,22 +89,22 @@ class InputName:
     These "pseudo-dependencies" still impact the hash of the step, but they don't block execution.
     """
 
-    def cd(self, name: str) -> InputName:
+    def cd(self, name: str) -> "InputName":
         return InputName(self.step, name=os.path.join(self.name, name) if self.name else name)
 
-    def __truediv__(self, other: str) -> InputName:
+    def __truediv__(self, other: str) -> "InputName":
         """Alias for `cd` that looks more Pythonic."""
         return self.cd(other)
 
     @staticmethod
-    def hardcoded(path: str) -> InputName:
+    def hardcoded(path: str) -> "InputName":
         """
         Sometimes we want to specify a path that is not part of the pipeline but is still relative to the prefix.
         Try to use this sparingly.
         """
         return InputName(None, name=path)
 
-    def nonblocking(self) -> InputName:
+    def nonblocking(self) -> "InputName":
         """
         the step will not block on (or attempt to execute) the parent step.
 

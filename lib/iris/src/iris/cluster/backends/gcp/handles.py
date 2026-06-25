@@ -9,8 +9,6 @@ GcpSliceHandle: TPU pod slice (describe, terminate)
 GcpVmSliceHandle: Single-VM GCE-backed slice
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import threading

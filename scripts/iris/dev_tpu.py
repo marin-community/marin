@@ -4,8 +4,6 @@
 
 """Allocate and use development TPUs on Iris-managed clusters."""
 
-from __future__ import annotations
-
 import atexit
 import getpass
 import json
@@ -82,7 +80,7 @@ class DevTpuState:
         return json.dumps(asdict(self), indent=2, sort_keys=True)
 
     @classmethod
-    def from_json(cls, raw: str) -> DevTpuState:
+    def from_json(cls, raw: str) -> "DevTpuState":
         data = json.loads(raw)
         workers = [
             DevTpuWorker(

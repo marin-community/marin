@@ -13,8 +13,6 @@ so no network access is required. The focus is on externally-observable behaviou
 * ``zip`` and ``tar.gz`` archive formats both round-trip.
 """
 
-from __future__ import annotations
-
 import gzip
 import io
 import json

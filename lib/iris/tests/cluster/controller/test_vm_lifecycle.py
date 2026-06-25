@@ -26,8 +26,6 @@ when ``healthy=False``, it returns failure. A short health_check_timeout
 ensures unhealthy tests complete quickly without real polling delays.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 

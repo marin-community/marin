@@ -11,8 +11,6 @@ Two protocols define the boundary between Iris orchestration and infrastructure:
 Concrete implementations live under providers/gcp/, providers/k8s/, etc.
 """
 
-from __future__ import annotations
-
 from contextlib import AbstractContextManager
 from typing import Protocol
 

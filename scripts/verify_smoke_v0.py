@@ -32,8 +32,6 @@ Submit on iris (eu-west4)::
         -- python scripts/verify_smoke_v0.py {v0,mixed}
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 from collections import Counter, defaultdict

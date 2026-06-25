@@ -11,8 +11,6 @@ config schema, mirroring how `iris cluster start` decides backend from
 cluster yaml.
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging

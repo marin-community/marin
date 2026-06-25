@@ -3,8 +3,6 @@
 
 """Shared SSH helpers for GCP providers."""
 
-from __future__ import annotations
-
 from iris.rpc import config_pb2
 
 # Instance metadata that opts a VM into OS Login. Applied at VM creation by

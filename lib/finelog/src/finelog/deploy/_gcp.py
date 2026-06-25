@@ -9,8 +9,6 @@ Lifted verbatim from the original `cli.py`, reshaped to take a
 /health poll, status, logs) lives here.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 import sys
