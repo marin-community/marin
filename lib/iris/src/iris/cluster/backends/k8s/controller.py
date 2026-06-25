@@ -568,7 +568,7 @@ class K8sControllerProvider:
                     # objects at startup so pods can be stamped without manual setup.
                     "apiGroups": ["scheduling.k8s.io"],
                     "resources": ["priorityclasses"],
-                    "verbs": ["get", "create", "update", "patch"],
+                    "verbs": ["get", "create", "update", "patch", "delete"],
                 },
             ],
         }
@@ -625,13 +625,13 @@ class K8sControllerProvider:
 
         Priority values:
           iris-production  1000  — preempts interactive/batch; never preempted
-          iris-interactive    0  — normal user work (scheduler default)
-          iris-batch        -10  — opportunistic; preemptible by the scheduler
+          iris-interactive   10  — normal user work
+          iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
         """
         priority_classes = [
             (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_INTERACTIVE, 0, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_BATCH, -10, "Never"),
+            (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
+            (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
         ]
         for name, value, preemption_policy in priority_classes:
             manifest = {
@@ -643,6 +643,13 @@ class K8sControllerProvider:
                 "globalDefault": False,
                 "description": f"Iris {name.removeprefix('iris-')} priority band",
             }
+            existing = self._kubectl.get_json(K8sResource.PRIORITY_CLASSES, name)
+            if existing and (existing.get("value") != value or existing.get("preemptionPolicy") != preemption_policy):
+                # PriorityClass.value and preemptionPolicy are immutable. Existing
+                # pods keep their admitted numeric priority after the class is
+                # deleted, and new pods resolve the recreated class.
+                logger.info("Replacing immutable PriorityClass %s", name)
+                self._kubectl.delete(K8sResource.PRIORITY_CLASSES, name)
             self._kubectl.apply_json(manifest)
         logger.info(
             "PriorityClasses applied: %s",
