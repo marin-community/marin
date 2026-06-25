@@ -138,10 +138,17 @@ class Recipe:
     """How to build an artifact: the step fn, a config builder, deps, run-args."""
 
     fn: Callable[[Any], Any]
-    """``fn(config) -> result``, or a :class:`~marin.execution.remote.RemoteCallable`
-    (``remote(fn, resources=…)``) to run the step on Fray with those resources. The
-    config carries its output path; the result is persisted. Compute rides with the
-    function, never on the step node — so it does not enter the fingerprint."""
+    """``fn(config)``, or a :class:`~marin.execution.remote.RemoteCallable`
+    (``remote(fn, resources=…)``) to run the step on Fray with those resources.
+
+    The contract is that a step produces its artifact by writing serialized data to
+    its output path (``config`` carries it as ``ctx.out``) — this holds uniformly
+    whether the step runs inline or on a Fray worker. As a convenience, an inline
+    step may instead ``return`` a value and the runner persists it; a remote step
+    cannot (a Fray job returns nothing to the caller), so it must write ``ctx.out``.
+
+    Compute rides with the function, never on the step node, so it does not enter the
+    fingerprint."""
     build_config: Callable[[RunContext], Any]
     """``build_config(ctx) -> config``. Pulls paths and live attributes from the RunContext."""
     deps: tuple["Artifact", ...] = ()
