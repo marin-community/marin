@@ -107,10 +107,10 @@ def transposed_ragged_dot(
             g_i = loop_info.index[0]
             m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
 
-            # Token (contraction) slice for this group, aligned down to block_k. Potentially out of
-            # bounds at the tail, but emit_pipeline never reads the out-of-bounds part.
-            group_block_start = group_block_start_blocks_gmem[g_i] * block_k
-            gmem_slice = pl.ds(group_block_start, k)
+            # Group's first token-block index. We offset into the full operand via a block-granular
+            # index_map (gstart_block + k_i) rather than a dynamic gmem slice on the contiguous token
+            # axis — the swizzled TMA can only form descriptors over block-aligned static tiles.
+            gstart_block = group_block_start_blocks_gmem[g_i]
 
             def acc_scope(acc_ref):
                 def block_matmul(block_idx, lhs_smem, rhs_smem):
@@ -158,19 +158,19 @@ def transposed_ragged_dot(
                         in_specs=[
                             plgpu.BlockSpec(
                                 (block_m, block_k),
-                                lambda k_i: (m_i, k_i),
+                                lambda k_i: (m_i, gstart_block + k_i),
                                 delay_release=1 if max_concurrent_steps > 1 else 0,
                                 transforms=transforms,
                             ),
                             plgpu.BlockSpec(
                                 (block_n, block_k),
-                                lambda k_i: (n_i, k_i),
+                                lambda k_i: (n_i, gstart_block + k_i),
                                 delay_release=1 if max_concurrent_steps > 1 else 0,
                                 transforms=transforms,
                             ),
                         ],
                         max_concurrent_steps=max_concurrent_steps,
-                    )(lhs_gmem.at[:, gmem_slice], rhs_gmem.at[:, gmem_slice])
+                    )(lhs_gmem, rhs_gmem)
 
                 return acc_ref[...]
 
