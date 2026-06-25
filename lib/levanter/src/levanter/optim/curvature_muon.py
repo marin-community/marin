@@ -222,10 +222,19 @@ def _curv_direction_2d(
 
     # Curvature term C (and, in sqrt mode, the inverse-sqrt iterate for the optional Mudam warm start).
     if curv_power == "sqrt":
-        a_norm = new_p / (emax + eps) + _SQRT_FLOOR * eye  # floored to [_SQRT_FLOOR, <1]; +eps guards P≈0
-        y_half, z_inv = _matrix_sqrt_ns(a_norm, power_iters)
-        curv = se * y_half  # ≈ (P + _SQRT_FLOOR·e_max·I)^{1/2}
-        x0_arg = (z_inv @ n_t) if mudam_init else n_t  # z_inv ∝ (P + floor)^{-1/2}; msign scale-invariant
+        # Normalize by trace(P) ≥ λ_max(P) (sum of nonneg eigenvalues), so P/tr has spectrum ≤ 1 and the
+        # coupled-NS sqrt CANNOT diverge. (Normalizing by the power-iteration e_max — a LOWER bound on
+        # λ_max — let P/e_max exceed 1 when the estimate lagged, blowing up the NS → NaN loss.)
+        tr = jnp.trace(new_p) + eps
+        s_tr = jnp.sqrt(tr)
+        y_half, _ = _matrix_sqrt_ns(new_p / tr, power_iters)
+        curv = s_tr * y_half  # = P^{1/2}, exact regardless of the (over-)normalization constant
+        if mudam_init:
+            # Inverse-sqrt iterate needs a spectrum floor (Z ~ A^{-1/2} blows up near 0) ⟹ separate floored NS.
+            _, z_inv = _matrix_sqrt_ns(new_p / tr + _SQRT_FLOOR * eye, power_iters)
+            x0_arg = z_inv @ n_t  # ∝ (P + floor·tr·I)^{-1/2} N; msign scale-invariant
+        else:
+            x0_arg = n_t
     else:
         curv = new_p / se  # P/√e_max
         x0_arg = n_t
