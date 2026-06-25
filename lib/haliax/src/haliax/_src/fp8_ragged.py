@@ -201,17 +201,21 @@ def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype,
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N], contracting the ragged token axis.
     if f8_wgrad:
-        # Both operands already cast-transposed (token-contiguous) -> the f8 wgrad kernel directly,
-        # no XLA `swapaxes` (the GFP8-033 win). Then dequantize by the lhs and grad scales.
+        # mosaic f8 wgrad: both operands already cast-transposed (token-contiguous) -> the wgrad kernel
+        # directly, no XLA `swapaxes` (the GFP8-033 win). Then dequantize by the lhs and grad scales.
         grad_rhs = _mosaic_wgrad_transposed(q_lhs_t, q_g_t, group_sizes, out_dtype=preferred_element_type)
         grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
-    else:
-        # bf16 reference fallback (the shipped ~1.27× hybrid): run the GEMM in bf16 on the dequantized
-        # f8 operands. Dequantizing here folds in lhs_scale/grad_scale, so the result is already in
-        # real units — no further output dequant.
+    elif implementation == "mosaic":
+        # mosaic, f8 wgrad off: bf16 fallback (the shipped ~1.27× hybrid). Hopper f8 wgmma can't
+        # transpose the token axis in-kernel, so run the GEMM in bf16 on the dequantized f8 operands.
+        # Dequantizing folds in lhs_scale/grad_scale, so the result is already in real units.
         lhs_b = dequantize(q_lhs, _WGRAD_FALLBACK_DTYPE, lhs_scale)
         g_b = dequantize(q_g, _WGRAD_FALLBACK_DTYPE, new_out_grad_scale)
         grad_rhs = _ragged_dot_layout(lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto")
+    else:
+        # triton / xla: f8 wgrad via the standard layout dispatch (these backends transpose internally).
+        grad_rhs = _ragged_dot_layout(q_lhs, q_g, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, implementation)
+        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
 
     return (
         grad_lhs,
