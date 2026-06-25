@@ -1645,3 +1645,30 @@ cast**, not a memref transpose.
   earlier GFP8-033 "blocked" entries.** Next: M3 — wire `cast_transpose` into `fp8_ragged` fwd/bwd
   (store q_lhs_t / q_g_t residuals, drop the `swapaxes` in `_mosaic_pallas_call` `_DRHS`) and rerun the
   3-arm e2e to confirm the ~1.34× and flip the f8 wgrad default on.
+
+### 2026-06-25 — GFP8-033 M3: f8 cast-transpose wgrad wired into fp8_ragged → e2e 1.28×→1.33× (beats the bf16 hybrid)
+Wired the fused cast-transpose into the f8 ragged backward (`fp8_ragged.py`): the forward uses
+`in_q_transpose` to produce the rowwise `q_lhs` + token-contiguous `q_lhs_t` from one read of the
+activations; the backward `cast_transpose`s the output grad into `q_g`/`q_g_t`; the f8 wgrad calls
+`_mosaic_wgrad_transposed(q_lhs_t, q_g_t)` directly — no XLA `swapaxes`. Gated on `RAGGED_F8_WGRAD`
+(mosaic only); bf16-wgrad / triton / xla paths unchanged. 3-arm e2e on the real Grug MoE-MLP
+(T=8192/D=2048/F=5632/E=8, grad_dtype=e4m3; H100, job `…-230137`):
+
+  | arm | fwd+bwd | vs bf16 | dw13 / dw2 rel_frob |
+  |-----|---------|---------|---------------------|
+  | bf16                              | 3.738 ms | 1.000× | — |
+  | mosaic, **bf16 wgrad** (shipped)  | 2.926 ms | 1.278× | 6.38e-2 / 6.10e-2 |
+  | mosaic, **f8 wgrad** (cast-transpose) | **2.805 ms** | **1.333×** | 7.16e-2 / 6.42e-2 |
+
+- **Gate met:** f8 arm 2.805 ms < the 2.94 ms bf16-hybrid bar; dw13/dw2 in the ~6–8e-2 band (forward/dx
+  unchanged at 7.95e-2 / 8.12e-2). The f8 wgrad beats the bf16 hybrid by ~4% e2e → **1.33×** (up from
+  1.278×), matching the GFP8-033 ~1.34× projection. The ~0.12 ms gain ≈ the ~0.27 ms transpose-tax saving
+  (per-GEMM) netted against the f8-vs-bf16 wgrad kernel delta, as predicted.
+- This REVERSES the GFP8-028/029 standing (f8 wgrad parked as a net e2e loss): with the coalesced
+  cast-transpose replacing the uncoalesced XLA `swapaxes`, f8 wgrad is now the fastest arm.
+- Implementation: `in_q_transpose` (delayed-scaling dual-output quant) in `fp8_cast_transpose.py`;
+  `_mosaic_wgrad_transposed` in `ragged_dot.py`; the bwd threads `q_lhs_t` through the custom_vjp
+  residuals. CPU tests green (33 passed). Repro: `… -- bash
+  lib/levanter/scripts/bench/_s5_mosaic_f8wgrad_parity.sh`.
+- **Open (M3 close-out):** flip the mosaic wgrad default to f8 + retire the `RAGGED_F8_WGRAD` env toggle
+  (a shipped-recipe + complexity call — the bf16 hybrid is ~4% slower but simpler). Pending user sign-off.
