@@ -309,6 +309,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
+        failure_count=task.failure_count,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -319,8 +320,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
+        # current_attempt_id is the authoritative attempt index; len(attempts) now
+        # counts only the current + failed attempts attached for the list view.
         proto.pending_reason = (
-            f"Retrying (attempt {len(task.attempts)}, last: {job_pb2.TaskState.Name(last.state).lower()})"
+            f"Retrying (attempt {task.current_attempt_id + 1}, last: {job_pb2.TaskState.Name(last.state).lower()})"
         )
         proto.can_be_scheduled = True
     return proto
@@ -455,21 +458,32 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
-    """Load tasks for the list view, attaching only the current attempt.
+# Terminal failure states the list view attaches in addition to the current
+# attempt. PREEMPTED and COSCHED_FAILED are deliberately excluded: those are the
+# high-volume churn — capacity preemptions and gang-cancellation collateral —
+# that buries the genuine failures the dashboard wants to surface.
+_LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED)
 
-    The list UI only needs the current attempt's ``started_at_ms`` /
-    ``finished_at_ms`` and a single ``proto.attempts`` entry. Full history is
-    fetched separately by ``get_task_status``.
+
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
+    """Load tasks for the list view with their current and latest-failed attempts.
+
+    Each task carries its current attempt plus the most recent attempt in each
+    genuine-failure state (``_LISTING_FAILURE_STATES``), so a failure stays
+    visible after the task is retried back into a running/pending state. Only the
+    latest per state is attached, keeping the payload bounded for tasks with long
+    retry histories. Attempts are ascending by ``attempt_id`` so the current
+    attempt (the highest id) stays last.
     """
+    job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
             select(*reads.TASK_DETAIL_COLS)
             .where(tasks_table.c.job_id == job_id)
             .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
         ).all()
-        # Fetch only the current attempt for each task (task_index-ordered listing).
-        attempt_rows = tx.execute(
+        # Current attempt per task (composite-PK lookup, at most one row each).
+        current_attempt_rows = tx.execute(
             select(*reads.ATTEMPT_COLS).where(
                 tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                     select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
@@ -478,10 +492,36 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
                 )
             )
         ).all()
-    attempts_by_task: dict[JobName, list] = {}
-    for a in attempt_rows:
-        attempts_by_task.setdefault(a.task_id, []).append(a)
-    return [TaskWithAttempts.from_row(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
+        # Highest failed attempt_id per (task, failure-state). One aggregate scan
+        # of this job's failed attempts, then a PK join back to the full rows —
+        # bounded to <= 2 rows per task no matter how deep the retry history runs.
+        latest_failed = (
+            select(
+                task_attempts_table.c.task_id.label("task_id"),
+                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+            )
+            .where(
+                task_attempts_table.c.task_id.in_(job_task_ids),
+                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+            )
+            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+            .subquery()
+        )
+        failed_attempt_rows = tx.execute(
+            select(*reads.ATTEMPT_COLS).join(
+                latest_failed,
+                (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+            )
+        ).all()
+    # Merge, deduping the current attempt when it is itself a failure.
+    attempts_by_task: dict[JobName, dict[int, Any]] = {}
+    for a in (*current_attempt_rows, *failed_attempt_rows):
+        attempts_by_task.setdefault(a.task_id, {})[a.attempt_id] = a
+    return [
+        TaskWithAttempts.from_row(r, tuple(a for _, a in sorted(attempts_by_task.get(r.task_id, {}).items())))
+        for r in task_rows
+    ]
 
 
 MAX_LIST_JOBS_LIMIT = 500

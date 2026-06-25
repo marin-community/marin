@@ -98,6 +98,9 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  // Genuine application-failure count for this task. The list view attaches only
+  // the latest failed attempt, so this carries the true count for the badge.
+  failureCount?: number
 }
 
 // -- Jobs --
