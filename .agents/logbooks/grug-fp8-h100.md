@@ -1243,3 +1243,41 @@ mixed e4m3×e5m2 wgmma). CPU-verified (pyrefly clean, fp8-ragged + dispatch test
   the real Grug regime (per the add-pallas-kernel autotuning workflow) and re-measure before any win claim.
   Open: even tuned, the bf16 baseline here is the well-tuned Triton kernel; the f8 fwd/dgrad must clear it
   *plus* amortize quant overhead. See [[mosaic-gpu-cluster-toolchain]] for the cu13 launch fixes this needed.
+
+### 2026-06-25 — GFP8-027: autotune the mosaic block config → e2e FLIPS to a win (block_k 64→256)
+GFP8-026 lost e2e (0.72× fwd+bwd) with the hardcoded block config `128/128/64`, suspected tuned for a
+4×-smaller shape. Refactored the mosaic block config into an explicit `MosaicBlockConfig` dataclass
+(threaded through `_mosaic_pallas_call`; default unchanged behavior) and swept a curated 16-config grid
+over the four mosaic-served GEMMs in-process at the real Grug regime (T=8192/D=2048/F=5632/E=8), each vs
+the bf16-Triton baseline the bf16 e2e actually runs (`bench_ragged_mosaic_autotune.py`, job
+`/matt/iris-run-job-20260625-181826`).
+- **Winner is a single global config — `128/128/256` (block_m/n=128, block_k=256, steps=2, grid_block_n=1)
+  — best for ALL four GEMMs.** `block_k` is the dominant knob (64→128→256 monotonic); the old `block_k=64`
+  ranked 4th. `block_k=512` exceeds H100 smem at this block_m/n. No per-shape table needed.
+
+  | gemm   | bf16-Triton | f8 mosaic | speedup |
+  |--------|-------------|-----------|---------|
+  | fwd13  | 460 TF      | 504 TF    | 1.09×   |
+  | fwd2   | 475 TF/0.475ms | 0.475ms | 1.00×  |
+  | dlhs13 | 332 TF      | 529 TF    | 1.59×   |
+  | dlhs2  | 332 TF/0.573ms | 550 TF | 1.67×   |
+
+- **The forward win shrank vs the GFP8-024 small-regime numbers (was 1.53× fwd), and that's a real
+  reframing, not a regression.** f8 forward throughput is ~constant (565→504 TF); the **bf16 baseline got
+  faster on the forward at the bigger shape (370→460 TF)** — large GEMMs let the tuned bf16 Triton kernel
+  approach peak, collapsing f8's relative headroom. The win **migrates to the dgrad**, whose bf16 baseline
+  stays hobbled at ~332 TF (the `_DLHS` layout is served by transposing rhs via `.mT` in Triton). So at the
+  production shape the hybrid is a **dgrad win**, not a forward win.
+- **E2E re-measure with `128/128/256`** (`bench_ragged_mosaic_hybrid_e2e.py`, job `…-182310`), same real
+  Grug MLP, numerics unchanged (fwd 7.95e-2, dx 8.12e-2, dw13 6.38e-2, dw2 6.10e-2):
+  - **fwd+bwd: bf16 3.774ms vs mosaic 3.565ms = 1.06×** (was **0.72×** @ block_k=64) — mosaic now WINS.
+  - **fwd-only: bf16 1.368ms vs mosaic 1.388ms = 0.99×** (was **0.57×**) — break-even.
+  The fwd+bwd win is carried entirely by the f8 dgrad; the forward is break-even (slim per-GEMM forward
+  win minus quant + the in-loop `swapaxes(rhs)` K-major transpose the forward pays and the dgrad doesn't).
+- **Verdict:** the M0 hybrid is now a **modest e2e win (1.06× fwd+bwd, break-even fwd)** at the real shape —
+  GFP8-026's loss was purely the untuned block_k. The win is dgrad-driven and modest because bf16 saturates
+  the forward at this size. Levers left: (1) store the forward weight K-major once to drop the in-loop
+  swapaxes (~+0.2× on the forward); (2) **fp8 wgrad via self-authored cast-transpose** (GFP8-025) — the
+  bf16 wgrad is now the largest remaining bf16 fraction of the backward and the main headroom. (2) is the
+  next phase. Cluster note: the synced gpu env regressed to cuDNN 9.10.2 (jaxlib 0.10.0 needs 9.12) — see
+  [[mosaic-gpu-cluster-toolchain]]; the launchers now upgrade cuDNN in place.
