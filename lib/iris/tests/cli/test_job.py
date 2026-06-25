@@ -226,12 +226,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
 
 
 def test_job_list_cli_forwards_username_only_prefix(monkeypatch):
-    """A username-only --prefix ('/tim') reaches the client verbatim.
-
-    Regresses the crash where the CLI parsed --prefix into a JobName, which
-    rejected single-segment values like '/tim' (the canonical form needs a
-    '/<user>/<job>' shape) before any RPC could be made.
-    """
+    """A username-only --prefix ('/tim') reaches the client verbatim, not parsed into a JobName."""
     captured: dict[str, object] = {}
 
     class FakeClient:
