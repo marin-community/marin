@@ -8,8 +8,6 @@ for the Autoscaler and ScalingGroup. Manages GCE instances (standalone VMs)
 and TPU slices via GcpService.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time

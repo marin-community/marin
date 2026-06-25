@@ -40,8 +40,6 @@ Usage:
     ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 import sys

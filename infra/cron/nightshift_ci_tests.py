@@ -3,8 +3,6 @@
 
 """Nightshift CI test audit: inspect recent CI logs for slow or unstable tests."""
 
-from __future__ import annotations
-
 import datetime as dt
 import hashlib
 import json

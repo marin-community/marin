@@ -17,8 +17,6 @@ across time and architecture changes.
 Used by the scheduled ``marin-canary-datakit-tier{1,2,3}`` workflows.
 """
 
-from __future__ import annotations
-
 import datetime
 import json
 import logging

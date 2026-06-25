@@ -21,8 +21,6 @@ The whole pipeline (ferry → tokenize → weights → train) lives in one
 executor DAG so ``--dry_run`` validates structure without touching GCS.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import os

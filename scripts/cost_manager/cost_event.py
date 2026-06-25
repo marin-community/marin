@@ -15,8 +15,6 @@ Readers take the latest snapshot by keeping the row with the greatest
 README for the canonical "latest snapshot" SQL.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import os
 from dataclasses import dataclass, replace
@@ -103,7 +101,7 @@ class DateWindow:
             raise ValueError(f"DateWindow end {self.end} precedes start {self.start}")
 
     @staticmethod
-    def trailing(days: int, *, today: dt.date) -> DateWindow:
+    def trailing(days: int, *, today: dt.date) -> "DateWindow":
         """The window of the last ``days`` UTC days ending at ``today``."""
         if days < 1:
             raise ValueError(f"lookback days must be >= 1, got {days}")

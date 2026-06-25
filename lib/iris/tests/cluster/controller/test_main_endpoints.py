@@ -3,8 +3,6 @@
 
 """Tests for endpoint resolution in the controller daemon entrypoint."""
 
-from __future__ import annotations
-
 import json
 import subprocess
 from pathlib import Path

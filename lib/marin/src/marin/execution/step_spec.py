@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import dataclasses
 import hashlib
 import json
@@ -52,7 +50,7 @@ class StepSpec:
     """Name of the step, used for readability and in the output path."""
     output_path_prefix: str | None = None
     """Output path prefix for the step. If not provided, it will be taken from the MARIN_PREFIX environment variable."""
-    deps: list[StepSpec] = dataclasses.field(default_factory=list)
+    deps: "list[StepSpec]" = dataclasses.field(default_factory=list)
     """Steps that this step depends on. Their output paths are used for dependency tracking and cache invalidation."""
     hash_attrs: dict[str, Any] = dataclasses.field(default_factory=dict)
     """Attributes to include in the hash calculation for the step. Used for cache invalidation.

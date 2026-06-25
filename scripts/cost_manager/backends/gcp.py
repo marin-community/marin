@@ -16,8 +16,6 @@ The billing export must be enabled and readable by the runner's service
 account; point ``billing_export_table`` at that dataset.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import json
 import logging

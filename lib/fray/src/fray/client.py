@@ -3,8 +3,6 @@
 
 """Client protocol and helpers for fray."""
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Sequence

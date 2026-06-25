@@ -16,8 +16,6 @@ The TPU's tensor-parallel size and (for clamped-RoPE models) max sequence length
 inferred automatically; override with ``--tensor-parallel-size`` / ``--max-model-len``.
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import re

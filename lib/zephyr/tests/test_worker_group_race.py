@@ -14,8 +14,6 @@ The race (before fix):
 Fix: _check_worker_group skips when all shards are completed.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from unittest.mock import MagicMock

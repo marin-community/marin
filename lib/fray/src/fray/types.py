@@ -9,8 +9,6 @@ ResourceConfig to JobRequest (it's a job-level gang-scheduling concern,
 not a per-task resource requirement).
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -361,7 +359,7 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> "ResourceConfig":
         """Create a resource config for TPU(s).
 
         When ``tpu_type`` is a list, the first entry is canonical (used for
@@ -403,12 +401,12 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> "ResourceConfig":
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu(**kwargs: Any) -> ResourceConfig:
+    def with_cpu(**kwargs: Any) -> "ResourceConfig":
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
@@ -541,11 +539,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Entrypoint:
+    ) -> "Entrypoint":
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
+    def from_binary(command: str, args: Sequence[str]) -> "Entrypoint":
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -595,5 +593,5 @@ class JobStatus(StrEnum):
     STOPPED = "stopped"
 
     @staticmethod
-    def finished(status: JobStatus) -> bool:
+    def finished(status: "JobStatus") -> bool:
         return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)

@@ -3,8 +3,6 @@
 
 """Tests for `finelog.deploy.config`."""
 
-from __future__ import annotations
-
 import textwrap
 from pathlib import Path
 

@@ -7,8 +7,6 @@ Provides high-level helpers that construct concrete provider implementations and
 drive cluster startup/shutdown.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from contextlib import contextmanager
 

@@ -14,8 +14,6 @@ This script:
 The default mode analyzes the last 24 hours.
 """
 
-from __future__ import annotations
-
 import csv
 import datetime as dt
 import json

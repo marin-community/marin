@@ -6,8 +6,6 @@ register_table contract: a declared key_column that names an existing column
 (or an implicit `timestamp_ms` column). Without it the metrics table never
 registers and FinelogTableSink drops every row."""
 
-from __future__ import annotations
-
 from finelog.client.log_client import schema_from_dataclass
 from sample import Sample
 

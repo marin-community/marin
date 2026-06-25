@@ -8,8 +8,6 @@ bootstrap handles Docker setup and container startup. TPU metadata discovery
 is performed by the worker environment probe at runtime.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

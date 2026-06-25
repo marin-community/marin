@@ -11,8 +11,6 @@ Failure injection (inject_failure, set_zone_quota, set_tpu_type_unavailable) is
 supported in DRY_RUN and LOCAL modes for testing.
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import uuid

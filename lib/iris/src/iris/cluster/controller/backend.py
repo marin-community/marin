@@ -31,8 +31,6 @@ folded by the controller; cluster backends have no Iris workers, so they emit no
 health events.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -113,7 +111,7 @@ class BackendDescriptor:
     capabilities: list[str]
 
 
-def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
+def backend_descriptor(backend: "TaskBackend") -> BackendDescriptor:
     """Build the dashboard capability descriptor from a live backend."""
     return BackendDescriptor(
         name=backend.name,

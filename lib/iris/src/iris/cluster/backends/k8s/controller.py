@@ -7,8 +7,6 @@ Manages the controller Deployment, Service, ConfigMap, RBAC, NodePools, and
 S3 credential Secrets. Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import logging

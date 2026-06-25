@@ -7,8 +7,6 @@ No worker daemon, no synthetic worker row. The controller talks directly to the
 k8s API via kubectl, launching one Pod per task attempt.
 """
 
-from __future__ import annotations
-
 import base64
 import hashlib
 import json

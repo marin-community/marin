@@ -69,8 +69,6 @@ Usage::
         --dest-prefix s3://marin-na/marin
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import re

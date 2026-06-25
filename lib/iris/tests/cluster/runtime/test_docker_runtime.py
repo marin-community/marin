@@ -3,8 +3,6 @@
 
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
-from __future__ import annotations
-
 import subprocess
 from unittest.mock import Mock
 

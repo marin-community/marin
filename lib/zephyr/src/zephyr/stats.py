@@ -16,8 +16,6 @@ via :func:`zephyr.runners._sample_process_stats` and stored with
 sent to the coordinator via heartbeats for aggregation into stage stats.
 """
 
-from __future__ import annotations
-
 import enum
 import logging
 import time
@@ -135,7 +133,7 @@ class StatsWriter:
                 self._worker_table = log_client.get_table(ZEPHYR_WORKER_STATS_NAMESPACE, ZephyrWorkerStat)
 
     @classmethod
-    def connect(cls, url: str | None = None) -> StatsWriter:
+    def connect(cls, url: str | None = None) -> "StatsWriter":
         """Connect to finelog; resolves the URL via Iris if not provided.
 
         Returns a no-op instance if the URL cannot be determined or the

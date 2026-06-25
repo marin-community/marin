@@ -3,8 +3,6 @@
 
 """Tests for k8s manifest rendering in `finelog.deploy._k8s`."""
 
-from __future__ import annotations
-
 import base64
 import json
 

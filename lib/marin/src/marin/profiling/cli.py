@@ -3,8 +3,6 @@
 
 """CLI for profile ingestion, querying, and before/after comparison."""
 
-from __future__ import annotations
-
 import argparse
 import json
 from pathlib import Path

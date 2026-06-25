@@ -7,8 +7,6 @@ These tests boot a real local cluster and execute jobs to verify that env vars
 and the parent's resolved setup propagate correctly through job hierarchies.
 """
 
-from __future__ import annotations
-
 import json
 import time
 from unittest.mock import patch

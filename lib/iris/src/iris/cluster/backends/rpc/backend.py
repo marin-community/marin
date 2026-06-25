@@ -10,8 +10,6 @@ back to the controller, and surfaces the per-worker liveness it observed
 (REACHED / UNREACHABLE) as health events the controller folds.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

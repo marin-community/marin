@@ -61,8 +61,6 @@ Usage:
     uv run lib/iris/scripts/iap_gclb.py teardown marin-dev
 """
 
-from __future__ import annotations
-
 import dataclasses
 import json
 import logging

@@ -14,8 +14,6 @@ All discovered files are merged into a single output: main records land in
 ``<output_path>/outputs/dups/``. Input directory structure is not preserved.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re

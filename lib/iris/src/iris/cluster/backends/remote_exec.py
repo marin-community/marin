@@ -11,8 +11,6 @@ This module provides:
 - Utility functions for connection testing and streaming commands
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import subprocess

@@ -16,8 +16,6 @@ bodies or summary contents at INFO/WARN — the per-user counts are only safe
 inside the Discord message and the gist.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import json
 import logging

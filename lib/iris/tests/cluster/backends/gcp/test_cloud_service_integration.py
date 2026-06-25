@@ -10,8 +10,6 @@ call is recorded so we can compare the REST API behavior against what the old
 gcloud CLI produced.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import urllib.parse

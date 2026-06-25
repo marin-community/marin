@@ -11,8 +11,6 @@ These tests cover:
 - Failure injection (one-shot error injection for testing error paths)
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 from unittest.mock import MagicMock, patch

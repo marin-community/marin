@@ -31,8 +31,6 @@ OOM on skewed or large-item workloads where a row-count limit provides no
 reliable bound.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import functools
 import io
@@ -326,7 +324,7 @@ class ScatterReader:
         self.avg_item_bytes = avg_item_bytes
 
     @classmethod
-    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
+    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
         Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
@@ -674,7 +672,7 @@ class ScatterWriter:
         if self._fs.exists(self._fs_path):
             self._fs.rm(self._fs_path)
 
-    def __enter__(self) -> ScatterWriter:
+    def __enter__(self) -> "ScatterWriter":
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, *exc: Any) -> None:
