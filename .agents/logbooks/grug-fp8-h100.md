@@ -1317,3 +1317,23 @@ feed token-CONTIGUOUS f8 operands so the wgmma needs no real transpose.
   transpose vs kernel cost, autotune the kernel, fuse the cast-transpose into the quant sites — but the
   ceiling is low, so f8 wgrad may simply not be worth it at this shape. Toggle `RAGGED_F8_WGRAD=1` keeps
   it available for future shapes / Blackwell. Plan: `.agents/projects/2026-06-25_fp8_ragged_wgrad_cast_transpose.md`.
+
+### 2026-06-25 — GFP8-028 M2 diagnostic: f8 wgrad KERNEL itself loses (output-bound); stop, don't autotune
+Before sinking an autotune+fusion pass into f8 wgrad (which lost e2e 1.06×→0.90×, GFP8-028 M1), split the
+regression per real wgrad GEMM into transpose vs kernel cost (`bench_ragged_wgrad_diag.py`, job …-201157):
+  | GEMM | transpose | f8 kernel-only | bf16 Triton ref | kernel/ref |
+  |------|-----------|----------------|-----------------|------------|
+  | wgrad13 [8,2048,11264] | 0.166 ms | 0.894 ms | 0.765 ms | **1.17×** |
+  | wgrad2  [8,5632,2048]  | 0.137 ms | 0.532 ms | 0.412 ms | **1.29×** |
+- **The f8 kernel itself (transpose excluded) is already 17–29% slower than the bf16 Triton wgrad.** The
+  cast-transpose is the *smaller* cost (~0.15 ms); even fused to zero, f8 stays ~1.21× slower (1.426 vs
+  1.177 ms). So this is "kernel loses" — fusing the transpose cannot recover a win.
+- **Why f8 is slower, not ~2× faster:** the wgrad is **output/accumulation-bound, not compute-bound** —
+  output [E,K,N] is ~185M elts while the per-group contraction is only ~1024 tokens (outer-product shape).
+  f8 doubles only MAC throughput; on an output-bound GEMM there's nothing for it to bite on, and the bf16
+  Triton kernel is already tuned for the layout. f8 ≈ 2× only when a GEMM is compute-bound AND bf16 is far
+  from peak (small/memory-bound shapes, or the `.mT`-hobbled dgrad) — the wgrad is the opposite regime.
+- **Decision: STOP.** Autotuning would need to erase a 17–29% structural deficit + the transpose just to
+  reach a wgrad break-even worth only ~5% e2e, starting from −15%; low EV. Shipped recipe stays f8
+  fwd/dgrad + bf16 wgrad (1.06×). f8 wgrad is correct + behind `RAGGED_F8_WGRAD` for regimes where it wins
+  (Blackwell native f8 / compute-bound wgrad shapes). M1+M2 of the wgrad plan are closed.
