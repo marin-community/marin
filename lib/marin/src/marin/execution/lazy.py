@@ -223,9 +223,10 @@ def lower(artifact: Artifact) -> StepSpec:
     :class:`~marin.execution.registry.ArtifactRecord` (recipe fingerprint + launch
     provenance); a pinned artifact references existing external data and writes none.
 
-    ``lower`` is a pure graph transform: it never inspects ``recipe.fn``. To run a
-    step on an accelerator, the author wraps the fn (``remote(fn, resources=…)``);
-    the closure below calls it, and a ``RemoteCallable`` dispatches itself to Fray.
+    ``lower`` is a pure graph transform: it never inspects ``recipe.fn`` and puts no
+    resources on the ``StepSpec``. Compute rides with the fn — an accelerator step
+    wraps it (``remote(fn, resources=…)``), so where a step runs is the fn's concern,
+    not the graph's.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
     fingerprint = artifact.fingerprint()

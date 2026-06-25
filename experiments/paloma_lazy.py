@@ -5,7 +5,7 @@
 
 The Paloma HF download is already pinned (``raw/paloma-fc6827``), so each subset
 tokenizes its ``val`` split straight from that location into a fresh explicit cache
-— no re-download. Handle version of ``paloma_tokenized`` in ``paloma.py``.
+— no re-download.
 """
 
 from marin.execution.lazy import Dataset

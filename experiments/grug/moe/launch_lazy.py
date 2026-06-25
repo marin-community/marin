@@ -3,8 +3,7 @@
 
 """grug-moe baseline, authored as a lazy artifact.
 
-This is the same run as ``baseline_moe`` in ``launch.py``, written in the
-artifact model: a function returns a typed :class:`Checkpoint` handle addressed by
+Each run is a function that returns a typed :class:`Checkpoint` handle addressed by
 an explicit ``name@version``. The experiment file contains no ``ExecutorStep``,
 ``executor_main``, ``versioned()``, or ``this_output_path()`` — the decisions are
 stated inline, and the output path is ``ctx.out``.

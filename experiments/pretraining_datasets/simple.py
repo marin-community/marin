@@ -119,6 +119,11 @@ downloads = _build_downloads()
 # TOKENIZED DATASETS
 # ============================================================================
 
+# Pinned llama3-tokenized cache locations; referencing these avoids re-tokenizing
+# the ~250B and ~55B token corpora.
+STARCODER_LLAMA3_PIN = "tokenized/starcoderdata-12f018/"
+PROOFPILE_LLAMA3_PIN = "tokenized/proofpile_2-4a35c7/"
+
 tokenized = {
     "dclm_baseline": _tokenize_simple(
         "dclm_baseline",
@@ -131,13 +136,13 @@ tokenized = {
         downloads["starcoderdata"],
         tokenizer=llama3_tokenizer,
         text_format=TextLmDatasetFormat(text_key="content"),
-        override_path="tokenized/starcoderdata-12f018/",
+        override_path=STARCODER_LLAMA3_PIN,
     ),
     "proofpile_2": _tokenize_simple(
         "proofpile_2",
         downloads["proofpile_2"],
         tokenizer=llama3_tokenizer,
-        override_path="tokenized/proofpile_2-4a35c7/",
+        override_path=PROOFPILE_LLAMA3_PIN,
     ),
     "slimpajama_6b": _tokenize_simple(
         "SlimPajama-6B",

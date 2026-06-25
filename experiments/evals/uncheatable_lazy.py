@@ -5,8 +5,7 @@
 
 The Uncheatable Eval dumps live in a GitHub repo with no pinned download, so the
 raw data is a :func:`raw_download` handle (re-fetched on demand — a small repo) that
-each subset tokenizer depends on. Handle version of ``uncheatable_eval_tokenized``
-in ``exp1600_uncheatable_evals.py``.
+each subset tokenizer depends on.
 """
 
 from marin.datakit.download.uncheatable_eval import (

@@ -3,11 +3,10 @@
 
 """How To: Replicating DCLM 1B/1x in Marin (inline-protocol style).
 
-Same run as ``exp1077_reproduce_dclm_1b1x`` but written with the
-``marin.experiment`` helpers so every decision is visible in this file rather
-than hidden inside ``default_train``. A golden test
-(``tests/experiment/test_train_lm_golden.py``) asserts this resolves to the same
-executor config as the ``default_train`` version.
+Written with the ``marin.experiment`` helpers so every training decision is
+visible in this file rather than hidden behind a higher-level default. A golden
+test (``tests/experiment/test_train_lm_golden.py``) pins this to the standard
+recipe's resolved config.
 """
 
 from fray.cluster import ResourceConfig

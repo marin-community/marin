@@ -13,13 +13,13 @@ from experiments.evals.uncheatable_lazy import UNCHEATABLE_SUBSETS
 from experiments.grug.moe.launch_lazy import grug_moe_baseline_pure
 from experiments.paloma import PALOMA_DATASETS_TO_DIR
 from experiments.pretraining_datasets.nemotron import NEMOTRON_DATASETS, NEMOTRON_LLAMA3_OVERRIDES
-from experiments.pretraining_datasets.simple_lazy import _PROOFPILE_LLAMA3_PIN, _STARCODER_LLAMA3_PIN
+from experiments.pretraining_datasets.simple import PROOFPILE_LLAMA3_PIN, STARCODER_LLAMA3_PIN
 
 # Pinned training components: mixture key -> (pinned tokenized path, weight).
 _PINNED_TRAIN = {
     **{f"nemotron_cc/{split}": (NEMOTRON_LLAMA3_OVERRIDES[split], None) for split in NEMOTRON_DATASETS},
-    "starcoderdata": (_STARCODER_LLAMA3_PIN, 0.25),
-    "proofpile_2": (_PROOFPILE_LLAMA3_PIN, 0.055),
+    "starcoderdata": (STARCODER_LLAMA3_PIN, 0.25),
+    "proofpile_2": (PROOFPILE_LLAMA3_PIN, 0.055),
 }
 
 
