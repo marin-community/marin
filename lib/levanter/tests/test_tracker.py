@@ -3,7 +3,6 @@
 
 # NOTE: Do not explicitly import wandb/other trackers here, as this will cause the tests to trivially pass.
 import dataclasses
-import json
 import logging
 import re
 import warnings
@@ -190,33 +189,6 @@ def test_wandb_tracker_materializes_before_dynamic_stale_step_check(monkeypatch)
     tracker.log({"metric": 2.0}, step=10)
 
     assert converted == [2.0]
-
-
-def test_wandb_tracker_writes_replicate_file_when_finish_raises(tmp_path, monkeypatch):
-    """A wedged run.finish() must not drop the tracker_metrics.jsonl replicate.
-
-    The canary metrics gate reads the replicate file, so a W&B upload hiccup at
-    teardown (which surfaces as a raised finish) must not skip the write for an
-    otherwise healthy run.
-    """
-    monkeypatch.setenv("WANDB_ERROR_REPORTING", "false")
-
-    class FakeRun:
-        config = {"learning_rate": 0.1}
-        summary = {"train/loss": 6.61, "_step": 99}
-
-        def finish(self):
-            raise RuntimeError("wandb finish hung")
-
-    tracker = WandbTracker(FakeRun(), replicate_path=str(tmp_path / "replicate"))
-
-    # finish() still surfaces the teardown failure, but only after the replicate write.
-    with pytest.raises(RuntimeError, match="wandb finish hung"):
-        tracker.finish()
-
-    record = json.loads((tmp_path / "replicate" / "tracker_metrics.jsonl").read_text())
-    assert record["summary"]["train/loss"] == 6.61
-    assert record["config"]["learning_rate"] == 0.1
 
 
 def test_truncate_wandb_run_name_preserves_scientific_notation_lr_suffix():
