@@ -71,8 +71,8 @@ class CurvatureMuonConfig(OptimizerConfig):
     curvature_beta: float = 0.95  # ρ, EMA decay of P = EMA(G Gᵀ)
     curvature_lambda: float = 0.0  # λ, curvature strength (0 ⟹ MuonH)
     curvature_alpha: float = 1.0  # α ≥ 1, multiplier on the √e_max shift (α=1 = boundary PSD)
-    curv_power: str = "linear"  # "linear" (C = P/√e_max) or "sqrt" (C = P^{1/2})
-    mudam_init: bool = False  # warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k) vs msign(N)
+    curv_power: str = "sqrt"  # "sqrt" (C = P^{1/2}, default) or "linear" (C = P/√e_max)
+    mudam_init: bool = True  # warm-start X⁰ = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k); default on
     mudam_steps: int = 5  # coupled-NS steps for the Mudam warm-start (kept small — stable only under-converged)
     inner_steps: int = 1  # K, inner fixed-point iterations
     power_iters: int = 8  # power-iteration steps for e_max(P) (warm-started) + Newton-Schulz steps for P^{1/2}
@@ -289,8 +289,8 @@ def scale_with_curvature_muon(
     curvature_beta=0.95,
     curvature_lambda=0.0,
     curvature_alpha=1.0,
-    curv_power="linear",
-    mudam_init=False,
+    curv_power="sqrt",
+    mudam_init=True,
     mudam_steps=5,
     inner_steps=1,
     power_iters=8,

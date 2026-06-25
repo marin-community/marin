@@ -62,9 +62,9 @@ def _ints(env: str, default: str) -> tuple[int, ...]:
 LAMBDAS: tuple[float, ...] = _floats("LAMBDAS", "0.0,0.1,1.0")
 KS: tuple[int, ...] = _ints("KS", "1,2")
 ALPHAS: tuple[float, ...] = _floats("ALPHAS", "1.0,1.2")  # multiplier on the sqrt(e_max) shift
-CURV_POWER: str = os.environ.get("CURV_POWER", "linear")  # "linear" (P/sqrt(e_max)) or "sqrt" (P^{1/2})
-# sqrt mode: warm-start X0 = msign(P^{-1/2} N) (Mudam direction) instead of msign(N).
-MUDAM_INIT: bool = os.environ.get("MUDAM_INIT", "false").lower() in ("1", "true", "yes")
+CURV_POWER: str = os.environ.get("CURV_POWER", "sqrt")  # "sqrt" (P^{1/2}, default) or "linear" (P/sqrt(e_max))
+# warm-start X0 = msign(P^{-1/2} N) (Mudam direction, coupled-NS q_k) instead of msign(N); default on.
+MUDAM_INIT: bool = os.environ.get("MUDAM_INIT", "true").lower() in ("1", "true", "yes")
 POWER_ITERS: int = int(os.environ.get("POWER_ITERS", "8"))  # power-iteration steps for e_max(P)
 # lambda tracks the LR schedule: lambda_t = (swept lambda = peak) * lr_t / peak_lr.
 LAMBDA_TRACKS_LR: bool = os.environ.get("LAMBDA_TRACKS_LR", "false").lower() in ("1", "true", "yes")
