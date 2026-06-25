@@ -18,10 +18,13 @@ register layout cast and is bit-exact to the reference (logbook GFP8-033); elsew
 shapes, or no Pallas) it delegates to the reference.
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
+from jax import custom_vjp
 
-from haliax._src.fp8 import quantize
+from haliax._src.fp8 import _new_scale_and_history, quantize
 
 # Guard the Mosaic-GPU cast-transpose kernel: H100-only (Hopper wgmma layouts), absent on TPU/CPU.
 _has_pallas_mosaic = False
@@ -35,7 +38,7 @@ except (ImportError, ModuleNotFoundError):
 # The Mosaic kernel tiles 128x128; non-conforming shapes fall back to the reference.
 _MOSAIC_BLOCK = 128
 
-__all__ = ["cast_transpose", "cast_transpose_reference"]
+__all__ = ["cast_transpose", "cast_transpose_reference", "in_q_transpose"]
 
 
 def cast_transpose_reference(
@@ -85,3 +88,38 @@ def cast_transpose(
             x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype, block_m=_MOSAIC_BLOCK, block_k=_MOSAIC_BLOCK
         )
     return cast_transpose_reference(x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)
+
+
+# --- Delayed-scaling dual-output quantize (the cast-transpose analog of fp8.in_q) ---------------
+# fp8.in_q quantizes an operand to E4M3 and propagates the delayed-scaling state (new scale/amax) as
+# the gradients of its scale/amax_history inputs. in_q_transpose does the same but ALSO returns the
+# transposed quantization from the same single read of the input, so the f8 weight-gradient consumes
+# a token-contiguous operand without a separate XLA transpose (logbook GFP8-033 M3).
+
+
+@partial(custom_vjp, nondiff_argnums=(0,))
+def in_q_transpose(compute_dtype, inp, scale, amax_history):
+    """Quantize ``inp`` to E4M3 and also return its transpose: ``(q, q.T, new_scale)`` from one read.
+
+    ``q``/``q.T`` are the rowwise and token-contiguous f8 operands the forward and weight-gradient
+    consume; ``new_scale`` is the live delayed-scaling scale (as in :func:`haliax._src.fp8.in_q`).
+    """
+    new_scale, _ = _new_scale_and_history(inp, jnp.float8_e4m3fn, scale, amax_history)
+    q, q_t = cast_transpose(inp, new_scale, out_dtype=jnp.float8_e4m3fn, compute_dtype=compute_dtype)
+    return q, q_t, new_scale
+
+
+def in_q_transpose_fwd(compute_dtype, inp, scale, amax_history):
+    new_scale, new_history = _new_scale_and_history(inp, jnp.float8_e4m3fn, scale, amax_history)
+    q, q_t = cast_transpose(inp, new_scale, out_dtype=jnp.float8_e4m3fn, compute_dtype=compute_dtype)
+    return (q, q_t, new_scale), (new_scale, new_history)
+
+
+def in_q_transpose_bwd(compute_dtype, res, _g):
+    # inp gets no gradient; the freshly computed scale/history overwrite the scale/amax_history grads
+    # (delayed-scaling state), exactly as in fp8.in_q. The cotangent of q.T is unused.
+    new_scale, new_history = res
+    return None, new_scale, new_history
+
+
+in_q_transpose.defvjp(in_q_transpose_fwd, in_q_transpose_bwd)

@@ -458,6 +458,24 @@ def _mosaic_pallas_call(
     return out if out_dtype is None else out.astype(out_dtype)
 
 
+def _mosaic_wgrad_transposed(
+    lhs_t: jax.Array,  # [K=hidden, tokens], token-contiguous f8 (already cast-transposed)
+    g_t: jax.Array,  # [N=out, tokens],   token-contiguous f8 (already cast-transposed)
+    group_sizes: jax.Array,
+    out_dtype: jnp.dtype,
+) -> jax.Array:  # [G, K=hidden, N=out]
+    """f8 weight-gradient on already-cast-transposed operands — no ``swapaxes``.
+
+    The ``_DRHS`` branch of :func:`_mosaic_pallas_call` transposes its f8 operands with XLA
+    ``swapaxes`` (an uncoalesced 1-byte transpose). When the operands are produced by the fused
+    cast-transpose (``haliax.quantization``'s f8 ragged path), they already arrive token-contiguous,
+    so the wgrad kernel is called directly. Both operands must share one f8 dtype (Hopper wgmma).
+    """
+    if not _has_pallas_mosaic:
+        raise NotImplementedError("Mosaic-GPU wgrad kernel is not available (H100-only)")
+    return _transposed_ragged_dot(lhs_t, g_t, group_sizes, out_dtype=out_dtype)
+
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
 def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     """Pallas-Triton grouped matmul with explicit backward pass.
