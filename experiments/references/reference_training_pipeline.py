@@ -52,7 +52,7 @@ TOTAL_STEPS = PRETRAIN_STEPS + MIDTRAIN_STEPS + SFT_STEPS
 
 def _pipeline_data():
     # --- Data components ---
-    pretrain = {"dclm": dclm_components_llama3["dclm_baseline"]}
+    pretrain = {"dclm": dclm_components_llama3()["dclm_baseline"]}
 
     dolmino = tokenize_dolmino()
     midtrain = {"dolmino_math": dolmino["dolmino/math/metamath-owmfilter"]}
