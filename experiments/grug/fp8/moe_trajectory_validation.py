@@ -75,11 +75,15 @@ def _teacher_forward(teacher, x):
 
 def _moe_layer(layer, x, cfg: Config, implementation):
     """One MoE block: top-k router -> expert MLP (via _moe_mlp_local) -> residual."""
-    router_logits = (x @ layer["wr"]).astype(jnp.float32)
+    # Pre-norm keeps the residual stream bounded across depth (so a deeper net is a fair
+    # E4M3 stress, not an init blow-up). Non-parametric RMS norm.
+    h = x.astype(jnp.float32)
+    h = (h * jax.lax.rsqrt(jnp.mean(h * h, axis=-1, keepdims=True) + 1e-6)).astype(x.dtype)
+    router_logits = (h @ layer["wr"]).astype(jnp.float32)
     _, selected = jax.lax.top_k(router_logits, cfg.top_k)
     combine = jax.nn.sigmoid(jnp.take_along_axis(router_logits, selected, axis=-1)).astype(x.dtype)
     out, _ = _moe_mlp_local(
-        x,
+        h,
         selected.astype(jnp.int32),
         combine,
         layer["w13"].astype(x.dtype),
