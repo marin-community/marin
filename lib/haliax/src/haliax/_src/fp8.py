@@ -291,8 +291,7 @@ def fp8_scaled_dot_general(
     `quantized_dot`'s custom VJP. The scale / amax-history arrays carry the
     delayed-scaling state and are updated through the custom VJP (overwrites).
 
-    `fwd_dtype` / `rev_dtype` default to the standard E4M3 / E5M2 pair; override
-    them with the NANOO (`*fnuz`) pair to target AMD GPUs."""
+    `fwd_dtype` / `rev_dtype` default to E4M3 / E5M2."""
     if precision is not None:
         warnings.warn(
             'fp8_scaled_dot_general will set the "precision" and disregard any provided "precision" argument.'

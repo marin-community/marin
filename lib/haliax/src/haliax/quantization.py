@@ -163,8 +163,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     updated as an [OverwriteWithGradient][].
 
     The forward-operand (``fwd_dtype``) and output-gradient (``rev_dtype``)
-    quantization dtypes default to E4M3 and E5M2; override them with the NANOO
-    (``*fnuz``) pair for AMD GPUs.
+    quantization dtypes default to E4M3 and E5M2.
 
     Faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
     (``flax/linen/fp8_ops.py``; see https://github.com/google/flax/pull/3922).
