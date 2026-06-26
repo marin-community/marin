@@ -33,6 +33,11 @@ from haliax.nn.ragged_dot import (
 
 _E4M3 = jnp.float8_e4m3fn
 
+# Token dimension is padded to a multiple of this before the grouped GEMM, matching
+# `haliax.nn.ragged_dot.ragged_dot` and the delayed-scaling `fp8_scaled_ragged_dot`. Unpadded
+# ragged token counts make the GPU XLA f8 path fail layout normalization (ReshapeIsBitcast RET_CHECK).
+_RAGGED_PAD_MULTIPLE = 512
+
 
 def _current_scale(x: jax.Array, q_dtype: jnp.dtype) -> jax.Array:
     """Per-tensor current scale ``amax(x) / fp8_max``, recomputed from the live tensor.
@@ -52,25 +57,15 @@ def _quantize_current(
 
 
 @partial(custom_vjp, nondiff_argnums=(3, 4))
-def fp8_current_scaled_ragged_dot(
+def _quantized_current_ragged_dot(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
     preferred_element_type: jnp.dtype,
     implementation: Implementation,
 ) -> jax.Array:
-    """``ragged_dot`` drop-in for per-tensor current-scaling all-E4M3 FP8.
-
-    Args:
-        lhs: ``[tokens, in]`` activations.
-        rhs: ``[experts, in, out]`` expert weights.
-        group_sizes: ``[experts]`` tokens per expert.
-        preferred_element_type: output/accumulation dtype of the grouped GEMM.
-        implementation: ragged-dot backend (see :func:`haliax.nn.ragged_dot.ragged_dot`).
-
-    Returns:
-        ``[tokens, out]`` activations dequantized back to ``preferred_element_type``.
-    """
+    """Current-scaling all-E4M3 grouped GEMM on (already-token-padded) operands. See the public
+    :func:`fp8_current_scaled_ragged_dot` wrapper, which handles the 512-token padding."""
     q_lhs, lhs_scale = _quantize_current(lhs, _E4M3, preferred_element_type)
     q_rhs, rhs_scale = _quantize_current(rhs, _E4M3, preferred_element_type)
     out = _ragged_dot_layout(
@@ -125,4 +120,38 @@ def _bwd(preferred_element_type, implementation, res, g):
     return grad_lhs, grad_rhs, None  # lhs, rhs, group_sizes (non-diff int)
 
 
-fp8_current_scaled_ragged_dot.defvjp(_fwd, _bwd)
+_quantized_current_ragged_dot.defvjp(_fwd, _bwd)
+
+
+def fp8_current_scaled_ragged_dot(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    preferred_element_type: jnp.dtype,
+    implementation: Implementation,
+) -> jax.Array:
+    """``ragged_dot`` drop-in for per-tensor current-scaling all-E4M3 FP8.
+
+    Args:
+        lhs: ``[tokens, in]`` activations.
+        rhs: ``[experts, in, out]`` expert weights.
+        group_sizes: ``[experts]`` tokens per expert.
+        preferred_element_type: output/accumulation dtype of the grouped GEMM.
+        implementation: ragged-dot backend (see :func:`haliax.nn.ragged_dot.ragged_dot`).
+
+    Returns:
+        ``[tokens, out]`` activations dequantized back to ``preferred_element_type``.
+
+    The token axis is zero-padded to a multiple of ``_RAGGED_PAD_MULTIPLE`` around the grouped GEMM
+    (pad/slice live outside the custom_vjp, so autodiff threads them); the padded rows belong to no
+    expert group and do not change the per-tensor amax. This matches ``ragged_dot``'s own padding and
+    avoids the GPU XLA f8 layout-normalization RET_CHECK on unpadded ragged shapes.
+    """
+    tokens = lhs.shape[0]
+    pad = (-tokens) % _RAGGED_PAD_MULTIPLE
+    if pad:
+        lhs = jax.lax.pad(lhs, jnp.zeros((), dtype=lhs.dtype), [(0, pad, 0), (0, 0, 0)])
+    y = _quantized_current_ragged_dot(lhs, rhs, group_sizes, preferred_element_type, implementation)
+    if pad:
+        y = y[:tokens]
+    return y
