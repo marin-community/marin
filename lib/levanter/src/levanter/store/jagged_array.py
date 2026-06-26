@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
-from rigging.filesystem import record_transfer, url_to_fs
+from rigging.filesystem import is_cross_region_url, record_transfer, url_to_fs
 
 from levanter.tensorstore_serialization import build_kvstore_spec
 from levanter.utils import fsspec_utils
@@ -59,8 +59,12 @@ def charge_store_read_budget(path: Optional[str]) -> None:
     front, rather than per batch, since the tensorstore reads themselves are
     invisible to the budget. Each distinct store path is charged once per
     process; a no-op for local or same-region paths.
+
+    The ``du`` stat pass only runs when ``path`` is actually cross-region, so
+    the common same-region and local opens pay nothing beyond a cached region
+    lookup.
     """
-    if not path or path == "memory":
+    if not path or path == "memory" or not is_cross_region_url(path):
         return
     with _charged_store_reads_lock:
         if path in _charged_store_reads:
