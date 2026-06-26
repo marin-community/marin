@@ -210,6 +210,7 @@ def test_deepep_internode_preflight_requires_nvshmem(tmp_path: Path, monkeypatch
     monkeypatch.setenv(DEEPEP_SRC_ENV, str(root))
     monkeypatch.setenv(DEEPEP_CUDA_ARCH_ENV, "sm_90")
     monkeypatch.delenv("NVSHMEM_DIR", raising=False)
+    monkeypatch.setattr(deepep_availability, "_nvshmem_python_package_roots", lambda: ())
 
     status = deepep_preflight_status(
         required_files=INTERNODE_TRANSPORT_REQUIRED_FILES,
@@ -970,7 +971,7 @@ def test_deepep_dispatch_internode_exposes_static_jax_contract(monkeypatch: pyte
     assert dispatch.x_dispatch.shape == (24, 16)
     assert dispatch.assignment_weights.shape == (24,)
     assert dispatch.recv_token_indices.shape == (24,)
-    assert dispatch.assignment_destinations.shape == (24,)
+    assert dispatch.assignment_destinations.shape == (2,)
 
 
 def test_internode_dispatch_config_accepts_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

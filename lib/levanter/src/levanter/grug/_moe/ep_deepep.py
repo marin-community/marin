@@ -43,7 +43,13 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_DISPATCH_OUTPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
+    MOE_REMAT_EXPERT_OFFLOAD_NAMES,
+    MOE_REMAT_EXPERT_SAVE_NAMES,
+    MOE_REMAT_HIDDEN_OFFLOAD_NAMES,
+    MOE_REMAT_HIDDEN_SAVE_NAMES,
     MOE_REMAT_OFFLOAD_NAMES,
+    MOE_REMAT_OUTPUT_OFFLOAD_NAMES,
+    MOE_REMAT_OUTPUT_SAVE_NAMES,
     MOE_REMAT_SAVE_NAMES,
     MoERematMode,
     split_moe_w13_output,
@@ -324,6 +330,27 @@ def _deepep_moe_up_down_remat(
         policy = jax.checkpoint_policies.save_and_offload_only_these_names(
             names_which_can_be_saved=(),
             names_which_can_be_offloaded=MOE_REMAT_OFFLOAD_NAMES,
+            offload_src="device",
+            offload_dst="pinned_host",
+        )
+    elif remat_mode == "offload_moe_hidden":
+        policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+            names_which_can_be_saved=MOE_REMAT_HIDDEN_SAVE_NAMES,
+            names_which_can_be_offloaded=MOE_REMAT_HIDDEN_OFFLOAD_NAMES,
+            offload_src="device",
+            offload_dst="pinned_host",
+        )
+    elif remat_mode == "offload_moe_output":
+        policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+            names_which_can_be_saved=MOE_REMAT_OUTPUT_SAVE_NAMES,
+            names_which_can_be_offloaded=MOE_REMAT_OUTPUT_OFFLOAD_NAMES,
+            offload_src="device",
+            offload_dst="pinned_host",
+        )
+    elif remat_mode == "offload_moe_expert":
+        policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+            names_which_can_be_saved=MOE_REMAT_EXPERT_SAVE_NAMES,
+            names_which_can_be_offloaded=MOE_REMAT_EXPERT_OFFLOAD_NAMES,
             offload_src="device",
             offload_dst="pinned_host",
         )
