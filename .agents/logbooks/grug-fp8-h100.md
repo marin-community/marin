@@ -1762,3 +1762,26 @@ extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progres
   **cache hit** (no tokenize/cross-region), GPU train task spawned.
 - **Result:** *(pending — GPU compile + 3000 steps; comparing loss trajectories + NaN watch)*.
 - **Next action:** parse both jobs' per-step loss; verdict on E4M3 grad dynamic range over the trajectory.
+
+### 2026-06-26 — GFP8-035 (cont.): 1-GPU full-model launch failed on a pre-existing XSA sharding bug → pivot to focused MoE loop
+- **Both arms FAILED at step 0** (`/matt/grug-fp8val-bf16-20260626-213611`, `…-f8e4m3-20260626-213625`),
+  identical error — so **not f8-related**:
+  ```
+  ShardingTypeError: mul  bf16[16@(replica_dcn,data,expert),1024,4,128@model]
+                        *  bf16[16@(replica_dcn,data,expert),1024,4@model,128]
+     -> illegal bf16[...,4@model,128@model]   (DuplicateSpecError: P(...,'model','model'))
+  ```
+  at `experiments/grug/moe/model.py:187` — the XSA step `dot = jnp.sum(attn_out * aligned_v, …)`. `attn_out`
+  carries `model` on the head_dim (128); `aligned_v` is resharded `P(_BATCH_AXES, None, 'model', None)`
+  (model on the heads dim, 4). Under `use_explicit_mesh_axes` the elementwise multiply yields a doubly-
+  `model`-sharded result. The degenerate single-device mesh (all axes size 1) trips JAX's structural
+  spec-uniqueness check; this is an attention/mesh issue orthogonal to MoE/f8 (bf16 baseline fails too).
+- **Decision:** don't patch grug XSA sharding (out of scope, touches production model code that runs at
+  256-H100 scale). The E4M3 **dynamic-range** question is about *quantization* — casting expert operands +
+  output grad to E4M3 — which is **bit-identical on any backend** (the op accumulates in f32). So a
+  self-contained MoE student/teacher regression loop answers it decisively without attention/mesh/EP/cluster
+  confounds, and runs free on CPU. Vehicle: `experiments/grug/fp8/moe_trajectory_validation.py` — K MoE
+  layers (router + `_moe_mlp_local` scatter vs scatter_f8), fp32 master / bf16 compute, Adam, identical
+  init+per-step data; only the expert-GEMM kernel differs.
+- **Smoke (100 steps, 2 layers, d256):** both arms train, **no NaN**; f8 final-loss gap **0.35%**, max
+  pointwise **1.47%**. Full 4000-step / 4-layer run in progress.
