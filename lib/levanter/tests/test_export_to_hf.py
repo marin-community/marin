@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import glob
+import json
 import os
 import tempfile
 from types import SimpleNamespace
@@ -21,7 +23,6 @@ from test_utils import has_torch
 
 
 def test_export_lm_to_hf():
-    # just testing if train_lm has a pulse
     model_config = Gpt2Config(
         num_layers=2,
         num_heads=2,
@@ -40,25 +41,33 @@ def test_export_lm_to_hf():
 
         save_checkpoint({"model": trainable}, 0, f"{tmpdir}/ckpt")
 
-        try:
-            trainer = SimpleNamespace(
-                device_mesh=contextlib.nullcontext(),
-                parameter_axis_mapping={},
-            )
-            config = export_lm_to_hf.ConvertLmConfig(
-                trainer=trainer,
-                checkpoint_path=f"{tmpdir}/ckpt",
-                output_dir=f"{tmpdir}/output",
-                model=model_config,
-                use_cpu=True,
-            )
-            export_lm_to_hf.main(config)
+        trainer = SimpleNamespace(
+            device_mesh=contextlib.nullcontext(),
+            parameter_axis_mapping={},
+        )
+        output_dir = f"{tmpdir}/output"
+        config = export_lm_to_hf.ConvertLmConfig(
+            trainer=trainer,
+            checkpoint_path=f"{tmpdir}/ckpt",
+            output_dir=output_dir,
+            model=model_config,
+            use_cpu=True,
+        )
+        export_lm_to_hf.main(config)
 
-            if has_torch():
-                AutoModelForCausalLM.from_pretrained(f"{tmpdir}/output")
+        # save_pretrained must persist a loadable HF config plus a weights shard.
+        config_path = os.path.join(output_dir, "config.json")
+        assert os.path.exists(config_path)
+        weights = glob.glob(os.path.join(output_dir, "*.safetensors")) + glob.glob(os.path.join(output_dir, "*.bin"))
+        assert weights, f"no weights file written under {output_dir}"
 
-        finally:
-            try:
-                os.unlink("wandb")
-            except Exception:
-                pass
+        with open(config_path) as f:
+            hf_config = json.load(f)
+        # the exported config must round-trip our model shape, not just be present
+        assert hf_config["n_layer"] == 2
+        assert hf_config["n_head"] == 2
+
+        if has_torch():
+            reloaded = AutoModelForCausalLM.from_pretrained(output_dir)
+            assert reloaded.config.n_layer == 2
+            assert reloaded.config.vocab_size == len(tok)

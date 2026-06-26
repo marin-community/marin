@@ -40,8 +40,6 @@ Usage:
     ./scripts/ops/storage/generate_report.py --gist secret --discord internal-discuss
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 import sys
@@ -51,9 +49,10 @@ from pathlib import Path
 import click
 import fsspec
 from fray import ResourceConfig
-from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
+from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, client_credentials, resolve_cluster_name
 from iris.client import IrisClient
-from iris.cluster.config import IrisConfig
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
 from iris.cluster.constraints import Constraint, preemptible_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.config_discovery import resolve_cluster_config
@@ -286,21 +285,19 @@ def _open_iris_client(cluster: str) -> tuple[IrisClient, object]:
     when finished (it backs the controller URL the client talks to).
     """
     config_path = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    iris_config = IrisConfig.load(config_path)
+    iris_config = load_config(config_path)
 
-    token_provider = None
-    cluster_name = resolve_cluster_name(iris_config.proto, None, cluster)
-    if iris_config.proto.HasField("auth"):
-        token_provider = create_client_token_provider(iris_config.proto.auth, cluster_name=cluster_name)
+    cluster_name = resolve_cluster_name(iris_config, None, cluster)
+    credentials = client_credentials(iris_config, cluster_name)
 
-    bundle = iris_config.provider_bundle()
+    bundle = provider_bundle(iris_config)
     controller_address = iris_config.controller_address() or bundle.controller.discover_controller(
-        iris_config.proto.controller
+        iris_config.controller
     )
 
     tunnel_cm = bundle.controller.tunnel(address=controller_address)
     tunnel_url = tunnel_cm.__enter__()
-    client = IrisClient.remote(tunnel_url, workspace=REPO_ROOT, token_provider=token_provider)
+    client = IrisClient.remote(tunnel_url, workspace=REPO_ROOT, credentials=credentials)
     return client, tunnel_cm
 
 

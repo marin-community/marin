@@ -8,8 +8,6 @@ Pure scheduling-layer helpers: they consume only ``scheduling.policy`` /
 carry no edge back to the controller's ops/reconcile/schema layer.
 """
 
-from __future__ import annotations
-
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
     SchedulingOrder,

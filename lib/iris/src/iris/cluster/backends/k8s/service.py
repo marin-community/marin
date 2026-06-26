@@ -3,8 +3,6 @@
 
 """K8sService protocol and CloudK8sService (kubernetes DynamicClient) implementation."""
 
-from __future__ import annotations
-
 import logging
 import os
 import socket
@@ -14,7 +12,7 @@ import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
 try:
@@ -134,7 +132,7 @@ class K8sService(Protocol):
         field_selector: str | None = None,
     ) -> list[dict]: ...
 
-    def top_pod(self, pod_name: str) -> PodResourceUsage | None: ...
+    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]: ...
 
     def read_file(
         self,
@@ -185,10 +183,10 @@ class CloudK8sService:
     namespace: str
     kubeconfig_path: str | None = None
     timeout: float = DEFAULT_TIMEOUT
-    _api_client: kubernetes.client.ApiClient = field(init=False, repr=False)
-    _dyn: DynamicClient = field(init=False, repr=False)
-    _core_v1: kubernetes.client.CoreV1Api = field(init=False, repr=False)
-    _custom: kubernetes.client.CustomObjectsApi = field(init=False, repr=False)
+    _api_client: "kubernetes.client.ApiClient" = field(init=False, repr=False)
+    _dyn: "DynamicClient" = field(init=False, repr=False)
+    _core_v1: "kubernetes.client.CoreV1Api" = field(init=False, repr=False)
+    _custom: "kubernetes.client.CustomObjectsApi" = field(init=False, repr=False)
     _kubectl_prefix: list[str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -209,7 +207,7 @@ class CloudK8sService:
             cmd.extend(["--kubeconfig", self.kubeconfig_path])
         self._kubectl_prefix = cmd
 
-    def create_api_client(self) -> kubernetes.client.ApiClient:
+    def create_api_client(self) -> "kubernetes.client.ApiClient":
         if self.kubeconfig_path:
             return kubernetes.config.new_client_from_config(
                 config_file=self.kubeconfig_path,
@@ -481,7 +479,7 @@ class CloudK8sService:
 
     def rollout_restart(self, resource: K8sResource, name: str) -> None:
         """Restart a rollout by patching the restart annotation."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         patch_body = {
             "spec": {
                 "template": {
@@ -604,7 +602,7 @@ class CloudK8sService:
                 if container:
                     kwargs["container"] = container
                 if since_time is not None:
-                    delta = datetime.now(timezone.utc) - since_time
+                    delta = datetime.now(UTC) - since_time
                     since_sec = max(1, int(delta.total_seconds()) + 1)
                     kwargs["since_seconds"] = since_sec
                 if limit_bytes is not None:
@@ -684,39 +682,50 @@ class CloudK8sService:
         """Remove files inside a Pod container. Ignores missing files."""
         self.exec(pod_name, ["rm", "-f", *paths], container=container, timeout=10)
 
-    # -- top_pod -------------------------------------------------------------
+    # -- top_pods ------------------------------------------------------------
 
-    def top_pod(self, pod_name: str) -> PodResourceUsage | None:
-        """Get CPU/memory usage for a pod via metrics.k8s.io API."""
-        logger.info("k8s: top_pod %s", pod_name)
-        with slow_log(logger, f"top_pod {pod_name}", threshold_ms=_SLOW_THRESHOLD_MS):
+    def top_pods(self, *, labels: dict[str, str] | None = None) -> dict[str, PodResourceUsage]:
+        """Return CPU/memory usage for every pod, keyed by pod name.
+
+        Lists ``PodMetrics`` for the namespace (optionally scoped by ``labels``)
+        via the metrics.k8s.io list endpoint. A 404 means the metrics API is
+        unavailable (metrics-server absent); returns an empty map rather than
+        raising so callers degrade quietly.
+        """
+        logger.info("k8s: top_pods labels=%s", labels)
+        kwargs = self._request_timeout_kwargs()
+        if labels:
+            kwargs["label_selector"] = _label_selector(labels)
+        with slow_log(logger, "top_pods", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                result = self._custom.get_namespaced_custom_object(
+                result = self._custom.list_namespaced_custom_object(
                     group="metrics.k8s.io",
                     version="v1beta1",
                     namespace=self.namespace,
                     plural="pods",
-                    name=pod_name,
-                    **self._request_timeout_kwargs(),
+                    **kwargs,
                 )
             except ApiException as e:
                 if e.status == 404:
-                    return None
+                    return {}
                 raise
 
-        containers = result.get("containers", [])
-        if not containers:
-            return None
-
-        total_cpu = 0
-        total_mem = 0
-        for c in containers:
-            usage = c.get("usage", {})
-            if "cpu" in usage:
-                total_cpu += parse_k8s_cpu(usage["cpu"])
-            if "memory" in usage:
-                total_mem += parse_k8s_quantity(usage["memory"])
-        return PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
+        usage_by_pod: dict[str, PodResourceUsage] = {}
+        for item in result.get("items", []):
+            name = item.get("metadata", {}).get("name", "")
+            containers = item.get("containers", [])
+            if not name or not containers:
+                continue
+            total_cpu = 0
+            total_mem = 0
+            for c in containers:
+                usage = c.get("usage", {})
+                if "cpu" in usage:
+                    total_cpu += parse_k8s_cpu(usage["cpu"])
+                if "memory" in usage:
+                    total_mem += parse_k8s_quantity(usage["memory"])
+            usage_by_pod[name] = PodResourceUsage(cpu_millicores=total_cpu, memory_bytes=total_mem)
+        return usage_by_pod
 
     # -- port_forward (subprocess-based) -------------------------------------
 
@@ -867,4 +876,4 @@ def _parse_kubectl_log_line(line: str) -> KubectlLogLine:
             logger.warning("Failed to parse timestamp from log line: %r", line[:120])
     else:
         logger.warning("Unexpected log line format (no space-separated timestamp): %r", line[:120])
-    return KubectlLogLine(timestamp=datetime.now(timezone.utc), stream="stdout", data=line)
+    return KubectlLogLine(timestamp=datetime.now(UTC), stream="stdout", data=line)

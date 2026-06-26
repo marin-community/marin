@@ -8,18 +8,14 @@ bootstrap handles Docker setup and container startup. TPU metadata discovery
 is performed by the worker environment probe at runtime.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re
 from collections.abc import Callable
 
 import yaml
-from google.protobuf.json_format import MessageToDict
 
-from iris.cluster.config_serde import config_to_dict
-from iris.rpc import config_pb2
+from iris.cluster.config import IrisClusterConfig, WorkerConfig, config_to_dict
 
 logger = logging.getLogger(__name__)
 
@@ -207,19 +203,45 @@ sudo mkdir -p {{ cache_dir }}
 echo "[iris-init] Phase: docker_pull"
 echo "[iris-init] Pulling image: {{ docker_image }}"
 
-# Configure Artifact Registry auth on demand.
-# Must run under sudo because `sudo docker pull` uses root's docker config.
+# Resolve the Artifact Registry host (empty for non-AR images). Auth is only
+# configured when pulling from AR; root's docker config is used by `sudo docker`.
+AR_HOST=""
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
-    echo "[iris-init] Configuring docker auth for $AR_HOST"
-    if command -v gcloud &> /dev/null; then
-        sudo gcloud auth configure-docker "$AR_HOST" -q || true
-    else
-        echo "[iris-init] Warning: gcloud not found; AR pull may fail without prior auth"
-    fi
 fi
 
-sudo docker pull {{ docker_image }}
+# Retry AR auth + pull. gcloud ships as a snap on tpu-ubuntu2204-base and can be
+# slow to become usable at first boot even after `snap wait system seed.loaded`:
+# /snap/bin/gcloud may not be linked yet, or docker-credential-gcloud may fail
+# mid-pull ("the required argument <snap> was not provided"). Either way docker
+# falls back to an unauthenticated request and Artifact Registry denies it.
+# Re-running configure-docker + pull on each attempt absorbs the race. This MUST
+# retry: the pull runs before the self-healing --restart=unless-stopped worker
+# container is created, so a single transient failure here strands the worker
+# permanently -- its /health never comes up and the slice health probe
+# eventually reaps the whole slice, healthy siblings included.
+IRIS_PULL_OK=0
+for attempt in $(seq 1 20); do
+    if [ -n "$AR_HOST" ]; then
+        echo "[iris-init] Configuring docker auth for $AR_HOST (attempt $attempt/20)"
+        if command -v gcloud &> /dev/null; then
+            sudo gcloud auth configure-docker "$AR_HOST" -q || true
+        else
+            echo "[iris-init] gcloud not yet on PATH; waiting for snap to settle"
+        fi
+    fi
+    if sudo docker pull {{ docker_image }}; then
+        IRIS_PULL_OK=1
+        break
+    fi
+    echo "[iris-init] docker pull failed (attempt $attempt/20); retrying in 15s"
+    sleep 15
+done
+
+if [ "$IRIS_PULL_OK" -ne 1 ]; then
+    echo "[iris-init] ERROR: docker pull failed after 20 attempts; giving up"
+    exit 1
+fi
 
 echo "[iris-init] Phase: config_setup"
 sudo mkdir -p /etc/iris
@@ -278,7 +300,7 @@ exit 1
 
 
 def build_worker_bootstrap_script(
-    worker_config: config_pb2.WorkerConfig,
+    worker_config: WorkerConfig,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
@@ -295,7 +317,7 @@ def build_worker_bootstrap_script(
         raise ValueError("worker_config.cache_dir is required for worker bootstrap")
 
     worker_config_json = json.dumps(
-        MessageToDict(worker_config, preserving_proto_field_name=True),
+        worker_config.model_dump(mode="json", exclude_none=True),
         indent=2,
     )
 
@@ -380,22 +402,38 @@ sudo sysctl -w net.ipv4.tcp_tw_reuse=1
 echo "[iris-controller] [3/5] Pulling image: {{ docker_image }}"
 echo "[iris-controller]       This may take several minutes for large images..."
 
-# Configure Artifact Registry auth on demand.
-# Must run under sudo because `sudo docker pull` uses root's docker config.
+# Resolve the Artifact Registry host (empty for non-AR images). Auth is only
+# configured when pulling from AR; root's docker config is used by `sudo docker`.
+AR_HOST=""
 if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
     AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
-    echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST"
-    if command -v gcloud &> /dev/null; then
-        sudo gcloud auth configure-docker "$AR_HOST" -q || true
-    else
-        echo "[iris-controller] [3/5] Warning: gcloud not found; AR pull may fail without prior auth"
-    fi
 fi
 
-if sudo docker pull {{ docker_image }}; then
+# Retry AR auth + pull -- gcloud ships as a snap and can be slow to become
+# usable at first boot, so a single configure-docker + pull may hit an
+# unauthenticated denial. Re-running both on each attempt absorbs the race.
+IRIS_PULL_OK=0
+for attempt in $(seq 1 20); do
+    if [ -n "$AR_HOST" ]; then
+        echo "[iris-controller] [3/5] Configuring docker auth for $AR_HOST (attempt $attempt/20)"
+        if command -v gcloud &> /dev/null; then
+            sudo gcloud auth configure-docker "$AR_HOST" -q || true
+        else
+            echo "[iris-controller] [3/5] gcloud not yet on PATH; waiting for snap to settle"
+        fi
+    fi
+    if sudo docker pull {{ docker_image }}; then
+        IRIS_PULL_OK=1
+        break
+    fi
+    echo "[iris-controller] [3/5] docker pull failed (attempt $attempt/20); retrying in 15s"
+    sleep 15
+done
+
+if [ "$IRIS_PULL_OK" -eq 1 ]; then
     echo "[iris-controller] [4/5] Image pull complete"
 else
-    echo "[iris-controller] [4/5] ERROR: Image pull failed"
+    echo "[iris-controller] [4/5] ERROR: Image pull failed after 20 attempts"
     exit 1
 fi
 
@@ -529,7 +567,7 @@ def build_controller_bootstrap_script(
 
 
 def build_controller_bootstrap_script_from_config(
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str],
     fresh: bool = False,
 ) -> str:
@@ -542,12 +580,14 @@ def build_controller_bootstrap_script_from_config(
             it starts with an empty local database and skips checkpoint restore.
     """
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)
-    port = config.controller.gcp.port or config.controller.manual.port or 10000
-    image = config.controller.image
-
     ctrl = config.controller
+    gcp_port = ctrl.gcp.port if ctrl.gcp is not None else 0
+    manual_port = ctrl.manual.port if ctrl.manual is not None else 0
+    port = gcp_port or manual_port or 10000
+    image = ctrl.image
+
     zone: str | None = None
-    if ctrl.HasField("gcp") and ctrl.gcp.zone:
+    if ctrl.gcp is not None and ctrl.gcp.zone:
         zone = ctrl.gcp.zone
 
     image = resolve_image(image, zone)

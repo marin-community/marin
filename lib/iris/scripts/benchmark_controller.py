@@ -68,6 +68,7 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
@@ -1200,10 +1201,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # the snapshot closes.
     sched = Scheduler()
     with db.read_snapshot() as _sched_snap:
-        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults(), {})
+        demand_ctx = build_scheduling_context(_sched_snap, health, _NoAttrs(), UserBudgetDefaults())
 
     def _demand():
-        compute_demand_entries(demand_ctx, sched, {})
+        compute_demand_entries(demand_ctx, sched)
 
     bench(
         f"Scheduling: compute_demand_entries (w={len(workers)}, t={len(pending_tasks)})",
@@ -2287,7 +2288,19 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         checkpoint_interval=None,
     )
     threads = ThreadContainer("bench-serve")
-    controller = Controller(config=config, provider=cast(TaskBackend, _FakeProvider()), db=db, threads=threads)
+    log_stack = build_log_stack(
+        log_service_address="",
+        local_log_dir=config.local_state_dir / "log-server",
+        host=config.host,
+        worker_token=None,
+    )
+    controller = Controller(
+        config=config,
+        provider=cast(TaskBackend, _FakeProvider()),
+        log_stack=log_stack,
+        db=db,
+        threads=threads,
+    )
     controller.start()
     deadline = time.time() + 10.0
     while time.time() < deadline:

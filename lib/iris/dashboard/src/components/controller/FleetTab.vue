@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import type { LocationQueryValue } from 'vue-router'
 import { useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { ListWorkersResponse, WorkerHealthStatus, WorkerQuery } from '@/types/rpc'
@@ -31,7 +32,7 @@ const SORT_DIRS: SortDir[] = ['asc', 'desc']
 const route = useRoute()
 const router = useRouter()
 
-function queryStr(v: string | string[] | null | undefined): string {
+function queryStr(v: LocationQueryValue | LocationQueryValue[]): string {
   if (Array.isArray(v)) return v[0] ?? ''
   return v ?? ''
 }

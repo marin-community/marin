@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "marin-finelog"
-version = "0.2.0"
+version = "0.2.11"
 description = "Standalone log store + log service: structured-log ingest, query, and persistence."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.14"
 # duckdb is used by the deploy CLI to query pulled parquet segments in-process
 # (`finelog inspect`), not by a storage engine — the Rust server owns storage.
 dependencies = [

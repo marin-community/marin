@@ -9,7 +9,7 @@ child jobs. Local mode runs the same broker/proxy/worker loop in the current
 process for single-node checks.
 
 lm-eval runs in an isolated uv environment so the eval client does not share the
-TPU serving environment's `vllm-tpu` dependency set.
+TPU serving environment's `vllm` dependency set.
 
 \b
 Examples:
@@ -17,8 +17,6 @@ Examples:
   uv run python experiments/evals/served_qwen3_humaneval.py --priority production
   uv run python experiments/evals/served_qwen3_humaneval.py --local
 """
-
-from __future__ import annotations
 
 import shlex
 import subprocess

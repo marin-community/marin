@@ -33,11 +33,11 @@ class ClusterClient(Protocol):
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName: ...
 
@@ -94,6 +94,13 @@ class ClusterClient(Protocol):
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
 
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]: ...
+
     def fetch_logs(
         self,
         source: str,
@@ -108,5 +115,7 @@ class ClusterClient(Protocol):
     ) -> logging_pb2.FetchLogsResponse: ...
 
     def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse: ...
+
+    def resolve_endpoint(self, endpoint_name: str) -> str: ...
 
     def shutdown(self, wait: bool = True) -> None: ...

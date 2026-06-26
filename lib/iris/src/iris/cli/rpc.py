@@ -16,10 +16,10 @@ import click
 from google.protobuf import json_format
 from google.protobuf.descriptor import FieldDescriptor
 from google.protobuf.message import Message
+from rigging.credentials import ClientCredentials
 
 from iris.cli.connect import require_controller_url
 from iris.rpc import actor_connect, controller_connect, worker_connect
-from iris.rpc.auth import TokenProvider, client_interceptors
 
 PROTO_TYPE_TO_CLICK: dict[int, click.ParamType] = {
     FieldDescriptor.TYPE_STRING: click.STRING,
@@ -164,7 +164,7 @@ def call_rpc(
     method_name: str,
     url: str,
     request: Message,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
 ) -> Message:
     """Execute an RPC call and return the response."""
     register_services()
@@ -179,7 +179,7 @@ def call_rpc(
         available = ", ".join(service.methods.keys())
         raise ValueError(f"Unknown method '{method_name}' on service '{service_name}'. Available: {available}")
 
-    interceptors = client_interceptors(token_provider)
+    interceptors = credentials.interceptors() if credentials is not None else []
     client = service.client_class(url, interceptors=interceptors)
     try:
         method_fn = getattr(client, method.method_fn_name)
@@ -294,8 +294,8 @@ class ServiceCommands(click.Group):
             controller_url = require_controller_url(ctx)
             field_values = {k: v for k, v in kwargs.items() if v is not None}
             request = build_request(method, json_str, field_values)
-            tp = ctx.obj.get("token_provider") if ctx.obj else None
-            response = call_rpc(service_name, method.name, controller_url, request, token_provider=tp)
+            credentials = ctx.obj.get("credentials") if ctx.obj else None
+            response = call_rpc(service_name, method.name, controller_url, request, credentials=credentials)
             click.echo(format_response(response))
 
         return click.Command(

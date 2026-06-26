@@ -27,8 +27,6 @@ Design choices:
   against ``RAW_TARGET_TOTAL_TOKENS_B`` via :func:`proportional_sample_fractions`.
 """
 
-from __future__ import annotations
-
 import logging
 import math
 import os

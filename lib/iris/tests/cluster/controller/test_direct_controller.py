@@ -57,9 +57,6 @@ class FakeDirectProvider:
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")
 
-    def set_log_sink(self, *args, **kwargs) -> None:
-        pass
-
     def fetch_live_logs(
         self,
         task_id: str,

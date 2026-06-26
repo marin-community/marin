@@ -2,18 +2,20 @@
 
 Internal dashboard for Marin: ferry workflow status from GitHub Actions,
 a GitHub Build panel showing aggregate CI status for the last 100
-commits on main (per-commit check-run rollup), and an Iris section
+commits on main (per-commit check-run rollup), an Iris section
 surfacing controller reachability, worker counts (current + 24h
 history), active-environment Iris + finelog health, and the 24h
-job-state breakdown. Deployed as Cloud Run + native IAP, following the
-`infra/iris-iap-proxy/` pattern.
+job-state breakdown, and a Probes section reading the synthetic-canary
+metrics that `infra/probes/` writes to finelog — health checks plus the
+accelerator-provisioning rollup. Deployed as Cloud Run + native IAP.
 
 ## Stack
 
 - **Server** — Node 20 + TypeScript + [Hono](https://hono.dev). Exposes
   `/api/ferry`, `/api/builds`, `/api/iris`, `/api/workers`,
-  `/api/control-plane/health`, `/api/workers/history`, `/api/jobs`,
-  `/api/health`, and serves the built web UI from `web/dist`.
+  `/api/control-plane/health`, `/api/workers/history`,
+  `/api/provisioning/history`, `/api/jobs`, `/api/probes`, `/api/health`,
+  and serves the built web UI from `web/dist`.
 - **Web** — Vite + React 18 + TypeScript + Jotai + `@tanstack/react-query`
   + Tailwind.
 - Single `package.json`, multi-stage Dockerfile, single service account,
@@ -25,15 +27,18 @@ job-state breakdown. Deployed as Cloud Run + native IAP, following the
 server/
   main.ts           Hono app: routes, sampler, static serving
   cache.ts          TTL cache with in-flight coalesce
-  history.ts        ring buffer for worker-count history
+  history.ts        ring buffers for the in-process iris-ping + control-plane series
   sources/
     github.ts          shared REPO + auth header helper
     githubActions.ts   Ferry workflow runs (REST API)
     githubCommits.ts   Build panel: per-commit CI rollup on main (GraphQL)
     iris.ts            iris controller /health caller
-    serviceHealth.ts   active env Iris + finelog /health probes
+    serviceHealth.ts   active env Iris + finelog /health probes (+ finelog URL)
     workers.ts         iris worker counts via the ListWorkers RPC
+    clusterHistory.ts  24h worker + provisioning history from finelog canary rows
     jobs.ts            iris 24h job-state breakdown via ExecuteRawQuery
+    probes.ts          synthetic-canary checks + provisioning from finelog
+    finelogQuery.ts    finelog StatsService SQL query → Arrow IPC decode
     controllerQuery.ts helper for the raw-SQL Connect RPC
     discovery.ts       GCE label → controller internal URL
 web/
@@ -50,14 +55,18 @@ web/
       useControlPlaneHealth.ts
       useWorkers.ts
       useWorkersHistory.ts
+      useProvisioningHistory.ts
       useJobs.ts
+      useProbes.ts
     components/
       FerryPanel.tsx
       BuildPanel.tsx  GitHub CI, last 100 runs on main
       IrisPanel.tsx   wraps reachability + WorkersPanel + ControlPlanePanel + JobsPanel
       ControlPlanePanel.tsx active env Iris + finelog latency chart
-      WorkersPanel.tsx
+      WorkersPanel.tsx  live worker counts + side-by-side availability & provisioning history
+      ProvisioningHistoryChart.tsx per-region + fleet-average provisioning success ratio
       JobsPanel.tsx
+      ProbesPanel.tsx synthetic-canary health checks + provisioning rollup
     style.css       Tailwind entry
 Dockerfile          multi-stage build → node:20-slim runtime
 deploy.sh           Cloud Run + IAP deploy
@@ -188,6 +197,41 @@ pending, expected, and commits with no checks configured — so the
 number reflects actual CI pass/fail ratios rather than being dragged
 down by in-flight builds.
 
+### Probes panel
+
+The Probes panel renders the synthetic-canary telemetry the
+`infra/probes/` daemon writes to the finelog `infra.canary.metrics`
+namespace (one flat `{metric, value, labels, collected_at}` row per
+sample). Two bounded SQL queries (Apache DataFusion, finelog's read
+engine — note: no JSON functions, so labels are decoded app-side) run
+against the **active
+environment's** finelog log-server through its `StatsService.Query`
+Connect RPC — the same JSON-over-HTTP shape the controller's
+`ExecuteRawQuery` uses, except the result is an Arrow IPC stream, which
+`server/sources/finelogQuery.ts` decodes with `apache-arrow`. No
+controller hop is involved; the finelog URL is resolved by
+`activeFinelogUrl()` (same overrides + GCE discovery as the
+control-plane health probe). The two queries are:
+
+- **Health checks** — the latest `probe_up` (+ matching
+  `probe_latency_ms`) per synthetic check (`controller-ping`,
+  `finelog-write`, `iris-job-submit/<zone>`). Only checks that emit
+  `probe_up` appear; a gauge collector surfaces here only when it
+  fails.
+- **Provisioning** — the latest provisioning cycle's `provision_*`
+  gauges, which the probe rolls up from the controller's
+  `iris.provisioning` namespace over a trailing window (default 3h).
+  Rendered as a fleet summary (create success ratio = ready /
+  resolved attempts, create→ready latency p50/p95, ready / stockout /
+  error / preempted counts, pools placing vs. stuck) plus a per-pool
+  breakdown keyed by `(resource_type, scale_group, zone)`. Per-pool
+  success ratio is computed client-side; preemptions are runtime
+  deaths and excluded from the create-success rate. See
+  `infra/probes/src/provisioning.py` for the metric vocabulary.
+
+The panel surfaces a friendly empty state until the canary has written
+metrics (e.g. before first deploy, or if the namespace is missing).
+
 ## Deploy
 
 ```bash
@@ -217,18 +261,27 @@ plus the dev controller discovery settings.
 | Iris            | 15s         | 15s                        | current only        |
 | Control plane   | in-memory   | 30s                        | 24h ring buffer     |
 | Workers         | 15s         | 30s                        | current only        |
-| Workers history | in-memory   | 30s                        | 24h ring buffer     |
+| Workers history | 60s         | 60s                        | 24h from finelog    |
+| Provisioning history | 60s    | 60s                        | 24h from finelog    |
 | Jobs            | 60s         | 60s                        | 24h window          |
+| Probes          | 60s         | 60s                        | latest cycle        |
 
 Backend TTL is the authoritative shield against the GitHub rate limit —
 frontend polling can be tuned without affecting upstream. Concurrent
 backend requests for the same key coalesce into one upstream call via
 `server/cache.ts`.
 
-The workers history is a 2880-slot ring buffer (`server/history.ts`)
-filled by a background sampler on a 30s cadence — 24h worth of points.
-The sampler runs on a fixed interval, not off request traffic, so
-history keeps ticking even when nobody is looking at the dashboard.
+The Workers panel renders two finelog-backed history charts side by
+side: per-region healthy worker counts (the `worker_healthy` gauge the
+canary writes every 60s) and the provisioning create-success ratio
+(a fleet average plus per-region lines, derived from the per-pool
+`provision_ready` / `provision_outcomes` gauges; zones roll up to
+regions). Both query the trailing 24h via `server/sources/clusterHistory.ts`
+and survive Cloud Run restarts since the history lives in finelog, not in
+process. The remaining in-process ring buffers (`server/history.ts`) back
+only the iris-ping and control-plane latency series, filled by a
+background sampler on a fixed cadence so they keep ticking even when
+nobody is looking at the dashboard.
 
 ## Controller data
 
@@ -251,14 +304,12 @@ break** — we'll need to plumb a service-account bearer token.
 
 ## Known limitations
 
-- **Workers history is in-process.** The ring buffer is lost on Cloud
-  Run restart (deploys, migrations), so the chart shows a 24h warm-up
-  window after each restart. Follow-ups to consider:
-  1. Persist samples to a small GCS object (rewrite on each sample).
-  2. Bump retention on the controller's `worker_resource_history` table
-     — currently ~45min — and aggregate from there.
-  3. Add a proper `worker_count_history` table in the controller schema
-     so history lives authoritatively next to the workers table.
+- **History depends on the canary.** Worker and provisioning history are
+  read from the `infra.canary.metrics` finelog namespace the `infra/probes`
+  daemon writes, so both charts are durable across Cloud Run restarts — but
+  they only have data for an environment whose canary is running. Point the
+  dashboard at an environment with no canary and both charts show their
+  empty state rather than data.
 - **Iris panel reachability row** is still `/health`-only. Worker counts
   and job-state breakdowns are surfaced in the Workers and Jobs
   subsections via `ExecuteRawQuery` SQL. Tasks, autoscaler, and detailed

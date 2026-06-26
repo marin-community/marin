@@ -29,7 +29,7 @@ from levanter.layers.attention import Attention, AttentionBackend, AttentionConf
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaMlp
 from levanter.models.olmo import Olmo2Embedding
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -408,12 +408,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[Olmo3Config]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)

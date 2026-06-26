@@ -15,8 +15,6 @@ on-disk persistence. The client only needs to declare schemas, encode
 them for the wire, and build Arrow tables, so that is all that lives here.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -60,6 +58,10 @@ class Column:
     # initial creation of a column where the producer guarantees presence
     # (e.g. the implicit ``timestamp_ms`` key).
     nullable: bool = True
+    # Maintain a per-row-group trigram substring index for this column so
+    # ``contains(col, …)`` / ``col LIKE '%…%'`` queries prune row groups instead
+    # of full-scanning. Only meaningful for STRING columns; ignored otherwise.
+    trigram_index: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,9 @@ LOG_REGISTERED_SCHEMA = Schema(
     columns=(
         Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
-        Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        # The log message body is substring-searched via contains()/LIKE, so it
+        # carries the trigram index (matches the server's log schema).
+        Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
         Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
     ),
@@ -122,7 +126,7 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
         if c.name == IMPLICIT_SEQ_COLUMN:
             raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
-        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable))
+        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable, trigram_index=c.index.trigram))
     return Schema(columns=tuple(cols), key_column=msg.key_column)
 
 
@@ -137,7 +141,14 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
     for c in schema.columns:
         if c.name == IMPLICIT_SEQ_COLUMN:
             continue
-        msg.columns.append(stats_pb2.Column(name=c.name, type=c.type, nullable=c.nullable))
+        msg.columns.append(
+            stats_pb2.Column(
+                name=c.name,
+                type=c.type,
+                nullable=c.nullable,
+                index=stats_pb2.ColumnIndex(trigram=c.trigram_index),
+            )
+        )
     return msg
 
 

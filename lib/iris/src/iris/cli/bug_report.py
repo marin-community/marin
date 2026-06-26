@@ -13,11 +13,13 @@ from dataclasses import dataclass, field
 
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import proxy_path
+from rigging.credentials import ClientCredentials
 
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import TokenProvider, client_interceptors
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import format_resources, job_state_friendly, task_state_friendly
@@ -116,10 +118,10 @@ def gather_bug_report(
     job_id: JobName,
     *,
     tail: int = 50,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
-    interceptors = client_interceptors(token_provider)
+    interceptors = credentials.interceptors() if credentials is not None else []
     client = ControllerServiceClientSync(
         controller_url,
         timeout_ms=30000,
@@ -127,7 +129,11 @@ def gather_bug_report(
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
-    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
+    log_client = LogClient.connect(
+        f"{controller_url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+        timeout_ms=30000,
+        interceptors=interceptors,
+    )
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:

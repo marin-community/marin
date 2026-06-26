@@ -18,7 +18,6 @@ _DUMMY_DATA: Any = object()
 _GRUG_LAUNCHERS = [
     Path("experiments/grug/base/launch.py"),
     Path("experiments/grug/moe/launch.py"),
-    Path("experiments/grug/modular_opt/launch.py"),
 ]
 
 

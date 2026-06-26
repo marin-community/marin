@@ -31,15 +31,11 @@ folded by the controller; cluster backends have no Iris workers, so they emit no
 health events.
 """
 
-from __future__ import annotations
-
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
-
-from finelog.client.log_client import Table
-from finelog.types import LogWriterProtocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -62,12 +58,10 @@ from iris.cluster.controller.scheduling.policy import (
     apply_scheduling_gates,
     compute_demand_entries,
     compute_scheduling_order,
-    inject_reservation_taints,
-    inject_taint_constraints,
-    preference_pass,
+    demanded_availability_variants,
+    enrich_workers_with_availability,
 )
 from iris.cluster.controller.scheduling.scheduler import JobRequirements, Scheduler, SchedulingContext
-from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.worker_health import WorkerHealthEvent
 from iris.cluster.types import JobName, PendingTask, WorkerId
 from iris.rpc import job_pb2, worker_pb2
@@ -114,7 +108,7 @@ class BackendDescriptor:
     capabilities: list[str]
 
 
-def backend_descriptor(backend: TaskBackend) -> BackendDescriptor:
+def backend_descriptor(backend: "TaskBackend") -> BackendDescriptor:
     """Build the dashboard capability descriptor from a live backend."""
     return BackendDescriptor(
         name=backend.name,
@@ -161,9 +155,7 @@ class ScheduleInput:
     decisions for one scheduling tick."""
 
     context: SchedulingContext
-    """Built by ``build_scheduling_context`` (un-tainted workers + raw reads)."""
-    claims: dict[WorkerId, ReservationClaim]
-    """Reservation claims from ``refresh_reservation_claims``."""
+    """Built by ``build_scheduling_context`` (workers + raw reads)."""
     max_tasks_per_job_per_cycle: int
     trace: bool = False
     """Whether to emit the per-phase scheduling trace logs this cycle."""
@@ -187,8 +179,8 @@ class ScheduleResult:
     """Limits-free capacity-fit residual; cached for the autoscaler loop."""
     diagnostics: dict[str, str] = field(default_factory=dict)
     """Per-job scheduling diagnostics surfaced on the dashboard."""
-    post_taint_context: SchedulingContext | None = None
-    """Post-taint (or un-tainted) context cached for dashboard diagnostics."""
+    scheduling_context: SchedulingContext | None = None
+    """Post-placement scheduling context cached for dashboard diagnostics."""
 
 
 @dataclass(frozen=True)
@@ -231,21 +223,45 @@ class AutoscaleResult:
     the backend manages its own capacity or did not provision this tick."""
 
 
-def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> ScheduleResult:
+def run_scheduling_decision(
+    scheduler: Scheduler,
+    snapshot: ScheduleInput,
+    zone_capabilities: Mapping[str, frozenset[str]] | None = None,
+) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
-    Stages: gates → order → reservation taints → preference pass →
-    ``find_assignments`` → preemption pass. Returns the placement decisions plus
-    the diagnostics/context the controller caches. Does no I/O — every input
-    comes from ``snapshot`` and every output is plain data.
+    Stages: availability enrichment → gates → order → ``find_assignments`` →
+    preemption pass. Returns the placement decisions plus the diagnostics/context
+    the controller caches. Does no I/O — every input comes from ``snapshot``
+    (plus the autoscaler-derived ``zone_capabilities`` snapshot) and every output
+    is plain data.
+
+    ``zone_capabilities`` (zone -> accelerator variants empirically available there)
+    is folded onto worker attributes as ``availability:<variant>`` markers so a hard
+    availability constraint confines a job to a zone where the accelerator has
+    actually been obtained.
     """
     ctx = snapshot.context
-    claims = snapshot.claims
     trace = snapshot.trace
+
+    if zone_capabilities:
+        # Inject only the availability markers some pending task actually constrains
+        # on (typically a single variant, e.g. v5p-8). Pruning zone_capabilities to
+        # the demanded variants confines the per-worker attribute copy to the handful
+        # of workers in a zone that provisions one, instead of rebuilding every
+        # worker's attributes every tick. No demand -> no enrichment, no index rebuild.
+        demanded = demanded_availability_variants(ctx.pending_task_rows)
+        relevant = {zone: kept for zone, variants in zone_capabilities.items() if (kept := variants & demanded)}
+        if relevant:
+            ctx = ctx.evolve_with_workers(
+                workers=enrich_workers_with_availability(ctx.workers, relevant),
+                jobs=ctx.jobs,
+                building_counts=ctx.building_counts,
+                max_building_tasks=ctx.max_building_tasks,
+            )
 
     gated = apply_scheduling_gates(
         ctx,
-        claims,
         max_tasks_per_job_per_cycle=snapshot.max_tasks_per_job_per_cycle,
         trace=trace,
     )
@@ -256,24 +272,22 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
     # expired) are excluded so the autoscaler is never asked to provision for a
     # job the same tick is failing. ``apply_scheduling_gates`` above only reads
     # ``ctx``; this still runs before ``apply_placements`` mutates it.
-    residual_demand = compute_demand_entries(
-        ctx, scheduler, claims, exclude_task_ids={t.task_id for t in gated.expired_tasks}
-    )
+    residual_demand = compute_demand_entries(ctx, scheduler, exclude_task_ids={t.task_id for t in gated.expired_tasks})
 
     if not gated.schedulable_task_ids:
         # No work to place. Expired tasks (if any) still flow back so the
-        # controller can mark them UNSCHEDULABLE; the un-tainted context is the
-        # diagnostics snapshot for this tick.
+        # controller can mark them UNSCHEDULABLE; the context is the diagnostics
+        # snapshot for this tick.
         return ScheduleResult(
             unschedulable=list(gated.expired_tasks),
-            post_taint_context=ctx,
+            scheduling_context=ctx,
             residual_demand=residual_demand,
         )
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
-    all_assignments, context, tainted_jobs = apply_placements(scheduler, order, gated, ctx, claims, trace=trace)
-    preemptions = apply_preemptions(order, tainted_jobs, all_assignments, ctx.running_for_preemption, context)
-    diagnostics = compute_diagnostics(scheduler, context, tainted_jobs, all_assignments, order.ordered_task_ids)
+    all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
+    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+    diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
     return ScheduleResult(
         assignments=[
@@ -290,7 +304,7 @@ def run_scheduling_decision(scheduler: Scheduler, snapshot: ScheduleInput) -> Sc
         ],
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
-        post_taint_context=context,
+        scheduling_context=context,
         residual_demand=residual_demand,
     )
 
@@ -300,37 +314,13 @@ def apply_placements(
     order: SchedulingOrder,
     gated: GatedCandidates,
     ctx: SchedulingContext,
-    claims: dict[WorkerId, ReservationClaim],
     *,
     trace: bool,
 ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
-    """Preference + normal assignment passes over a shared (post-taint) context.
-
-    Reservation taints are injected here so gates/order/diagnostics saw the
-    un-tainted workers. When there are no claims the un-tainted ``ctx`` is reused
-    to avoid an index rebuild.
-    """
-    modified_jobs = inject_taint_constraints(
-        gated.jobs,
-        gated.has_reservation,
-        gated.has_direct_reservation,
-        ctx.reservation_zones_by_job,
-    )
-
-    if claims:
-        modified_workers = inject_reservation_taints(list(ctx.workers), claims)
-        building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
-        ctx.pending_tasks = list(order.ordered_task_ids)
-        context = ctx.evolve_with_workers(
-            workers=modified_workers,
-            jobs=modified_jobs,
-            building_counts=building_counts,
-            max_building_tasks=scheduler.max_building_tasks_per_worker,
-        )
-    else:
-        ctx.pending_tasks = list(order.ordered_task_ids)
-        ctx.jobs = modified_jobs
-        context = ctx
+    """Run the assignment pass over the gated context in priority order."""
+    ctx.pending_tasks = list(order.ordered_task_ids)
+    ctx.jobs = gated.jobs
+    context = ctx
 
     if trace:
         logger.info(
@@ -340,19 +330,11 @@ def apply_placements(
             len(context.jobs),
         )
 
-    # Soft preference — steer reservation tasks toward claimed workers. Skips
-    # coscheduled jobs (they need atomic all-or-nothing via find_assignments).
-    preference_assignments = preference_pass(context, gated.has_reservation, claims)
     result = scheduler.find_assignments(context)
-    all_assignments = preference_assignments + result.assignments
+    all_assignments = result.assignments
     if trace:
-        logger.info(
-            "[TRACE] Phase 5 assignments: %d total (%d preferred, %d normal)",
-            len(all_assignments),
-            len(preference_assignments),
-            len(result.assignments),
-        )
-    return all_assignments, context, modified_jobs
+        logger.info("[TRACE] Phase 5 assignments: %d total", len(all_assignments))
+    return all_assignments, context, gated.jobs
 
 
 class TaskBackend(Protocol):
@@ -417,8 +399,8 @@ class TaskBackend(Protocol):
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Attach the Iris autoscaler that provisions capacity for this backend.
 
-        Called once by the controller's main() after construction (mirrors
-        :meth:`set_log_sink`). Only invoked on backends carrying
+        Called once by the composer after it builds the autoscaler from the
+        provider bundle. Only invoked on backends carrying
         :attr:`BackendCapability.IRIS_AUTOSCALER`; capacity-managing backends
         (k8s) never receive one.
         """
@@ -448,20 +430,6 @@ class TaskBackend(Protocol):
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Exec a command in a task's container. Raises ProviderUnsupportedError if N/A."""
-        ...
-
-    def set_log_sink(
-        self,
-        log_client: LogWriterProtocol,
-        task_stats_table: Table,
-        profile_table: Table,
-    ) -> None:
-        """Inject the finelog handles the controller resolves after connecting.
-
-        Backends without a worker daemon collect logs and write resource/profile
-        samples directly to finelog. Daemon-backed backends ignore these — the
-        worker writes its own rows.
-        """
         ...
 
     def close(self) -> None:

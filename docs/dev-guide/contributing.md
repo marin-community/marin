@@ -1,5 +1,22 @@
 # Contributing to Marin
 
+We welcome contributions that add missing features or fix serious issues. If you
+are unsure whether a change is wanted, open an issue or ask in the
+[Marin Discord](https://discord.gg/J9CTk7pqcM) before sending a PR. We are
+unlikely to merge typo fixes, stylistic rewrites, or speculative refactors that
+are not tied to an issue.
+
+## AI-generated contributions
+
+We use coding agents ourselves and accept contributions made with them. We do
+not accept drive-by PRs that an agent produced in one shot.
+
+The rule of thumb: if your agent can do it in one shot, so can ours, so please
+do not burden us with the PR. A throwaway agent-generated change costs us more to
+review than it cost you to file. If you do contribute agent-assisted work, hold
+it to the same bar as the rest of this guide: confirm the change is needed, that
+it is correct, and that you can explain why it matters.
+
 ## Setup
 
 1. Clone the repository
@@ -10,7 +27,7 @@
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
-uv venv --python 3.11
+uv venv --python 3.12
 source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit
@@ -43,7 +60,7 @@ Before opening a pull request:
 3. If your change adds, removes, renames, or rewires docs pages or docs-owned links, run `uv run python infra/check_docs_source_links.py`.
 4. If your change is docs-heavy, run `uv run mkdocs build --strict`.
 5. If your change adds or rewrites substantial prose, do a final prose-only review using `./.agents/skills/writing-style/SKILL.md`. Remove generic significance framing, stock AI-writing templates, and polished filler that does not add information.
-6. Keep the PR description concise and plain text because it becomes the squash-merge commit message. The `.github/PULL_REQUEST_TEMPLATE.md` file shows the expected style.
+6. Write the PR description like a commit message — it becomes the squash-merge commit message: lead with what the change does, then why, and keep it to what a reviewer needs. The `.github/PULL_REQUEST_TEMPLATE.md` file shows the expected style.
 7. Make sure the PR body references an issue with `Fixes #NNNN` or `Part of #NNNN`.
 8. After pushing, verify the relevant GitHub CI checks pass before considering the PR ready for review.
 

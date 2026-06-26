@@ -12,11 +12,21 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from finelog.client.proxy import LogServiceProxy
+from finelog.client.log_client import Table
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
 from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import (
+    AutoscalerConfig,
+    GcpPlatformConfig,
+    GcpSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    WorkerConfig,
+)
 from iris.cluster.constraints import (
     AttributeValue,
     Constraint,
@@ -48,6 +58,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -55,7 +66,6 @@ from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
-    jobs_table,
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
@@ -64,8 +74,15 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_finished
-from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.cluster.types import (
+    TERMINAL_TASK_STATES,
+    AcceleratorType,
+    CapacityType,
+    JobName,
+    WorkerId,
+    is_job_finished,
+)
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
@@ -103,7 +120,7 @@ class FakeProvider:
     def __init__(self) -> None:
         # Real Iris scheduler: ``ctrl._run_scheduling`` routes the decision
         # through ``schedule`` now, so the fake must run the real pipeline for
-        # scheduler/preemption/reservation tests to exercise placement.
+        # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
@@ -131,9 +148,6 @@ class FakeProvider:
     ) -> job_pb2.GetProcessStatusResponse:
         raise ProviderUnsupportedError("fake")
 
-    def set_log_sink(self, *args, **kwargs) -> None:
-        pass
-
     def profile_task(
         self,
         target: TaskTarget,
@@ -158,6 +172,8 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
+        self.request_worker_eviction = Mock()
+        self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.autoscaler = None
@@ -172,16 +188,15 @@ def mock_controller() -> MockController:
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    """A LogService client (RPC proxy) against a fresh in-process finelog server.
+def log_service(embedded_log_server) -> LogServiceClientSync:
+    """A LogService RPC client against a fresh in-process finelog server.
 
     The native server makes pushed log entries immediately fetchable (RAM
     buffer), so push→fetch is synchronously visible within a test without any
-    manual flush. ``LogServiceProxy`` exposes the same async
-    ``push_logs(request, ctx)`` / ``fetch_logs(request, ctx)`` surface the tests
-    drive, so callers are unchanged.
+    manual flush. The sync client exposes ``push_logs(request)`` /
+    ``fetch_logs(request)``.
     """
-    return LogServiceProxy(embedded_log_server.address)
+    return LogServiceClientSync(address=embedded_log_server.address)
 
 
 @pytest.fixture
@@ -257,9 +272,16 @@ def make_controller(tmp_path):
             config = ControllerConfig(**config_kwargs)
         elif config_kwargs:
             raise TypeError("make_controller: pass either a config or config kwargs, not both")
+        log_stack = build_log_stack(
+            log_service_address="",
+            local_log_dir=config.local_state_dir / "log-server",
+            host=config.host,
+            worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
+        )
         controller = Controller(
             config=config,
             provider=provider if provider is not None else FakeProvider(),
+            log_stack=log_stack,
             db=db,
         )
         created.append(controller)
@@ -473,7 +495,7 @@ def schedulable_tasks(state: ControllerTestState) -> list:
 
 
 def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
-    """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
+    """Count tasks in BUILDING/ASSIGNED state per worker."""
     with state._db.read_snapshot() as tx:
         rows = tx.execute(
             select(task_attempts_table.c.worker_id, func.count().label("c"))
@@ -482,11 +504,7 @@ def building_counts(state: ControllerTestState) -> dict[WorkerId, int]:
                 (tasks_table.c.task_id == task_attempts_table.c.task_id)
                 & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
             )
-            .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
-            .where(
-                tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
-                jobs_table.c.is_reservation_holder == False,  # noqa: E712
-            )
+            .where(tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]))
             .group_by(task_attempts_table.c.worker_id)
             .order_by(task_attempts_table.c.worker_id.asc())
         ).all()
@@ -564,7 +582,7 @@ def submit_job(
 
 # =============================================================================
 # Shared test helpers (deduplicated from test_transitions, test_scheduler,
-# test_service, test_dashboard, test_reservation)
+# test_service, test_dashboard)
 # =============================================================================
 
 
@@ -882,52 +900,60 @@ def harness(state) -> ControllerTestHarness:
 # =============================================================================
 
 
-DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+DEFAULT_RESOURCES = ScaleGroupResources(
     cpu_millicores=128000,
     memory_bytes=128 * 1024**3,
     disk_bytes=100 * 1024**3,
-    device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+    device_type=AcceleratorType.TPU,
     device_variant="v5p-8",
     device_count=8,
 )
 
 
-def ensure_scale_group_resources(config: config_pb2.ScaleGroupConfig) -> config_pb2.ScaleGroupConfig:
-    if not config.HasField("resources"):
-        config.resources.CopyFrom(DEFAULT_RESOURCES)
-    if not config.HasField("num_vms"):
+def ensure_scale_group_resources(config: ScaleGroupConfig) -> ScaleGroupConfig:
+    if config.resources is None:
+        config.resources = DEFAULT_RESOURCES.model_copy(deep=True)
+    if config.num_vms is None:
         config.num_vms = 1
     return config
 
 
-def make_scale_group_config(**kwargs: object) -> config_pb2.ScaleGroupConfig:
-    accelerator_type = kwargs.pop("accelerator_type", config_pb2.ACCELERATOR_TYPE_TPU)
-    accelerator_variant = kwargs.pop("accelerator_variant", "v5p-8")
-    runtime_version = kwargs.pop("runtime_version", None)
-    zones = kwargs.pop("zones", None)
-    capacity_type = kwargs.pop("capacity_type", None)
-    config = ensure_scale_group_resources(config_pb2.ScaleGroupConfig(**kwargs))
+def make_scale_group_config(
+    *,
+    accelerator_type: AcceleratorType = AcceleratorType.TPU,
+    accelerator_variant: str = "v5p-8",
+    runtime_version: str | None = None,
+    zones: list[str] | None = None,
+    capacity_type: CapacityType | None = None,
+    **kwargs: object,
+) -> ScaleGroupConfig:
+    config = ensure_scale_group_resources(ScaleGroupConfig(**kwargs))
     config.resources.device_type = accelerator_type
     if accelerator_variant:
         config.resources.device_variant = accelerator_variant
     if capacity_type is not None:
-        config.slice_template.capacity_type = capacity_type
         config.resources.capacity_type = capacity_type
 
     # Derive slice template fields from resources, matching what
-    # _derive_slice_config_from_resources() does in production config loading.
+    # ScaleGroupConfig._derive_slice_template() does in production config loading.
     # GcpWorkerProvider validates these fields on create_slice().
+    if config.slice_template is None:
+        config.slice_template = SliceConfig()
     template = config.slice_template
     template.accelerator_type = accelerator_type
     if accelerator_variant:
         template.accelerator_variant = accelerator_variant
-    if accelerator_type == config_pb2.ACCELERATOR_TYPE_GPU and config.resources.device_count > 0:
+    if capacity_type is not None:
+        template.capacity_type = capacity_type
+    if accelerator_type == AcceleratorType.GPU and config.resources.device_count > 0:
         template.gpu_count = config.resources.device_count
 
+    if template.gcp is None:
+        template.gcp = GcpSliceConfig()
     gcp = template.gcp
     if runtime_version:
         gcp.runtime_version = runtime_version
-    elif accelerator_type == config_pb2.ACCELERATOR_TYPE_TPU and not gcp.runtime_version:
+    elif accelerator_type == AcceleratorType.TPU and not gcp.runtime_version:
         gcp.runtime_version = "v2-alpha-tpuv5"
     if zones:
         gcp.zone = zones[0]
@@ -943,7 +969,7 @@ def make_demand_entries(
     device_type: DeviceType = DeviceType.TPU,
     device_variant: str | None = "v5p-8",
     device_variants: frozenset[str] | None = None,
-    capacity_type: int | None = None,
+    capacity_type: CapacityType | None = None,
     required_regions: frozenset[str] | None = None,
     required_zones: frozenset[str] | None = None,
     task_prefix: str = "task",
@@ -960,7 +986,7 @@ def make_demand_entries(
     effective_variants = device_variants
     if effective_variants is None and device_variant is not None:
         effective_variants = frozenset({device_variant})
-    preemptible = (capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) if capacity_type is not None else None
+    preemptible = (capacity_type == CapacityType.PREEMPTIBLE) if capacity_type is not None else None
     normalized = PlacementRequirements(
         device_type=device_type,
         device_variants=effective_variants,
@@ -977,7 +1003,7 @@ def make_demand_entries(
     if effective_variants:
         constraint_list.append(device_variant_constraint(sorted(effective_variants)))
     if capacity_type is not None:
-        constraint_list.append(preemptible_constraint(capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE))
+        constraint_list.append(preemptible_constraint(capacity_type == CapacityType.PREEMPTIBLE))
     if required_regions:
         constraint_list.append(region_constraint(sorted(required_regions)))
     if required_zones:
@@ -1043,9 +1069,10 @@ def make_big_demand_entries(
 
 def make_autoscaler(
     scale_groups: dict[str, ScalingGroup],
-    config: config_pb2.AutoscalerConfig | None = None,
+    config: AutoscalerConfig | None = None,
     platform: MagicMock | None = None,
-    base_worker_config: config_pb2.WorkerConfig | None = None,
+    base_worker_config: WorkerConfig | None = None,
+    provisioning_table: Table | None = None,
 ) -> Autoscaler:
     """Create an Autoscaler with the given groups."""
     mock_platform = platform or make_mock_platform()
@@ -1056,6 +1083,7 @@ def make_autoscaler(
             config=config,
             platform=mock_platform,
             base_worker_config=base_worker_config,
+            provisioning_table=provisioning_table,
         )
     else:
         return Autoscaler(
@@ -1063,6 +1091,7 @@ def make_autoscaler(
             evaluation_interval=Duration.from_seconds(0.1),
             platform=mock_platform,
             base_worker_config=base_worker_config,
+            provisioning_table=provisioning_table,
         )
 
 
@@ -1087,7 +1116,7 @@ def mark_all_slices_ready(group: ScalingGroup) -> None:
 
 
 def make_gcp_provider(
-    config: config_pb2.ScaleGroupConfig,
+    config: ScaleGroupConfig,
     zone: str = "us-central1-a",
 ) -> tuple[GcpWorkerProvider, InMemoryGcpService]:
     """Create a GcpWorkerProvider backed by InMemoryGcpService(DRY_RUN).
@@ -1096,7 +1125,7 @@ def make_gcp_provider(
     failures and advance TPU state.
     """
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
-    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=[zone])
+    gcp_config = GcpPlatformConfig(project_id="test-project", zones=[zone])
     provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=service)
     return provider, service
 

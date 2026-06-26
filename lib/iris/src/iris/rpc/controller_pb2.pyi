@@ -56,7 +56,7 @@ class Controller(_message.Message):
     WORKER_SORT_FIELD_LAST_HEARTBEAT: Controller.WorkerSortField
     WORKER_SORT_FIELD_DEVICE_TYPE: Controller.WorkerSortField
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "reservation", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date")
+        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "reservation", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile")
         NAME_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -80,6 +80,7 @@ class Controller(_message.Message):
         TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
         SUBMIT_ARGV_FIELD_NUMBER: _ClassVar[int]
         CLIENT_REVISION_DATE_FIELD_NUMBER: _ClassVar[int]
+        CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
         name: str
         entrypoint: _job_pb2.RuntimeEntrypoint
         resources: _job_pb2.ResourceSpecProto
@@ -103,7 +104,8 @@ class Controller(_message.Message):
         task_image: str
         submit_argv: _containers.RepeatedScalarFieldContainer[str]
         client_revision_date: str
-        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., reservation: _Optional[_Union[_job_pb2.ReservationConfig, _Mapping]] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ...) -> None: ...
+        container_profile: _job_pb2.ContainerProfile
+        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., reservation: _Optional[_Union[_job_pb2.ReservationConfig, _Mapping]] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -200,6 +202,31 @@ class Controller(_message.Message):
         TASKS_FIELD_NUMBER: _ClassVar[int]
         tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ...) -> None: ...
+    class KickTasksRequest(_message.Message):
+        __slots__ = ("targets", "desired_state", "reason")
+        TARGETS_FIELD_NUMBER: _ClassVar[int]
+        DESIRED_STATE_FIELD_NUMBER: _ClassVar[int]
+        REASON_FIELD_NUMBER: _ClassVar[int]
+        targets: _containers.RepeatedScalarFieldContainer[str]
+        desired_state: _job_pb2.TaskState
+        reason: str
+        def __init__(self, targets: _Optional[_Iterable[str]] = ..., desired_state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    class KickResult(_message.Message):
+        __slots__ = ("target", "task_id", "queued", "detail")
+        TARGET_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        QUEUED_FIELD_NUMBER: _ClassVar[int]
+        DETAIL_FIELD_NUMBER: _ClassVar[int]
+        target: str
+        task_id: str
+        queued: bool
+        detail: str
+        def __init__(self, target: _Optional[str] = ..., task_id: _Optional[str] = ..., queued: _Optional[bool] = ..., detail: _Optional[str] = ...) -> None: ...
+    class KickTasksResponse(_message.Message):
+        __slots__ = ("results",)
+        RESULTS_FIELD_NUMBER: _ClassVar[int]
+        results: _containers.RepeatedCompositeFieldContainer[Controller.KickResult]
+        def __init__(self, results: _Optional[_Iterable[_Union[Controller.KickResult, _Mapping]]] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
         __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -350,12 +377,14 @@ class Controller(_message.Message):
         endpoint_id: str
         def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
     class ListEndpointsRequest(_message.Message):
-        __slots__ = ("prefix", "exact")
+        __slots__ = ("prefix", "exact", "task_ids")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
         EXACT_FIELD_NUMBER: _ClassVar[int]
+        TASK_IDS_FIELD_NUMBER: _ClassVar[int]
         prefix: str
         exact: bool
-        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ...) -> None: ...
+        task_ids: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ..., task_ids: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListEndpointsResponse(_message.Message):
         __slots__ = ("endpoints",)
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]

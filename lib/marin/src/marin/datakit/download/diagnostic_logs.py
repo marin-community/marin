@@ -3,8 +3,6 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -341,7 +339,7 @@ class _DocumentIdentityPseudonymizer:
     username_ids: dict[str, str]
 
     @classmethod
-    def from_text(cls, text: str) -> _DocumentIdentityPseudonymizer:
+    def from_text(cls, text: str) -> "_DocumentIdentityPseudonymizer":
         pseudonymizer = cls(identity_ids={}, username_ids={})
         for match in _EMAIL_RE.finditer(text):
             pseudonymizer._register_email(match.group(0))
@@ -1113,79 +1111,6 @@ def extract_loghub_step(
             "source_label": source.source_label,
             "max_files": max_files,
             "source_content_fingerprint": source.fingerprint(),
-            "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
-        },
-    )
-
-
-def extract_diagnostic_logs_steps(
-    *,
-    ghalogs_source_path: str,
-    logchunks_source_path: str | None = None,
-    loghub_source_path: str | None = None,
-    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-    output_path_prefix: str | None = None,
-) -> tuple[StepSpec, StepSpec, StepSpec]:
-    """Return one materialization step per public diagnostic-log source."""
-    return (
-        extract_ghalogs_step(
-            source_path=ghalogs_source_path,
-            max_members=max_ghalogs_members,
-            output_path_prefix=output_path_prefix,
-        ),
-        extract_logchunks_step(
-            source_path=logchunks_source_path,
-            max_examples=max_logchunks_examples,
-            output_path_prefix=output_path_prefix,
-        ),
-        extract_loghub_step(
-            source_path=loghub_source_path,
-            max_files=max_loghub_files,
-            output_path_prefix=output_path_prefix,
-        ),
-    )
-
-
-def extract_diagnostic_logs_step(
-    *,
-    ghalogs_source_path: str,
-    logchunks_source_path: str | None = None,
-    loghub_source_path: str | None = None,
-    max_ghalogs_members: int = DEFAULT_GHALOGS_MAX_MEMBERS,
-    max_logchunks_examples: int = DEFAULT_LOGCHUNKS_MAX_EXAMPLES,
-    max_loghub_files: int = DEFAULT_LOGHUB_MAX_FILES,
-    output_path_prefix: str | None = None,
-) -> StepSpec:
-    """Return a StepSpec that materializes all public diagnostic-log slices together."""
-    return StepSpec(
-        name="processed/diagnostic_logs/public_sample",
-        output_path_prefix=output_path_prefix,
-        fn=lambda output_path: extract_diagnostic_logs(
-            ghalogs_source_path,
-            output_path,
-            logchunks_input_path=logchunks_source_path,
-            loghub_input_path=loghub_source_path,
-            max_ghalogs_members=max_ghalogs_members,
-            max_logchunks_examples=max_logchunks_examples,
-            max_loghub_files=max_loghub_files,
-        ),
-        hash_attrs={
-            "version": "v4",
-            "sample_only": True,
-            "ghalogs_source_path": ghalogs_source_path,
-            "logchunks_source_path": logchunks_source_path,
-            "loghub_source_path": loghub_source_path,
-            "max_ghalogs_members": max_ghalogs_members,
-            "max_logchunks_examples": max_logchunks_examples,
-            "max_loghub_files": max_loghub_files,
-            "split_policy": "97% train / 1% dev / 1% test / 1% issue_5093_holdout",
-            "source_content_fingerprints": {
-                source.source_label: source.fingerprint()
-                for source in SOURCE_INVENTORY
-                if source.source_label in {"ghalogs", "logchunks", "loghub"}
-            },
             "sanitization_rules": "gh token/aws key/secret kv/email/user path/internal gs path",
         },
     )

@@ -27,7 +27,7 @@
 
 ## Variant notes
 
-Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
+Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
@@ -52,7 +52,7 @@ The entrypoint job is CPU-only; `executor_main` inside it submits TPU sub-tasks 
 When template-copying `experiments/grug/base/` to a new variant, use the HTML diff tool to review changes:
 
 ```bash
-uv run python scripts/grug_dir_diff.py \
+uv run python scripts/ci/grug_dir_diff.py \
   experiments/grug/base \
   experiments/grug/<variant> \
   --out /tmp/grug-diff

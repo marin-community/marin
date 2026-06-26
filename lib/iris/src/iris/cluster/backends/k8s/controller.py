@@ -7,8 +7,6 @@ Manages the controller Deployment, Service, ConfigMap, RBAC, NodePools, and
 S3 credential Secrets. Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import logging
@@ -25,11 +23,15 @@ from rigging.timing import Deadline
 
 from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
+from iris.cluster.backends.k8s.tasks import (
+    IRIS_PRIORITY_CLASS_BATCH,
+    IRIS_PRIORITY_CLASS_INTERACTIVE,
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+)
 from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
-from iris.cluster.config_serde import config_to_dict
+from iris.cluster.config import ControllerVmConfig, CoreweavePlatformConfig, IrisClusterConfig, config_to_dict
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ _KUBECTL_TIMEOUT = 1800.0
 
 _CONTROLLER_CPU_REQUEST = "4"
 _CONTROLLER_MEMORY_REQUEST = "16Gi"
+_CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
+_CONTROLLER_STATE_PVC_SIZE = "50Gi"
 
 
 # S3-compatible endpoints that require virtual-hosted-style addressing where the
@@ -63,16 +67,17 @@ def _needs_virtual_host_addressing(endpoint_url: str) -> bool:
     return any(hostname == domain or hostname.endswith("." + domain) for domain in _VIRTUAL_HOST_ONLY_S3_DOMAINS)
 
 
-def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
+def configure_client_s3(config: IrisClusterConfig) -> None:
     """Configure S3 env vars for fsspec access on CoreWeave (R2 → AWS mapping).
 
     Maps R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY to their AWS equivalents and
     sets FSSPEC_S3 with the correct endpoint and addressing style. No-op if the
     config has no CoreWeave object storage endpoint.
     """
-    endpoint = config.platform.coreweave.object_storage_endpoint
-    if not endpoint:
+    coreweave = config.platform.coreweave
+    if coreweave is None or not coreweave.object_storage_endpoint:
         return
+    endpoint = coreweave.object_storage_endpoint
 
     r2_key = os.environ.get("R2_ACCESS_KEY_ID", "")
     r2_secret = os.environ.get("R2_SECRET_ACCESS_KEY", "")
@@ -121,19 +126,15 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
-    # `--fresh` wipes the controller's SQLite, so the new pod must NOT overlap
-    # with the OLD one — otherwise a job submitted in the rollout surge window
-    # lands on the OLD controller, then the NEW empty-DB controller deletes
-    # the runner pod as "stray" on its first reconcile (#5590). Setting
-    # `strategy.type: Recreate` here, combined with deleting the existing
-    # Deployment in start_controller (because SSA can't clear the
-    # API-server-defaulted rollingUpdate field), guarantees the old pod is
-    # gone before the new one starts. Non-fresh restarts omit `strategy` so
-    # the API server defaults to RollingUpdate and in-place upgrades stay
-    # zero-downtime.
+    # The controller SQLite DB lives on a PersistentVolumeClaim, so two
+    # controller pods must never mount the same local state dir at once. We
+    # guarantee that by tearing the old Deployment down and waiting for it to
+    # fully disappear before applying the new one (see start_controller); the
+    # Recreate strategy is belt-and-suspenders for any in-place apply path.
     deploy_spec: dict = {
         "replicas": 1,
         "selector": {"matchLabels": {"app": "iris-controller"}},
+        "strategy": {"type": "Recreate"},
         "template": {
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
@@ -190,13 +191,14 @@ def _build_controller_deployment(
                 ],
                 "volumes": [
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
-                    {"name": "local-state", "emptyDir": {}},
+                    {
+                        "name": "local-state",
+                        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+                    },
                 ],
             },
         },
     }
-    if fresh:
-        deploy_spec["strategy"] = {"type": "Recreate"}
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -206,6 +208,23 @@ def _build_controller_deployment(
             "labels": {"app": "iris-controller"},
         },
         "spec": deploy_spec,
+    }
+
+
+def _build_controller_state_pvc(*, namespace: str) -> dict:
+    """Build the PVC that stores the controller SQLite state."""
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": _CONTROLLER_STATE_PVC_NAME,
+            "namespace": namespace,
+            "labels": {"app": "iris-controller"},
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": _CONTROLLER_STATE_PVC_SIZE}},
+        },
     }
 
 
@@ -223,7 +242,7 @@ class K8sControllerProvider:
 
     def __init__(
         self,
-        config: config_pb2.CoreweavePlatformConfig,
+        config: CoreweavePlatformConfig,
         label_prefix: str,
         poll_interval: float = _DEFAULT_POLL_INTERVAL,
         kubectl: K8sService | None = None,
@@ -264,13 +283,13 @@ class K8sControllerProvider:
 
     # -- ControllerProvider protocol methods -----------------------------------
 
-    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         cw = controller_config.coreweave
         service_name = cw.service_name or "iris-controller-svc"
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
 
         Fully idempotent: always applies ConfigMap, Deployment, and Service
@@ -314,6 +333,9 @@ class K8sControllerProvider:
 
         self.ensure_nodepools(config)
         self.ensure_kueue_queues(config)
+        self.ensure_priority_classes()
+        self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
+        logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
         deploy_manifest = _build_controller_deployment(
             namespace=self._namespace,
@@ -323,18 +345,17 @@ class K8sControllerProvider:
             task_env_secret=projects_task_env_secret(config),
             fresh=fresh,
         )
-        if fresh:
-            # SSA preserves the API-server-defaulted spec.strategy.rollingUpdate
-            # field, so an apply that switches type to Recreate fails validation
-            # ("rollingUpdate may not be specified when type is Recreate").
-            # Delete the existing Deployment first and wait for it to be gone
-            # so the apply creates a fresh object with no leftover strategy
-            # fields. This also enforces no-overlap with the OLD controller
-            # pod, avoiding the stray-pod race in #5590.
-            self._delete_controller_deployment_and_wait()
+        # Always stop the old controller before starting the new one. The
+        # SQLite state PVC is ReadWriteOnce and a rolling update could briefly
+        # mount it from two pods on the same node, corrupting the DB. Iris
+        # restarts are fast and clients tolerate a short controller outage, so a
+        # clean stop/start is simpler and safer than any overlap-avoidance hack.
+        # The PVC is intentionally retained across the restart so the new
+        # controller reuses the local DB (a --fresh controller wipes its DB
+        # directory itself after starting).
+        self._delete_controller_deployment_and_wait()
         self._kubectl.apply_json(deploy_manifest)
-        self._kubectl.rollout_restart(K8sResource.DEPLOYMENTS, "iris-controller")
-        logger.info("Controller Deployment iris-controller applied (rollout restarted)")
+        logger.info("Controller Deployment iris-controller applied")
 
         svc_manifest = {
             "apiVersion": "v1",
@@ -366,24 +387,29 @@ class K8sControllerProvider:
 
         return self.discover_controller(config.controller)
 
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         return self.start_controller(config)
 
     def _delete_controller_deployment_and_wait(self) -> None:
-        """Delete the controller Deployment and wait until it's fully gone."""
+        """Wait for the old controller to completely be stopped so we can reuse the PV."""
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
         deadline = Deadline.from_seconds(_DEPLOYMENT_DELETE_TIMEOUT)
         while not self._shutdown_event.is_set():
-            if self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None:
-                logger.info("Controller Deployment iris-controller deleted")
+            deployment_gone = self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+            pods = self._kubectl.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
+            if deployment_gone and not pods:
+                logger.info("Controller Deployment iris-controller and its Pods deleted")
                 return
             if deadline.expired():
+                pod_names = [p.get("metadata", {}).get("name", "") for p in pods]
                 raise InfraError(
-                    f"Controller Deployment iris-controller did not delete within {_DEPLOYMENT_DELETE_TIMEOUT}s"
+                    f"Controller Deployment iris-controller did not fully delete within "
+                    f"{_DEPLOYMENT_DELETE_TIMEOUT}s (deployment_gone={deployment_gone}, "
+                    f"pods still present: {pod_names})"
                 )
             self._shutdown_event.wait(self._poll_interval)
 
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+    def stop_controller(self, config: IrisClusterConfig) -> None:
         cw = config.controller.coreweave
         service_name = cw.service_name or "iris-controller-svc"
 
@@ -391,6 +417,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.SERVICES, service_name)
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
+        self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
         if self.uses_s3_storage(config) or config.defaults.inject_env:
             self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
 
@@ -401,7 +428,7 @@ class K8sControllerProvider:
 
     def stop_all(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
@@ -536,6 +563,13 @@ class K8sControllerProvider:
                     "resources": ["workloads"],
                     "verbs": ["get", "list", "watch", "delete"],
                 },
+                {
+                    # Iris creates iris-{production,interactive,batch} PriorityClass
+                    # objects at startup so pods can be stamped without manual setup.
+                    "apiGroups": ["scheduling.k8s.io"],
+                    "resources": ["priorityclasses"],
+                    "verbs": ["get", "create", "update", "patch", "delete"],
+                },
             ],
         }
 
@@ -560,7 +594,7 @@ class K8sControllerProvider:
 
     # -- Kueue ------------------------------------------------------------------
 
-    def ensure_kueue_queues(self, config: config_pb2.IrisClusterConfig) -> None:
+    def ensure_kueue_queues(self, config: IrisClusterConfig) -> None:
         """Reconcile the namespaced Kueue LocalQueue this cluster dispatches into.
 
         The Kueue operator, ClusterQueue, ResourceFlavor and Topology CRs are
@@ -583,6 +617,45 @@ class K8sControllerProvider:
         self._kubectl.apply_json(manifest)
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
+    def ensure_priority_classes(self) -> None:
+        """Create or update the iris-{production,interactive,batch} PriorityClass objects.
+
+        PriorityClass is cluster-scoped. Iris owns these three names; any cluster
+        running Iris gets them so pods are stamped without manual admin setup.
+
+        Priority values:
+          iris-production  1000  — preempts interactive/batch; never preempted
+          iris-interactive   10  — normal user work
+          iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
+        """
+        priority_classes = [
+            (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
+            (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
+            (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
+        ]
+        for name, value, preemption_policy in priority_classes:
+            manifest = {
+                "apiVersion": "scheduling.k8s.io/v1",
+                "kind": "PriorityClass",
+                "metadata": {"name": name},
+                "value": value,
+                "preemptionPolicy": preemption_policy,
+                "globalDefault": False,
+                "description": f"Iris {name.removeprefix('iris-')} priority band",
+            }
+            existing = self._kubectl.get_json(K8sResource.PRIORITY_CLASSES, name)
+            if existing and (existing.get("value") != value or existing.get("preemptionPolicy") != preemption_policy):
+                # PriorityClass.value and preemptionPolicy are immutable. Existing
+                # pods keep their admitted numeric priority after the class is
+                # deleted, and new pods resolve the recreated class.
+                logger.info("Replacing immutable PriorityClass %s", name)
+                self._kubectl.delete(K8sResource.PRIORITY_CLASSES, name)
+            self._kubectl.apply_json(manifest)
+        logger.info(
+            "PriorityClasses applied: %s",
+            ", ".join(n for n, _, _ in priority_classes),
+        )
+
     # -- NodePool Management ---------------------------------------------------
 
     def _resource_labels(self, scale_group: str) -> dict[str, str]:
@@ -595,7 +668,7 @@ class K8sControllerProvider:
         # NodePool metadata.name must be a valid RFC 1123 subdomain (lowercase alphanumeric, '-', '.')
         return f"{self._label_prefix}-{scale_group}".replace("_", "-").lower()
 
-    def ensure_nodepools(self, config: config_pb2.IrisClusterConfig) -> None:
+    def ensure_nodepools(self, config: IrisClusterConfig) -> None:
         """Create shared NodePools for all scale groups and delete stale ones.
 
         Idempotent. After creating/verifying expected NodePools, any managed
@@ -696,7 +769,7 @@ class K8sControllerProvider:
 
     # -- Storage Detection ----------------------------------------------------
 
-    def uses_s3_storage(self, config: config_pb2.IrisClusterConfig) -> bool:
+    def uses_s3_storage(self, config: IrisClusterConfig) -> bool:
         """Check if any storage URI uses S3."""
         return config.storage.remote_state_dir.startswith("s3://")
 
@@ -912,7 +985,7 @@ class K8sControllerProvider:
 
     # -- Internal helpers ------------------------------------------------------
 
-    def _config_json_for_configmap(self, config: config_pb2.IrisClusterConfig) -> str:
+    def _config_json_for_configmap(self, config: IrisClusterConfig) -> str:
         """Serialize cluster config to JSON for the in-cluster ConfigMap."""
         config_dict = config_to_dict(config)
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})

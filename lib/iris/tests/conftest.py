@@ -18,9 +18,19 @@ from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
 from iris.client.local_client import make_local_client
-from iris.cluster.config import load_config, make_local_config
+from iris.cluster.config import (
+    AuthConfig,
+    IrisClusterConfig,
+    LocalSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    StaticAuthConfig,
+    load_config,
+    make_local_config,
+)
+from iris.cluster.types import AcceleratorType, CapacityType
 from iris.managed_thread import thread_container_scope
-from iris.rpc import config_pb2
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -37,7 +47,7 @@ def embedded_log_server(tmp_path):
     buffer never flushes to a readable segment — written logs would never be
     queryable; a disk-backed store serves reads.) Function-scoped so every test
     gets an isolated store. Tests talk to it over the normal RPC contract via
-    ``finelog.client.LogClient`` or ``finelog.client.proxy.LogServiceProxy``
+    ``finelog.client.LogClient`` or the generated ``LogServiceClientSync``
     against ``embedded_log_server.address``. Skips when the native extension is
     unavailable (e.g. a pure-Python install).
     """
@@ -60,21 +70,28 @@ def log_client(embedded_log_server):
         client.close()
 
 
-def _make_controller_only_config() -> config_pb2.IrisClusterConfig:
+def _make_controller_only_config() -> IrisClusterConfig:
     """Build a local config with no auto-scaled workers."""
     config = load_config(DEFAULT_CONFIG)
-    config.scale_groups.clear()
-    sg = config.scale_groups["placeholder"]
-    sg.name = "placeholder"
-    sg.num_vms = 1
-    sg.buffer_slices = 0
-    sg.max_slices = 0
-    sg.resources.cpu_millicores = 1000
-    sg.resources.memory_bytes = 1 * 1024**3
-    sg.resources.disk_bytes = 10 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.local.SetInParent()
+    config.scale_groups = {
+        "placeholder": ScaleGroupConfig(
+            name="placeholder",
+            num_vms=1,
+            buffer_slices=0,
+            max_slices=0,
+            resources=ScaleGroupResources(
+                cpu_millicores=1000,
+                memory_bytes=1 * 1024**3,
+                disk_bytes=10 * 1024**3,
+                device_type=AcceleratorType.CPU,
+                capacity_type=CapacityType.ON_DEMAND,
+            ),
+            slice_template=SliceConfig(local=LocalSliceConfig()),
+        )
+    }
+    # Provide an empty static-auth block so auth tests can populate tokens
+    # (config.auth.static.tokens[...]) the way the proto config auto-vivified.
+    config.auth = AuthConfig(static=StaticAuthConfig())
     return make_local_config(config)
 
 
@@ -164,10 +181,10 @@ def _thread_cleanup(request):
     """Isolate each test's managed threads and warn on leaks.
 
     Installs a fresh ThreadContainer via thread_container_scope() so every
-    component that calls get_thread_container() (e.g. Controller._start_local_log_server)
-    registers its threads into a per-test container that is stopped on teardown.
-    This ensures log-server uvicorn threads and other managed threads are joined
-    even when a test constructs a Controller without calling stop().
+    component that calls get_thread_container() registers its threads into a
+    per-test container that is stopped on teardown. This ensures log-server
+    uvicorn threads and other managed threads are joined even when a test
+    constructs a Controller without calling stop().
 
     As a safety net, takes a snapshot of threads before the test and warns
     about any non-daemon threads created outside any container that survive

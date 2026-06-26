@@ -5,9 +5,10 @@
 """Switch the native (maturin) packages between dev mode (source build) and
 user mode (pre-built wheel).
 
-Covers marin-dupekit and the finelog pair (pure marin-finelog + native
-marin-finelog-server). Operates on each target pyproject.toml by replacing the
-block between RUST-DEV markers:
+Covers the native packages marin-dupekit and marin-finelog-server. The
+pure-Python marin-finelog client is a permanent workspace member (always built
+from source, see the root pyproject), so it is not toggled here. Operates on
+each target pyproject.toml by replacing the block between RUST-DEV markers:
     # ### BEGIN RUST-DEV SOURCES ###
     ...
     # ### END RUST-DEV SOURCES ###
@@ -29,17 +30,17 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-# Path sources injected in dev mode, per pyproject. The Python packages are
-# editable so source edits land without reinstalling; marin-finelog-server is a
-# plain path source — its [tool.uv] cache-keys cover the Rust sources, so
-# `uv sync` rebuilds the extension when they change.
+# Path sources injected in dev mode, per pyproject. marin-dupekit is editable so
+# source edits land without reinstalling; marin-finelog-server is a plain path
+# source — its [tool.uv] cache-keys cover the Rust sources, so `uv sync` rebuilds
+# the extension when they change. The pure marin-finelog client is omitted: it is
+# a permanent workspace member and always resolves from source.
 TARGETS = [
     (
         pathlib.Path("pyproject.toml"),
         "\n".join(
             [
                 'marin-dupekit = { path = "lib/dupekit", editable = true }',
-                'marin-finelog = { path = "lib/finelog", editable = true }',
                 'marin-finelog-server = { path = "lib/finelog/rust" }',
             ]
         ),

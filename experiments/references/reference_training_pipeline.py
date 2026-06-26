@@ -25,7 +25,7 @@ from experiments.defaults import default_validation_sets
 from experiments.grug.base.launch import GrugBaseLaunchConfig, train_grug
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino

@@ -15,6 +15,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
@@ -112,7 +113,7 @@ class RemoteClusterClient:
         # adds no RPC for CLI calls that never touch logs.
         self._log_client = LogClient.connect(
             LOG_SERVER_ENDPOINT_NAME,
-            resolver=self._resolve_endpoint,
+            resolver=self.resolve_endpoint,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -134,11 +135,11 @@ class RemoteClusterClient:
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
         timeout: Duration | None = None,
-        reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -165,6 +166,7 @@ class RemoteClusterClient:
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
             priority_band=priority_band,
+            container_profile=container_profile,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
@@ -182,8 +184,6 @@ class RemoteClusterClient:
             request.timeout.CopyFrom(duration_to_proto(timeout))
         if coscheduling is not None:
             request.coscheduling.CopyFrom(coscheduling)
-        if reservation is not None:
-            request.reservation.CopyFrom(reservation)
 
         launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
 
@@ -405,16 +405,16 @@ class RemoteClusterClient:
 
         return call_with_retry("list_endpoints", _call)
 
-    def _resolve_endpoint(self, endpoint_name: str) -> str:
+    def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
 
         When ``use_controller_proxy`` is set (external clients), returns the
-        controller address so RPCs flow through its proxies; otherwise looks
+        endpoint's path under the controller's generic proxy; otherwise looks
         the name up in the controller's endpoint registry and returns the
         backing service's direct address.
         """
         if self._use_controller_proxy:
-            return self._address
+            return f"{self._address.rstrip('/')}{proxy_path(endpoint_name)}"
         endpoints = self.list_endpoints(endpoint_name, exact=True)
         if not endpoints:
             raise ConnectionError(f"No {endpoint_name!r} endpoint registered on controller")
@@ -506,6 +506,25 @@ class RemoteClusterClient:
             return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)
+
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override)."""
+
+        def _call():
+            request = controller_pb2.Controller.KickTasksRequest(
+                targets=targets,
+                desired_state=desired_state,
+                reason=reason,
+            )
+            response = self._client.kick_tasks(request)
+            return list(response.results)
+
+        return call_with_retry(f"kick_tasks({', '.join(targets)})", _call)
 
     def fetch_logs(
         self,

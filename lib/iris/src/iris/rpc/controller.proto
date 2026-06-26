@@ -85,8 +85,11 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // Resource reservation. When set, the autoscaler pre-provisions capacity
-    // and the reserving job is held pending until the reservation is satisfied.
+    // DEPRECATED, back-compat only. Reservations were replaced by the hard
+    // availability:<variant> constraint. Current clients leave this empty; when a
+    // pre-availability client sets it, the server converts each entry into a hard
+    // availability constraint at ingestion and discards the field. Scheduled for
+    // removal once stragglers have upgraded — do not add new uses.
     iris.job.ReservationConfig reservation = 30;
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;
@@ -113,6 +116,11 @@ message Controller {
     // Nested submissions (is_root == false) are exempt. Empty string is
     // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
     string client_revision_date = 36;
+
+    // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
+    iris.job.ContainerProfile container_profile = 37;
   }
 
   message LaunchJobResponse {
@@ -222,6 +230,35 @@ message Controller {
 
   message ListTasksResponse {
     repeated iris.job.TaskStatus tasks = 1;
+  }
+
+  // --- Task administrative overrides ---
+  // KickTasks forces task attempts into a terminal state out-of-band, for
+  // emergencies such as a scheduling bug wedging a task on a machine. The
+  // controller queues each kick and applies it through the normal reconcile
+  // finalization on the next control tick, so it shares one write transaction
+  // with the scheduler instead of racing it.
+  message KickTasksRequest {
+    // Task, task-attempt, or job identifiers. A task id (/user/job/0) or
+    // task-attempt id (/user/job/0:3) targets a single task; a job id
+    // (/user/job) expands to that job's active tasks. The optional ":attempt"
+    // suffix is honored only when it matches the task's current attempt.
+    repeated string targets = 1;
+    // Terminal state to force. Only TASK_STATE_PREEMPTED (retried if budget
+    // remains) and TASK_STATE_FAILED (no retry) are accepted.
+    iris.job.TaskState desired_state = 2;
+    string reason = 3;
+  }
+
+  message KickResult {
+    string target = 1;   // The requested target, verbatim.
+    string task_id = 2;  // Resolved task id, when the target was understood.
+    bool queued = 3;     // True if the kick was accepted and queued.
+    string detail = 4;   // Rejection reason when queued is false.
+  }
+
+  message KickTasksResponse {
+    repeated KickResult results = 1;
   }
 
   // --- Exec in Container (proxied to worker) ---
@@ -336,6 +373,7 @@ message Controller {
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
     bool exact = 2;                  // If true, match prefix as an exact name instead
+    repeated string task_ids = 3;    // Wire-format task IDs; when set, only endpoints registered by these tasks are returned (ANDed with prefix/exact).
   }
 
   message ListEndpointsResponse {
@@ -536,6 +574,8 @@ service ControllerService {
   // Task operations
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+  // Force task attempts into a terminal state out-of-band (emergency override).
+  rpc KickTasks(Controller.KickTasksRequest) returns (Controller.KickTasksResponse);
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);

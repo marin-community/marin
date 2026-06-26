@@ -28,8 +28,6 @@ independent so the pipeline is fully resumable across preemptions
 survive a restart).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed

@@ -37,15 +37,12 @@ def _build_multi_root_descendants_stmt():
     """Build a single recursive CTE walking descendants from many roots.
 
     Seeds with all roots (each row carries its own ``root_id``) and walks down
-    via ``parent_job_id``. Returns ``(root_id, descendant_id, is_holder)``
-    triples so a single statement covers both the full and the
-    ``exclude_holders`` views.
+    via ``parent_job_id``. Returns ``(root_id, descendant_id)`` pairs.
     """
     j_seed = jobs_table.alias("j_seed")
     base_q = select(
         j_seed.c.job_id.label("root_id"),
         j_seed.c.job_id.label("descendant_id"),
-        j_seed.c.is_reservation_holder.label("is_holder"),
     ).where(j_seed.c.job_id.in_(bindparam("root_ids", expanding=True)))
     subtree = base_q.cte("subtree", recursive=True)
 
@@ -53,12 +50,11 @@ def _build_multi_root_descendants_stmt():
     recursive_q = select(
         subtree.c.root_id,
         j_child.c.job_id.label("descendant_id"),
-        j_child.c.is_reservation_holder.label("is_holder"),
     ).join(subtree, j_child.c.parent_job_id == subtree.c.descendant_id)
     full = subtree.union_all(recursive_q)
     # Drop the seed rows themselves (root_id == descendant_id) — callers only
     # want strict descendants.
-    return select(full.c.root_id, full.c.descendant_id, full.c.is_holder).where(full.c.root_id != full.c.descendant_id)
+    return select(full.c.root_id, full.c.descendant_id).where(full.c.root_id != full.c.descendant_id)
 
 
 _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
@@ -67,25 +63,20 @@ _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
 def _load_descendants_multi(cur: Tx, root_ids: Iterable[JobName]) -> dict[JobName, JobDescendants]:
     """Load descendants for all ``root_ids`` in one recursive-CTE query.
 
-    Returns a :class:`JobDescendants` per root, with both the full and the
-    ``exclude_holders`` views derived from a single ``(root_id, descendant_id,
-    is_holder)`` result set.
+    Returns a :class:`JobDescendants` per root from a single ``(root_id,
+    descendant_id)`` result set.
     """
     ids = list(root_ids)
     if not ids:
         return {}
     rows = cur.execute(_MULTI_ROOT_DESCENDANTS_STMT, {"root_ids": ids}).all()
     full_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
-    no_holders_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
     for row in rows:
         full_by_root.setdefault(row.root_id, []).append(row.descendant_id)
-        if not row.is_holder:
-            no_holders_by_root.setdefault(row.root_id, []).append(row.descendant_id)
     return {
         root_id: JobDescendants(
             job_id=root_id,
-            descendants_full=tuple(full_by_root.get(root_id, ())),
-            descendants_no_holders=tuple(no_holders_by_root.get(root_id, ())),
+            descendants=tuple(full_by_root.get(root_id, ())),
         )
         for root_id in ids
     }
@@ -269,7 +260,7 @@ def load_closed_snapshot(
     job_set: set[JobName] = set(seed_job_ids)
     if job_set:
         for desc in _load_descendants_multi(cur, job_set).values():
-            job_set.update(desc.descendants_full)
+            job_set.update(desc.descendants)
         for rows in _load_all_tasks_for_jobs(cur, job_set).values():
             seed_task_set.update(row.task_id for row in rows)
 
@@ -287,7 +278,7 @@ def load_closed_snapshot(
     job_set.update(task.job_id for task in tasks.values())
     job_descendants = _load_descendants_multi(cur, job_set)
     for desc in job_descendants.values():
-        job_set.update(desc.descendants_full)
+        job_set.update(desc.descendants)
 
     # Re-walk so descendants pulled in above also expose their own subtrees as
     # cascade sources, then close the per-job relations over the full set.

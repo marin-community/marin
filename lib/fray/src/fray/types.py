@@ -9,8 +9,6 @@ ResourceConfig to JobRequest (it's a job-level gang-scheduling concern,
 not a per-task resource requirement).
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -311,6 +309,13 @@ class TpuConfig:
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
 
 
+# Sentinel region value meaning ANY: run anywhere; do NOT inherit the parent job's region.
+# Distinct from ``None`` (UNSET — inherit) and a concrete region list (PINNED). Pass it as the
+# sole element of ``ResourceConfig.regions`` (``regions=[ANY_REGION]``). Not a real region, so
+# it never collides with a GCP region name.
+ANY_REGION = "*"
+
+
 @dataclass
 class ResourceConfig:
     """Resource requirements for a single task/replica.
@@ -332,6 +337,9 @@ class ResourceConfig:
     disk: str = "16g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     preemptible: bool = True
+    # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a
+    # region list) restricts to those regions; ANY ([ANY_REGION]) runs anywhere without
+    # inheriting.
     regions: Sequence[str] | None = None
     zone: str | None = None
     replicas: int = 1
@@ -351,7 +359,7 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> "ResourceConfig":
         """Create a resource config for TPU(s).
 
         When ``tpu_type`` is a list, the first entry is canonical (used for
@@ -393,12 +401,12 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> "ResourceConfig":
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu(**kwargs: Any) -> ResourceConfig:
+    def with_cpu(**kwargs: Any) -> "ResourceConfig":
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
@@ -443,6 +451,11 @@ class EnvironmentConfig:
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
         extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
+        setup_scripts: Setup scripts run in order before the command. ``None``
+            builds the default uv-sync script; a list runs verbatim (``[]`` => no
+            setup, image used as-is). Either way iris appends its own runtime-deps
+            script. Build the default and tweak it via ``fray.default_setup_script``.
+        sync_packages: Workspace members the default sync targets (default: all).
     """
 
     workspace: str | None = None
@@ -450,6 +463,8 @@ class EnvironmentConfig:
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
     extras: Sequence[str] = field(default_factory=list)
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.workspace and self.docker_image:
@@ -464,6 +479,8 @@ def create_environment(
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
     extras: Sequence[str] | None = None,
+    setup_scripts: Sequence[str] | None = None,
+    sync_packages: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
     """Create an EnvironmentConfig with sensible defaults.
 
@@ -489,6 +506,8 @@ def create_environment(
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
         extras=list(extras or []),
+        setup_scripts=setup_scripts,
+        sync_packages=list(sync_packages or []),
     )
 
 
@@ -520,11 +539,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Entrypoint:
+    ) -> "Entrypoint":
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
+    def from_binary(command: str, args: Sequence[str]) -> "Entrypoint":
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -574,5 +593,5 @@ class JobStatus(StrEnum):
     STOPPED = "stopped"
 
     @staticmethod
-    def finished(status: JobStatus) -> bool:
+    def finished(status: "JobStatus") -> bool:
         return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)

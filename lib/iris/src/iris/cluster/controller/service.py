@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -20,6 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
+from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
@@ -49,7 +51,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
     worker_metadata_to_proto,
 )
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -59,6 +61,7 @@ from iris.cluster.controller.projections.endpoints import (
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
+from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -90,14 +93,13 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.auth import (
-    AuthzAction,
-    authorize,
-    authorize_resource_owner,
-    get_verified_identity,
-    require_identity,
+from iris.rpc.auth import AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.proto_display import (
+    job_state_friendly,
+    priority_band_name,
+    resolve_container_profile,
+    task_state_friendly,
 )
-from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -199,6 +201,13 @@ USER_JOB_STATES = (
     job_pb2.JOB_STATE_WORKER_FAILED,
     job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
+
+# Terminal states KickTasks can force, mapped to the reconcile kernel's
+# terminal-transition kind. PREEMPTED retries if budget remains; FAILED does not.
+_KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
+    job_pb2.TASK_STATE_PREEMPTED: TerminalKind.PREEMPT,
+    job_pb2.TASK_STATE_FAILED: TerminalKind.TIMEOUT,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +317,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
+        failure_count=task.failure_count,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -318,8 +328,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
+        # current_attempt_id is the authoritative attempt index; len(attempts) now
+        # counts only the current + failed attempts attached for the list view.
         proto.pending_reason = (
-            f"Retrying (attempt {len(task.attempts)}, last: {job_pb2.TaskState.Name(last.state).lower()})"
+            f"Retrying (attempt {task.current_attempt_id + 1}, last: {job_pb2.TaskState.Name(last.state).lower()})"
         )
         proto.can_be_scheduled = True
     return proto
@@ -454,21 +466,32 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
-    """Load tasks for the list view, attaching only the current attempt.
+# Terminal failure states the list view attaches in addition to the current
+# attempt. PREEMPTED and COSCHED_FAILED are deliberately excluded: those are the
+# high-volume churn — capacity preemptions and gang-cancellation collateral —
+# that buries the genuine failures the dashboard wants to surface.
+_LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED)
 
-    The list UI only needs the current attempt's ``started_at_ms`` /
-    ``finished_at_ms`` and a single ``proto.attempts`` entry. Full history is
-    fetched separately by ``get_task_status``.
+
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
+    """Load tasks for the list view with their current and latest-failed attempts.
+
+    Each task carries its current attempt plus the most recent attempt in each
+    genuine-failure state (``_LISTING_FAILURE_STATES``), so a failure stays
+    visible after the task is retried back into a running/pending state. Only the
+    latest per state is attached, keeping the payload bounded for tasks with long
+    retry histories. Attempts are ascending by ``attempt_id`` so the current
+    attempt (the highest id) stays last.
     """
+    job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
             select(*reads.TASK_DETAIL_COLS)
             .where(tasks_table.c.job_id == job_id)
             .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
         ).all()
-        # Fetch only the current attempt for each task (task_index-ordered listing).
-        attempt_rows = tx.execute(
+        # Current attempt per task (composite-PK lookup, at most one row each).
+        current_attempt_rows = tx.execute(
             select(*reads.ATTEMPT_COLS).where(
                 tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                     select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
@@ -477,10 +500,36 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
                 )
             )
         ).all()
-    attempts_by_task: dict[JobName, list] = {}
-    for a in attempt_rows:
-        attempts_by_task.setdefault(a.task_id, []).append(a)
-    return [TaskWithAttempts.from_row(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
+        # Highest failed attempt_id per (task, failure-state). One aggregate scan
+        # of this job's failed attempts, then a PK join back to the full rows —
+        # bounded to <= 2 rows per task no matter how deep the retry history runs.
+        latest_failed = (
+            select(
+                task_attempts_table.c.task_id.label("task_id"),
+                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+            )
+            .where(
+                task_attempts_table.c.task_id.in_(job_task_ids),
+                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+            )
+            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+            .subquery()
+        )
+        failed_attempt_rows = tx.execute(
+            select(*reads.ATTEMPT_COLS).join(
+                latest_failed,
+                (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+            )
+        ).all()
+    # Merge, deduping the current attempt when it is itself a failure.
+    attempts_by_task: dict[JobName, dict[int, Any]] = {}
+    for a in (*current_attempt_rows, *failed_attempt_rows):
+        attempts_by_task.setdefault(a.task_id, {})[a.attempt_id] = a
+    return [
+        TaskWithAttempts.from_row(r, tuple(a for _, a in sorted(attempts_by_task.get(r.task_id, {}).items())))
+        for r in task_rows
+    ]
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -845,6 +894,7 @@ class AutoscalerProtocol(Protocol):
         constraints: list[Constraint],
         *,
         replicas: int | None = None,
+        resources: job_pb2.ResourceSpecProto | None = None,
     ) -> str | None:
         """Check if a job can ever be scheduled. Returns error message or None."""
         ...
@@ -854,10 +904,28 @@ class AutoscalerProtocol(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class PendingKick:
+    """A queued administrative task kick.
+
+    ``attempt_id`` is the targeted attempt, or ``None`` to take whatever attempt
+    is current when the kick is applied.
+    """
+
+    task_id: JobName
+    attempt_id: int | None
+    kind: TerminalKind
+    reason: str
+
+
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
+
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
+
+    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -877,6 +945,14 @@ class ControllerProtocol(Protocol):
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
+
+
+def _profile_is_elevated(profile: int) -> bool:
+    """Whether a container profile is host-root-equivalent and so requires admin."""
+    return resolve_container_profile(profile) in (
+        job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+        job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    )
 
 
 def _inject_resource_constraints(
@@ -1085,6 +1161,33 @@ class ControllerServiceImpl:
                     f"registered correctly.",
                 )
 
+        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
+        # and require the admin role. The check only runs when an auth provider is
+        # configured; a trusted-loopback caller resolves to admin.
+        if _profile_is_elevated(request.container_profile):
+            if self._auth.provider:
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            logger.info(
+                "Job %s using elevated container profile %s",
+                job_id.to_wire(),
+                job_pb2.ContainerProfile.Name(request.container_profile),
+            )
+
+        # DOCKER_ACCESS mounts the host docker socket, which only the docker
+        # worker backend has. Reject it at submit on a cluster backend (k8s nodes
+        # run containerd, no host socket) so the job never lands — the k8s
+        # manifest builder would otherwise raise mid-reconcile and stall dispatch.
+        if (
+            resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+            and BackendCapability.WORKER_DAEMON not in self._controller.capabilities
+        ):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile docker_access requires the docker worker backend (it mounts the "
+                "host docker socket); this cluster's backend does not support it. Use a privileged "
+                "profile with an in-pod runtime, or submit to a docker-worker cluster.",
+            )
+
         # Cap the number of non-terminal tasks a single user may hold at once.
         # A burst of eval submissions once materialized enough tasks to OOM the
         # controller (#6411); reject up front any submission that would push the
@@ -1254,6 +1357,7 @@ class ControllerServiceImpl:
             error = autoscaler.job_feasibility(
                 constraints=constraints,
                 replicas=replicas,
+                resources=request.resources,
             )
             if error:
                 raise ConnectError(
@@ -1577,6 +1681,100 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.ListTasksResponse(tasks=task_statuses)
 
+    def kick_tasks(
+        self,
+        request: controller_pb2.Controller.KickTasksRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Force task attempts into a terminal state out-of-band (emergency override).
+
+        Validates each target against the current snapshot and queues the accepted
+        ones on the controller for the next control tick to apply. Returns one
+        ``KickResult`` per resolved task reporting whether it was queued.
+        """
+        kind = _KICK_KIND_BY_STATE.get(request.desired_state)
+        if kind is None:
+            allowed = ", ".join(task_state_friendly(state) for state in _KICK_KIND_BY_STATE)
+            raise ConnectError(Code.INVALID_ARGUMENT, f"desired_state must be one of: {allowed}")
+        if not request.targets:
+            raise ConnectError(Code.INVALID_ARGUMENT, "at least one target is required")
+
+        reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
+
+        results: list[controller_pb2.Controller.KickResult] = []
+        kicks: list[PendingKick] = []
+        with self._db.read_snapshot() as tx:
+            for target in request.targets:
+                self._resolve_kick_target(tx, target, kind, reason, kicks, results)
+
+        self._controller.request_task_kicks(kicks)
+        return controller_pb2.Controller.KickTasksResponse(results=results)
+
+    def _resolve_kick_target(
+        self,
+        tx: Tx,
+        target: str,
+        kind: TerminalKind,
+        reason: str,
+        kicks: list[PendingKick],
+        results: list[controller_pb2.Controller.KickResult],
+    ) -> None:
+        """Validate one kick target, appending its queued kicks and result rows.
+
+        A task or task-attempt id targets a single task; a job id expands to the
+        job's active tasks. Only tasks running on a worker (ASSIGNED / BUILDING /
+        RUNNING) can be kicked; anything else is rejected with a reason.
+        """
+
+        def reject(detail: str, *, task_id: str = "") -> None:
+            results.append(
+                controller_pb2.Controller.KickResult(target=target, task_id=task_id, queued=False, detail=detail)
+            )
+
+        try:
+            task_attempt = TaskAttempt.from_wire(target)
+        except ValueError as exc:
+            reject(str(exc))
+            return
+
+        name = task_attempt.task_id
+        self._authorize_job_owner(name)
+
+        if name.is_task:
+            detail = reads.get_task_detail(tx, name)
+            if detail is None:
+                reject("task not found")
+                return
+            if task_attempt.attempt_id is not None and task_attempt.attempt_id != detail.current_attempt_id:
+                reject(
+                    f"attempt {task_attempt.attempt_id} is not current (current is {detail.current_attempt_id})",
+                    task_id=name.to_wire(),
+                )
+                return
+            if detail.state not in ACTIVE_TASK_STATES:
+                reject(f"task is {task_state_friendly(detail.state)}, not running on a worker", task_id=name.to_wire())
+                return
+            kicks.append(PendingKick(task_id=name, attempt_id=task_attempt.attempt_id, kind=kind, reason=reason))
+            results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
+            return
+
+        # Job target: expand to its active tasks.
+        if task_attempt.attempt_id is not None:
+            reject("a job target cannot carry an ':attempt' suffix")
+            return
+        if reads.get_job_state(tx, name) is None:
+            reject("job not found")
+            return
+        active = reads.list_active_tasks(tx, reads.TaskScope(job_id=name), states=ACTIVE_TASK_STATES)
+        if not active:
+            reject("job has no tasks running on a worker", task_id=name.to_wire())
+            return
+        for row in active:
+            kicks.append(PendingKick(task_id=row.task_id, attempt_id=None, kind=kind, reason=reason))
+            results.append(
+                controller_pb2.Controller.KickResult(target=target, task_id=row.task_id.to_wire(), queued=True)
+            )
+
     # --- Worker Management ---
 
     def register(
@@ -1611,11 +1809,31 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
+        self._request_recycled_address_eviction(worker_id, request.address)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
+
+    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
+        """Hand any stale prior owner of ``address`` to the controller for teardown.
+
+        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
+        and defers the reap to :meth:`Controller.request_worker_eviction`.
+        """
+        with self._db.read_snapshot() as snap:
+            stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
+        if not stale:
+            return
+        logger.warning(
+            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
+            worker_id,
+            address,
+            len(stale),
+            [str(wid) for wid in stale],
+        )
+        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,
@@ -1749,6 +1967,9 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix (or exact name when request.exact is set).
 
+        When ``request.task_ids`` is set, only endpoints registered by those
+        tasks are returned, ANDed with any prefix/exact match.
+
         System endpoints (names starting with ``/system/``) are resolved from
         an in-memory map rather than the DB.  This allows system services like
         the LogService to be discovered via the same API as job-scoped actors.
@@ -1761,6 +1982,7 @@ class ControllerServiceImpl:
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
+                task_ids=tuple(JobName.from_wire(t) for t in request.task_ids),
             ),
         )
         return controller_pb2.Controller.ListEndpointsResponse(

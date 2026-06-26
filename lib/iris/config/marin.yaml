@@ -190,7 +190,7 @@ scale_groups:
     slice_template:
       gcp:
         service_account: iris-worker@hai-gcp-models.iam.gserviceaccount.com
-        mode: GCP_SLICE_MODE_VM
+        mode: vm
         machine_type: n2-highmem-2
 
 # ---------------------------------------------------------------------------

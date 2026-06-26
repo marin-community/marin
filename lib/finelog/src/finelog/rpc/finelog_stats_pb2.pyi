@@ -26,15 +26,23 @@ COLUMN_TYPE_TIMESTAMP_MS: ColumnType
 COLUMN_TYPE_BYTES: ColumnType
 COLUMN_TYPE_INT32: ColumnType
 
+class ColumnIndex(_message.Message):
+    __slots__ = ("trigram",)
+    TRIGRAM_FIELD_NUMBER: _ClassVar[int]
+    trigram: bool
+    def __init__(self, trigram: _Optional[bool] = ...) -> None: ...
+
 class Column(_message.Message):
-    __slots__ = ("name", "type", "nullable")
+    __slots__ = ("name", "type", "nullable", "index")
     NAME_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     NULLABLE_FIELD_NUMBER: _ClassVar[int]
+    INDEX_FIELD_NUMBER: _ClassVar[int]
     name: str
     type: ColumnType
     nullable: bool
-    def __init__(self, name: _Optional[str] = ..., type: _Optional[_Union[ColumnType, str]] = ..., nullable: _Optional[bool] = ...) -> None: ...
+    index: ColumnIndex
+    def __init__(self, name: _Optional[str] = ..., type: _Optional[_Union[ColumnType, str]] = ..., nullable: _Optional[bool] = ..., index: _Optional[_Union[ColumnIndex, _Mapping]] = ...) -> None: ...
 
 class Schema(_message.Message):
     __slots__ = ("columns", "key_column")

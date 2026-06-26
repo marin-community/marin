@@ -38,8 +38,6 @@ score. Individual classifiers wire their own input discovery, output
 naming, hash_attrs, projection, and downstream artifact shape.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile

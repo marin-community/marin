@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.12"
 # dependencies = [
 #     "trafilatura>=2.0",
 #     "lxml[html_clean]>=5.3",
@@ -27,8 +27,6 @@ Run with::
 
     HF_TOKEN=... uv run tests/.../parser_variants/generate_quote_inclusion.py [--dry-run]
 """
-from __future__ import annotations
-
 import sys
 from collections.abc import Iterator
 from pathlib import Path

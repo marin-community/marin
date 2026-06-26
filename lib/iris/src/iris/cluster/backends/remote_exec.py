@@ -11,8 +11,6 @@ This module provides:
 - Utility functions for connection testing and streaming commands
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import subprocess
@@ -38,6 +36,20 @@ def _extend_gcloud_ssh_options(
     if impersonate_service_account:
         cmd.append(f"--impersonate-service-account={impersonate_service_account}")
     return cmd
+
+
+def _append_gcloud_ssh_command(cmd: list[str], command: str) -> list[str]:
+    """Append the non-interactive flags and remote command shared by gcloud SSH transports."""
+    cmd.extend(["--quiet", "--ssh-flag=-oBatchMode=yes", "--command", command])
+    return cmd
+
+
+def _run_subprocess(cmd: list[str], timeout: Duration) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout.to_seconds())
+
+
+def _popen_streaming(cmd: list[str]) -> subprocess.Popen:
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
 # ============================================================================
@@ -126,26 +138,13 @@ class GcloudRemoteExec:
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
         )
-        cmd.extend(
-            [
-                "--quiet",
-                "--ssh-flag=-oBatchMode=yes",
-                "--command",
-                command,
-            ]
-        )
-        return cmd
+        return _append_gcloud_ssh_command(cmd, command)
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_subprocess(self._build_cmd(command), timeout)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -188,26 +187,13 @@ class GceRemoteExec:
             ssh_key_file=self.ssh_key_file,
             impersonate_service_account=self.impersonate_service_account,
         )
-        cmd.extend(
-            [
-                "--quiet",
-                "--ssh-flag=-oBatchMode=yes",
-                "--command",
-                command,
-            ]
-        )
-        return cmd
+        return _append_gcloud_ssh_command(cmd, command)
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds())
+        return _run_subprocess(self._build_cmd(command), timeout)
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 @dataclass
@@ -256,15 +242,10 @@ class DirectSshRemoteExec:
 
     def run(self, command: str, timeout: Duration = Duration.from_seconds(30)) -> subprocess.CompletedProcess:
         # +5s buffer over the requested timeout so SSH's own ConnectTimeout fires first.
-        return subprocess.run(self._build_cmd(command), capture_output=True, text=True, timeout=timeout.to_seconds() + 5)
+        return _run_subprocess(self._build_cmd(command), Duration.from_seconds(timeout.to_seconds() + 5))
 
     def run_streaming(self, command: str) -> subprocess.Popen:
-        return subprocess.Popen(
-            self._build_cmd(command),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+        return _popen_streaming(self._build_cmd(command))
 
 
 # ============================================================================
@@ -346,6 +327,18 @@ SSH_MAX_RETRIES = 3
 
 SSH_RETRYABLE_EXIT_CODES = {255}  # SSH connection failures
 
+# gcloud caches credentials and impersonated tokens in a local SQLite database.
+# When many gcloud invocations run concurrently (e.g. a wide worker-restart
+# batch), that database can fail to acquire its lock and gcloud aborts with a
+# non-zero exit *before* the remote command runs. The remote host is healthy, so
+# treat this local-contention crash as retryable rather than a command failure.
+GCLOUD_TRANSIENT_CRASH_SIGNATURES = ("database is locked",)
+
+
+def _is_transient_gcloud_crash(output_lines: list[str]) -> bool:
+    tail = "\n".join(output_lines[-15:])
+    return any(signature in tail for signature in GCLOUD_TRANSIENT_CRASH_SIGNATURES)
+
 
 def run_streaming_with_retry(
     conn: RemoteExec,
@@ -383,6 +376,11 @@ def run_streaming_with_retry(
             if returncode in SSH_RETRYABLE_EXIT_CODES:
                 last_error = f"SSH exit code {returncode}"
                 logger.warning("SSH: Connection failed on attempt %d (exit code %d)", attempt + 1, returncode)
+            elif returncode != 0 and _is_transient_gcloud_crash(output_lines):
+                last_error = "gcloud crashed locally (transient credential 'database is locked')"
+                logger.warning(
+                    "SSH: transient gcloud crash on attempt %d (exit code %d); will retry", attempt + 1, returncode
+                )
             else:
                 return subprocess.CompletedProcess(proc.args, returncode, "\n".join(output_lines), "")
 

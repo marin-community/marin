@@ -3,8 +3,6 @@
 
 """Typed source manifests for small ingestion registries and sidecar metadata."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import posixpath
@@ -13,12 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import atomic_rename, open_url
-from typing_extensions import TypeAliasType
 
 from marin.utils import fsspec_mkdirs
 
 JsonScalar = str | int | float | bool | None
-JsonValue = TypeAliasType("JsonValue", JsonScalar | list["JsonValue"] | dict[str, "JsonValue"])
+type JsonValue = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 INGESTION_METADATA_SCHEMA_VERSION = 1
 
 

@@ -16,8 +16,6 @@ bodies or summary contents at INFO/WARN — the per-user counts are only safe
 inside the Discord message and the gist.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import json
 import logging
@@ -133,7 +131,7 @@ def main(hours: float, channel: str, dry_run: bool) -> None:
     large_users: dict[str, int] = summary.get("cross_region_large_users") or {}
     offenders = [(u, n) for u, n in large_users.items() if n >= LARGE_TIER_USER_THRESHOLD and u != "<unknown>"]
 
-    date = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+    date = dt.datetime.now(dt.UTC).strftime("%Y-%m-%d")
     description = f"Marin cross-region egress {date} ({hours:.0f}h window)"
 
     if dry_run:

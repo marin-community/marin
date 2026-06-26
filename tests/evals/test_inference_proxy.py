@@ -8,10 +8,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from typing import cast
 
 import httpx
+import marin.inference.vllm as vllm_module
 import pytest
+from fray.types import ResourceConfig
 from marin.inference.broker import InferenceBroker
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
@@ -29,6 +32,7 @@ from marin.inference.vllm import (
     BrokeredVllmSystemConfig,
     InferenceWorkerConfig,
     VllmProxyConfig,
+    start_iris_brokered_vllm,
     start_local_brokered_vllm,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
@@ -147,6 +151,58 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
     with pytest.raises(ValueError):
         with start_local_brokered_vllm(config):
             pass
+
+
+def test_iris_brokered_vllm_worker_env_defaults_tpu_build_settings(monkeypatch) -> None:
+    class _FakeJob:
+        job_id = "worker-0"
+
+        def terminate(self) -> None:
+            pass
+
+    class _FakeActorGroup:
+        def wait_ready(self, *, count: int, timeout: float):
+            assert count == 1
+            assert timeout > 0
+            return [object()]
+
+        def shutdown(self) -> None:
+            pass
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.submissions = []
+
+        def create_actor_group(self, *args, **kwargs):
+            return _FakeActorGroup()
+
+        def submit(self, job_request):
+            self.submissions.append(job_request)
+            return _FakeJob()
+
+    @contextmanager
+    def _fake_start_proxy(config, response_provider):
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1", model=config.model))
+
+    client = _FakeClient()
+    monkeypatch.setattr(vllm_module, "current_client", lambda: client)
+    monkeypatch.setattr(vllm_module, "get_job_info", lambda: SimpleNamespace(job_id="parent"))
+    monkeypatch.setattr(vllm_module, "_start_proxy", _fake_start_proxy)
+    monkeypatch.setattr(vllm_module, "_wait_for_brokered_vllm_ready", lambda *args, **kwargs: None)
+
+    config = BrokeredVllmSystemConfig(
+        model="gpt2",
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
+    )
+
+    with start_iris_brokered_vllm(config):
+        pass
+
+    [worker_request] = client.submissions
+    assert worker_request.environment.extras == ["tpu", "vllm"]
+    assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
+    assert worker_request.environment.env_vars["VLLM_TARGET_DEVICE"] == "tpu"
 
 
 def test_inference_proxy_forwards_completions_to_running_model(mock_cluster: MockInferenceCluster) -> None:

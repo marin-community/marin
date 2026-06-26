@@ -10,8 +10,6 @@ back to the controller, and surfaces the per-worker liveness it observed
 (REACHED / UNREACHABLE) as health events the controller folds.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading
@@ -19,8 +17,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
-from finelog.client.log_client import Table
-from finelog.types import LogWriterProtocol
 from rigging.timing import Duration
 
 from iris.chaos import chaos
@@ -48,11 +44,14 @@ from iris.rpc.worker_connect import WorkerServiceClient
 
 logger = logging.getLogger(__name__)
 
-# Per-worker RPC deadline applied to every fanned-out worker reconcile call.
-# Combined with the fan-out semaphore this bounds a full reconcile round at
-# ~DEFAULT_WORKER_RPC_TIMEOUT * ceil(num_workers / parallelism), so the control
-# thread is never blocked indefinitely even if the whole fleet is hung.
+# Per-worker RPC deadline for on-demand worker RPCs (profile_task, exec_in_container,
+# get_process_status) and the cached stub's fallback timeout.
 DEFAULT_WORKER_RPC_TIMEOUT = Duration.from_seconds(10.0)
+
+# Tighter per-worker deadline for the reconcile fan-out: a hung worker can't gate
+# the gather-joined round on the slow straggler, and a missed round never reaps a
+# worker (the reconcile-failure threshold is dozens of rounds).
+RECONCILE_RPC_TIMEOUT = Duration.from_seconds(3.0)
 
 # Max concurrent in-flight per-worker RPCs in a fan-out (asyncio.Semaphore width).
 # Kept >= fleet size so the whole fleet reconciles in one wave and a slow worker
@@ -144,9 +143,9 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
-    # The Iris autoscaler that provisions capacity for this backend. Attached by
-    # the controller's main() after construction (mirrors set_log_sink); None for
-    # clusters with no scale groups, where capacity calls are no-ops.
+    # The Iris autoscaler that provisions capacity for this backend, attached by
+    # the composer after it builds the autoscaler from the provider bundle; None
+    # for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
@@ -160,8 +159,17 @@ class RpcTaskBackend:
         self.autoscaler = autoscaler
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        """Run the Iris scheduling decision pipeline over the snapshot."""
-        return run_scheduling_decision(self._scheduler, snapshot)
+        """Run the Iris scheduling decision pipeline over the snapshot.
+
+        Reads the autoscaler's per-zone accelerator-capability map so the
+        scheduler can inject ``availability:<variant>`` markers onto workers and
+        confine a hard availability constraint to a capable zone. Clusters with no
+        autoscaler pass an empty map: no worker gets an availability marker, so a
+        job carrying an availability constraint there stays unschedulable (it has
+        no zone that can satisfy it).
+        """
+        zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
+        return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities)
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
@@ -264,14 +272,6 @@ class RpcTaskBackend:
         )
         return asyncio.run(stub.get_process_status(forwarded, timeout_ms=10000))
 
-    def set_log_sink(
-        self,
-        log_client: LogWriterProtocol,
-        task_stats_table: Table,
-        profile_table: Table,
-    ) -> None:
-        """No-op: worker daemons write their own log/resource/profile rows."""
-
     def profile_task(
         self,
         target: TaskTarget,
@@ -313,7 +313,9 @@ class RpcTaskBackend:
                     await asyncio.sleep(rule.delay_seconds)
                     raise ProviderError("chaos: controller.reconcile")
                 stub = self.stub_factory.get_stub(address)
-                response = await stub.reconcile(plan.request)
+                response = await asyncio.wait_for(
+                    stub.reconcile(plan.request), timeout=RECONCILE_RPC_TIMEOUT.to_seconds()
+                )
                 return WorkerReconcileResult(
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
@@ -322,7 +324,7 @@ class RpcTaskBackend:
                     responder_worker_id=response.worker_id or None,
                 )
             except Exception as e:
-                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))
+                return WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e) or type(e).__name__)
 
     def close(self) -> None:
         if self.autoscaler is not None:

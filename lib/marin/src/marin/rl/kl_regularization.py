@@ -3,7 +3,7 @@
 
 """KL regularization helpers for RL objectives.
 
-The ``k2``/``k3`` names follow the sampled-KL estimator shorthand introduced in
+The ``k1``/``k2``/``k3`` names follow the sampled-KL estimator shorthand introduced in
 John Schulman's "Approximating KL Divergence" and reused in recent RLHF
 analyses such as "A Comedy of Estimators" and "Rethinking KL Regularization in
 RLHF".
@@ -19,12 +19,13 @@ import jax.numpy as jnp
 class KLMode(StrEnum):
     """Supported trainer-side KL surrogates for the RL loss.
 
-    The ``k2``/``k3`` labels follow Schulman's sampled-KL estimator shorthand.
+    The ``k1``/``k2``/``k3`` labels follow Schulman's sampled-KL estimator shorthand.
     """
 
     NONE = "none"
-    K3_LOSS = "k3_loss"
+    K1_LOSS = "k1_loss"
     K2_LOSS = "k2_loss"
+    K3_LOSS = "k3_loss"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,11 @@ def token_log_ratio(current_logprobs: jax.Array, reference_logprobs: jax.Array) 
     return current_logprobs - reference_logprobs
 
 
+def k1_from_log_ratio(log_ratio: jax.Array) -> jax.Array:
+    """Return the signed ``k1`` KL estimator for sampled tokens."""
+    return log_ratio
+
+
 def k2_from_log_ratio(log_ratio: jax.Array) -> jax.Array:
     """Return the quadratic ``k2`` KL surrogate for sampled tokens."""
     return 0.5 * jnp.square(log_ratio)
@@ -76,6 +82,8 @@ def masked_response_mean(values: jax.Array, loss_masks: jax.Array) -> jax.Array:
 
 def kl_penalty_from_log_ratio(log_ratio: jax.Array, mode: KLMode) -> jax.Array:
     """Return the optimization penalty for the selected KL mode."""
+    if mode == KLMode.K1_LOSS:
+        return k1_from_log_ratio(log_ratio)
     if mode == KLMode.K2_LOSS:
         return k2_from_log_ratio(log_ratio)
     if mode == KLMode.K3_LOSS:
@@ -87,7 +95,7 @@ def kl_penalty_from_log_ratio(log_ratio: jax.Array, mode: KLMode) -> jax.Array:
 def kl_statistics_from_log_ratio(log_ratio: jax.Array, loss_masks: jax.Array) -> KLStatistics:
     """Return reported KL estimates over masked response tokens."""
     return KLStatistics(
-        k1_mean=masked_response_mean(log_ratio, loss_masks),
+        k1_mean=masked_response_mean(k1_from_log_ratio(log_ratio), loss_masks),
         k2_mean=masked_response_mean(k2_from_log_ratio(log_ratio), loss_masks),
         k3_mean=masked_response_mean(k3_from_log_ratio(log_ratio), loss_masks),
     )

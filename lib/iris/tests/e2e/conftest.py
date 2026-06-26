@@ -28,19 +28,30 @@ from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.chaos import reset_chaos
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import load_config, make_local_config
+from iris.cluster.config import (
+    IrisClusterConfig,
+    LocalSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    load_config,
+    make_local_config,
+)
 from iris.cluster.constraints import Constraint, WellKnownAttribute
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import (
+    AcceleratorType,
+    CapacityType,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
-    ReservationEntry,
     ResourceSpec,
     is_job_finished,
 )
-from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.connect import proxy_path
 from rigging.timing import Duration
 
 from .chronos import VirtualClock
@@ -152,7 +163,6 @@ class IrisTestCluster:
         timeout: Duration | None = None,
         coscheduling: CoschedulingConfig | None = None,
         constraints: list[Constraint] | None = None,
-        reservation: list[ReservationEntry] | None = None,
     ) -> Job:
         """Submit a callable as a job. Returns a Job handle."""
         if memory is None:
@@ -170,7 +180,6 @@ class IrisTestCluster:
             timeout=timeout,
             coscheduling=coscheduling,
             constraints=constraints,
-            reservation=reservation,
         )
 
     def status(self, job: Job) -> job_pb2.JobStatus:
@@ -326,29 +335,28 @@ def discover_capabilities(controller_client: ControllerServiceClientSync) -> Clu
     )
 
 
-def _add_coscheduling_group(config: config_pb2.IrisClusterConfig) -> None:
+def _add_coscheduling_group(config: IrisClusterConfig) -> None:
     """Add a scale group with num_vms=2 so coscheduling tests can find a match.
 
     v5litepod-16 has vm_count=2, so the local platform creates 2 workers per slice
     sharing the same tpu-name. Setting num_vms=2 lets the demand router match
     coscheduled jobs with replicas=2.
     """
-    sg = config.scale_groups["tpu_cosched_2"]
-    sg.name = "tpu_cosched_2"
-    sg.num_vms = 2
-    sg.buffer_slices = 1
-    sg.max_slices = 2
-    sg.resources.cpu_millicores = 128000
-    sg.resources.memory_bytes = 128 * 1024 * 1024 * 1024
-    sg.resources.disk_bytes = 1024 * 1024 * 1024 * 1024
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.resources.device_variant = "v5litepod-16"
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-    sg.slice_template.num_vms = 2
-    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
-    sg.slice_template.accelerator_variant = "v5litepod-16"
-    sg.slice_template.local.SetInParent()
+    config.scale_groups["tpu_cosched_2"] = ScaleGroupConfig(
+        name="tpu_cosched_2",
+        num_vms=2,
+        buffer_slices=1,
+        max_slices=2,
+        resources=ScaleGroupResources(
+            cpu_millicores=128000,
+            memory_bytes=128 * 1024 * 1024 * 1024,
+            disk_bytes=1024 * 1024 * 1024 * 1024,
+            device_type=AcceleratorType.TPU,
+            device_variant="v5litepod-16",
+            capacity_type=CapacityType.PREEMPTIBLE,
+        ),
+        slice_template=SliceConfig(num_vms=2, local=LocalSliceConfig()),
+    )
 
 
 @pytest.fixture
@@ -360,27 +368,33 @@ def cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         yield IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         log_client.close()
         controller_client.close()
 
 
-def _make_multi_worker_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+def _make_multi_worker_config(num_workers: int) -> IrisClusterConfig:
     """Build a local config with a single CPU scale group providing num_workers workers."""
     config = load_config(DEFAULT_CONFIG)
     config.scale_groups.clear()
-    sg = config.scale_groups["local-cpu"]
-    sg.name = "local-cpu"
-    sg.num_vms = 1
-    sg.buffer_slices = num_workers
-    sg.max_slices = num_workers
-    sg.resources.cpu_millicores = 8000
-    sg.resources.memory_bytes = 16 * 1024**3
-    sg.resources.disk_bytes = 50 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.local.SetInParent()
+    config.scale_groups["local-cpu"] = ScaleGroupConfig(
+        name="local-cpu",
+        num_vms=1,
+        buffer_slices=num_workers,
+        max_slices=num_workers,
+        resources=ScaleGroupResources(
+            cpu_millicores=8000,
+            memory_bytes=16 * 1024**3,
+            disk_bytes=50 * 1024**3,
+            device_type=AcceleratorType.CPU,
+            capacity_type=CapacityType.ON_DEMAND,
+        ),
+        slice_template=SliceConfig(local=LocalSliceConfig()),
+    )
     return make_local_config(config)
 
 
@@ -396,7 +410,10 @@ def multi_worker_cluster():
     with connect_cluster(config) as url:
         client = IrisClient.remote(url, workspace=MARIN_ROOT)
         controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
+        log_client = LogServiceClientSync(
+            address=f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}",
+            timeout_ms=30000,
+        )
         tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
         tc.wait_for_workers(num_workers, timeout=60)
         yield tc
@@ -488,6 +505,9 @@ class _NoOpPage:
         pass
 
     def wait_for_function(self, expression, **kwargs):
+        pass
+
+    def evaluate(self, expression, *args, **kwargs):
         pass
 
     def click(self, selector, **kwargs):

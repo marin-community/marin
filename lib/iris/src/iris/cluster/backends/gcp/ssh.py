@@ -3,9 +3,7 @@
 
 """Shared SSH helpers for GCP providers."""
 
-from __future__ import annotations
-
-from iris.rpc import config_pb2
+from iris.cluster.config import SshConfig
 
 # Instance metadata that opts a VM into OS Login. Applied at VM creation by
 # the controller and worker-VM creation paths so `gcloud compute ssh` picks
@@ -17,7 +15,7 @@ OS_LOGIN_METADATA = {
 
 
 def ssh_impersonate_service_account(
-    ssh_config: config_pb2.SshConfig | None,
+    ssh_config: SshConfig | None,
 ) -> str | None:
     """Return the explicit impersonation SA from ssh_config, or None."""
     if ssh_config and ssh_config.impersonate_service_account:

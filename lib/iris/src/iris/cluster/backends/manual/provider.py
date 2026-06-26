@@ -33,9 +33,17 @@ from iris.cluster.backends.types import (
 from iris.cluster.backends.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.backends.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.backends.vm_lifecycle import stop_controller as vm_stop_controller
+from iris.cluster.config import (
+    ControllerVmConfig,
+    IrisClusterConfig,
+    ManualSliceConfig,
+    ManualVmConfig,
+    SliceConfig,
+    SshConfig,
+    VmConfig,
+    WorkerConfig,
+)
 from iris.cluster.worker.env_probe import construct_worker_id
-from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +213,7 @@ class ManualWorkerProvider:
         self,
         label_prefix: str,
         worker_port: int,
-        ssh_config: config_pb2.SshConfig | None = None,
+        ssh_config: SshConfig | None = None,
         hosts: list[str] | None = None,
     ):
         self._label_prefix = label_prefix
@@ -229,7 +237,7 @@ class ManualWorkerProvider:
     def resolve_image(self, image: str, zone: str | None = None) -> str:
         return image
 
-    def create_vm(self, config: config_pb2.VmConfig) -> ManualStandaloneWorkerHandle:
+    def create_vm(self, config: VmConfig) -> ManualStandaloneWorkerHandle:
         """Allocate a host from the pool for a standalone VM (e.g., controller)."""
         manual = config.manual
         host = manual.host
@@ -264,8 +272,8 @@ class ManualWorkerProvider:
 
     def create_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> ManualSliceHandle:
         """Allocate hosts from the pool for a slice.
 
@@ -389,7 +397,7 @@ class ManualWorkerProvider:
     def _create_remote_exec(
         self,
         host: str,
-        manual_config: config_pb2.ManualVmConfig | config_pb2.ManualSliceConfig | None = None,
+        manual_config: ManualVmConfig | ManualSliceConfig | None = None,
     ) -> DirectSshRemoteExec:
         """Create a remote execution connection for the given host.
 
@@ -405,8 +413,8 @@ class ManualWorkerProvider:
                 user = self._ssh_config.user
             if self._ssh_config.key_file:
                 key_file = self._ssh_config.key_file
-            if self._ssh_config.HasField("connect_timeout"):
-                connect_timeout = duration_from_proto(self._ssh_config.connect_timeout)
+            if self._ssh_config.connect_timeout is not None:
+                connect_timeout = self._ssh_config.connect_timeout
 
         if manual_config is not None:
             ssh_user = getattr(manual_config, "ssh_user", "")
@@ -447,12 +455,12 @@ class ManualControllerProvider:
 
     worker_provider: ManualWorkerProvider
 
-    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         manual = controller_config.manual
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
@@ -461,7 +469,7 @@ class ManualControllerProvider:
         )
         return address
 
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         address, _vm = vm_restart_controller(
             self.worker_provider,
             config,
@@ -469,12 +477,12 @@ class ManualControllerProvider:
         )
         return address
 
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+    def stop_controller(self, config: IrisClusterConfig) -> None:
         vm_stop_controller(self.worker_provider, config)
 
     def stop_all(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
@@ -510,7 +518,7 @@ class ManualControllerProvider:
 
 def _run_bootstrap(
     handle: ManualSliceHandle,
-    worker_config: config_pb2.WorkerConfig,
+    worker_config: WorkerConfig,
 ) -> None:
     """Bootstrap all workers in the slice in parallel.
 
@@ -528,8 +536,7 @@ def _run_bootstrap(
                 raise InfraError(f"Worker {worker.worker_id} in slice {handle.slice_id} has no internal address")
             if not worker.wait_for_connection(timeout=Duration.from_seconds(300)):
                 raise InfraError(f"Worker {worker.worker_id} in slice {handle.slice_id} not reachable via SSH")
-            per_worker_config = config_pb2.WorkerConfig()
-            per_worker_config.CopyFrom(worker_config)
+            per_worker_config = worker_config.model_copy(deep=True)
             per_worker_config.worker_id = worker.worker_id
             script = build_worker_bootstrap_script(per_worker_config)
             worker.bootstrap(script)

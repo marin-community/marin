@@ -1,107 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Authentication interceptor for Iris Connect RPC services.
+"""Iris's RBAC policy over the generic ``rigging.server_auth`` framework.
 
-All tokens are JWTs signed with HMAC-SHA256. Verification is a pure crypto
-operation — no database hit on the hot path. User identity and role are
-embedded in the JWT claims, so authorization checks read directly from the
-verified token instead of querying the database.
-
-Authentication is optional: when no verifier is configured, all requests
-pass through as the anonymous admin user.
+The mechanism — verifying a token, binding the per-request identity, the
+authenticator stack and the Connect interceptors — lives in
+``rigging.server_auth``. This module holds only what is Iris-specific: the role
+semantics. It names the privileged actions and the role each requires, the
+read-only allowlist for the ``dashboard`` role, and the cookie the dashboard
+authenticates browsers with, and it reads the identity ``rigging.server_auth``
+bound for the request to enforce them.
 """
 
-import contextlib
-import ipaddress
-import logging
-import time
-from contextvars import ContextVar
-from dataclasses import dataclass
 from enum import StrEnum
-from http.cookies import SimpleCookie
-from typing import Protocol
 
-import google.auth
-import google.auth.transport.requests
-import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.server_auth import VerifiedIdentity, require_identity
 
-logger = logging.getLogger(__name__)
-
+# Browser session cookie the dashboard sets; passed to rigging's auth
+# interceptors as ``cookie_name`` so a cookie-bearing browser RPC authenticates.
 SESSION_COOKIE = "iris_session"
 
-
-@dataclass(frozen=True, slots=True)
-class VerifiedIdentity:
-    """Identity of an authenticated caller, extracted from JWT claims."""
-
-    user_id: str
-    role: str
-
-
-# Identity granted to any tokenless caller on a genuine loopback connection.
-# Mirrors the null-auth default: reaching the loopback interface (SSH tunnel /
-# on-host) already implies host-level trust, so the caller is the admin user.
-# Jobs are still attributed per-user via the job name's owner segment.
-LOOPBACK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
-
-
-def _extract_cookie(cookie_header: str, name: str) -> str | None:
-    """Extract a named cookie value from a raw Cookie header."""
-    if not cookie_header:
-        return None
-    try:
-        cookie = SimpleCookie(cookie_header)
-        morsel = cookie.get(name)
-        return morsel.value if morsel else None
-    except Exception:
-        return None
-
-
-def extract_bearer_token(headers: dict) -> str | None:
-    """Extract bearer token from Authorization header or session cookie."""
-    auth_header = headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[len("Bearer ") :]
-    cookie_header = headers.get("cookie", "")
-    return _extract_cookie(cookie_header, SESSION_COOKIE)
-
-
-# Per-request identity set by AuthInterceptor, read by service handlers.
-_verified_identity: ContextVar[VerifiedIdentity | None] = ContextVar("verified_identity", default=None)
-
-
-def get_verified_identity() -> VerifiedIdentity | None:
-    """Return the verified identity for the current RPC, or None if auth is disabled."""
-    return _verified_identity.get()
-
-
-def get_verified_user() -> str | None:
-    """Return just the user_id for the current RPC, or None."""
-    identity = _verified_identity.get()
-    return identity.user_id if identity is not None else None
-
-
-@contextlib.contextmanager
-def identity_scope(identity: VerifiedIdentity | None):
-    """Bind ``identity`` as the verified identity for the duration of the block.
-
-    Mirrors the ContextVar bookkeeping AuthInterceptor performs per RPC so code
-    outside the interceptor (e.g. the dashboard's RPC dispatch) can establish
-    the same identity for service handlers reached via get_verified_identity().
-    """
-    reset_token = _verified_identity.set(identity)
-    try:
-        yield
-    finally:
-        _verified_identity.reset(reset_token)
-
-
-# ---------------------------------------------------------------------------
-# Centralized authorization — policy is defined here, not scattered in service
-# ---------------------------------------------------------------------------
+# Read-only role granted to an IAP-authenticated caller whose email is not
+# provisioned in the user store (see the controller's IAP role resolver). It may
+# only call the read RPCs in DASHBOARD_READABLE_RPCS; see authorize_method. A
+# provisioned admin/user behind IAP resolves to their real role instead.
+DASHBOARD_ROLE = "dashboard"
 
 
 class AuthzAction(StrEnum):
@@ -110,6 +35,7 @@ class AuthzAction(StrEnum):
     ACT_AS_WORKER = "act_as_worker"
     MANAGE_OTHER_KEYS = "manage_other_keys"
     MANAGE_BUDGETS = "manage_budgets"
+    SET_CONTAINER_PROFILE = "set_container_profile"
 
 
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
@@ -117,15 +43,61 @@ POLICY: dict[AuthzAction, frozenset[str]] = {
     AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
+    AuthzAction.SET_CONTAINER_PROFILE: frozenset(),  # admin only (elevated container profiles)
 }
 
 
-def require_identity() -> VerifiedIdentity:
-    """Get the verified identity for the current RPC or raise UNAUTHENTICATED."""
-    identity = _verified_identity.get()
-    if identity is None:
-        raise ConnectError(Code.UNAUTHENTICATED, "Authentication required")
-    return identity
+# RPC methods the read-only `dashboard` role may call. A default-deny allowlist:
+# a dashboard caller (an IAP-authenticated browser whose email is not provisioned
+# in the user store) may invoke only these read methods; everything else — job
+# submit/terminate, worker registration, key/budget management, exec, profiling,
+# raw queries — is denied. A newly added RPC is therefore denied to the dashboard
+# role until it is explicitly listed here, which is the safe direction for a
+# read-only tier.
+DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
+    {
+        # Jobs and tasks
+        "GetJobStatus",
+        "GetJobState",
+        "ListJobs",
+        "GetTaskStatus",
+        "ListTasks",
+        "GetProcessStatus",
+        # Workers, endpoints, scheduler, autoscaler
+        "ListWorkers",
+        "GetWorkerStatus",
+        "ListEndpoints",
+        "GetAutoscalerStatus",
+        "GetSchedulerState",
+        "GetKubernetesClusterStatus",
+        # Identity, users, budgets (read)
+        "GetAuthInfo",
+        "GetCurrentUser",
+        "ListApiKeys",
+        "ListUsers",
+        "GetUserBudget",
+        "ListUserBudgets",
+        # RPC stats panel
+        "GetRpcStats",
+    }
+)
+
+
+def authorize_method(identity: VerifiedIdentity, method_name: str) -> None:
+    """Enforce per-method access for restricted roles before dispatch.
+
+    The ``dashboard`` role is read-only: it may call only the methods in
+    ``DASHBOARD_READABLE_RPCS``. Other roles are unrestricted here — their
+    mutating actions remain gated inside the handlers by ``authorize`` /
+    ``authorize_resource_owner``. Raises ``PERMISSION_DENIED`` for a dashboard
+    caller invoking a non-readable method.
+    """
+    if identity.role == DASHBOARD_ROLE and method_name not in DASHBOARD_READABLE_RPCS:
+        raise ConnectError(
+            Code.PERMISSION_DENIED,
+            f"Read-only dashboard access cannot call {method_name}; "
+            "this identity is not provisioned for write access",
+        )
 
 
 def authorize(action: AuthzAction) -> VerifiedIdentity:
@@ -153,316 +125,3 @@ def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
             f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",
         )
     return identity
-
-
-class TokenVerifier(Protocol):
-    """Verifies a bearer token and returns the authenticated identity."""
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        """Verify the token and return the identity.
-
-        Raises:
-            ValueError: If the token is invalid or expired.
-        """
-        ...
-
-
-class StaticTokenVerifier:
-    """Maps fixed tokens to identities. Useful for testing and login exchange."""
-
-    def __init__(self, tokens: dict[str, str], roles: dict[str, str] | None = None):
-        """Args:
-        tokens: Mapping of token string to username.
-        roles: Optional mapping of username to role (defaults to "user").
-        """
-        self._tokens = tokens
-        self._roles = roles or {}
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        user = self._tokens.get(token)
-        if user is None:
-            raise ValueError("Invalid token")
-        role = self._roles.get(user, "user")
-        return VerifiedIdentity(user_id=user, role=role)
-
-
-class GcpAccessTokenVerifier:
-    """Verifies GCP OAuth2 access tokens via Google's tokeninfo endpoint.
-
-    Optionally checks that the user has access to a specific GCP project
-    using the Cloud Resource Manager API with the user's own token.
-    """
-
-    _TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
-    _PROJECT_URL_TEMPLATE = "https://cloudresourcemanager.googleapis.com/v3/projects/{}"
-
-    def __init__(self, project_id: str | None = None):
-        self._project_id = project_id
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
-        if resp.status_code != 200:
-            raise ValueError(f"Token verification failed (status {resp.status_code})")
-        info = resp.json()
-        email = info.get("email")
-        if not email:
-            raise ValueError("Token does not contain an email claim")
-
-        if self._project_id:
-            proj_resp = requests.get(
-                self._PROJECT_URL_TEMPLATE.format(self._project_id),
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            if proj_resp.status_code != 200:
-                raise ValueError(f"User {email} does not have access to project {self._project_id}")
-
-        return VerifiedIdentity(user_id=email, role="user")
-
-
-class CompositeTokenVerifier:
-    """Tries multiple verifiers in order, returning the first successful result."""
-
-    def __init__(self, verifiers: list[TokenVerifier]):
-        if not verifiers:
-            raise ValueError("CompositeTokenVerifier requires at least one verifier")
-        self._verifiers = verifiers
-
-    def verify(self, token: str) -> VerifiedIdentity:
-        errors = []
-        for verifier in self._verifiers:
-            try:
-                return verifier.verify(token)
-            except ValueError as exc:
-                errors.append(str(exc))
-        raise ValueError(f"All verifiers failed: {'; '.join(errors)}")
-
-
-def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
-    """Return True if the request arrived over a genuine loopback connection.
-
-    A connection is trusted-loopback iff its transport peer is a loopback
-    address (127.0.0.0/8 or ::1) on a nonzero port *and* it carries no
-    ``X-Forwarded-For`` header.
-
-    The two conditions are individually sufficient and kept together as
-    defence in depth. The controller runs uvicorn with
-    ``forwarded_allow_ips="*"``, so when the client is derived from a forwarded
-    header uvicorn rewrites ``scope["client"]`` to the attacker-controllable
-    leftmost ``X-Forwarded-For`` entry and zeroes the port (it cannot recover
-    the forwarded client's port). A public request spoofing
-    ``X-Forwarded-For: 127.0.0.1`` therefore presents as ``("127.0.0.1", 0)``
-    with the header present — rejected on both counts. Only a direct transport
-    peer on the loopback interface (SSH tunnel / on-host) passes. See
-    ``docs/auth-loopback-transition.md``.
-    """
-    if not client_address:
-        return False
-    if headers.get("x-forwarded-for"):
-        return False
-    host, _, port = client_address.rpartition(":")
-    if not host or not port:
-        return False
-    try:
-        if int(port) == 0:
-            return False
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
-
-
-def resolve_auth(
-    token: str | None,
-    verifier: TokenVerifier,
-    optional: bool,
-    *,
-    client_address: str | None = None,
-    headers: dict | None = None,
-) -> VerifiedIdentity | None:
-    """Shared auth policy for gRPC interceptors and HTTP middleware.
-
-    Returns VerifiedIdentity on success, None for anonymous passthrough.
-    Raises ValueError on rejected tokens (invalid token, or missing when required).
-
-    A present token always wins. A tokenless request over a genuine loopback
-    connection is always trusted as the admin user (see ``is_trusted_loopback``
-    and ``LOOPBACK_IDENTITY``) — the SSH-tunnel transition path. Otherwise a
-    missing token is allowed only when ``optional`` is set.
-    """
-    if token is not None:
-        return verifier.verify(token)
-    if is_trusted_loopback(client_address, headers or {}):
-        return LOOPBACK_IDENTITY
-    if optional:
-        return None
-    raise ValueError("Missing authentication")
-
-
-class AuthInterceptor:
-    """Server-side Connect RPC interceptor that enforces bearer token auth.
-
-    Reads the Authorization header (or session cookie), verifies the JWT via
-    the configured verifier, and stores the VerifiedIdentity in a ContextVar
-    for the service layer to read via get_verified_identity().
-    """
-
-    def __init__(self, verifier: TokenVerifier):
-        self._verifier = verifier
-
-    def _verify_or_raise(self, ctx) -> "VerifiedIdentity":
-        token = extract_bearer_token(ctx.request_headers())
-        if not token:
-            raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
-        try:
-            return self._verifier.verify(token)
-        except ValueError as exc:
-            logger.warning("Authentication failed: %s", exc)
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        identity = self._verify_or_raise(ctx)
-        reset_token = _verified_identity.set(identity)
-        try:
-            return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-    async def intercept_unary(self, call_next, request, ctx):
-        # Token verification is pure crypto (HMAC-SHA256 for JWTs); safe to
-        # run inline on the loop. ContextVar bookkeeping mirrors the sync
-        # path so service handlers see the same identity regardless of
-        # which dispatch surface they came in through.
-        identity = self._verify_or_raise(ctx)
-        reset_token = _verified_identity.set(identity)
-        try:
-            return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-    def intercept_server_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-    def intercept_client_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-    def intercept_bidi_stream_sync(self, call_next, request, ctx):
-        raise ConnectError(Code.UNIMPLEMENTED, "Streaming RPCs are not supported")
-
-
-class NullAuthInterceptor:
-    """Interceptor for null-auth mode.
-
-    When a verifier is provided, tokens are verified if present (e.g. worker
-    tokens) but unauthenticated requests fall through as the anonymous admin.
-    Without a verifier, all requests are treated as anonymous admin.
-    """
-
-    def __init__(
-        self,
-        user: str = "anonymous",
-        role: str = "admin",
-        verifier: TokenVerifier | None = None,
-    ):
-        self._default_identity = VerifiedIdentity(user_id=user, role=role)
-        self._verifier = verifier
-
-    def _resolve_identity(self, ctx) -> "VerifiedIdentity":
-        identity = self._default_identity
-        if self._verifier is not None:
-            token = extract_bearer_token(ctx.request_headers())
-            if token:
-                try:
-                    identity = self._verifier.verify(token)
-                except ValueError:
-                    pass
-        return identity
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        reset_token = _verified_identity.set(self._resolve_identity(ctx))
-        try:
-            return call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-    async def intercept_unary(self, call_next, request, ctx):
-        reset_token = _verified_identity.set(self._resolve_identity(ctx))
-        try:
-            return await call_next(request, ctx)
-        finally:
-            _verified_identity.reset(reset_token)
-
-
-class AuthTokenInjector:
-    """Client-side Connect RPC interceptor that attaches a bearer token to requests."""
-
-    def __init__(self, token_provider: "TokenProvider"):
-        self._provider = token_provider
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        token = self._provider.get_token()
-        if token:
-            ctx.request_headers()["authorization"] = f"Bearer {token}"
-        return call_next(request, ctx)
-
-
-def client_interceptors(token_provider: "TokenProvider | None") -> list:
-    """Build the client-side RPC interceptor chain.
-
-    With a token provider, attach the bearer token. Without one (the SSH-tunnel
-    case), send nothing: a loopback-trust controller authenticates the
-    connection by its transport peer, and job ownership comes from the job name.
-    """
-    if token_provider is not None:
-        return [AuthTokenInjector(token_provider)]
-    return []
-
-
-class TokenProvider(Protocol):
-    """Provides a bearer token for outgoing requests."""
-
-    def get_token(self) -> str | None:
-        """Return a token string, or None to skip auth."""
-        ...
-
-
-class StaticTokenProvider:
-    """Returns a fixed token. Useful for testing and worker auth."""
-
-    def __init__(self, token: str):
-        self._token = token
-
-    def get_token(self) -> str | None:
-        return self._token
-
-
-class GcpAccessTokenProvider:
-    """Gets OAuth2 access tokens via google-auth SDK.
-
-    Works for all credential types: user accounts (from gcloud auth
-    application-default login), service accounts, and GCE metadata.
-    Tokens are cached until 5 minutes before expiry.
-    """
-
-    _REFRESH_MARGIN_SECONDS = 300
-
-    def __init__(self):
-        self._creds = None
-        self._cached_token: str | None = None
-        self._expires_at: float = 0.0
-
-    def get_token(self) -> str | None:
-        if self._cached_token is not None and time.monotonic() < self._expires_at:
-            return self._cached_token
-
-        if self._creds is None:
-            self._creds, _ = google.auth.default()
-        self._creds.refresh(google.auth.transport.requests.Request())
-
-        self._cached_token = self._creds.token
-        now_mono = time.monotonic()
-        if self._creds.expiry is not None:
-            self._expires_at = now_mono + (self._creds.expiry.timestamp() - time.time()) - self._REFRESH_MARGIN_SECONDS
-        else:
-            self._expires_at = now_mono + self._REFRESH_MARGIN_SECONDS
-
-        return self._cached_token

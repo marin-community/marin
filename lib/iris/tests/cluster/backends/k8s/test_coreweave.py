@@ -9,8 +9,6 @@ configuration. Worker/slice management is handled by K8sTaskProvider (not
 K8sControllerProvider).
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import threading
@@ -20,6 +18,8 @@ import pytest
 from iris.cluster.backends.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
+    _CONTROLLER_STATE_PVC_NAME,
+    _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
 )
 from iris.cluster.backends.k8s.fake import InMemoryK8sService
@@ -28,7 +28,18 @@ from iris.cluster.backends.types import (
     InfraError,
     Labels,
 )
-from iris.rpc import config_pb2
+from iris.cluster.config import (
+    ControllerVmConfig,
+    CoreweaveControllerConfig,
+    CoreweavePlatformConfig,
+    CoreweaveSliceConfig,
+    IrisClusterConfig,
+    KubernetesProviderConfig,
+    PlatformConfig,
+    ScaleGroupConfig,
+    SliceConfig,
+    StorageConfig,
+)
 
 
 def _make_provider(
@@ -38,7 +49,7 @@ def _make_provider(
     k8s: InMemoryK8sService | None = None,
 ) -> tuple[K8sControllerProvider, InMemoryK8sService]:
     k8s = k8s or InMemoryK8sService(namespace=namespace)
-    config = config_pb2.CoreweavePlatformConfig(
+    config = CoreweavePlatformConfig(
         region=region,
         namespace=namespace,
     )
@@ -72,8 +83,8 @@ def _s3_env_vars(monkeypatch):
 def test_discover_controller_dns():
     """discover_controller returns correct K8s Service DNS name."""
     provider, _ = _make_provider()
-    controller_config = config_pb2.ControllerVmConfig(
-        coreweave=config_pb2.CoreweaveControllerConfig(
+    controller_config = ControllerVmConfig(
+        coreweave=CoreweaveControllerConfig(
             port=10000,
             service_name="iris-controller-svc",
         )
@@ -86,7 +97,7 @@ def test_discover_controller_dns():
 def test_discover_controller_defaults():
     """discover_controller uses default port and service name when not set."""
     provider, _ = _make_provider(namespace="my-ns")
-    controller_config = config_pb2.ControllerVmConfig(coreweave=config_pb2.CoreweaveControllerConfig())
+    controller_config = ControllerVmConfig(coreweave=CoreweaveControllerConfig())
     address = provider.discover_controller(controller_config)
     assert address == "iris-controller-svc.my-ns.svc.cluster.local:10000"
     provider.shutdown()
@@ -103,37 +114,39 @@ def _make_cluster_config(
     image: str = "ghcr.io/marin-community/iris-controller:latest",
     remote_state_dir: str = "gs://test-bucket/bundles",
     controller_scale_group: str = "cpu-erapids",
-) -> config_pb2.IrisClusterConfig:
-    config = config_pb2.IrisClusterConfig(
-        platform=config_pb2.PlatformConfig(
+) -> IrisClusterConfig:
+    config = IrisClusterConfig(
+        platform=PlatformConfig(
             label_prefix="iris",
-            coreweave=config_pb2.CoreweavePlatformConfig(
+            coreweave=CoreweavePlatformConfig(
                 region="LGA1",
                 namespace="iris",
             ),
         ),
-        controller=config_pb2.ControllerVmConfig(
+        controller=ControllerVmConfig(
             image=image,
-            coreweave=config_pb2.CoreweaveControllerConfig(
+            coreweave=CoreweaveControllerConfig(
                 port=port,
                 service_name=service_name,
                 scale_group=controller_scale_group,
             ),
         ),
-        storage=config_pb2.StorageConfig(
+        storage=StorageConfig(
             remote_state_dir=remote_state_dir,
         ),
-    )
-    # Add the controller's scale group so start_controller can validate it
-    sg = config.scale_groups[controller_scale_group]
-    sg.buffer_slices = 0
-    sg.max_slices = 10
-    sg.slice_template.CopyFrom(
-        config_pb2.SliceConfig(
-            name_prefix=controller_scale_group,
-            num_vms=1,
-            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="cd-gp-i64-erapids"),
-        )
+        kubernetes_provider=KubernetesProviderConfig(),
+        # The controller's scale group so start_controller can validate it.
+        scale_groups={
+            controller_scale_group: ScaleGroupConfig(
+                buffer_slices=0,
+                max_slices=10,
+                slice_template=SliceConfig(
+                    name_prefix=controller_scale_group,
+                    num_vms=1,
+                    coreweave=CoreweaveSliceConfig(instance_type="cd-gp-i64-erapids"),
+                ),
+            )
+        },
     )
     return config
 
@@ -151,6 +164,7 @@ def test_start_controller_creates_all_resources():
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
     # S3 storage auth lives in the iris-task-env Secret, not the ConfigMap.
@@ -171,6 +185,20 @@ def test_start_controller_creates_all_resources():
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
     assert container["resources"]["requests"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
     assert container["resources"]["limits"] == {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST}
+    # Recreate (not RollingUpdate): the old controller pod must be gone before
+    # the new one mounts the ReadWriteOnce SQLite state PVC.
+    assert deploy_spec["strategy"] == {"type": "Recreate"}
+    assert {"name": "local-state", "mountPath": "/var/cache/iris/controller"} in container["volumeMounts"]
+    assert {
+        "name": "local-state",
+        "persistentVolumeClaim": {"claimName": _CONTROLLER_STATE_PVC_NAME},
+    } in deploy_spec[
+        "template"
+    ]["spec"]["volumes"]
+
+    pvc = k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
+    assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
+    assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
     t.join(timeout=5)
     provider.shutdown()
@@ -240,6 +268,45 @@ def test_start_controller_reconciles_when_already_available():
     provider.shutdown()
 
 
+def test_start_controller_stops_old_controller_before_reapply():
+    """start_controller tears the old Deployment down before applying the new one.
+
+    The controller SQLite state lives on a ReadWriteOnce PVC, so two controller
+    pods must never run at once. start_controller must delete the existing
+    Deployment (and wait for it to disappear) before re-applying, rather than
+    letting a rolling update briefly run two pods.
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    events: list[tuple[str, str]] = []
+    real_delete = k8s.delete
+    real_apply = k8s.apply_json
+
+    def recording_delete(resource, name, **kwargs):
+        if resource is K8sResource.DEPLOYMENTS and name == "iris-controller":
+            events.append(("delete", name))
+        return real_delete(resource, name, **kwargs)
+
+    def recording_apply(manifest):
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "iris-controller":
+            events.append(("apply", "iris-controller"))
+        return real_apply(manifest)
+
+    k8s.delete = recording_delete
+    k8s.apply_json = recording_apply
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert events == [("delete", "iris-controller"), ("apply", "iris-controller")]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
 def test_stop_controller_deletes_resources():
     """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and RBAC."""
     provider, k8s = _make_provider()
@@ -250,6 +317,7 @@ def test_stop_controller_deletes_resources():
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
     _apply_stub(k8s, "Secret", "iris-task-env")
+    _apply_stub(k8s, "PersistentVolumeClaim", _CONTROLLER_STATE_PVC_NAME)
 
     provider.stop_controller(cluster_config)
 
@@ -257,6 +325,7 @@ def test_stop_controller_deletes_resources():
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
+    assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is None
     provider.shutdown()
 
 
@@ -344,8 +413,8 @@ def test_rbac_isolation_across_namespaces():
 def test_tunnel_parses_address_and_forwards():
     """tunnel() parses address and delegates to K8sService.port_forward()."""
     provider, _ = _make_provider()
-    controller_config = config_pb2.ControllerVmConfig(
-        coreweave=config_pb2.CoreweaveControllerConfig(port=9999, service_name="my-svc"),
+    controller_config = ControllerVmConfig(
+        coreweave=CoreweaveControllerConfig(port=9999, service_name="my-svc"),
     )
     address = provider.discover_controller(controller_config)
     assert address == "my-svc.iris.svc.cluster.local:9999"
@@ -384,7 +453,7 @@ def test_start_controller_deployment_command_references_config_json():
 def test_configmap_strips_kubeconfig_path():
     """ConfigMap must not contain kubeconfig_path so pods use in-cluster auth."""
     k8s = InMemoryK8sService(namespace="iris")
-    cw_config = config_pb2.CoreweavePlatformConfig(
+    cw_config = CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
         kubeconfig_path="/home/user/.kube/coreweave-iris",
@@ -411,7 +480,7 @@ def test_configmap_strips_kubeconfig_path():
 def test_controller_endpoint_url_in_task_env_secret():
     """When object_storage_endpoint is set, AWS_ENDPOINT_URL lands in the iris-task-env Secret."""
     k8s = InMemoryK8sService(namespace="iris")
-    cw_config = config_pb2.CoreweavePlatformConfig(
+    cw_config = CoreweavePlatformConfig(
         region="LGA1",
         namespace="iris",
         object_storage_endpoint="https://object.lga1.coreweave.com",
@@ -441,14 +510,14 @@ def test_controller_endpoint_url_in_task_env_secret():
 def test_start_controller_errors_without_scale_group():
     """start_controller raises when scale_group is not set."""
     provider, _ = _make_provider()
-    config = config_pb2.IrisClusterConfig(
-        platform=config_pb2.PlatformConfig(
+    config = IrisClusterConfig(
+        platform=PlatformConfig(
             label_prefix="iris",
-            coreweave=config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="iris"),
+            coreweave=CoreweavePlatformConfig(region="LGA1", namespace="iris"),
         ),
-        controller=config_pb2.ControllerVmConfig(
+        controller=ControllerVmConfig(
             image="ghcr.io/marin-community/iris-controller:latest",
-            coreweave=config_pb2.CoreweaveControllerConfig(port=10000),
+            coreweave=CoreweaveControllerConfig(port=10000),
         ),
     )
     with pytest.raises(InfraError, match="must set scale_group"):
@@ -459,14 +528,14 @@ def test_start_controller_errors_without_scale_group():
 def test_start_controller_errors_with_invalid_scale_group():
     """start_controller raises when scale_group references a nonexistent group."""
     provider, _ = _make_provider()
-    config = config_pb2.IrisClusterConfig(
-        platform=config_pb2.PlatformConfig(
+    config = IrisClusterConfig(
+        platform=PlatformConfig(
             label_prefix="iris",
-            coreweave=config_pb2.CoreweavePlatformConfig(region="LGA1", namespace="iris"),
+            coreweave=CoreweavePlatformConfig(region="LGA1", namespace="iris"),
         ),
-        controller=config_pb2.ControllerVmConfig(
+        controller=ControllerVmConfig(
             image="ghcr.io/marin-community/iris-controller:latest",
-            coreweave=config_pb2.CoreweaveControllerConfig(port=10000, scale_group="nonexistent"),
+            coreweave=CoreweaveControllerConfig(port=10000, scale_group="nonexistent"),
         ),
     )
     with pytest.raises(InfraError, match="not found in scale_groups"):
@@ -660,15 +729,14 @@ def test_ensure_nodepools_scales_multihost_groups_by_num_vms():
     """NodePool capacity is counted in nodes, so multihost groups scale by num_vms per slice."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
-    sg = cluster_config.scale_groups["h100-16x"]
-    sg.buffer_slices = 0
-    sg.max_slices = 1
-    sg.slice_template.CopyFrom(
-        config_pb2.SliceConfig(
+    cluster_config.scale_groups["h100-16x"] = ScaleGroupConfig(
+        buffer_slices=0,
+        max_slices=1,
+        slice_template=SliceConfig(
             name_prefix="h100-16x",
             num_vms=2,
-            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
-        )
+            coreweave=CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        ),
     )
 
     provider.ensure_nodepools(cluster_config)
@@ -684,15 +752,14 @@ def test_ensure_nodepools_keeps_one_multihost_slice_warm():
     """Existing multihost pools keep one full slice worth of desired nodes."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config()
-    sg = cluster_config.scale_groups["h100-16x"]
-    sg.buffer_slices = 0
-    sg.max_slices = 1
-    sg.slice_template.CopyFrom(
-        config_pb2.SliceConfig(
+    cluster_config.scale_groups["h100-16x"] = ScaleGroupConfig(
+        buffer_slices=0,
+        max_slices=1,
+        slice_template=SliceConfig(
             name_prefix="h100-16x",
             num_vms=2,
-            coreweave=config_pb2.CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
-        )
+            coreweave=CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128"),
+        ),
     )
 
     # Pre-create nodepool so _ensure_one_nodepool detects it as existing

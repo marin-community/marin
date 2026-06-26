@@ -28,9 +28,9 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, worker_attributes_table
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
 from iris.cluster.worker.env_probe import _build_worker_attributes
-from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
@@ -176,8 +176,6 @@ def _make_context(
         user_spend={},
         user_budget_limits={},
         requested_bands={},
-        reserved_job_ids=frozenset(),
-        reservation_entry_counts={},
         user_budget_defaults=UserBudgetDefaults(),
     )
 
@@ -2166,10 +2164,10 @@ def test_dedup_unfittable_job_does_not_block_other_jobs(state):
     assert assigned_jobs == {"small"}
 
 
-def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, state):
-    """A worker pre-pinned in the SchedulingContext (e.g., via reservation pre-pass)
-    is still gated by max_assignments_per_worker for non-coscheduled tasks of the
-    same or different jobs in the same cycle.
+def test_dedup_pre_pinned_worker_respected_for_later_tasks(scheduler, state):
+    """A worker pre-pinned in the SchedulingContext (assignment_counts at the
+    per-cycle cap before find_assignments runs) is still gated by
+    max_assignments_per_worker for non-coscheduled tasks in the same cycle.
 
     The dedup must observe assignment_counts mutations from earlier in the pass.
     """
@@ -2180,19 +2178,18 @@ def test_dedup_reservation_pinned_worker_respected_for_later_tasks(scheduler, st
         register_worker(state, f"w{i}", f"addr{i}", meta)
 
     req = controller_pb2.Controller.LaunchJobRequest(
-        name="reserved-job",
+        name="pinned-job",
         entrypoint=_make_test_entrypoint(),
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         environment=job_pb2.EnvironmentConfig(),
         replicas=10,
     )
-    submit_job(state, "reserved-job", req)
+    submit_job(state, "pinned-job", req)
 
     context = _build_context(sched, state)
 
-    # Simulate a reservation pre-pass having pinned worker w0 up to its per-cycle
-    # cap before find_assignments runs (this is what _run_scheduler_pass phase 4
-    # does). w0 is now full for the cycle and must be skipped for later tasks.
+    # Pin worker w0 up to its per-cycle cap before find_assignments runs. w0 is
+    # now full for the cycle and must be skipped for later tasks.
     req = next(iter(context.jobs.values()))
     context.assignment_counts[WorkerId("w0")] = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
     for _ in range(DEFAULT_MAX_ASSIGNMENTS_PER_WORKER):
@@ -2246,19 +2243,19 @@ def _register_worker_with_probed_attributes(state, worker_id, address, metadata)
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.
     if metadata.device.HasField("tpu"):
-        accel_type = config_pb2.ACCELERATOR_TYPE_TPU
+        accel_type = AcceleratorType.TPU
         accel_variant = metadata.device.tpu.variant
     elif metadata.device.HasField("gpu"):
-        accel_type = config_pb2.ACCELERATOR_TYPE_GPU
+        accel_type = AcceleratorType.GPU
         accel_variant = metadata.device.gpu.variant
     else:
-        accel_type = config_pb2.ACCELERATOR_TYPE_CPU
+        accel_type = AcceleratorType.CPU
         accel_variant = ""
 
     attrs = _build_worker_attributes(
         accelerator_type=accel_type,
         accelerator_variant=accel_variant,
-        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+        capacity_type=CapacityType.ON_DEMAND,
         tpu_name=metadata.tpu_name,
         tpu_worker_id=str(0),
         device=metadata.device,

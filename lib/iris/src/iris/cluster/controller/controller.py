@@ -16,12 +16,10 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import uvicorn
-from finelog.client import LogClient, RemoteLogHandler
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
-from finelog.embedded import require_embedded_server
+from finelog.client import RemoteLogHandler
+from rigging.server_auth import RequestAuthPolicy, TokenVerifier
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp, TokenBucket
 from sqlalchemy import Row
 
@@ -48,6 +46,7 @@ from iris.cluster.controller.checkpoint import (
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
     apply_dispatch_updates,
@@ -68,18 +67,13 @@ from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
-    read_reservation_claims,
-    refresh_reservation_claims,
-    refresh_reservation_claims_in_tx,
 )
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.schema import ReservationClaim
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
-from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
     PendingTask,
@@ -89,10 +83,8 @@ from iris.cluster.types import (
     WorkerStatusMap,
     WorkerUsability,
 )
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +96,7 @@ logger = logging.getLogger(__name__)
 # every other RPC, including the worker heartbeats that would unblock the
 # drain. Install a wider, named pool so a burst of slow handlers cannot
 # starve the rest.
-_RPC_HANDLER_THREADS = 1024
+_RPC_HANDLER_THREADS = 64
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -143,13 +135,11 @@ class _TickInputs:
     """DB-less per-tick inputs the control driver assembles in one read txn.
 
     Only the sections for the phases due this tick are populated; the rest stay
-    at their empty defaults. ``ctx``/``claims`` feed the schedule phase,
-    ``control`` the reconcile phase, ``worker_status_map`` the autoscale phase.
+    at their empty defaults. ``ctx`` feeds the schedule phase, ``control`` the
+    reconcile phase, ``worker_status_map`` the autoscale phase.
     """
 
     ctx: SchedulingContext | None = None
-    claims: dict[WorkerId, ReservationClaim] = field(default_factory=dict)
-    claims_changed: bool = False
     control: "reads.ControlSnapshot" = field(
         default_factory=lambda: reads.ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[])
     )
@@ -187,11 +177,12 @@ class ControllerConfig:
 
     worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
     """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before the controller fails and tears it down. Realized as a count
-    of consecutive failed reconcile passes — ``round(grace / poll_interval)`` —
-    so detection latency stays fixed regardless of the reconcile cadence. ~50s
-    tolerates brief network blips without reaping a multi-VM slice; tests shorten
-    it for fast deterministic teardown."""
+    unhealthy) before the controller fails and tears it down. Realized as
+    wall-clock elapsed since the worker's last successful reconcile (see
+    ``WorkerHealthTracker``), so detection latency is ~grace regardless of the
+    reconcile cadence or how long a failing pass takes. ~50s tolerates brief
+    network blips without reaping a multi-VM slice; tests shorten it for fast
+    deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -212,6 +203,13 @@ class ControllerConfig:
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
 
+    slice_retention: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
+    """Delete orphaned slices (no backing worker row) older than this (default: 1 hour).
+
+    Must comfortably exceed worst-case slice boot + worker-registration lag, so a
+    freshly-created slice whose VMs are still booting is never reaped before its
+    workers register."""
+
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
 
@@ -230,32 +228,10 @@ class ControllerConfig:
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
-    log_service_address: str | None = None
-    """Address of an externally-hosted log server (e.g. http://localhost:10001).
-    When set, the controller connects to the existing server. When None, the
-    Controller starts an in-process native ``finelog_server`` server on a free
-    port (used by tests and local-mode runs). In production this address is
-    sourced from `endpoints["/system/log-server"]` and passed in here by the
-    daemon entrypoint."""
-
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
-
-
-def _log_client_interceptors(config: "ControllerConfig") -> tuple:
-    """Return Connect interceptors for controller-originated LogService RPCs.
-
-    When auth is configured, attach the worker JWT as a bearer token so the
-    log server accepts PushLogs/FetchLogs. The worker token is signed with
-    the same key the log server verifies against; no separate admin token
-    is required for controller-initiated pushes.
-    """
-    token = config.auth.worker_token if config.auth and config.auth.worker_token else None
-    if not token:
-        return ()
-    return (AuthTokenInjector(StaticTokenProvider(token)),)
 
 
 class Controller:
@@ -291,6 +267,7 @@ class Controller:
         self,
         config: ControllerConfig,
         provider: TaskBackend,
+        log_stack: LogStack,
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
     ):
@@ -318,13 +295,9 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Detection latency is fixed in wall-clock by worker_unreachable_grace and
-        # converted to a consecutive-failure count for the reconcile cadence, so it
-        # is unaffected by poll_interval.
-        reconcile_failure_threshold = max(
-            1, round(config.worker_unreachable_grace.to_seconds() / config.poll_interval.to_seconds())
-        )
-        self._health = WorkerHealthTracker(reconcile_failure_threshold=reconcile_failure_threshold)
+        # Worker-death detection is wall-clock, fixed at the grace regardless of
+        # the reconcile cadence (see WorkerHealthTracker).
+        self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
@@ -333,35 +306,12 @@ class Controller:
 
         self._threads = threads if threads is not None else get_thread_container()
 
-        # --- Log service setup ---
-        # The log server is always accessed via RPC. In production the
-        # controller's main() starts a subprocess; in tests/local mode the
-        # Controller spins up an in-process native finelog server
-        # (finelog_server). After the server is running, all access goes
-        # through RPC clients — no branching on hosting mode.
-        self._log_server: Any = None  # finelog_server.EmbeddedServer when started locally
-
-        if config.log_service_address:
-            self._log_service_address = config.log_service_address
-        else:
-            self._log_service_address = self._start_local_log_server()
-
-        log_client_interceptors = _log_client_interceptors(config)
-        self._remote_log_service = LogServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-        self._remote_stats_service = StatsServiceProxy(self._log_service_address, interceptors=log_client_interceptors)
-
-        # A single log client serves both the controller's own logs and any backend
-        # that collects logs out-of-process.
-        self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-
-        # Backends without a worker daemon push per-task resource/profile samples to the
-        # log server directly; daemon-backed backends (RPC) ignore the sink.
-        self._task_backend.set_log_sink(
-            self._log_client,
-            self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat),
-            self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile),
-        )
-
+        # The log client and its tables are built before the backend and autoscaler
+        # (their finelog handles are constructor args), so the controller only holds
+        # the stack for its own logging and shuts it down at stop().
+        self._log_stack = log_stack
+        self._log_client = log_stack.client
+        self._log_service_address = log_stack.address
         self._log_handler = RemoteLogHandler(self._log_client, key=CONTROLLER_LOG_KEY)
 
         self._log_handler.setLevel(logging.DEBUG)
@@ -386,13 +336,14 @@ class Controller:
         )
         self._dashboard = ControllerDashboard(
             self._service,
-            log_service=self._remote_log_service,
             host=config.host,
             port=config.port,
-            auth_verifier=config.auth_verifier,
             auth_provider=config.auth_provider,
-            auth_optional=config.auth.optional if config.auth else False,
-            finelog_stats_service=self._remote_stats_service,
+            auth_policy=RequestAuthPolicy.from_verifiers(
+                verifier=config.auth_verifier,
+                optional=config.auth.optional if config.auth else False,
+                iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
+            ),
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only
@@ -402,6 +353,14 @@ class Controller:
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.
         self._force_reconcile = False
+        # Workers queued off the control loop for teardown on the next tick; see
+        # request_worker_eviction / _drain_pending_evictions.
+        self._pending_evictions: set[WorkerId] = set()
+        self._pending_evictions_lock = threading.Lock()
+        # Task terminal-state overrides queued off the control loop for the next
+        # tick; see request_task_kicks / _drain_pending_kicks.
+        self._pending_kicks: list[PendingKick] = []
+        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -453,6 +412,33 @@ class Controller:
         """
         self._tick_wake.set()
 
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
+        """Queue workers for fail-and-teardown on the next control tick.
+
+        Called off the control-loop thread (the Register RPC, when a worker claims
+        an address still held by a stale row — a recycled internal IP). The
+        teardown reaps the worker's slice through the autoscaler, which is only
+        safe on the control-loop thread, so the work is deferred to the tick drain.
+        """
+        if not worker_ids:
+            return
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
+        self.wake()
+
+    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
+        """Queue task terminal-state overrides to apply on the next control tick.
+
+        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
+        kicks inside the tick's single write transaction so they cannot race the
+        scheduler's view of task state.
+        """
+        if not kicks:
+            return
+        with self._pending_kicks_lock:
+            self._pending_kicks.extend(kicks)
+        self.wake()
+
     def _seed_liveness_from_workers(self) -> None:
         """Seed every persisted worker as healthy so the scheduler sees them at startup.
 
@@ -472,28 +458,6 @@ class Controller:
     def started(self) -> bool:
         """Whether the controller loops have been started."""
         return self._started
-
-    def _start_local_log_server(self) -> str:
-        """Start a bundled in-process log + stats server and return its address.
-
-        Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). Backed by the native
-        ``finelog_server`` module (the same engine the ``finelog-server`` binary
-        runs), storing segments under ``local_state_dir/log-server`` so written
-        logs are queryable: the engine's in-memory mode spawns no maintenance
-        task, so its RAM buffer never flushes to a readable segment — only a
-        disk-backed store serves reads. The server is bound and ready when the
-        constructor returns. For any deployment that needs scale or durability
-        beyond the controller's local disk, run ``finelog-server`` out-of-band
-        and point ``endpoints["/system/log-server"]`` at it.
-        """
-        log_dir = self._config.local_state_dir / "log-server"
-        embedded_server_cls = require_embedded_server()
-        self._log_server = embedded_server_cls(log_dir=str(log_dir), host=self._config.host)
-
-        address = f"http://{self.external_host}:{self._log_server.port}"
-        logger.info("Local log server ready at %s (log_dir=%s)", address, log_dir)
-        return address
 
     def start(self) -> None:
         """Start the dashboard server and the control + housekeeping threads.
@@ -608,11 +572,7 @@ class Controller:
         # from late log records hitting a closed store or connection.
         logging.getLogger("iris").removeHandler(self._log_handler)
         self._log_handler.close()
-        self._log_client.close()
-        self._remote_log_service.close()
-        self._remote_stats_service.close()
-        if self._log_server is not None:
-            self._log_server.stop()
+        self._log_stack.close()
         self._db.close()
         self._bundle_store.close()
 
@@ -659,6 +619,7 @@ class Controller:
                         self._worker_attrs,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
+                        slice_retention=self._config.slice_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
@@ -737,6 +698,9 @@ class Controller:
             self._run_scheduling()
             return
 
+        self._drain_pending_evictions()
+        pending_kicks = self._drain_pending_kicks()
+
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
@@ -783,15 +747,22 @@ class Controller:
             sched_result=sched_result,
             recon_result=recon_result,
             timeout_decisions=timeout_decisions,
+            pending_kicks=pending_kicks,
             auto_result=auto_result,
             now=now,
         )
+
+        # Force the next reconcile so workers are told to stop the kicked attempts
+        # promptly instead of waiting a full reconcile interval.
+        if pending_kicks:
+            self._force_reconcile = True
+            self._tick_wake.set()
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments, fold health.
         if sched_result is not None:
             self._scheduling_diagnostics = sched_result.diagnostics
-            self._last_scheduling_context = sched_result.post_taint_context
+            self._last_scheduling_context = sched_result.scheduling_context
             if sched_result.assignments:
                 self._force_reconcile = True
                 self._tick_wake.set()
@@ -811,9 +782,8 @@ class Controller:
 
         A placement-owning (``CLUSTER_VIEW``) backend's reconcile snapshot comes
         from the dispatch drain (a write), so it is built first, outside the read
-        txn; the worker-daemon reconcile snapshot, the scheduling context +
-        reservation claims, and the autoscale worker-status map all share the one
-        read snapshot.
+        txn; the worker-daemon reconcile snapshot, the scheduling context, and the
+        autoscale worker-status map all share the one read snapshot.
         """
         drained_control: reads.ControlSnapshot | None = None
         if run_reconcile and self._backend_drains_dispatch:
@@ -824,15 +794,11 @@ class Controller:
         # dashboard read for a connection.
         with self._db.control_read_snapshot() as snap:
             if run_schedule:
-                claims, changed = refresh_reservation_claims_in_tx(snap, self._health, self._worker_attrs)
-                inputs.claims = claims
-                inputs.claims_changed = changed
                 inputs.ctx = build_scheduling_context(
                     snap,
                     self._health,
                     self._worker_attrs,
                     self._config.user_budget_defaults,
-                    claims,
                 )
             if run_reconcile and not self._backend_drains_dispatch:
                 control = reads.load_control_snapshot(snap, self._health, scan_timeouts=scan_timeouts)
@@ -859,11 +825,10 @@ class Controller:
         if not ctx.pending_task_rows:
             # No pending work: empty decision, but keep the context as the
             # dashboard diagnostics snapshot for this tick.
-            return ScheduleResult(post_taint_context=ctx)
+            return ScheduleResult(scheduling_context=ctx)
         return self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=inputs.claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -876,29 +841,28 @@ class Controller:
         sched_result: ScheduleResult | None,
         recon_result: ReconcileResult | None,
         timeout_decisions: list[TerminalDecision],
+        pending_kicks: list[PendingKick],
         auto_result: AutoscaleResult | None,
         now: Timestamp,
     ) -> ControllerEffects | None:
         """Apply this tick's decisions and observations in one write transaction.
 
-        Order within the txn: reservation claims, schedule decisions, reconcile
-        observations, execution-timeout finalizations, autoscaler state. Returns
-        the reconcile kernel effects (consumed by the health fold) or None when the
-        backend reported no worker results. A no-op tick opens no transaction.
+        Order within the txn: schedule decisions, reconcile observations,
+        execution-timeout finalizations, administrative kicks, autoscaler state.
+        Returns the reconcile kernel effects (consumed by the health fold) or None
+        when the backend reported no worker results. A no-op tick opens no
+        transaction.
         """
-        has_claims = inputs.claims_changed
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions
         )
         has_recon = recon_result is not None and bool(recon_result.worker_results or recon_result.updates)
         has_state = auto_result is not None and auto_result.autoscaler_state is not None
-        if not (has_claims or has_sched or has_recon or timeout_decisions or has_state):
+        if not (has_sched or has_recon or timeout_decisions or pending_kicks or has_state):
             return None
 
         reconcile_effects: ControllerEffects | None = None
         with self._db.transaction() as cur:
-            if has_claims:
-                writes.replace_reservation_claims(cur, inputs.claims)
             if sched_result is not None:
                 self._commit_schedule_decisions(cur, sched_result, now)
             if recon_result is not None:
@@ -910,6 +874,13 @@ class Controller:
                     apply_dispatch_updates(cur, recon_result.updates, endpoints=self._endpoints, now=now)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
+            if pending_kicks:
+                # Resolve after the schedule/reconcile writes so the attempt
+                # re-check sees this tick's reassignments.
+                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
+                if kick_decisions:
+                    finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
+                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             if has_state:
                 assert auto_result is not None and auto_result.autoscaler_state is not None
                 persist_autoscaler_state(cur, auto_result.autoscaler_state)
@@ -937,14 +908,14 @@ class Controller:
         schedule via ``_schedule_phase`` and commits it in the shared end-of-tick
         transaction instead.
 
-        The controller owns only the I/O: it refreshes reservation claims and
-        builds the scheduling context in a single DB snapshot (which folds in the
-        running-task band/value the preemption pass may evict), hands the
-        resulting DB-less snapshot to ``backend.schedule`` for the pure placement
-        decision, then commits the returned assignments, preemptions, and
-        unschedulable marks. A worker-daemon backend runs the full
-        gates → order → taints → preference → find_assignments → preemption
-        pipeline; a cluster backend returns an empty result (Kueue schedules).
+        The controller owns only the I/O: it builds the scheduling context in a
+        single DB snapshot (which folds in the running-task band/value the
+        preemption pass may evict), hands the resulting DB-less snapshot to
+        ``backend.schedule`` for the pure placement decision, then commits the
+        returned assignments, preemptions, and unschedulable marks. A
+        worker-daemon backend runs the full gates → order → find_assignments →
+        preemption pipeline; a cluster backend returns an empty result (Kueue
+        schedules).
 
         No lock is needed since the control driver is single-threaded. Every DB
         access is serialized by ControllerDB._lock with multi-statement
@@ -953,23 +924,20 @@ class Controller:
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
-        claims = self._refresh_reservation_claims()
         with self._db.control_read_snapshot() as snap:
             ctx = build_scheduling_context(
                 snap,
                 self._health,
                 self._worker_attrs,
                 self._config.user_budget_defaults,
-                claims,
             )
 
         if trace:
             logger.info(
-                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers, %d reservation claims",
+                "[TRACE round=%d] Phase 0: %d pending tasks, %d workers",
                 self._scheduling_round,
                 len(ctx.pending_task_rows),
                 len(ctx.workers),
-                len(claims),
             )
 
         if not ctx.pending_task_rows:
@@ -980,7 +948,6 @@ class Controller:
         result = self._task_backend.schedule(
             ScheduleInput(
                 context=ctx,
-                claims=claims,
                 max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                 trace=trace,
             )
@@ -995,7 +962,7 @@ class Controller:
         self._apply_preemptions(result.preemptions)
 
         self._scheduling_diagnostics = result.diagnostics
-        self._last_scheduling_context = result.post_taint_context
+        self._last_scheduling_context = result.scheduling_context
 
         if result.assignments or result.preemptions:
             log_event(
@@ -1008,15 +975,6 @@ class Controller:
             )
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
-
-    def _refresh_reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Read, clean up, and refresh reservation claims. Returns updated claims."""
-        return refresh_reservation_claims(
-            self._db,
-            self._health,
-            self._worker_attrs,
-            persist=not self._config.dry_run,
-        )
 
     def _commit_assignments(self, assignments: list[Assignment]) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
@@ -1139,7 +1097,7 @@ class Controller:
         """Build per-job ``RunTaskRequest`` templates for the ASSIGNED reconcile rows.
 
         ``run_request_template`` can return ``None`` for jobs the scheduler hasn't
-        cached yet (e.g. reservation holders); those are dropped from the map.
+        cached yet; those are dropped from the map.
         """
         templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
         for row in reconcile_rows:
@@ -1197,7 +1155,13 @@ class Controller:
         if dead_workers:
             self._fail_and_teardown(dead_workers, snapshot)
 
-    def _fail_and_teardown(self, dead_workers: list[WorkerId], snapshot: reads.ControlSnapshot) -> None:
+    def _fail_and_teardown(
+        self,
+        dead_workers: list[WorkerId],
+        snapshot: reads.ControlSnapshot,
+        *,
+        reason: str = "worker reconcile failure threshold exceeded",
+    ) -> None:
         """Serialize worker failure, tear down slices + siblings, forget the lot.
 
         Fail the dead workers (``ops.worker.fail``), hand them to
@@ -1206,7 +1170,6 @@ class Controller:
         the autoscaler state, and forget every removed worker from the tracker.
         The only health-driven write is removal.
         """
-        reason = "worker reconcile failure threshold exceeded"
         sibling_reason = "unhealthy worker failed, slice terminated"
         for wid in dead_workers:
             log_event("worker_failing", str(wid), trigger=reason)
@@ -1244,6 +1207,53 @@ class Controller:
                 worker_attrs=self._worker_attrs,
             )
         self._health.forget_many(set(removed_ids) | set(auto.removed_workers))
+
+    def _drain_pending_evictions(self) -> None:
+        """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`.
+
+        The snapshot carries only the queued workers' addresses (for cached-stub
+        eviction); their rows still exist because eviction is queued before any
+        failure.
+        """
+        with self._pending_evictions_lock:
+            if not self._pending_evictions:
+                return
+            drained = sorted(self._pending_evictions)
+            self._pending_evictions.clear()
+        with self._db.read_snapshot() as snap:
+            addresses = reads.bulk_get_worker_addresses(snap, drained)
+        snapshot = reads.ControlSnapshot(worker_addresses=addresses, reconcile_rows=[], timeout_rows=[])
+        self._fail_and_teardown(drained, snapshot, reason="address reused by newly-registered worker (recycled IP)")
+
+    def _drain_pending_kicks(self) -> list[PendingKick]:
+        """Take the queued administrative kicks for this tick's commit."""
+        with self._pending_kicks_lock:
+            if not self._pending_kicks:
+                return []
+            drained = self._pending_kicks
+            self._pending_kicks = []
+        return drained
+
+    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
+        """Turn queued kicks into terminal decisions, dropping superseded attempts.
+
+        A kick targeting a specific attempt is dropped if that attempt is no longer
+        current (the task retried in the meantime); a kick with no attempt id takes
+        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
+        """
+        decisions: list[TerminalDecision] = []
+        for kick in pending_kicks:
+            if kick.attempt_id is not None:
+                detail = reads.get_task_detail(cur, kick.task_id)
+                if detail is None or detail.current_attempt_id != kick.attempt_id:
+                    logger.info(
+                        "Dropping kick for %s: attempt %d is no longer current",
+                        kick.task_id.to_wire(),
+                        kick.attempt_id,
+                    )
+                    continue
+            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
+        return decisions
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:
         """Per-worker idle/running status for the autoscale phase, read from ``tx``.
@@ -1349,11 +1359,6 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self.external_host}:{self.port}"
-
-    @property
-    def reservation_claims(self) -> dict[WorkerId, ReservationClaim]:
-        """Current reservation claims, keyed by worker ID."""
-        return read_reservation_claims(self._db)
 
     @property
     def autoscaler(self) -> Autoscaler | None:

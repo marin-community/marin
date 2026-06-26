@@ -121,23 +121,38 @@ force-push.
 ## 8. Open or update the PR
 
 Do this once the branch is ready for review. The PR description becomes the
-squash-merge commit message — write it as plain text.
+squash-merge commit message, so **write it the way you'd write a good commit
+message a reviewer reads in `git log`.**
 
 **Title:** short imperative sentence; optional `[scope]` tag.
-**Body:** what changed and why. End with an issue link if one exists.
+
+**Body:** Lead with what the change does, in plain language, then the motivation —
+the problem it fixes or the reason it's shaped this way. Include only what a
+reviewer needs to understand and approve it. The body should stand on its own: a
+reader who never saw the diff should come away knowing what happened and why.
+
+Write for the reviewer, not for a template. Most PRs are a paragraph or two with
+no headings. Markdown earns its place when it makes the change *clearer* — a
+short list of the distinct things that changed, a table, a mermaid diagram of a
+new flow are all welcome when they help. Reach for them to aid the reviewer,
+never to fill in a standard set of sections. Let the change decide the shape; do
+not impose a What/Change/Scope/Testing scaffold.
 
 Keep the title and body aligned with the branch's actual scope — including when
 you change a branch that already has a PR.
 
 **Hard rules — violations are rejected:**
 
-- No "Validation" / "Testing" / "written by …" filler. The body is *what & why*,
-  not *how I tested it* or *who wrote it*.
+- No "Testing" / "Validation" / "Test plan" section, and no "how I verified it"
+  narration. The body is *what & why*. If a test result is the very thing that
+  justifies the change, fold that one fact into the *why*; otherwise leave it out.
+- No empty boilerplate headings — a `## Summary` that restates the title, a
+  `## Changes` that just lists the touched files. If a heading's body adds nothing
+  the reviewer can't get from the title or the diff, delete the heading.
+- No "written by …" / "Created by Claude" notes; don't credit yourself.
 - No checkboxes (`- [ ]`, `- [x]`), no emoji.
 - No filler openers ("This PR…", "I noticed…", "Summary of changes:").
-- Under ~500 words.
-- Don't credit yourself, no "Created by Claude" filler.
-- Only use Markdown & sections if this is a large change that requires structured description
+- Under ~500 words. Shorter is better; a one-line change gets a one-line body.
 
 Example:
 
@@ -182,33 +197,60 @@ Opening the PR does not end your turn. You MUST monitor until the PR is merged o
 closed, or the user tells you to stop. A summary message to the user is NOT a
 substitute for monitoring and is NOT an exit condition.
 
-Drive the loop yourself — do not just check once. While CI runs, block on it with
-`gh pr checks <N> --watch --fail-fast` instead of re-polling. Once CI is green,
-switch to `ScheduleWakeup` polling for comments/reviews/merge with exponential
-backoff (e.g. 270s, doubling, capped at the 1h `ScheduleWakeup` max), giving up
-after ~4h idle. Only stop early when an exit condition below is met.
+Drive the loop with `scripts/ci/wait_for.py`, which blocks on **all** the things
+that matter at once (CI finishing, a new comment or review, the PR closing) and
+returns as soon as the first one fires — so you no longer hand-roll a
+`gh pr checks --watch` then `ScheduleWakeup` backoff. Run it **in the background**
+and you are re-invoked when an event fires; it handles the exponential backoff
+internally.
 
-Each poll, check **both**:
-1. **CI status** — `gh pr checks <N>`. On failure, read the failing job log and
-   fix it. A failure in a file you did not touch is NOT automatically pre-existing:
-   first check whether the same job fails on `main` without your change (or whether
-   your change altered an API, config, or behavior that breaks that caller/test). If
-   your change caused it — even in an untouched file — it is your regression; fix it.
-   Only call it pre-existing once you have confirmed it fails on `main` independently,
-   then handle per the unrelated-changes rule. Never silently absorb a failure.
-2. **New comments and reviews** — `gh api repos/<owner>/<repo>/pulls/<N>/comments`
-   and `.../reviews`, plus `gh pr view <N> --json comments`. CI being green does
-   NOT mean there is nothing to do — review bots and humans comment after CI
-   passes. Never declare the PR done on CI status alone.
+```bash
+uv run scripts/ci/wait_for.py --timeout 12h \
+  "github.ci <N>" "github.pr_comment <N>" "github.review <N>" \
+  'poll test "$(gh pr view <N> --json state --jq .state)" != OPEN'
+```
+
+The `poll '<shell command>'` arm is the escape hatch for anything without a
+built-in: it fires when the command exits `0`, so the command itself is the
+predicate. Here it detects the PR closing/merging (the loop's stop condition);
+use the same pattern to wait on a specific check, a downstream job, or a deploy —
+compose with the shell (`| grep -q`, `| jq -e`, `test`).
+
+It prints one JSON object naming the arm that fired and its payload, then exits
+(`0` fired, `2` the 12h timeout elapsed, `1` an error). **Firing is not a verdict:**
+`github.ci` fires when CI *finishes*, pass or fail — read `result.conclusion`.
+On `result.status == "timeout"` — 12h with no event — you may **stand down**: report
+where the PR stands and stop. The long timeout exists precisely so an idle PR
+(green CI, awaiting human review with nothing actionable) lets you end the turn
+rather than re-arm forever.
+
+When an arm fires, act on it, then re-arm `wait_for.py` for the next event:
+
+1. **`github.ci`** — if `result.conclusion` is `failure`, read the failing job
+   log and fix it. A failure in a file you did not touch is NOT automatically
+   pre-existing: first check whether the same job fails on `main` without your
+   change (or whether your change altered an API, config, or behavior that breaks
+   that caller/test). If your change caused it — even in an untouched file — it is
+   your regression; fix it. Only call it pre-existing once you have confirmed it
+   fails on `main` independently, then handle per the unrelated-changes rule.
+   Never silently absorb a failure. Once CI has finished, **drop the `github.ci`
+   arm** from later re-arms — CI stays terminal, so it would fire immediately on
+   every poll. Re-add it only when you push a new commit (which restarts CI).
+2. **`github.pr_comment` / `github.review`** — respond to it (see below). CI being
+   green does NOT mean there is nothing to do — review bots and humans comment
+   after CI passes. Never declare the PR done on CI status alone. `wait_for.py`
+   ignores your own comments by default, so it wakes you only on others' activity.
+3. **`poll` (PR closed)** — the PR merged or closed; this is an exit condition.
 
 Respond to every human and agent comment: address obvious ones directly (commit
 the fix, then reply, prefixing agent replies with `🤖`) and resolve them. For
 comments you are unsure about, report your analysis and proposed action to the
 user — but keep monitoring while you wait.
 
-Exit conditions (the only ways to stop the loop): the PR is merged or closed, or
-the user explicitly tells you to stop. Blocking on a user question pauses for the
-answer; it does not end monitoring.
+Exit conditions (the ways to stop the loop): the PR is merged or closed, the user
+explicitly tells you to stop, or `wait_for.py` hits its 12h timeout with nothing
+left to act on (stand down with a status report). Blocking on a user question
+pauses for the answer; it does not end monitoring.
 
 ## Rules
 

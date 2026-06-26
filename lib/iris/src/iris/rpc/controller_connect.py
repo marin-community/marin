@@ -40,6 +40,9 @@ class ControllerService(Protocol):
     async def list_tasks(self, request: controller__pb2.Controller.ListTasksRequest, ctx: RequestContext) -> controller__pb2.Controller.ListTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def kick_tasks(self, request: controller__pb2.Controller.KickTasksRequest, ctx: RequestContext) -> controller__pb2.Controller.KickTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def register(self, request: controller__pb2.Controller.RegisterRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -187,6 +190,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_tasks,
+                ),
+                "/iris.cluster.ControllerService/KickTasks": Endpoint.unary(
+                    method=MethodInfo(
+                        name="KickTasks",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.KickTasksRequest,
+                        output=controller__pb2.Controller.KickTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.kick_tasks,
                 ),
                 "/iris.cluster.ControllerService/Register": Endpoint.unary(
                     method=MethodInfo(
@@ -575,6 +588,26 @@ class ControllerServiceClient(ConnectClient):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListTasksRequest,
                 output=controller__pb2.Controller.ListTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def kick_tasks(
+        self,
+        request: controller__pb2.Controller.KickTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.KickTasksResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="KickTasks",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.KickTasksRequest,
+                output=controller__pb2.Controller.KickTasksResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -1077,6 +1110,8 @@ class ControllerServiceSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_tasks(self, request: controller__pb2.Controller.ListTasksRequest, ctx: RequestContext) -> controller__pb2.Controller.ListTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def kick_tasks(self, request: controller__pb2.Controller.KickTasksRequest, ctx: RequestContext) -> controller__pb2.Controller.KickTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def register(self, request: controller__pb2.Controller.RegisterRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_workers(self, request: controller__pb2.Controller.ListWorkersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListWorkersResponse:
@@ -1200,6 +1235,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_tasks,
+                ),
+                "/iris.cluster.ControllerService/KickTasks": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="KickTasks",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.KickTasksRequest,
+                        output=controller__pb2.Controller.KickTasksResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.kick_tasks,
                 ),
                 "/iris.cluster.ControllerService/Register": EndpointSync.unary(
                     method=MethodInfo(
@@ -1588,6 +1633,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListTasksRequest,
                 output=controller__pb2.Controller.ListTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def kick_tasks(
+        self,
+        request: controller__pb2.Controller.KickTasksRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.KickTasksResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="KickTasks",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.KickTasksRequest,
+                output=controller__pb2.Controller.KickTasksResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

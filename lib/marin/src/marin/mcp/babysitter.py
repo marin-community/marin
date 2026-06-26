@@ -8,7 +8,6 @@ import base64
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 from finelog.rpc import logging_pb2
@@ -18,14 +17,15 @@ from iris.cli.bug_report import gather_bug_report
 from iris.cli.job import build_job_summary
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
-from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_display import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
+from rigging.auth import BearerTokenInjector, StaticTokenProvider, TokenProvider
+from rigging.credential_store import cluster_name_from_url, load_credentials
+from rigging.credentials import ClientCredentials
 from rigging.timing import Timestamp
 
 DEFAULT_LOG_LINES = 200
@@ -403,7 +403,7 @@ class IrisBabysitter:
     def __init__(self, config: IrisConnectionConfig):
         self.config = config
         self.token_provider = _token_provider(config.cluster)
-        interceptors = [AuthTokenInjector(self.token_provider)] if self.token_provider else []
+        interceptors = [BearerTokenInjector(self.token_provider, "authorization")] if self.token_provider else []
         self.controller = ControllerServiceClientSync(
             config.controller_url,
             timeout_ms=config.timeout_ms,
@@ -601,7 +601,9 @@ class IrisBabysitter:
             self.config.controller_url,
             JobName.from_wire(job_id),
             tail=tail,
-            token_provider=self.token_provider,
+            credentials=(
+                ClientCredentials(token_provider=self.token_provider) if self.token_provider is not None else None
+            ),
         )
         return self.envelope(asdict(report))
 
@@ -685,13 +687,11 @@ def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]
     return summary
 
 
-def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
-    credential = load_token(cluster, store_path=store_path)
-    if credential is None:
-        credential = load_any_token(store_path=store_path)
-    if credential is None:
+def _token_provider(cluster: str) -> TokenProvider | None:
+    record = load_credentials(cluster)
+    if record is None or record.app_token is None:
         return None
-    return StaticTokenProvider(credential.token)
+    return StaticTokenProvider(record.app_token)
 
 
 def _normalize_state_filter(state: str) -> str:

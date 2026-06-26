@@ -31,8 +31,6 @@ OOM on skewed or large-item workloads where a row-count limit provides no
 reliable bound.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import functools
 import io
@@ -48,7 +46,7 @@ import cloudpickle
 import msgspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import is_remote_path, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
@@ -326,7 +324,7 @@ class ScatterReader:
         self.avg_item_bytes = avg_item_bytes
 
     @classmethod
-    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
+    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
         Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
@@ -534,8 +532,11 @@ class ScatterWriter:
         self._first_item_bytes: float = 0.0  # logged at close for comparison
 
         ensure_parent_dir(data_path)
-        fs, fs_path = url_to_fs(data_path)
-        self._out = fs.open(fs_path, "wb")
+        self._fs, self._fs_path = url_to_fs(data_path)
+        self._out = self._fs.open(self._fs_path, "wb")
+        # Cached committed result; makes close() idempotent so the
+        # context-manager exit after an explicit close() is a no-op.
+        self._result: ListShard | None = None
 
     def _flush(self, target: int, buf: list) -> None:
         if self._combiner_fn is not None:
@@ -608,7 +609,13 @@ class ScatterWriter:
             self._mid_write_flushes += 1
 
     def close(self) -> ListShard:
-        """Flush remaining buffers, write sidecar, return ListShard."""
+        """Flush remaining buffers, write sidecar, return ListShard.
+
+        Idempotent: the committed result is cached, so a second call (e.g. the
+        context-manager exit after an explicit ``close()``) is a no-op.
+        """
+        if self._result is not None:
+            return self._result
         close_flushes = 0
         with log_time(f"Flushing remaining buffers for {self._data_path}"):
             for target, buf in sorted(self._buffers.items()):
@@ -643,13 +650,42 @@ class ScatterWriter:
         with log_time(f"Writing scatter meta for {self._data_path}"):
             _write_scatter_meta(self._data_path, sidecar)
 
-        return ListShard(refs=[MemChunk(items=[self._data_path])])
+        self._result = ListShard(refs=[MemChunk(items=[self._data_path])])
+        return self._result
 
-    def __enter__(self) -> ScatterWriter:
+    def cleanup(self) -> None:
+        """Discard the output instead of committing it.
+
+        A clean ``close()`` is the only thing that finalises an object-store
+        upload; on a failed or reassigned shard the upload is otherwise left
+        open and keeps billing for uploaded parts (see #6488).
+        """
+        if is_remote_path(self._data_path):
+            # discard() aborts the multipart upload. Run it even after close()
+            # failed mid-commit: fsspec flips the file to closed in its finally
+            # block, but the upload stays open until aborted (a no-op if nothing
+            # was uploaded).
+            self._out.discard()
+            return
+        if not self._out.closed:
+            self._out.close()
+        if self._fs.exists(self._fs_path):
+            self._fs.rm(self._fs_path)
+
+    def __enter__(self) -> "ScatterWriter":
         return self
 
-    def __exit__(self, *exc: Any) -> None:
-        self.close()
+    def __exit__(self, exc_type: type[BaseException] | None, *exc: Any) -> None:
+        if exc_type is not None:
+            self.cleanup()
+            return
+        try:
+            self.close()
+        except BaseException:
+            # A failure while committing (e.g. a dead R2 connection) would
+            # otherwise leave the multipart upload open. Discard, then re-raise.
+            self.cleanup()
+            raise
 
 
 def _write_scatter(
@@ -670,7 +706,7 @@ def _write_scatter(
         A ListShard wrapping the data file path (as the existing scatter
         plumbing expects a list of paths).
     """
-    writer = ScatterWriter(
+    with ScatterWriter(
         data_path=data_path,
         key_fn=key_fn,
         num_output_shards=num_output_shards,
@@ -678,7 +714,8 @@ def _write_scatter(
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
         buffer_limit_bytes=buffer_limit_bytes,
-    )
-    for item in items:
-        writer.write(item)
-    return writer.close()
+    ) as writer:
+        for item in items:
+            writer.write(item)
+        # __exit__ discards the in-flight upload if anything above raises.
+        return writer.close()

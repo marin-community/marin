@@ -21,6 +21,7 @@ from rigging.timing import Duration, Timestamp, TokenBucket
 from iris.chaos import chaos_raise
 from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.backends.types import Labels, QuotaExhaustedError, SliceHandle
+from iris.cluster.config import ScaleGroupConfig, ScaleGroupResources, SliceConfig, WorkerConfig
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
     AttributeValue,
@@ -28,6 +29,7 @@ from iris.cluster.constraints import (
     DeviceType,
     ResourceCapacity,
     WellKnownAttribute,
+    accelerator_type_to_string,
     check_resource_fit,
     evaluate_constraint,
     is_cpu_device_type_constraint,
@@ -39,8 +41,8 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
     SliceFate,
 )
 from iris.cluster.controller.autoscaler.state import GroupPersist, SlicePersist
-from iris.cluster.types import WorkerStatusMap, get_gpu_count, get_tpu_count
-from iris.rpc import config_pb2, job_pb2, time_pb2, vm_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatusMap, get_gpu_count, get_tpu_count
+from iris.rpc import job_pb2, time_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -140,57 +142,62 @@ class SliceState:
     # controller restart), which the per-worker counters never observe.
     # Memory-only.
     no_worker_probes: int = 0
+    # Timestamp of the first describe in the current run of UNKNOWN observations,
+    # cleared whenever the slice resolves to a concrete state (e.g. READY). The
+    # unresolvable-timeout is measured from here, NOT from created_at, so a single
+    # transient UNKNOWN never terminates a long-running or freshly-adopted slice.
+    # Memory-only.
+    unknown_since: Timestamp | None = None
     error_message: str = ""
 
 
 def prepare_slice_config(
-    template: config_pb2.SliceConfig,
-    parent_config: config_pb2.ScaleGroupConfig,
+    template: SliceConfig,
+    parent_config: ScaleGroupConfig,
     label_prefix: str,
-) -> config_pb2.SliceConfig:
+) -> SliceConfig:
     """Build a SliceConfig for WorkerInfraProvider.create_slice() from a template.
 
     Copies the template and sets the name_prefix and managed/scale-group labels.
     Propagates num_vms from the parent ScaleGroupConfig when the template
     doesn't set it. accelerator_type, accelerator_variant, preemptible,
     gpu_count, and disk_size_gb are already derived from resources onto the
-    template by _derive_slice_config_from_resources() during config loading.
+    template during config loading.
     """
     labels = Labels(label_prefix)
-    config = config_pb2.SliceConfig()
-    config.CopyFrom(template)
+    config = template.model_copy(deep=True)
     config.name_prefix = f"{label_prefix}-{parent_config.name}"
     config.labels[labels.iris_managed] = "true"
     config.labels[labels.iris_scale_group] = parent_config.name
 
-    if not config.num_vms and parent_config.HasField("num_vms"):
+    if not config.num_vms and parent_config.num_vms is not None:
         config.num_vms = parent_config.num_vms
 
     return config
 
 
-def _region_from_template(template: config_pb2.SliceConfig) -> str | None:
+def _region_from_template(template: SliceConfig) -> str | None:
     """Region derived from a scale group's slice template."""
-    if template.HasField("gcp") and template.gcp.zone:
+    if template.gcp is not None and template.gcp.zone:
         return template.gcp.zone.rsplit("-", 1)[0]
-    if template.HasField("coreweave") and template.coreweave.region:
+    if template.coreweave is not None and template.coreweave.region:
         return template.coreweave.region
     return None
 
 
-def _zone_from_template(template: config_pb2.SliceConfig) -> str | None:
+def _zone_from_template(template: SliceConfig) -> str | None:
     """Zone derived from a scale group's slice template."""
-    if template.HasField("gcp") and template.gcp.zone:
+    if template.gcp is not None and template.gcp.zone:
         return template.gcp.zone
-    if template.HasField("coreweave") and template.coreweave.region:
+    if template.coreweave is not None and template.coreweave.region:
         return template.coreweave.region
     return None
 
 
 def build_worker_config_for_group(
-    base_worker_config: config_pb2.WorkerConfig | None,
-    group_config: config_pb2.ScaleGroupConfig,
-) -> config_pb2.WorkerConfig | None:
+    base_worker_config: WorkerConfig | None,
+    group_config: ScaleGroupConfig,
+) -> WorkerConfig | None:
     """Merge base worker config with per-scale-group overrides.
 
     Returns None when base_worker_config is None (test/local mode).
@@ -198,33 +205,32 @@ def build_worker_config_for_group(
     if not base_worker_config:
         return None
 
-    wc = config_pb2.WorkerConfig()
-    wc.CopyFrom(base_worker_config)
+    wc = base_worker_config.model_copy(deep=True)
 
-    resources = group_config.resources if group_config.HasField("resources") else None
+    resources = group_config.resources
     if resources is not None:
         wc.accelerator_type = resources.device_type
         if resources.device_variant:
             wc.accelerator_variant = resources.device_variant
-        if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
+        if resources.device_type == AcceleratorType.GPU and resources.device_count > 0:
             wc.gpu_count = resources.device_count
         wc.capacity_type = resources.capacity_type
         # Advertised scheduling CPU capacity; the worker reports this instead of
         # the probed host count so operators can over-commit CPU via config.
         wc.cpu_millicores = resources.cpu_millicores
 
-    if group_config.HasField("worker"):
+    if group_config.worker is not None:
         for k, v in group_config.worker.attributes.items():
             wc.worker_attributes[k] = v
         if group_config.worker.cache_dir:
             wc.cache_dir = group_config.worker.cache_dir
 
     template = group_config.slice_template
-    region = _region_from_template(template)
+    region = _region_from_template(template) if template is not None else None
     if region and not wc.worker_attributes.get(WellKnownAttribute.REGION):
         wc.worker_attributes[WellKnownAttribute.REGION] = region
 
-    zone = _zone_from_template(template)
+    zone = _zone_from_template(template) if template is not None else None
     if zone and not wc.worker_attributes.get(WellKnownAttribute.ZONE):
         wc.worker_attributes[WellKnownAttribute.ZONE] = zone
 
@@ -234,13 +240,13 @@ def build_worker_config_for_group(
     return wc
 
 
-def _zones_from_config(config: config_pb2.ScaleGroupConfig) -> list[str]:
+def _zones_from_config(config: ScaleGroupConfig) -> list[str]:
     """Extract zones from ScaleGroupConfig's slice_template.
 
     Raises ValueError for GCP configs with no zones, since reconcile and
     list_slices would silently do nothing.
     """
-    if not config.HasField("slice_template") or not config.slice_template.HasField("gcp"):
+    if config.slice_template is None or config.slice_template.gcp is None:
         return []
     gcp = config.slice_template.gcp
     if gcp.zone:
@@ -310,7 +316,7 @@ class ScalingGroup:
 
     def __init__(
         self,
-        config: config_pb2.ScaleGroupConfig,
+        config: ScaleGroupConfig,
         platform: WorkerInfraProvider,
         label_prefix: str = "iris",
         idle_threshold: Duration = DEFAULT_IDLE_THRESHOLD,
@@ -394,7 +400,7 @@ class ScalingGroup:
         return self._label_prefix
 
     @property
-    def config(self) -> config_pb2.ScaleGroupConfig:
+    def config(self) -> ScaleGroupConfig:
         """Configuration for this scale group."""
         return self._config
 
@@ -409,11 +415,9 @@ class ScalingGroup:
         return self._config.num_vms or 1
 
     @property
-    def resources(self) -> config_pb2.ScaleGroupResources | None:
+    def resources(self) -> ScaleGroupResources | None:
         """Per-VM resource capacity for this scale group."""
-        if self._config.HasField("resources"):
-            return self._config.resources
-        return None
+        return self._config.resources
 
     @property
     def buffer_slices(self) -> int:
@@ -429,9 +433,11 @@ class ScalingGroup:
     def region(self) -> str | None:
         """Region derived from the slice template."""
         template = self._config.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
+        if template is None:
+            return None
+        if template.gcp is not None and template.gcp.zone:
             return template.gcp.zone.rsplit("-", 1)[0]
-        if template.HasField("coreweave") and template.coreweave.region:
+        if template.coreweave is not None and template.coreweave.region:
             return template.coreweave.region
         return None
 
@@ -439,11 +445,32 @@ class ScalingGroup:
     def zone(self) -> str | None:
         """Zone derived from the slice template."""
         template = self._config.slice_template
-        if template.HasField("gcp") and template.gcp.zone:
+        if template is None:
+            return None
+        if template.gcp is not None and template.gcp.zone:
             return template.gcp.zone
-        if template.HasField("coreweave") and template.coreweave.region:
+        if template.coreweave is not None and template.coreweave.region:
             return template.coreweave.region
         return None
+
+    @property
+    def device_type(self) -> DeviceType:
+        """Accelerator device type (TPU/GPU/CPU) for this scale group."""
+        if self._config.resources is None:
+            return DeviceType.CPU
+        accel = self._config.resources.device_type
+        if accel == AcceleratorType.GPU:
+            return DeviceType.GPU
+        if accel == AcceleratorType.TPU:
+            return DeviceType.TPU
+        return DeviceType.CPU
+
+    @property
+    def accelerator_variant(self) -> str:
+        """Accelerator variant (e.g. ``v6e``); ``""`` when unset or CPU."""
+        if self._config.resources is not None:
+            return self._config.resources.device_variant
+        return ""
 
     @property
     def current_demand(self) -> int:
@@ -530,6 +557,7 @@ class ScalingGroup:
                 state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
+                state.unknown_since = None  # resolved: reset the unresolvable-timeout clock
         if state is not None:
             logger.info(
                 "slice ready group=%s slice=%s n_workers=%d worker_ids=%s",
@@ -559,6 +587,23 @@ class ScalingGroup:
                 error_message,
             )
 
+    def note_slice_unknown(self, slice_id: str, timestamp: Timestamp) -> Duration:
+        """Record an UNKNOWN describe and return how long the slice has been continuously UNKNOWN.
+
+        The first UNKNOWN observation stamps ``unknown_since``; it is cleared the
+        moment the slice resolves (``mark_slice_ready``). Callers compare the
+        returned duration against the unresolvable-timeout so that one transient
+        UNKNOWN — common for a long-running or freshly-adopted slice — never
+        terminates it, while a slice genuinely stuck UNKNOWN still fails.
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return Duration.from_ms(0)
+            if state.unknown_since is None:
+                state.unknown_since = timestamp
+            return Duration.from_ms(timestamp.epoch_ms() - state.unknown_since.epoch_ms())
+
     def reconcile(self) -> None:
         """Discover and adopt existing slices from the cloud.
 
@@ -581,7 +626,7 @@ class ScalingGroup:
         self,
         tags: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a new slice via the platform.
 
@@ -597,8 +642,9 @@ class ScalingGroup:
             The newly created SliceHandle
         """
         chaos_raise("vm.create")
+        template = self._config.slice_template if self._config.slice_template is not None else SliceConfig()
         slice_config = prepare_slice_config(
-            self._config.slice_template,
+            template,
             self._config,
             self._label_prefix,
         )
@@ -612,7 +658,7 @@ class ScalingGroup:
             slice_config.accelerator_variant,
             slice_config.gpu_count,
             dict(slice_config.labels),
-            slice_config.coreweave.instance_type if slice_config.HasField("coreweave") else "n/a",
+            slice_config.coreweave.instance_type if slice_config.coreweave is not None else "n/a",
         )
 
         return self._platform.create_slice(slice_config, worker_config=worker_config)
@@ -671,13 +717,21 @@ class ScalingGroup:
         with self._slices_lock:
             return [s.handle for s in self._slices.values()]
 
-    def non_ready_slice_handles(self) -> list[tuple[str, SliceHandle]]:
-        """Snapshot non-READY slice handles for background lifecycle polling."""
+    def slices_needing_describe(self) -> list[tuple[str, SliceHandle]]:
+        """Snapshot slice handles the caller must ``describe()`` this tick.
+
+        Returns not-yet-ready slices (BOOTING/INITIALIZING), plus READY slices
+        the autoscaler tracks no workers for. A READY slice with empty
+        ``worker_ids`` never resolved its membership (e.g. adopted from a
+        checkpoint that recorded none); re-describing lets ``refresh`` repopulate
+        or reap it instead of leaving it stuck DEGRADED.
+        """
         with self._slices_lock:
             return [
                 (slice_id, state.handle)
                 for slice_id, state in self._slices.items()
                 if state.lifecycle in (SliceLifecycleState.BOOTING, SliceLifecycleState.INITIALIZING)
+                or (state.lifecycle == SliceLifecycleState.READY and not state.worker_ids)
             ]
 
     def slice_count(self) -> int:
@@ -1003,13 +1057,13 @@ class ScalingGroup:
         if device_type == DeviceType.CPU:
             return True  # CPU jobs can run on ANY group
 
-        group_type = self._get_device_type()
+        group_type = self.device_type
         if group_type != device_type:
             return False
 
         if device_variants is None:
             return True
-        group_variant = self._config.resources.device_variant if self._config.HasField("resources") else ""
+        group_variant = self._config.resources.device_variant if self._config.resources is not None else ""
         return group_variant.lower() in {v.lower() for v in device_variants}
 
     def to_attributes(self) -> dict[str, AttributeValue]:
@@ -1019,11 +1073,11 @@ class ScalingGroup:
         used for worker matching to also work for scaling group routing.
         """
         attrs: dict[str, AttributeValue] = {}
-        attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(self._get_device_type().value)
-        if self._config.HasField("resources") and self._config.resources.device_variant:
+        attrs[WellKnownAttribute.DEVICE_TYPE] = AttributeValue(self.device_type.value)
+        if self._config.resources is not None and self._config.resources.device_variant:
             attrs[WellKnownAttribute.DEVICE_VARIANT] = AttributeValue(self._config.resources.device_variant.lower())
-        if self._config.HasField("resources"):
-            is_preemptible = self._config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        if self._config.resources is not None:
+            is_preemptible = self._config.resources.capacity_type == CapacityType.PREEMPTIBLE
             attrs[WellKnownAttribute.PREEMPTIBLE] = AttributeValue(str(is_preemptible).lower())
         region = self.region
         if region:
@@ -1051,17 +1105,6 @@ class ScalingGroup:
             if not evaluate_constraint(attrs.get(c.key), c):
                 return False
         return True
-
-    def _get_device_type(self) -> DeviceType:
-        """Get device type from resources."""
-        if not self._config.HasField("resources"):
-            return DeviceType.CPU
-        accel = self._config.resources.device_type
-        if accel == config_pb2.ACCELERATOR_TYPE_GPU:
-            return DeviceType.GPU
-        elif accel == config_pb2.ACCELERATOR_TYPE_TPU:
-            return DeviceType.TPU
-        return DeviceType.CPU
 
     def availability(self, timestamp: Timestamp | None = None) -> AvailabilityState:
         """Compute current availability state for waterfall routing.
@@ -1194,9 +1237,14 @@ class ScalingGroup:
         blocked_until = availability.until if availability.until is not None else Timestamp.from_ms(0)
         counts = self.slice_state_counts()
 
+        resources = self._config.resources
         status = vm_pb2.ScaleGroupStatus(
             name=self.name,
-            config=self._config,
+            device_type=accelerator_type_to_string(resources.device_type) if resources is not None else "",
+            device_variant=resources.device_variant if resources is not None else "",
+            quota_pool=self._config.quota_pool,
+            allocation_tier=self._config.allocation_tier,
+            region=self.region or "",
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
             backoff_until=timestamp_to_proto(Timestamp.from_ms(0)),
