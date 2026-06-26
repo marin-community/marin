@@ -29,12 +29,14 @@ RaggedDotFn = Callable[[jax.Array, jax.Array, jax.Array], jax.Array]
 def _fp8_current_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     """All-E4M3, current/per-step-scaled grouped GEMM (the GFP8-035 E4M3-range validation knob).
 
-    Accumulates in float32 and uses the ``xla`` backend so the E4M3 quantization is numerically
-    faithful regardless of tensor-core availability; the result is cast back to the operand dtype
-    so the surrounding bf16 graph is unchanged.
+    Accumulates in float32 and uses the ``auto`` backend -- the same per-platform default the bf16
+    ``ragged_dot`` resolves to (triton/mosaic on GPU). All-E4M3 operands share one f8 dtype, so the
+    mixed-f8 backend walls don't apply; the E4M3 quantization is identical on any backend. (Forcing
+    ``xla`` instead tripped an XLA-GPU layout-normalization RET_CHECK.) Result is cast back to the
+    operand dtype so the surrounding bf16 graph is unchanged.
     """
     # preferred_element_type and implementation are custom_vjp nondiff_argnums -> pass positionally.
-    out = fp8_current_scaled_ragged_dot(lhs, rhs, group_sizes, jnp.float32, "xla")
+    out = fp8_current_scaled_ragged_dot(lhs, rhs, group_sizes, jnp.float32, "auto")
     return out.astype(lhs.dtype)
 
 
