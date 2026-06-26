@@ -166,19 +166,19 @@ def _sonic_kernel_config(hidden_dim: int) -> tuple[int, int, int]:
     return block_h, block_k, num_warps
 
 
-def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> jax.Array:
+def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "T"]:
     return jnp.arange(0, tokens * topk + 1, topk, dtype=jnp.int32)
 
 
 def _sonic_gather_sum_impl(
-    dispatch_output: jax.Array,
-    weights_flat: jax.Array,
-    positions_flat: jax.Array,
-    offsets: jax.Array,
+    dispatch_output: Float[Array, "M H"],
+    weights_flat: Float[Array, "M"],
+    positions_flat: Int[Array, "M"],
+    offsets: Int[Array, "T"],
     *,
     tokens: int,
     topk: int,
-) -> jax.Array:
+) -> Float[Array, "T H"]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, block_k, num_warps = _sonic_kernel_config(hidden_dim)
@@ -208,15 +208,15 @@ def _sonic_gather_sum_impl(
 
 
 def _sonic_gather_sum_bwd_impl(
-    dout: jax.Array,
-    dispatch_output: jax.Array,
-    weights_flat: jax.Array,
-    positions_flat: jax.Array,
-    offsets: jax.Array,
+    dout: Float[Array, "T H"],
+    dispatch_output: Float[Array, "M H"],
+    weights_flat: Float[Array, "M"],
+    positions_flat: Int[Array, "M"],
+    offsets: Int[Array, "T"],
     *,
     tokens: int,
     topk: int,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[Float[Array, "M H"], Float[Array, "M"]]:
     _require_sonic_deps()
     hidden_dim = dispatch_output.shape[1]
     block_h, _block_k, num_warps = _sonic_kernel_config(hidden_dim)
@@ -246,10 +246,10 @@ def _sonic_gather_sum_bwd_impl(
 
 @jax.custom_vjp
 def sonic_gather_sum(
-    dispatch_output: jax.Array,
-    dispatch_positions: jax.Array,
-    combine_weights: jax.Array,
-) -> jax.Array:
+    dispatch_output: Float[Array, "M H"],
+    dispatch_positions: Int[Array, "M"],
+    combine_weights: Float[Array, "T K"],
+) -> Float[Array, "T H"]:
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -265,10 +265,10 @@ def sonic_gather_sum(
 
 
 def _sonic_gather_sum_fwd(
-    dispatch_output: jax.Array,
-    dispatch_positions: jax.Array,
-    combine_weights: jax.Array,
-) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+    dispatch_output: Float[Array, "M H"],
+    dispatch_positions: Int[Array, "M"],
+    combine_weights: Float[Array, "T K"],
+) -> tuple[Float[Array, "T H"], tuple[Float[Array, "M H"], Int[Array, "M"], Float[Array, "T K"]]]:
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -285,9 +285,9 @@ def _sonic_gather_sum_fwd(
 
 
 def _sonic_gather_sum_bwd(
-    residuals: tuple[jax.Array, jax.Array, jax.Array],
-    dout: jax.Array,
-) -> tuple[jax.Array, None, jax.Array]:
+    residuals: tuple[Float[Array, "M H"], Int[Array, "M"], Float[Array, "T K"]],
+    dout: Float[Array, "T H"],
+) -> tuple[Float[Array, "M H"], None, Float[Array, "T K"]]:
     dispatch_output, dispatch_positions, combine_weights = residuals
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
