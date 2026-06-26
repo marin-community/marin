@@ -18,7 +18,6 @@ import haliax as hax
 from haliax._src.fp8 import compute_scale, fp8_scaled_dot_general
 from haliax.nn import Linear
 from haliax.quantization import (
-    Fp8DirectDotGeneralOp,
     Fp8DotGeneralOp,
     QuantizationConfig,
     apply_updates,
@@ -27,13 +26,12 @@ from haliax.quantization import (
 )
 
 
-@pytest.mark.parametrize("dot_general_cls", [Fp8DotGeneralOp, Fp8DirectDotGeneralOp])
-def test_fp8_is_reasonable(dot_general_cls):
+def test_fp8_is_reasonable():
     In = hax.Axis("In", 8)
     Out = hax.Axis("Out", 8)
     linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=0.1)
 
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=dot_general_cls.init(), init_scale=0.1)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init(), init_scale=0.1)
 
     input = hax.random.normal(jrandom.PRNGKey(3), In)
     output = linear(input)
@@ -64,12 +62,10 @@ def _all_dot_general_eqns(jaxpr):
 
 
 def test_fp8_direct_feeds_fp8_operands_to_dot():
-    # The point of the direct op (vs the QDQ Fp8DotGeneralOp) is that the matmul
-    # sees genuine fp8 operands rather than dequantized bf16 ones. Assert that
-    # the lowered jaxpr contains a dot_general whose operands are float8.
+    # Assert the lowered jaxpr has a dot_general with float8 operands.
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 8)
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init())
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init())
     input = hax.random.normal(jrandom.PRNGKey(3), In)
 
     jaxpr = jax.make_jaxpr(lambda m, x: m(x).array)(fp8_linear, input)
@@ -82,20 +78,18 @@ def test_fp8_direct_feeds_fp8_operands_to_dot():
 
 @pytest.mark.skipif(
     jax.default_backend() != "gpu",
-    reason="cuBLASLt fp8 kernels require a CUDA GPU (Hopper/sm90)",
+    reason="cuBLASLt FP8 kernels require a CUDA GPU (Hopper/sm90)",
 )
 def test_fp8_direct_emits_cublas_fp8_kernel_on_gpu():
-    # On Hopper the direct op's forward matmul must run as a genuine fp8 GEMM on
-    # tensor cores. Depending on shape, XLA's autotuner lowers it either to a
-    # cuBLASLt fp8 kernel (__cublas$lt$matmul$f8) or to a Triton fp8 gemm fusion
-    # (__triton_nested_gemm_fusion) -- both consume fp8 (e4m3) operands. The
-    # legacy QDQ op's forward instead falls back to a bf16 __cublas$lt$matmul
-    # with the operands dequantized (no fp8 reaching the matmul).
+    # On Hopper the forward matmul must run as an FP8 GEMM on tensor cores.
+    # Depending on shape, XLA's autotuner lowers it either to a cuBLASLt FP8
+    # kernel (__cublas$lt$matmul$f8) or to a Triton FP8 gemm fusion
+    # (__triton_nested_gemm_fusion) -- both consume FP8 (e4m3) operands.
     Batch = hax.Axis("Batch", 512)
     In = hax.Axis("In", 512)
     Out = hax.Axis("Out", 512)
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), use_bias=False, dot_general=Fp8DirectDotGeneralOp.init())
-    # Run in bf16 (the training compute dtype); fp8 state stays float32.
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), use_bias=False, dot_general=Fp8DotGeneralOp.init())
+    # Run in bf16 (the training compute dtype); FP8 state stays float32.
     fp8_linear = dataclasses.replace(fp8_linear, weight=fp8_linear.weight.astype(jnp.bfloat16))
     x = hax.random.normal(jrandom.PRNGKey(1), (Batch, In)).astype(jnp.bfloat16)
 
@@ -108,12 +102,12 @@ def test_fp8_direct_emits_cublas_fp8_kernel_on_gpu():
 
     hlo = jax.jit(forward).lower(params, x).compile().as_text()
 
-    # fp8 operands must reach the matmul (a bf16 fallback dequantizes them first).
-    assert "f8e4m3" in hlo, "forward should quantize operands to fp8 (e4m3) before the matmul"
-    # ... fed to a real fp8 GEMM kernel: cuBLASLt fp8 or a Triton fp8 gemm fusion.
+    # FP8 operands must reach the matmul (a bf16 fallback dequantizes them first).
+    assert "f8e4m3" in hlo, "forward should quantize operands to FP8 (e4m3) before the matmul"
+    # ... fed to a real FP8 GEMM kernel: cuBLASLt FP8 or a Triton FP8 gemm fusion.
     assert (
         "__cublas$lt$matmul$f8" in hlo or "__triton_nested_gemm_fusion" in hlo
-    ), "forward should lower to an fp8 GEMM (cuBLASLt fp8 or Triton fp8 fusion)"
+    ), "forward should lower to an FP8 GEMM (cuBLASLt FP8 or Triton FP8 fusion)"
     # ... and not to a bf16 cuBLASLt fallback (every cuBLAS matmul must be the $f8 variant).
     assert hlo.count("__cublas$lt$matmul") == hlo.count(
         "__cublas$lt$matmul$f8"
@@ -124,7 +118,7 @@ def test_fp8_direct_grads_match_reference():
     In = hax.Axis("In", 32)
     Out = hax.Axis("Out", 16)
     ref = Linear.init(In, Out, key=jrandom.PRNGKey(0), init_scale=1.0)
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init(), init_scale=1.0)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init(), init_scale=1.0)
 
     x = hax.random.normal(jrandom.PRNGKey(3), In)
 
@@ -145,7 +139,7 @@ def test_fp8_direct_backward_uses_distinct_operand_scales():
     # magnitudes and pre-seed their amax histories so input and kernel get
     # distinct, non-unit scales (here ~32x apart), then check both gradients
     # against an fp32 reference (the gradient of the exact matmul -- an oracle
-    # independent of the fp8 implementation). A swap would be off by ~32x.
+    # independent of the FP8 implementation). A swap would be off by ~32x.
     M, K, N = 8, 16, 4
     lhs = jrandom.normal(jrandom.PRNGKey(0), (M, K))
     rhs = jrandom.normal(jrandom.PRNGKey(1), (K, N)) * 32.0
@@ -183,11 +177,11 @@ def test_fp8_direct_backward_uses_distinct_operand_scales():
 
 
 def test_fp8_direct_backward_quantizes_grad_to_e5m2():
-    # Mirror of the forward fp8-operand check for the backward pass: the output
+    # Mirror of the forward FP8-operand check for the backward pass: the output
     # gradient must reach the gradient GEMMs as float8_e5m2.
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 8)
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DirectDotGeneralOp.init())
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init())
     x = hax.random.normal(jrandom.PRNGKey(3), In)
 
     def loss(model, x):
@@ -201,16 +195,15 @@ def test_fp8_direct_backward_quantizes_grad_to_e5m2():
 
 
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
-# The QDQ and direct ops carry the same delayed-scaling state and update it with
-# the same TE formula on the same amax sources (input, kernel, output grad), so
-# the same manual reference computation validates both.
-@pytest.mark.parametrize("dot_general_cls", [Fp8DotGeneralOp, Fp8DirectDotGeneralOp])
-def test_fp_loop(dot_general_cls):
+# Validates the delayed-scaling state update against a manual reference: each
+# step rolls the amax history and recomputes the scale with the TE formula on
+# the input, kernel and output-gradient amax.
+def test_fp_loop():
     key, init_key, random_key = jrandom.split(jrandom.PRNGKey(seed=123), 3)
     Batch = hax.Axis("Batch", 16)
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 32)
-    linear = Linear.init(In, Out, key=init_key, dot_general=dot_general_cls.init())
+    linear = Linear.init(In, Out, key=init_key, dot_general=Fp8DotGeneralOp.init())
 
     def _roll_and_update(amax_h, update):
         return jnp.roll(amax_h, shift=-1, axis=0).at[0].set(update)

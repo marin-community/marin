@@ -25,7 +25,7 @@ import haliax.nn as hnn
 from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
-from ._src.fp8 import dot_general_with_precision, fp8_scaled_dot_general, in_qdq, out_qdq
+from ._src.fp8 import fp8_scaled_dot_general
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
@@ -152,70 +152,18 @@ class DefaultDotGeneralOp(eqx.Module):
 
 
 class Fp8DotGeneralOp(OverwriteWithGradient):
-    input_scale: jnp.ndarray
-    output_grad_scale: jnp.ndarray
-    kernel_scale: jnp.ndarray
-    input_amax_history: jnp.ndarray
-    output_grad_amax_history: jnp.ndarray
-    kernel_amax_history: jnp.ndarray
-    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    """Direct-quantization FP8 ``dot_general`` op for [haliax.nn.Linear][].
 
-    @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
-        return cls(
-            input_scale=jnp.ones(1, dtype=jnp.float32),
-            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
-            kernel_scale=jnp.ones(1, dtype=jnp.float32),
-            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
-            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
-            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
-            compute_dtype=compute_dtype,
-        )
+    Casts both operands to E4M3 and contracts them as FP8, then dequantizes
+    the result, so FP8 tensor cores are used directly instead of relying on
+    XLA's GemmRewriter to recover an FP8 kernel from a
+    quantize/dequantize pattern. Output gradients are quantized to E5M2 in the
+    custom VJP of [fp8_scaled_dot_general][], which also carries the
+    delayed-scaling state (per-tensor scale + amax history for the input, kernel
+    and output gradient) updated as an [OverwriteWithGradient][].
 
-    # copied from flax
-    def __call__(
-        self,
-        lhs,
-        rhs,
-        dimension_numbers,
-        precision: PrecisionLike = None,
-        preferred_element_type: DTypeLike | None = None,
-        **kwargs,
-    ):
-        # Use the `k.dtype` since it aligns with the `dtype` of its layers,
-        # namely, the computation data type.
-        if self.compute_dtype is None:
-            comp_dtype = rhs.dtype
-        else:
-            comp_dtype = self.compute_dtype
-        lhs = jnp.asarray(lhs, comp_dtype)
-
-        x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
-        k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
-        y_qdq = dot_general_with_precision(
-            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
-        )
-        y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
-
-        return y
-
-
-class Fp8DirectDotGeneralOp(OverwriteWithGradient):
-    """Direct-quantization fp8 ``dot_general`` op.
-
-    Like [Fp8DotGeneralOp][] this carries the delayed-scaling state (per-tensor
-    scale + amax history for the input, kernel and output-gradient) and is a
-    drop-in replacement for the ``dot_general`` used by [haliax.nn.Linear][].
-
-    Unlike ``Fp8DotGeneralOp`` (which dequantizes the operands and leaves XLA's
-    GemmRewriter to recover an fp8 kernel from the QDQ pattern), this op feeds
-    genuine E4M3 operands to ``dot_general`` and dequantizes the output, so fp8
-    tensor cores are used without relying on pattern matching. Output gradients
-    are quantized to E5M2 via the custom VJP in [fp8_scaled_dot_general][].
-
-    The implementation is faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
-    (``flax/linen/fp8_ops.py``); the field layout matches ``Fp8DotGeneralOp`` so
-    the two are interchangeable.
+    Faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
+    (``flax/linen/fp8_ops.py``; see https://github.com/google/flax/pull/3922).
     """
 
     input_scale: jnp.ndarray
@@ -248,7 +196,7 @@ class Fp8DirectDotGeneralOp(OverwriteWithGradient):
         **kwargs,
     ):
         # Use the kernel (`rhs`) dtype as the compute dtype since it aligns with
-        # the layer's dtype, matching Fp8DotGeneralOp and Flax.
+        # the layer's dtype, matching Flax.
         if self.compute_dtype is None:
             comp_dtype = rhs.dtype
         else:

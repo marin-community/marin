@@ -7,7 +7,7 @@ import warnings
 from functools import partial
 
 import numpy as np
-from jax import custom_jvp, custom_vjp, lax
+from jax import custom_vjp, lax
 from jax import numpy as jnp
 from jax.typing import DTypeLike
 
@@ -27,11 +27,6 @@ from jax.typing import DTypeLike
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
-def quantize_dequantize(x, q_dtype, scale, compute_dtype):
-    qx = quantize(x, q_dtype, scale, compute_dtype)
-    return dequantize(qx, x.dtype, scale)
 
 
 def get_fp8_max(fp8_dtype, out_dtype):
@@ -72,108 +67,23 @@ def compute_amax_history(x, amax_history):
     return new_history
 
 
-def qdq_and_return(x, q_dtype, scale, amax_history, compute_dtype):
-    dtype_max = get_fp8_max(q_dtype, jnp.float32)
-    amax_from_history = jnp.max(amax_history, axis=0)
-    new_scale = compute_scale(amax_from_history, scale, dtype_max)
-
-    qx = quantize_dequantize(x, q_dtype, new_scale, compute_dtype)
-
-    new_history = compute_amax_history(x, amax_history)
-
-    return qx, new_scale, new_history
-
-
-@partial(custom_vjp, nondiff_argnums=(0,))
-def in_qdq(compute_dtype, inp, scale, amax_history):
-    qin, _, _ = qdq_and_return(inp, jnp.float8_e4m3fn, scale, amax_history, compute_dtype)
-    return qin
-
-
-def in_qdq_fwd(compute_dtype, inp, scale, amax_history):
-    qin, new_scale, new_history = qdq_and_return(inp, jnp.float8_e4m3fn, scale, amax_history, compute_dtype)
-    return qin, (new_scale, new_history)
-
-
-def in_qdq_bwd(compute_dtype, res, g):
-    new_scale, new_history = res
-    q_g = g
-    return q_g, new_scale, new_history
-
-
-in_qdq.defvjp(in_qdq_fwd, in_qdq_bwd)
-
-
-@partial(custom_vjp, nondiff_argnums=(0,))
-def out_qdq(compute_dtype, out, scale, amax_history):
-    return out
-
-
-def out_qdq_fwd(compute_dtype, out, scale, amax_history):
-    return out, (scale, amax_history)
-
-
-def out_qdq_bwd(compute_dtype, res, g):
-    scale, amax_history = res
-    q_g, new_scale, new_history = qdq_and_return(g, jnp.float8_e5m2, scale, amax_history, compute_dtype)
-    return q_g, new_scale, new_history
-
-
-out_qdq.defvjp(out_qdq_fwd, out_qdq_bwd)
-
-
-@partial(custom_jvp, nondiff_argnums=(2, 3, 4, 5))
-def dot_general_with_precision(
-    lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, out_sharding=None, **kwargs
-):
-    if precision is not None or preferred_element_type is not None:
-        # einsum sets preferred_element_type and so this is just noisy
-        # warnings.warn(
-        #     "The function dot_general_with_precision will set the "
-        #     "precision/preferred_element_type and disregard any provided "
-        #     "values."
-        # )
-        pass
-    return lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT, **kwargs)
-
-
-@dot_general_with_precision.defjvp
-def dot_general_with_precision_jvp(
-    dimension_numbers, precision, preferred_element_type, out_sharding, primals, tangents
-):
-    del preferred_element_type
-    del out_sharding
-    del precision
-    lhs, rhs = primals
-    lhs_dot, rhs_dot = tangents
-
-    out = lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT)
-    grad_out = lax.dot_general(lhs_dot, rhs, dimension_numbers, precision=lax.Precision.HIGHEST) + lax.dot_general(
-        lhs, rhs_dot, dimension_numbers, precision=lax.Precision.HIGHEST
-    )
-    return out, grad_out
-
-
 # ---------------------------------------------------------------------------
-# Direct fp8 quantization path
+# Direct FP8 quantization
 #
-# The functions above implement the legacy "quantize-dequantize" (QDQ) recipe,
-# in which the operands handed to `lax.dot_general` are dequantized back to the
-# compute dtype, so whether FP8 tensor cores are used at all depends on XLA's
-# GemmRewriter folding the QDQ pattern. The functions below implement Flax's
-# *direct* recipe, in which genuine FP8 operands are fed to `lax.dot_general`
-# (the cast is explicit and the dequantize happens on the output and gradients),
-# so FP8 kernels are used without relying on pattern matching.
+# FP8 operands are fed to `lax.dot_general`: the cast to E4M3 is explicit
+# and the dequantize happens on the output (and, in E5M2, on the gradients), so
+# FP8 kernels are used directly rather than relying on XLA's GemmRewriter to
+# recover them from a quantize/dequantize pattern.
 #
 # Faithfully vendored from flax/linen/fp8_ops.py (flax 0.12.4); see
-# https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py
+# https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py and
+# https://github.com/google/flax/pull/3922.
 #
 # Deviation from the Flax source: Flax stores the scale / amax-history state in a
 # custom "fm32" extended dtype and converts it back to float32 at each use (its
 # `_fm32_to_float32` helper and the `is_fmax32` branch of `update_fp8_meta`).
-# Haliax keeps this state as plain float32 arrays (see `Fp8DotGeneralOp`), so the
-# fm32 handling is dead code here and is omitted, consistent with the QDQ port
-# above.
+# Haliax keeps this state as plain float32 arrays, so the fm32 handling is dead
+# code here and is omitted.
 # ---------------------------------------------------------------------------
 
 
@@ -372,7 +282,7 @@ def fp8_scaled_dot_general(
     quantize_compute_type=jnp.float32,
 ):
     """Drop-in `dot_general` that quantizes both operands to E4M3, contracts them
-    as genuine FP8, and dequantizes the result. Gradients are taken in E5M2 via
+    as FP8, and dequantizes the result. Gradients are taken in E5M2 via
     `quantized_dot`'s custom VJP. The scale / amax-history arrays carry the
     delayed-scaling state and are updated through the custom VJP (overwrites)."""
     if precision is not None:
