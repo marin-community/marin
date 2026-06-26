@@ -217,9 +217,9 @@ function formatSliceSummary(totals: Record<string, number>): string {
 // ===========================================================================
 
 const expandedSlices = ref<Set<string>>(new Set())
-// Explicit per-pool open/closed intent (set on user click). Pools with no slices and
-// no demand default to collapsed — just their one-line state summary — while the rest
-// default to expanded. An override recorded here wins over that default.
+// Explicit per-pool open/closed intent (set on user click). Every pool defaults to
+// collapsed — just its one-line state summary — since an operator usually cares about
+// one slice type and expands it. An override recorded here wins over that default.
 const poolOverrides = ref<Map<string, boolean>>(new Map())
 // Pools whose idle (zero-slice, idle-decision) tiers have been revealed. By default an
 // expanded pool shows only its active tiers plus a "+N idle sizes" toggle.
@@ -387,12 +387,9 @@ function poolDemand(section: PoolSection): number {
 function poolLaunch(section: PoolSection): number {
   return section.groups.reduce((n, gs) => n + (gs.launch ?? 0), 0)
 }
-function poolSliceTotal(section: PoolSection): number {
-  return poolStatusSummary(section).reduce((n, c) => n + c.count, 0)
-}
 
 // A group needs attention when its availability is constrained even if it holds no
-// slices yet — these must stay visible rather than collapse into "no slices".
+// slices yet — these stay visible rather than collapse into the idle remainder.
 function groupNeedsAttention(name: string): boolean {
   const status = group(name)?.availabilityStatus
   return status === 'quota_exceeded' || status === 'backoff' || status === 'at_capacity' || status === 'requesting'
@@ -402,19 +399,9 @@ function groupIsActive(gs: GroupRoutingStatus): boolean {
   return (decision !== 'idle' && decision !== '') || groupNeedsAttention(gs.group)
 }
 
-// A pool is "active" — and so expanded by default — when it has materialized slices,
-// outstanding demand, a planned launch, a tier-blocking condition, or any group with a
-// non-idle decision or constrained availability. Empty inert pools collapse to their
-// one-line header so the table stays scannable.
-function poolHasActivity(section: PoolSection): boolean {
-  if (poolSliceTotal(section) > 0 || poolDemand(section) > 0 || poolLaunch(section) > 0 || section.blockedAtTier != null) {
-    return true
-  }
-  return section.groups.some(groupIsActive)
-}
+// Every pool defaults to collapsed; only an explicit user toggle opens one.
 function isPoolCollapsed(section: PoolSection): boolean {
-  const override = poolOverrides.value.get(section.pool)
-  return override !== undefined ? override : !poolHasActivity(section)
+  return poolOverrides.value.get(section.pool) ?? true
 }
 function togglePool(section: PoolSection) {
   const next = new Map(poolOverrides.value)
