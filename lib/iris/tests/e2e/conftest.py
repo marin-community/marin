@@ -507,6 +507,9 @@ class _NoOpPage:
     def wait_for_function(self, expression, **kwargs):
         pass
 
+    def evaluate(self, expression, *args, **kwargs):
+        pass
+
     def click(self, selector, **kwargs):
         pass
 
