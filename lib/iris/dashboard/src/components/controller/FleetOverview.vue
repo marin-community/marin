@@ -189,28 +189,9 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     .sort((a, b) => b.total - a.total)
 })
 
-/** Stable color index for a region across all chip types. */
-const allRegions = computed<Map<string, number>>(() => {
-  const regionTotals = new Map<string, number>()
-  for (const c of fleetSummary.value) {
-    for (const r of c.regions) {
-      regionTotals.set(r.region, (regionTotals.get(r.region) ?? 0) + r.count)
-    }
-  }
-  const seen = new Map<string, number>()
-  for (const [region] of Array.from(regionTotals.entries()).sort((a, b) => b[1] - a[1])) {
-    seen.set(region, seen.size)
-  }
-  return seen
-})
-
-function regionColor(region: string): string {
-  const idx = allRegions.value.get(region) ?? 0
-  return CATEGORICAL_COLORS[idx % CATEGORICAL_COLORS.length]
-}
-
-// Fleet-wide region totals in shared-legend (color) order. One legend above the cards
-// names each region's color, so the per-card bars need no repeated legend of their own.
+// Fleet-wide region totals, largest first. The single place region aggregation
+// happens: the shared legend renders these, and both the per-region color index and
+// the bar colors follow this order so a region keeps one color across every card.
 const legendRegions = computed<RegionCount[]>(() => {
   const totals = new Map<string, number>()
   for (const c of fleetSummary.value) {
@@ -218,8 +199,19 @@ const legendRegions = computed<RegionCount[]>(() => {
   }
   return Array.from(totals.entries())
     .map(([region, count]) => ({ region, count }))
-    .sort((a, b) => (allRegions.value.get(a.region) ?? 0) - (allRegions.value.get(b.region) ?? 0))
+    .sort((a, b) => b.count - a.count)
 })
+
+const regionColorIndex = computed<Map<string, number>>(() => {
+  const index = new Map<string, number>()
+  legendRegions.value.forEach((r, i) => index.set(r.region, i))
+  return index
+})
+
+function regionColor(region: string): string {
+  const idx = regionColorIndex.value.get(region) ?? 0
+  return CATEGORICAL_COLORS[idx % CATEGORICAL_COLORS.length]
+}
 
 function cardTooltip(c: FleetChipSummary): string {
   const lines: string[] = []
@@ -290,7 +282,7 @@ function formatUptimeShort(ms: number | null): string {
             {{ c.total > 0 ? Math.round(c.inUse / c.total * 100) : 0 }}% in use
           </span>
         </div>
-        <!-- Footer: avg uptime, plus the band mix when it is a genuine mix. -->
+        <!-- Band mix is shown only for genuine mixes; a lone 100% band stays in the tooltip. -->
         <div class="flex items-center justify-between gap-2 mt-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
           <span class="whitespace-nowrap tabular-nums">avg {{ formatUptimeShort(c.avgUptimeMs) }}</span>
           <span v-if="c.bands.length > 1" class="truncate text-right">

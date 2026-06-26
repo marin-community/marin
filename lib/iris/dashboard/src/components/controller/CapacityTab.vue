@@ -866,7 +866,6 @@ function sliceIdShort(sliceId?: string): string {
                         </template>
                       </span>
                     </div>
-                    <!-- One-line pool state summary -->
                     <div class="flex items-center gap-1.5 flex-shrink-0">
                       <template v-if="poolStatusSummary(section).length">
                         <span
