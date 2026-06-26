@@ -350,6 +350,10 @@ class TaskAttempt:
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+        # Restore host-port reservations and re-mark them taken so the worker
+        # never re-allocates an in-use port to a new task after restart.
+        instance.ports = dict(discovered.ports)
+        port_allocator.reserve(list(discovered.ports.values()))
         return instance
 
     def resume_monitoring(self) -> None:
@@ -767,6 +771,7 @@ class TaskAttempt:
             job_id=job_id.to_wire(),
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
+            ports=self.ports,
         )
 
         chaos_raise("worker.create_container")
