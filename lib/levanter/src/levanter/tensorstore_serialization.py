@@ -4,7 +4,6 @@
 # References:
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
-import json
 import logging
 import os
 import urllib.parse
@@ -48,23 +47,6 @@ def _estimate_array_nbytes(array: Any) -> int:
     return int(size) * int(itemsize)
 
 
-def _s3_uses_virtual_addressing() -> bool:
-    """Return True if ``FSSPEC_S3`` requests virtual-hosted-style S3 addressing.
-
-    The cluster sets ``config_kwargs.s3.addressing_style = "virtual"`` for
-    S3-compatible endpoints that reject path-style requests (CoreWeave object
-    storage). We mirror that signal here so the tensorstore spec matches.
-    """
-    raw = os.environ.get("FSSPEC_S3")
-    if not raw:
-        return False
-    try:
-        conf = json.loads(raw)
-    except json.JSONDecodeError:
-        return False
-    return ((conf.get("config_kwargs") or {}).get("s3") or {}).get("addressing_style") == "virtual"
-
-
 def build_kvstore_spec(path: str) -> dict:
     """Build a tensorstore kvstore spec for the given URI, handling S3, GCS, and local files.
 
@@ -72,27 +54,25 @@ def build_kvstore_spec(path: str) -> dict:
     environment, so we pass them explicitly when set. This is required for S3-compatible
     endpoints like CoreWeave object storage.
 
-    CoreWeave object storage rejects path-style requests; tensorstore only emits
-    path-style for a custom ``endpoint`` *with* a ``bucket`` field. When
-    ``FSSPEC_S3`` requests virtual-hosted addressing we instead use the
-    virtual-hosted form added in tensorstore 0.1.82 (google/tensorstore#285):
-    omit ``bucket`` and fold it into the endpoint host
-    (``https://<bucket>.<endpoint-host>``).
+    For a custom ``endpoint`` we always use virtual-hosted-style addressing (tensorstore
+    0.1.82+, google/tensorstore#285): omit ``bucket`` and fold it into the endpoint host
+    (``https://<bucket>.<endpoint-host>``). Every S3-compatible store we target (R2, AWS,
+    CoreWeave) supports virtual-hosted style, and CoreWeave *requires* it (it rejects
+    path-style with ``PathStyleRequestNotAllowed``). Without a custom endpoint we leave
+    addressing to tensorstore's native AWS handling.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
         bucket = parsed.netloc
         spec: dict = {"driver": "s3", "path": parsed.path.lstrip("/")}
         endpoint = os.environ.get("AWS_ENDPOINT_URL")
-        if endpoint and _s3_uses_virtual_addressing():
+        if endpoint:
             # Virtual-hosted style: bucket becomes a subdomain of the endpoint
             # host and the ``bucket`` field is omitted (tensorstore #285).
             scheme, _, host = endpoint.partition("://")
             spec["endpoint"] = f"{scheme}://{bucket}.{host}"
         else:
             spec["bucket"] = bucket
-            if endpoint:
-                spec["endpoint"] = endpoint
         region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
         if region:
             spec["aws_region"] = region
