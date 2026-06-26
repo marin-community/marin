@@ -30,6 +30,10 @@ The model:
   a job runs on). It is recorded for the build-once-immutability guard, never in the
   path.
 
+Pre-existing data is brought in with :func:`adopt`: it registers a ``name@version``
+that points at data already on disk (no move, no recompute) while still recording
+provenance and obeying the build-once guard.
+
 :func:`lower` turns a pure handle graph into the existing :class:`StepSpec` graph,
 which the existing ``StepRunner`` runs (cache → lock → run) — no content-addressing.
 """
@@ -40,7 +44,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from rigging.filesystem import marin_prefix, marin_region
+from rigging.filesystem import marin_prefix, marin_region, url_to_fs
 
 from marin.execution.provenance import created_now, get_git_commit, get_user
 from marin.execution.registry import FINGERPRINT_KEY, VERSION_KEY, ArtifactRecord, write_record
@@ -165,21 +169,44 @@ class Artifact:
     Used to reference already-materialized data (e.g. a content-addressed tokenize
     cache) without recomputing it. A relative pin is resolved against the prefix; an
     absolute one is used as-is. The pin does not affect identity/fingerprint."""
+    adopt_source: str | None = None
+    """Adopt pre-existing data at this location as a managed ``name@version``.
+
+    Unlike a pin, an adopted artifact is *registered*: consumers resolve to
+    ``adopt_source`` (the data is neither moved nor recomputed), but lowering writes a
+    provenance record at the canonical ``{prefix}/{name}/{version}`` so the build-once
+    guard governs the alias. Set via :func:`adopt`. A relative source is resolved
+    against the prefix; an absolute one is used as-is. The source bears identity:
+    re-adopting ``name@version`` from a different source re-fingerprints and is a
+    guarded conflict."""
+
+    def __post_init__(self) -> None:
+        if self.adopt_source is not None and self.override_path is not None:
+            raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
 
     def fingerprint(self) -> str:
         """Stable id of *how* this artifact is built: the config with dependency
         versions in place of paths. Changes iff a config value or a dep version
-        changes; independent of the storage prefix/region."""
+        changes; independent of the storage prefix/region.
+
+        An adopted artifact's identity is its source location, so re-adopting the same
+        ``name@version`` from a different source re-fingerprints and trips the guard."""
+        if self.adopt_source is not None:
+            payload = json.dumps({"adopt_source": self.adopt_source}, sort_keys=True)
+            return hashlib.md5(payload.encode()).hexdigest()[:8]
         config = self.recipe.build_config(RunContext.for_fingerprint(self.recipe.run_args.keys()))
         payload = json.dumps(config, sort_keys=True, cls=CustomJsonEncoder)
         return hashlib.md5(payload.encode()).hexdigest()[:8]
 
     def path(self, prefix: str | None = None) -> str:
         resolved_prefix = prefix or marin_prefix()
-        if self.override_path is not None:
-            if _is_relative_path(self.override_path):
-                return f"{resolved_prefix}/{self.override_path}"
-            return self.override_path
+        # An adopted artifact resolves to its source data; a pin to its pinned location;
+        # otherwise to the canonical name@version address.
+        location = self.adopt_source if self.adopt_source is not None else self.override_path
+        if location is not None:
+            if _is_relative_path(location):
+                return f"{resolved_prefix}/{location}"
+            return location
         return _artifact_path(self.name, self.version, resolved_prefix)
 
 
@@ -191,6 +218,29 @@ class Dataset(Artifact):
 @dataclass(frozen=True, eq=False)
 class Checkpoint(Artifact):
     """A Levanter checkpoint handle (routes to ``initialize_from_checkpoint_path``)."""
+
+
+def _adopt_noop(config: Any) -> None:
+    raise AssertionError("adopted artifacts are registered, not computed")
+
+
+_ADOPT_RECIPE = Recipe(fn=_adopt_noop, build_config=lambda _ctx: None)
+
+
+def adopt(name: str, version: str, source: str, *, kind: type[Artifact] = Dataset) -> Artifact:
+    """Register pre-existing data at ``source`` as a managed ``name@version``.
+
+    The data is neither moved nor recomputed: a consumer that depends on the returned
+    handle resolves to ``source``. Lowering writes a provenance record at the canonical
+    ``{prefix}/{name}/{version}`` (with ``source`` recorded) so the build-once guard
+    governs the alias — re-adopting ``name@version`` from a different source raises
+    :class:`~marin.execution.registry.ImmutableArtifactError`. A relative source is
+    resolved against the prefix; an absolute one is used as-is.
+
+    ``kind`` selects the handle type for consumer routing (:class:`Dataset` by default,
+    or :class:`Checkpoint`).
+    """
+    return kind(name=name, version=version, recipe=_ADOPT_RECIPE, adopt_source=source)
 
 
 def materialized_config(artifact: Artifact, prefix: str) -> Any:
@@ -239,10 +289,19 @@ def lower(artifact: Artifact) -> StepSpec:
     user = get_user() if record_provenance else None
 
     def fn(output_path: str, _artifact: Artifact = artifact) -> Any:
-        ctx = RunContext.for_run(
-            out=output_path, prefix=marin_prefix(), region=marin_region(), run_args=_artifact.recipe.run_args
-        )
-        result = _artifact.recipe.fn(_artifact.recipe.build_config(ctx))
+        if _artifact.adopt_source is not None:
+            # Adoption registers pre-existing data: no compute, the record points at it.
+            source = _artifact.path(marin_prefix())
+            fs = url_to_fs(source, use_listings_cache=False)[0]
+            if not fs.exists(source):
+                raise FileNotFoundError(f"cannot adopt {_artifact.name}@{_artifact.version}: no data at {source}")
+            result = None
+        else:
+            ctx = RunContext.for_run(
+                out=output_path, prefix=marin_prefix(), region=marin_region(), run_args=_artifact.recipe.run_args
+            )
+            result = _artifact.recipe.fn(_artifact.recipe.build_config(ctx))
+            source = None
         if record_provenance:
             write_record(
                 ArtifactRecord(
@@ -250,6 +309,7 @@ def lower(artifact: Artifact) -> StepSpec:
                     version=_artifact.version,
                     fingerprint=fingerprint,
                     output_path=output_path,
+                    source=source,
                     git_commit=git_commit,
                     user=user,
                     created_at=created_now(),

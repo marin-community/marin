@@ -6,8 +6,8 @@
 An artifact is addressed by an explicit ``name@version`` whose output path is
 ``{prefix}/{name}/{version}`` — no content hash. To keep that address honest, the
 registry records *how* the artifact was built (its recipe ``fingerprint``) plus
-*who/when/which-commit* (provenance) in a small ``.artifact`` file next to the
-output, and enforces one rule:
+*who/when/which-commit* (provenance) in a small ``.artifact_record.json`` file next
+to the output, and enforces one rule:
 
     a ``name@version`` is built once. Rebuilding it from a changed recipe (a
     different fingerprint) is an error — bump the version.
@@ -30,7 +30,9 @@ from rigging.filesystem import open_url, url_to_fs
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
-RECORD_FILENAME = ".artifact"
+# A distinct name from the output-payload sidecar (``.artifact.json``, written by
+# marin.execution.artifact) so a build record never shadows a payload read.
+RECORD_FILENAME = ".artifact_record.json"
 
 # Keys under ``StepSpec.hash_attrs`` that carry the artifact's identity, so the
 # runner can apply the immutability guard without knowing about the lazy layer.
@@ -55,6 +57,10 @@ class ArtifactRecord:
     created_at: str
     deps: list[str]
     """Dependency identities as ``name@version`` strings."""
+    source: str | None = None
+    """For an *adopted* artifact, the pre-existing data location this ``name@version``
+    aliases (where consumers resolve). ``None`` for a computed artifact, whose data
+    lives at ``output_path``."""
 
 
 def is_mutable_version(version: str) -> bool:
