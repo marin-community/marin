@@ -1684,3 +1684,47 @@ exactly: bf16 3.753 ms; mosaic bf16-wgrad 2.909 ms (1.290×); **mosaic f8-wgrad 
 f8 wgrad is implemented, bit-exact, e2e-validated at 1.33×, and shipped as a clean opt-in. The PR-extraction
 plan (`.agents/projects/2026-06-25_haliax_fp8_ragged_dot_pr.md`) should now INCLUDE the f8 wgrad (it is a
 real win, no longer "dead on arrival") behind the `mosaic_wgrad` param.
+
+### 2026-06-26 — GFP8-034: mixed E4M3×E5M2 wgmma is a JAX *software* gap (not Hopper hardware); patchable, untracked upstream
+Revisiting "why are we on all-E4M3 grads" (the recipe deviates from the TE hybrid's E5M2-grad and from
+DeepSeek's all-E4M3 *with block scaling*). The shipped Mosaic path uses E4M3 everywhere because
+`jax.experimental.mosaic.gpu.wgmma.wgmma` rejects mismatched operand dtypes — but that turns out to be a
+Mosaic-emitter limitation, **not** a Hopper constraint. Verified two ways (codex independent pass + direct
+source/PTX-ISA reads):
+- **The gate:** `wgmma.py:359` — `if element_type != element_type2: raise ValueError("WGMMA requires A and
+  B to have the same element type")`. Present in our pin (jax 0.10.0) **and** in current HEAD
+  (`jax-ml/jax` `origin/main` @ `9b6874ae`, 2026-06-26, same check at `wgmma.py:356`; confirmed by an
+  independent fetch of raw `main`).
+- **Hardware vs software:** the emitted PTX hardcodes one type into *both* operand slots —
+  `wgmma.py:242` builds `wgmma.mma_async.sync.aligned.m64n{n}k{k}.{out}.{el_ty}.{el_ty}` from a single
+  `el_ty` (`:225`). But the **PTX ISA 9.3** defines FP8 wgmma as `.dtype.atype.btype` with
+  `.atype,.btype ∈ {.e4m3,.e5m2}` *independently* — FP8 is the **explicit exception** to the "atype must
+  equal btype" floating rule, with worked mixed examples (`.f16.e4m3.e5m2`, `.f32.e5m2.e4m3`). So Hopper's
+  `wgmma.mma_async` is *designed* to take mixed fp8; JAX just never wired up the second type field.
+- **Provenance:** fp8 was added to Mosaic wgmma single-type from day one — commit `097e755b2` "[Mosaic GPU]
+  Add support for fp8 types in WGMMA" (Adam Paszke, 2025-05-19) is the diff that introduced the
+  `.{el_ty}.{el_ty}` line. The `element_type != element_type2` guard predates fp8 (generic same-type check)
+  and the fp8 exception was never carved out.
+- **Upstream tracking:** none. Searched jax-ml/jax issues + PRs (126 wgmma items) — no issue/PR requests or
+  tracks mixed-fp8 wgmma; the e4m3/e5m2 hits are unrelated (dtype hierarchy #38474, doc coverage, IFRT type
+  numbers). Genuine unfilled gap.
+- **Consequence (corrects GFP8-021's "off the table"):** the accurate statement is "off the table *as stock
+  JAX ships it*", not a hardware wall. Mixed E4M3×E5M2 — i.e. **E5M2 grads on the fast Mosaic path** — is
+  reachable with a small (~10-line) `wgmma.py` patch (derive `a_el_ty`/`b_el_ty` separately; emit
+  `.{out}.{a_el_ty}.{b_el_ty}`; relax the equality check to the {e4m3,e5m2}² fp8 pair — k-step/swizzle math
+  is byte-width-identical, accumulator already accepts both fp8 → f32) **plus** threading the second dtype
+  through `ragged_dot_mgpu` and the transposed wgrad kernel. Cost is carrying a fork patch (or upstreaming).
+
+**Numerical-validation risk surfaced (open).** This reframes the recipe decision: the shipped all-E4M3 +
+coarse per-tensor recipe shares DeepSeek's *dtype* but none of its *scaling* (DeepSeek paired all-E4M3 with
+fine-grained block scaling via custom kernels). All our numerics are **single-step synthetic-cotangent
+snapshots** (GFP8-023: E4M3 actually beat E5M2 for benign-to-moderate dynamic range; both collapse only at
+~7-decade spread, a scaling-granularity failure). We have **never validated over a real training
+trajectory**, where gradient tails shift late. The three deployable options are now: (a) all-E4M3 per-tensor
+(shipped, fast, unvalidated); (b) **E5M2 grads on Mosaic via the patch above** (standard-safe, ~bounded
+fix); (c) E4M3 + block scaling (principled, larger lift). See [[fp8-scaling-causal-invariant]].
+
+**Next (ranked):** (1) short training-loss validation (bf16 vs f8 mosaic-hybrid) — decisive, gates the rest;
+(2) the E5M2-on-Mosaic patch; (3) forward weight-transpose fusion (~8% e2e); (4) haliax `ragged_dot` f8 PR
+extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progress summary) + topic
+`grug-fp8-h100` updated.
