@@ -54,6 +54,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerCapacity,
     WorkerSnapshot,
+    ranked_groups_for_req,
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
@@ -62,6 +63,7 @@ from iris.cluster.types import (
     JobName,
     PendingTask,
     UserBudgetDefaults,
+    WorkerId,
     is_job_finished,
 )
 from iris.rpc import job_pb2
@@ -457,6 +459,118 @@ def _preempt_coscheduled(
     return []
 
 
+def _solo_victims_freeing_host(
+    candidate: PreemptionCandidate,
+    cap: WorkerCapacity,
+    host_victims: list[RunningTaskInfo],
+) -> list[RunningTaskInfo] | None:
+    """Lowest-priority solo victims whose combined eviction lets the gang's req
+    fit on ``cap``'s host, or None if the host cannot be freed.
+
+    ``host_victims`` is pre-sorted lowest-priority-first; this accumulates the
+    resources each evicted victim returns and stops as soon as the req fits. Only
+    victims strictly lower band than the candidate are eligible.
+
+    The host's ``building_task_count`` is left unchanged in the hypothetical:
+    ``RunningTaskInfo`` carries no build state and a long-running squatter holds
+    no build slot, so eviction must not be assumed to free one. A host blocked
+    solely by the build limit is therefore not recoverable here, which is correct
+    — that limit is transient back-pressure, not a held resource.
+    """
+    req = candidate.requirements
+    available_cpu = cap.available_cpu_millicores
+    available_memory = cap.available_memory
+    available_gpus = cap.available_gpus
+    available_tpus = cap.available_tpus
+    chosen: list[RunningTaskInfo] = []
+    for victim in host_victims:
+        if victim.already_preempted:
+            continue
+        # Only strictly lower priority (higher band_sort_key) victims are eligible.
+        if victim.band_sort_key <= candidate.band:
+            continue
+        chosen.append(victim)
+        available_cpu += victim.cpu_millicores
+        available_memory += victim.memory_bytes
+        available_gpus += victim.gpu_count
+        available_tpus += victim.tpu_count
+        hypothetical = WorkerCapacity(
+            worker_id=cap.worker_id,
+            available_cpu_millicores=available_cpu,
+            available_memory=available_memory,
+            available_gpus=available_gpus,
+            available_tpus=available_tpus,
+            attributes=cap.attributes,
+            building_task_count=cap.building_task_count,
+            max_building_tasks=cap.max_building_tasks,
+        )
+        if hypothetical.can_fit(req) is None:
+            return chosen
+    return None
+
+
+def _preempt_coscheduled_partial_hosts(
+    candidate: PreemptionCandidate,
+    n_required: int,
+    solo_victims_by_worker: Mapping[WorkerId, list[RunningTaskInfo]],
+    reserved_workers: set[WorkerId],
+    context: SchedulingContext,
+) -> list[tuple[JobName, JobName]]:
+    """Free a blocked gang by evicting lower-band solo co-tenants on its hosts.
+
+    Fallback for when no whole victim slice qualifies but the gang is short a few
+    hosts whose only blocker is a solo task squatting on per-host CPU/RAM. Finds
+    the group the gang would place in (``ranked_groups_for_req`` — the same
+    ranking placement uses), then frees each
+    capacity-blocked host via :func:`_solo_victims_freeing_host`. Commits
+    evictions only when enough hosts can be freed for the whole gang to place
+    (``n_required`` workers); otherwise the eviction would be wasted and the gang
+    is left pending.
+
+    ``reserved_workers`` holds hosts an earlier gang's eviction already claimed
+    this pass; they are skipped here, and the committed gang's hosts are added to
+    it, so two gangs contending for one group never double-book the same hosts.
+    """
+    req = candidate.requirements
+    for _group_key, worker_ids in ranked_groups_for_req(context, req):
+        if len(worker_ids) < n_required:
+            continue
+        fitting: list[WorkerId] = []
+        recoverable: list[tuple[WorkerId, list[RunningTaskInfo]]] = []
+        for wid in worker_ids:
+            if wid in reserved_workers:
+                continue
+            cap = context.capacities.get(wid)
+            if cap is None:
+                continue
+            if cap.can_fit(req) is None:
+                fitting.append(wid)
+                continue
+            victims = _solo_victims_freeing_host(candidate, cap, solo_victims_by_worker.get(wid, []))
+            if victims is not None:
+                recoverable.append((wid, victims))
+
+        needed = n_required - len(fitting)
+        if needed <= 0:
+            return []  # group already has room for the gang; no preemption needed
+        if len(recoverable) < needed:
+            continue  # cannot free enough hosts in this group; try the next
+
+        # Commit the cheapest `needed` host-evictions (fewest victims, then least
+        # resource) to bound blast radius; reserve every host the gang will use.
+        recoverable.sort(key=lambda item: (len(item[1]), sum(v.resource_value for v in item[1])))
+        used_hosts: set[WorkerId] = set(fitting)
+        pairs: list[tuple[JobName, JobName]] = []
+        for wid, victims in recoverable[:needed]:
+            used_hosts.add(wid)
+            for victim in victims:
+                victim.already_preempted = True
+                pairs.append((candidate.job_name, victim.task_id))
+        reserved_workers |= used_hosts
+        return pairs
+    return []
+
+
 def run_preemption_pass(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
@@ -485,6 +599,18 @@ def run_preemption_pass(
         key=lambda t: (-t.band_sort_key, t.resource_value),
     )
 
+    # Same solo victims bucketed by host for the gang partial-host fallback. Holds
+    # the *same* RunningTaskInfo objects, so already_preempted is shared across the
+    # solo path, the fallback, and competing gangs. Each bucket inherits the sort
+    # above: lowest-priority-first, then cheapest-first.
+    solo_victims_by_worker: dict[WorkerId, list[RunningTaskInfo]] = defaultdict(list)
+    for v in solo_victims:
+        solo_victims_by_worker[v.worker_id].append(v)
+
+    # Hosts a gang's partial-host eviction has claimed this pass; keeps two gangs
+    # contending for one group from double-booking the same hosts.
+    reserved_workers: set[WorkerId] = set()
+
     # Lazy: only build coscheduled-victim slice index if some preemptor needs
     # one. The common case (no coscheduled preemptors) skips the bucketing.
     sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]] = []
@@ -508,6 +634,11 @@ def run_preemption_pass(
     # Preemptor jobs whose siblings have already been satisfied by a slice
     # eviction this pass; the remaining N-1 siblings short-circuit.
     satisfied_preemptor_jobs: set[JobName] = set()
+    # Gangs whose coscheduled preemption was already attempted this pass (success
+    # or failure). A gang's siblings select identically (same req, n_required, and
+    # candidate group), so one attempt suffices and a failed gang does not re-run
+    # the index-scanning search for each of its N pending siblings.
+    attempted_coscheduled_jobs: set[JobName] = set()
     sibling_count: dict[JobName, int] = defaultdict(int)
     for c in unscheduled_tasks:
         if c.job_name.parent is not None:
@@ -530,8 +661,20 @@ def run_preemption_pass(
                 preemptions.append(pair)
             continue
 
+        # Attempt a gang's coscheduled preemption once per gang, not per sibling.
+        if parent is not None and parent in attempted_coscheduled_jobs:
+            continue
+        if parent is not None:
+            attempted_coscheduled_jobs.add(parent)
+
         n_required = sibling_count.get(parent, 1) if parent is not None else 1
         pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
+        if not pairs:
+            # No whole victim slice qualified; try freeing the gang's blocking
+            # hosts by evicting lower-band solo co-tenants squatting on them.
+            pairs = _preempt_coscheduled_partial_hosts(
+                candidate, n_required, solo_victims_by_worker, reserved_workers, context
+            )
         if pairs:
             preemptions.extend(pairs)
             if parent is not None:
