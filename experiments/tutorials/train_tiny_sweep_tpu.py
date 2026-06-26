@@ -1,142 +1,158 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Tutorial: LR/WD hyper-parameter sweep over a tiny model on TPU using TinyStories.
+"""Tutorial: an LR/WD sweep over a tiny model on TPU, in the lazy-artifact style.
 
-Submits ``NUM_WORKERS`` independent TPU jobs; each worker races on
-``step_lock`` to claim grid targets and trains inline on its own TPU. There is
-no CPU coordinator. ``SWEEP_NAME`` is the stable lock-path key — bump it to
-start a fresh sweep over the same grid.
+An LR/WD grid search authored as lazy artifacts, end to end:
 
-This example uses a single-host slice (``v4-8``), so each worker is one
-process. On a multi-host slice the whole gang acts as one worker: its leader
-(task 0) claims targets and the other hosts train alongside it — see
-``marin.execution.sweep_coordination``. A multi-host sweep must also pass
-``ports=["actor"]`` in its ``JobRequest`` so the leader's coordination actor is
-reachable by its followers.
+- the corpus is a :class:`~marin.execution.lazy.Dataset` handle, tokenized once and
+  shared by every trial;
+- :func:`~marin.experiment.sweep.sweep` fans out one
+  :class:`~marin.execution.lazy.Checkpoint` trial per grid point — the swept
+  hyperparameters are literals, so each trial gets a distinct ``name@version``;
+- each trial dispatches its own TPU training job (the launcher step runs inline),
+  then reads the run's final loss back and returns it as the trial's metrics;
+- :func:`~marin.experiment.sweep.select` reduces the trials to the lowest-loss one.
+
+There is no executor, no import-time step graph, and no lock coordination: the
+``StepRunner`` schedules the trials and the selection from the lowered graph.
+
+Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional
+with ``TRAIN_RESOURCES``)::
+
+    python -m experiments.tutorials.train_tiny_sweep_tpu
 """
-import dataclasses
+
 from dataclasses import dataclass
 
-from fray import client as fray_client
 from fray.cluster import ResourceConfig
-from fray.types import Entrypoint, JobRequest, create_environment
-from levanter.main.train_lm import TrainLmConfig
-from marin.execution.sweep import SweepTarget, claim_and_run
-from marin.execution.types import versioned
-from marin.training.run_environment import extras_for_resources
-from marin.training.training import resolve_training_env
+from levanter.data.text import LmDataConfig
+from marin.execution.artifact import Artifact as ArtifactIO
+from marin.execution.lazy import Artifact, Checkpoint, Recipe, RunContext, lower
+from marin.execution.remote import remote
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture, tokenized
+from marin.experiment.sweep import select, sweep
+from marin.scaling_laws.eval_metrics_reader import read_eval_records
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
-from experiments.evals.task_configs import CORE_TASKS
-from experiments.llama import llama_30m
-from experiments.pretraining_datasets.simple import tokenized
+from experiments.llama import llama3_tokenizer, llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
-EVALS = CORE_TASKS
+# A single-host TPU slice; each trial trains on its own slice. This is a run-arg, not
+# part of a trial's identity — re-running on a different TPU is the same checkpoint.
+TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8")
 
-# Stable sweep identifier — derives the lock root so workers from different
-# `iris job run` invocations converge on the same target set. Bump for a fresh sweep.
-SWEEP_NAME = "train-tiny-sweep"
+# The selection metric: levanter logs the train loss every step under this key, and the
+# run's final value ranks the trials. Selecting on a held-out "eval/loss" works
+# identically (`select(metric="eval/loss")`); this tutorial uses train loss so each trial
+# stays self-contained, with no separate validation set to configure.
+SELECTION_METRIC = "train/loss"
 
-# Sweep lock root lives in a fixed region (matches MARIN_REMOTE_STATE_DIR
-# in iris). Workers in any region contend on the same path, and re-submitting
-# the same sweep from a different region resumes against the same locks
-# instead of starting a new claim namespace.
-SWEEP_ROOT = f"gs://marin-us-central2/sweeps/{SWEEP_NAME}"
-
-# Each TPU worker claims one target at a time and trains inline on its own
-# TPU, so NUM_WORKERS sets the parallelism — three trials run concurrently
-# here. Workers exit when no unclaimed targets remain.
-NUM_WORKERS = 3
-
-small_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=RESOURCES,
-    train_batch_size=128,
-    num_train_steps=10000,
-    # set hyperparameters
-    learning_rate=6e-4,
-    weight_decay=0.1,
+# The corpus: SlimPajama-6B, llama3-tokenized once into a shared cache. The first trial
+# to run tokenizes it (its own Fray job); the rest reuse the cache by name@version.
+slimpajama = tokenized(
+    "slimpajama-6b",
+    source="DKYoon/SlimPajama-6B",
+    tokenizer=llama3_tokenizer,
+    resources=ResourceConfig(ram="64g", disk="64g"),
 )
-
-sweep_configs = [
-    dataclasses.replace(
-        small_train_config,
-        learning_rate=lr,
-        weight_decay=wd,
-    )
-    for lr in [3e-4, 6e-4, 1e-3]
-    for wd in [0.0, 0.1, 0.2]
-]
 
 
 @dataclass(frozen=True)
-class SweepTrial:
-    name: str
-    raw_config: TrainLmConfig
+class TrialConfig:
+    """The concrete inputs one sweep trial trains on."""
+
+    label: str
+    out: str
+    data: LmDataConfig
+    learning_rate: float
+    weight_decay: float
+    resources: ResourceConfig
 
 
-# Build all trials at submission time so workers do no config work. Configs
-# carry placeholders (OutputName, InputName) until resolved on the worker, so
-# checkpoint paths land in the *worker's* region after a cross-region
-# preemption.
-trials = []
-for sc in sweep_configs:
-    # Marin will automatically create unique ids for runs b/c the model_config is versioned
-    # however, we can give each run a unique name for easier identification
-    _name = f"tutorial-slimpajama_6b-30m-sweep-lr{sc.learning_rate}-wd{sc.weight_decay}"
-    _job_name, _raw_config = prepare_lm_train(
-        name=_name,
-        tokenized=tokenized["slimpajama_6b"],
-        model_config=versioned(llama_30m),
-        train_config=sc,
-        tags=["llama", "30m", "slimpajama_6b", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
-    )
-    trials.append(SweepTrial(name=_job_name, raw_config=_raw_config))
+def _train_and_eval(config: TrialConfig) -> dict:
+    """Train one trial on a TPU and return its metrics.
 
-targets = [SweepTarget(target_id=t.name, config=t) for t in trials]
-
-
-def _run_one(target: SweepTarget) -> None:
-    """Resolve the trial's config under this worker's region and train inline."""
-    trial: SweepTrial = target.config
-    _run_training_on_worker(
-        name=trial.name,
-        raw_config=trial.raw_config,
-        override_output_path=None,
-        resources=RESOURCES,
-    )
-
-
-def _sweep_worker_entrypoint(sweep_root: str) -> None:
-    """One TPU sweep worker: loop, claim a target, train inline.
-
-    ``sweep_root`` is the canonical (region-pinned) lock path baked into the
-    entrypoint args. All TPU replicas — across regions, across resubmissions —
-    contend on the same lock namespace regardless of where Iris schedules
-    them.
+    Builds the trainer config from the resolved data and hyperparameters, dispatches
+    training as its own Fray job on ``config.resources`` (this launcher step runs
+    inline), then reads the run's final loss from the metrics the training wrote
+    alongside its checkpoints. The returned mapping is the trial's artifact payload,
+    which :func:`~marin.experiment.sweep.select` reduces over.
     """
-    claim_and_run(sweep_root, targets, _run_one)
+    train_config = SimpleTrainConfig(
+        resources=config.resources,
+        train_batch_size=128,
+        num_train_steps=10000,
+        learning_rate=config.learning_rate,
+        weight_decay=config.weight_decay,
+    )
+    job_name, raw_config = prepare_lm_train(
+        name=config.label,
+        tokenized=config.data,
+        model_config=llama_30m,
+        train_config=train_config,
+        tags=["llama", "30m", "slimpajama-6b", "tutorial", "sweep"],
+        use_default_validation=False,
+    )
+    remote(_run_training_on_worker, resources=config.resources, name=job_name)(
+        job_name, raw_config, config.out, config.resources
+    )
+
+    summary = read_eval_records([config.out])[-1]["summary"]
+    return {
+        "learning_rate": config.learning_rate,
+        "weight_decay": config.weight_decay,
+        SELECTION_METRIC: summary[SELECTION_METRIC],
+    }
+
+
+def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> Checkpoint:
+    """One sweep trial as a :class:`~marin.execution.lazy.Checkpoint` handle.
+
+    The swept hyperparameters are literals in the config, so each grid point gets a
+    distinct ``name@version`` and fingerprint; the TPU is a run-arg, excluded from
+    identity, so re-running on different hardware does not fork the trial.
+    """
+    name = f"checkpoints/tiny-sweep/lr{learning_rate}-wd{weight_decay}"
+
+    def build_config(ctx: RunContext) -> TrialConfig:
+        return TrialConfig(
+            label=f"tiny-sweep-lr{learning_rate}-wd{weight_decay}",
+            out=ctx.out,
+            data=mixture(ctx, {slimpajama: 1.0}),
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            resources=ctx.run_arg("train_resources"),
+        )
+
+    return Checkpoint(
+        name=name,
+        version=version,
+        recipe=Recipe(
+            fn=_train_and_eval,
+            build_config=build_config,
+            deps=(slimpajama,),
+            run_args={"train_resources": TRAIN_RESOURCES},
+        ),
+    )
+
+
+def best_trial(*, version: str = "v1") -> Artifact:
+    """The full LR/WD sweep, reduced to its lowest-loss trial."""
+    trials = sweep(
+        trial,
+        learning_rate=[3e-4, 6e-4, 1e-3],
+        weight_decay=[0.0, 0.1, 0.2],
+    )
+    return select("sweeps/tiny-sweep", version, trials, metric=SELECTION_METRIC, mode="min")
 
 
 if __name__ == "__main__":
-    client = fray_client.current_client()
+    # Lower the sweep to a StepSpec graph and run it: each trial trains (its own TPU
+    # job, tokenizing the shared corpus first), then `select` records the winner.
+    best = best_trial()
+    StepRunner().run([lower(best)])
 
-    env = resolve_training_env(base_env=None, resources=RESOURCES)
-    handles = []
-    for i in range(NUM_WORKERS):
-        handle = client.submit(
-            JobRequest(
-                name=f"{SWEEP_NAME}-{i}",
-                entrypoint=Entrypoint.from_callable(_sweep_worker_entrypoint, args=[SWEEP_ROOT]),
-                resources=RESOURCES,
-                environment=create_environment(env_vars=env, extras=extras_for_resources(RESOURCES)),
-            )
-        )
-        handles.append(handle)
-    for h in handles:
-        h.wait(raise_on_failure=True)
+    selection = ArtifactIO.from_path(best.path())
+    print(f"best trial: {selection['winner']} ({SELECTION_METRIC}={selection['score']:.4f})")

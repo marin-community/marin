@@ -15,7 +15,7 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.checkpoint import CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
 from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
@@ -61,6 +61,10 @@ class GrugMoeLaunchConfig:
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
     slow object-store commit can't wedge the end-of-run barrier."""
+    init_from: str | None = None
+    """Checkpoint base directory to initialize weights from (the latest checkpoint
+    under it is loaded). None trains from scratch. Used to chain training phases —
+    a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -119,6 +123,7 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
     # Map template launch knobs onto full Levanter TrainerConfig.
+    initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
@@ -130,6 +135,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        initialize_from=initialize_from,
         checkpointer=config.checkpointer
         or CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
