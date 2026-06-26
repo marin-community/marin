@@ -37,6 +37,7 @@ from levanter.data.text import (
 from marin.execution.lazy import Dataset, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
+from marin.processing.tokenize.data_configs import dataset_component
 from marin.processing.tokenize.download_pretokenized import PretokenizedCacheDownloadConfig, fetch_pretokenized_cache
 from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
 from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
@@ -187,8 +188,7 @@ def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
     )
     if not isinstance(config, TokenizeConfigBase):
         raise TypeError(f"{dataset.name}: mixture component must be a tokenize dataset, got {type(config).__name__}")
-    source = config.as_lm_dataset_source_config(cache_path)
-    return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
+    return dataset_component(config.as_lm_dataset_source_config(cache_path))
 
 
 def _tokenizer_of(dataset: Dataset) -> str:

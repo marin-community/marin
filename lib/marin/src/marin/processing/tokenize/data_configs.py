@@ -7,7 +7,13 @@ import os
 from functools import lru_cache
 
 import numpy as np
-from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.data.text import (
+    DEFAULT_LM_DATA_SHUFFLE,
+    BlockShuffleConfig,
+    DatasetComponent,
+    LmDataConfig,
+    LmDatasetSourceConfigBase,
+)
 from levanter.tokenizers import load_tokenizer
 
 from marin.execution import unwrap_versioned_value
@@ -40,6 +46,15 @@ _EQUIVALENT_TOKENIZERS = frozenset(
 )
 
 
+def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
+    """A Levanter mixture component wrapping a resolved dataset source.
+
+    The single place the ``DatasetComponent`` fields are forwarded from a source, so the
+    executor and lazy mixture builders cannot drift in how they assemble a component.
+    """
+    return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
+
+
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
     """
     Converts a tokenizer step to a Levanter dataset component. This is useful for creating
@@ -51,12 +66,7 @@ def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_r
     else:
         source = step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
 
-    return DatasetComponent(
-        source=source,
-        cache_dir=source.cache_dir,
-        format=source.format,
-        tags=source.tags,
-    )
+    return dataset_component(source)
 
 
 def lm_data_config(

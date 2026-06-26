@@ -17,10 +17,21 @@ by a metric key.
 
 import itertools
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from marin.execution.artifact import Artifact as ArtifactIO
 from marin.execution.lazy import Artifact, Recipe, RunContext
+
+
+@dataclass(frozen=True)
+class _SelectConfig:
+    """The reducer's config: how to rank, and where each trial's metrics live."""
+
+    metric: str
+    mode: str
+    trials: dict[str, str]
+    """Trial name -> resolved output path (a placeholder ``name@version`` at fingerprint time)."""
 
 
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]:
@@ -70,20 +81,20 @@ def select(
     if not trials:
         raise ValueError("select needs at least one trial")
 
-    def build_config(ctx: RunContext) -> dict[str, Any]:
-        return {"metric": metric, "mode": mode, "trials": {t.name: ctx.path(t) for t in trials}}
+    def build_config(ctx: RunContext) -> _SelectConfig:
+        return _SelectConfig(metric=metric, mode=mode, trials={t.name: ctx.path(t) for t in trials})
 
-    def choose(config: Mapping[str, Any]) -> dict[str, Any]:
-        maximize = config["mode"] == "max"
+    def choose(config: _SelectConfig) -> dict[str, Any]:
+        maximize = config.mode == "max"
         scores: dict[str, float] = {}
         metrics: dict[str, Mapping[str, Any]] = {}
         best: tuple[str, float, str] | None = None
-        for trial_name, trial_path in config["trials"].items():
+        for trial_name, trial_path in config.trials.items():
             payload = ArtifactIO.from_path(trial_path)
             if not isinstance(payload, Mapping):
                 raise TypeError(f"trial {trial_name!r} produced no metrics payload at {trial_path}")
             metrics[trial_name] = payload
-            score = payload[config["metric"]]
+            score = payload[config.metric]
             scores[trial_name] = score
             if best is None or (score > best[1] if maximize else score < best[1]):
                 best = (trial_name, score, trial_path)
