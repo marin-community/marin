@@ -128,10 +128,31 @@ message CommandResult {                 // agent -> root, in PollRequest.command
 }
 ```
 
-The controller-side call blocks until the matching `CommandResult` returns on a subsequent `Poll`. **Poll
-cadence sets interactive latency** — acceptable cadence vs. an opt-in low-latency held stream for a
-trusted in-VPC backend is **spike S4** (open). Bulk logs are *not* tunneled: they stay in each backend's
-finelog, proxied per `backend_id` (no cross-region shipping).
+The controller-side call blocks until the matching `CommandResult` returns on a subsequent `Poll`. The
+agent **fast-follows** — re-Polls immediately when a `command_result` is pending — so interactive latency
+is ≈**0.5× Poll cadence** (≈0.5 s mean / 1 s p95 at a 1 s cadence; spike S4 validated this on a loopback
+Connect prototype; IAP adds ~30–100 ms RTT). A **held stream** (server-push + unary report, ~2 ms) is an
+opt-in escalation for trusted in-VPC latency-sensitive backends; escalate to long-poll on the single
+`Poll` RPC before ever adding a second RPC. **PTY / interactive-TTY exec is out of scope** (needs real
+bidi). Bulk logs are *not* tunneled: they stay in each backend's finelog, proxied per `backend_id` (no
+cross-region shipping).
+
+### 1.2 Lease timing & self-fence (spike S3)
+
+The `lease_duration` (§1) must be a **dedicated short lease**, not the worker's 600 s
+`heartbeat_timeout` (`worker.py:83`) — that 600 s term alone makes post-partition re-placement ~10 min.
+Spike S3 measured the other terms of the reuse invariant: `kill_grace` ≈ the task-monitor poll interval
+(**~5 s**), `transport_grace` = `RECONCILE_RPC_TIMEOUT` (**3 s**), `max_skew` negligible (<30 ms, since
+leases are monotonic-duration — only rate drift counts). A short lease therefore targets **~20–30 s**
+re-placement with an **~8–9 s** floor.
+
+- **Worker-daemon backends** already self-fence via the lease (the worker self-terminates on a stale
+  lease).
+- **k8s backends need a NEW lease-sidecar self-fence.** `activeDeadlineSeconds` is the *job* timeout and
+  is disabled for Kueue gangs, so a lease-less pod **never self-fences** on lost contact. A sidecar (or
+  equivalent) that holds the lease and kills the pod on expiry is **required** for the §1 reuse
+  invariant to hold on k8s. This is the one term S3 could not measure offline; it needs a gated live run
+  before the k8s fence timing is trusted.
 
 ## 2. Root-side adapter & agent
 
@@ -217,22 +238,38 @@ last-reported `CapacitySummary`, reusing the existing `Constraint{key, op, value
 `ConstraintIndex` matcher (`scheduling/scheduler.py`).
 
 - **Attribute normalization.** `BackendConfig.attributes` values are **comma-split into a set** at load
-  (`device-variant: "v5e-4,v5p-8"` → `{v5e-4, v5p-8}`); a constraint matches under the same op semantics
-  the worker matcher already uses (`EQ` = set membership, `EXISTS`, etc.). Normalization happens once at
-  config load, not per-match.
+  (`device-variant: "v5e-4,v5p-8"` → `{v5e-4, v5p-8}`). The existing `ConstraintIndex` is **scalar (one
+  value per key)**, so matching a constraint against a set-valued backend attribute needs a
+  **set-membership extension** to the matcher (spike S2) — "reuse the existing matcher" is not literal.
+  Normalization happens once at config load, not per-match.
+- **`--backend X` is a routing directive, not a worker constraint.** It pins task→backend, then **must be
+  stripped from the constraints handed to the agent's local scheduler**: agents don't advertise a
+  `backend` attribute on workers, so a leftover `backend=X` constraint matches no worker and the task
+  starves (a real bug surfaced in S2).
 - **`allow_policy` filters first.** Backends the requesting user can't access are removed *before*
   matching (see §6).
-- **`CapacitySummary` (strawman; exact shape is spike S2, provisional):**
+- **`CapacitySummary` (validated against the real `Scheduler` in spike S2 — 512 tasks / 5 backends;
+  two-level placed 512/512, 0 starved, vs. one global scheduler, at +0.15 tick mean wait / −0.6 pts
+  util):**
 
   ```python
   class CapacitySummary(BaseModel):
-      static: dict[str, list[str]]        # device variants, region/zone (mirrors attributes)
-      allocatable: dict[str, int]         # free worker slots per device shape, now
-      pending_leases: int                 # attempts launched-but-unobserved (don't double-count capacity)
-      largest_gang: int                   # biggest coschedulable gang placeable now (fragmentation signal)
-      stale_ms: int                       # age of this summary (root discounts stale capacity)
-      backoff: dict[str, int]             # per-group quota-exceeded / cooldown until-ms
+      # free, dynamic capacity reported each Poll — config the root already holds is NOT repeated here:
+      allocatable: dict[str, int]            # free worker slots per device variant, now
+      max_free_cpu_millicores: int           # largest single-worker free CPU bin (a free *count* can't bin-fit)
+      max_free_memory_bytes: int             # largest single-worker free RAM bin
+      largest_gang: dict[str, int]           # biggest coschedulable gang placeable NOW, per variant (balance)
+      stale_ms: int                          # age of this summary (root discounts stale capacity)
+      backoff: dict[str, int]                # per-group quota-exceeded / cooldown until-ms
   ```
+
+  S2 pruned two strawman fields and split one: **`static` dropped** (it only mirrors
+  `BackendConfig.attributes`, which the root already has); **`pending_leases` dropped** (the root is
+  authoritative over task→backend + leases, so its own ledger subsumes it — the real double-count guard is
+  an **in-tick decrement** in root-side bookkeeping, *not* a summary field; omitting it halved utilization
+  83%→50% in the BURST scenario); **`largest_gang` split** into a static config-derived `max_gang` per
+  variant (prevents permanent gang starvation; lives in config, not the summary) and the dynamic
+  `largest_gang` above (latency/balance only). Each capacity field is **per-variant**, not a single int.
 
   A task matching **no** backend statically → `UNSCHEDULABLE` with a reason; matching but with no live
   capacity → stays `PENDING` and rides the autoscaler.
@@ -317,7 +354,19 @@ reserved id derived from `config.name` (e.g. the cluster name); the migration ba
 **Agent-local cache (NOT a root migration).** Worker roster, per-worker health, slice inventory, idle
 inventory, attempt→worker binding, and **allocated host ports** live in an agent-local, in-memory store
 rebuilt at startup from re-registration + `list_all_slices()` + the root's Poll response. No
-outbox/inbox/event-log/cursor tables.
+outbox/inbox/event-log/cursor tables. Spike S1 confirmed roster/slices/bindings/ports rebuild exactly
+(health resets — the allowed diff), with two boundary corrections:
+
+- **Service endpoints stay root-authoritative — never demote them to the agent cache.** They are *not* a
+  pure function of the three sources (a long-running task does not re-announce its endpoint across an
+  agent restart), so they remain in the root DB; `endpoints_table`
+  ([`schema.py:448`](https://github.com/marin-community/marin/blob/1013be215490cce01d095518ba3c07bbe0de0a7f/lib/iris/src/iris/cluster/controller/schema.py#L448))
+  is reframed as a lease in [#6722](https://github.com/marin-community/marin/issues/6722) so endpoint
+  liveness is self-healing rather than tied to task-row lifetime.
+- **The attempt→worker binding recovers from the substrate object's stamped labels** (surfaced via the
+  worker's reconcile/discovery), **not from the `Register` handshake** — `RegisterRequest` carries
+  identity only. This is why `attempt_uid` (+ ports) must be stamped on the substrate (below); it holds
+  for the k8s path too (pod labels listed via the API).
 
 **Substrate stamping (the recoverability footprint).** Every substrate object carries full identity: k8s
 pods get label `iris.attempt_uid` + annotations `iris.full_task_id` / `iris.root_epoch` /
@@ -325,7 +374,15 @@ pods get label `iris.attempt_uid` + annotations `iris.full_task_id` / `iris.root
 worker-daemon containers get the same in Docker labels. CAS keys on `attempt_uid` (already `UNIQUE`),
 never on a sanitized label. `TaskAttempt.adopt()`
 ([`task_attempt.py:303`](https://github.com/marin-community/marin/blob/1013be215490cce01d095518ba3c07bbe0de0a7f/lib/iris/src/iris/cluster/worker/task_attempt.py#L303))
-must restore ports from the stamp into `PortAllocator` before scheduling new work on that worker.
+must restore ports from the stamp into `PortAllocator` before scheduling new work on that worker. This
+port recovery is **mandatory** — spike S1 reproduced the loss against the real classes (a live
+double-allocation bug on *any* worker restart, tracked as
+[#6721](https://github.com/marin-community/marin/issues/6721)) — and takes three concrete deltas:
+(1) add a `ports` field to `DiscoveredContainer`
+([`runtime/types.py:271`](https://github.com/marin-community/marin/blob/1013be215490cce01d095518ba3c07bbe0de0a7f/lib/iris/src/iris/cluster/runtime/types.py#L271)),
+populated from the stamped label/annotation in discovery; (2) add `PortAllocator.reserve(ports)`
+([`port_allocator.py:13`](https://github.com/marin-community/marin/blob/1013be215490cce01d095518ba3c07bbe0de0a7f/lib/iris/src/iris/cluster/worker/port_allocator.py#L13)
+has only `allocate`/`release` today); (3) have `adopt()` restore `attempt.ports` and call `reserve()`.
 
 ## 6. Auth & access control
 

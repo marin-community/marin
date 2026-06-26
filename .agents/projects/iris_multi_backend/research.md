@@ -155,3 +155,31 @@ self-fence, ack-gated-terminal + CAS) — none a second database.
   effectively "C2 with a recoverable cache" — the agent *remembers* its assignments and that memory is
   disposable because it rebuilds from the substrate. No `ProposePlacements` round-trip (each task lands
   on one backend; launch-lease + generation provide safety).
+
+## Spike validation (S1–S4)
+
+Four throwaway spikes (harnesses + findings under `.agents/projects/iris_multi_backend/spikes/`) ran the
+load-bearing claims before committing to the build order.
+
+- **S1 — recoverability: HOLDS, with caveats.** A harness reusing the real `WorkerHealthTracker` /
+  `PortAllocator` / `TaskAttempt.adopt()` populated a worker-state cache, wiped it, and rebuilt from the
+  three sources: roster, slices, and active bindings rebuilt *exactly*; health reset (the allowed diff).
+  Two caveats: (1) host **ports** have no substrate footprint — `adopt()` rebuilds `ports={}`, a live
+  double-alloc bug on any worker restart ([#6721](https://github.com/marin-community/marin/issues/6721));
+  (2) **service endpoints** are not a pure function of the three sources (no re-announce across restart),
+  so they must stay root-authoritative ([#6722](https://github.com/marin-community/marin/issues/6722)
+  reframes them as a lease).
+- **S2 — two-level placement: NO meaningful loss.** 512 tasks across 5 backends through one global
+  scheduler vs. root(task→backend from a `CapacitySummary`) + agent(task→worker): 512/512 placed, 0
+  starved, +0.15 tick mean wait, −0.6 pts util. Pinned the minimal `CapacitySummary` (pruned `static` +
+  `pending_leases`; added per-resource free-bin maxima; split gang into static `max_gang` + dynamic
+  `largest_gang`). Found two matcher gaps: set-valued backend attrs need a set-membership extension to
+  the scalar `ConstraintIndex`, and `--backend X` must be stripped from the agent's local constraints.
+- **S3 — fence/reuse timing: ~20–30 s achievable.** A dedicated short lease (not the 600 s heartbeat)
+  gives ~20–30 s re-placement (~8–9 s floor); `kill_grace` ≈ 5 s and `transport_grace` = 3 s dominate,
+  skew negligible. **k8s self-fence is a real gap:** `activeDeadlineSeconds` (job timeout, disabled for
+  Kueue gangs) won't fence a lease-less pod, so k8s needs a lease sidecar — the one term needing a gated
+  live run.
+- **S4 — transport: dial-home WORKS.** Loopback Connect prototype: agent as pure dialing client,
+  `system:controller` bearer auth, the §1.1 interactive piggyback end-to-end. Interactive latency
+  ≈1.5× cadence naively, ≈0.5× with a fast-follow re-poll; held stream ~2 ms (opt-in for in-VPC).

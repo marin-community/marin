@@ -132,7 +132,11 @@ sequenceDiagram
    immediately after substrate create; a skew-safe `root_reuse > agent_self_fence` invariant guarantees
    the agent kills the old runner before the root reuses the task.
 3. **Execution-layer self-fence** — workers/pods self-kill on a lost lease, surviving a total
-   partition. The one irreducible mechanism (you cannot un-run running code over a dead link).
+   partition. The one irreducible mechanism (you cannot un-run running code over a dead link). It needs
+   a **dedicated short lease** (~20–30 s target, ~8–9 s floor — spike S3), not the worker's 600 s
+   heartbeat-timeout. On k8s the self-fence must be a real **lease sidecar**: `activeDeadlineSeconds` is
+   the job timeout and is disabled for Kueue gangs, so a lease-less pod never self-fences — the one
+   piece still needing live validation.
 4. **Ack-gated terminal retention + CAS apply** — the substrate *is* the buffer (don't GC a terminal
    pod/container until the root acks); the root applies observations only under compare-and-swap on
    `attempt_uid`, returning `APPLIED` / `STALE_DISCARDED` / `RETRY_LATER`.
@@ -169,18 +173,35 @@ so adoption must re-reserve stamped ports or a post-restart task clashes.
 Final cloud smoke: root + one GCP backend + one CoreWeave backend; e2e job + exec + logs + a forced
 agent restart + a forced partition (assert fence + safe re-place + correct terminal status).
 
-## Open Questions
+## Spike results & open questions
 
-- **Capacity-summary shape (spike S2).** What is the minimal per-backend summary the root needs to pack
-  task→backend *well* without mirroring workers — static caps + allocatable + pending leases + gang
-  shape + staleness + backoff? Too coarse risks bad packing and starvation; this is the main scheduling
-  risk and a non-goal (global cross-backend preemption) bounds it.
-- **Fence/reuse margins (spike S3).** Is post-partition re-placement seconds or minutes? We need the
-  real `lease_duration + max_skew + transport_grace + kill_grace` from live partition injection on a
-  worker and a k8s pod — a UX number we can't derive on paper.
-- **On-demand interactive transport (spike S4).** For `exec` / live logs over an agent that only dials
-  out, is a short-poll command channel acceptable, or do we need an opt-in held stream for trusted
-  in-VPC backends? What's the interactive latency over IAP?
+Four throwaway spikes (`.agents/projects/iris_multi_backend/spikes/`) validated the load-bearing claims;
+the design above folds in their results.
+
+- **S1 — recoverability: holds, with caveats.** Roster, slice inventory, and active attempt→worker
+  bindings rebuild *exactly* from the three sources; only health resets (the allowed diff). Two
+  carve-outs: host **ports** have no substrate footprint today — a live double-allocation bug on any
+  worker restart ([#6721](https://github.com/marin-community/marin/issues/6721)), fixed by stamping +
+  re-reserving on adopt; and **service endpoints** are *not* recoverable from the three sources, so they
+  stay root-authoritative (reframed as a lease in
+  [#6722](https://github.com/marin-community/marin/issues/6722)), never demoted to the agent cache.
+- **S2 — two-level placement: no meaningful loss.** Replaying 512 tasks across 5 backends through one
+  global scheduler vs. root(task→backend from a summary) + agent(task→worker) placed 512/512 with 0
+  starved, costing +0.15 tick mean wait and −0.6 pts utilization; the only losses are the accepted
+  non-goals (cross-backend rebalancing / preemption). The `CapacitySummary` is pinned in `spec.md` §3.1.
+- **S3 — fence/reuse margins: ~20–30 s achievable.** With a dedicated short lease, post-partition
+  re-placement is ~20–30 s (vs. ~10 min on today's 600 s heartbeat); `kill_grace` ≈ 5 s and
+  `transport_grace` = 3 s dominate, skew is negligible. **Residual:** the k8s pod self-fence needs a
+  lease sidecar and one gated live measurement (harness ready).
+- **S4 — transport: dial-home works.** A loopback Connect prototype runs the agent as a pure dialing
+  client with `system:controller` auth and the §1.1 interactive piggyback end-to-end; interactive
+  latency is ≈0.5× Poll cadence with a fast-follow re-poll, and an opt-in held stream covers
+  latency-sensitive in-VPC backends.
+
+Still genuinely open:
+
+- **k8s lease-sidecar self-fence** (from S3) — the one gated live measurement to take before we trust
+  fence timing on k8s.
 - **Operator worker-policy** (cordon/drain) is the one non-recoverable class — it must live in the root
   DB or as a substrate marker, never in the volatile agent cache. Which, and is the rare/authoritative
   root-DB option simpler than a per-substrate marker?
