@@ -202,9 +202,8 @@ USER_JOB_STATES = (
     job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
 
-# Terminal states the KickTasks RPC can force, mapped to the reconcile kernel's
-# terminal-transition kind. PREEMPTED retries if budget remains; FAILED is
-# terminal with no retry (the same finalization the execution-timeout scan uses).
+# Terminal states KickTasks can force, mapped to the reconcile kernel's
+# terminal-transition kind. PREEMPTED retries if budget remains; FAILED does not.
 _KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
     job_pb2.TASK_STATE_PREEMPTED: TerminalKind.PREEMPT,
     job_pb2.TASK_STATE_FAILED: TerminalKind.TIMEOUT,
@@ -907,14 +906,10 @@ class AutoscalerProtocol(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PendingKick:
-    """A queued administrative task kick (see ``ControllerServiceImpl.kick_tasks``).
+    """A queued administrative task kick.
 
-    ``attempt_id`` is the attempt the caller targeted, or ``None`` to target
-    whatever attempt is current when the kick is applied. The controller
-    re-checks a non-``None`` ``attempt_id`` against ``current_attempt_id`` at
-    apply time and drops the kick if the attempt has since advanced, so an
-    ``:attempt`` qualifier guards against kicking a retry that started in the
-    window between the RPC and the tick that applies it.
+    ``attempt_id`` is the targeted attempt, or ``None`` to take whatever attempt
+    is current when the kick is applied.
     """
 
     task_id: JobName
@@ -1727,10 +1722,8 @@ class ControllerServiceImpl:
         """Validate one kick target, appending its queued kicks and result rows.
 
         A task or task-attempt id targets a single task; a job id expands to the
-        job's currently active tasks. Only tasks running on a worker (ASSIGNED /
-        BUILDING / RUNNING) can be kicked; anything else is rejected with a reason.
-        A task-attempt target carries its attempt id through to the queued kick so
-        the controller can re-check it when it applies the kick.
+        job's active tasks. Only tasks running on a worker (ASSIGNED / BUILDING /
+        RUNNING) can be kicked; anything else is rejected with a reason.
         """
 
         def reject(detail: str, *, task_id: str = "") -> None:

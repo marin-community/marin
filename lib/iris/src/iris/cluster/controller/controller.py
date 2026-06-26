@@ -357,9 +357,8 @@ class Controller:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
-        # Administrative task terminal-state overrides queued off the control loop
-        # (the KickTasks RPC) and finalized in the next tick's write transaction;
-        # see request_task_kicks / _drain_pending_kicks.
+        # Task terminal-state overrides queued off the control loop for the next
+        # tick; see request_task_kicks / _drain_pending_kicks.
         self._pending_kicks: list[PendingKick] = []
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
@@ -430,11 +429,9 @@ class Controller:
     def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
         """Queue task terminal-state overrides to apply on the next control tick.
 
-        Called off the control-loop thread by the KickTasks RPC. Queuing the
-        kicks (rather than writing them directly) keeps them inside the control
-        tick's single write transaction, so a manual kick cannot race the
-        scheduler's view of task state; each kick's targeted attempt is re-checked
-        against the current attempt when the tick applies it.
+        Called off the control-loop thread by the KickTasks RPC. Queuing keeps the
+        kicks inside the tick's single write transaction so they cannot race the
+        scheduler's view of task state.
         """
         if not kicks:
             return
@@ -755,9 +752,8 @@ class Controller:
             now=now,
         )
 
-        # A kick finalizes its victims' current attempts; force the next reconcile
-        # so the worker is told to stop them promptly instead of waiting a full
-        # reconcile interval (mirrors the fresh-assignment dispatch follow-up).
+        # Force the next reconcile so workers are told to stop the kicked attempts
+        # promptly instead of waiting a full reconcile interval.
         if pending_kicks:
             self._force_reconcile = True
             self._tick_wake.set()
@@ -879,8 +875,8 @@ class Controller:
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
             if pending_kicks:
-                # Resolve after the schedule/reconcile writes above so the attempt
-                # re-check sees this tick's reassignments and observations.
+                # Resolve after the schedule/reconcile writes so the attempt
+                # re-check sees this tick's reassignments.
                 kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
                 if kick_decisions:
                     finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
@@ -1241,11 +1237,9 @@ class Controller:
     def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
         """Turn queued kicks into terminal decisions, dropping superseded attempts.
 
-        A kick that named a specific attempt (``:attempt``) is dropped when that
-        attempt is no longer current — the task may have retried into a new
-        attempt between the RPC and now — so the qualifier guards against kicking
-        the wrong attempt. A kick with no attempt id targets whatever attempt is
-        current. Reads ``cur`` so the check sees this tick's earlier writes.
+        A kick targeting a specific attempt is dropped if that attempt is no longer
+        current (the task retried in the meantime); a kick with no attempt id takes
+        whatever attempt is current. Reads ``cur`` to see this tick's earlier writes.
         """
         decisions: list[TerminalDecision] = []
         for kick in pending_kicks:

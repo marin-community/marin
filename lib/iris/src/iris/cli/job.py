@@ -1057,10 +1057,7 @@ def kick(ctx, target: tuple[str, ...], state: str, reason: str) -> None:
     """Force task attempts into a terminal state (emergency override).
 
     Each TARGET is a task id (/user/job/0), task-attempt id (/user/job/0:3), or a
-    job id (/user/job), which expands to the job's active tasks. The kick is
-    queued on the controller and applied on the next control tick through the
-    same machinery as a reconcile-driven termination, so it does not race the
-    scheduler.
+    job id (/user/job) that expands to the job's active tasks.
     """
     client = _remote_client(ctx)
     results = client.kick_tasks(list(target), desired_state=_KICK_STATE_MAP[state], reason=reason)
