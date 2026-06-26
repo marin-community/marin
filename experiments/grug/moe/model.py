@@ -103,12 +103,6 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.3
     router_z_loss_coef: float = 0.0
-    # When True, the post-embedding RMSNorm (``embed_norm``) is skipped in the
-    # forward pass; instead the token embedding is multiplied by the static
-    # constant ``1/initializer_std`` so the input to ``embed_gated_norm`` has
-    # the same RMS at init as the original RMSNorm output. The model no longer
-    # rescales per-token; it has to maintain reasonable embed magnitudes itself.
-    embed_skip_rms_norm: bool = False
     # When True, the every-4th-and-last "long" layers skip the Partial Key
     # Offset (no shift of the second half of K, no doc-start zeroing). They
     # still run full causal attention (no sliding window); only the PKO step
@@ -136,40 +130,12 @@ class GrugModelConfig:
     per-forward concat temp (~6.7 GB at d=2560, BS=4096) and running one
     bigger NS call per expert. Changes NS semantics; use only for throughput
     probes unless you're OK with the different optimization target."""
-    alternating_dense_moe: bool = False
-    """When True, layers alternate dense (even index) and routed MoE (odd
-    index). Even layers use a single DenseMLP with intermediate
-    ``dense_intermediate_dim`` (typically 3 * hidden_dim) and no router;
-    odd layers use the usual MoE with ``num_experts`` / ``num_experts_per_token``
-    / ``intermediate_dim``. Requires ``use_array_stacked_blocks=False``
-    (the heterogeneous block shapes can't be stacked) and
-    ``shared_expert_intermediate_dim == 0`` (no shared expert)."""
-    dense_intermediate_dim: int = 0
-    """Intermediate dim for the dense layers when ``alternating_dense_moe=True``.
-    Typically ``3 * hidden_dim``. Ignored otherwise."""
     use_array_stacked_blocks: bool = False
     """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    # YaRN NTK-by-parts rescaling (Peng et al. 2023). When ``yarn_old_seq_len`` is
-    # set, RoPE inv_freqs are blended between full position interpolation (low-freq
-    # bands) and original NTK (high-freq bands). ``None`` disables YaRN. The base
-    # fields apply to short (sliding-window) layers; ``long_*`` overrides apply to
-    # the every-4th + last "long" full-attention layers (gated on the layer's
-    # ``is_long_layer`` flag, NOT on ``use_pko`` — so YaRN still routes correctly
-    # when ``disable_pko=True``).
-    yarn_old_seq_len: int | None = None
-    yarn_alpha: int = 1
-    yarn_beta: int = 32
-    # When set, applies YaRN twice: first (old -> prior) to reproduce the
-    # training-time rescaling of an already-YaRN-extended checkpoint, then
-    # (prior -> seq_len). Used when extending an already-extended ckpt further.
-    yarn_prior_seq_len: int | None = None
-    long_yarn_old_seq_len: int | None = None
-    long_yarn_prior_seq_len: int | None = None
-    long_qk_mult: float | None = None
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -206,29 +172,9 @@ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
-def _rope_inv_freq(
-    half_dim: int,
-    theta: float,
-    yarn_old_seq_len: int | None,
-    seq_len: int,
-    yarn_alpha: int,
-    yarn_beta: int,
-    yarn_prior_seq_len: int | None = None,
-) -> jax.Array:
-    """RoPE inv_freq with optional YaRN NTK-by-parts rescaling."""
-    inv_freq = 1.0 / (theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
-    if yarn_old_seq_len is None:
-        return inv_freq
-    if yarn_prior_seq_len is not None:
-        rotations = yarn_old_seq_len * inv_freq / (2 * jnp.pi)
-        mask = jnp.clip((rotations - yarn_alpha) / (yarn_beta - yarn_alpha), 0.0, 1.0)
-        scaling_factor = yarn_old_seq_len / yarn_prior_seq_len
-        inv_freq = inv_freq * (scaling_factor + mask * (1.0 - scaling_factor))
-        yarn_old_seq_len = yarn_prior_seq_len
-    rotations = yarn_old_seq_len * inv_freq / (2 * jnp.pi)
-    mask = jnp.clip((rotations - yarn_alpha) / (yarn_beta - yarn_alpha), 0.0, 1.0)
-    scaling_factor = yarn_old_seq_len / seq_len
-    return inv_freq * (scaling_factor + mask * (1.0 - scaling_factor))
+def _rope_inv_freq(half_dim: int, theta: float) -> jax.Array:
+    """RoPE inv_freq for half_dim channels."""
+    return 1.0 / (theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
 
 
 def _apply_half_rope(
@@ -238,20 +184,15 @@ def _apply_half_rope(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
-    yarn_old_seq_len: int | None = None,
-    yarn_alpha: int = 1,
-    yarn_beta: int = 32,
-    yarn_prior_seq_len: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """RoPE applied to the first ``head_dim`` channels of q/k, with optional YaRN.
+    """RoPE applied to the first ``head_dim`` channels of q/k.
 
-    Matches ``levanter.grug.attention.apply_rotary_embedding`` when
-    ``yarn_old_seq_len=None``; otherwise rescales inv_freqs per Peng et al. 2023.
-    Convention: ``x1, x2 = split(x, 2, axis=-1)``; rotation is
+    Matches ``levanter.grug.attention.apply_rotary_embedding``. Convention:
+    ``x1, x2 = split(x, 2, axis=-1)``; rotation is
     ``[x1*cos - x2*sin, x2*cos + x1*sin]``.
     """
     half_dim = head_dim // 2
-    inv_freq = _rope_inv_freq(half_dim, rope.theta, yarn_old_seq_len, seq_len, yarn_alpha, yarn_beta, yarn_prior_seq_len)
+    inv_freq = _rope_inv_freq(half_dim, rope.theta)
     positions = jnp.arange(seq_len, dtype=jnp.float32)
     angles = positions[:, None] * inv_freq[None, :]
     cos = jnp.cos(angles)[None, :, None, :]
@@ -295,7 +236,6 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
         disable_rope: bool = False,
-        is_long_layer: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -334,13 +274,7 @@ class CausalSelfAttention(eqx.Module):
 
         q = rms_norm(q)
         k = rms_norm(k)
-        # YaRN overrides are gated on ``is_long_layer`` (the every-4th + last
-        # full-attention layers), not on ``use_pko`` — so YaRN routes correctly
-        # when ``disable_pko=True`` and we still want YaRN on long layers.
         cfg = self.cfg
-        yarn_old = cfg.long_yarn_old_seq_len if is_long_layer else cfg.yarn_old_seq_len
-        yarn_prior = cfg.long_yarn_prior_seq_len if is_long_layer else cfg.yarn_prior_seq_len
-        qk_mult = cfg.long_qk_mult if (is_long_layer and cfg.long_qk_mult is not None) else cfg.qk_mult
         if not disable_rope:
             # Half-RoPE: apply rotary embedding only to first half of Q/K head_dim.
             # Second half is rope-free on every layer.
@@ -351,14 +285,10 @@ class CausalSelfAttention(eqx.Module):
                 seq_len=seq_len,
                 head_dim=half,
                 rope=cfg.rope,
-                yarn_old_seq_len=yarn_old,
-                yarn_alpha=cfg.yarn_alpha,
-                yarn_beta=cfg.yarn_beta,
-                yarn_prior_seq_len=yarn_prior,
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        q = q * qk_mult
+        q = q * cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Half-RoPE's slice+concat on the head_dim axis can leave the explicit-mesh
         # propagator with ``model`` annotated on ``head_dim`` rather than
@@ -685,8 +615,8 @@ class Block(eqx.Module):
         # layers use the sliding-window mask, never PKO, and always RoPE.
         attn_out = jax.lax.cond(
             jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope, is_long_layer=True),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, is_long_layer=False),
+            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope),
+            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False),
             operand=None,
         )
         x = x + attn_out
@@ -704,116 +634,16 @@ def _long_layer_schedule(num_layers: int) -> jax.Array:
     return ((idx % 4) == 3) | (idx == num_layers - 1)
 
 
-def _zero_router_stats(num_experts: int) -> dict[str, jax.Array]:
-    """Dummy router stats for non-routed (dense) layers, shape-compatible with
-    MoEMLP's output so per-layer stacking across heterogeneous blocks doesn't
-    change shape. Reported router metrics will read 0 on dense layers.
-
-    Shapes mirror what MoEMLP produces:
-    - routing_counts, qb_beta: (num_experts,)
-    - all other entries: scalar.
-    """
-    return {
-        "routing_counts": jnp.zeros((num_experts,), dtype=jnp.float32),
-        "routing_entropy": jnp.float32(0.0),
-        "load_balancing_loss": jnp.float32(0.0),
-        "router_z_loss": jnp.float32(0.0),
-        "qb_beta": jnp.zeros((num_experts,), dtype=jnp.float32),
-        "capacity_overflow": jnp.float32(0.0),
-    }
-
-
-class DenseBlock(eqx.Module):
-    """Block variant whose FFN is a single DenseMLP — no router, no shared expert.
-
-    Used when ``alternating_dense_moe=True``: even-indexed layers are DenseBlock
-    (FFN width = ``dense_intermediate_dim``, typically 3x hidden_dim) and odd
-    layers are the standard MoE Block. Same attention + norms as Block.
-    Returns zero router stats so per-layer stacking across mixed block types
-    stays shape-consistent.
-    """
-
-    rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
-    attn: CausalSelfAttention
-    rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
-    mlp: DenseMLP
-    num_experts: int = eqx.field(static=True)
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "DenseBlock":
-        attn_key, mlp_key, gn_attn_key, gn_mlp_key = random.split(key, 4)
-        if cfg.dense_intermediate_dim <= 0:
-            raise ValueError("DenseBlock requires cfg.dense_intermediate_dim > 0; " f"got {cfg.dense_intermediate_dim}")
-        return DenseBlock(
-            rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=DenseMLP.init(cfg.hidden_dim, cfg.dense_intermediate_dim, cfg.initializer_std, key=mlp_key),
-            num_experts=cfg.num_experts,
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        short_mask: AttentionMask | jax.Array,
-        long_mask: AttentionMask | jax.Array,
-        use_long_mask: Bool[Array, ""] | bool,
-        use_pko: bool = False,
-        disable_long_rope: bool = False,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = jax.lax.cond(
-            jnp.asarray(use_long_mask, dtype=jnp.bool_),
-            lambda _: self.attn(attn_in, long_mask, use_pko=use_pko, disable_rope=disable_long_rope, is_long_layer=True),
-            lambda _: self.attn(attn_in, short_mask, use_pko=False, disable_rope=False, is_long_layer=False),
-            operand=None,
-        )
-        x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out = self.mlp(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, _zero_router_stats(self.num_experts)
-
-
-class LayerPair(eqx.Module):
-    """A (DenseBlock, MoE Block) pair used when ``alternating_dense_moe=True``.
-
-    Stacking 13 pairs into one ``ArrayStacked[LayerPair]`` works even though
-    DenseBlock and MoE Block have different shapes (the heterogeneity is
-    inside the pair, not across pairs). One scan iteration applies the dense
-    half then the routed half, so the scanned sequence is dense, routed,
-    dense, routed, ...
-    """
-
-    dense: DenseBlock
-    routed: Block
-
-    @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "LayerPair":
-        dense_key, routed_key = random.split(key, 2)
-        return LayerPair(
-            dense=DenseBlock.init(cfg, key=dense_key),
-            routed=Block.init(cfg, key=routed_key),
-        )
-
-
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    # Exactly one of `blocks` / `stacked_blocks` / `stacked_pairs` is populated:
-    #   - `blocks`: per-block path (use_array_stacked_blocks=False)
-    #   - `stacked_blocks`: standard stacked path (homogeneous Block, lax.scan)
-    #   - `stacked_pairs`: alternating dense+MoE stacked path
+    # Exactly one of ``blocks`` / ``stacked_blocks`` is populated:
+    #   - ``blocks``: per-block path (use_array_stacked_blocks=False)
+    #   - ``stacked_blocks``: stacked path (homogeneous Block, lax.scan)
     blocks: tuple[Block, ...] | None
     stacked_blocks: ArrayStacked[Block] | None
-    stacked_pairs: ArrayStacked[LayerPair] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -825,26 +655,9 @@ class Transformer(eqx.Module):
                 "use_array_stacked_blocks=True currently requires disable_pko=True "
                 "because CausalSelfAttention reads use_pko at trace time."
             )
-        if cfg.alternating_dense_moe:
-            if not cfg.use_array_stacked_blocks:
-                raise ValueError(
-                    "alternating_dense_moe currently requires use_array_stacked_blocks=True "
-                    "(paired blocks are stacked into one ArrayStacked[LayerPair])."
-                )
-            if cfg.shared_expert_intermediate_dim != 0:
-                raise ValueError(
-                    "alternating_dense_moe requires shared_expert_intermediate_dim=0 "
-                    "(the dense layers stand in for the shared expert role)."
-                )
-            if cfg.num_layers % 2 != 0:
-                raise ValueError(f"alternating_dense_moe requires num_layers to be even; got {cfg.num_layers}.")
-            if cfg.dense_intermediate_dim <= 0:
-                raise ValueError("alternating_dense_moe requires dense_intermediate_dim > 0.")
 
-        num_pairs = cfg.num_layers // 2 if cfg.alternating_dense_moe else 0
-        # 4 module-level keys + per-layer / per-pair keys.
-        num_block_keys = num_pairs if cfg.alternating_dense_moe else cfg.num_layers
-        keys = random.split(key, num_block_keys + 4)
+        # 4 module-level keys + per-layer keys.
+        keys = random.split(key, cfg.num_layers + 4)
         embed_key, out_key, embed_gn_key, final_gn_key = keys[:4]
         block_keys = keys[4:]
         token_embed = reshard(
@@ -854,19 +667,12 @@ class Transformer(eqx.Module):
 
         blocks: tuple[Block, ...] | None
         stacked_blocks: ArrayStacked[Block] | None
-        stacked_pairs: ArrayStacked[LayerPair] | None
-        if cfg.alternating_dense_moe:
-            blocks = None
-            stacked_blocks = None
-            stacked_pairs = ArrayStacked.init(num_pairs, LayerPair)(cfg=cfg, key=block_keys)
-        elif cfg.use_array_stacked_blocks:
+        if cfg.use_array_stacked_blocks:
             blocks = None
             stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
-            stacked_pairs = None
         else:
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
             stacked_blocks = None
-            stacked_pairs = None
 
         return Transformer(
             token_embed=token_embed,
@@ -875,7 +681,6 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
-            stacked_pairs=stacked_pairs,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -893,10 +698,7 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        if cfg.embed_skip_rms_norm:
-            hidden = hidden * jnp.float32(1.0 / cfg.initializer_std)
-        else:
-            hidden = self.embed_norm(hidden)
+        hidden = self.embed_norm(hidden)
         hidden = self.embed_gated_norm(hidden)
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
@@ -927,53 +729,6 @@ class Transformer(eqx.Module):
                 "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
                 "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
                 "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
-            }
-        elif self.stacked_pairs is not None:
-            # Alternating dense+MoE: one scan over LayerPair, each iteration
-            # applies the dense half then the routed half. The 26-layer mask
-            # schedule is reshaped to (num_pairs, 2) so each iteration gets one
-            # mask per half.
-            num_pairs = cfg.num_layers // 2
-            mask_schedule = _long_layer_schedule(cfg.num_layers).reshape(num_pairs, 2)
-
-            def _scan_pairs(
-                carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[LayerPair, Bool[Array, "2"]],
-            ) -> tuple[Float[Array, "B S D"], tuple[dict[str, jax.Array], dict[str, jax.Array]]]:
-                pair, masks_for_pair = scan_inputs
-                dense_long = masks_for_pair[0]
-                routed_long = masks_for_pair[1]
-                carry_hidden, dense_stats = eqx.filter_checkpoint(pair.dense, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, dense_long, False, cfg.disable_long_rope
-                )
-                carry_hidden, routed_stats = eqx.filter_checkpoint(pair.routed, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, routed_long, False, cfg.disable_long_rope
-                )
-                return carry_hidden, (dense_stats, routed_stats)
-
-            hidden, (dense_stats_per_pair, routed_stats_per_pair) = jax.lax.scan(
-                _scan_pairs,
-                hidden,
-                xs=(self.stacked_pairs.stacked, mask_schedule),
-            )
-
-            # Interleave (num_pairs, ...) + (num_pairs, ...) -> (cfg.num_layers, ...).
-            def _interleave(dense_v: jax.Array, routed_v: jax.Array) -> jax.Array:
-                # stack along axis=1 then reshape so dense=row 0, routed=row 1 within each pair.
-                stacked = jnp.stack([dense_v, routed_v], axis=1)
-                new_shape = (cfg.num_layers, *stacked.shape[2:])
-                return stacked.reshape(new_shape)
-
-            router_metrics = {
-                f"{key}_per_layer": _interleave(dense_stats_per_pair[key], routed_stats_per_pair[key])
-                for key in (
-                    "routing_entropy",
-                    "routing_counts",
-                    "load_balancing_loss",
-                    "router_z_loss",
-                    "qb_beta",
-                    "capacity_overflow",
-                )
             }
         else:
             assert self.stacked_blocks is not None

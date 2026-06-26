@@ -261,16 +261,6 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
             model,
             new_biases,
         )
-    if model.stacked_pairs is not None:
-        # Alternating dense+routed: qb_betas has one row per (num_layers) layer
-        # with zeros on the dense rows (even indices). Routed layers are at odd
-        # indices; slice out their rows to match the stacked LayerPair shape.
-        routed_biases = new_biases[1::2]
-        return eqx.tree_at(
-            lambda t: t.stacked_pairs.stacked.routed.mlp.router_bias,
-            model,
-            routed_biases,
-        )
     assert model.blocks is not None
     new_blocks = list(model.blocks)
     for i, block in enumerate(model.blocks):
