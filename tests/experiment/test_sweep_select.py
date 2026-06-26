@@ -79,3 +79,10 @@ def test_select_rejects_an_unknown_mode():
 def test_select_rejects_an_empty_sweep():
     with pytest.raises(ValueError):
         select("sweeps/x", "v1", [], metric="loss")
+
+
+def test_select_rejects_colliding_trial_identities():
+    # Two trials that share name@version would silently collapse in the selection.
+    same = _trial(0.1, 0.0)
+    with pytest.raises(ValueError, match="distinct name@version"):
+        select("sweeps/x", "v1", [same, _trial(0.1, 0.0)], metric="loss")

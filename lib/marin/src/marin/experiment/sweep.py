@@ -31,7 +31,9 @@ class _SelectConfig:
     metric: str
     mode: str
     trials: dict[str, str]
-    """Trial name -> resolved output path (a placeholder ``name@version`` at fingerprint time)."""
+    """Trial ``name@version`` -> resolved output path (a placeholder ``name@version`` at
+    fingerprint time). Keyed by full identity, not bare name, so two trials that differ only
+    by version do not collapse."""
 
 
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]:
@@ -49,8 +51,9 @@ def sweep(trial: Callable[..., Artifact], **axes: Sequence[Any]) -> list[Artifac
     """One trial handle per grid point: ``trial(**params)`` for each combination.
 
     ``axes`` are the swept dimensions (see :func:`grid`); ``trial`` maps one parameter
-    set to a handle. The swept values are literals in each trial's config, so every
-    grid point gets a distinct fingerprint and ``name@version``.
+    set to a handle. The trial must fold the swept values into both its config (so each
+    grid point gets a distinct fingerprint) and its ``name`` (so each gets a distinct,
+    readable address); :func:`select` rejects trials whose ``name@version`` collide.
     """
     return [trial(**params) for params in grid(**axes)]
 
@@ -80,9 +83,15 @@ def select(
     trials = tuple(trials)
     if not trials:
         raise ValueError("select needs at least one trial")
+    ids = [f"{t.name}@{t.version}" for t in trials]
+    if len(set(ids)) != len(ids):
+        duplicates = sorted({i for i in ids if ids.count(i) > 1})
+        raise ValueError(f"select trials must have distinct name@version; duplicates: {duplicates}")
 
     def build_config(ctx: RunContext) -> _SelectConfig:
-        return _SelectConfig(metric=metric, mode=mode, trials={t.name: ctx.path(t) for t in trials})
+        return _SelectConfig(
+            metric=metric, mode=mode, trials={tid: ctx.path(t) for tid, t in zip(ids, trials, strict=True)}
+        )
 
     def choose(config: _SelectConfig) -> dict[str, Any]:
         maximize = config.mode == "max"
