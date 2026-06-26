@@ -541,6 +541,12 @@ const taskCounts = computed(() => {
   return counts
 })
 
+// The Scheduling pane auto-opens while tasks are pending — that's when placement
+// constraints explain why the job can't run — but a manual collapse then sticks
+// instead of being forced back open on the next auto-refresh.
+const schedulingOpen = ref(false)
+watch(() => taskCounts.value.pending > 0, pending => { if (pending) schedulingOpen.value = true }, { immediate: true })
+
 const MAX_FAILURE_EXAMPLES = 8
 
 interface TaskFailureSummary {
@@ -960,52 +966,42 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow label="Failed">{{ taskCounts.failed }}</InfoRow>
         </InfoCard>
 
+        <!-- Resources: per-VM reservation, annotated inline with live usage across the
+             running tasks so the card reads as utilization (am I using what I booked,
+             and how close to OOM) rather than two disconnected lists of numbers. -->
         <InfoCard title="Resources (per VM)">
-          <InfoRow label="CPU">{{ cpuDisplay }}</InfoRow>
-          <InfoRow label="Memory">{{ memoryDisplay }}</InfoRow>
+          <InfoRow label="CPU">
+            <span class="font-mono">{{ cpuDisplay }}</span>
+            <span v-if="runningResourceRange" class="text-text-muted"> · {{ formatCpuMillicores(runningResourceRange.cpuMillicoresMin) }}&ndash;{{ formatCpuMillicores(runningResourceRange.cpuMillicoresMax) }} used</span>
+          </InfoRow>
+          <InfoRow label="Memory">
+            <span class="font-mono">{{ memoryDisplay }}</span>
+            <span v-if="runningResourceRange" class="text-text-muted"> · {{ formatBytes(runningResourceRange.memoryBytesMin) }}&ndash;{{ formatBytes(runningResourceRange.memoryBytesMax) }} used</span>
+          </InfoRow>
+          <InfoRow v-if="runningResourceRange?.memoryPeakBytesMax" label="Peak memory">
+            <span class="font-mono">{{ formatBytes(runningResourceRange.memoryPeakBytesMax) }}</span>
+          </InfoRow>
           <InfoRow label="Disk">{{ diskDisplay }}</InfoRow>
           <InfoRow label="Accelerator">{{ acceleratorDisplay }}</InfoRow>
           <InfoRow label="Replicas">{{ tasks.length || '-' }}</InfoRow>
         </InfoCard>
       </div>
 
-      <!-- Live resource usage (min/max across running tasks) -->
-      <div
-        v-if="runningResourceRange"
-        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
-      >
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
-          Live Resource Usage (across running tasks)
-        </h3>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-sm">
-          <div>
-            <span class="text-text-muted">CPU:</span>
-            <span class="font-mono ml-1">{{ formatCpuMillicores(runningResourceRange.cpuMillicoresMin) }}</span>
-            <span class="text-text-muted mx-1">&ndash;</span>
-            <span class="font-mono">{{ formatCpuMillicores(runningResourceRange.cpuMillicoresMax) }}</span>
-          </div>
-          <div>
-            <span class="text-text-muted">Memory:</span>
-            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryBytesMin) }}</span>
-            <span class="text-text-muted mx-1">&ndash;</span>
-            <span class="font-mono">{{ formatBytes(runningResourceRange.memoryBytesMax) }}</span>
-          </div>
-          <div v-if="runningResourceRange.memoryPeakBytesMax">
-            <span class="text-text-muted">Peak Memory:</span>
-            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryPeakBytesMax) }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Constraints -->
-      <div
+      <!-- Scheduling: placement constraints, auto-opened while tasks are pending so an
+           operator sees what the job is asking for right when it can't be placed. -->
+      <details
         v-if="jobRequest?.constraints && jobRequest.constraints.length > 0"
-        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+        class="mb-6 rounded-lg border border-surface-border bg-surface"
+        :open="schedulingOpen"
+        @toggle="schedulingOpen = ($event.target as HTMLDetailsElement).open"
       >
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
-          Constraints
-        </h3>
-        <div class="flex flex-wrap gap-1.5">
+        <summary class="flex items-center gap-2 px-4 py-2 cursor-pointer select-none text-xs font-semibold uppercase tracking-wider text-text-secondary">
+          Scheduling
+          <span class="font-normal normal-case tracking-normal text-text-muted">
+            — {{ jobRequest.constraints.length }} constraint{{ jobRequest.constraints.length > 1 ? 's' : '' }}<template v-if="taskCounts.pending > 0"> · {{ taskCounts.pending }} task{{ taskCounts.pending > 1 ? 's' : '' }} pending</template>
+          </span>
+        </summary>
+        <div class="border-t border-surface-border px-4 py-3 flex flex-wrap gap-1.5">
           <span
             v-for="(c, i) in jobRequest.constraints"
             :key="i"
@@ -1014,17 +1010,18 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             {{ c.key }} {{ c.op }} {{ c.value?.stringValue ?? c.value?.intValue ?? '' }}
           </span>
         </div>
-      </div>
+      </details>
 
-      <!-- Job Request Details -->
-      <div
+      <!-- Job Request Details (collapsed by default — open to inspect command/env) -->
+      <details
         v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.submitArgv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
-        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+        class="mb-6 rounded-lg border border-surface-border bg-surface"
       >
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+        <summary class="flex items-center gap-2 px-4 py-2 cursor-pointer select-none text-xs font-semibold uppercase tracking-wider text-text-secondary">
           Job Request
-        </h3>
-        <div class="flex flex-col gap-2 text-sm">
+          <span class="font-normal normal-case tracking-normal text-text-muted">— command, setup &amp; environment</span>
+        </summary>
+        <div class="flex flex-col gap-2 text-sm border-t border-surface-border px-4 py-3">
           <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
             <span class="text-text-muted text-xs">Command</span>
             <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
@@ -1074,7 +1071,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             </div>
           </div>
         </div>
-      </div>
+      </details>
 
       <!-- Child Jobs -->
       <div v-if="flattenedChildJobs.length > 0" class="mb-6">
