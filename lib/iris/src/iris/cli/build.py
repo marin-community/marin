@@ -231,7 +231,21 @@ def build_image(
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
 
     if push:
-        cmd.extend(["--cache-to", f"type=registry,ref={cache_ref},mode=max"])
+        # Match the cache compression to the image output (zstd level 3). The
+        # cache exporter defaults to gzip, so a mismatched setting makes BuildKit
+        # decompress every zstd image layer and recompress it to gzip for the
+        # cache — the dominant cost of "exporting cache to registry". Aligned
+        # compression yields byte-identical blob digests, so GHCR cross-repo
+        # blob-mounts the layers already pushed for the image instead of
+        # re-uploading them. oci-mediatypes/image-manifest store the cache as a
+        # single OCI image (required for zstd cache on registries).
+        cmd.extend(
+            [
+                "--cache-to",
+                f"type=registry,ref={cache_ref},mode=max,"
+                "compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true",
+            ]
+        )
         cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
         cmd.append("--provenance=false")
     else:
