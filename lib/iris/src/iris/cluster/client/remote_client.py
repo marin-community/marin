@@ -507,6 +507,25 @@ class RemoteClusterClient:
 
         return call_with_retry(f"list_tasks({job_id})", _call)
 
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override)."""
+
+        def _call():
+            request = controller_pb2.Controller.KickTasksRequest(
+                targets=targets,
+                desired_state=desired_state,
+                reason=reason,
+            )
+            response = self._client.kick_tasks(request)
+            return list(response.results)
+
+        return call_with_retry(f"kick_tasks({', '.join(targets)})", _call)
+
     def fetch_logs(
         self,
         source: str,

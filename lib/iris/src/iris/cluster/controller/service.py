@@ -51,7 +51,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
     worker_metadata_to_proto,
 )
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -61,6 +61,7 @@ from iris.cluster.controller.projections.endpoints import (
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
+from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -200,6 +201,13 @@ USER_JOB_STATES = (
     job_pb2.JOB_STATE_WORKER_FAILED,
     job_pb2.JOB_STATE_UNSCHEDULABLE,
 )
+
+# Terminal states KickTasks can force, mapped to the reconcile kernel's
+# terminal-transition kind. PREEMPTED retries if budget remains; FAILED does not.
+_KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
+    job_pb2.TASK_STATE_PREEMPTED: TerminalKind.PREEMPT,
+    job_pb2.TASK_STATE_FAILED: TerminalKind.TIMEOUT,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -896,12 +904,28 @@ class AutoscalerProtocol(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class PendingKick:
+    """A queued administrative task kick.
+
+    ``attempt_id`` is the targeted attempt, or ``None`` to take whatever attempt
+    is current when the kick is applied.
+    """
+
+    task_id: JobName
+    attempt_id: int | None
+    kind: TerminalKind
+    reason: str
+
+
 class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
 
     def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
+
+    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -1656,6 +1680,100 @@ class ControllerServiceImpl:
             task_statuses.append(proto_task_status)
 
         return controller_pb2.Controller.ListTasksResponse(tasks=task_statuses)
+
+    def kick_tasks(
+        self,
+        request: controller_pb2.Controller.KickTasksRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Force task attempts into a terminal state out-of-band (emergency override).
+
+        Validates each target against the current snapshot and queues the accepted
+        ones on the controller for the next control tick to apply. Returns one
+        ``KickResult`` per resolved task reporting whether it was queued.
+        """
+        kind = _KICK_KIND_BY_STATE.get(request.desired_state)
+        if kind is None:
+            allowed = ", ".join(task_state_friendly(state) for state in _KICK_KIND_BY_STATE)
+            raise ConnectError(Code.INVALID_ARGUMENT, f"desired_state must be one of: {allowed}")
+        if not request.targets:
+            raise ConnectError(Code.INVALID_ARGUMENT, "at least one target is required")
+
+        reason = request.reason or f"Kicked to {task_state_friendly(request.desired_state)} by operator"
+
+        results: list[controller_pb2.Controller.KickResult] = []
+        kicks: list[PendingKick] = []
+        with self._db.read_snapshot() as tx:
+            for target in request.targets:
+                self._resolve_kick_target(tx, target, kind, reason, kicks, results)
+
+        self._controller.request_task_kicks(kicks)
+        return controller_pb2.Controller.KickTasksResponse(results=results)
+
+    def _resolve_kick_target(
+        self,
+        tx: Tx,
+        target: str,
+        kind: TerminalKind,
+        reason: str,
+        kicks: list[PendingKick],
+        results: list[controller_pb2.Controller.KickResult],
+    ) -> None:
+        """Validate one kick target, appending its queued kicks and result rows.
+
+        A task or task-attempt id targets a single task; a job id expands to the
+        job's active tasks. Only tasks running on a worker (ASSIGNED / BUILDING /
+        RUNNING) can be kicked; anything else is rejected with a reason.
+        """
+
+        def reject(detail: str, *, task_id: str = "") -> None:
+            results.append(
+                controller_pb2.Controller.KickResult(target=target, task_id=task_id, queued=False, detail=detail)
+            )
+
+        try:
+            task_attempt = TaskAttempt.from_wire(target)
+        except ValueError as exc:
+            reject(str(exc))
+            return
+
+        name = task_attempt.task_id
+        self._authorize_job_owner(name)
+
+        if name.is_task:
+            detail = reads.get_task_detail(tx, name)
+            if detail is None:
+                reject("task not found")
+                return
+            if task_attempt.attempt_id is not None and task_attempt.attempt_id != detail.current_attempt_id:
+                reject(
+                    f"attempt {task_attempt.attempt_id} is not current (current is {detail.current_attempt_id})",
+                    task_id=name.to_wire(),
+                )
+                return
+            if detail.state not in ACTIVE_TASK_STATES:
+                reject(f"task is {task_state_friendly(detail.state)}, not running on a worker", task_id=name.to_wire())
+                return
+            kicks.append(PendingKick(task_id=name, attempt_id=task_attempt.attempt_id, kind=kind, reason=reason))
+            results.append(controller_pb2.Controller.KickResult(target=target, task_id=name.to_wire(), queued=True))
+            return
+
+        # Job target: expand to its active tasks.
+        if task_attempt.attempt_id is not None:
+            reject("a job target cannot carry an ':attempt' suffix")
+            return
+        if reads.get_job_state(tx, name) is None:
+            reject("job not found")
+            return
+        active = reads.list_active_tasks(tx, reads.TaskScope(job_id=name), states=ACTIVE_TASK_STATES)
+        if not active:
+            reject("job has no tasks running on a worker", task_id=name.to_wire())
+            return
+        for row in active:
+            kicks.append(PendingKick(task_id=row.task_id, attempt_id=None, kind=kind, reason=reason))
+            results.append(
+                controller_pb2.Controller.KickResult(target=target, task_id=row.task_id.to_wire(), queued=True)
+            )
 
     # --- Worker Management ---
 

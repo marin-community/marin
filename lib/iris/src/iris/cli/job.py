@@ -1035,6 +1035,50 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
     _print_terminated(terminated)
 
 
+_KICK_STATE_MAP = {
+    "preempted": job_pb2.TASK_STATE_PREEMPTED,
+    "failed": job_pb2.TASK_STATE_FAILED,
+}
+
+
+@job.command("kick")
+@click.argument("target", nargs=-1, required=True)
+@click.option(
+    "--state",
+    "-s",
+    type=click.Choice(sorted(_KICK_STATE_MAP)),
+    default="preempted",
+    show_default=True,
+    help="Terminal state to force: 'preempted' retries if budget remains; 'failed' does not retry.",
+)
+@click.option("--reason", type=str, default="", help="Reason recorded on the kicked task attempts.")
+@click.pass_context
+def kick(ctx, target: tuple[str, ...], state: str, reason: str) -> None:
+    """Force task attempts into a terminal state (emergency override).
+
+    Each TARGET is a task id (/user/job/0), task-attempt id (/user/job/0:3), or a
+    job id (/user/job) that expands to the job's active tasks.
+    """
+    client = _remote_client(ctx)
+    results = client.kick_tasks(list(target), desired_state=_KICK_STATE_MAP[state], reason=reason)
+
+    queued = [r for r in results if r.queued]
+    rejected = [r for r in results if not r.queued]
+    if queued:
+        click.echo(f"Queued kick to {state} for {len(queued)} task(s):")
+        for r in queued:
+            click.echo(f"  {r.task_id}")
+    if rejected:
+        click.echo("Rejected:")
+        for r in rejected:
+            label = r.task_id or r.target
+            click.echo(f"  {label}: {r.detail}")
+    if not results:
+        click.echo("No tasks matched.")
+    if rejected and not queued:
+        ctx.exit(1)
+
+
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
 @click.option(
