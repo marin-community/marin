@@ -584,6 +584,27 @@ def _format_rejection_summary(
     return "\n".join(reason_lines)
 
 
+# Diagnostic returned when a task fits but has not yet been placed by the
+# scheduling loop — i.e. the failure is transient, not a capacity problem.
+_SCHEDULABLE_NEXT_CYCLE = "Schedulable — waiting for next scheduling cycle"
+
+
+def diagnose_fit(
+    req: JobRequirements,
+    context: SchedulingContext,
+    max_building_tasks_per_worker: int,
+) -> str:
+    """Explain whether a non-coscheduled req fits, and why not if it doesn't.
+
+    Returns ``_SCHEDULABLE_NEXT_CYCLE`` if a fitting worker exists (the task is
+    just awaiting the next cycle); otherwise delegates to :func:`explain_unfittable`.
+    """
+    candidates = compute_candidates(req, context)
+    if first_fitting_worker(candidates, context, req) is not None:
+        return _SCHEDULABLE_NEXT_CYCLE
+    return explain_unfittable(req, context, max_building_tasks_per_worker)
+
+
 def explain_unfittable(
     req: JobRequirements,
     context: SchedulingContext,
@@ -593,8 +614,8 @@ def explain_unfittable(
 
     Diagnostics-only — walks candidates a second time accumulating rejection
     counts and formatting per-dimension messages with totals. Returns
-    "Schedulable — waiting for next scheduling cycle" if the req does fit
-    after all (race against `find_assignments`).
+    ``_SCHEDULABLE_NEXT_CYCLE`` if the req does fit after all (race against
+    `find_assignments`).
     """
     if not context.capacities:
         return "No healthy workers available"
@@ -610,7 +631,7 @@ def explain_unfittable(
             continue
         rejection = context.capacities[worker_id].can_fit(req)
         if rejection is None:
-            return "Schedulable — waiting for next scheduling cycle"
+            return _SCHEDULABLE_NEXT_CYCLE
         rejection_counts[rejection.kind] += 1
         if rejection.kind not in rejection_samples:
             rejection_samples[rejection.kind] = rejection
@@ -874,10 +895,7 @@ class Scheduler:
         if schedulable_task_id is None:
             return "No schedulable tasks (all tasks have non-terminal attempts)"
 
-        candidates = compute_candidates(req, context)
-        if first_fitting_worker(candidates, context, req) is not None:
-            return "Schedulable — waiting for next scheduling cycle"
-        return explain_unfittable(req, context, self._max_building_tasks_per_worker)
+        return diagnose_fit(req, context, self._max_building_tasks_per_worker)
 
     def _diagnose_coscheduled_job(
         self,
@@ -899,10 +917,7 @@ class Scheduler:
 
         if not group_by:
             if schedulable_task_id:
-                candidates = compute_candidates(req, context)
-                if first_fitting_worker(candidates, context, req) is not None:
-                    return "Schedulable — waiting for next scheduling cycle"
-                return explain_unfittable(req, context, self._max_building_tasks_per_worker)
+                return diagnose_fit(req, context, self._max_building_tasks_per_worker)
             return "No schedulable tasks"
 
         groups = context.workers_by_group(group_by, matching_ids)

@@ -41,6 +41,14 @@ def _log_missing_tracker_once() -> None:
     logger.info("No global tracker set; tracker logs are being dropped.")
 
 
+def _active_tracker() -> Optional["Tracker"]:
+    """Return the global tracker, or None (logging a one-time notice) when it is unset."""
+    if _global_tracker is None:
+        _log_missing_tracker_once()
+        return None
+    return _global_tracker
+
+
 def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None):
     """
     Log metrics to the global tracker.
@@ -51,9 +59,8 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
         step: Step to log at. If None, uses the default for the tracker.
         commit: Whether to commit the metrics. If None, uses the default for the tracker.
     """
-    global _global_tracker
-    if _global_tracker is None:
-        _log_missing_tracker_once()
+    tracker = _active_tracker()
+    if tracker is None:
         return
 
     if is_inside_jit():
@@ -63,26 +70,14 @@ def log(metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int
         jit_log(metrics, step=step)
     else:
         # TODO: do we need to coerce to np here?
-        _global_tracker.log(metrics, step=step, commit=commit)
-
-
-# deprecated in favor of log()
-def log_metrics(
-    metrics: typing.Mapping[str, LoggableValue | Any], *, step: Optional[int], commit: Optional[bool] = None
-):
-    """
-    Deprecated. Use log instead.
-    """
-    warnings.warn("log_metrics is deprecated in favor of log", DeprecationWarning)
-    log(metrics, step=step, commit=commit)
+        tracker.log(metrics, step=step, commit=commit)
 
 
 def _do_jit_log(metrics, *, step=None):
     try:
-        if _global_tracker is None:
-            _log_missing_tracker_once()
-        else:
-            _global_tracker.log(metrics, step=step, commit=False)
+        tracker = _active_tracker()
+        if tracker is not None:
+            tracker.log(metrics, step=step, commit=False)
     except Exception:
         logger.exception("Error logging metrics")
 
@@ -99,13 +94,13 @@ def jit_log(metrics, *, step=None):
 
     We strongly recommend using the first method, as it is much more performant.
     """
-    if _global_tracker is None:
-        _log_missing_tracker_once()
+    tracker = _active_tracker()
+    if tracker is None:
         return
     if not _should_use_callback:
         # we're not using the callback, so we assume we're inside a defer_tracker_for_jit context manager
         # and we just return the metrics dictionary
-        _global_tracker.log(metrics, step=step, commit=False)
+        tracker.log(metrics, step=step, commit=False)
     else:
         jax.experimental.io_callback(_do_jit_log, None, metrics=metrics, step=step)
 
@@ -161,12 +156,11 @@ def log_summary(metrics: dict[str, Any]):
     Args:
          metrics: Metrics to log
     """
-    global _global_tracker
-    if _global_tracker is None:
-        _log_missing_tracker_once()
+    tracker = _active_tracker()
+    if tracker is None:
         return
 
-    _global_tracker.log_summary(metrics)
+    tracker.log_summary(metrics)
 
 
 def log_hyperparameters(hparams: dict[str, Any]):
@@ -176,12 +170,11 @@ def log_hyperparameters(hparams: dict[str, Any]):
     Args:
          hparams: Hyperparameters to log
     """
-    global _global_tracker
-    if _global_tracker is None:
-        _log_missing_tracker_once()
+    tracker = _active_tracker()
+    if tracker is None:
         return
 
-    _global_tracker.log_hyperparameters(hparams)
+    tracker.log_hyperparameters(hparams)
 
 
 def log_configuration(hparams: Any, config_name: Optional[str] = None):
@@ -192,13 +185,12 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
     Args:
          hparams: Hyperparameters to log
     """
-    global _global_tracker
-    if _global_tracker is None:
-        _log_missing_tracker_once()
+    tracker = _active_tracker()
+    if tracker is None:
         return
 
     hparams_dict = hparams_to_dict(hparams)
-    _global_tracker.log_hyperparameters(hparams_dict)
+    tracker.log_hyperparameters(hparams_dict)
 
     if dataclasses.is_dataclass(hparams):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -207,7 +199,7 @@ def log_configuration(hparams: Any, config_name: Optional[str] = None):
                 with open(config_path, "w") as f:
                     draccus.dump(hparams, f, encoding="utf-8")
                     name = config_name or "config.yaml"
-                    _global_tracker.log_artifact(config_path, name=name, type="config")
+                    tracker.log_artifact(config_path, name=name, type="config")
             except Exception:  # noqa
                 logger.warning("Failed to dump config to yaml. Skipping logging as artifact.", exc_info=True)
 
