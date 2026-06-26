@@ -49,7 +49,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
 
-import fsspec.core
+from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
@@ -618,17 +618,17 @@ class ControllerDB:
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
             tmp_path = self._db_path.with_suffix(".tmp")
-            with fsspec.core.open(main_source, "rb") as src, open(tmp_path, "wb") as dst:
+            with open_url(main_source, "rb") as src, open(tmp_path, "wb") as dst:
                 dst.write(src.read())
             self._remove_sidecars(self._db_path)
             tmp_path.rename(self._db_path)
 
             # Download auth DB if present in source
             auth_source = f"{source_dir_str}/{self.AUTH_DB_FILENAME}"
-            fs, fs_path = fsspec.core.url_to_fs(auth_source)
+            fs, fs_path = url_to_fs(auth_source)
             if fs.exists(fs_path):
                 auth_tmp = self._auth_db_path.with_suffix(".tmp")
-                with fsspec.core.open(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
+                with open_url(auth_source, "rb") as src, open(auth_tmp, "wb") as dst:
                     dst.write(src.read())
                 self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)

@@ -19,9 +19,9 @@ import pickle
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
+from rigging.filesystem import open_url
 
 from zephyr.writers import ThreadedBatchWriter
 
@@ -159,7 +159,7 @@ class SpillReader:
         Returns 0 for an empty spill. Useful as a memory-budgeting hint without
         exposing the underlying format.
         """
-        with fsspec.open(self._path, "rb") as f:
+        with open_url(self._path, "rb") as f:
             md = pq.ParquetFile(f).metadata
             if md.num_rows <= 0:
                 return 0
@@ -173,7 +173,7 @@ class SpillReader:
         set on the reader, in which case items are re-batched to approximately
         that size.
         """
-        with fsspec.open(self._path, "rb") as f:
+        with open_url(self._path, "rb") as f:
             pf = pq.ParquetFile(f)
             if self._batch_size is None:
                 for i in range(pf.num_row_groups):

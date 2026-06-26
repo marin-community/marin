@@ -24,9 +24,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar
 
-import fsspec
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from rigging.filesystem import url_to_fs
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
@@ -1090,6 +1090,6 @@ def build_ssh_command_config(config: IrisClusterConfig, group_name: str | None =
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    fs, path = fsspec.core.url_to_fs(remote_state_dir)
+    fs, path = url_to_fs(remote_state_dir)
     if fs.exists(path):
         fs.rm(path, recursive=True)

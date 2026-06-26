@@ -31,6 +31,7 @@ from collections.abc import Callable, Generator
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files
 from rigging.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
+from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def cache_to_prefix(
         ``cache_path`` — a path the caller can load the snapshot from.
     """
     cache_path = cache_path.rstrip("/")
-    fs, _ = fsspec.core.url_to_fs(cache_path)
+    fs, _ = url_to_fs(cache_path)
     marker = f"{cache_path}/{complete_marker}"
 
     if fs.exists(marker):
