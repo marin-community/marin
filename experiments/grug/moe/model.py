@@ -182,6 +182,11 @@ class CausalSelfAttention(eqx.Module):
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(_BATCH_AXES, None, "model", None))
+        # Pin attn_out to the same head-sharded layout as aligned_v before the XSA elementwise ops.
+        # The attention kernel may place the `model` axis on the head_dim while aligned_v carries it on
+        # the heads dim; the products below would then double-map `model` (DuplicateSpecError, e.g. on a
+        # single-device mesh). A no-op where the two already agree (the multi-device EP path).
+        attn_out = reshard(attn_out, P(_BATCH_AXES, None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
