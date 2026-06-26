@@ -604,19 +604,25 @@ def test_solo_preemptor_does_not_tear_down_slice():
 
 # ---------------------------------------------------------------------------
 # Coscheduled partial-host fallback: a blocked gang evicts lower-band solo
-# co-tenants squatting on the few hosts it needs (issue #6672).
+# co-tenants squatting on the few hosts it needs.
 # ---------------------------------------------------------------------------
 
 _GB = 1024**3
+_HOST_CPU = 4000  # millicores free on a host with no squatter
+_FULL_TPUS = 4  # chips on a whole TPU host
+_FREE_RAM = 200 * _GB  # RAM free on a host that fits the gang
+_BLOCKED_RAM = 10 * _GB  # RAM free on a host a squatter is hogging
+_SQUATTER_RAM = 200 * _GB  # RAM a squatter holds; freeing it unblocks its host
+_GANG_RAM = 128 * _GB  # per-host RAM the gang requests
 
 
 def _pod_capacity(
     worker_id: WorkerId,
     *,
     pod: str = "pod-a",
-    cpu_millicores: int,
+    cpu_millicores: int = _HOST_CPU,
     memory_bytes: int,
-    tpus: int,
+    tpus: int = _FULL_TPUS,
 ) -> WorkerCapacity:
     """A TPU host in coscheduling group ``pod`` with the given free resources."""
     return WorkerCapacity(
@@ -632,9 +638,9 @@ def _pod_capacity(
 def _gang_req(
     *,
     variant: str = "v4-2048",
-    tpus: int = 4,
+    tpus: int = _FULL_TPUS,
     cpu_millicores: int = 1000,
-    memory_bytes: int = 128 * _GB,
+    memory_bytes: int = _GANG_RAM,
 ) -> JobRequirements:
     return JobRequirements(
         req_cpu_millicores=cpu_millicores,
@@ -678,14 +684,14 @@ def _gang_unscheduled(job: JobName, req: JobRequirements, n: int) -> list[Preemp
 
 
 def test_gang_preempts_cpu_squatter_on_blocking_host():
-    """The #6672 repro: a PRODUCTION gang needs every host in its pod; N-1 fit and
-    one is blocked only by a BATCH CPU-only squatter's RAM. The gang evicts the
-    squatter (which has no device variant), freeing the host."""
+    """The reserved-pod repro: a PRODUCTION gang needs every host in its pod; N-1
+    fit and one is blocked only by a BATCH CPU-only squatter's RAM. The gang
+    evicts the squatter (which has no device variant), freeing the host."""
     workers = [WorkerId(f"w{i}") for i in range(4)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
-    # w0-w2 fit; w3 has TPUs free but only 10 GB RAM (squatter holds the rest).
-    caps = [_pod_capacity(workers[i], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4) for i in range(3)]
-    caps.append(_pod_capacity(workers[3], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4))
+    req = _gang_req()
+    # w0-w2 fit; w3 has TPUs free but its RAM is held by the squatter.
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(3)]
+    caps.append(_pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM))
     ctx = _make_simple_context(caps)
 
     squatter = _solo_victim(
@@ -693,7 +699,7 @@ def test_gang_preempts_cpu_squatter_on_blocking_host():
         workers[3],
         band=job_pb2.PRIORITY_BAND_BATCH,
         cpu_millicores=64000,
-        memory_bytes=200 * _GB,  # freeing makes w3's 10 GB -> 210 GB, fits 128 GB
+        memory_bytes=_SQUATTER_RAM,  # freeing it lifts w3 past the gang's RAM ask
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
@@ -707,10 +713,10 @@ def test_gang_preempts_cpu_squatter_on_blocking_host():
 def test_gang_does_not_preempt_same_band_squatter():
     """A squatter at or above the gang's band is never evicted by the fallback."""
     workers = [WorkerId(f"w{i}") for i in range(2)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     caps = [
-        _pod_capacity(workers[0], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[1], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_BLOCKED_RAM),
     ]
     ctx = _make_simple_context(caps)
 
@@ -719,7 +725,7 @@ def test_gang_does_not_preempt_same_band_squatter():
         JobName.from_wire("/peer/prod-cpu:0"),
         workers[1],
         band=job_pb2.PRIORITY_BAND_PRODUCTION,
-        memory_bytes=200 * _GB,
+        memory_bytes=_SQUATTER_RAM,
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
@@ -731,13 +737,13 @@ def test_gang_partial_host_skips_when_not_enough_recoverable():
     """No eviction when fewer hosts can be freed than the gang needs — freeing a
     strict subset would be wasted (the gang still can't place)."""
     workers = [WorkerId(f"w{i}") for i in range(4)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     # w0,w1 fit; w2,w3 both RAM-blocked but only w2 has an evictable victim.
     caps = [
-        _pod_capacity(workers[0], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[1], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[2], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
-        _pod_capacity(workers[3], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[2], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM),
     ]
     ctx = _make_simple_context(caps)
 
@@ -745,7 +751,7 @@ def test_gang_partial_host_skips_when_not_enough_recoverable():
         JobName.from_wire("/m/batch:0"),
         workers[2],
         band=job_pb2.PRIORITY_BAND_BATCH,
-        memory_bytes=200 * _GB,
+        memory_bytes=_SQUATTER_RAM,
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
@@ -757,17 +763,17 @@ def test_gang_partial_host_no_preemption_when_enough_hosts_free():
     """When the group has enough free hosts for the gang already, the squatter on
     a spare host is left alone (the gang places without preemption)."""
     workers = [WorkerId(f"w{i}") for i in range(5)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     # 4 free hosts (>= n_required=4) plus one squatted spare; no preemption needed.
-    caps = [_pod_capacity(workers[i], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4) for i in range(4)]
-    caps.append(_pod_capacity(workers[4], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4))
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(4)]
+    caps.append(_pod_capacity(workers[4], memory_bytes=_BLOCKED_RAM))
     ctx = _make_simple_context(caps)
 
     squatter = _solo_victim(
         JobName.from_wire("/m/batch:0"),
         workers[4],
         band=job_pb2.PRIORITY_BAND_BATCH,
-        memory_bytes=200 * _GB,
+        memory_bytes=_SQUATTER_RAM,
     )
 
     gang = JobName.from_wire("/larry/grug-moe")
@@ -778,15 +784,15 @@ def test_gang_partial_host_no_preemption_when_enough_hosts_free():
 def test_gang_partial_host_commits_minimal_evictions():
     """With more recoverable hosts than needed, evict only the cheapest `needed`."""
     workers = [WorkerId(f"w{i}") for i in range(5)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     # w0,w1 fit; w2,w3,w4 each blocked with one evictable victim. Gang needs 3, so
     # only one host (the cheapest victim) is freed.
     caps = [
-        _pod_capacity(workers[0], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[1], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[2], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
-        _pod_capacity(workers[3], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
-        _pod_capacity(workers[4], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[2], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM),
+        _pod_capacity(workers[4], memory_bytes=_BLOCKED_RAM),
     ]
     ctx = _make_simple_context(caps)
 
@@ -795,21 +801,21 @@ def test_gang_partial_host_commits_minimal_evictions():
             JobName.from_wire("/m/batch-a:0"),
             workers[2],
             band=job_pb2.PRIORITY_BAND_BATCH,
-            memory_bytes=200 * _GB,
+            memory_bytes=_SQUATTER_RAM,
             resource_value=9000,
         ),
         _solo_victim(
             JobName.from_wire("/m/batch-b:0"),
             workers[3],
             band=job_pb2.PRIORITY_BAND_BATCH,
-            memory_bytes=200 * _GB,
+            memory_bytes=_SQUATTER_RAM,
             resource_value=1000,  # cheapest
         ),
         _solo_victim(
             JobName.from_wire("/m/batch-c:0"),
             workers[4],
             band=job_pb2.PRIORITY_BAND_BATCH,
-            memory_bytes=200 * _GB,
+            memory_bytes=_SQUATTER_RAM,
             resource_value=5000,
         ),
     ]
@@ -824,10 +830,10 @@ def test_gang_partial_host_ignores_coscheduled_cotenant():
     """The fallback never evicts a *coscheduled* co-tenant — only whole-slice
     eviction (``_preempt_coscheduled``) may touch a gang, and only at slice size."""
     workers = [WorkerId(f"w{i}") for i in range(2)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     caps = [
-        _pod_capacity(workers[0], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[1], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4),
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_BLOCKED_RAM),
     ]
     ctx = _make_simple_context(caps)
 
@@ -840,7 +846,7 @@ def test_gang_partial_host_ignores_coscheduled_cotenant():
         resource_value=1000,
         is_coscheduled=True,
         cpu_millicores=0,
-        memory_bytes=200 * _GB,
+        memory_bytes=_SQUATTER_RAM,
         gpu_count=0,
         tpu_count=0,
         device_variant="v4-2048",
@@ -856,11 +862,11 @@ def test_gang_preempts_solo_tpu_cotenant_on_blocking_host():
     needs is preemptible too (on a host matching the gang's group, any TPU solo
     victim is necessarily the same variant)."""
     workers = [WorkerId(f"w{i}") for i in range(2)]
-    req = _gang_req(variant="v5p-8", tpus=4, memory_bytes=_GB)
+    req = _gang_req(variant="v5p-8", memory_bytes=_GB)
     # w0 fits; w1 has only 2 of 4 chips free (a solo BATCH task holds the other 2).
     caps = [
-        _pod_capacity(workers[0], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4),
-        _pod_capacity(workers[1], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=2),
+        _pod_capacity(workers[0], memory_bytes=_FREE_RAM),
+        _pod_capacity(workers[1], memory_bytes=_FREE_RAM, tpus=2),
     ]
     ctx = _make_simple_context(caps)
 
@@ -882,17 +888,17 @@ def test_two_gangs_do_not_double_book_hosts():
     """Two gangs contending for one pod don't double-book hosts: the first claims
     the freed pod; the second finds every host reserved and preempts nothing."""
     workers = [WorkerId(f"w{i}") for i in range(4)]
-    req = _gang_req(tpus=4, memory_bytes=128 * _GB)
+    req = _gang_req()
     # 3 hosts fit; w3 is RAM-blocked with one evictable BATCH squatter.
-    caps = [_pod_capacity(workers[i], cpu_millicores=4000, memory_bytes=200 * _GB, tpus=4) for i in range(3)]
-    caps.append(_pod_capacity(workers[3], cpu_millicores=4000, memory_bytes=10 * _GB, tpus=4))
+    caps = [_pod_capacity(workers[i], memory_bytes=_FREE_RAM) for i in range(3)]
+    caps.append(_pod_capacity(workers[3], memory_bytes=_BLOCKED_RAM))
     ctx = _make_simple_context(caps)
 
     squatter = _solo_victim(
         JobName.from_wire("/m/batch:0"),
         workers[3],
         band=job_pb2.PRIORITY_BAND_BATCH,
-        memory_bytes=200 * _GB,
+        memory_bytes=_SQUATTER_RAM,
     )
 
     gang_a = JobName.from_wire("/larry/gang-a")

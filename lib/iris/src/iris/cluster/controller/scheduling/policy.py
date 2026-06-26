@@ -464,18 +464,14 @@ def _solo_victims_freeing_host(
     cap: WorkerCapacity,
     host_victims: list[RunningTaskInfo],
 ) -> list[RunningTaskInfo] | None:
-    """Lowest-priority solo victims whose combined eviction lets the gang's req
-    fit on ``cap``'s host, or None if the host cannot be freed.
+    """Lowest-priority solo victims whose eviction lets the gang's req fit on
+    ``cap``'s host, or None if the host cannot be freed. Only victims strictly
+    lower band than the candidate are eligible; ``host_victims`` must be ordered
+    lowest-priority-first.
 
-    ``host_victims`` is pre-sorted lowest-priority-first; this accumulates the
-    resources each evicted victim returns and stops as soon as the req fits. Only
-    victims strictly lower band than the candidate are eligible.
-
-    The host's ``building_task_count`` is left unchanged in the hypothetical:
-    ``RunningTaskInfo`` carries no build state and a long-running squatter holds
-    no build slot, so eviction must not be assumed to free one. A host blocked
-    solely by the build limit is therefore not recoverable here, which is correct
-    — that limit is transient back-pressure, not a held resource.
+    The host's build-slot count is treated as fixed: a long-running squatter
+    holds no build slot, so a host blocked solely by the build limit is not
+    recoverable here (that limit is transient back-pressure, not a held resource).
     """
     req = candidate.requirements
     available_cpu = cap.available_cpu_millicores
@@ -516,20 +512,17 @@ def _preempt_coscheduled_partial_hosts(
     reserved_workers: set[WorkerId],
     context: SchedulingContext,
 ) -> list[tuple[JobName, JobName]]:
-    """Free a blocked gang by evicting lower-band solo co-tenants on its hosts.
+    """Free a blocked gang by evicting lower-band solo co-tenants on its hosts,
+    returning (preemptor, victim) pairs or [] if the gang cannot be placed.
 
     Fallback for when no whole victim slice qualifies but the gang is short a few
-    hosts whose only blocker is a solo task squatting on per-host CPU/RAM. Finds
-    the group the gang would place in (``ranked_groups_for_req`` — the same
-    ranking placement uses), then frees each
-    capacity-blocked host via :func:`_solo_victims_freeing_host`. Commits
-    evictions only when enough hosts can be freed for the whole gang to place
-    (``n_required`` workers); otherwise the eviction would be wasted and the gang
-    is left pending.
+    hosts whose only blocker is a solo task squatting on per-host CPU/RAM. Evicts
+    only when enough hosts can be freed for the whole gang (``n_required``
+    workers) to place; otherwise nothing is evicted, since a partial eviction
+    would be wasted.
 
-    ``reserved_workers`` holds hosts an earlier gang's eviction already claimed
-    this pass; they are skipped here, and the committed gang's hosts are added to
-    it, so two gangs contending for one group never double-book the same hosts.
+    ``reserved_workers`` is read and updated so two gangs contending for one group
+    never double-book the same hosts.
     """
     req = candidate.requirements
     for _group_key, worker_ids in ranked_groups_for_req(context, req):

@@ -538,10 +538,7 @@ def ranked_groups_for_req(
 ) -> list[tuple[str, list[WorkerId]]]:
     """Constraint-matched worker groups for a coscheduled req, ranked by total
     soft-constraint score (descending) — the order placement tries them in.
-
-    Used by both the placement pass and the preemption fallback so they agree on
-    which group a gang would land in. Returns ``[]`` for a req with no
-    ``coscheduling_group_by``.
+    Returns ``[]`` for a req with no ``coscheduling_group_by``.
     """
     group_by = req.coscheduling_group_by
     if group_by is None:
