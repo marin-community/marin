@@ -17,7 +17,11 @@ from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.models.gpt2 import Gpt2Mlp
-from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
+from levanter.tensorstore_serialization import (
+    build_kvstore_spec,
+    tree_deserialize_leaves_tensorstore,
+    tree_serialize_leaves_tensorstore,
+)
 
 
 def test_tensorstore_checkpoint_simple():
@@ -194,3 +198,62 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
+
+
+@pytest.fixture
+def _clean_s3_env(monkeypatch):
+    """Start each S3 spec test from a known environment."""
+    for name in (
+        "AWS_ENDPOINT_URL",
+        "AWS_DEFAULT_REGION",
+        "AWS_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "LEVANTER_S3_VIRTUAL_HOSTED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def test_build_kvstore_spec_s3_path_style_default(_clean_s3_env):
+    # Without the virtual-hosted flag, a custom endpoint is passed through unchanged
+    # (path-style addressing), preserving the bucket name. This is the default that keeps
+    # path-style providers like Cloudflare R2 working.
+    _clean_s3_env.setenv("AWS_ENDPOINT_URL", "https://cwobject.com")
+
+    spec = build_kvstore_spec("s3://my-bucket/checkpoints/step-100")
+    assert spec["driver"] == "s3"
+    assert spec["bucket"] == "my-bucket"
+    assert spec["path"] == "checkpoints/step-100"
+    assert spec["endpoint"] == "https://cwobject.com"
+    assert spec["aws_region"] == "us-east-1"
+    assert "aws_credentials" not in spec
+
+
+def test_build_kvstore_spec_s3_virtual_hosted(_clean_s3_env):
+    # With the flag set, the bucket is folded into the endpoint host as a subdomain and the
+    # bucket field is emptied, producing the virtual-hosted spec CoreWeave cwobject requires.
+    _clean_s3_env.setenv("AWS_ENDPOINT_URL", "https://cwobject.com")
+    _clean_s3_env.setenv("LEVANTER_S3_VIRTUAL_HOSTED", "1")
+    _clean_s3_env.setenv("AWS_ACCESS_KEY_ID", "key")
+    _clean_s3_env.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+
+    spec = build_kvstore_spec("s3://marin-us-east-02a/checkpoints/step-100")
+    assert spec == {
+        "driver": "s3",
+        "bucket": "",
+        "path": "checkpoints/step-100",
+        "endpoint": "https://marin-us-east-02a.cwobject.com",
+        "aws_region": "us-east-1",
+        "aws_credentials": {"type": "environment"},
+    }
+
+
+def test_build_kvstore_spec_virtual_hosted_noop_without_endpoint(_clean_s3_env):
+    # The flag only takes effect when a custom endpoint is configured; without one it is a
+    # no-op and ordinary AWS S3 (default path/virtual handling) is left untouched.
+    _clean_s3_env.setenv("LEVANTER_S3_VIRTUAL_HOSTED", "true")
+
+    spec = build_kvstore_spec("s3://my-bucket/checkpoints/step-100")
+    assert spec["bucket"] == "my-bucket"
+    assert "endpoint" not in spec

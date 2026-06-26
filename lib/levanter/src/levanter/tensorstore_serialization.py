@@ -38,6 +38,11 @@ def _format_gib(num_bytes: int) -> str:
     return f"{num_bytes / (1024**3):.2f}GiB"
 
 
+def _env_flag(name: str) -> bool:
+    """Return True if the named environment variable is set to a truthy value."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def _estimate_array_nbytes(array: Any) -> int:
     size = getattr(array, "size", None)
     dtype = getattr(array, "dtype", None)
@@ -56,10 +61,26 @@ def build_kvstore_spec(path: str) -> dict:
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
-        spec: dict = {"driver": "s3", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
+        bucket = parsed.netloc
+        spec: dict = {"driver": "s3", "bucket": bucket, "path": parsed.path.lstrip("/")}
         endpoint = os.environ.get("AWS_ENDPOINT_URL")
         if endpoint:
-            spec["endpoint"] = endpoint
+            if _env_flag("LEVANTER_S3_VIRTUAL_HOSTED"):
+                # Virtual-hosted addressing for S3-compatible providers (e.g. CoreWeave
+                # "cwobject") that REJECT path-style requests with
+                # "PathStyleRequestNotAllowed". By default tensorstore's s3 driver uses
+                # path-style addressing for a custom endpoint, i.e. it issues requests to
+                # ``{endpoint}/{bucket}/{key}``. Virtual-hosted addressing instead folds the
+                # bucket into the endpoint host as a subdomain (``{scheme}://{bucket}.{host}``)
+                # and uses an empty ``bucket`` field. NOTE: an empty bucket combined with a
+                # custom endpoint requires tensorstore>=0.1.84 (google/tensorstore PR #285).
+                ep = urllib.parse.urlparse(endpoint)
+                host = ep.netloc or ep.path  # tolerate endpoints given without a scheme
+                scheme = ep.scheme or "https"
+                spec["bucket"] = ""
+                spec["endpoint"] = f"{scheme}://{bucket}.{host}"
+            else:
+                spec["endpoint"] = endpoint
         region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
         if region:
             spec["aws_region"] = region
