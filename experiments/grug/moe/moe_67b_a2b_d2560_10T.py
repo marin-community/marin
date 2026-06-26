@@ -11,8 +11,8 @@ Config:
 - d=2560 (V2 / MuonH heuristic; num_layers=26, NH=20, KV=5, HD=128,
   num_experts=256, num_experts_per_token=4, intermediate=1280,
   shared_expert_intermediate_dim=2560) → ~67B total params, ~2B active/token
-- BS=4096 sequences, seq=8192 → 33,554,432 tokens/step (~33.5M)
-- num_train_steps=300,000 → 10.07T total tokens
+- BS=8192 sequences, seq=8192 → 67,108,864 tokens/step (~67M)
+- num_train_steps=150,000 → 10.07T total tokens
 - LR: MuonH default schedule, ``min_lr_ratio=0.05`` (decay to 5% of peak)
 - z-loss: logit-only ``z_loss_weight=1e-4`` (router z-loss stays at the model
   default of 0.0)
@@ -50,9 +50,9 @@ from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _DIM: int = 2560
-_BS: int = 4096  # 4096 * 8192 = 33,554,432 tokens/step (~33.5M)
+_BS: int = 8192  # 8192 * 8192 = 67,108,864 tokens/step (~67M)
 _SEQ: int = 8192
-_STEPS: int = 300_000  # ~10.07T total tokens
+_STEPS: int = 150_000  # ~10.07T total tokens
 _EP: int = 1
 _REPLICA_AXIS: int = 8
 _SLICE: str = "v4-2048"
