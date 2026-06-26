@@ -30,7 +30,7 @@ from jax.typing import DTypeLike
 
 
 def get_fp8_max(fp8_dtype, out_dtype):
-    assert fp8_dtype in (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    assert fp8_dtype in (jnp.float8_e4m3fn, jnp.float8_e5m2, jnp.float8_e4m3fnuz, jnp.float8_e5m2fnuz)
     return jnp.finfo(fp8_dtype).max.astype(out_dtype)
 
 
@@ -70,10 +70,11 @@ def compute_amax_history(x, amax_history):
 # ---------------------------------------------------------------------------
 # Direct FP8 quantization
 #
-# FP8 operands are fed to `lax.dot_general`: the cast to E4M3 is explicit
-# and the dequantize happens on the output (and, in E5M2, on the gradients), so
-# FP8 kernels are used directly rather than relying on XLA's GemmRewriter to
-# recover them from a quantize/dequantize pattern.
+# FP8 operands are fed to `lax.dot_general`: the cast to FP8 is explicit and
+# the dequantize happens on the output (and on the gradients), so FP8 kernels
+# are used directly rather than relying on XLA's GemmRewriter to recover them
+# from a quantize/dequantize pattern. The forward-operand and output-gradient
+# quantization dtypes are parameters, defaulting to E4M3 and E5M2 respectively.
 #
 # Faithfully vendored from flax/linen/fp8_ops.py (flax 0.12.4); see
 # https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py and
@@ -186,7 +187,7 @@ def dot_general_transpose_rhs(g, x, y, *, dimension_numbers, precision, preferre
     return y_bar
 
 
-@partial(custom_vjp, nondiff_argnums=(8, 9))
+@partial(custom_vjp, nondiff_argnums=(8, 9, 10))
 def quantized_dot(
     lhs,
     q_lhs,
@@ -198,6 +199,7 @@ def quantized_dot(
     out_grad_amax_history,  # amax history from previous step
     dimension_numbers,
     preferred_element_type=None,
+    rev_dtype=jnp.float8_e5m2,
 ):
     return lax.dot_general(
         q_lhs,
@@ -219,6 +221,7 @@ def quantized_dot_fwd(
     out_grad_amax_history,
     dimension_numbers,
     preferred_element_type,
+    rev_dtype,
 ):
     out = lax.dot_general(
         q_lhs,
@@ -231,14 +234,14 @@ def quantized_dot_fwd(
     return out, res
 
 
-def quantized_dot_bwd(dimension_numbers, preferred_element_type, res, g):
+def quantized_dot_bwd(dimension_numbers, preferred_element_type, rev_dtype, res, g):
     (lhs, q_lhs, lhs_scale, rhs, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history) = res
 
     new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
-        g, jnp.float8_e5m2, out_grad_scale, out_grad_amax_history
+        g, rev_dtype, out_grad_scale, out_grad_amax_history
     )
 
-    q_g = quantize(g, jnp.float8_e5m2, new_out_grad_scale, preferred_element_type)
+    q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
 
     grad_lhs = dot_general_transpose_lhs(
         q_g,
@@ -280,17 +283,22 @@ def fp8_scaled_dot_general(
     rhs_amax_history,
     grad_amax_history,
     quantize_compute_type=jnp.float32,
+    fwd_dtype=jnp.float8_e4m3fn,
+    rev_dtype=jnp.float8_e5m2,
 ):
-    """Drop-in `dot_general` that quantizes both operands to E4M3, contracts them
-    as FP8, and dequantizes the result. Gradients are taken in E5M2 via
+    """Drop-in `dot_general` that quantizes both operands to `fwd_dtype`, contracts
+    them as FP8, and dequantizes the result. Gradients are taken in `rev_dtype` via
     `quantized_dot`'s custom VJP. The scale / amax-history arrays carry the
-    delayed-scaling state and are updated through the custom VJP (overwrites)."""
+    delayed-scaling state and are updated through the custom VJP (overwrites).
+
+    `fwd_dtype` / `rev_dtype` default to the standard E4M3 / E5M2 pair; override
+    them with the NANOO (`*fnuz`) pair to target AMD GPUs."""
     if precision is not None:
         warnings.warn(
             'fp8_scaled_dot_general will set the "precision" and disregard any provided "precision" argument.'
         )
-    q_lhs, new_lhs_scale = in_q(quantize_compute_type, jnp.float8_e4m3fn, lhs, lhs_scale, lhs_amax_history)
-    q_rhs, new_rhs_scale = in_q(quantize_compute_type, jnp.float8_e4m3fn, rhs, rhs_scale, rhs_amax_history)
+    q_lhs, new_lhs_scale = in_q(quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history)
+    q_rhs, new_rhs_scale = in_q(quantize_compute_type, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
     y = quantized_dot(
         lhs,
         q_lhs,
@@ -302,6 +310,7 @@ def fp8_scaled_dot_general(
         grad_amax_history,
         dimension_numbers,
         preferred_element_type,
+        rev_dtype,
     )
     y = out_dq(dq_type=preferred_element_type, lhs_scale=new_lhs_scale, rhs_scale=new_rhs_scale, out=y)
     return y

@@ -154,13 +154,17 @@ class DefaultDotGeneralOp(eqx.Module):
 class Fp8DotGeneralOp(OverwriteWithGradient):
     """Direct-quantization FP8 ``dot_general`` op for [haliax.nn.Linear][].
 
-    Casts both operands to E4M3 and contracts them as FP8, then dequantizes
-    the result, so FP8 tensor cores are used directly instead of relying on
-    XLA's GemmRewriter to recover an FP8 kernel from a
-    quantize/dequantize pattern. Output gradients are quantized to E5M2 in the
-    custom VJP of [fp8_scaled_dot_general][], which also carries the
-    delayed-scaling state (per-tensor scale + amax history for the input, kernel
-    and output gradient) updated as an [OverwriteWithGradient][].
+    Casts both operands to FP8 and contracts them, then dequantizes the result,
+    so FP8 tensor cores are used directly instead of relying on XLA's
+    GemmRewriter to recover an FP8 kernel from a quantize/dequantize pattern.
+    Output gradients are quantized to FP8 in the custom VJP of
+    [fp8_scaled_dot_general][], which also carries the delayed-scaling state
+    (per-tensor scale + amax history for the input, kernel and output gradient)
+    updated as an [OverwriteWithGradient][].
+
+    The forward-operand (``fwd_dtype``) and output-gradient (``rev_dtype``)
+    quantization dtypes default to E4M3 and E5M2; override them with the NANOO
+    (``*fnuz``) pair for AMD GPUs.
 
     Faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
     (``flax/linen/fp8_ops.py``; see https://github.com/google/flax/pull/3922).
@@ -173,9 +177,17 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     output_grad_amax_history: jnp.ndarray
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
+    ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -184,6 +196,8 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
         )
 
     def __call__(
@@ -216,6 +230,8 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             rhs_amax_history=self.kernel_amax_history,
             grad_amax_history=self.output_grad_amax_history,
             quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
         )
 
 

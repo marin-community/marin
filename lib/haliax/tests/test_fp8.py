@@ -76,6 +76,31 @@ def test_fp8_direct_feeds_fp8_operands_to_dot():
     ), "forward dot_general should contract two float8_e4m3fn operands"
 
 
+def test_fp8_direct_quant_dtype_overrides_reach_dot_operands():
+    # The forward-operand and output-gradient quantization dtypes are
+    # configurable (defaulting to E4M3 / E5M2). Swap the two so each override is
+    # observable, then confirm the dtype fed to each dot_general follows: the
+    # forward contracts two E5M2 operands and a backward dot contracts an E4M3
+    # output gradient -- the reverse of the defaults asserted elsewhere.
+    In = hax.Axis("In", 16)
+    Out = hax.Axis("Out", 8)
+    dot_general = Fp8DotGeneralOp.init(fwd_dtype=jnp.float8_e5m2, rev_dtype=jnp.float8_e4m3fn)
+    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=dot_general)
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
+
+    def loss(model, x):
+        return hax.sum(model(x) ** 2).scalar()
+
+    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
+    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
+    assert any(
+        all(v.aval.dtype == jnp.float8_e5m2 for v in eqn.invars) for eqn in dot_eqns
+    ), "forward dot_general should contract operands quantized to the configured fwd_dtype (here E5M2)"
+    assert any(
+        any(v.aval.dtype == jnp.float8_e4m3fn for v in eqn.invars) for eqn in dot_eqns
+    ), "a backward dot_general should contract the output gradient quantized to the configured rev_dtype (here E4M3)"
+
+
 def _gpu_is_fp8_capable() -> bool:
     # FP8 tensor-core GEMMs need CUDA compute capability >= 8.9 (Ada/Hopper/Blackwell).
     if jax.default_backend() != "gpu":
