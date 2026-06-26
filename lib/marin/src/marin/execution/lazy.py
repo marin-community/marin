@@ -261,22 +261,17 @@ def _output_path_spec(artifact: Artifact) -> str:
 
 
 def lower(artifact: Artifact) -> StepSpec:
-    """Lower a pure handle graph into the existing ``StepSpec`` graph.
+    """Lower a handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.
 
-    For artifacts whose config references only ``ctx.out`` / ``ctx.path(dep)`` (no
-    embedded legacy ``ExecutorStep`` placeholders). The concrete config is rebuilt
-    inside the step body using the runner's ``marin_prefix()``, so dependency paths
-    resolve region-locally rather than capturing the build environment's prefix.
-    Identity is the explicit ``{name}/{version}`` (or the pin); the fingerprint and
-    version ride in ``hash_attrs`` so the runner can apply the immutability guard
-    before serving a cached output. On success the step writes an
-    :class:`~marin.execution.registry.ArtifactRecord` (recipe fingerprint + launch
-    provenance); a pinned artifact references existing external data and writes none.
+    Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its
+    pin); the recipe fingerprint and version travel in ``hash_attrs`` so the runner
+    applies the build-once guard before serving a cached output. A computed or adopted
+    step records an :class:`~marin.execution.registry.ArtifactRecord` on success; a
+    pin references existing data and records nothing.
 
-    ``lower`` is a pure graph transform: it never inspects ``recipe.fn`` and puts no
-    resources on the ``StepSpec``. Compute rides with the fn — an accelerator step
-    wraps it (``remote(fn, resources=…)``), so where a step runs is the fn's concern,
-    not the graph's.
+    The graph is compute-agnostic: resources ride on the fn (``remote(fn,
+    resources=…)``), so the same graph runs inline or dispatches to Fray by the fn's
+    type alone — placement is the fn's concern, not the graph's.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
     fingerprint = artifact.fingerprint()
