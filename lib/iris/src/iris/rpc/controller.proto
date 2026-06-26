@@ -50,9 +50,12 @@ message Controller {
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
 
-    // Job-level failure tolerance
-    // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
-    // Preemptions do not count toward this limit
+    // Job-level failure tolerance.
+    // A job fails when the cumulative number of failed task attempts across the
+    // whole job exceeds this (default 0 = fail on the first failure). The count
+    // accumulates across retries, so a job cannot crash-loop indefinitely. For a
+    // coscheduled gang one crashed round charges one failure. Preemptions are
+    // retried by Iris and never count toward this limit.
     int32 max_task_failures = 11;
 
     // Per-task retry limits

@@ -14,7 +14,7 @@
       "job_id": "/test-user/retry-job",
       "max_retries_failure": 2,
       "max_retries_preemption": 0,
-      "max_task_failures": 0,
+      "max_task_failures": 2,
       "name": "/test-user/retry-job",
       "ports_json": "[]",
       "preemption_policy": 0,

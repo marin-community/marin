@@ -722,6 +722,7 @@ def _submit_and_wait_job(
         coscheduling=coscheduling,
         replicas=replicas,
         max_retries_failure=max_retries,
+        max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         priority_band=priority_band,
