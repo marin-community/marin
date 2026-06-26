@@ -24,7 +24,7 @@ Follow these steps precisely:
    - The root CLAUDE.md and AGENTS.md files, if they exist
    - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
-3. Launch a sonnet agent to view the PR and return a summary of the changes. The
+3. Launch an opus agent to view the PR and return a summary of the changes. The
    same agent also checks the PR *description* against the PR-body rules in
    `.agents/skills/commit/SKILL.md` §8 and returns any problems it finds:
 
@@ -44,7 +44,7 @@ Follow these steps precisely:
 
 4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
 
-   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
+   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance opus agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents. If the PR adds or changes tests, read root `TESTING.md` plus the relevant module-specific testing docs, and check for low-value/slop tests or local testing-policy violations.
 
    Agents 3 + 4: Opus bug agents (parallel). Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
 
@@ -64,7 +64,7 @@ Follow these steps precisely:
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use Opus subagents for bugs/logic, sonnet for CLAUDE.md violations.
+5. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use Opus subagents throughout — for both bugs/logic and CLAUDE.md violations.
 
 6. Filter out any issues not validated in step 5. The remainder is the high-signal review list.
 
