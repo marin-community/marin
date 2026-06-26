@@ -12,7 +12,7 @@ import numpy as np
 from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
 
-from .jagged_array import JaggedArrayStore
+from .jagged_array import JaggedArrayStore, charge_store_read_budget
 
 T = TypeVar("T", bound=PyTree)
 
@@ -55,6 +55,8 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file.
         """
+        if mode == "r":
+            charge_store_read_budget(path)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
@@ -63,6 +65,8 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file asynchronously.
         """
+        if mode == "r":
+            charge_store_read_budget(path)
         tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 

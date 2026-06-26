@@ -1443,7 +1443,7 @@ def test_stage_from_mirror_copies_files(tmp_path, fake_tokenizer_dir):
         return False
 
     with (
-        patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()),
+        patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()),
         patch("levanter.tokenizers._fetch_file_atomic", side_effect=fake_fetch),
     ):
         result = _stage_from_mirror("org/model", str(local_dir))
@@ -1464,7 +1464,7 @@ def test_stage_from_mirror_absent(tmp_path):
         def ls(self, path, detail=False):
             return []
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=FakeMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=FakeMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False
@@ -1551,7 +1551,7 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
         def exists(self, path):
             raise OSError("mirror unreachable")
 
-    with patch("levanter.tokenizers.fsspec.filesystem", return_value=BrokenMirrorFS()):
+    with patch("levanter.tokenizers.filesystem", return_value=BrokenMirrorFS()):
         result = _stage_from_mirror("org/model", str(local_dir))
 
     assert result is False

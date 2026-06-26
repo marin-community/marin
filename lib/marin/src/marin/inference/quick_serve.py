@@ -21,14 +21,13 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 
-import fsspec
 import requests
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.tpu_topology import get_tpu_topology
 from levanter.model_cache import cache_hf_model
 from rigging.connect import proxy_path
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, open_url
 from rigging.log_setup import configure_logging
 from transformers import AutoConfig
 
@@ -133,7 +132,7 @@ def read_attention_heads(model: str) -> tuple[int, int | None]:
 def _read_model_config_dict(model: str) -> dict:
     if _is_object_store_path(model):
         config_path = model.rstrip("/") + "/config.json"
-        with fsspec.open(config_path, "r") as handle:
+        with open_url(config_path, "r") as handle:
             return json.load(handle)
     return AutoConfig.from_pretrained(model, trust_remote_code=True).to_dict()
 

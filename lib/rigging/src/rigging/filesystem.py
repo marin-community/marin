@@ -780,6 +780,16 @@ def _is_cross_region_url(url: str) -> bool:
     return not _regions_match(vm_region, bucket_location)
 
 
+def is_cross_region_url(url: str) -> bool:
+    """Return True if reading *url* would cross regions and be charged to the budget.
+
+    Cheap: only cached region lookups, no listing or stat.  Callers can use this
+    to skip an expensive size computation when a read would not be charged
+    anyway (local paths, same-region buckets, unknown VM region, override set).
+    """
+    return _is_cross_region_url(url)
+
+
 def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
     """Charge *size* bytes against the cross-region transfer budget.
 
