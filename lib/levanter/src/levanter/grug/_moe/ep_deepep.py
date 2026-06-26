@@ -281,6 +281,11 @@ def _collapse_local_assignments_gather_jax(
     return jnp.sum(jnp.where(valid[:, :, None], weighted, 0), axis=1)
 
 
+def _assignment_destinations_have_recv_topk_layout(assignment_destinations: jax.Array, *, recv_capacity: int) -> bool:
+    """Return whether destination metadata can be viewed as per-received-token top-k rows."""
+    return recv_capacity > 0 and assignment_destinations.shape[0] % recv_capacity == 0
+
+
 def _deepep_moe_up_down(
     x_dispatch: Float[Array, "TK D"],
     local_group_sizes: Int[Array, "EL"],
@@ -640,7 +645,10 @@ def _moe_mlp_ep_deepep_internode_local(
 
     with jax.named_scope("moe_ep_deepep_internode/combine"):
         collapse_mode = _deepep_internode_collapse_mode()
-        if collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_FUSED_COMBINE:
+        has_recv_topk_destination_layout = _assignment_destinations_have_recv_topk_layout(
+            assignment_destinations, recv_capacity=recv_x.shape[0]
+        )
+        if collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_FUSED_COMBINE and has_recv_topk_destination_layout:
             if _deepep_internode_combine_x_only():
                 with jax.named_scope("deepep_combine_internode_x_only_with_local_collapse"):
                     out_local = deepep_combine_internode_x_only_with_local_collapse(
@@ -685,7 +693,7 @@ def _moe_mlp_ep_deepep_internode_local(
                         num_recv_tokens,
                         num_recv_rdma_tokens,
                     )
-        elif collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_GATHER:
+        elif collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_GATHER and has_recv_topk_destination_layout:
             with jax.named_scope("deepep_collapse_local_assignments_gather_jax"):
                 recv_out = _collapse_local_assignments_gather_jax(
                     out_dispatch,
@@ -712,7 +720,7 @@ def _moe_mlp_ep_deepep_internode_local(
                     num_recv_tokens,
                     num_recv_rdma_tokens,
                 )
-        elif collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_FFI:
+        elif collapse_mode == _DEEPEP_INTERNODE_COLLAPSE_FFI and has_recv_topk_destination_layout:
             with jax.named_scope("deepep_collapse_local_assignments_ffi"):
                 recv_out = deepep_collapse_local_assignments(
                     out_dispatch,
@@ -742,7 +750,17 @@ def _moe_mlp_ep_deepep_internode_local(
                     num_recv_rdma_tokens,
                 )
         else:
-            with jax.named_scope("deepep_collapse_local_assignments_jax"):
+            fallback_scope = (
+                "deepep_collapse_local_assignments_shape_fallback_jax"
+                if collapse_mode
+                in {
+                    _DEEPEP_INTERNODE_COLLAPSE_FUSED_COMBINE,
+                    _DEEPEP_INTERNODE_COLLAPSE_GATHER,
+                    _DEEPEP_INTERNODE_COLLAPSE_FFI,
+                }
+                else "deepep_collapse_local_assignments_jax"
+            )
+            with jax.named_scope(fallback_scope):
                 recv_out = _collapse_local_assignments_jax(
                     out_dispatch,
                     assignment_weights,
