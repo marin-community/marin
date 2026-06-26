@@ -1,19 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tokenizer sweep for Marin issue #5821 on the 2026-05-26 Datakit testbed.
+"""Reusable tokenizer sweep for Marin issue #5821-style experiments.
 
-This builds proportional windows from the 1.1T-token normalized testbed sample:
+This builds proportional windows from a normalized Datakit corpus:
 
-* randomized 50B-token-equivalent window: tokenizer-training corpus
-* window [100B, 200B): holdout corpus to tokenize with the trained vocabularies
-* optional window [0, 50B): train corpus retokenization for downstream runs
+* randomized tokenizer-training corpus
+* held-out corpus to tokenize with the trained vocabularies
+* optional train-corpus retokenization for downstream model runs
 
-The Llama and GPT-OSS HF-family tokenizers are initialized from their upstream
-tokenizer repositories and trained at 262k, then derived to 128k, 32k, and 8k
-using the same training corpus and trainer configuration. TokenMonster uses its
-native binary training/export flow at 262k, then derives smaller vocabularies
-with ``exportvocab -resize``.
+By default, this reproduces the Llama/GPT-OSS tokenizer sweep from issue #5821:
+initialize from upstream tokenizer repositories, train a 262k tokenizer on a
+50B-token-equivalent sample, then derive 128k, 32k, and 8k vocabularies from
+that same trained tokenizer. Environment variables below make the corpus,
+windows, vocab sizes, and tokenizer families configurable for future sweeps.
 """
 
 from __future__ import annotations
@@ -54,30 +54,87 @@ from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
-STAGING_PREFIX = "gs://marin-eu-west4"
-NORMALIZED_BASE = "gs://marin-eu-west4/data/datakit/sample/2026-05-26"
-TOTAL_TOKENIZED_TOKENS = 1_099_611_681_172
-WINDOW_TOKENS = 100_000_000_000
-WINDOW_FRACTION = WINDOW_TOKENS / TOTAL_TOKENIZED_TOKENS
-TOKENIZER_TRAIN_TOKENS = int(os.environ.get("TOKENIZER_SWEEP_TOKENIZER_TRAIN_TOKENS", "50000000000"))
-TOKENIZER_TRAIN_FRACTION = TOKENIZER_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
-RETOKENIZE_TRAIN_TOKENS = int(os.environ.get("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_TOKENS", "50000000000"))
-RETOKENIZE_TRAIN_START_TOKENS = int(os.environ.get("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_START_TOKENS", "0"))
-RETOKENIZE_TRAIN_FRACTION = RETOKENIZE_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
-RETOKENIZE_TRAIN_START_FRACTION = RETOKENIZE_TRAIN_START_TOKENS / TOTAL_TOKENIZED_TOKENS
-
-RUN_ID = "tokenizer-sweep-20260526"
-MAX_STEP_CONCURRENCY = int(os.environ.get("TOKENIZER_SWEEP_MAX_STEP_CONCURRENCY", "24"))
-VOCAB_SIZES = (262_144, 131_072, 32_768, 8_192)
-HF_TOKENIZER_FAMILIES = {
+DEFAULT_HF_TOKENIZER_FAMILIES = {
     "gpt-oss": ("openai/gpt-oss-20b", False),
     "llama": ("meta-llama/Meta-Llama-3.1-8B", False),
     "gpt-oss-place-digits": ("openai/gpt-oss-20b", True),
     "llama-place-digits": ("meta-llama/Meta-Llama-3.1-8B", True),
 }
-OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES = {
+DEFAULT_OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES = {
     "llama-official": "meta-llama/Meta-Llama-3.1-8B",
 }
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, str(default)))
+
+
+def _env_int_tuple(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    values = tuple(int(part.strip()) for part in raw.split(",") if part.strip())
+    if not values:
+        raise ValueError(f"{name} must contain at least one integer")
+    return values
+
+
+def _env_hf_tokenizer_families() -> dict[str, tuple[str, bool]]:
+    """Parse custom HF tokenizer family specs.
+
+    ``TOKENIZER_SWEEP_HF_FAMILIES_JSON`` accepts either:
+
+    * ``{"name": "hf/repo"}`` for a vanilla family, or
+    * ``{"name": {"base_tokenizer": "hf/repo", "place_aligned_digits": true}}``.
+    """
+    raw = os.environ.get("TOKENIZER_SWEEP_HF_FAMILIES_JSON")
+    if not raw:
+        return DEFAULT_HF_TOKENIZER_FAMILIES
+    data = json.loads(raw)
+    families: dict[str, tuple[str, bool]] = {}
+    for family, spec in data.items():
+        if isinstance(spec, str):
+            families[family] = (spec, False)
+        else:
+            base = spec.get("base_tokenizer") or spec.get("base")
+            if base is None:
+                raise ValueError(f"Missing base_tokenizer for tokenizer family {family!r}")
+            families[family] = (base, bool(spec.get("place_aligned_digits", False)))
+    return families
+
+
+def _env_official_truncated_tokenizer_families() -> dict[str, str]:
+    raw = os.environ.get("TOKENIZER_SWEEP_OFFICIAL_TRUNCATED_FAMILIES_JSON")
+    if not raw:
+        return DEFAULT_OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("TOKENIZER_SWEEP_OFFICIAL_TRUNCATED_FAMILIES_JSON must be a JSON object")
+    return {str(family): str(base_tokenizer) for family, base_tokenizer in data.items()}
+
+
+STAGING_PREFIX = os.environ.get("TOKENIZER_SWEEP_STAGING_PREFIX", "gs://marin-eu-west4")
+NORMALIZED_BASE = os.environ.get(
+    "TOKENIZER_SWEEP_NORMALIZED_BASE",
+    "gs://marin-eu-west4/data/datakit/sample/2026-05-26",
+)
+TOTAL_TOKENIZED_TOKENS = _env_int("TOKENIZER_SWEEP_TOTAL_TOKENIZED_TOKENS", 1_099_611_681_172)
+HOLDOUT_TOKENS = _env_int("TOKENIZER_SWEEP_HOLDOUT_TOKENS", 100_000_000_000)
+HOLDOUT_START_TOKENS = _env_int("TOKENIZER_SWEEP_HOLDOUT_START_TOKENS", HOLDOUT_TOKENS)
+HOLDOUT_FRACTION = HOLDOUT_TOKENS / TOTAL_TOKENIZED_TOKENS
+HOLDOUT_START_FRACTION = HOLDOUT_START_TOKENS / TOTAL_TOKENIZED_TOKENS
+TOKENIZER_TRAIN_TOKENS = _env_int("TOKENIZER_SWEEP_TOKENIZER_TRAIN_TOKENS", 50_000_000_000)
+TOKENIZER_TRAIN_FRACTION = TOKENIZER_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
+RETOKENIZE_TRAIN_TOKENS = _env_int("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_TOKENS", 50_000_000_000)
+RETOKENIZE_TRAIN_START_TOKENS = _env_int("TOKENIZER_SWEEP_RETOKENIZE_TRAIN_START_TOKENS", 0)
+RETOKENIZE_TRAIN_FRACTION = RETOKENIZE_TRAIN_TOKENS / TOTAL_TOKENIZED_TOKENS
+RETOKENIZE_TRAIN_START_FRACTION = RETOKENIZE_TRAIN_START_TOKENS / TOTAL_TOKENIZED_TOKENS
+
+RUN_ID = os.environ.get("TOKENIZER_SWEEP_RUN_ID", "tokenizer-sweep")
+MAX_STEP_CONCURRENCY = int(os.environ.get("TOKENIZER_SWEEP_MAX_STEP_CONCURRENCY", "24"))
+VOCAB_SIZES = _env_int_tuple("TOKENIZER_SWEEP_VOCAB_SIZES", (262_144, 131_072, 32_768, 8_192))
+HF_TOKENIZER_FAMILIES = _env_hf_tokenizer_families()
+OFFICIAL_TRUNCATED_TOKENIZER_FAMILIES = _env_official_truncated_tokenizer_families()
 PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS = 510
 PLACE_ALIGNED_DIGIT_CHUNK_SIZE = 3
 PLACE_ALIGNED_DIGIT_PRETOKENIZER_REVISION = "bounded-leading-triplets-v2"
@@ -441,7 +498,7 @@ def sample_window_step(
     normalized_path: str,
     start_fraction: float,
     sample_fraction: float,
-    window_tokens: int = WINDOW_TOKENS,
+    window_tokens: int = HOLDOUT_TOKENS,
     sample_mode: str = "contiguous",
     random_seed: int = TOKENIZER_SWEEP_TRAIN_RANDOM_SEED,
 ) -> StepSpec:
@@ -480,7 +537,7 @@ def sample_window_step(
 
 
 def existing_normalized_sources() -> dict[str, str]:
-    """Return all 2026-05-26 source artifacts that exist in the regional sample."""
+    """Return all source artifacts that exist in the configured normalized sample."""
     if not NORMALIZED_BASE.startswith("gs://"):
         raise ValueError(f"expected GCS NORMALIZED_BASE, got {NORMALIZED_BASE}")
     fs = fsspec.filesystem("gcs")
@@ -1360,8 +1417,9 @@ def build_steps(phase: str = "all") -> list[ExecutorStep]:
         holdout_samples[source_name] = sample_window_step(
             name=f"data/datakit/tokenizer_sweep/{RUN_ID}/holdout/{safe_source_name}",
             normalized_path=normalized_path,
-            start_fraction=WINDOW_FRACTION,
-            sample_fraction=WINDOW_FRACTION,
+            start_fraction=HOLDOUT_START_FRACTION,
+            sample_fraction=HOLDOUT_FRACTION,
+            window_tokens=HOLDOUT_TOKENS,
         )
 
     train_sample_list = list(train_samples.values())

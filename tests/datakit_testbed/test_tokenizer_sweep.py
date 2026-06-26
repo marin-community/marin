@@ -10,7 +10,7 @@ from tokenizers import models
 from tokenizers import pre_tokenizers
 from tokenizers import trainers
 
-from experiments.datakit_testbed.tokenizer_sweep_20260526 import (
+from experiments.datakit_testbed.tokenizer_sweep import (
     PLACE_ALIGNED_DIGIT_MAX_RUN_CHARS,
     _derive_hf_bpe_tokenizer_dir,
     _place_aligned_digit_pretokenizer,
