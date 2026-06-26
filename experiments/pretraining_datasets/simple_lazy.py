@@ -16,6 +16,21 @@ from experiments.pretraining_datasets.simple import PROOFPILE_LLAMA3_PIN, STARCO
 # Raw download locations (pinned in simple.py's `_build_downloads`).
 _STARCODER_RAW = "raw/starcoderdata-720c8c"
 _PROOFPILE_RAW = "raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927"
+_DCLM_BASELINE_RAW = "raw/dclm/a3b142c"
+
+# Pinned llama3-tokenized cache for dclm-baseline (~3.8T tokens; never re-tokenize).
+_DCLM_BASELINE_LLAMA3_PIN = "tokenized/dclm_baseline-0206f1/"
+
+
+def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+    """DCLM-baseline as a tokenized ``Dataset`` handle."""
+    return tokenized(
+        "dclm_baseline",
+        tokenizer=tokenizer,
+        version="llama3",
+        paths=[_DCLM_BASELINE_RAW],
+        pin=_DCLM_BASELINE_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
+    )
 
 
 def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
