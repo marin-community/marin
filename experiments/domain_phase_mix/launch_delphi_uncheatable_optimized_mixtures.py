@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train selected Uncheatable-optimized mixtures on the Delphi scaling ladder.
+"""Train selected optimized mixtures on the Delphi scaling ladder.
 
-This launcher is for issues #6602 and #6608.  It validates and submits three
-two-phase Dolma3/Dolmino top-level mixtures:
+This launcher validates and submits selected two-phase Dolma3/Dolmino top-level
+mixtures:
 
 - OLMix delta=0.01, KL=0.05, aggregate cap=4.
 - DSP effective-exposure, KL=0.1.
 - Canonical DSP, KL=0.1.
+- OLMix Table-9 macro delta=0.01, KL=0.05, aggregate cap=4.
+- DSP effective-exposure Table-9 macro, KL=0.025.
 
 Unlike ``launch_delphi_baseline_mixtures.py``, this script intentionally accepts
 phase-asymmetric mixtures and uses the historical 80/20 Dolma3/Dolmino
@@ -83,6 +85,7 @@ logger = logging.getLogger(__name__)
 SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUT_DIR = SCRIPT_DIR / "exploratory" / "two_phase_many" / "reference_outputs"
 LOCAL_ARTIFACT_DIR = REFERENCE_OUTPUT_DIR / "delphi_uncheatable_optimized_mixtures_20260625"
+MIXTURE_ASSET_DIR = SCRIPT_DIR / "assets" / "delphi_optimized_mixtures"
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_uncheatable_optimized_mixtures_20260625"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
@@ -95,11 +98,13 @@ PHASE_FRACTIONS = {phase.name: phase.end_fraction - phase.start_fraction for pha
 
 
 class DelphiValidationMixture(StrEnum):
-    """Selected mixtures for Uncheatable scaling validation."""
+    """Selected mixtures for Delphi scaling validation."""
 
     OLMIX_D001_KL005_CAP4 = "olmix_d001_kl005_cap4"
     DSP_EFFECTIVE_EXPOSURE_KL01 = "dsp_effexp_kl01"
     DSP_CANONICAL_KL01 = "dsp_canon_kl01"
+    OLMIX_TABLE9_D001_KL005_CAP4 = "olmix_table9_d001_kl005_cap4"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0025 = "dsp_effexp_table9_kl0025"
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,7 @@ class MixtureSource:
     github_issue: int
     target_metric: str
     method: str
+    wandb_series_tag: str
     expected_max_simulated_epoch: float | None = None
 
 
@@ -129,6 +135,7 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         github_issue=6608,
         target_metric="eval/uncheatable_eval/bpb",
         method="olmix_delta0p01_kl0p05_cap4",
+        wandb_series_tag="delphi-uncheatable-optimized-mixtures",
         expected_max_simulated_epoch=4.0,
     ),
     DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_KL01: MixtureSource(
@@ -143,6 +150,7 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         github_issue=6602,
         target_metric="eval/uncheatable_eval/bpb",
         method="dsp_effective_exposure_l2_0p01_kl0p1",
+        wandb_series_tag="delphi-uncheatable-optimized-mixtures",
     ),
     DelphiValidationMixture.DSP_CANONICAL_KL01: MixtureSource(
         key=DelphiValidationMixture.DSP_CANONICAL_KL01,
@@ -156,6 +164,27 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         github_issue=6602,
         target_metric="eval/uncheatable_eval/bpb",
         method="dsp_canonical_l2_1e-4_kl0p1",
+        wandb_series_tag="delphi-uncheatable-optimized-mixtures",
+    ),
+    DelphiValidationMixture.OLMIX_TABLE9_D001_KL005_CAP4: MixtureSource(
+        key=DelphiValidationMixture.OLMIX_TABLE9_D001_KL005_CAP4,
+        display_name="OLMix Table-9 macro delta=0.01 KL=0.05 cap=4",
+        source_csv=str(MIXTURE_ASSET_DIR / "olmix_table9_delta0p01_kl0p05_cap4.csv"),
+        github_issue=6611,
+        target_metric="olmo_base_easy/table9_51_component_macro_bpb",
+        method="olmix_table9_delta0p01_kl0p05_cap4",
+        wandb_series_tag="delphi-table9-optimized-mixtures",
+        expected_max_simulated_epoch=4.0,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0025: MixtureSource(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0025,
+        display_name="DSP effective-exposure Table-9 macro KL=0.025",
+        source_csv=str(MIXTURE_ASSET_DIR / "dsp_effexp_table9_kl0p025.csv"),
+        github_issue=6611,
+        target_metric="olmo_base_easy/table9_51_component_macro_bpb",
+        method="dsp_effective_exposure_table9_kl0p025",
+        wandb_series_tag="delphi-table9-optimized-mixtures",
+        expected_max_simulated_epoch=8.530735,
     ),
 }
 
@@ -413,8 +442,13 @@ def _q95(values: list[float]) -> float:
     if not values:
         raise ValueError("Cannot compute q95 of empty list")
     ordered = sorted(values)
-    index = min(len(ordered) - 1, int(0.95 * len(ordered)))
-    return ordered[index]
+    if len(ordered) == 1:
+        return ordered[0]
+    position = 0.95 * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
 def _parse_weight_rows(csv_text: str, *, source_label: str) -> list[dict[str, str]]:
@@ -456,16 +490,24 @@ def _validate_embedded_matches_local(
 
 
 def _read_phase_weight_rows(source: MixtureSource) -> list[dict[str, str]]:
-    embedded_rows = _parse_weight_rows(
-        _EMBEDDED_MIXTURE_WEIGHT_CSVS[source.key],
-        source_label=f"embedded:{source.key.value}",
+    embedded_csv = _EMBEDDED_MIXTURE_WEIGHT_CSVS.get(source.key)
+    embedded_rows = (
+        _parse_weight_rows(
+            embedded_csv,
+            source_label=f"embedded:{source.key.value}",
+        )
+        if embedded_csv is not None
+        else None
     )
     path = Path(source.source_csv)
     if path.exists():
         local_rows = _parse_weight_rows(path.read_text(), source_label=str(path))
-        _validate_embedded_matches_local(embedded_rows, local_rows, source=source)
-    else:
-        logger.info("Using embedded weights for %s; local provenance CSV is absent at %s", source.key.value, path)
+        if embedded_rows is not None:
+            _validate_embedded_matches_local(embedded_rows, local_rows, source=source)
+        return local_rows
+    if embedded_rows is None:
+        raise FileNotFoundError(f"{source.key.value} mixture CSV is required but absent at {path}")
+    logger.info("Using embedded weights for %s; local provenance CSV is absent at %s", source.key.value, path)
     return embedded_rows
 
 
@@ -647,7 +689,8 @@ def run_delphi_optimized_training(config: DelphiOptimizedTrainingConfig) -> None
                 project="marin",
                 tags=[
                     f"issue-{source.github_issue}",
-                    "delphi-uncheatable-optimized-mixtures",
+                    source.wandb_series_tag,
+                    "delphi-optimized-mixtures",
                     "completed-adamh",
                     config.mixture.value,
                     source.method,
@@ -1037,13 +1080,18 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--analysis-output-path", default=DEFAULT_ANALYSIS_OUTPUT_PATH)
+    parser.add_argument("--experiment-name", default=EXPERIMENT_NAME)
+    parser.add_argument("--local-artifact-dir", default=str(LOCAL_ARTIFACT_DIR))
     return parser.parse_known_args()
 
 
 def main() -> None:
+    global EXPERIMENT_NAME, LOCAL_ARTIFACT_DIR
     logging.basicConfig(level=logging.INFO)
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
+    EXPERIMENT_NAME = args.experiment_name
+    LOCAL_ARTIFACT_DIR = Path(args.local_artifact_dir)
 
     if args.tpu_region != DEFAULT_TPU_REGION or args.tpu_zone != DEFAULT_TPU_ZONE:
         raise ValueError(f"This launcher is pinned to {DEFAULT_TPU_REGION}/{DEFAULT_TPU_ZONE}")
@@ -1095,7 +1143,7 @@ def main() -> None:
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
         steps=artifacts.training_steps if args.skip_manifest else artifacts.steps,
-        description=f"{EXPERIMENT_NAME}: issues #6602/#6608 Delphi scaling validation",
+        description=f"{EXPERIMENT_NAME}: Delphi optimized-mixture scaling validation",
     )
 
 
