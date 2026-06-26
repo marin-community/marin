@@ -532,6 +532,43 @@ def first_fitting_worker(
     return None
 
 
+def ranked_groups_for_req(
+    context: SchedulingContext,
+    req: JobRequirements,
+) -> list[tuple[str, list[WorkerId]]]:
+    """Constraint-matched worker groups for a coscheduled req, ranked by total
+    soft-constraint score (descending) — the order placement tries them in.
+    Returns ``[]`` for a req with no ``coscheduling_group_by``.
+    """
+    group_by = req.coscheduling_group_by
+    if group_by is None:
+        return []
+    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
+    matching_worker_ids = context.matching_workers(hard_constraints)
+    groups = context.workers_by_group(group_by, matching_worker_ids)
+    if not soft_constraints:
+        return list(groups.items())
+
+    soft_key_tail = tuple(soft_constraints)
+    cache = context._soft_score_cache
+
+    def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
+        total = 0
+        for wid in group_worker_ids:
+            cap = context.capacities.get(wid)
+            if cap is None:
+                continue
+            key = (wid, soft_key_tail)
+            score = cache.get(key)
+            if score is None:
+                score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+                cache[key] = score
+            total += score
+        return total
+
+    return sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
+
+
 def _format_rejection_summary(
     rejection_counts: dict[RejectionKind, int],
     rejection_samples: dict[RejectionKind, RejectionReason],
@@ -752,42 +789,16 @@ class Scheduler:
 
         Returns None if no valid worker group exists with sufficient capacity.
         """
-        group_by = req.coscheduling_group_by
-        if group_by is None:
+        if req.coscheduling_group_by is None:
             return None
 
         if not task_ids:
             return None
 
         num_tasks = len(task_ids)
-        all_constraints = list(req.constraints)
-        hard_constraints, soft_constraints = split_hard_soft(all_constraints)
-
-        # Only hard constraints filter candidates; soft constraints rank groups.
-        matching_worker_ids = context.matching_workers(hard_constraints)
-        groups = context.workers_by_group(group_by, matching_worker_ids)
-
-        # Sort groups so those satisfying more soft constraints are tried first.
-        soft_key_tail = tuple(soft_constraints)
-        cache = context._soft_score_cache
-
-        def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
-            if not soft_constraints:
-                return 0
-            total = 0
-            for wid in group_worker_ids:
-                cap = context.capacities.get(wid)
-                if cap is None:
-                    continue
-                key = (wid, soft_key_tail)
-                score = cache.get(key)
-                if score is None:
-                    score = soft_constraint_score(dict(cap.attributes), soft_constraints)
-                    cache[key] = score
-                total += score
-            return total
-
-        sorted_groups = sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
+        # Constraint-match + group + soft-rank, shared with the preemption fallback
+        # so placement and preemption agree on which group the gang prefers.
+        sorted_groups = ranked_groups_for_req(context, req)
 
         # Find first group with enough workers that have capacity.
         # Note: matching_worker_ids passed attribute constraints (e.g., tpu-name=my-tpu),
@@ -829,7 +840,7 @@ class Scheduler:
         logger.debug(
             "Coscheduled job: no group with %d available workers for group_by=%s",
             num_tasks,
-            group_by,
+            req.coscheduling_group_by,
         )
         return None
 
