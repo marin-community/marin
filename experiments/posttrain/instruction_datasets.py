@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SpecializedDomains-Finance-v1
 """
 
 import dataclasses
@@ -156,6 +157,31 @@ def multi_turn_adapter(
     )
 
 
+def multi_turn_reasoning_adapter(
+    conversation_column: str = "messages",
+    role_key: str = "role",
+    user_value: str = "user",
+    assistant_value: str = "assistant",
+    system_value: str = "system",
+    content_key: str = "content",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_WITH_REASONING,
+        conversation_column=conversation_column,
+        role_key=role_key,
+        user_value=user_value,
+        assistant_value=assistant_value,
+        system_value=system_value,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
 def instruction_response_adapter(
     *,
     instruction_column: str,
@@ -256,6 +282,9 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_REVISION = "5a21b106168facb96ced11b883c2a9b4788ee939"
+NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_METADATA_COLUMNS = ["uuid", "license", "used_in"]
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -429,6 +458,16 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="lm-provers/FineProofs-SFT/proof-only",
         subsets=["default"],
         splits=["train"],
+    ),
+    "nvidia/Nemotron-SpecializedDomains-Finance-v1": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/Nemotron-SpecializedDomains-Finance-v1",
+        revision=NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_REVISION,
+        adapter=multi_turn_reasoning_adapter(),
+        metadata_columns=NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_METADATA_COLUMNS,
+        name="nvidia/Nemotron-SpecializedDomains-Finance-v1",
+        subsets=["default"],
+        splits=["train"],
+        max_parallelism=16,
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",

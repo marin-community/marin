@@ -50,6 +50,7 @@ class InputDatasetFormat(str, Enum):
     """
 
     SINGLE_COLUMN_MULTI_TURN = "messages"
+    SINGLE_COLUMN_MULTI_TURN_WITH_REASONING = "messages_with_reasoning_content"
     INSTRUCTION_RESPONSE = "instruction_response"
     INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
     INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
@@ -117,7 +118,10 @@ class TransformAdapter:
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))
             return messages
-        elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
+        elif self.dataset_format in {
+            InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_WITH_REASONING,
+        }:
             messages = []
             role_to_openai_role = {
                 self.user_value: "user",
@@ -128,7 +132,12 @@ class TransformAdapter:
             conversation = row[self.conversation_column]
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                message_kwargs = {"role": role, "content": conv[self.content_key]}
+                if self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN_WITH_REASONING:
+                    reasoning_content = conv.get("reasoning_content")
+                    if isinstance(reasoning_content, str) and reasoning_content:
+                        message_kwargs["reasoning_content"] = reasoning_content
+                messages.append(OpenAIChatMessage(**message_kwargs))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
