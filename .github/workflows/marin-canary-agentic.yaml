@@ -1,0 +1,249 @@
+name: Marin - Canary Agentic
+
+# Nightly agentic canary: a cold-prompt agent authors a tiny grug-base experiment; CI
+# clamps its consumption (accelerator / dataset / steps), launches it on a single v6e in
+# us-east5, and grades that it trained. See experiments/ferries/agentic/agentic_canary.py.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily at 03:00 UTC, staggered clear of the other canaries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write    # claude triage files issues
+  id-token: write  # claude-code-action OIDC
+
+jobs:
+  agentic-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: canary-agentic
+      cancel-in-progress: true
+    env:
+      RUN_ID: canary-agentic-${{ github.run_id }}-${{ github.run_attempt }}
+      WANDB_ENTITY: marin-community
+      WANDB_PROJECT: marin
+      IRIS_CONFIG: lib/iris/config/marin.yaml
+      MARIN_PREFIX: gs://marin-us-east5  # pin every region-resolved path (data, output, compile cache) in-region
+      CANARY_STEPS: "500"
+      CANARY_CHILD_WAIT_TIMEOUT: "12600"
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-packages --extra=cpu --no-default-groups
+
+      # Agent authoring runs BEFORE any cloud credentials exist in the runner: its scoped
+      # `.venv/bin/python` (used only to self-validate its module) cannot reach the cluster
+      # or read cloud secrets. The allowlist still excludes iris/gcloud/git/gh. CI
+      # authenticates and launches (with the clamp) only after Gate A.
+      - name: Agent authors experiment
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1.0.140
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          prompt: |
+            Set up a tiny language-model pretraining smoke experiment in this Marin repo,
+            to run on a single TPU for a few hundred steps. Use the repo and its skills to
+            figure out the conventions.
+
+            Author a NEW module at experiments/ferries/agentic/run_<short_slug>.py that defines
+            a module-level variable `launch` of type
+            experiments.grug.base.launch.GrugBaseLaunchConfig — a small grug-base model with an
+            optimizer and trainer. Base it on the grug-base template. Focus on the MODEL,
+            OPTIMIZER, and TRAINER. You do NOT need to choose the accelerator, dataset, or step
+            count: CI pins those for safety, so whatever you set for resources/data/steps is
+            overridden at launch.
+
+            Validate before finishing: run
+            `.venv/bin/python -m experiments.ferries.agentic.agentic_canary check --module experiments.ferries.agentic.run_<slug>`
+            and fix any import/type errors it reports. Then write ONLY the dotted module path
+            (e.g. experiments.ferries.agentic.run_<slug>) to `agentic_module.txt` at the repo root.
+
+            Constraints: only create files under experiments/ferries/agentic/. You MAY use
+            `.venv/bin/python` to import-check your module; do NOT commit, push, or launch
+            anything, and do NOT use git, gh, iris, or gcloud.
+          claude_args: |
+            --model claude-opus-4-8
+            --max-turns 40
+            --allowedTools "Read,Write,Edit,Bash(grep:*),Bash(cat:*),Bash(ls:*),Bash(find:*),Bash(.venv/bin/python:*)"
+
+      - name: Resolve authored module
+        id: mod
+        run: |
+          test -s agentic_module.txt || { echo "::error::agent did not write agentic_module.txt"; exit 1; }
+          MODULE="$(tr -d '[:space:]' < agentic_module.txt)"
+          echo "$MODULE" | grep -qE '^experiments\.ferries\.agentic\.[A-Za-z0-9_.]+$' \
+            || { echo "::error::unexpected module path: $MODULE"; exit 1; }
+          echo "module=$MODULE" >> "$GITHUB_OUTPUT"
+          echo "Authored module: $MODULE"
+
+      # Gate A, part 1 (credential-free): import + statically validate the agent's module
+      # BEFORE any cloud creds exist in the runner, so its import-time code can't read them.
+      - name: Gate A — validate (credential-free)
+        shell: bash -l {0}
+        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary check --module "${{ steps.mod.outputs.module }}"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Install SSH key
+        env:
+          SSH_KEY: ${{ secrets.IRIS_CI_GCP_SSH_KEY }}
+          SSH_KEY_PUB: ${{ secrets.IRIS_CI_GCP_SSH_KEY_PUB }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/google_compute_engine
+          printf '%s\n' "$SSH_KEY_PUB" > ~/.ssh/google_compute_engine.pub
+          chmod 600 ~/.ssh/google_compute_engine
+          chmod 644 ~/.ssh/google_compute_engine.pub
+
+      # Gate A, part 2: confirm the pinned dataset is present in-region. This does NOT import
+      # the agent module (it only checks the pinned mixture), so running it post-auth is safe.
+      - name: Gate A — data preflight
+        shell: bash -l {0}
+        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary preflight --region us-east5
+
+      # CI owns the launch. The worker entrypoint clamps consumption (resources/data/steps)
+      # before submitting the child; --priority batch yields to interactive/production.
+      - name: Submit agentic canary
+        id: submit
+        shell: bash -l {0}
+        run: |
+          JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
+            job run --no-wait \
+            --memory=2G --disk=4G --cpu=1 --extra=cpu \
+            --priority batch \
+            -e RUN_ID "$RUN_ID" \
+            -e MARIN_PREFIX "$MARIN_PREFIX" \
+            -e WANDB_ENTITY "$WANDB_ENTITY" \
+            -e WANDB_PROJECT "$WANDB_PROJECT" \
+            -e WANDB_API_KEY "$WANDB_API_KEY" \
+            -e HF_TOKEN "$HF_TOKEN" \
+            -e CANARY_STEPS "$CANARY_STEPS" \
+            -- python -m experiments.ferries.agentic.agentic_canary launch --module "${{ steps.mod.outputs.module }}")
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Submitted job: $JOB_ID"
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      # Bound the wait below the job timeout so a hung run fails this step (keeps the runner
+      # alive for triage), not the job. See marin-canary-ferry.yaml for the rationale.
+      - name: Wait for agentic canary
+        timeout-minutes: 300
+        shell: bash -l {0}
+        run: |
+          uv run python scripts/workflows/iris_monitor.py wait \
+            --job-id "${{ steps.submit.outputs.job_id }}" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --poll-interval 30 \
+            --child-wait-timeout "${{ env.CANARY_CHILD_WAIT_TIMEOUT }}" \
+            --github-output
+
+      # Gate B (post-run): the run produced enough finite loss steps. Fails closed.
+      - name: Gate B (loss health)
+        shell: bash -l {0}
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: .venv/bin/python -m experiments.ferries.agentic.agentic_canary gate-b --run-id "$RUN_ID"
+
+      - name: Capture failure diagnostics
+        if: failure() || cancelled()
+        continue-on-error: true
+        shell: bash -l {0}
+        env:
+          JOB_ID: ${{ steps.submit.outputs.job_id }}
+          DIAG_DIR: ${{ github.workspace }}/canary-diagnostics
+        run: |
+          mkdir -p "$DIAG_DIR"
+          uv run python scripts/workflows/iris_monitor.py collect \
+            --job-id "$JOB_ID" \
+            --iris-config "${{ env.IRIS_CONFIG }}" \
+            --provider gcp \
+            --output-dir "$DIAG_DIR" \
+            --project "${{ secrets.GCP_PROJECT_ID }}" \
+            --controller-label iris-marin-controller \
+            --service-account "$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ssh-key ~/.ssh/google_compute_engine
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-canary-diagnostics
+          path: canary-diagnostics/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Capture what the agent produced so triage can tell a Gate-A (ergonomics) failure
+      # from a Gate-B (infra/stability) failure.
+      - name: Upload agent artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentic-canary-authored
+          path: |
+            agentic_module.txt
+            experiments/ferries/agentic/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Claude triage
+        if: (failure() || cancelled()) && github.event_name == 'schedule'
+        uses: ./.github/actions/claude-triage
+        timeout-minutes: 30
+        with:
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}
+          lane: agentic
+          job-id: ${{ steps.submit.outputs.job_id }}
+          run-id: ${{ env.RUN_ID }}
+          iris-config: ${{ env.IRIS_CONFIG }}
+          wandb-entity: ${{ env.WANDB_ENTITY }}
+          wandb-project: ${{ env.WANDB_PROJECT }}
+          wandb-api-key: ${{ secrets.WANDB_API_KEY }}
+          gha-run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Upload Slack message
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-message
+          path: slack_message.md
+          retention-days: 1
+          if-no-files-found: ignore
+
+  # Separate job so Slack always fires even if the main job is force-killed past its grace window.
+  notify-slack:
+    needs: agentic-canary
+    if: always() && (needs.agentic-canary.result == 'failure' || needs.agentic-canary.result == 'cancelled') && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Notify Slack
+        uses: ./.github/actions/notify-slack
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          fallback-text: ":red_circle: *Agentic Canary failed*\nRun: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
