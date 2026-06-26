@@ -1728,3 +1728,37 @@ fix); (c) E4M3 + block scaling (principled, larger lift). See [[fp8-scaling-caus
 (2) the E5M2-on-Mosaic patch; (3) forward weight-transpose fusion (~8% e2e); (4) haliax `ragged_dot` f8 PR
 extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progress summary) + topic
 `grug-fp8-h100` updated.
+
+### 2026-06-26 — GFP8-035: all-E4M3 trajectory validation — wiring + launch (1×H100, bf16 vs f8)
+- **Hypothesis:** Over a real training trajectory, the shipped all-E4M3 recipe (operands *and* grads in
+  E4M3) tracks the bf16 loss curve without drift/NaN. Per-tensor **current/per-step** scaling is the best
+  case for E4M3 (ideal scale every step, no staleness) — if loss drifts even here, coarser/delayed scaling
+  cannot rescue it, and E5M2 grads (the GFP8-034 Mosaic patch) become necessary. Decisive gate before the
+  recipe is trusted. Matt's prior: skeptical E4M3 has the dynamic range for grads (the direction most
+  serious impls take).
+- **Design (Matt-approved):** vehicle = 1-GPU local **scatter** MoE (expert_axis=1; identical per-expert
+  GEMM numerics to EP, no shard_map confound, cheapest); scaling = current/per-step per-tensor (pure fn,
+  no amax-history state).
+- **Wiring (this commit):**
+  - `haliax/_src/fp8_ragged_current.py` — `fp8_current_scaled_ragged_dot`: pure `custom_vjp`, all-E4M3,
+    `amax(x)/fp8_max` recomputed each step; xla backend, f32 accumulation; bwd quantizes the output grad to
+    E4M3 too (the range risk under test). Operand-dtype sentinels carry bf16 cotangent dtypes back.
+  - `levanter/grug/_moe/scatter.py` — `_moe_mlp_local_scatter` gains `ragged_dot_fn` (default bf16
+    `ragged_dot`); `_fp8_current_ragged_dot` adapter (f32 accum → cast to operand dtype).
+  - new `MoeImplementation` value **`scatter_f8`** (common.py + local.py partial) — reuses the existing
+    `moe_implementation` config field, so the knob threads model→worker via the serialized config (no env
+    on the worker). bf16 `scatter` path byte-identical when off.
+  - launcher `experiments/grug/fp8/launch_cw_fp8_val.py` (`MOE_IMPL` knob).
+- **CPU wiring check** (`JAX_PLATFORMS=cpu`, tiny MoE, d64/I96/E4/top2): f8-vs-bf16 loss rel **1.4%**;
+  grads finite (grad_x 8.0%, grad_w13 7.1%, grad_w2 9.7% — the expected E4M3 floor); bf16 path identical
+  across two runs. Standalone op (T1024/D256/E4) earlier: fwd rel 3.5%, grad rel ~4.5%, all finite.
+- **Launch (cw-us-east-02a, 1×H100, d512/L6/e8/top2, seq1024, batch16, 3000 steps, json_logger):**
+  ```
+  bash submit_fp8val.sh scatter   bf16   3000   # /matt/grug-fp8val-bf16-20260626-213611
+  bash submit_fp8val.sh scatter_f8 f8e4m3 3000   # /matt/grug-fp8val-f8e4m3-20260626-213625
+  ```
+  (json_logger, not wandb: per-step loss goes to job logs; the shared-cluster wandb-key passing is blocked,
+  and the bf16-vs-f8 deltas are extracted by parsing both jobs' logs.) Both arms: executor up, SlimPajama
+  **cache hit** (no tokenize/cross-region), GPU train task spawned.
+- **Result:** *(pending — GPU compile + 3000 steps; comparing loss trajectories + NaN watch)*.
+- **Next action:** parse both jobs' per-step loss; verdict on E4M3 grad dynamic range over the trajectory.
