@@ -1803,3 +1803,31 @@ extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progres
 - **Next:** deeper (8-layer) + longer (8000-step) stress to widen intra-tensor gradient spread; then the
   decisive test remains the **full grug LM**, currently blocked by the unrelated XSA single-device sharding
   bug (would need a multi-GPU mesh or an attention-sharding fix).
+
+### 2026-06-26 — GFP8-035 FULL-LM GPU RESULT: all-E4M3 holds on the real grug MoE (1×H100, 3000 steps)
+- **Both arms trained to completion on cw-us-east-02a (1 H100), full grug MoE** (d512, 6 layers, 8 experts
+  top-2, seq 1024, batch 16, 3000 steps, SlimPajama, json_logger):
+  - bf16 `scatter`:    `/matt/grug-fp8val-bf16-20260626-225706`   — SUCCEEDED, 16.7 it/s, final loss 5.16
+  - f8 `scatter_f8`:   `/matt/grug-fp8val-f8e4m3-20260626-232413` — SUCCEEDED, 15.4 it/s, final loss 5.18
+- **No NaN/Inf anywhere — guaranteed**: the trainer ran with `crash_on_nan: true` + `crash_on_inf: true`;
+  both arms reaching SUCCEEDED means neither E4M3 operands nor E4M3 grads produced a non-finite value at
+  any of the 3000 steps.
+- **Trajectory tracking (last 120 logged steps, 2880–2999 — late training, smallest grads, the hardest case
+  for E4M3 range):** f8 sits a stable +0.4–0.7% above bf16; max pointwise gap **1.23%** (step 2942);
+  final loss (mean last 5 logged) bf16 **4.970** vs f8 **4.999** (+0.58%). A small, *systematic*, non-growing
+  offset — E4M3 rounding bias, not divergence.
+- **Path to get here (the f8 GPU run surfaced bugs the bf16 path didn't):**
+  1. XSA attention double-mapped the `model` mesh axis on the single-device mesh → DuplicateSpecError.
+     Fixed by pinning `attn_out` to aligned_v's head-sharded layout (`model.py`); verified it still lowers on a
+     multi-device EP mesh, reshard changes layout only.
+  2. f8 op forced `implementation="xla"` → XLA-GPU layout-normalization RET_CHECK (ReshapeIsBitcast) at
+     compile. The 512-pad was *not* the cause; the **backend** was. bf16 `ragged_dot` defaults to `"auto"`
+     (triton/mosaic on GPU); all-E4M3 shares one f8 dtype so the mixed-f8 walls don't apply. Switching the f8
+     adapter to `"auto"` cleared it and the f8 arm trained.
+- **Verdict (answers Matt's skepticism, now on the *real* model):** with per-tensor current/per-step scaling,
+  all-E4M3 — operands AND gradients in E4M3 — trains the real grug MoE for 3000 steps with **zero NaN** and
+  tracks the bf16 loss to **sub-1%** through the end of training. E4M3 does **not** lack the dynamic range here.
+- **Honest scope:** (1) current scaling is best-case (shipped recipe uses delayed — staler, strictly worse);
+  (2) 3000 steps / d512-6L is short+small — late gradient-tail shifts may need a longer run; (3) the deep CPU
+  stress (8L/8000) showed a one-off 244% transient spike that reconverged — worth watching at longer horizons.
+  Necessary + strong, not yet a full pretraining-scale guarantee. CPU and GPU agree (E4M3-quant is hw-independent).
