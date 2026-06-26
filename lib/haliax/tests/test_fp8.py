@@ -76,14 +76,23 @@ def test_fp8_direct_feeds_fp8_operands_to_dot():
     ), "forward dot_general should contract two float8_e4m3fn operands"
 
 
+def _gpu_is_fp8_capable() -> bool:
+    # FP8 tensor-core GEMMs need CUDA compute capability >= 8.9 (Ada/Hopper/Blackwell).
+    if jax.default_backend() != "gpu":
+        return False
+    # compute_capability is a string like "9.0" on a CUDA device.
+    major, _, minor = jax.devices()[0].compute_capability.partition(".")
+    return (int(major), int(minor or 0)) >= (8, 9)
+
+
 @pytest.mark.skipif(
-    jax.default_backend() != "gpu",
-    reason="cuBLASLt FP8 kernels require a CUDA GPU (Hopper/sm90)",
+    not _gpu_is_fp8_capable(),
+    reason="needs an FP8-capable GPU (CUDA sm89+: Ada/Hopper/Blackwell)",
 )
 def test_fp8_direct_emits_cublas_fp8_kernel_on_gpu():
-    # On Hopper the forward matmul must run as an FP8 GEMM on tensor cores.
-    # Depending on shape, XLA's autotuner lowers it either to a cuBLASLt FP8
-    # kernel (__cublas$lt$matmul$f8) or to a Triton FP8 gemm fusion
+    # On an FP8-capable GPU the forward matmul must run as an FP8 GEMM on tensor
+    # cores. Depending on shape, XLA's autotuner lowers it either to a cuBLASLt
+    # FP8 kernel (__cublas$lt$matmul$f8) or to a Triton FP8 gemm fusion
     # (__triton_nested_gemm_fusion) -- both consume FP8 (e4m3) operands.
     Batch = hax.Axis("Batch", 512)
     In = hax.Axis("In", 512)
