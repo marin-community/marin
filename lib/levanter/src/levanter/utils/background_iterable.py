@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextvars
 import queue
 import sys
 import threading
 from typing import AsyncIterator, Callable, Iterable, Iterator, Optional, TypeVar, Union
 
+import haliax.partitioning as hpart
 import tblib
+from jax.sharding import Mesh
 
 from levanter.utils.thread_utils import AsyncIteratorWrapper
 
@@ -48,6 +51,18 @@ class BackgroundIterator(Iterator[Ex]):
         else:
             self._producer_fn = producer_fn
         self._stop_event = threading.Event()
+        # Capture the parent thread's ContextVars and active JAX mesh so the
+        # prefetch thread runs under the same sharding context. A fresh
+        # threading.Thread carries neither: jits traced inside the producer
+        # (e.g. stack_tree) would otherwise see an empty mesh, fall back to
+        # CPU, and raise "Received incompatible devices" when their output
+        # meets TPU-resident data downstream. On modern JAX the active mesh
+        # lives in the concrete-mesh config (set via jax.set_mesh), not in a
+        # ContextVar, so copy_context() does not carry it across the thread
+        # boundary — snapshot it here and re-enter it in the worker.
+        self._captured_ctx = contextvars.copy_context()
+        mesh = hpart.get_concrete_mesh()
+        self._captured_mesh: Optional[Mesh] = None if mesh is None or mesh.empty else mesh
 
         if self.max_capacity is None or self.max_capacity >= 0:
             self.q: queue.Queue = queue.Queue(self.max_capacity or 0)
@@ -96,6 +111,20 @@ class BackgroundIterator(Iterator[Ex]):
             self.thread.join()
 
     def _fill_queue_with_batches(self):
+        # Re-enter the parent thread's mesh and ContextVars in this producer
+        # thread (a fresh threading.Thread inherits neither). Re-entering the
+        # captured mesh is the actual fix for the eval-boundary "incompatible
+        # devices" error; copy_context carries any other ContextVars.
+        def run():
+            if self._captured_mesh is not None:
+                with hpart.set_mesh(self._captured_mesh):
+                    self._fill_queue_with_batches_inner()
+            else:
+                self._fill_queue_with_batches_inner()
+
+        self._captured_ctx.run(run)
+
+    def _fill_queue_with_batches_inner(self):
         try:
             iterator = self._producer_fn()
         except Exception:
