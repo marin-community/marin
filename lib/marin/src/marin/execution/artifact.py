@@ -165,8 +165,14 @@ class Artifact:
                 # avoiding non-serializable objects in `__dict__`.
                 fd.write(json.dumps(asdict(artifact)).encode("utf-8"))
             else:
-                # TODO: should the error to serialize be ignored/logged instead of raising an exception?
-                fd.write(json.dumps(artifact).encode("utf-8"))
+                try:
+                    fd.write(json.dumps(artifact).encode("utf-8"))
+                except TypeError:
+                    logger.warning(
+                        "Artifact of type %s at %s is not JSON-serializable; skipping save.",
+                        type(artifact).__qualname__,
+                        base_path,
+                    )
 
 
 class PathMetadata(BaseModel):
