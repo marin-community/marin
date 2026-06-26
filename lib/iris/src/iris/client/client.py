@@ -884,6 +884,29 @@ class IrisClient:
         """
         return self._cluster_client.list_tasks(job_id)
 
+    def kick_tasks(
+        self,
+        targets: list[str],
+        *,
+        desired_state: job_pb2.TaskState,
+        reason: str = "",
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override).
+
+        Args:
+            targets: Task, task-attempt, or job identifiers (wire form). A task id
+                (``/user/job/0``) or task-attempt id (``/user/job/0:3``) targets a
+                single task; a job id (``/user/job``) expands to the job's active
+                tasks.
+            desired_state: ``TASK_STATE_PREEMPTED`` (retried if budget remains) or
+                ``TASK_STATE_FAILED`` (no retry).
+            reason: Operator-supplied reason recorded on the kicked attempts.
+
+        Returns:
+            One ``KickResult`` per resolved task, reporting whether it was queued.
+        """
+        return self._cluster_client.kick_tasks(targets, desired_state, reason)
+
     def fetch_task_logs(
         self,
         target: JobName,

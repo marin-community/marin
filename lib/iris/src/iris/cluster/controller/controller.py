@@ -357,6 +357,11 @@ class Controller:
         # request_worker_eviction / _drain_pending_evictions.
         self._pending_evictions: set[WorkerId] = set()
         self._pending_evictions_lock = threading.Lock()
+        # Administrative task terminal-state overrides queued off the control loop
+        # (the KickTasks RPC) and finalized in the next tick's write transaction;
+        # see request_task_kicks / _drain_pending_kicks.
+        self._pending_kicks: list[TerminalDecision] = []
+        self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._control_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
@@ -420,6 +425,21 @@ class Controller:
             return
         with self._pending_evictions_lock:
             self._pending_evictions.update(worker_ids)
+        self.wake()
+
+    def request_task_kicks(self, decisions: Sequence[TerminalDecision]) -> None:
+        """Queue administrative task terminal-state overrides for the next tick.
+
+        Called off the control-loop thread (the KickTasks RPC). The decisions are
+        drained in ``_control_tick`` and applied through the same ``finalize``
+        path the scheduler's preemptions and execution timeouts use, inside the
+        tick's single write transaction — so a manual kick never races the
+        scheduling loop's view of task state.
+        """
+        if not decisions:
+            return
+        with self._pending_kicks_lock:
+            self._pending_kicks.extend(decisions)
         self.wake()
 
     def _seed_liveness_from_workers(self) -> None:
@@ -682,6 +702,7 @@ class Controller:
             return
 
         self._drain_pending_evictions()
+        kick_decisions = self._drain_pending_kicks()
 
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
@@ -729,9 +750,17 @@ class Controller:
             sched_result=sched_result,
             recon_result=recon_result,
             timeout_decisions=timeout_decisions,
+            kick_decisions=kick_decisions,
             auto_result=auto_result,
             now=now,
         )
+
+        # A kick finalizes its victims' current attempts; force the next reconcile
+        # so the worker is told to stop them promptly instead of waiting a full
+        # reconcile interval (mirrors the fresh-assignment dispatch follow-up).
+        if kick_decisions:
+            self._force_reconcile = True
+            self._tick_wake.set()
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
         # dispatch follow-up for fresh assignments, fold health.
@@ -816,22 +845,24 @@ class Controller:
         sched_result: ScheduleResult | None,
         recon_result: ReconcileResult | None,
         timeout_decisions: list[TerminalDecision],
+        kick_decisions: list[TerminalDecision],
         auto_result: AutoscaleResult | None,
         now: Timestamp,
     ) -> ControllerEffects | None:
         """Apply this tick's decisions and observations in one write transaction.
 
         Order within the txn: schedule decisions, reconcile observations,
-        execution-timeout finalizations, autoscaler state. Returns the reconcile
-        kernel effects (consumed by the health fold) or None when the backend
-        reported no worker results. A no-op tick opens no transaction.
+        execution-timeout finalizations, administrative kicks, autoscaler state.
+        Returns the reconcile kernel effects (consumed by the health fold) or None
+        when the backend reported no worker results. A no-op tick opens no
+        transaction.
         """
         has_sched = sched_result is not None and bool(
             sched_result.unschedulable or sched_result.assignments or sched_result.preemptions
         )
         has_recon = recon_result is not None and bool(recon_result.worker_results or recon_result.updates)
         has_state = auto_result is not None and auto_result.autoscaler_state is not None
-        if not (has_sched or has_recon or timeout_decisions or has_state):
+        if not (has_sched or has_recon or timeout_decisions or kick_decisions or has_state):
             return None
 
         reconcile_effects: ControllerEffects | None = None
@@ -847,6 +878,9 @@ class Controller:
                     apply_dispatch_updates(cur, recon_result.updates, endpoints=self._endpoints, now=now)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
+            if kick_decisions:
+                finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
+                logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             if has_state:
                 assert auto_result is not None and auto_result.autoscaler_state is not None
                 persist_autoscaler_state(cur, auto_result.autoscaler_state)
@@ -1190,6 +1224,15 @@ class Controller:
             addresses = reads.bulk_get_worker_addresses(snap, drained)
         snapshot = reads.ControlSnapshot(worker_addresses=addresses, reconcile_rows=[], timeout_rows=[])
         self._fail_and_teardown(drained, snapshot, reason="address reused by newly-registered worker (recycled IP)")
+
+    def _drain_pending_kicks(self) -> list[TerminalDecision]:
+        """Take the queued administrative kick decisions for this tick's commit."""
+        with self._pending_kicks_lock:
+            if not self._pending_kicks:
+                return []
+            drained = self._pending_kicks
+            self._pending_kicks = []
+        return drained
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:
         """Per-worker idle/running status for the autoscale phase, read from ``tx``.

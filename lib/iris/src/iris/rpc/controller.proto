@@ -232,6 +232,35 @@ message Controller {
     repeated iris.job.TaskStatus tasks = 1;
   }
 
+  // --- Task administrative overrides ---
+  // KickTasks forces task attempts into a terminal state out-of-band, for
+  // emergencies such as a scheduling bug wedging a task on a machine. The
+  // controller queues each kick and applies it through the normal reconcile
+  // finalization on the next control tick, so it shares one write transaction
+  // with the scheduler instead of racing it.
+  message KickTasksRequest {
+    // Task, task-attempt, or job identifiers. A task id (/user/job/0) or
+    // task-attempt id (/user/job/0:3) targets a single task; a job id
+    // (/user/job) expands to that job's active tasks. The optional ":attempt"
+    // suffix is honored only when it matches the task's current attempt.
+    repeated string targets = 1;
+    // Terminal state to force. Only TASK_STATE_PREEMPTED (retried if budget
+    // remains) and TASK_STATE_FAILED (no retry) are accepted.
+    iris.job.TaskState desired_state = 2;
+    string reason = 3;
+  }
+
+  message KickResult {
+    string target = 1;   // The requested target, verbatim.
+    string task_id = 2;  // Resolved task id, when the target was understood.
+    bool queued = 3;     // True if the kick was accepted and queued.
+    string detail = 4;   // Rejection reason when queued is false.
+  }
+
+  message KickTasksResponse {
+    repeated KickResult results = 1;
+  }
+
   // --- Exec in Container (proxied to worker) ---
   message ExecInContainerRequest {
     string task_id = 1;             // Task whose container to exec into
@@ -545,6 +574,8 @@ service ControllerService {
   // Task operations
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+  // Force task attempts into a terminal state out-of-band (emergency override).
+  rpc KickTasks(Controller.KickTasksRequest) returns (Controller.KickTasksResponse);
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);

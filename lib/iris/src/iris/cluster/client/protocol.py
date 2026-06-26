@@ -94,6 +94,13 @@ class ClusterClient(Protocol):
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
 
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]: ...
+
     def fetch_logs(
         self,
         source: str,
