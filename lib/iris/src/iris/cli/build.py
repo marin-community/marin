@@ -10,6 +10,12 @@ import click
 
 GHCR_DEFAULT_ORG = "marin-community"
 
+# Compression for pushed images and their registry cache. The two must match: a
+# mismatch forces BuildKit to recompress every layer when exporting the cache
+# (the dominant cost of "exporting cache to registry"), whereas aligned settings
+# let it reuse the already-built blobs and let GHCR cross-repo blob-mount them.
+PUSH_COMPRESSION = "compression=zstd,compression-level=3"
+
 
 def _is_verbose(ctx: click.Context) -> bool:
     """Walk up the Click context chain to find the top-level --verbose flag."""
@@ -231,22 +237,16 @@ def build_image(
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
 
     if push:
-        # Match the cache compression to the image output (zstd level 3). The
-        # cache exporter defaults to gzip, so a mismatched setting makes BuildKit
-        # decompress every zstd image layer and recompress it to gzip for the
-        # cache — the dominant cost of "exporting cache to registry". Aligned
-        # compression yields byte-identical blob digests, so GHCR cross-repo
-        # blob-mounts the layers already pushed for the image instead of
-        # re-uploading them. oci-mediatypes/image-manifest store the cache as a
-        # single OCI image (required for zstd cache on registries).
+        # oci-mediatypes/image-manifest store the cache as a single OCI image,
+        # required for non-gzip (zstd) cache on registries. See PUSH_COMPRESSION
+        # for why the cache and image compression are kept in lockstep.
         cmd.extend(
             [
                 "--cache-to",
-                f"type=registry,ref={cache_ref},mode=max,"
-                "compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true",
+                f"type=registry,ref={cache_ref},mode=max,{PUSH_COMPRESSION},oci-mediatypes=true,image-manifest=true",
             ]
         )
-        cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
+        cmd.extend(["--output", f"type=image,{PUSH_COMPRESSION},push=true"])
         cmd.append("--provenance=false")
     else:
         cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])
