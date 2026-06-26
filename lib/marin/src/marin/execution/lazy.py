@@ -38,7 +38,6 @@ provenance and obeying the build-once guard.
 which the existing ``StepRunner`` runs (cache → lock → run) — no content-addressing.
 """
 
-import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -46,10 +45,16 @@ from typing import Any
 
 from rigging.filesystem import marin_prefix, marin_region, url_to_fs
 
+from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.provenance import created_now, get_git_commit, get_user
-from marin.execution.registry import FINGERPRINT_KEY, VERSION_KEY, ArtifactRecord, write_record
+from marin.execution.registry import (
+    FINGERPRINT_KEY,
+    VERSION_KEY,
+    ArtifactRecord,
+    FingerprintMismatchError,
+    write_record,
+)
 from marin.execution.step_spec import StepSpec, _is_relative_path
-from marin.utilities.json_encoder import CustomJsonEncoder
 
 
 def _artifact_path(name: str, version: str, prefix: str) -> str:
@@ -179,24 +184,34 @@ class Artifact:
     against the prefix; an absolute one is used as-is. The source bears identity:
     re-adopting ``name@version`` from a different source re-fingerprints and is a
     guarded conflict."""
+    expected_fingerprint: str | None = None
+    """Pin the recipe fingerprint. When set, :func:`lower` raises
+    :class:`~marin.execution.registry.FingerprintMismatchError` if the config now
+    fingerprints to something else — making the config↔identity contract explicit and
+    review-visible, and catching an edit *before* the first build (the build-once guard
+    only fires once a record exists). Leave ``None`` to opt out."""
 
     def __post_init__(self) -> None:
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
 
-    def fingerprint(self) -> str:
-        """Stable id of *how* this artifact is built: the config with dependency
-        versions in place of paths. Changes iff a config value or a dep version
-        changes; independent of the storage prefix/region.
+    def fingerprint_payload(self) -> str:
+        """The canonical config bytes this artifact's fingerprint hashes
+        (:mod:`marin.execution.fingerprint`).
 
-        An adopted artifact's identity is its source location, so re-adopting the same
-        ``name@version`` from a different source re-fingerprints and trips the guard."""
+        For a computed artifact, the config built with dependency versions in place of
+        paths and context placeholders for everything pulled from ``ctx``. For an
+        adopted artifact, its source location (so re-adopting from a different source
+        re-fingerprints and trips the guard)."""
         if self.adopt_source is not None:
-            payload = json.dumps({"adopt_source": self.adopt_source}, sort_keys=True)
-            return hashlib.md5(payload.encode()).hexdigest()[:8]
+            return json.dumps({"adopt_source": self.adopt_source}, sort_keys=True)
         config = self.recipe.build_config(RunContext.for_fingerprint(self.recipe.run_args.keys()))
-        payload = json.dumps(config, sort_keys=True, cls=CustomJsonEncoder)
-        return hashlib.md5(payload.encode()).hexdigest()[:8]
+        return canonical_json(config)
+
+    def fingerprint(self) -> str:
+        """Stable id of *how* this artifact is built. Changes iff a config value or a
+        dep version changes; independent of the storage prefix/region."""
+        return fingerprint_hash(self.fingerprint_payload())
 
     def path(self, prefix: str | None = None) -> str:
         resolved_prefix = prefix or marin_prefix()
@@ -274,7 +289,14 @@ def lower(artifact: Artifact) -> StepSpec:
     type alone — placement is the fn's concern, not the graph's.
     """
     dep_specs = [lower(dep) for dep in artifact.recipe.deps]
-    fingerprint = artifact.fingerprint()
+    payload = artifact.fingerprint_payload()
+    fingerprint = fingerprint_hash(payload)
+    if artifact.expected_fingerprint is not None and fingerprint != artifact.expected_fingerprint:
+        raise FingerprintMismatchError(
+            f"{artifact.name}@{artifact.version}: config fingerprint is {fingerprint}, but "
+            f"expected_fingerprint pins {artifact.expected_fingerprint}. The recipe changed — update "
+            f"the pin, and bump the version if this is meant to be a different artifact."
+        )
     dep_refs = [f"{d.name}@{d.version}" for d in artifact.recipe.deps]
 
     # Provenance is captured in the launching process (which holds the git checkout)
@@ -309,6 +331,7 @@ def lower(artifact: Artifact) -> StepSpec:
                     user=user,
                     created_at=created_now(),
                     deps=dep_refs,
+                    fingerprint_payload=payload,
                 )
             )
         return result
@@ -318,5 +341,6 @@ def lower(artifact: Artifact) -> StepSpec:
         override_output_path=_output_path_spec(artifact),
         deps=dep_specs,
         hash_attrs={FINGERPRINT_KEY: fingerprint, VERSION_KEY: artifact.version, "deps": dep_refs},
+        fingerprint_payload=payload,
         fn=fn,
     )

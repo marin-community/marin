@@ -7,10 +7,12 @@ Drives the real lower -> StepRunner pipeline against a tmp prefix so the guard i
 exercised exactly as it fires in production (before a cached SUCCESS is served).
 """
 
+import dataclasses
+
 import pytest
 from marin.execution.artifact import Artifact as ArtifactIO
 from marin.execution.lazy import Dataset, Recipe, lower
-from marin.execution.registry import ImmutableArtifactError, read_record
+from marin.execution.registry import FingerprintMismatchError, ImmutableArtifactError, read_record
 from marin.execution.step_runner import StepRunner
 
 
@@ -54,6 +56,34 @@ def test_rebuild_with_changed_recipe_raises(tmp_path, monkeypatch):
     # Same name@version, different recipe -> different fingerprint -> guarded.
     with pytest.raises(ImmutableArtifactError):
         _run(_toy("v1", "b"))
+
+
+def test_changed_recipe_error_names_the_changed_field(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    _run(_toy("v1", "a"))
+
+    # The conflict spells out the field that changed, not just two opaque hashes.
+    with pytest.raises(ImmutableArtifactError, match=r"payload: 'a' -> 'b'"):
+        _run(_toy("v1", "b"))
+
+
+def test_record_carries_fingerprint_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy("v1", "a")
+    _run(art)
+
+    record = read_record(f"{tmp_path}/datasets/toy/v1")
+    assert record.fingerprint_payload == art.fingerprint_payload()
+
+
+def test_expected_fingerprint_pin(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy("v1", "a")
+
+    # A matching pin lowers cleanly; a stale pin fails even before the first build.
+    lower(dataclasses.replace(art, expected_fingerprint=art.fingerprint()))
+    with pytest.raises(FingerprintMismatchError):
+        lower(dataclasses.replace(art, expected_fingerprint="deadbeef"))
 
 
 def test_dev_version_is_mutable(tmp_path, monkeypatch):

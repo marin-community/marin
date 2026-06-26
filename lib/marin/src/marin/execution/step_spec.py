@@ -66,6 +66,12 @@ class StepSpec:
     override_output_path: str | None = None
     """Override the default output path for the step."""
 
+    fingerprint_payload: str | None = None
+    """For a lazy artifact, the canonical config JSON behind its fingerprint
+    (:mod:`marin.execution.fingerprint`). Recorded as provenance and used to render a
+    field-level diff when the build-once guard rejects a changed recipe. Diagnostics
+    only: it never enters :attr:`hash_id`."""
+
     # Execution
     fn: Callable[[str], Any] | None = None
     """

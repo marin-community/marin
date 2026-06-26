@@ -44,6 +44,15 @@ class ImmutableArtifactError(Exception):
     """Raised when a fixed ``name@version`` is rebuilt from a changed recipe."""
 
 
+class FingerprintMismatchError(Exception):
+    """Raised when an artifact's config fingerprint differs from a pinned ``expected_fingerprint``."""
+
+
+# Cap on how many changed config values an immutability error spells out before
+# summarizing the remainder, so a wholesale recipe change stays readable.
+_MAX_DIFF_LINES = 20
+
+
 @dataclass(frozen=True)
 class ArtifactRecord:
     """What produced an artifact at a given output path."""
@@ -61,6 +70,10 @@ class ArtifactRecord:
     """For an *adopted* artifact, the pre-existing data location this ``name@version``
     aliases (where consumers resolve). ``None`` for a computed artifact, whose data
     lives at ``output_path``."""
+    fingerprint_payload: str | None = None
+    """The canonical config JSON the ``fingerprint`` hashes
+    (:mod:`marin.execution.fingerprint`). Kept so a build-once conflict can diff the
+    recorded recipe against the current one field by field."""
 
 
 def is_mutable_version(version: str) -> bool:
@@ -89,12 +102,54 @@ def write_record(record: ArtifactRecord) -> None:
         f.write(json.dumps(asdict(record), indent=2, cls=CustomJsonEncoder))
 
 
-def guard_immutable(output_path: str, name: str, version: str, fingerprint: str) -> None:
+def _diff_json(old: object, new: object, prefix: str = "") -> list[str]:
+    """Dotted-path descriptions of where ``old`` and ``new`` (parsed JSON) differ."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        changes: list[str] = []
+        for key in sorted(set(old) | set(new)):
+            sub = f"{prefix}.{key}" if prefix else key
+            if key not in old:
+                changes.append(f"{sub}: (added) {new[key]!r}")
+            elif key not in new:
+                changes.append(f"{sub}: {old[key]!r} (removed)")
+            else:
+                changes.extend(_diff_json(old[key], new[key], sub))
+        return changes
+    if isinstance(old, list) and isinstance(new, list):
+        if len(old) != len(new):
+            return [f"{prefix}: list of {len(old)} -> list of {len(new)}"]
+        changes = []
+        for i, (a, b) in enumerate(zip(old, new, strict=True)):
+            changes.extend(_diff_json(a, b, f"{prefix}[{i}]"))
+        return changes
+    if old != new:
+        return [f"{prefix or '(root)'}: {old!r} -> {new!r}"]
+    return []
+
+
+def _describe_change(existing: ArtifactRecord, payload: str | None) -> str:
+    """A field-level summary of how the current recipe differs from the recorded one,
+    or an empty string when neither side carries a payload to diff."""
+    if payload is None or existing.fingerprint_payload is None:
+        return ""
+    changes = _diff_json(json.loads(existing.fingerprint_payload), json.loads(payload))
+    if not changes:
+        return ""
+    shown = changes[:_MAX_DIFF_LINES]
+    body = "\n".join(f"  {c}" for c in shown)
+    if len(changes) > len(shown):
+        body += f"\n  …and {len(changes) - len(shown)} more"
+    return f"\nChanged config values:\n{body}"
+
+
+def guard_immutable(output_path: str, name: str, version: str, fingerprint: str, payload: str | None = None) -> None:
     """Enforce build-once immutability for a fixed ``name@version``.
 
     No-op when the artifact is unbuilt, when the recorded fingerprint matches, or
     when the version is mutable. Raises :class:`ImmutableArtifactError` when an
-    existing record was built from a different recipe.
+    existing record was built from a different recipe; when ``payload`` and the
+    recorded payload are both present, the error spells out which config values
+    changed.
     """
     if is_mutable_version(version):
         return
@@ -103,7 +158,8 @@ def guard_immutable(output_path: str, name: str, version: str, fingerprint: str)
         return
     raise ImmutableArtifactError(
         f"{name}@{version} was already built from a different recipe "
-        f"(recorded fingerprint {existing.fingerprint}, now {fingerprint}). "
+        f"(recorded fingerprint {existing.fingerprint}, now {fingerprint})."
+        f"{_describe_change(existing, payload)} "
         f"Bump the version to build the new recipe, or delete {output_path} to rebuild in place."
     )
 
@@ -122,5 +178,5 @@ def enforce_immutability(step: StepSpec) -> bool:
     version = step.hash_attrs.get(VERSION_KEY, "")
     if is_mutable_version(version):
         return True
-    guard_immutable(step.output_path, step.name, version, fingerprint)
+    guard_immutable(step.output_path, step.name, version, fingerprint, step.fingerprint_payload)
     return False
