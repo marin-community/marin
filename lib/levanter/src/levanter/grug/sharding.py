@@ -6,12 +6,17 @@ import numpy as np
 from jax import P
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh, get_mesh, reshard
 
-# Convenience shorthand for batch sharding. Keep this aligned with Levanter's
-# default distributed batch mapping, which includes the cross-slice axis.
+# Convenience shorthand for batch sharding. The combined batch axis still
+# includes replica_dcn (so each DP replica processes its own shard of
+# examples), but parameters are FSDP-sharded only along 'data' — they get
+# replicated across replica_dcn instead. That gives ``replica_axis_size``
+# its standard DP-replica semantics (per-replica copy of params, one
+# cross-replica grad all-reduce per step) and keeps the FSDP group size
+# = data axis size, independent of replica.
 Pbatch = P(("replica_dcn", "data"))
-Pembed_vocab = P("model", Pbatch[0])
-Plm_head = P(Pbatch[0], "model")
-Plogits = P(Pbatch[0], None, "model")
+Pembed_vocab = P("model", "data")
+Plm_head = P("data", "model")
+Plogits = P("data", None, "model")
 
 
 def unshard(x: jax.Array) -> jax.Array:

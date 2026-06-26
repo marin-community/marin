@@ -69,6 +69,10 @@ class GrugMoeLaunchConfig:
     Each entry is a CheckpointInterval dict, e.g. ``[{"every": 10_000}]`` for periodic
     permanent checkpoints, or ``[{"every": phase_1_start_step, "until": phase_1_start_step}]``
     to snapshot a specific transition step. Ignored when ``checkpointer`` is set."""
+    save_interval_minutes: int = 10
+    """Temp checkpoint cadence (minutes) when ``checkpointer`` is None. Long-running
+    production jobs on reserved (non-preemptible) hardware can safely raise this to
+    cut GCS write churn; 10 min is appropriate for short jobs that may hit preemption."""
     load_checkpoint_path: str | None = None
     """Resume training from this checkpoint path. The trainer restores model
     weights, optimizer state, and step counter — so the run continues the
@@ -148,7 +152,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
+            save_interval=timedelta(minutes=config.save_interval_minutes),
             keep=config.checkpoint_keep,
         ),
         # load_checkpoint=None lets levanter auto-detect existing checkpoints
