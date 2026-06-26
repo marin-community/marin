@@ -3,9 +3,9 @@
 
 """Marin-specific *content* for the experiment helpers.
 
-The plumbing (``train_lm``, ``mixture``, ``EvalSuite``) lives in ``marin.experiment``.
-The choices of *which* eval suite and *which* validation sets are marin
-conventions, so they live here, next to the experiments that use them.
+``EvalSuite`` lives in ``marin.experiment``; the choices of *which* eval suite and
+*which* validation sets are marin conventions, so they live here, next to the
+experiments that use them.
 """
 
 from marin.experiment import EvalSuite
