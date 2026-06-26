@@ -2,6 +2,12 @@
 
 **Issue**: [#2822 -- Iris: Implement CoreWeave platform](https://github.com/marin-community/marin/issues/2822)
 
+> Operating a cluster? Start at `.agents/runbooks/deploy-iris-coreweave.md`
+> for the guarded walkthrough (cost guardrails, the shared `iris-ci` warning,
+> zero-to-job, the canary smoke, nodepool cleanup). This document is the detailed
+> reference it points into — RBAC, config fields, instance-type naming, and the
+> per-region specifics.
+
 ## 0. Quickstart — `marin-gpu` (US-EAST-02A)
 
 Zero to a running job on the `marin-gpu` H100 cluster. The rest of this document

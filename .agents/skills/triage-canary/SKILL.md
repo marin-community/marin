@@ -43,6 +43,8 @@ Use hypothesis-driven diagnosis: state hypothesis, gather evidence, narrow.
 Attempt to reproduce the issue locally and minimally.
 Triple check that you're narrowing down on the same issue as the one that actually broke the canary.
 
+Routing once you've classified: scheduling/PENDING → lib/iris/OPS.md "Troubleshooting" (Job stuck PENDING); TPU task failures → lib/iris/OPS.md "TPU Bad-Node Recovery"; GPU-lane/CoreWeave context → .agents/runbooks/deploy-iris-coreweave.md.
+
 ### 3. File a GitHub issue
 
 Follow the `file-issue` skill. Use the bug-report template.

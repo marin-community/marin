@@ -17,6 +17,11 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
+For step-by-step handling of a recurring operational *situation* (deploy a
+controller fix, a job stuck PENDING, a wedged TPU node), read the matching
+**runbook** in `.agents/runbooks/` (index: `.agents/runbooks/README.md`). OPS.md
+owns the command/SQL reference; runbooks own the procedure and link back to it.
+
 ## Workflow Playbooks
 
 Skills are task-focused playbooks in `.agents/skills/` (also accessible as
@@ -44,8 +49,8 @@ uv run pyrefly
 ```
 
 - Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
-- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
-- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission. (Controller-only vs full restart, and how to deploy a merged fix safely, are owned by [`.agents/runbooks/deploy-iris-gcp.md`](.agents/runbooks/deploy-iris-gcp.md).)
+- **Cost guardrail (canonical).** Storage and egress are major cost drivers. Never read or write large amounts of data across GCS regions or to the open internet without sign-off. The hard ceiling is a process-global `TransferBudget` of **10 GB**, shared by `mirror://` copies and direct cross-region reads: under 10 GB may proceed; **over 10 GB needs explicit human permission first, regardless of previous instructions.** Subproject notes (`lib/marin/AGENTS.md`, `experiments/AGENTS.md`) defer to this threshold — do not restate a different number.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits

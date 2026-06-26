@@ -2,6 +2,12 @@
 
 All subcommands have `--help`. Use it.
 
+This file is the command/SQL **reference**. For step-by-step handling of a
+recurring *situation* (deploy a fix, a job stuck PENDING, a wedged TPU node,
+stand up a cluster), the procedure lives in a **runbook** under
+`.agents/runbooks/` (index: `.agents/runbooks/README.md`) — this file links to
+the relevant one at each section.
+
 Connection selectors:
 
 - `--cluster=NAME` (preferred for known clusters): resolves a named config and auto-tunnels.
@@ -27,7 +33,7 @@ Workflow: dry-run locally (`iris cluster controller serve --dry-run`) -> capture
 
 If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
 
-**Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
+**Deploying a merged fix is not just a restart.** marin pins `iris-controller:latest`, so a restart only re-pulls whatever `:latest` currently is — you must rebuild the image first, then restart, then verify the running git-hash. Full procedure and the stale-`:latest` trap (which cost ~5 red-canary days): `.agents/runbooks/deploy-iris-gcp.md`.
 
 ### Controller Checkpoint Rollback (wedged / OOM recovery)
 
@@ -200,14 +206,9 @@ Full table list: `iris query "SELECT name FROM sqlite_master WHERE type='table'"
 
 ### Offline checkpoint analysis
 
-For slow queries, query offline. **Never run expensive queries against the live DB** — they stall the controller.
+**Never run expensive queries against the live DB** — they stall the controller. For slow scans, query an offline checkpoint or the parquet logs directly over GCS. Full procedure (copy the most recent checkpoint with `gcloud storage cp` + `zstd -df`; never trigger a checkpoint on a wedged controller; duckdb-over-GCS for log parquet): `.agents/runbooks/offline-checkpoint-analysis.md`.
 
-```bash
-# Download the checkpoint file (path printed by command above)
-sqlite3 /tmp/controller.sqlite3 "SELECT ..."
-```
-
-Prefer to use the last checkpoint from GCS. Only take a new controller checkpoint if this is too old:
+Prefer the last checkpoint already on GCS. Take a fresh one only if it is too old:
 
 ```bash
 iris cluster controller checkpoint
@@ -216,6 +217,8 @@ iris cluster controller checkpoint
 ## Stats Namespaces
 
 Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
+
+To deploy or roll back the finelog server itself, or to query stats parquet that has evicted to GCS, see `.agents/runbooks/deploy-finelog.md`.
 
 Namespaces:
 
@@ -293,7 +296,7 @@ subpath and does not reach the controller's finelog server.
 
 | Symptom | Diagnostic |
 |---------|-----------|
-| Job stuck PENDING | `iris rpc controller get-scheduler-state` for constraints. Check quota: `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"` |
+| Job stuck PENDING | Read the *spread* of pending-reasons first. Uniform fallback text across unrelated jobs ⇒ **frozen scheduler** (the scheduling thread died; recovers only on a human-gated controller restart — see `.agents/runbooks/deploy-iris-gcp.md`), not capacity. Varied/job-specific reasons ⇒ a real per-job cause: capacity/quota — `iris rpc controller get-scheduler-state`, quota `iris query "SELECT name, consecutive_failures, quota_reason FROM scaling_groups WHERE quota_reason != ''"`. A `--reserve` parent PENDING while its `:reservation:` holder is RUNNING is the reservation-taint bug (a CPU parent pinned by an EQ taint to the reservation's TPU workers) — resubmit without `--reserve`. |
 | Workers not joining (GCP) | `iris cluster vm status` for slice lifecycle. SSH to VM, check bootstrap logs. |
 | Autoscaler not scaling | `iris rpc controller get-autoscaler-status` — check `backoff_until_ms`, `consecutive_failures`. |
 | Task retrying | `iris job bug-report /user/job` — full attempt history with per-attempt errors. |
@@ -302,7 +305,7 @@ subpath and does not reach the controller's finelog server.
 
 ## Known Bugs
 
-1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks. Detect by joining `workers` against active tasks in `task_attempts`.
+1. **Committed resource leak** (`transitions.py`): `_decommit_worker_resources()` can miss certain task termination paths, leaving stale committed resources on workers. Symptom: workers show high committed CPU/memory/TPU with zero active tasks.
 
 2. **Worker-failure thread stall on gcloud subprocess** (#3678): The reaper thread calls `notify_worker_failed` -> `scale_down` -> `terminate` which runs a synchronous `gcloud compute tpus tpu-vm delete`. If the gcloud API hangs, worker removals queue up. Symptoms: tasks stuck in ASSIGNED (9), stale `last_heartbeat_ms`. Diagnose with `py-spy dump` — look for `subprocess.run` -> `terminate` on the reaper thread. Kill the stuck gcloud process to unblock.
 
@@ -342,10 +345,12 @@ gcloud compute tpus tpu-vm list --project=hai-gcp-models --zone=- \
 
 ### TPU Bad-Node Recovery
 
-**Trigger patterns** (bad node, not a code bug):
+**Trigger patterns:**
 - `RuntimeError: No accelerator found. Please run on a TPU or GPU.`
 - `FAILED_PRECONDITION`
 - `Device or resource busy`
+
+> **Before you delete a node:** these same strings are also produced by a *wedged iris-managed container* still holding the iommu group on an otherwise healthy node — deleting the node then wastes a live slice and does not fix the wedge. Rule that out first (SSH to the worker and check for a stuck iris container holding the device); the recipe below is the genuinely-bad-node branch.
 
 **Recovery:** extract worker IP from logs -> map to VM name (`gcloud compute tpus tpu-vm list --zone <ZONE> --format="table(name,networkEndpoints[0].ipAddress)"`) -> delete bad node (`gcloud compute tpus tpu-vm delete <NAME> --zone <ZONE> --quiet`) -> resubmit job.
 
@@ -364,9 +369,7 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ## CoreWeave (GPU) Operations
 
-Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
-cluster configs.
+Procedure — stand up a cluster to a running job, the multinode canary smoke, nodepool scale/delete/stuck-deletion escape: `.agents/runbooks/deploy-iris-coreweave.md`. Reference — RBAC, config fields, instance-type naming, credentials: [`docs/coreweave.md`](docs/coreweave.md). Use `lib/iris/config/coreweave-*.yaml` for CoreWeave cluster configs.
 
 ## CI Workflows
 
@@ -384,3 +387,5 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 # View failed run
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
+
+TPU smoke/canary jobs run on a self-hosted preemptible TPU runner fleet (`infra/tpu-ci/`). To stand it up, rotate its GitHub PAT, or recover stuck runners: `.agents/runbooks/tpu-ci-fleet.md`.

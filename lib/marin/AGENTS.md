@@ -22,4 +22,4 @@ uv run --package marin-core pytest
 - Use `fsspec.open` for filesystem access — do not special-case GCS unless absolutely necessary.
 - Do not copy data artifacts to local filesystem; stream through fsspec instead.
 - Avoid hard-coding GCS paths like `gs://marin-us-central2/foo/bar`. Prefer referencing pipeline steps; if you must use a literal path, wrap with `InputName.hard_coded` and call out the risk.
-- NEVER load GCS files from across region if they are more than a few MB.
+- Never casually read GCS across regions in pipeline code — stream small reads via `fsspec` and route large or cross-region transfers through `mirror://`. The hard transfer ceiling and approval rule are the cost guardrail in `/AGENTS.md`.
