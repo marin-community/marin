@@ -1785,3 +1785,21 @@ extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progres
   init+per-step data; only the expert-GEMM kernel differs.
 - **Smoke (100 steps, 2 layers, d256):** both arms train, **no NaN**; f8 final-loss gap **0.35%**, max
   pointwise **1.47%**. Full 4000-step / 4-layer run in progress.
+
+### 2026-06-26 — GFP8-035 RESULT: focused MoE trajectory — all-E4M3 holds (best-case, 4000 steps, no NaN)
+- **Config:** d256, expert_dim 512, 8 experts top-2, 4 MoE layers, batch 512, Adam lr 3e-3 cosine,
+  fp32 master / bf16 compute. Student/teacher MSE; identical init + per-step data across arms; only the
+  expert grouped-GEMM kernel differs (bf16 `scatter` vs all-E4M3 current-scaling `scatter_f8`).
+- **Result (4000 steps):** both arms train smoothly, **zero NaN** (bf16 and f8). f8 tracks bf16 the whole
+  trajectory; final loss (mean last 50) bf16 **0.0635** vs f8 **0.0608** (f8 −4.2%, within rounding noise —
+  E4M3 rounding acts as mild noise, not divergence). **Max pointwise rel gap over the trajectory: 5.0%.**
+- **Interpretation:** With per-tensor **current/per-step** scaling (the best case — ideal scale every
+  step), all-E4M3 (operands AND gradients in E4M3) shows **no dynamic-range collapse** over a real
+  optimization trajectory on this MoE. This is the strongest case *for* E4M3; it does not blow up.
+- **Honest caveats (this is necessary, not sufficient, vs Matt's skepticism):** (1) focused MoE regression
+  task, not the full grug LM — real text gradients have heavier tails; (2) current scaling is best-case; the
+  *shipped* recipe uses delayed scaling (staler scales, strictly worse); (3) 4000 steps is short — late
+  gradient-tail shifts (GFP8-034) may not fully manifest; (4) smooth gelu teacher → benign gradients.
+- **Next:** deeper (8-layer) + longer (8000-step) stress to widen intra-tensor gradient spread; then the
+  decisive test remains the **full grug LM**, currently blocked by the unrelated XSA single-device sharding
+  bug (would need a multi-GPU mesh or an attention-sharding fix).
