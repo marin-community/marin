@@ -173,6 +173,7 @@ class MockController:
     def __init__(self):
         self.wake = Mock()
         self.request_worker_eviction = Mock()
+        self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
         self.autoscaler = None
@@ -637,6 +638,7 @@ def make_job_request(
     replicas: int = 1,
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
     scheduling_timeout_seconds: int = 0,
     priority_band: int = 0,
     task_image: str = "",
@@ -649,6 +651,7 @@ def make_job_request(
         environment=job_pb2.EnvironmentConfig(),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
         replicas=replicas,
         priority_band=priority_band,
         task_image=task_image,

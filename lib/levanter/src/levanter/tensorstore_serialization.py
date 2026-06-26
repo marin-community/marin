@@ -53,13 +53,26 @@ def build_kvstore_spec(path: str) -> dict:
     For S3, tensorstore does not read AWS_ENDPOINT_URL or AWS_DEFAULT_REGION from the
     environment, so we pass them explicitly when set. This is required for S3-compatible
     endpoints like CoreWeave object storage.
+
+    For a custom ``endpoint`` we always use virtual-hosted-style addressing (tensorstore
+    0.1.82+, google/tensorstore#285): omit ``bucket`` and fold it into the endpoint host
+    (``https://<bucket>.<endpoint-host>``). Every S3-compatible store we target (R2, AWS,
+    CoreWeave) supports virtual-hosted style, and CoreWeave *requires* it (it rejects
+    path-style with ``PathStyleRequestNotAllowed``). Without a custom endpoint we leave
+    addressing to tensorstore's native AWS handling.
     """
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
-        spec: dict = {"driver": "s3", "bucket": parsed.netloc, "path": parsed.path.lstrip("/")}
+        bucket = parsed.netloc
+        spec: dict = {"driver": "s3", "path": parsed.path.lstrip("/")}
         endpoint = os.environ.get("AWS_ENDPOINT_URL")
         if endpoint:
-            spec["endpoint"] = endpoint
+            # Virtual-hosted style: bucket becomes a subdomain of the endpoint
+            # host and the ``bucket`` field is omitted (tensorstore #285).
+            scheme, _, host = endpoint.partition("://")
+            spec["endpoint"] = f"{scheme}://{bucket}.{host}"
+        else:
+            spec["bucket"] = bucket
         region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
         if region:
             spec["aws_region"] = region

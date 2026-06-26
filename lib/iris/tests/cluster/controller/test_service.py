@@ -1826,6 +1826,86 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     assert proto.state == job_pb2.TASK_STATE_RUNNING
     # current attempt is loaded -> started_at on the proto is populated
     assert proto.started_at.epoch_ms > 0
-    # exactly one attempt entry — the current one — even if more existed
+    # Only the current attempt is attached: this task has no failed attempts in
+    # its history, so the failure-surfacing path contributes nothing.
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
+    """The latest failed attempt stays visible after a retry, but history is bounded.
+
+    The dashboard's "failed tasks" callout reads ``ListTasks``. Before the fix
+    the listing attached only the current attempt, so a task that failed and was
+    then retried (current attempt running) showed no failure at all. The listing
+    now also attaches the *most recent* failed attempt — only the latest, so a
+    task stuck in a long retry loop doesn't ship thousands of rows — and carries
+    the authoritative ``failure_count`` for the count badge.
+    """
+    request = make_job_request("list-tasks-failed-history")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-failed-history")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-failed-history")
+    _register_worker(state, worker_id)
+    # Attempt 0 fails; a second failure (attempt 1) follows; the task is then
+    # retried into a running attempt 2. Only the latest failure should surface.
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_FAILED, error="boom: first")
+
+    now = Timestamp.now()
+    with state._db.transaction() as cur:
+        cur.execute(
+            task_attempts_table.insert().values(
+                task_id=task_id,
+                attempt_id=1,
+                worker_id=worker_id,
+                state=job_pb2.TASK_STATE_FAILED,
+                created_at_ms=now,
+                started_at_ms=now,
+                finished_at_ms=now,
+                error="boom: second",
+                attempt_uid="b" * 16,
+            )
+        )
+        cur.execute(
+            task_attempts_table.insert().values(
+                task_id=task_id,
+                attempt_id=2,
+                worker_id=worker_id,
+                state=job_pb2.TASK_STATE_RUNNING,
+                created_at_ms=now,
+                started_at_ms=now,
+                attempt_uid="c" * 16,
+            )
+        )
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.task_id == task_id)
+            .values(
+                state=job_pb2.TASK_STATE_RUNNING,
+                current_attempt_id=2,
+                failure_count=2,
+                error=None,
+                exit_code=None,
+            )
+        )
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    proto = response.tasks[0]
+    # The task reads as running, but its latest failure is still surfaced.
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    assert proto.current_attempt_id == 2
+    assert proto.failure_count == 2
+    by_id = {a.attempt_id: a for a in proto.attempts}
+    # Only the latest failed attempt (1) plus the current attempt (2): the older
+    # failure (0) is dropped so a long retry loop stays bounded.
+    assert set(by_id) == {1, 2}
+    assert by_id[1].state == job_pb2.TASK_STATE_FAILED
+    assert by_id[1].error == "boom: second"
+    assert by_id[2].state == job_pb2.TASK_STATE_RUNNING
+    # Current attempt stays last so _current_attempt() resolves correctly.
+    assert proto.attempts[-1].attempt_id == proto.current_attempt_id

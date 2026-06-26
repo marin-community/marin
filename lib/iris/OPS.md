@@ -125,6 +125,25 @@ iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.lo
 iris task exec /user/job/0 -- cat /tmp/out.log   # check later
 ```
 
+### Kicking a wedged task (emergency override)
+
+When a scheduling bug or stuck node strands a task on a machine, force its
+current attempt terminal without touching the rest of the job:
+
+```bash
+iris job kick /user/job/0                       # preempt task 0 (reschedules if budget remains)
+iris job kick /user/job/0 --state failed        # fail task 0 with no retry
+iris job kick /user/job/0:3                      # only if attempt 3 is still current (guards against a race)
+iris job kick /user/job --reason "stuck node"   # kick every active task in the job
+```
+
+The kick is queued on the controller and applied on the next control tick
+through the same finalization path the scheduler's preemptions use, so it shares
+one write transaction with the scheduler instead of racing it. Only tasks
+running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
+already-terminal tasks are rejected with a reason. `preempted` charges the
+preemption budget; `failed` is terminal with no retry.
+
 ## Process Inspection & Profiling
 
 ```bash

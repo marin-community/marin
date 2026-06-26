@@ -17,7 +17,6 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
-import fsspec
 import haliax as hax
 import jax
 import jmp
@@ -37,6 +36,7 @@ from levanter.models.loss import next_token_loss
 from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
+from rigging.filesystem import open_url
 
 from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
@@ -153,7 +153,7 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             )
 
             output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
-            cm = fsspec.open(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
+            cm = open_url(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
             with cm as f:
                 for batch in loader:
                     with hax.axis_mapping(compute_axis_mapping):
