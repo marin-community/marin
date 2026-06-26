@@ -71,7 +71,7 @@ from iris.cluster.controller.scheduling.policy import (
 from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
-from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
@@ -360,7 +360,7 @@ class Controller:
         # Administrative task terminal-state overrides queued off the control loop
         # (the KickTasks RPC) and finalized in the next tick's write transaction;
         # see request_task_kicks / _drain_pending_kicks.
-        self._pending_kicks: list[TerminalDecision] = []
+        self._pending_kicks: list[PendingKick] = []
         self._pending_kicks_lock = threading.Lock()
         self._server: uvicorn.Server | None = None
         self._control_thread: ManagedThread | None = None
@@ -427,18 +427,19 @@ class Controller:
             self._pending_evictions.update(worker_ids)
         self.wake()
 
-    def request_task_kicks(self, decisions: Sequence[TerminalDecision]) -> None:
+    def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
         """Queue task terminal-state overrides to apply on the next control tick.
 
         Called off the control-loop thread by the KickTasks RPC. Queuing the
-        decisions (rather than writing them directly) keeps them inside the
-        control tick's single write transaction, so a manual kick cannot race the
-        scheduler's view of task state.
+        kicks (rather than writing them directly) keeps them inside the control
+        tick's single write transaction, so a manual kick cannot race the
+        scheduler's view of task state; each kick's targeted attempt is re-checked
+        against the current attempt when the tick applies it.
         """
-        if not decisions:
+        if not kicks:
             return
         with self._pending_kicks_lock:
-            self._pending_kicks.extend(decisions)
+            self._pending_kicks.extend(kicks)
         self.wake()
 
     def _seed_liveness_from_workers(self) -> None:
@@ -701,7 +702,7 @@ class Controller:
             return
 
         self._drain_pending_evictions()
-        kick_decisions = self._drain_pending_kicks()
+        pending_kicks = self._drain_pending_kicks()
 
         run_autoscale = autoscale_limiter.should_run()
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
@@ -749,7 +750,7 @@ class Controller:
             sched_result=sched_result,
             recon_result=recon_result,
             timeout_decisions=timeout_decisions,
-            kick_decisions=kick_decisions,
+            pending_kicks=pending_kicks,
             auto_result=auto_result,
             now=now,
         )
@@ -757,7 +758,7 @@ class Controller:
         # A kick finalizes its victims' current attempts; force the next reconcile
         # so the worker is told to stop them promptly instead of waiting a full
         # reconcile interval (mirrors the fresh-assignment dispatch follow-up).
-        if kick_decisions:
+        if pending_kicks:
             self._force_reconcile = True
             self._tick_wake.set()
 
@@ -844,7 +845,7 @@ class Controller:
         sched_result: ScheduleResult | None,
         recon_result: ReconcileResult | None,
         timeout_decisions: list[TerminalDecision],
-        kick_decisions: list[TerminalDecision],
+        pending_kicks: list[PendingKick],
         auto_result: AutoscaleResult | None,
         now: Timestamp,
     ) -> ControllerEffects | None:
@@ -861,7 +862,7 @@ class Controller:
         )
         has_recon = recon_result is not None and bool(recon_result.worker_results or recon_result.updates)
         has_state = auto_result is not None and auto_result.autoscaler_state is not None
-        if not (has_sched or has_recon or timeout_decisions or kick_decisions or has_state):
+        if not (has_sched or has_recon or timeout_decisions or pending_kicks or has_state):
             return None
 
         reconcile_effects: ControllerEffects | None = None
@@ -877,9 +878,13 @@ class Controller:
                     apply_dispatch_updates(cur, recon_result.updates, endpoints=self._endpoints, now=now)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
-            if kick_decisions:
-                finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
-                logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
+            if pending_kicks:
+                # Resolve after the schedule/reconcile writes above so the attempt
+                # re-check sees this tick's reassignments and observations.
+                kick_decisions = self._resolve_pending_kicks(cur, pending_kicks)
+                if kick_decisions:
+                    finalize(cur, kick_decisions, endpoints=self._endpoints, now=now)
+                    logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             if has_state:
                 assert auto_result is not None and auto_result.autoscaler_state is not None
                 persist_autoscaler_state(cur, auto_result.autoscaler_state)
@@ -1224,14 +1229,37 @@ class Controller:
         snapshot = reads.ControlSnapshot(worker_addresses=addresses, reconcile_rows=[], timeout_rows=[])
         self._fail_and_teardown(drained, snapshot, reason="address reused by newly-registered worker (recycled IP)")
 
-    def _drain_pending_kicks(self) -> list[TerminalDecision]:
-        """Take the queued administrative kick decisions for this tick's commit."""
+    def _drain_pending_kicks(self) -> list[PendingKick]:
+        """Take the queued administrative kicks for this tick's commit."""
         with self._pending_kicks_lock:
             if not self._pending_kicks:
                 return []
             drained = self._pending_kicks
             self._pending_kicks = []
         return drained
+
+    def _resolve_pending_kicks(self, cur: Tx, pending_kicks: list[PendingKick]) -> list[TerminalDecision]:
+        """Turn queued kicks into terminal decisions, dropping superseded attempts.
+
+        A kick that named a specific attempt (``:attempt``) is dropped when that
+        attempt is no longer current — the task may have retried into a new
+        attempt between the RPC and now — so the qualifier guards against kicking
+        the wrong attempt. A kick with no attempt id targets whatever attempt is
+        current. Reads ``cur`` so the check sees this tick's earlier writes.
+        """
+        decisions: list[TerminalDecision] = []
+        for kick in pending_kicks:
+            if kick.attempt_id is not None:
+                detail = reads.get_task_detail(cur, kick.task_id)
+                if detail is None or detail.current_attempt_id != kick.attempt_id:
+                    logger.info(
+                        "Dropping kick for %s: attempt %d is no longer current",
+                        kick.task_id.to_wire(),
+                        kick.attempt_id,
+                    )
+                    continue
+            decisions.append(TerminalDecision(kind=kick.kind, task_id=kick.task_id, reason=kick.reason))
+        return decisions
 
     def _worker_status_map_from_tx(self, tx: Tx) -> WorkerStatusMap:
         """Per-worker idle/running status for the autoscale phase, read from ``tx``.

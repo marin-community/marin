@@ -18,7 +18,8 @@ from connectrpc.errors import ConnectError
 from iris.cluster.controller import ops
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.reconcile.task import TerminalKind
+from iris.cluster.controller.service import PendingKick
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -91,7 +92,7 @@ def test_kick_is_buffered_until_next_tick(make_controller):
     state, task_id = _running_task_on_controller(ctrl)
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
-    ctrl.request_task_kicks([TerminalDecision(kind=TerminalKind.PREEMPT, task_id=task_id, reason="emergency")])
+    ctrl.request_task_kicks([PendingKick(task_id=task_id, attempt_id=None, kind=TerminalKind.PREEMPT, reason="x")])
     # Queued, not applied: the task stays RUNNING until a control tick drains the buffer.
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
@@ -105,7 +106,7 @@ def test_kick_preempt_with_budget_requeues_for_retry(make_controller):
     request.max_retries_preemption = 3
     state, task_id = _running_task_on_controller(ctrl, request)
 
-    ctrl.request_task_kicks([TerminalDecision(kind=TerminalKind.PREEMPT, task_id=task_id, reason="emergency")])
+    ctrl.request_task_kicks([PendingKick(task_id=task_id, attempt_id=None, kind=TerminalKind.PREEMPT, reason="x")])
     reconcile_once(ctrl)
 
     task = query_task(state, task_id)
@@ -119,10 +120,31 @@ def test_kick_failed_finalizes_without_retry(make_controller):
     ctrl = make_controller(remote_state_dir="file:///tmp/iris-kick-failed")
     state, task_id = _running_task_on_controller(ctrl)
 
-    ctrl.request_task_kicks([TerminalDecision(kind=TerminalKind.TIMEOUT, task_id=task_id, reason="wedged")])
+    ctrl.request_task_kicks([PendingKick(task_id=task_id, attempt_id=None, kind=TerminalKind.TIMEOUT, reason="x")])
     reconcile_once(ctrl)
 
     assert query_task(state, task_id).state == job_pb2.TASK_STATE_FAILED
+
+
+def test_kick_targeting_superseded_attempt_is_dropped(make_controller):
+    """A kick naming a specific attempt is dropped once that attempt is no longer
+    current, so it cannot land on a retry that started after the RPC."""
+    ctrl = make_controller(remote_state_dir="file:///tmp/iris-kick-superseded")
+    state, task_id = _running_task_on_controller(ctrl)
+    current = query_task(state, task_id).current_attempt_id
+
+    ctrl.request_task_kicks(
+        [PendingKick(task_id=task_id, attempt_id=current + 1, kind=TerminalKind.PREEMPT, reason="stale")]
+    )
+    reconcile_once(ctrl)
+
+    # The targeted attempt was never current, so the task is untouched.
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Targeting the actual current attempt does take effect.
+    ctrl.request_task_kicks([PendingKick(task_id=task_id, attempt_id=current, kind=TerminalKind.PREEMPT, reason="x")])
+    reconcile_once(ctrl)
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_PREEMPTED
 
 
 # =============================================================================
