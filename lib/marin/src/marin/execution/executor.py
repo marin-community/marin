@@ -585,6 +585,24 @@ def asdict_without_description(obj: Any) -> dict[str, Any]:
     return d
 
 
+def _resolved_output_path(output_path: str) -> str:
+    """Absolutize a fully-resolved local executor output path.
+
+    Executor output paths are already resolved against the executor's ``prefix``
+    (``executor.py``'s ``compute_version``). When that prefix is relative
+    (e.g. ``--prefix ../marin-prefix``), the resolved path stays relative.
+    Passing such a path straight into ``StepSpec(override_output_path=...)``
+    would make :pyattr:`StepSpec.output_path` re-interpret it as
+    prefix-relative and prepend ``marin_prefix()`` a second time, splitting the
+    step's status/lock/dependency paths from where its ``fn`` actually writes
+    data. Absolutizing here (URLs and already-absolute paths pass through) keeps
+    every path for one logical step pointing at the same directory.
+    """
+    if _is_relative_path(output_path):
+        return os.path.abspath(output_path)
+    return output_path
+
+
 def resolve_executor_step(
     step: "ExecutorStep",
     config: Any,
@@ -656,7 +674,7 @@ def resolve_executor_step(
     return StepSpec(
         name=step.name,
         deps=deps or [],
-        override_output_path=output_path,
+        override_output_path=_resolved_output_path(output_path),
         fn=final_fn,
         resources=step.resources,
     )
@@ -1176,7 +1194,7 @@ class Executor:
         dag_tpu_regions_by_step = _step_dag_tpu_regions(steps, self.dependencies)
         dep_stubs_by_step = {
             step: [
-                StepSpec(name=dep.name, override_output_path=self.output_paths[dep])
+                StepSpec(name=dep.name, override_output_path=_resolved_output_path(self.output_paths[dep]))
                 for dep in self.dependencies[step]
                 if dep in self.output_paths
             ]

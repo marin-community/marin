@@ -140,6 +140,42 @@ def test_executor():
     cleanup_log(log)
 
 
+def test_relative_prefix_resolves_to_single_directory(tmp_path):
+    """Regression for #6334.
+
+    With a relative executor ``prefix`` (e.g. ``--prefix ../marin-prefix``) the
+    resolved output path stays relative. The ``ExecutorStep``->``StepSpec``
+    bridge must hand a final, non-relative path to ``StepSpec`` so that
+    ``StepSpec.output_path`` does not re-prefix it against ``marin_prefix()``,
+    which would split a step's status/lock/dependency paths from where its
+    ``fn`` actually writes data.
+    """
+    rel_prefix = os.path.relpath(str(tmp_path / "work"))
+
+    def fn(config: MyConfig | None):
+        return None
+
+    a = ExecutorStep(name="a", fn=fn, config=None)
+    b = ExecutorStep(
+        name="b",
+        fn=fn,
+        config=MyConfig(input_path=output_path_of(a, "sub"), output_path=this_output_path(), n=1, m=2),
+    )
+
+    executor = create_executor(rel_prefix)
+    executor.compute_version(b, is_pseudo_dep=False)
+    specs = {spec.name: spec for spec in executor._resolve_steps([a, b])}
+
+    for step in (a, b):
+        spec = specs[step.name]
+        # Status/lock/info path (StepSpec.output_path) must be the resolved path
+        # where fn writes data, not a second-prefixed variant.
+        assert spec.output_path == os.path.abspath(executor.output_paths[step])
+
+    # The dependency stub (b -> a) must resolve to a's real directory.
+    assert specs["b"].dep_paths[0] == os.path.abspath(executor.output_paths[a])
+
+
 def test_status_file_reads_legacy_format(tmp_path):
     output_dir = tmp_path / "step"
     output_dir.mkdir()
