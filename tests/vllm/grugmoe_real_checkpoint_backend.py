@@ -274,7 +274,6 @@ def _legacy_split_expert_inference_state_dict(model: Any, cfg: Any, prefix: str 
     from experiments.grug.moe.model import (  # noqa: PLC0415
         _linear_inference_tensor,
         _with_state_dict_prefix,
-        canonical_grugmoe_tensor_names,
     )
 
     tensors: dict[str, Any] = {
@@ -319,8 +318,6 @@ def _legacy_split_expert_inference_state_dict(model: Any, cfg: Any, prefix: str 
                     f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
                 }
             )
-    if set(tensors) != canonical_grugmoe_tensor_names(cfg):
-        raise ValueError("Legacy GrugMoE export tensor names do not match the canonical schema")
     return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
 

@@ -769,50 +769,6 @@ def _linear_inference_tensor(value: jax.Array) -> jax.Array:
     return jnp.swapaxes(value, -1, -2)
 
 
-def canonical_grugmoe_tensor_names(cfg: GrugModelConfig) -> frozenset[str]:
-    names = {
-        "model.embed_tokens.weight",
-        "model.embed_norm.weight",
-        "model.embed_gated_norm.down_proj.weight",
-        "model.embed_gated_norm.up_proj.weight",
-        "model.norm.weight",
-        "model.final_gated_norm.down_proj.weight",
-        "model.final_gated_norm.up_proj.weight",
-        "lm_head.weight",
-    }
-    for layer_index in range(cfg.num_layers):
-        prefix = f"model.layers.{layer_index}"
-        names.update(
-            {
-                f"{prefix}.input_layernorm.weight",
-                f"{prefix}.attn_gated_norm.down_proj.weight",
-                f"{prefix}.attn_gated_norm.up_proj.weight",
-                f"{prefix}.self_attn.q_proj.weight",
-                f"{prefix}.self_attn.k_proj.weight",
-                f"{prefix}.self_attn.v_proj.weight",
-                f"{prefix}.self_attn.o_proj.weight",
-                f"{prefix}.self_attn.attn_gate.weight",
-                f"{prefix}.post_attention_layernorm.weight",
-                f"{prefix}.mlp_gated_norm.down_proj.weight",
-                f"{prefix}.mlp_gated_norm.up_proj.weight",
-                f"{prefix}.mlp.router.weight",
-                f"{prefix}.mlp.router.bias",
-                f"{prefix}.mlp.experts.gate_proj.weight",
-                f"{prefix}.mlp.experts.up_proj.weight",
-                f"{prefix}.mlp.experts.down_proj.weight",
-            }
-        )
-        if cfg.shared_expert_intermediate_dim > 0:
-            names.update(
-                {
-                    f"{prefix}.shared_expert.gate_proj.weight",
-                    f"{prefix}.shared_expert.up_proj.weight",
-                    f"{prefix}.shared_expert.down_proj.weight",
-                }
-            )
-    return frozenset(names)
-
-
 def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) -> dict[str, jax.Array]:
     tensors: dict[str, jax.Array] = {
         "model.embed_tokens.weight": model.token_embed,
@@ -859,9 +815,6 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 }
             )
 
-    if set(tensors) != canonical_grugmoe_tensor_names(model.config):
-        raise ValueError("GrugMoE inference state dict tensor names do not match the canonical schema")
-
     return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
 
@@ -880,7 +833,6 @@ __all__ = [
     "MoeActivation",
     "RMSNorm",
     "Transformer",
-    "canonical_grugmoe_tensor_names",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",
 ]
