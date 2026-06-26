@@ -47,11 +47,8 @@ _EQUIVALENT_TOKENIZERS = frozenset(
 
 
 def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
-    """A Levanter mixture component wrapping a resolved dataset source.
-
-    The single place the ``DatasetComponent`` fields are forwarded from a source, so the
-    executor and lazy mixture builders cannot drift in how they assemble a component.
-    """
+    """Wrap a resolved dataset source as a Levanter mixture component, carrying its
+    cache dir, format, and tags."""
     return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
 
 
