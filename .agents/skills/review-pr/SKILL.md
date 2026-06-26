@@ -24,7 +24,23 @@ Follow these steps precisely:
    - The root CLAUDE.md and AGENTS.md files, if they exist
    - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
-3. Launch a sonnet agent to view the PR and return a summary of the changes.
+3. Launch a sonnet agent to view the PR and return a summary of the changes. The
+   same agent also checks the PR *description* against the PR-body rules in
+   `.agents/skills/commit/SKILL.md` §8 and returns any problems it finds:
+
+   - a "Testing" / "Validation" / "Test plan" section, or "how I verified it" narration;
+   - a templated What/Change/Scope/Testing heading scaffold, or empty boilerplate
+     headings (a `## Summary` that restates the title, a `## Changes` that just
+     lists the touched files) — markdown is fine when it makes the change clearer,
+     the problem is structure that carries no information a reviewer needs;
+   - checkboxes, emoji, self-credit ("written by …" / "Created by Claude"), or a
+     filler opener ("This PR…", "Summary of changes:");
+   - a body that buries what-the-change-does under boilerplate instead of leading
+     with it.
+
+   A terse, plain body for a small change is correct — do not flag mere brevity or
+   the absence of markdown. Flag only descriptions that read like a filled-in form
+   rather than a commit message.
 
 4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
 
@@ -84,12 +100,20 @@ Follow these steps precisely:
 8. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.
    - If no issues were found, state: "No issues found. Checked for bugs and CLAUDE.md compliance."
+   - Separately, report any PR-description problems from step 3.
 
    If `--comment` argument was NOT provided, stop here. Do not post any GitHub comments.
 
-   If `--comment` argument IS provided and NO issues were found, post a summary comment using `gh pr comment` and stop.
+   If `--comment` IS provided and step 3 found PR-description problems, post **one**
+   top-level comment with `gh pr comment` (prefixed `🤖`, not inline) naming the
+   specific problems and the concrete fix (e.g. "drop the Testing section; lead
+   with what changed and why"). This is independent of the code review — post it
+   whether or not code issues were found, but skip it when the description is fine.
 
-   If `--comment` argument IS provided and issues were found, continue to step 9.
+   If `--comment` argument IS provided and NO code issues were found, post the
+   no-issues summary comment using `gh pr comment` and stop.
+
+   If `--comment` argument IS provided and code issues were found, continue to step 9.
 
 9. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
 
