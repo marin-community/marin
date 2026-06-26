@@ -165,6 +165,12 @@ def train_lm(
     if (tokens is None) == (num_train_steps is None):
         raise ValueError("Specify exactly one of `tokens` or `num_train_steps`.")
 
+    # Export intervals feed Levanter's `step % every`; a non-positive value would fire
+    # on every step. None is the explicit way to disable an export.
+    for label, interval in (("export_every", export_every), ("hf_export_every", hf_export_every)):
+        if interval is not None and interval <= 0:
+            raise ValueError(f"`{label}` must be a positive step interval; pass None to disable. Got {interval}.")
+
     steps = (
         num_train_steps if num_train_steps is not None else _steps_for_tokens(tokens, train_batch_size, train_seq_len)
     )
