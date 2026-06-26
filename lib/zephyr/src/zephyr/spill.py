@@ -91,7 +91,7 @@ class SpillWriter:
         # which it resolves via its native S3 client) so the filesystem's
         # configured options apply — notably R2's ``fixed_upload_size`` from
         # ``FSSPEC_S3``, which keeps multipart parts uniformly sized.
-        self._fs_file = fsspec.open(path, "wb")
+        self._fs_file = open_url(path, "wb")
         file_handle = self._fs_file.open()
         self._writer = pq.ParquetWriter(
             file_handle, _SCHEMA, compression=compression, compression_level=compression_level
