@@ -4,16 +4,18 @@
 """Local Grug MoE backend dispatch."""
 
 from collections.abc import Callable
+from functools import partial
 
 import jax
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
-from levanter.grug._moe.scatter import _moe_mlp_local_scatter
+from levanter.grug._moe.scatter import _fp8_current_ragged_dot, _moe_mlp_local_scatter
 from levanter.grug._moe.sonic import _moe_mlp_local_sonic
 
 _MOE_LOCAL_FNS = {
     "scatter": _moe_mlp_local_scatter,
+    "scatter_f8": partial(_moe_mlp_local_scatter, ragged_dot_fn=_fp8_current_ragged_dot),
     "sonic": _moe_mlp_local_sonic,
 }
 

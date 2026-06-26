@@ -25,6 +25,7 @@ MoeImplementation: TypeAlias = Literal[
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
+    "scatter_f8",  # scatter with all-E4M3 current-scaling f8 expert GEMMs (GFP8-035 validation).
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
@@ -33,6 +34,7 @@ _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
+    "scatter_f8",
     "sonic",
 )
 
