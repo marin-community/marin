@@ -10,8 +10,15 @@ from pathlib import Path
 
 import fsspec
 
+import pytest
+
 import levanter.model_cache as model_cache
-from levanter.model_cache import DEFAULT_COMPLETE_MARKER, cache_hf_model, cache_to_prefix
+from levanter.model_cache import (
+    DEFAULT_COMPLETE_MARKER,
+    cache_hf_model,
+    cache_to_prefix,
+    resolve_cached_model_path,
+)
 
 
 def _make_populate(call_count: list[int], lock: threading.Lock, *, delay: float = 0.0):
@@ -111,3 +118,48 @@ def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
     for filename in repo_files:
         assert Path(cache_path, filename).read_text() == f"contents of {filename}"
     assert Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "gs://bucket/snapshot",  # object store
+        "s3://bucket/snapshot",  # object store
+        "hf://org/model",  # explicit fsspec HF URL
+        "/local/checkpoint/dir",  # absolute local path
+        "./relative/dir",  # relative local path
+    ],
+)
+def test_resolve_loads_non_repo_paths_in_place(path, monkeypatch):
+    """A path that already names a snapshot is returned unchanged, never mirrored.
+
+    Mirroring it would feed the path to ``cache_hf_model`` as if it were a repo id and fail.
+    """
+    monkeypatch.setattr(model_cache, "cache_hf_model", lambda *a, **k: pytest.fail("must not mirror"))
+    assert resolve_cached_model_path(path, cache_ttl_days=30, cache_prefix="models") == path
+
+
+def test_resolve_disabled_ttl_skips_mirror(monkeypatch):
+    monkeypatch.setattr(model_cache, "cache_hf_model", lambda *a, **k: pytest.fail("must not mirror"))
+    assert resolve_cached_model_path("org/model", cache_ttl_days=0, cache_prefix="models") == "org/model"
+
+
+def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
+    """Two refs that a lossy slug would collide (``org/model_a`` vs ``org/model@a``) must mirror
+    to different cache dirs, so a hit on one never loads the other's snapshot."""
+    mirrored: dict[str, tuple[str, str | None]] = {}
+
+    monkeypatch.setattr(model_cache, "marin_temp_bucket", lambda ttl_days, prefix: f"gs://temp/{prefix}")
+
+    def fake_cache(cache_path, repo, *, revision=None, complete_marker):
+        mirrored[cache_path] = (repo, revision)
+        return cache_path
+
+    monkeypatch.setattr(model_cache, "cache_hf_model", fake_cache)
+
+    a = resolve_cached_model_path("org/model_a", cache_ttl_days=7, cache_prefix="models")
+    b = resolve_cached_model_path("org/model@a", cache_ttl_days=7, cache_prefix="models")
+
+    assert a != b
+    assert mirrored[a] == ("org/model_a", None)
+    assert mirrored[b] == ("org/model", "a")

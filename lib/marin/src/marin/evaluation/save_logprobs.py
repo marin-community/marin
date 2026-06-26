@@ -30,7 +30,7 @@ from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
 from levanter.data import DataLoader
 from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
-from levanter.model_loading import load_lm_model_from_checkpoint
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
@@ -127,16 +127,22 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             TopK = top_k_values.resolve_axis("top_k")
             return top_k_values.rearrange((EvalBatch, Pos, TopK)), top_k_indices.rearrange((EvalBatch, Pos, TopK))
 
-        model = load_lm_model_from_checkpoint(
-            config.model,
-            config.checkpoint_path,
-            is_hf=config.checkpoint_is_hf,
-            Vocab=Vocab,
-            axis_mapping=parameter_axis_mapping,
-            tokenizer=tokenizer,
-            compute_dtype=mp.compute_dtype,
-            key=key,
-        )
+        if config.checkpoint_is_hf:
+            model = load_hf_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=mp.compute_dtype,
+            )
+        else:
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
+            )
 
         for name, dataset in validation_sets.items():
             loader = DataLoader(

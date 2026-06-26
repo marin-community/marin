@@ -21,8 +21,10 @@ takes an arbitrary populate callback for callers that need a custom source.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -31,6 +33,7 @@ from collections.abc import Callable, Generator
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files
 from rigging.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
+from rigging.filesystem import marin_temp_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,58 @@ def cache_hf_model(
         complete_marker=complete_marker,
         poll_interval=poll_interval,
     )
+
+
+def resolve_cached_model_path(
+    model: str,
+    *,
+    cache_ttl_days: int,
+    cache_prefix: str,
+    complete_marker: str = DEFAULT_COMPLETE_MARKER,
+) -> str:
+    """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
+
+    A bare HuggingFace repo id (optionally ``org/model@revision``) is mirrored once to a
+    region-local TTL bucket under a distributed lock and the cache path is returned, so later
+    loads of the same model read the snapshot from nearby storage instead of re-downloading
+    from HuggingFace. Object-store and local paths already name a loadable snapshot and are
+    returned unchanged, as is *model* when ``cache_ttl_days`` is non-positive (mirroring
+    disabled).
+
+    Args:
+        model: HuggingFace repo id (``org/model`` or ``org/model@revision``), or an
+            object-store / local path holding a snapshot.
+        cache_ttl_days: TTL in days for the region-local mirror; ``<= 0`` disables mirroring.
+        cache_prefix: Sub-path under the TTL bucket the mirror is written to.
+        complete_marker: Filename written last to mark the cache complete.
+
+    Returns:
+        A path the caller can load *model* from.
+    """
+    # Deferred so importing levanter (which eagerly imports this module) does not pull
+    # transformers via hf_checkpoints onto CPU-only workers (see levanter/__init__.py).
+    from levanter.compat.hf_checkpoints import _is_hf_model_id  # noqa: PLC0415  # optional dep: transformers
+
+    repo, _, revision = model.partition("@")
+    if cache_ttl_days <= 0 or not _is_hf_model_id(repo):
+        return model
+
+    cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(model)}")
+    return cache_hf_model(cache_path, repo, revision=revision or None, complete_marker=complete_marker)
+
+
+def _cache_slug(model: str) -> str:
+    """Collision-resistant, filesystem-safe cache slug for a model ref.
+
+    The sanitized prefix keeps the cache dir readable when browsing the bucket; the appended
+    digest of the full ref keeps distinct refs in distinct dirs even when sanitizing alone
+    would collide them (e.g. ``org/model_a`` and ``org/model@a`` both sanitize to
+    ``org_model_a``).
+    """
+    ref = model.strip("/")
+    readable = re.sub(r"[^A-Za-z0-9._-]+", "_", ref)
+    digest = hashlib.sha256(ref.encode()).hexdigest()[:16]
+    return f"{readable}-{digest}"
 
 
 def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None) -> None:
