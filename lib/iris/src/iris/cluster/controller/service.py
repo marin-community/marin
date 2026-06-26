@@ -51,7 +51,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
     worker_metadata_to_proto,
 )
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -1673,11 +1673,9 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.KickTasksResponse:
         """Force task attempts into a terminal state out-of-band (emergency override).
 
-        Each target is validated against the current snapshot and, when accepted,
-        queued on the controller. The next control tick finalizes the queued
-        decisions in its write transaction through the same path the scheduler's
-        preemptions and execution timeouts use, so a kick never races the
-        scheduling loop.
+        Validates each target against the current snapshot and queues the accepted
+        ones on the controller for the next control tick to apply. Returns one
+        ``KickResult`` per resolved task reporting whether it was queued.
         """
         kind = _KICK_KIND_BY_STATE.get(request.desired_state)
         if kind is None:
@@ -1699,7 +1697,7 @@ class ControllerServiceImpl:
 
     def _resolve_kick_target(
         self,
-        tx: Any,
+        tx: Tx,
         target: str,
         kind: TerminalKind,
         reason: str,

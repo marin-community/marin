@@ -428,13 +428,12 @@ class Controller:
         self.wake()
 
     def request_task_kicks(self, decisions: Sequence[TerminalDecision]) -> None:
-        """Queue administrative task terminal-state overrides for the next tick.
+        """Queue task terminal-state overrides to apply on the next control tick.
 
-        Called off the control-loop thread (the KickTasks RPC). The decisions are
-        drained in ``_control_tick`` and applied through the same ``finalize``
-        path the scheduler's preemptions and execution timeouts use, inside the
-        tick's single write transaction — so a manual kick never races the
-        scheduling loop's view of task state.
+        Called off the control-loop thread by the KickTasks RPC. Queuing the
+        decisions (rather than writing them directly) keeps them inside the
+        control tick's single write transaction, so a manual kick cannot race the
+        scheduler's view of task state.
         """
         if not decisions:
             return
