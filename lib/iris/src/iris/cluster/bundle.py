@@ -21,7 +21,7 @@ from collections import OrderedDict
 from pathlib import Path
 from urllib.request import urlopen
 
-from rigging.filesystem import url_to_fs
+import fsspec.core
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class BundleStore:
         self._max_cache_bytes = max_cache_bytes
         self._lock = threading.RLock()
 
-        self._fs, self._fs_path = url_to_fs(storage_dir)
+        self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
 
         # content id -> bytes, ordered by access (MRU at end).
