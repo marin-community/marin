@@ -26,7 +26,7 @@ import jax.numpy as jnp
 from haliax import Axis
 from haliax.partitioning import ResourceMapping
 
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
+from levanter.checkpoint import discover_latest_checkpoint, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.model_cache import resolve_cached_model_path
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -48,21 +48,24 @@ def load_levanter_checkpoint(
 ) -> LmHeadModel:
     """Load and shard an ``LmHeadModel`` from a local Levanter checkpoint.
 
-    Must be called under an active device mesh (e.g. ``trainer.use_device_mesh()``). The
-    latest checkpoint under *checkpoint* is discovered (an already-resolved ``step-N`` dir is
-    returned unchanged), loaded on CPU to keep peak device memory low, then sharded.
+    Must be called under an active device mesh (e.g. ``trainer.use_device_mesh()``). When
+    *checkpoint* is a run directory, the latest ``step-*`` checkpoint under it is loaded; when
+    it already names a concrete checkpoint dir it is loaded directly (so checkpoints without a
+    ``metadata.json`` discovery marker still load). The weights are loaded on CPU to keep peak
+    device memory low, then sharded.
 
     Args:
         model_config: Model configuration used to build the model template.
-        checkpoint: Path to a run directory holding ``step-*`` checkpoints, or a single
-            resolved checkpoint dir.
+        checkpoint: Path to a run directory holding ``step-*`` checkpoints, or a concrete
+            checkpoint dir.
         Vocab: Vocabulary axis used to build the model template.
         axis_mapping: Resource mapping the model is sharded with.
         key: PRNG key for building the model template.
     """
+    resolved = discover_latest_checkpoint(checkpoint) or checkpoint
     with use_cpu_device():
         model = eqx.filter_eval_shape(model_config.build, Vocab, key=key)
-        model = load_checkpoint(model, latest_checkpoint_path(checkpoint), subpath="model")
+        model = load_checkpoint(model, resolved, subpath="model")
     return hax.shard_with_axis_mapping(model, axis_mapping)
 
 
