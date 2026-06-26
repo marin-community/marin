@@ -24,15 +24,15 @@ are in `experiments/grug/moe/README.md` — compare against the table there.
 - `throughput/total_tokens` (final value)
 - `run.state` must be `finished` before pulling final metrics
 
-**Baseline scaling law** (L∞ pinned at 1.6):
+**Baseline scaling law** (May Recipe, drop-1e18 fit, L∞ pinned at 1.6):
 
 ```
-loss(C) = 1.6 + 95.18 · C^(-0.0941)
+loss(C) = 1.6 + 88.32 · C^(-0.0941)
 ```
 
 ### Gate 1: effective speedup at two small scales
 
-Run the variant at `d512` (2.19e17 FLOPs) and `d768` (1.70e18 FLOPs).
+Run the variant at `d512` (3.82e17 FLOPs) and `d768` (2.81e18 FLOPs).
 
 For each scale, compute the **effective speedup** at a fixed macro_loss target
 (use the baseline's final macro_loss at that scale as the target). The variant
@@ -40,15 +40,15 @@ passes gate 1 if it shows an effective speedup at **both** scales.
 
 ### Gate 2: scaling law projection
 
-Run the variant at the two larger scales: `d1024` (9.00e18) and `d1280`
-(2.83e19). Combine with the gate 1 results (d512, d768) for four total points.
+Run the variant at the two larger scales: `d1024` (1.16e19) and `d1280`
+(3.46e19). Combine with the gate 1 results (d512, d768) for four total points.
 
 The variant passes gate 2 if:
 1. It shows an effective speedup at **all four** scales.
 2. Fit a new scaling law `loss(C) = 1.6 + A · C^(-alpha)` (asymptote pinned
    at 1.6) on the variant's four optima. Project to 1e21 and 1e23 FLOPs.
    The variant's projected loss must be lower than the baseline's at both
-   budgets (baseline: 2.606 at 1e21, 2.252 at 1e23).
+   budgets (baseline: 2.534 at 1e21, 2.205 at 1e23).
 
 ### Effective speedup calculation
 
@@ -86,20 +86,20 @@ def effective_speedup(baseline_loss, baseline_tps, variant_loss, variant_tps, bu
 
 ### Example
 
-Suppose at d512 / 2.19e17 FLOPs:
-- **Baseline**: macro_loss = 3.81, tok/s = 405,000
-- **Variant**: macro_loss = 3.79, tok/s = 380,000 (better loss, 6% slower)
+Suppose at d512 / 3.82e17 FLOPs (May Recipe d=512 compute-optimal point):
+- **Baseline**: macro_loss = 3.5422, tok/s = 433,986 (v4-32 EP=1 reference run)
+- **Variant**: macro_loss = 3.52, tok/s = 410,000 (better loss, ~5% slower)
 
 ```python
 # 1. Fit A through baseline point
-A_bl = (3.81 - 1.6) * (2.19e17) ** 0.0941  # ≈ 94.7
+A_bl = (3.5422 - 1.6) * (3.82e17) ** 0.0941  # ≈ 87.7
 
-# 2. Compute baseline needs to reach 3.79
-C_needed = (94.7 / (3.79 - 1.6)) ** (1 / 0.0941)  # > 2.19e17
+# 2. Compute baseline needs to reach 3.52
+C_needed = (A_bl / (3.52 - 1.6)) ** (1 / 0.0941)  # > 3.82e17
 
 # 3. Wall-clock comparison
-baseline_time = C_needed / 405_000
-variant_time  = 2.19e17 / 380_000
+baseline_time = C_needed / 433_986
+variant_time  = 3.82e17 / 410_000
 speedup = baseline_time / variant_time
 ```
 
