@@ -435,6 +435,7 @@ class Checkpointer:
         delete_old_temp_checkpoints: bool = True,
         keep_last_temporary_checkpoints: int = 1,
         debug: CheckpointDebugConfig | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -472,6 +473,7 @@ class Checkpointer:
         self._last_save_step = 0
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
+        self.metadata = dict(metadata or {})
         self._temporary_checkpoints = []
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
@@ -709,6 +711,7 @@ class Checkpointer:
             commit_callback=commit_callback,
             is_temporary=is_temporary,
             debug=self.debug,
+            metadata=self.metadata,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -730,6 +733,7 @@ def save_checkpoint(
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -777,7 +781,7 @@ def save_checkpoint(
             progress_logger.set_phase("metadata_write")
         status = "completed"
         try:
-            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            _save_metadata(checkpoint_path, fs, step, is_temporary, metadata)
             logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
             if commit_callback is not None:
@@ -814,8 +818,12 @@ def save_checkpoint(
     return checkpoint_path
 
 
-def _save_metadata(checkpoint_path, fs, step, is_temporary):
+def _save_metadata(checkpoint_path, fs, step, is_temporary, extra_metadata=None):
     metadata = {"step": step, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": is_temporary}
+    if extra_metadata:
+        if any(key in extra_metadata for key in ("step", "timestamp", "is_temporary")):
+            raise ValueError("checkpoint metadata cannot override step, timestamp, or is_temporary")
+        metadata.update(extra_metadata)
     if jax.process_index() == 0:
         with fs.open(os.path.join(checkpoint_path, "metadata.json"), "w") as json_out:
             json.dump(metadata, json_out)
@@ -851,7 +859,7 @@ def load_checkpoint(
         the loaded checkpoint, with the same structure as the exemplar tree
 
     """
-    checkpoint_path = str(checkpoint_path)
+    checkpoint_path = _stage_mirror_to_local(str(checkpoint_path))
 
     if is_in_jit():
         logger.warning("Loading checkpoint in jit. This is not recommended and probably won't work.")
@@ -1073,7 +1081,39 @@ def latest_checkpoint_path(
     if latest is None:
         search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
         raise FileNotFoundError(f"Could not discover checkpoint under any of: {search_paths}")
-    return latest
+    return _stage_mirror_to_local(latest)
+
+
+def _stage_mirror_to_local(checkpoint_path: str) -> str:
+    """Materialize a ``mirror://`` checkpoint directory to the local marin prefix.
+
+    TensorStore's kvstore drivers speak only ``gs``/``s3``/``file``, so a
+    ``mirror://`` URL cannot be passed directly to checkpoint deserialization.
+    This walks the directory via the mirror fsspec protocol, triggers per-file
+    copies into ``${MARIN_PREFIX}/<rel>`` on cache miss, and returns the
+    concrete local URL.
+
+    No-ops on non-``mirror://`` inputs.
+    """
+    if not checkpoint_path.startswith("mirror://"):
+        return checkpoint_path
+
+    # Importing rigging.filesystem registers the "mirror" protocol with fsspec.
+    from rigging.filesystem import marin_prefix  # noqa: F401 — side-effectful import
+
+    rel = checkpoint_path.removeprefix("mirror://")
+    mfs = fsspec.filesystem("mirror")
+
+    files = mfs.find(rel)
+    if not files:
+        raise FileNotFoundError(f"No files found under {checkpoint_path}")
+
+    for file_rel in files:
+        mfs._resolve_path(file_rel)
+
+    local_url = f"{marin_prefix().rstrip('/')}/{rel}"
+    logger.info(f"Staged {checkpoint_path} ({len(files)} files) to {local_url}")
+    return local_url
 
 
 def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[CheckpointCandidate]:
@@ -1147,6 +1187,8 @@ class CheckpointerConfig:
     """Number of complete temporary checkpoints to retain after a successful temporary checkpoint commit."""
     debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
     """Checkpoint-path diagnostics. Disabled by default."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Extra JSON metadata to include in every checkpoint metadata file."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -1170,6 +1212,7 @@ class CheckpointerConfig:
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
             keep_last_temporary_checkpoints=self.keep_last_temporary_checkpoints,
             debug=self.debug,
+            metadata=self.metadata,
         )
 
     def __post_init__(self):
@@ -1180,6 +1223,8 @@ class CheckpointerConfig:
             self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
         if isinstance(self.debug, dict):
             self.debug = CheckpointDebugConfig(**self.debug)
+        if any(key in self.metadata for key in ("step", "timestamp", "is_temporary")):
+            raise ValueError("CheckpointerConfig.metadata cannot override step, timestamp, or is_temporary")
         if self.keep_last_temporary_checkpoints < 0:
             raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 

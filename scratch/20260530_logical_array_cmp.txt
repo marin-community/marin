@@ -1,0 +1,20 @@
+I0530 13:43:36.933437 11559039 google_auth_provider.cc:149] Using credentials at /Users/ahmed/.config/gcloud/application_default_credentials.json
+I0530 13:43:36.933542 11559039 google_auth_provider.cc:156] Using OAuth2 AuthProvider
+== 2e19 ==
+  raw keys: source=210 prefix=354
+  LOGICAL arrays: source=59 prefix=59
+  logical sets IDENTICAL: True
+  logical missing in prefix (source-prefix): []  count=0
+  logical extra in prefix (prefix-source):   []  count=0
+  raw-extra that are NOT chunk-data (concerning if any): [] count=0
+  prefix logical q_norm arrays=3 k_norm arrays=3 opt_state arrays=42
+    q_norm sample: ['model/transformer/layers/stacked/self_attn/q_norm/weight', 'opt_state/inner_state/inner_states/adam/inner_state/1/mu/transformer/layers/stacked/self_attn/q_norm/weight', 'opt_state/inner_state/inner_states/adam/inner_state/1/nu/transformer/layers/stacked/self_attn/q_norm/weight']
+== 3e19 ==
+  raw keys: source=210 prefix=354
+  LOGICAL arrays: source=59 prefix=59
+  logical sets IDENTICAL: True
+  logical missing in prefix (source-prefix): []  count=0
+  logical extra in prefix (prefix-source):   []  count=0
+  raw-extra that are NOT chunk-data (concerning if any): [] count=0
+  prefix logical q_norm arrays=3 k_norm arrays=3 opt_state arrays=42
+    q_norm sample: ['model/transformer/layers/stacked/self_attn/q_norm/weight', 'opt_state/inner_state/inner_states/adam/inner_state/1/mu/transformer/layers/stacked/self_attn/q_norm/weight', 'opt_state/inner_state/inner_states/adam/inner_state/1/nu/transformer/layers/stacked/self_attn/q_norm/weight']

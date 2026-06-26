@@ -1,0 +1,724 @@
+{
+  "auto_build_caches": false,
+  "block_cross_document_attention": true,
+  "cache_dir": null,
+  "cache_options": {
+    "batch_size": 128
+  },
+  "chat_template": null,
+  "components": {
+    "nemotron_cc/hq_actual": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/hq_actual-5af4cc",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/hq_actual-5af4cc",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=actual/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/hq_synth": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/hq_synth-3525e2",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/hq_synth-3525e2",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=high/kind=synthetic/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/low_actual": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/low_actual-cb3f2c",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/low_actual-cb3f2c",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=actual/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/low_synth": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/low_synth-3c57b3",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/low_synth-3c57b3",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=low/kind=synthetic/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/medium": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium-d86506",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium-d86506",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/medium_high": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium_high-d21701",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium_high-d21701",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-high/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc/medium_low": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium_low-0fdb07",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc/medium_low-0fdb07",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/nemotro-cc-eeb783/contrib/Nemotron/Nemotron-CC/data-jsonl/quality=medium-low/**/*.jsonl.*"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "nemotron_cc_math_v1/4plus": {
+      "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-2c5519",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-2c5519",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/normalized/nemotron_cc_math_v1/4plus_b05688a8/outputs/main/*.parquet"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/4chan": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/4chan-496ad5",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/4chan-496ad5",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/c4_100_domains": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/c4_100_domains-2b6db7",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/c4_100_domains-2b6db7",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/c4_en": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/c4_en-cf1f79",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/c4_en-cf1f79",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/dolma-v1_5": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma-v1_5-d3bed7",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma-v1_5-d3bed7",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/dolma_100_programing_languages": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma_100_programing_languages-369132",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma_100_programing_languages-369132",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/dolma_100_subreddits": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma_100_subreddits-f25f70",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/dolma_100_subreddits-f25f70",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/falcon-refinedweb": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/falcon-refinedweb-75d43b",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/falcon-refinedweb-75d43b",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/gab": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/gab-ccaced",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/gab-ccaced",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/m2d2_s2orc_unsplit": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/m2d2_wikipedia_unsplit": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/manosphere_meta_sep": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/manosphere_meta_sep-a07891",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/manosphere_meta_sep-a07891",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/mc4": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/mc4-ea36a2",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/mc4-ea36a2",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/ptb": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/ptb-628036",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/ptb-628036",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/redpajama": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/redpajama-9d4ddd",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/redpajama-9d4ddd",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/twitterAAE_HELM_fixed": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "paloma/wikitext_103": {
+      "cache_dir": "gs://marin-us-east5/tokenized/paloma/wikitext_103-1f5636",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/paloma/wikitext_103-1f5636",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "proofpile_2": {
+      "cache_dir": "gs://marin-us-east5/tokenized/proofpile_2-4a35c7/",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/proofpile_2-4a35c7/",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/proof-pile-2-f1b1d8/901a927/huggingface.co/datasets/EleutherAI/proof-pile-2/resolve/901a927"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "starcoderdata": {
+      "cache_dir": "gs://marin-us-east5/tokenized/starcoderdata-12f018/",
+      "format": {
+        "text_key": "content"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/starcoderdata-12f018/",
+        "format": {
+          "text_key": "content"
+        },
+        "tags": [],
+        "train_urls": [
+          "gs://marin-us-east5/raw/starcoderdata-720c8c"
+        ],
+        "validation_urls": []
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/ao3_english": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/ao3_english-bb5666",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/ao3_english-bb5666",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/ao3_english_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/arxiv_computer_science": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/arxiv_computer_science-2b4f07",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/arxiv_computer_science-2b4f07",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/arxiv_computer_science_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/arxiv_physics": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/arxiv_physics-f4ad8c",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/arxiv_physics-f4ad8c",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/arxiv_physics_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/bbc_news": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/bbc_news-4df59f",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/bbc_news-4df59f",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/bbc_news_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/github_cpp": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/github_cpp-a9de07",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/github_cpp-a9de07",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/github_cpp_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/github_python": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/github_python-baab41",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/github_python-baab41",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/github_python_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    },
+    "uncheatable_eval/wikipedia_english": {
+      "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/wikipedia_english-6330df",
+      "format": {
+        "text_key": "text"
+      },
+      "pack": null,
+      "source": {
+        "cache_dir": "gs://marin-us-east5/tokenized/uncheatable_eval/wikipedia_english-6330df",
+        "format": {
+          "text_key": "text"
+        },
+        "tags": [],
+        "train_urls": [],
+        "validation_urls": [
+          "gs://marin-us-east5/raw/uncheatable-eval/latest_43d8c7f4/wikipedia_english_*.jsonl.gz"
+        ]
+      },
+      "split": "validation",
+      "tags": []
+    }
+  },
+  "enforce_eos": true,
+  "experiment_budget": null,
+  "max_train_batches": null,
+  "mixture_block_size": 2048,
+  "num_validation_sequences": {
+    "nemotron_cc_math_v1/4plus": 12500
+  },
+  "permutation_type": "feistel",
+  "shuffle": {
+    "io_block_size": 256,
+    "perm_type": "feistel",
+    "window_blocks": 512
+  },
+  "shuffle_before_trainval_split": true,
+  "stop_strategy": "restart",
+  "target_budget": null,
+  "tokenizer": "meta-llama/Meta-Llama-3.1-8B",
+  "train_weights": {
+    "nemotron_cc/hq_actual": 0.041477330514631094,
+    "nemotron_cc/hq_synth": 0.12349984017667741,
+    "nemotron_cc/low_actual": 0.031838894458489524,
+    "nemotron_cc/low_synth": 0.02850076642547874,
+    "nemotron_cc/medium": 0.1534667131607241,
+    "nemotron_cc/medium_high": 0.03744542396768663,
+    "nemotron_cc/medium_low": 0.06992270362944235,
+    "nemotron_cc_math_v1/4plus": 0.5,
+    "paloma/4chan": 0.0,
+    "paloma/c4_100_domains": 0.0,
+    "paloma/c4_en": 0.0,
+    "paloma/dolma-v1_5": 0.0,
+    "paloma/dolma_100_programing_languages": 0.0,
+    "paloma/dolma_100_subreddits": 0.0,
+    "paloma/falcon-refinedweb": 0.0,
+    "paloma/gab": 0.0,
+    "paloma/m2d2_s2orc_unsplit": 0.0,
+    "paloma/m2d2_wikipedia_unsplit": 0.0,
+    "paloma/manosphere_meta_sep": 0.0,
+    "paloma/mc4": 0.0,
+    "paloma/ptb": 0.0,
+    "paloma/redpajama": 0.0,
+    "paloma/twitterAAE_HELM_fixed": 0.0,
+    "paloma/wikitext_103": 0.0,
+    "proofpile_2": 0.002497239415337227,
+    "starcoderdata": 0.011351088251532849,
+    "uncheatable_eval/ao3_english": 0.0,
+    "uncheatable_eval/arxiv_computer_science": 0.0,
+    "uncheatable_eval/arxiv_physics": 0.0,
+    "uncheatable_eval/bbc_news": 0.0,
+    "uncheatable_eval/github_cpp": 0.0,
+    "uncheatable_eval/github_python": 0.0,
+    "uncheatable_eval/wikipedia_english": 0.0
+  },
+  "vocab_size": null
+}

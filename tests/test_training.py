@@ -206,6 +206,48 @@ def test_pathlib_path_handling(trainer_config):
             doublecheck_paths(config)
 
 
+def test_executor_output_path_scopes_temporary_checkpoints():
+    """Executor-imputed run IDs must still isolate temporary checkpoints."""
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
+    ):
+        config = TrainLmOnPodConfig(
+            train_config=train_lm.TrainLmConfig(
+                data={},
+                trainer=TrainerConfig(checkpointer=CheckpointerConfig()),
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://marin-us-central1/checkpoints/my-run-abc123",
+        )
+
+        config = _update_config_to_use_out_path(config)
+        config = _enforce_run_id(config)
+
+    checkpointer = config.train_config.trainer.checkpointer
+    assert config.train_config.trainer.id == "my-run-abc123"
+    assert checkpointer.append_run_id_to_base_path is False
+    assert checkpointer.expanded_path("my-run-abc123") == "gs://marin-us-central1/checkpoints/my-run-abc123/checkpoints"
+    assert (
+        checkpointer.expanded_temporary_path("my-run-abc123") == "gs://marin-us-central1/tmp/ttl=14d/"
+        "checkpoints-temp/marin-us-central1/checkpoints/my-run-abc123/checkpoints"
+    )
+
+
+def test_enforce_run_id_rejects_executor_output_path_mismatch():
+    config = TrainLmOnPodConfig(
+        train_config=train_lm.TrainLmConfig(
+            data={},
+            trainer=TrainerConfig(id="wrong-run-id", checkpointer=CheckpointerConfig()),
+        ),
+        resources=ResourceConfig.with_tpu("v4-8"),
+        output_path="gs://marin-us-central1/checkpoints/right-run-id",
+    )
+
+    with pytest.raises(ValueError, match="does not match output path basename"):
+        _enforce_run_id(config)
+
+
 def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
     assert tokenized_cache_stats_path("/tmp/cache", "train") == "/tmp/cache/train/.stats.json"
     assert (

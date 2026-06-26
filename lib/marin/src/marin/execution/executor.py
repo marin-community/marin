@@ -100,6 +100,7 @@ from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
 from rigging.filesystem import (
+    MARIN_MIRROR_BUDGET_ENV,
     collect_gcs_paths,
     get_bucket_location,
     marin_prefix,
@@ -641,10 +642,11 @@ def resolve_executor_step(
     captured_budget = mirror_budget_gb
 
     def resolved_fn(output_path):
+        runtime_config = _with_mirror_budget_env(captured_config, captured_budget)
         if captured_budget is not None:
             with mirror_budget(captured_budget):
-                return captured_fn(captured_config)
-        return captured_fn(captured_config)
+                return captured_fn(runtime_config)
+        return captured_fn(runtime_config)
 
     # If the original fn was decorated with @remote, propagate the
     # RemoteCallable wrapper (with updated inner fn) so Fray dispatch
@@ -955,6 +957,20 @@ def _max_mirror_budget(config: Any) -> float | None:
 
     recurse(config)
     return max_budget
+
+
+def _with_mirror_budget_env(config: Any, mirror_budget_gb: float | None) -> Any:
+    """Propagate mirror transfer budgets into nested Iris/Fray job environments."""
+    if mirror_budget_gb is None or not is_dataclass(config):
+        return config
+
+    field_names = {field.name for field in fields(config)}
+    if "env_vars" not in field_names:
+        return config
+
+    env_vars = dict(config.env_vars or {})
+    env_vars.setdefault(MARIN_MIRROR_BUDGET_ENV, f"{mirror_budget_gb:g}")
+    return replace(config, env_vars=env_vars)
 
 
 def instantiate_config(config: Any, output_path: str | None, output_paths: dict[ExecutorStep, str], prefix: str) -> Any:

@@ -172,6 +172,7 @@ def _build_train_lm_config(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     adapter: AdaptorConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
@@ -186,6 +187,8 @@ def _build_train_lm_config(
 
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
+    if wandb_project is None:
+        wandb_project = os.environ.get("WANDB_PROJECT", "marin")
 
     name = truncate_wandb_run_name(name)
 
@@ -218,7 +221,7 @@ def _build_train_lm_config(
         data=pretraining_data,
         trainer=TrainerConfig(
             tracker=WandbConfig(
-                project="marin",
+                project=wandb_project or "marin",
                 name=wandb_name,
                 tags=[*tags],
                 group=wandb_group,
@@ -256,6 +259,7 @@ def _build_train_lm_config(
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
         ),
+        checkpoint_init_mode=train_config.checkpoint_init_mode,
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         pad_tokenizer_to_match_model=train_config.pad_tokenizer_to_match_model,
         z_loss_weight=train_config.z_loss_weight,
@@ -309,6 +313,7 @@ def default_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
     adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
@@ -325,6 +330,7 @@ def default_train(
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
         wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group to organize related runs (e.g., a sweep). If unset, defaults to $WANDB_GROUP.
+        wandb_project: Optional W&B project. If unset, defaults to $WANDB_PROJECT, then "marin".
     """
     name, inner_config = _build_train_lm_config(
         name,
@@ -336,6 +342,7 @@ def default_train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        wandb_project=wandb_project,
         adapter=adapter,
     )
 
@@ -465,6 +472,7 @@ def prepare_lm_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the placeholder-bearing trainer config without resolving paths.
 
@@ -487,6 +495,7 @@ def prepare_lm_train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        wandb_project=wandb_project,
     )
     return os.path.join("checkpoints", truncated_name), inner_config
 
@@ -502,6 +511,7 @@ def train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    wandb_project: str | None = None,
     override_output_path: str | None = None,
 ) -> None:
     """Build and immediately submit a Levanter LM training job to Iris.
@@ -523,6 +533,7 @@ def train(
             Pass ``()`` or ``[]`` to disable.
         wandb_name: Optional W&B display name. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group. Defaults to ``$WANDB_GROUP`` if unset.
+        wandb_project: Optional W&B project. Defaults to ``$WANDB_PROJECT`` if unset.
         override_output_path: Optional explicit output path, bypassing the hash-based one.
     """
     job_name, inner_config = prepare_lm_train(
@@ -535,6 +546,7 @@ def train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        wandb_project=wandb_project,
     )
 
     _submit_train_job(
