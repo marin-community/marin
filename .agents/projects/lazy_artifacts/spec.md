@@ -115,55 +115,40 @@ already-done path, so concurrent first-builds with different fingerprints are no
 `object.__repr__` — anything with no reproducible serialization — rather than falling back to
 `str(o)`. The same config always produces identical bytes across processes.
 
-## Authoring APIs (`marin.experiment`)
+## Authoring layer (built on the core API — not part of the low-level contract)
+
+`marin.experiment` ships convenience builders that construct ordinary `Artifact`/`Recipe`s for
+common cases. They are *not* low-level primitives — they are sugar an experiment author can use or
+ignore, and they could be replaced without touching the core contract above. The load-bearing
+spec is the core API; this layer is application code.
+
+**Sweep / select** (`sweep.py`) — small and genuinely sweep-specific:
 
 ```python
-# sweep.py
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]: ...
 def sweep(trial: Callable[..., Artifact], **axes: Sequence[Any]) -> list[Artifact]: ...
 def select(name: str, version: str, trials: Sequence[Artifact], *,
-           metric: str, mode: str = "min") -> Artifact: ...   # mode in {"min","max"} else ValueError
-
-# data.py  (DEFAULT_VERSION is the catalog default)
-def tokenized(name: str, *, tokenizer: str, source: str | None = None,
-              paths: Sequence[str] | None = None, raw: Dataset | None = None,
-              glob: str | None = None, validation: bool = False, pin: str | None = None,
-              text_key: str = "text", version: str = DEFAULT_VERSION,
-              tags: Sequence[str] = (), resources: ResourceConfig | None = None) -> Dataset: ...
-def pretokenized(name: str, *, repo_id: str, tokenizer: str, revision: str | None = None,
-                 version: str = DEFAULT_VERSION, pin: str | None = None,
-                 tags: Sequence[str] = (), resources: ResourceConfig | None = None) -> Dataset: ...
-def raw_download(name: str, *, fn, build_config, version: str = DEFAULT_VERSION,
-                 pin: str | None = None, resources: ResourceConfig | None = None) -> Dataset: ...
-def mixture(ctx: RunContext, train: Mapping[Dataset, float], *,
-            validation: Sequence[Dataset] = (), shuffle=DEFAULT_LM_DATA_SHUFFLE) -> LmDataConfig: ...
+           metric: str, mode: str = "min") -> Artifact: ...
 ```
 
-**Contracts.** `select` depends on every trial, reads each trial's metrics payload at run time, and
-writes `{"winner", "score", "winner_path", "metrics", "scores"}`; `metric`/`mode` bear identity,
-trial *values* do not. It keys trials by full `name@version` and **raises `ValueError` if two
-trials share an identity** (so a same-name/different-version collision can't silently drop a trial);
-a `trial` builder must therefore fold its swept values into both the config (distinct fingerprint)
-and the `name` (distinct address). `tokenized` covers pinned / fresh-from-HF (`source`) / raw-glob
-(`paths`) / download-dependent (`raw` + `glob`) caches; exactly one source mode. `mixture` resolves
-each component's cache path via `ctx.path(handle)` and emits weight-0 entries for `validation` sets.
+`select` depends on every trial, reads each trial's metrics payload at run time, and writes
+`{"winner", "score", "winner_path", "metrics", "scores"}`; `metric`/`mode` bear identity, trial
+*values* do not. It keys trials by full `name@version` and **raises `ValueError` if two trials
+share an identity** (so a same-name/different-version collision can't silently drop a trial); a
+`trial` builder must fold its swept values into both the config (distinct fingerprint) and the
+`name` (distinct address). `mode` not in `{"min","max"}` or an empty sweep also raise `ValueError`.
 
-### Identity-bearing vs run-only
+**Data builders** (`data.py`) — each returns a `Dataset` whose recipe is a tokenize/download step:
 
-The line `build_config` draws (Open Question in `design.md`); when in doubt, make it a literal.
-
-| Value | Identity-bearing (literal → fingerprint) | Run-only (pulled from `ctx`) |
-|---|---|---|
-| Model / hyperparameters / token budget | ✔ literal | |
-| Logical mesh (`MeshConfig` axes, partitioning) | ✔ literal | |
-| Dependency *identity* (`name@version`) | ✔ (dep versions enter the fingerprint) | |
-| Dependency *path* | | `ctx.path(dep)` (region-local) |
-| Output path / storage prefix / GCP region | | `ctx.out`, `ctx.prefix`, `ctx.region` |
-| Physical accelerator (`ResourceConfig.with_tpu`) | | `ctx.run_arg("train_resources")` |
-| Random seed, data source revision | ✔ literal (they change the result) | |
-
-Rule: anything that changes *what is computed* is a literal; `run_args` are reserved for placement
-that leaves the result equivalent. Cross-hardware numeric drift is the known soft spot (design.md).
+- `tokenized(name, *, tokenizer, …) -> Dataset` — produce a tokenized cache. It currently spans
+  four source modes via optional kwargs (`pin` existing / `source` HF id / `paths` raw glob /
+  `raw`+`glob` download-dependent); exactly one applies. That breadth is a known smell — these read
+  as four functions wearing one signature, and splitting them (e.g. `tokenize_hf` / `tokenize_paths`
+  / `tokenize_from`) is an open design question, not a committed contract.
+- `pretokenized(name, *, repo_id, tokenizer, …) -> Dataset` — adopt an HF-hosted Levanter cache.
+- `raw_download(name, *, fn, build_config, …) -> Dataset` — a download step with a caller-supplied fn.
+- `mixture(ctx, train: Mapping[Dataset, float], *, validation=()) -> LmDataConfig` — resolves each
+  component's cache path via `ctx.path(handle)` and emits weight-0 entries for `validation` sets.
 
 ## Canonical patterns
 

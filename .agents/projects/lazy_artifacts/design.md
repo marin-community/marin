@@ -68,14 +68,13 @@ substitutes placeholders for everything pulled — so a prefix move, a region mo
 accelerator never re-fingerprints. Compute likewise rides on the fn via
 `remote(fn, resources=…)`, never on the graph node.
 
-The subtle case is the accelerator. The *logical* mesh (`MeshConfig` axes, partitioning) is written
-as a **literal** in `build_config`, so it bears identity; only the *physical* TPU
-(`ResourceConfig.with_tpu(...)`, pulled via `ctx.run_arg("train_resources")`) is run-only. The line
-is "logical shape = what, physical hardware = where" — and it's a real judgment call: the same
-logical config on a `v4-8` vs a `v5p-128` can shift numerics. So the rule is normative, not
-incidental — anything that changes *what is computed* must be a literal (hence fingerprinted), and
-`run_args` are reserved for placement that leaves the result equivalent. `spec.md` carries the
-identity-bearing vs run-only table.
+**Expressing non-versioned configuration.** Some configuration must reach the step but must *not*
+bear identity — execution choices like the accelerator. These are declared as recipe `run_args` and
+pulled via `ctx.run_arg(key)`: `ResourceConfig.with_tpu(...)` reaches the training job through
+`ctx.run_arg("train_resources")`, so the same artifact runs on a `v4-8` or a `v5p-128` without
+re-fingerprinting. What actually determines the computation — the logical mesh
+(`MeshConfig` axes, partitioning) — is a literal in `build_config`, so it bears identity already.
+`run_args` are simply how an author marks a value as where/how rather than what.
 
 **Build-once registry.** Identity is the explicit `{prefix}/{name}/{version}`. On success, a
 step writes a `.artifact_record.json` recording its fingerprint + provenance
@@ -134,10 +133,6 @@ lineage.
   re-checked when a worker finds the step already built, so concurrent first-builds with different
   fingerprints can both pass (above). Move the check inside the lock, re-check on the already-done
   path, or accept the gap as out-of-scope for now? (This is a real bug, narrow in trigger.)
-- **Where exactly does the accelerator sit on the identity line?** The logical mesh is a literal;
-  the physical TPU is a run-arg. But cross-hardware numerics aren't bit-identical — do we need a
-  normative per-field rule (which `ResourceConfig` fields, env vars, seeds, source revisions are
-  identity-bearing), or is "logical=what, physical=where" + author judgment enough?
 - **When does the import-time guard become a hard error?** Flip `MARIN_EXECUTOR_STRICT`
   default-on *before* the catalog migration completes (forcing the work) or *after* (avoiding a
   flag-day break)?

@@ -113,6 +113,11 @@ pinned to branch `weaver/adopt-executor-context-for-remai` @ `4221dde`.
   provenance-tracking variant and hasn't seen wide adoption.
 - **The phase-chain test is structural only** — it checks lowering + `init_from` resolution, not a
   real SFT/RL run (those fns are sketches). A full smoke would exercise all four phases.
+- **`tokenized()` is over-broad** — one signature spanning four mutually-exclusive source modes
+  (`pin` / `source` / `paths` / `raw`+`glob`) plus a `validation` flag. It reads as four functions
+  in a trench coat; the codebase's own API guidance (`AGENTS.md`: separate classes/functions over
+  flag dispatch) suggests splitting it. These are authoring-layer conveniences, not part of the
+  low-level execution contract.
 
 ## Peer review (codex)
 
@@ -121,9 +126,12 @@ A codex pass over `design.md` + `spec.md` against the code surfaced five issues;
 1. **"Recipe change is loud" overstated** — the fingerprint covers `build_config` output, not
    `recipe.fn` source. Code-only changes serve cached output. Docs now say "fingerprinted-config
    change" and name code-change staleness as a risk.
-2. **Identity line too permissive for TPUs** — `ctx.run_arg("train_resources")` excludes the
-   accelerator, but hardware can shift numerics. Docs now state the normative rule (logical mesh =
-   literal/identity, physical TPU = run-only) + an identity-bearing table + an open question.
+2. **Identity line too permissive for TPUs** — codex argued the accelerator (a run-arg) can shift
+   numerics. *Rejected on review:* changing TPU generation (e.g. v5p→v4) does not change numerics;
+   the computation is fixed by the *logical* mesh, which is already a literal and so bears identity.
+   So the original line is correct. Docs reframed descriptively — `run_args` are the mechanism for
+   expressing configuration that must reach the step but must not be versioned — and the prescriptive
+   "normative rule" + identity table + open question were dropped as over-correction.
 3. **Guard-before-lock race (real bug)** — `enforce_immutability` runs before `step_lock`
    (`step_runner.py:333` vs `:341`) and isn't re-checked on `StepAlreadyDone` (`:360`), so
    concurrent first-builds with different fingerprints can both pass. Documented as a risk + open
