@@ -14,7 +14,7 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
-from experiments.marin_models import MARIN_CHAT_TEMPLATE
+from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 _MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
     (

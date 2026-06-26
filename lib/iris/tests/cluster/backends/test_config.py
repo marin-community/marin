@@ -14,18 +14,36 @@ import yaml
 from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.backends.gcp.service import KNOWN_GCP_ZONES
 from iris.cluster.config import (
-    get_ssh_config,
+    ControllerVmConfig,
+    CoreweavePlatformConfig,
+    CoreweaveSliceConfig,
+    DefaultsConfig,
+    GcpControllerConfig,
+    GcpPlatformConfig,
+    GcpSliceConfig,
+    IrisClusterConfig,
+    LocalSliceConfig,
+    ManualSliceConfig,
+    PlatformConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    SshConfig,
+    WorkerConfig,
+    WorkerProviderConfig,
+    WorkerSettings,
+    build_ssh_command_config,
+    config_to_dict,
     load_config,
     make_local_config,
     validate_config,
 )
-from iris.cluster.config_serde import config_to_dict
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.lifecycle import connect_cluster
-from iris.rpc import config_pb2, controller_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
+from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff
 
 
@@ -71,7 +89,7 @@ scale_groups:
         original_config = load_config(config_path)
 
         # Verify accelerator type
-        assert original_config.scale_groups["tpu_v5e_8"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert original_config.scale_groups["tpu_v5e_8"].resources.device_type == AcceleratorType.TPU
 
         # Round-trip: proto → dict → yaml → dict → proto
         config_dict = config_to_dict(original_config)
@@ -82,7 +100,7 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         # Verify accelerator type is still TPU after round-trip
-        assert loaded_config.scale_groups["tpu_v5e_8"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_v5e_8"].resources.device_type == AcceleratorType.TPU
 
     def test_manual_provider_survives_round_trip(self, tmp_path: Path):
         """Manual config survives proto→dict→yaml→dict→proto round-trip."""
@@ -121,8 +139,8 @@ scale_groups:
         original_config = load_config(config_path)
 
         # Verify manual hosts configuration
-        assert original_config.scale_groups["manual_hosts"].HasField("slice_template")
-        assert original_config.scale_groups["manual_hosts"].slice_template.HasField("manual")
+        assert original_config.scale_groups["manual_hosts"].slice_template is not None
+        assert original_config.scale_groups["manual_hosts"].slice_template.platform_kind() == "manual"
         assert list(original_config.scale_groups["manual_hosts"].slice_template.manual.hosts) == [
             "10.0.0.1",
             "10.0.0.2",
@@ -137,8 +155,8 @@ scale_groups:
         loaded_config = load_config(round_trip_path)
 
         # Verify manual hosts configuration survives round-trip
-        assert loaded_config.scale_groups["manual_hosts"].HasField("slice_template")
-        assert loaded_config.scale_groups["manual_hosts"].slice_template.HasField("manual")
+        assert loaded_config.scale_groups["manual_hosts"].slice_template is not None
+        assert loaded_config.scale_groups["manual_hosts"].slice_template.platform_kind() == "manual"
         assert list(loaded_config.scale_groups["manual_hosts"].slice_template.manual.hosts) == [
             "10.0.0.1",
             "10.0.0.2",
@@ -205,8 +223,8 @@ scale_groups:
         round_trip_path.write_text(yaml_str)
         loaded_config = load_config(round_trip_path)
 
-        assert loaded_config.scale_groups["tpu_group_a"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
-        assert loaded_config.scale_groups["tpu_group_b"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert loaded_config.scale_groups["tpu_group_a"].resources.device_type == AcceleratorType.TPU
+        assert loaded_config.scale_groups["tpu_group_b"].resources.device_type == AcceleratorType.TPU
 
     def test_example_eu_west4_config_round_trips(self, tmp_path: Path):
         """Real example config from config/marin.yaml round-trips correctly."""
@@ -221,7 +239,7 @@ scale_groups:
         assert "tpu_v5e-preemptible_16-europe-west4-b" in original_config.scale_groups
         assert (
             original_config.scale_groups["tpu_v5e-preemptible_16-europe-west4-b"].resources.device_type
-            == config_pb2.ACCELERATOR_TYPE_TPU
+            == AcceleratorType.TPU
         )
 
         # Round-trip via dict and YAML
@@ -233,15 +251,15 @@ scale_groups:
 
         assert (
             loaded_config.scale_groups["tpu_v5e-preemptible_16-europe-west4-b"].resources.device_type
-            == config_pb2.ACCELERATOR_TYPE_TPU
+            == AcceleratorType.TPU
         )
 
     @pytest.mark.parametrize(
         "accelerator_type,expected_enum",
         [
-            ("tpu", config_pb2.ACCELERATOR_TYPE_TPU),
-            ("cpu", config_pb2.ACCELERATOR_TYPE_CPU),
-            ("gpu", config_pb2.ACCELERATOR_TYPE_GPU),
+            ("tpu", AcceleratorType.TPU),
+            ("cpu", AcceleratorType.CPU),
+            ("gpu", AcceleratorType.GPU),
         ],
     )
     def test_lowercase_accelerator_types_work(self, tmp_path: Path, accelerator_type: str, expected_enum):
@@ -277,8 +295,8 @@ scale_groups:
 
         assert config.scale_groups["test_group"].resources.device_type == expected_enum
 
-    def test_uppercase_accelerator_types_still_work(self, tmp_path: Path):
-        """Config still accepts uppercase accelerator types for backwards compatibility."""
+    def test_proto_name_accelerator_types_rejected(self, tmp_path: Path):
+        """device_type only accepts the friendly lowercase spelling (cpu/gpu/tpu)."""
         config_content = """\
 platform:
   gcp:
@@ -312,9 +330,8 @@ scale_groups:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(config_content)
 
-        config = load_config(config_path)
-
-        assert config.scale_groups["tpu_group"].resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        with pytest.raises(ValueError, match=r"device_type[\s\S]*'cpu', 'gpu' or 'tpu'"):
+            load_config(config_path)
 
 
 class TestCreateAutoscalerFromConfig:
@@ -484,74 +501,79 @@ class TestSshConfigMerging:
     """Tests for SSH config merging from cluster defaults and per-group overrides."""
 
     def test_uses_cluster_default_ssh_config(self):
-        """get_ssh_config returns cluster defaults when no group override."""
+        """build_ssh_command_config returns cluster defaults when no group override."""
 
-        ssh_config_proto = config_pb2.SshConfig(
+        config = IrisClusterConfig()
+        config.defaults.ssh = SshConfig(
             user="ubuntu",
             key_file="~/.ssh/cluster_key",
             impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
+            connect_timeout=Duration.from_seconds(60),
         )
-        ssh_config_proto.connect_timeout.CopyFrom(duration_to_proto(Duration.from_seconds(60)))
 
-        config = config_pb2.IrisClusterConfig()
-        config.defaults.ssh.CopyFrom(ssh_config_proto)
-
-        ssh_config = get_ssh_config(config)
+        ssh_config = build_ssh_command_config(config)
 
         assert ssh_config.user == "ubuntu"
         assert ssh_config.key_file == "~/.ssh/cluster_key"
         assert ssh_config.port == 22  # DEFAULT_SSH_PORT
         assert ssh_config.impersonate_service_account == "iris-controller@test-project.iam.gserviceaccount.com"
-        assert ssh_config.connect_timeout.milliseconds == 60_000
+        assert ssh_config.connect_timeout.to_ms() == 60_000
 
     def test_applies_per_group_ssh_overrides(self):
-        """get_ssh_config applies per-group SSH overrides for manual slice template."""
-        config = config_pb2.IrisClusterConfig()
+        """build_ssh_command_config applies per-group SSH overrides for manual slice template."""
+        config = IrisClusterConfig()
         config.defaults.ssh.user = "ubuntu"
         config.defaults.ssh.key_file = "~/.ssh/cluster_key"
 
-        manual_config = config_pb2.ScaleGroupConfig(
+        config.scale_groups["manual_group"] = ScaleGroupConfig(
             name="manual_group",
+            slice_template=SliceConfig(
+                manual=ManualSliceConfig(
+                    hosts=["10.0.0.1"],
+                    ssh_user="admin",
+                    ssh_key_file="~/.ssh/group_key",
+                )
+            ),
         )
-        manual_config.slice_template.manual.hosts.append("10.0.0.1")
-        manual_config.slice_template.manual.ssh_user = "admin"
-        manual_config.slice_template.manual.ssh_key_file = "~/.ssh/group_key"
 
-        config.scale_groups["manual_group"].CopyFrom(manual_config)
-
-        ssh_config = get_ssh_config(config, group_name="manual_group")
+        ssh_config = build_ssh_command_config(config, group_name="manual_group")
 
         assert ssh_config.user == "admin"
         assert ssh_config.key_file == "~/.ssh/group_key"
         assert ssh_config.port == 22
 
     def test_uses_defaults_when_cluster_ssh_config_empty(self):
-        """get_ssh_config uses built-in defaults when cluster config empty."""
+        """build_ssh_command_config uses built-in defaults when cluster config empty."""
 
-        config = config_pb2.IrisClusterConfig()
+        config = IrisClusterConfig()
 
-        ssh_config = get_ssh_config(config)
+        ssh_config = build_ssh_command_config(config)
 
         assert ssh_config.user == "root"
         assert ssh_config.key_file == ""
         assert ssh_config.port == 22
         assert ssh_config.impersonate_service_account == ""
-        assert ssh_config.connect_timeout.milliseconds == 30_000
+        assert ssh_config.connect_timeout.to_ms() == 30_000
 
     def test_validate_config_requires_gcp_service_accounts(self):
-        config = config_pb2.IrisClusterConfig()
-        config.platform.gcp.project_id = "test-project"
-        config.controller.gcp.zone = "us-central1-a"
+        config = IrisClusterConfig(
+            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test-project")),
+            controller=ControllerVmConfig(gcp=GcpControllerConfig(zone="us-central1-a")),
+        )
         config.defaults.worker.docker_image = "ghcr.io/marin-community/iris-worker:latest"
 
-        group = config.scale_groups["tpu"]
-        group.name = "tpu"
-        group.num_vms = 1
-        group.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
-        group.resources.device_variant = "v5litepod-4"
-        group.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-        group.slice_template.gcp.zone = "us-central1-a"
-        group.slice_template.gcp.runtime_version = "tpu-ubuntu2204-base"
+        config.scale_groups["tpu"] = ScaleGroupConfig(
+            name="tpu",
+            num_vms=1,
+            resources=ScaleGroupResources(
+                device_type=AcceleratorType.TPU,
+                device_variant="v5litepod-4",
+                capacity_type=CapacityType.PREEMPTIBLE,
+            ),
+            slice_template=SliceConfig(
+                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="tpu-ubuntu2204-base"),
+            ),
+        )
 
         with pytest.raises(ValueError, match=r"controller\.gcp\.service_account"):
             validate_config(config)
@@ -613,17 +635,16 @@ scale_groups:
         local_config = make_local_config(original_config)
 
         # Verify platform transformed to local
-        assert local_config.platform.WhichOneof("platform") == "local"
+        assert local_config.platform.platform_kind() == "local"
 
         # Verify controller transformed to local
-        assert local_config.controller.WhichOneof("controller") == "local"
+        assert local_config.controller.controller_kind() == "local"
         assert local_config.controller.local.port == 0  # auto-assign
 
-        # Verify fast timings applied (0.5s eval, 1s scale_up)
-        assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
-        assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
-        # scale_down_delay preserved from YAML (600s)
-        assert local_config.defaults.autoscaler.scale_down_delay.milliseconds == 600000
+        # Verify fast local-dev timings override any production timings.
+        assert local_config.defaults.autoscaler.evaluation_interval.to_ms() == 500
+        assert local_config.defaults.autoscaler.scale_up_delay.to_ms() == 1000
+        assert local_config.defaults.autoscaler.scale_down_delay.to_ms() == 1000
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
@@ -687,13 +708,13 @@ scale_groups:
 
         # Verify other fields preserved
         cpu_group = local_config.scale_groups["cpu_group"]
-        assert cpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_CPU
+        assert cpu_group.resources.device_type == AcceleratorType.CPU
         assert cpu_group.buffer_slices == 2
         assert cpu_group.max_slices == 5
         assert cpu_group.priority == 50
 
         tpu_group = local_config.scale_groups["tpu_group"]
-        assert tpu_group.resources.device_type == config_pb2.ACCELERATOR_TYPE_TPU
+        assert tpu_group.resources.device_type == AcceleratorType.TPU
         assert tpu_group.resources.device_variant == "v5litepod-16"
         assert tpu_group.buffer_slices == 1
         assert tpu_group.max_slices == 3
@@ -717,16 +738,16 @@ scale_groups:
 
             # Load the config
             config = load_config(config_path)
-            assert config.platform.WhichOneof("platform") in ["gcp", "manual", "coreweave"]
-            assert config.defaults.autoscaler.evaluation_interval.milliseconds > 0
+            assert config.platform.platform_kind() in ["gcp", "manual", "coreweave"]
+            assert config.defaults.autoscaler.evaluation_interval.to_ms() > 0
 
             # Transform to local
             local_config = make_local_config(config)
-            assert local_config.platform.WhichOneof("platform") == "local"
-            assert local_config.controller.WhichOneof("controller") == "local"
+            assert local_config.platform.platform_kind() == "local"
+            assert local_config.controller.controller_kind() == "local"
             # Verify fast timings applied
-            assert local_config.defaults.autoscaler.evaluation_interval.milliseconds == 500
-            assert local_config.defaults.autoscaler.scale_up_delay.milliseconds == 1000
+            assert local_config.defaults.autoscaler.evaluation_interval.to_ms() == 500
+            assert local_config.defaults.autoscaler.scale_up_delay.to_ms() == 1000
 
     def test_example_config_zones_in_known_gcp_zones(self):
         """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
@@ -738,42 +759,64 @@ scale_groups:
             config = load_config(config_path)
             for name, sg in config.scale_groups.items():
                 template = sg.slice_template
-                if template.WhichOneof("platform") == "gcp" and template.gcp.zone:
+                if template.platform_kind() == "gcp" and template.gcp.zone:
                     assert (
                         template.gcp.zone in KNOWN_GCP_ZONES
                     ), f"Scale group '{name}': zone '{template.gcp.zone}' not in KNOWN_GCP_ZONES"
 
 
-def _valid_scale_group() -> config_pb2.ScaleGroupConfig:
+def _valid_scale_group() -> ScaleGroupConfig:
     """Create a valid ScaleGroupConfig for use in validation tests."""
-    sg = config_pb2.ScaleGroupConfig(
+    return ScaleGroupConfig(
         name="test",
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(
+        resources=ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
-            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
-            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+            device_type=AcceleratorType.CPU,
+            capacity_type=CapacityType.ON_DEMAND,
         ),
+        slice_template=SliceConfig(num_vms=1, local=LocalSliceConfig()),
     )
-    sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.slice_template.num_vms = 1
-    sg.slice_template.local.SetInParent()
-    return sg
 
 
-def _config_with(**overrides) -> config_pb2.IrisClusterConfig:
+def _config_with(**overrides) -> IrisClusterConfig:
     """Build an IrisClusterConfig with a single scale group, overriding fields."""
     sg = _valid_scale_group()
     for key, value in overrides.items():
-        if key == "resources":
-            sg.resources.CopyFrom(value)
-        else:
-            setattr(sg, key, value)
-    config = config_pb2.IrisClusterConfig()
-    config.scale_groups["test"].CopyFrom(sg)
-    return config
+        setattr(sg, key, value)
+    return IrisClusterConfig(scale_groups={"test": sg})
+
+
+class TestOneofExclusivity:
+    """Former protobuf ``oneof`` groups reject more than one selected arm."""
+
+    def test_construct_two_platform_arms_rejected(self):
+        with pytest.raises(ValueError, match="at most one of"):
+            PlatformConfig(gcp=GcpPlatformConfig(), coreweave=CoreweavePlatformConfig())
+
+    def test_construct_two_slice_arms_rejected(self):
+        with pytest.raises(ValueError, match="at most one of"):
+            SliceConfig(manual=ManualSliceConfig(), local=LocalSliceConfig())
+
+    def test_yaml_two_platform_arms_rejected(self, tmp_path: Path):
+        config_path = tmp_path / "cluster.yaml"
+        config_path.write_text(
+            yaml.safe_dump({"platform": {"gcp": {"project_id": "p"}, "manual": {}}}),
+        )
+        with pytest.raises(ValueError, match="at most one of"):
+            load_config(config_path)
+
+    def test_zero_arms_allowed(self):
+        # A platform with no selected arm constructs; downstream validation owns
+        # the "a platform is required" rule.
+        assert PlatformConfig().platform_kind() is None
+
+    def test_exclude_none_dump_round_trips_single_arm(self):
+        # config_to_dict serializes with exclude_none; the unselected arms must
+        # not reappear on re-validation and trip the at-most-one check.
+        dumped = PlatformConfig(gcp=GcpPlatformConfig(project_id="p")).model_dump(mode="json", exclude_none=True)
+        assert PlatformConfig.model_validate(dumped).platform_kind() == "gcp"
 
 
 class TestConfigValidation:
@@ -783,23 +826,22 @@ class TestConfigValidation:
         validate_config(_config_with())
 
     def test_rejects_missing_resources(self):
-        config = config_pb2.IrisClusterConfig()
-        sg = config.scale_groups["test"]
-        sg.name = "test"
-        sg.num_vms = 1
+        config = IrisClusterConfig(scale_groups={"test": ScaleGroupConfig(name="test", num_vms=1)})
         with pytest.raises(ValueError, match="must set resources"):
             validate_config(config)
 
     def test_rejects_missing_num_vms(self):
-        config = config_pb2.IrisClusterConfig()
-        sg = config.scale_groups["test"]
-        sg.name = "test"
-        sg.resources.CopyFrom(
-            config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
-            )
+        config = IrisClusterConfig(
+            scale_groups={
+                "test": ScaleGroupConfig(
+                    name="test",
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=AcceleratorType.CPU,
+                    ),
+                )
+            }
         )
         with pytest.raises(ValueError, match="must set num_vms"):
             validate_config(config)
@@ -812,10 +854,10 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match=r"must set resources\.device_type"):
             validate_config(
                 _config_with(
-                    resources=config_pb2.ScaleGroupResources(
+                    resources=ScaleGroupResources(
                         cpu_millicores=8000,
                         memory_bytes=16 * 1024**3,
-                        device_type=config_pb2.ACCELERATOR_TYPE_UNSPECIFIED,
+                        device_type=None,
                     )
                 )
             )
@@ -824,59 +866,65 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match="invalid cpu_millicores"):
             validate_config(
                 _config_with(
-                    resources=config_pb2.ScaleGroupResources(
+                    resources=ScaleGroupResources(
                         cpu_millicores=-1000,
                         memory_bytes=16 * 1024**3,
-                        device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+                        device_type=AcceleratorType.CPU,
                     )
                 )
             )
 
     def test_rejects_gcp_zone_not_in_platform_zones(self):
         """Validation fails when scale group zone is not in platform.gcp.zones."""
-        config = config_pb2.IrisClusterConfig()
-        config.platform.gcp.project_id = "test"
-        config.platform.gcp.zones.append("zone-a")
-
-        sg = config_pb2.ScaleGroupConfig(
-            name="tpu",
-            num_vms=8,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_count=4,
-                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            ),
+        config = IrisClusterConfig(
+            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test", zones=["zone-a"])),
+            scale_groups={
+                "tpu": ScaleGroupConfig(
+                    name="tpu",
+                    num_vms=8,
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_count=4,
+                        device_type=AcceleratorType.TPU,
+                        capacity_type=CapacityType.PREEMPTIBLE,
+                    ),
+                    slice_template=SliceConfig(
+                        gcp=GcpSliceConfig(zone="zone-b", runtime_version="v2-alpha-tpuv5-lite"),
+                    ),
+                )
+            },
         )
-        sg.slice_template.gcp.zone = "zone-b"
-        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
-        config.scale_groups["tpu"].CopyFrom(sg)
 
         with pytest.raises(ValueError, match=r"not in platform\.gcp\.zones"):
             validate_config(config)
 
     def test_accepts_gcp_zone_in_platform_zones(self):
         """Validation passes when scale group zone is in platform.gcp.zones."""
-        config = config_pb2.IrisClusterConfig()
-        config.platform.gcp.project_id = "test"
-        config.platform.gcp.zones.append("zone-a")
-
-        sg = config_pb2.ScaleGroupConfig(
-            name="tpu",
-            num_vms=8,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_count=4,
-                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
-            ),
+        config = IrisClusterConfig(
+            platform=PlatformConfig(gcp=GcpPlatformConfig(project_id="test", zones=["zone-a"])),
+            defaults=DefaultsConfig(worker=WorkerConfig(docker_image="ghcr.io/marin/iris-worker:latest")),
+            scale_groups={
+                "tpu": ScaleGroupConfig(
+                    name="tpu",
+                    num_vms=8,
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_count=4,
+                        device_type=AcceleratorType.TPU,
+                        capacity_type=CapacityType.PREEMPTIBLE,
+                    ),
+                    slice_template=SliceConfig(
+                        gcp=GcpSliceConfig(
+                            zone="zone-a",
+                            runtime_version="v2-alpha-tpuv5-lite",
+                            service_account="iris-worker@test-project.iam.gserviceaccount.com",
+                        ),
+                    ),
+                )
+            },
         )
-        sg.slice_template.gcp.zone = "zone-a"
-        sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
-        sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
-        config.scale_groups["tpu"].CopyFrom(sg)
 
         validate_config(config)  # Should not raise
 
@@ -885,98 +933,103 @@ class TestConfigValidation:
         [
             (
                 1,
-                config_pb2.ACCELERATOR_TYPE_CPU,
+                AcceleratorType.CPU,
                 0,
-                config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+                CapacityType.PREEMPTIBLE,
                 "only support capacity_type on-demand",
             ),
-            (2, config_pb2.ACCELERATOR_TYPE_CPU, 0, config_pb2.CAPACITY_TYPE_ON_DEMAND, "require num_vms=1"),
-            (1, config_pb2.ACCELERATOR_TYPE_GPU, 1, config_pb2.CAPACITY_TYPE_ON_DEMAND, "require device_type=cpu"),
+            (2, AcceleratorType.CPU, 0, CapacityType.ON_DEMAND, "require num_vms=1"),
+            (1, AcceleratorType.GPU, 1, CapacityType.ON_DEMAND, "require device_type=cpu"),
         ],
         ids=["non_on_demand", "multi_vm", "non_cpu"],
     )
     def test_rejects_invalid_gcp_vm_mode(self, num_vms, device_type, device_count, capacity_type, error_match):
-        config = config_pb2.IrisClusterConfig()
-        sg = config_pb2.ScaleGroupConfig(
-            name="test-vm",
-            num_vms=num_vms,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_type=device_type,
-                device_count=device_count,
-                capacity_type=capacity_type,
-            ),
+        config = IrisClusterConfig(
+            scale_groups={
+                "test-vm": ScaleGroupConfig(
+                    name="test-vm",
+                    num_vms=num_vms,
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=device_type,
+                        device_count=device_count,
+                        capacity_type=capacity_type,
+                    ),
+                    slice_template=SliceConfig(
+                        gcp=GcpSliceConfig(
+                            zone="us-central1-a",
+                            mode=GcpSliceMode.VM,
+                            machine_type="n2-standard-4",
+                        ),
+                    ),
+                )
+            }
         )
-        sg.slice_template.accelerator_type = device_type
-        sg.slice_template.capacity_type = capacity_type
-        sg.slice_template.gcp.zone = "us-central1-a"
-        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
-        sg.slice_template.gcp.machine_type = "n2-standard-4"
-        config.scale_groups["test-vm"].CopyFrom(sg)
 
         with pytest.raises(ValueError, match=error_match):
             validate_config(config)
 
     def test_accepts_gcp_vm_mode_cpu_single_vm_on_demand(self):
-        config = config_pb2.IrisClusterConfig()
-        sg = config_pb2.ScaleGroupConfig(
-            name="cpu-vm",
-            num_vms=1,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_type=config_pb2.ACCELERATOR_TYPE_CPU,
-                capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
-            ),
+        config = IrisClusterConfig(
+            scale_groups={
+                "cpu-vm": ScaleGroupConfig(
+                    name="cpu-vm",
+                    num_vms=1,
+                    resources=ScaleGroupResources(
+                        cpu_millicores=8000,
+                        memory_bytes=16 * 1024**3,
+                        device_type=AcceleratorType.CPU,
+                        capacity_type=CapacityType.ON_DEMAND,
+                    ),
+                    slice_template=SliceConfig(
+                        gcp=GcpSliceConfig(
+                            zone="us-central1-a",
+                            mode=GcpSliceMode.VM,
+                            machine_type="n2-standard-4",
+                            service_account="iris-worker@test-project.iam.gserviceaccount.com",
+                        ),
+                    ),
+                )
+            }
         )
-        sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_CPU
-        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-        sg.slice_template.gcp.zone = "us-central1-a"
-        sg.slice_template.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
-        sg.slice_template.gcp.machine_type = "n2-standard-4"
-        sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
-        config.scale_groups["cpu-vm"].CopyFrom(sg)
 
         validate_config(config)
 
 
-def _gcp_scale_group(
-    zone: str, *, capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-) -> config_pb2.ScaleGroupConfig:
+def _gcp_scale_group(zone: str, *, capacity_type: CapacityType = CapacityType.PREEMPTIBLE) -> ScaleGroupConfig:
     """Build a valid GCP-backed ScaleGroupConfig for worker settings validation tests."""
-    sg = config_pb2.ScaleGroupConfig(
+    return ScaleGroupConfig(
         name="test",
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(
+        resources=ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             device_count=1,
-            device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+            device_type=AcceleratorType.TPU,
             capacity_type=capacity_type,
         ),
+        slice_template=SliceConfig(
+            gcp=GcpSliceConfig(
+                zone=zone,
+                runtime_version="v2-alpha-tpuv5-lite",
+                service_account="iris-worker@test-project.iam.gserviceaccount.com",
+            ),
+        ),
     )
-    sg.slice_template.gcp.zone = zone
-    sg.slice_template.gcp.runtime_version = "v2-alpha-tpuv5-lite"
-    sg.slice_template.gcp.service_account = "iris-worker@test-project.iam.gserviceaccount.com"
-    sg.slice_template.capacity_type = capacity_type
-    return sg
 
 
 def _config_with_gcp_sg(
     zone: str,
     *,
-    capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+    capacity_type: CapacityType = CapacityType.PREEMPTIBLE,
     worker_attributes: dict[str, str] | None = None,
-) -> config_pb2.IrisClusterConfig:
+) -> IrisClusterConfig:
     """Build an IrisClusterConfig containing a single GCP scale group with optional worker attributes."""
     sg = _gcp_scale_group(zone, capacity_type=capacity_type)
     if worker_attributes is not None:
-        for k, v in worker_attributes.items():
-            sg.worker.attributes[k] = v
-    config = config_pb2.IrisClusterConfig()
-    config.scale_groups["test"].CopyFrom(sg)
-    return config
+        sg.worker = WorkerSettings(attributes=dict(worker_attributes))
+    return IrisClusterConfig(scale_groups={"test": sg})
 
 
 class TestWorkerSettingsValidation:
@@ -1444,7 +1497,7 @@ v5e-preempt:
         assert g4eu.buffer_slices == 3
         assert g4eu.max_slices == 1024
         assert g4eu.slice_template.gcp.zone == "europe-west4-b"
-        assert g4eu.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        assert g4eu.resources.capacity_type == CapacityType.PREEMPTIBLE
 
         # Check v5e-16 in us-west4-a (tier 2)
         g16us = config.scale_groups["tpu_v5e-preempt_16-us-west4-a"]
@@ -1596,7 +1649,7 @@ scale_groups:
       gcp:
         service_account: iris-worker@test-project.iam.gserviceaccount.com
         zone: us-central1-a
-        mode: GCP_SLICE_MODE_VM
+        mode: vm
         machine_type: e2-highmem-2
 """
         p = tmp_path / "config.yaml"
@@ -1648,11 +1701,11 @@ tpu_pools:
 
         g_preempt = config.scale_groups["tpu_v5e-preempt_4-europe-west4-b"]
         assert g_preempt.quota_pool == "v5e-preempt/europe-west4-b"
-        assert g_preempt.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        assert g_preempt.resources.capacity_type == CapacityType.PREEMPTIBLE
 
         g_reserved = config.scale_groups["tpu_v5e-reserved_128-us-east5-a"]
         assert g_reserved.quota_pool == "v5e-reserved/us-east5-a"
-        assert g_reserved.resources.capacity_type == config_pb2.CAPACITY_TYPE_RESERVED
+        assert g_reserved.resources.capacity_type == CapacityType.RESERVED
         assert g_reserved.allocation_tier == 1
 
     def test_name_collision_rejected(self, tmp_path: Path):
@@ -1733,13 +1786,13 @@ scale_groups:
     @pytest.mark.parametrize(
         "value,expected",
         [
-            ("preemptible", config_pb2.CAPACITY_TYPE_PREEMPTIBLE),
-            ("on-demand", config_pb2.CAPACITY_TYPE_ON_DEMAND),
-            ("on_demand", config_pb2.CAPACITY_TYPE_ON_DEMAND),
-            ("reserved", config_pb2.CAPACITY_TYPE_RESERVED),
+            ("preemptible", CapacityType.PREEMPTIBLE),
+            ("on-demand", CapacityType.ON_DEMAND),
+            ("on_demand", CapacityType.ON_DEMAND),
+            ("reserved", CapacityType.RESERVED),
         ],
     )
-    def test_capacity_type_parsed_correctly(self, tmp_path: Path, value: str, expected: int):
+    def test_capacity_type_parsed_correctly(self, tmp_path: Path, value: str, expected: CapacityType):
         content = self._BASE_CONFIG.format(value=value)
         p = tmp_path / "config.yaml"
         p.write_text(content)
@@ -1752,7 +1805,7 @@ scale_groups:
         content = self._BASE_CONFIG.format(value=value)
         p = tmp_path / "config.yaml"
         p.write_text(content)
-        with pytest.raises(ValueError, match="capacity_type must be one of"):
+        with pytest.raises(ValueError, match=r"capacity_type[\s\S]*'preemptible', 'on_demand' or 'reserved'"):
             load_config(p)
 
     def test_missing_capacity_type_rejected(self, tmp_path: Path):
@@ -1763,27 +1816,31 @@ scale_groups:
             load_config(p)
 
 
-def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) -> config_pb2.IrisClusterConfig:
+def _config_with_coreweave_gpu_sg(topology_attrs: dict[str, str] | None = None) -> IrisClusterConfig:
     """Build a minimal IrisClusterConfig with a multi-VM CoreWeave GPU scale group."""
-    config = config_pb2.IrisClusterConfig()
-    sg = config.scale_groups["h100-16x"]
-    sg.num_vms = 2
-    sg.resources.cpu_millicores = 128_000
-    sg.resources.memory_bytes = 2048 * 1024**3
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_GPU
-    sg.resources.device_variant = "H100"
-    sg.resources.device_count = 8
-    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    sg.buffer_slices = 0
-    sg.max_slices = 1
-    sg.slice_template.num_vms = 2
-    sg.slice_template.coreweave.region = "US-WEST-04A"
-    sg.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
-    sg.worker.attributes["pool"] = "h100-16x"
+    attributes = {"pool": "h100-16x"}
     if topology_attrs:
-        for k, v in topology_attrs.items():
-            sg.worker.attributes[k] = v
-    return config
+        attributes.update(topology_attrs)
+    sg = ScaleGroupConfig(
+        name="h100-16x",
+        num_vms=2,
+        buffer_slices=0,
+        max_slices=1,
+        resources=ScaleGroupResources(
+            cpu_millicores=128_000,
+            memory_bytes=2048 * 1024**3,
+            device_type=AcceleratorType.GPU,
+            device_variant="H100",
+            device_count=8,
+            capacity_type=CapacityType.ON_DEMAND,
+        ),
+        slice_template=SliceConfig(
+            num_vms=2,
+            coreweave=CoreweaveSliceConfig(region="US-WEST-04A", instance_type="gd-8xh100ib-i128"),
+        ),
+        worker=WorkerSettings(attributes=attributes),
+    )
+    return IrisClusterConfig(scale_groups={"h100-16x": sg})
 
 
 def test_coreweave_gpu_multivm_requires_topology_label():
@@ -1798,15 +1855,18 @@ def test_coreweave_gpu_multivm_accepts_topology_label():
 
 
 def test_coreweave_worker_provider_rejected():
-    config = config_pb2.IrisClusterConfig()
-    config.platform.coreweave.region = "US-WEST-04A"
-    config.worker_provider.SetInParent()
-    sg = config.scale_groups["cpu-test"]
-    sg.num_vms = 1
-    sg.resources.cpu_millicores = 64_000
-    sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    sg.slice_template.num_vms = 1
-    sg.slice_template.coreweave.region = "US-WEST-04A"
+    config = IrisClusterConfig(
+        platform=PlatformConfig(coreweave=CoreweavePlatformConfig(region="US-WEST-04A")),
+        worker_provider=WorkerProviderConfig(),
+        scale_groups={
+            "cpu-test": ScaleGroupConfig(
+                name="cpu-test",
+                num_vms=1,
+                resources=ScaleGroupResources(cpu_millicores=64_000, device_type=AcceleratorType.CPU),
+                slice_template=SliceConfig(num_vms=1, coreweave=CoreweaveSliceConfig(region="US-WEST-04A")),
+            )
+        },
+    )
     with pytest.raises(ValueError, match="does not support worker_provider"):
         validate_config(config)
 

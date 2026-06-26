@@ -14,8 +14,6 @@ This script:
 The default mode analyzes the last 24 hours.
 """
 
-from __future__ import annotations
-
 import csv
 import datetime as dt
 import json
@@ -32,7 +30,7 @@ import click
 import duckdb
 import fsspec
 from finelog.deploy.config import load_finelog_config
-from iris.cluster.config import IrisConfig
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
 
@@ -148,14 +146,14 @@ class TimeWindow:
 
 def parse_window(end_time: str | None, hours: float) -> TimeWindow:
     if end_time is None:
-        end = dt.datetime.now(dt.timezone.utc)
+        end = dt.datetime.now(dt.UTC)
     else:
         text = end_time.replace("Z", "+00:00")
         end = dt.datetime.fromisoformat(text)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=dt.timezone.utc)
+            end = end.replace(tzinfo=dt.UTC)
         else:
-            end = end.astimezone(dt.timezone.utc)
+            end = end.astimezone(dt.UTC)
     start = end - dt.timedelta(hours=hours)
     return TimeWindow(start=start, end=end)
 
@@ -244,7 +242,7 @@ def choose_log_objects(
     before_window: dict | None = None
     chosen: list[dict] = []
     for entry in entries:
-        entry_mtime = entry["mtime"].astimezone(dt.timezone.utc)
+        entry_mtime = entry["mtime"].astimezone(dt.UTC)
         if entry_mtime < mtime_cutoff:
             before_window = entry
             continue
@@ -252,12 +250,12 @@ def choose_log_objects(
 
     if before_window is not None:
         chosen.insert(0, before_window)
-        before_mtime = before_window["mtime"].astimezone(dt.timezone.utc)
+        before_mtime = before_window["mtime"].astimezone(dt.UTC)
         logging.info(f"Included 1 file before cutoff (mtime: {before_mtime.isoformat()})")
 
     if chosen:
-        oldest = chosen[0]["mtime"].astimezone(dt.timezone.utc)
-        newest = chosen[-1]["mtime"].astimezone(dt.timezone.utc)
+        oldest = chosen[0]["mtime"].astimezone(dt.UTC)
+        newest = chosen[-1]["mtime"].astimezone(dt.UTC)
         logging.info(f"Selected {len(chosen)} files (mtime range: {oldest.isoformat()} to {newest.isoformat()})")
         logging.info(f"File names: {[Path(e['name']).name for e in chosen]}")
     return chosen
@@ -330,10 +328,10 @@ def validate_parquet_files(paths: list[Path]) -> list[Path]:
     return good
 
 
-def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
-    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.proto.storage.remote_state_dir)
+def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
+    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.storage.remote_state_dir)
     if chosen is None:
-        raise RuntimeError(f"No checkpoint found under {config.proto.storage.remote_state_dir}")
+        raise RuntimeError(f"No checkpoint found under {config.storage.remote_state_dir}")
     # Key the local cache on the remote checkpoint id so reruns that pick up
     # a newer checkpoint don't collide with a stale one.
     checkpoint_id = chosen.rstrip("/").rsplit("/", 1)[-1]
@@ -344,7 +342,7 @@ def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | 
         logging.info(f"Checkpoint {checkpoint_id} already cached at {db_path}")
         return db_path
     logging.info(f"Downloading checkpoint {chosen}")
-    ok = download_checkpoint_to_local(config.proto.storage.remote_state_dir, checkpoint_outdir, chosen)
+    ok = download_checkpoint_to_local(config.storage.remote_state_dir, checkpoint_outdir, chosen)
     if not ok:
         raise RuntimeError(f"Failed to download checkpoint from {chosen}")
     if not db_path.exists():
@@ -620,7 +618,7 @@ def analyze(
 
 
 def _fmt_ms(ms: int) -> str:
-    return dt.datetime.fromtimestamp(ms / 1000, tz=dt.timezone.utc).isoformat()
+    return dt.datetime.fromtimestamp(ms / 1000, tz=dt.UTC).isoformat()
 
 
 def _md_table(headers: list[str], rows: list[list]) -> str:
@@ -904,15 +902,15 @@ def main(
     logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     logging.info(f"Output directory: {out_path}")
 
-    cfg = IrisConfig.load(config)
-    if not cfg.proto.log_server_config:
+    cfg = load_config(config)
+    if not cfg.log_server_config:
         raise click.ClickException(
             f"Iris config {config!r} has no log_server_config; cross-region analysis "
             "requires logs shipped via finelog."
         )
-    finelog_cfg = load_finelog_config(cfg.proto.log_server_config)
+    finelog_cfg = load_finelog_config(cfg.log_server_config)
     if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.proto.log_server_config!r} has no remote_log_dir.")
+        raise click.ClickException(f"finelog config {cfg.log_server_config!r} has no remote_log_dir.")
     remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
 
     log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)

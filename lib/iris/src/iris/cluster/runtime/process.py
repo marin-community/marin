@@ -14,8 +14,6 @@ Lifecycle management includes:
 - Process group termination on Unix platforms
 """
 
-from __future__ import annotations
-
 import atexit
 import logging
 import os
@@ -65,7 +63,7 @@ logger = logging.getLogger(__name__)
 # Python interpreter shuts down (normal exit, sys.exit, unhandled exceptions).
 # This does NOT cover SIGKILL of the parent.
 
-_active_runtimes: weakref.WeakSet[ProcessRuntime] = weakref.WeakSet()
+_active_runtimes: "weakref.WeakSet[ProcessRuntime]" = weakref.WeakSet()
 
 
 def _cleanup_all_runtimes() -> None:
@@ -389,7 +387,7 @@ class ProcessContainerHandle:
     """
 
     config: ContainerConfig
-    runtime: ProcessRuntime
+    runtime: "ProcessRuntime"
     _container: ProcessContainer | None = field(default=None, repr=False)
     _container_id: str | None = field(default=None, repr=False)
     _prev_cpu_total: float = field(default=0.0, repr=False)

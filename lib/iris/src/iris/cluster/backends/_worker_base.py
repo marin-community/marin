@@ -11,8 +11,6 @@ operations (status queries, terminate, labels, etc.).
 Local handles use subprocess rather than SSH, so they do not use this base.
 """
 
-from __future__ import annotations
-
 import logging
 import shlex
 from collections.abc import Callable

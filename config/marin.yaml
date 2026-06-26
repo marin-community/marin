@@ -1,0 +1,11 @@
+iris: marin
+data:
+  scheme: gs
+  region_buckets:
+    us-central1:  marin-us-central1
+    us-central2:  marin-us-central2
+    us-east1:     marin-us-east1
+    us-east5:     marin-us-east5
+    us-west4:     marin-us-west4
+    europe-west4: marin-eu-west4
+  temp: { path: tmp, ttl_days: [1, 2, 3, 4, 5, 6, 7, 14, 30] }

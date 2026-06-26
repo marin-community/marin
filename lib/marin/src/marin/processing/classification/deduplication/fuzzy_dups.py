@@ -31,8 +31,6 @@ global dedup: re-running this job over the union of all per-dataset MinHash
 artifacts produces fresh markers without re-reading any source text.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import Iterator

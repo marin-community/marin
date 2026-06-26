@@ -47,13 +47,6 @@ def test_hf_gpt2_roundtrip_fa():
     _roundtrip_compare_gpt2_checkpoint(TEST_GPT2_MODEL_ID, None, config=config)
 
 
-# TODO: gotta figure out why this regressed
-@pytest.mark.skip
-@skip_if_no_torch
-def test_mistral_gpt2_roundtrip():
-    _roundtrip_compare_gpt2_checkpoint("stanford-crfm/expanse-gpt2-small-x777", "checkpoint-60000")
-
-
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):
     import torch  # noqa: PLC0415  # optional dep: torch
 

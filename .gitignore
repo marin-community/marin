@@ -233,8 +233,9 @@ scr/*
 /scratch
 
 .forge
-.claude
+.claude/*
 !.claude/skills
+!.claude/agents
 .agents/tmp/
 .codex
 .entire

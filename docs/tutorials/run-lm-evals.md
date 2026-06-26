@@ -136,8 +136,6 @@ The checked-in examples under `experiments/evals/` are the safest starting point
 ```bash
 uv run python experiments/evals/run_key_evals.py
 uv run python experiments/evals/run_base_model_evals.py
-uv run python experiments/evals/run_sft_model_evals.py
-uv run python experiments/evals/run_on_gpu.py
 ```
 
 These scripts launch the requested hardware, load the selected checkpoint or model definition, run the configured eval tasks, and log results to W&B.

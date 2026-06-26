@@ -11,8 +11,6 @@ The finelog Docker image is assumed to be public on GHCR; no Artifact Registry
 or `docker login` wiring is performed here.
 """
 
-from __future__ import annotations
-
 import re
 
 # Container/host conventions baked into the bootstrap.
@@ -60,19 +58,24 @@ sudo systemctl start docker || true
 
 # Cache directory on the boot disk. Finelog copies parquet segments to GCS
 # via FINELOG_REMOTE_DIR, so the boot disk only needs working space.
-# Owned by UID/GID 1000 to match the in-container `finelog` user (the
-# Dockerfile's chown is shadowed by this bind mount).
 sudo mkdir -p {{ cache_dir }}
-# 1000 matches the finelog user **inside** the container
-sudo chown -R 1000:1000 {{ cache_dir }}
 
 echo "[finelog-init] Pulling image: {{ docker_image }}"
 sudo docker pull {{ docker_image }}
 
 # Gracefully stop any existing container so the server can flush RAM
-# buffers to L0 on disk, then remove it.
+# buffers to L0 on disk, then remove it. This MUST precede the chown below:
+# a running server constantly creates and renames transient files
+# (seg_L*.parquet.tmp, _finelog_catalog.sqlite-journal). One vanishing between
+# readdir and the chown syscall makes `chown -R` exit non-zero, and `set -e`
+# would then abort the whole bootstrap before the new image is ever started.
 sudo docker stop --timeout 5 {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
+
+# Own the cache dir as UID/GID 1000 to match the in-container `finelog` user
+# (the Dockerfile's chown is shadowed by this bind mount). Safe to recurse now
+# that the writer is stopped.
+sudo chown -R 1000:1000 {{ cache_dir }}
 
 host_cpus=$(nproc)
 host_mem_mib=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)

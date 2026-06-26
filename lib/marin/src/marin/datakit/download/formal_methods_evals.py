@@ -22,8 +22,6 @@ Supported archive formats: ``tar``, ``tar.gz`` (``.tgz``), ``tar.bz2``, ``tar.xz
 the issue discussion and not supported by this module.
 """
 
-from __future__ import annotations
-
 import fnmatch
 import gzip
 import io

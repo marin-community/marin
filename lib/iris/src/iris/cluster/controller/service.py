@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
@@ -20,6 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
+from rigging.server_auth import get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
@@ -35,7 +37,8 @@ from iris.cluster.controller.auth import (
     revoke_api_key,
     revoke_login_keys_for_user,
 )
-from iris.cluster.controller.autoscaler.status import PendingHint
+from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
+from iris.cluster.controller.autoscaler.status import PendingHint, slice_capacity_status
 from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
 from iris.cluster.controller.budget import (
     compute_effective_band,
@@ -57,6 +60,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -84,18 +88,17 @@ from iris.cluster.types import (
     TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
+    WorkerUsability,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.auth import (
-    AuthzAction,
-    authorize,
-    authorize_resource_owner,
-    get_verified_identity,
-    get_verified_user,
-    require_identity,
+from iris.rpc.auth import AuthzAction, authorize, authorize_resource_owner
+from iris.rpc.proto_display import (
+    job_state_friendly,
+    priority_band_name,
+    resolve_container_profile,
+    task_state_friendly,
 )
-from iris.rpc.proto_display import job_state_friendly, priority_band_name, task_state_friendly
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -306,6 +309,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         error=task.error or "",
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
+        failure_count=task.failure_count,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -316,8 +320,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     # For pending tasks with prior terminal attempts, surface retry context.
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
+        # current_attempt_id is the authoritative attempt index; len(attempts) now
+        # counts only the current + failed attempts attached for the list view.
         proto.pending_reason = (
-            f"Retrying (attempt {len(task.attempts)}, last: {job_pb2.TaskState.Name(last.state).lower()})"
+            f"Retrying (attempt {task.current_attempt_id + 1}, last: {job_pb2.TaskState.Name(last.state).lower()})"
         )
         proto.can_be_scheduled = True
     return proto
@@ -452,21 +458,32 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
-    """Load tasks for the list view, attaching only the current attempt.
+# Terminal failure states the list view attaches in addition to the current
+# attempt. PREEMPTED and COSCHED_FAILED are deliberately excluded: those are the
+# high-volume churn — capacity preemptions and gang-cancellation collateral —
+# that buries the genuine failures the dashboard wants to surface.
+_LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED)
 
-    The list UI only needs the current attempt's ``started_at_ms`` /
-    ``finished_at_ms`` and a single ``proto.attempts`` entry. Full history is
-    fetched separately by ``get_task_status``.
+
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
+    """Load tasks for the list view with their current and latest-failed attempts.
+
+    Each task carries its current attempt plus the most recent attempt in each
+    genuine-failure state (``_LISTING_FAILURE_STATES``), so a failure stays
+    visible after the task is retried back into a running/pending state. Only the
+    latest per state is attached, keeping the payload bounded for tasks with long
+    retry histories. Attempts are ascending by ``attempt_id`` so the current
+    attempt (the highest id) stays last.
     """
+    job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
             select(*reads.TASK_DETAIL_COLS)
             .where(tasks_table.c.job_id == job_id)
             .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
         ).all()
-        # Fetch only the current attempt for each task (task_index-ordered listing).
-        attempt_rows = tx.execute(
+        # Current attempt per task (composite-PK lookup, at most one row each).
+        current_attempt_rows = tx.execute(
             select(*reads.ATTEMPT_COLS).where(
                 tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                     select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
@@ -475,10 +492,36 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
                 )
             )
         ).all()
-    attempts_by_task: dict[JobName, list] = {}
-    for a in attempt_rows:
-        attempts_by_task.setdefault(a.task_id, []).append(a)
-    return [TaskWithAttempts.from_row(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
+        # Highest failed attempt_id per (task, failure-state). One aggregate scan
+        # of this job's failed attempts, then a PK join back to the full rows —
+        # bounded to <= 2 rows per task no matter how deep the retry history runs.
+        latest_failed = (
+            select(
+                task_attempts_table.c.task_id.label("task_id"),
+                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+            )
+            .where(
+                task_attempts_table.c.task_id.in_(job_task_ids),
+                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+            )
+            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+            .subquery()
+        )
+        failed_attempt_rows = tx.execute(
+            select(*reads.ATTEMPT_COLS).join(
+                latest_failed,
+                (task_attempts_table.c.task_id == latest_failed.c.task_id)
+                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+            )
+        ).all()
+    # Merge, deduping the current attempt when it is itself a failure.
+    attempts_by_task: dict[JobName, dict[int, Any]] = {}
+    for a in (*current_attempt_rows, *failed_attempt_rows):
+        attempts_by_task.setdefault(a.task_id, {})[a.attempt_id] = a
+    return [
+        TaskWithAttempts.from_row(r, tuple(a for _, a in sorted(attempts_by_task.get(r.task_id, {}).items())))
+        for r in task_rows
+    ]
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -633,6 +676,46 @@ def _query_from_list_jobs_request(
             "narrow the result set with state_filter/name_filter/parent_job_id instead of paging deeper.",
         )
     return query
+
+
+def _overlay_worker_usability(
+    status: vm_pb2.AutoscalerStatus,
+    usability_by_id: dict[str, WorkerUsability],
+    running: dict[WorkerId, set],
+) -> None:
+    """Overlay per-VM usability and stamp each ready slice's capacity status in place.
+
+    worker_id/running_task_count are always set; usability/worker_healthy only when
+    the worker is in the liveness roster (else left empty rather than mislabelled).
+    Per ready slice we derive a slice-granular ``capacity_status`` from host health
+    and occupancy, plus ``degraded_slot_count`` for detail.
+    """
+    for group in status.groups:
+        for slice_info in group.slices:
+            healthy_hosts = 0
+            degraded_hosts = 0
+            running_tasks = 0
+            for vm in slice_info.vms:
+                vm.worker_id = vm.vm_id
+                vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
+                running_tasks += vm.running_task_count
+                usability = usability_by_id.get(vm.vm_id)
+                if usability is None:
+                    continue
+                vm.usability = str(usability)
+                vm.worker_healthy = usability is not WorkerUsability.DEAD
+                if usability is WorkerUsability.HEALTHY:
+                    healthy_hosts += 1
+                elif usability is WorkerUsability.DEGRADED:
+                    degraded_hosts += 1
+            slice_info.degraded_slot_count = degraded_hosts
+            slice_info.capacity_status = slice_capacity_status(
+                is_ready=slice_info.state == SliceLifecycleState.READY,
+                host_count=len(slice_info.vms),
+                healthy_hosts=healthy_hosts,
+                running_tasks=running_tasks,
+                idle=slice_info.idle,
+            )
 
 
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
@@ -803,6 +886,7 @@ class AutoscalerProtocol(Protocol):
         constraints: list[Constraint],
         *,
         replicas: int | None = None,
+        resources: job_pb2.ResourceSpecProto | None = None,
     ) -> str | None:
         """Check if a job can ever be scheduled. Returns error message or None."""
         ...
@@ -816,6 +900,8 @@ class ControllerProtocol(Protocol):
     """Protocol for controller operations used by ControllerServiceImpl."""
 
     def wake(self) -> None: ...
+
+    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -835,6 +921,14 @@ class ControllerProtocol(Protocol):
 
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
+
+
+def _profile_is_elevated(profile: int) -> bool:
+    """Whether a container profile is host-root-equivalent and so requires admin."""
+    return resolve_container_profile(profile) in (
+        job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+        job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+    )
 
 
 def _inject_resource_constraints(
@@ -994,15 +1088,23 @@ class ControllerServiceImpl:
         if job_id.is_root and ctx is not None:
             _check_client_freshness(request.client_revision_date, date.today())
 
-        # When an auth provider is configured, override the user segment with
-        # the verified identity to prevent impersonation. Only override for
-        # root-level submissions; child jobs inherit the parent's user.
-        verified_user = get_verified_user()
-        if self._auth.provider and verified_user is not None and job_id.is_root:
-            job_id = JobName.root(verified_user, job_id.name)
+        # Reconcile the requested job owner with the authenticated principal.
+        #
+        # The job name's user segment names the *acting* owner the job is
+        # attributed to; the verified identity is the authenticated *principal*.
+        # These are distinct: a non-admin may only act as themselves, so we pin
+        # the owner to the principal to prevent impersonation. An admin — which
+        # includes a trusted-loopback caller (see docs/auth-loopback-transition)
+        # — may submit on behalf of any user, so the requested owner stands.
+        # This makes loopback-trust attribute jobs exactly as null-auth always
+        # has (the name is authoritative), while token users stay pinned.
+        # Only root submissions carry an owner segment; child jobs inherit it.
+        identity = get_verified_identity()
+        if self._auth.provider and identity is not None and job_id.is_root and identity.role != "admin":
+            job_id = JobName.root(identity.user_id, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
-        if self._auth.provider and verified_user is not None and not job_id.is_root:
+        if self._auth.provider and identity is not None and not job_id.is_root:
             self._authorize_job_owner(job_id)
 
         # Priority band validation.
@@ -1033,6 +1135,51 @@ class ControllerServiceImpl:
                     f"if you believe your username ({job_id.user}) should have a higher band — "
                     f"either to be added to the researcher list or to confirm your username is "
                     f"registered correctly.",
+                )
+
+        # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
+        # and require the admin role. The check only runs when an auth provider is
+        # configured; a trusted-loopback caller resolves to admin.
+        if _profile_is_elevated(request.container_profile):
+            if self._auth.provider:
+                authorize(AuthzAction.SET_CONTAINER_PROFILE)
+            logger.info(
+                "Job %s using elevated container profile %s",
+                job_id.to_wire(),
+                job_pb2.ContainerProfile.Name(request.container_profile),
+            )
+
+        # DOCKER_ACCESS mounts the host docker socket, which only the docker
+        # worker backend has. Reject it at submit on a cluster backend (k8s nodes
+        # run containerd, no host socket) so the job never lands — the k8s
+        # manifest builder would otherwise raise mid-reconcile and stall dispatch.
+        if (
+            resolve_container_profile(request.container_profile) == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS
+            and BackendCapability.WORKER_DAEMON not in self._controller.capabilities
+        ):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "Container profile docker_access requires the docker worker backend (it mounts the "
+                "host docker socket); this cluster's backend does not support it. Use a privileged "
+                "profile with an in-pod runtime, or submit to a docker-worker cluster.",
+            )
+
+        # Cap the number of non-terminal tasks a single user may hold at once.
+        # A burst of eval submissions once materialized enough tasks to OOM the
+        # controller (#6411); reject up front any submission that would push the
+        # user past the cap. Keyed on job_id.user, so a launcher that admits
+        # tasks gradually stays under the cap as earlier tasks finish.
+        incoming_tasks = int(request.replicas)
+        if incoming_tasks > 0:
+            with self._db.read_snapshot() as _snap:
+                active_tasks = reads.count_active_tasks_for_user(_snap, job_id.user)
+            if active_tasks + incoming_tasks > MAX_ACTIVE_TASKS_PER_USER:
+                raise ConnectError(
+                    Code.RESOURCE_EXHAUSTED,
+                    f"User {job_id.user} has {active_tasks} active task(s); submitting "
+                    f"{incoming_tasks} more would exceed the per-user cap of "
+                    f"{MAX_ACTIVE_TASKS_PER_USER}. Wait for running tasks to finish, or "
+                    f"structure the work as a launcher job that admits tasks gradually.",
                 )
 
         # Reject submissions whose parent is absent or already terminated.
@@ -1186,6 +1333,7 @@ class ControllerServiceImpl:
             error = autoscaler.job_feasibility(
                 constraints=constraints,
                 replicas=replicas,
+                resources=request.resources,
             )
             if error:
                 raise ConnectError(
@@ -1543,11 +1691,31 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
+        self._request_recycled_address_eviction(worker_id, request.address)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
+
+    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
+        """Hand any stale prior owner of ``address`` to the controller for teardown.
+
+        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
+        and defers the reap to :meth:`Controller.request_worker_eviction`.
+        """
+        with self._db.read_snapshot() as snap:
+            stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
+        if not stale:
+            return
+        logger.warning(
+            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
+            worker_id,
+            address,
+            len(stale),
+            [str(wid) for wid in stale],
+        )
+        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,
@@ -1681,6 +1849,9 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix (or exact name when request.exact is set).
 
+        When ``request.task_ids`` is set, only endpoints registered by those
+        tasks are returned, ANDed with any prefix/exact match.
+
         System endpoints (names starting with ``/system/``) are resolved from
         an in-memory map rather than the DB.  This allows system services like
         the LogService to be discovered via the same API as job-scoped actors.
@@ -1693,6 +1864,7 @@ class ControllerServiceImpl:
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
+                task_ids=tuple(JobName.from_wire(t) for t in request.task_ids),
             ),
         )
         return controller_pb2.Controller.ListEndpointsResponse(
@@ -1760,8 +1932,8 @@ class ControllerServiceImpl:
 
         workers = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
-        worker_id_to_health: dict[str, bool] = {
-            str(w.worker_id): liveness_by_id[w.worker_id].healthy for w, _attrs in workers
+        usability_by_id: dict[str, WorkerUsability] = {
+            str(w.worker_id): liveness_by_id[w.worker_id].usability for w, _attrs in workers
         }
 
         # Look up running tasks for every VM in the status. The vm_id IS the
@@ -1778,17 +1950,7 @@ class ControllerServiceImpl:
         else:
             running = {}
 
-        for group in status.groups:
-            for slice_info in group.slices:
-                for vm in slice_info.vms:
-                    # worker_id and running_task_count are intrinsic to the VM
-                    # and always populated; health is overlaid only when the
-                    # worker is present in the liveness roster.
-                    vm.worker_id = vm.vm_id
-                    vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
-                    healthy = worker_id_to_health.get(vm.vm_id)
-                    if healthy is not None:
-                        vm.worker_healthy = healthy
+        _overlay_worker_usability(status, usability_by_id, running)
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 

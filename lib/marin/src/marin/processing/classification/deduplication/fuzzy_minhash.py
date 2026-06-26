@@ -14,8 +14,6 @@ deduplication.fuzzy_dups.compute_fuzzy_dups_attrs` consumes one or more of
 these artifacts to produce duplicate markers.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import Iterator

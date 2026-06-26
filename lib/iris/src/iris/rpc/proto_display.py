@@ -4,24 +4,27 @@
 """Protobuf enum utilities."""
 
 import humanfriendly
+from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
-from iris.rpc import config_pb2, job_pb2, vm_pb2
+from iris.rpc import job_pb2, vm_pb2
+
+
+def _enum_name(enum_wrapper: EnumTypeWrapper, value: int) -> str:
+    """Return the proto enum name for ``value``, or ``UNKNOWN(value)`` if unmapped."""
+    try:
+        return enum_wrapper.Name(value)
+    except ValueError:
+        return f"UNKNOWN({value})"
 
 
 def vm_state_name(state: int) -> str:
     """Return enum name like 'VM_STATE_READY'."""
-    try:
-        return vm_pb2.VmState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(vm_pb2.VmState, state)
 
 
 def job_state_name(state: int) -> str:
     """Return enum name like 'JOB_STATE_RUNNING'."""
-    try:
-        return job_pb2.JobState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(job_pb2.JobState, state)
 
 
 def job_state_friendly(state: int) -> str:
@@ -31,38 +34,12 @@ def job_state_friendly(state: int) -> str:
 
 def task_state_name(state: int) -> str:
     """Return enum name like 'TASK_STATE_RUNNING'."""
-    try:
-        return job_pb2.TaskState.Name(state)
-    except ValueError:
-        return f"UNKNOWN({state})"
+    return _enum_name(job_pb2.TaskState, state)
 
 
 def task_state_friendly(state: int) -> str:
     """Return human-friendly lowercase name like 'running'."""
     return task_state_name(state).removeprefix("TASK_STATE_").lower()
-
-
-def accelerator_type_name(accel_type: int) -> str:
-    """Return enum name like 'ACCELERATOR_TYPE_TPU'."""
-    try:
-        return config_pb2.AcceleratorType.Name(accel_type)
-    except ValueError:
-        return f"UNKNOWN({accel_type})"
-
-
-def accelerator_type_friendly(accel_type: int) -> str:
-    """Return human-friendly accelerator type name.
-
-    Examples:
-        ACCELERATOR_TYPE_UNSPECIFIED (0) -> "unspecified"
-        ACCELERATOR_TYPE_CPU (1) -> "cpu"
-        ACCELERATOR_TYPE_GPU (2) -> "gpu"
-        ACCELERATOR_TYPE_TPU (3) -> "tpu"
-    """
-    name = accelerator_type_name(accel_type)
-    if name.startswith("ACCELERATOR_TYPE_"):
-        return name.replace("ACCELERATOR_TYPE_", "").lower()
-    return name.lower()
 
 
 def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
@@ -92,15 +69,15 @@ def format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
     return ", ".join(parts) if parts else "-"
 
 
-def format_accelerator_display(accel_type: int, variant: str = "") -> str:
-    """Format accelerator type and variant for display.
+def format_accelerator_display(device_type: str, variant: str = "") -> str:
+    """Format an accelerator device type and variant for display.
 
     Examples:
-        format_accelerator_display(3, "v5litepod-16") -> "tpu (v5litepod-16)"
-        format_accelerator_display(2, "A100") -> "gpu (A100)"
-        format_accelerator_display(1, "") -> "cpu"
+        format_accelerator_display("tpu", "v5litepod-16") -> "tpu (v5litepod-16)"
+        format_accelerator_display("gpu", "A100") -> "gpu (A100)"
+        format_accelerator_display("cpu", "") -> "cpu"
     """
-    friendly = accelerator_type_friendly(accel_type)
+    friendly = device_type or "unspecified"
     if variant:
         return f"{friendly} ({variant})"
     return friendly
@@ -128,3 +105,26 @@ PRIORITY_BAND_VALUES: list[int] = [
 ]
 
 PRIORITY_BAND_NAMES: list[str] = [priority_band_name(b) for b in PRIORITY_BAND_VALUES]
+
+
+# ---------------------------------------------------------------------------
+# ContainerProfile helpers
+# ---------------------------------------------------------------------------
+
+
+# User-selectable profiles, ordered ascending by privilege.
+CONTAINER_PROFILE_VALUES: list[int] = [
+    job_pb2.CONTAINER_PROFILE_RESTRICTED,
+    job_pb2.CONTAINER_PROFILE_DEFAULT,
+    job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS,
+    job_pb2.CONTAINER_PROFILE_PRIVILEGED,
+]
+
+CONTAINER_PROFILE_NAMES: list[str] = [job_pb2.ContainerProfile.Name(p) for p in CONTAINER_PROFILE_VALUES]
+
+
+def resolve_container_profile(profile: int) -> int:
+    """Resolve UNSPECIFIED to the DEFAULT profile; pass others through."""
+    if profile == job_pb2.CONTAINER_PROFILE_UNSPECIFIED:
+        return job_pb2.CONTAINER_PROFILE_DEFAULT
+    return profile

@@ -37,13 +37,14 @@ jobs:
               # is why they keep 'uv.lock' here and dupekit does not.
               - 'lib/dupekit/**'
               - '.github/workflows/dupekit-unit.yaml'
-            # The dev-mode guard below inspects the root pyproject.toml, where a
-            # leaked editable rust source (written by scripts/rust_mode.py dev)
-            # lands — it never rewrites uv.lock. Gate the guard on that file
-            # directly so it runs whenever its target changes, without dragging
-            # the expensive test/cargo jobs onto every root-pyproject edit.
+            # The dev-mode guard below inspects the pyprojects where a leaked
+            # rust path source (written by scripts/rust_mode.py dev) lands —
+            # it never rewrites uv.lock. Gate the guard on those files directly
+            # so it runs whenever its targets change, without dragging the
+            # expensive test/cargo jobs onto every root-pyproject edit.
             user_mode:
               - 'pyproject.toml'
+              - 'lib/finelog/pyproject.toml'
 
   check-user-mode:
     needs: changes
@@ -54,12 +55,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Ensure pyproject.toml is in user mode
+      - name: Ensure pyprojects are in user mode
         run: |
-          # The RUST-DEV SOURCES block governs both native packages (dupekit and
-          # finelog); either editable path source committed means dev mode leaked.
-          if grep -qE 'marin-(dupekit|finelog) = \{ path' pyproject.toml; then
-            echo "ERROR: pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
+          # The RUST-DEV SOURCES blocks govern the native packages (dupekit and
+          # the finelog pair); any path source committed means dev mode leaked.
+          if grep -qE 'marin-(dupekit|finelog|finelog-server) = \{ path' pyproject.toml lib/finelog/pyproject.toml; then
+            echo "ERROR: a pyproject.toml has a dev-mode rust source. Run 'python scripts/rust_mode.py user' before committing."
             exit 1
           fi
 
@@ -70,7 +71,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.12", "3.13"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

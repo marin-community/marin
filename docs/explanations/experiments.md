@@ -12,7 +12,7 @@ filtering schemes.  Regardless, an experiment consists of a sequence of steps.
 
 To promote the reproducibility of experiments,
 we record all experiments in the [experiments](https://github.com/marin-community/marin/tree/main/experiments) directory.
-Each file in that directory (e.g., [exp934_hq_vs_pt.py](https://github.com/marin-community/marin/blob/main/experiments/exp934_hq_vs_pt.py)) corresponds to one experiment, where the naming convention contains the GitHub issue number.
+Each file in that directory (e.g., [tutorials/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1077_reproduce_dclm_1b1x.py)) corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
 Running each experiment produces an experiment JSON file (see the
 [executor documentation](../references/executor-api.md)), which can be visualized specially

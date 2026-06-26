@@ -46,8 +46,8 @@ from marin.execution.executor import (
     ExecutorStep,
     executor_main,
     output_path_of,
-    this_output_path
 )
+from marin.execution.types import this_output_path
 ```
 
 Key imports:

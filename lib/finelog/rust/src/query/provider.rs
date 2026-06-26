@@ -124,9 +124,10 @@ impl TableProvider for NamespaceProvider {
                 // range / min-max / bloom row-group pruning), then layer the
                 // trigram prune on top by injecting per-file access plans.
                 let plan = t.scan(state, projection, filters, limit).await?;
-                // Hot path: a query with no `contains(data, …)` filter does only
-                // this cheap expr inspection (no I/O) and returns untouched.
-                let needles = crate::query::trigram_prune::indexed_column_needles(filters);
+                // Hot path: a query with no `contains(col, …)`/`LIKE` filter on any
+                // column does only this cheap expr inspection (no I/O) and returns
+                // untouched.
+                let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 if needles.is_empty() {
                     return Ok(plan);
                 }
@@ -378,7 +379,7 @@ mod tests {
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
         // Build the sidecar the way the compactor would.
         assert!(
-            crate::store::trigram::write_sidecar(&path, &[batch], "data", Some("key")).unwrap(),
+            crate::store::trigram::write_sidecar(&path, &[batch], &["data"], Some("key")).unwrap(),
             "sidecar should be written for a data column"
         );
         path.to_string_lossy().into_owned()

@@ -76,16 +76,6 @@ class Worker(_message.Message):
         stderr: str
         error: str
         def __init__(self, exit_code: _Optional[int] = ..., stdout: _Optional[str] = ..., stderr: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
-    class PingRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class PingResponse(_message.Message):
-        __slots__ = ("healthy", "health_error")
-        HEALTHY_FIELD_NUMBER: _ClassVar[int]
-        HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
-        healthy: bool
-        health_error: str
-        def __init__(self, healthy: _Optional[bool] = ..., health_error: _Optional[str] = ...) -> None: ...
     class ReconcileRequest(_message.Message):
         __slots__ = ("worker_id", "desired")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]

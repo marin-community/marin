@@ -6,19 +6,31 @@
 Hosts the SA ``Engine`` factories, the ``Tx`` wrapper, and the two
 transaction context managers (``write_transaction`` / ``read_snapshot``).
 
-The engine is split into a **write engine** and a **read engine**:
+The engine is split into a **write engine** and two **read engines**:
 
 * The write engine uses pool size 1 so writes are funneled through a
   single connection. Serialization between writers is enforced by an
   external ``threading.RLock`` passed into ``write_transaction``.
-* The read engine uses ``QueuePool(pool_size=2, max_overflow=2)`` with
-  ``PRAGMA query_only = ON`` **pinned at connect time**. Pinning avoids
-  toggling the pragma on every ``read_snapshot`` call. A small pool keeps
-  tail latency low under concurrent reads — SQLite's WAL-index header lock
-  becomes contended once many readers each hold their own connection, so
-  queueing surplus readers at the SA pool (FIFO) beats spinning inside SQLite.
+* The shared read engine uses ``QueuePool(pool_size=4, max_overflow=4)``
+  with ``PRAGMA query_only = ON`` **pinned at connect time** and backs every
+  RPC-handler read (``read_snapshot``). Pinning avoids toggling the pragma on
+  every call. The pool caps in-flight readers: SQLite's WAL admits concurrent
+  readers but each contends on the WAL-index header lock when establishing a
+  snapshot, so queueing surplus readers at the SA pool (FIFO) beats spinning
+  inside SQLite. A total of 8 is the controller benchmark's measured knee — it
+  lets the high-volume fast reads (e.g. ``GetJobState``) bypass the handful of
+  slow ones (``ListJobs``, ``GetSchedulerState``) that would otherwise occupy
+  every connection and head-of-line block the dashboard; widening past 8 only
+  adds WAL-index/GIL contention with no throughput gain.
+* The control read engine is a **dedicated** ``QueuePool(pool_size=2,
+  max_overflow=2)`` used only by the single control-loop thread's per-tick
+  snapshot (``control_read_snapshot``). Isolating it guarantees the
+  schedule/reconcile/autoscale tick never waits behind a slow dashboard read
+  for a connection — the pool-checkout wait visible as ``QueuePool.get`` in
+  controller stacks. Its connections sit idle between ticks (~1 read/s), so
+  they add negligible WAL-index contention.
 
-Both engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
+All engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
 ``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly.
 
 Post-commit hooks registered via ``Tx.register`` fire *under the write
@@ -96,12 +108,32 @@ def _make_engine(
     return engine
 
 
+# Read-pool sizing. See the module docstring for the rationale; the totals are
+# the controller benchmark's measured knee.
+SHARED_READ_POOL_SIZE = 4
+SHARED_READ_MAX_OVERFLOW = 4
+CONTROL_READ_POOL_SIZE = 2
+CONTROL_READ_MAX_OVERFLOW = 2
+# Auth reads are low-volume (token/key lookups) against a separate WAL; keep
+# the pool small and pinned rather than inheriting the shared default.
+AUTH_READ_POOL_SIZE = 2
+AUTH_READ_MAX_OVERFLOW = 2
+
+
 def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
 
 
-def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
-    return _make_engine(db_path, read_only=True, pool_size=2, max_overflow=2, auth_db_path=auth_db_path)
+def _make_read_engine(
+    db_path: Path,
+    auth_db_path: Path | None,
+    *,
+    pool_size: int = SHARED_READ_POOL_SIZE,
+    max_overflow: int = SHARED_READ_MAX_OVERFLOW,
+) -> Engine:
+    return _make_engine(
+        db_path, read_only=True, pool_size=pool_size, max_overflow=max_overflow, auth_db_path=auth_db_path
+    )
 
 
 class Tx:
@@ -214,9 +246,16 @@ class ControllerDB:
         self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
         # Read connections must not see auth tables — pass None so auth is not ATTACHed.
         self._sa_read_engine: Engine = _make_read_engine(self._db_path, None)
+        # Dedicated read engine for the control-loop tick, isolated from the
+        # shared RPC pool so scheduling never queues behind a slow dashboard read.
+        self._sa_control_read_engine: Engine = _make_read_engine(
+            self._db_path, None, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
+        )
         # Dedicated read engine backed by the auth DB file directly so auth
         # read functions do not go through the write connection.
-        self._sa_auth_read_engine: Engine = _make_read_engine(self._auth_db_path, None)
+        self._sa_auth_read_engine: Engine = _make_read_engine(
+            self._auth_db_path, None, pool_size=AUTH_READ_POOL_SIZE, max_overflow=AUTH_READ_MAX_OVERFLOW
+        )
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
@@ -240,8 +279,13 @@ class ControllerDB:
 
     @property
     def sa_read_engine(self) -> Engine:
-        """SA Core read engine."""
+        """Shared SA Core read engine (RPC-handler reads)."""
         return self._sa_read_engine
+
+    @property
+    def sa_control_read_engine(self) -> Engine:
+        """Dedicated SA Core read engine for the control-loop tick."""
+        return self._sa_control_read_engine
 
     @property
     def sa_write_engine(self) -> Engine:
@@ -300,6 +344,7 @@ class ControllerDB:
     def close(self) -> None:
         self._sa_write_engine.dispose()
         self._sa_read_engine.dispose()
+        self._sa_control_read_engine.dispose()
         self._sa_auth_read_engine.dispose()
 
     @contextmanager
@@ -323,6 +368,19 @@ class ControllerDB:
         loop holds the write lock.
         """
         with read_snapshot(self._sa_read_engine) as tx:
+            yield tx
+
+    @contextmanager
+    def control_read_snapshot(self) -> Iterator[Tx]:
+        """Read-only snapshot for the control loop, backed by a dedicated engine.
+
+        Identical to :meth:`read_snapshot` but checks out from the control-only
+        pool, so the schedule/reconcile/autoscale tick never queues behind
+        RPC-handler reads for a connection. Use only from control-plane threads
+        (the single control-loop thread, or the scheduling/autoscaler loops on
+        the legacy path).
+        """
+        with read_snapshot(self._sa_control_read_engine) as tx:
             yield tx
 
     @contextmanager
@@ -555,6 +613,7 @@ class ControllerDB:
             # Dispose existing SA pools before swapping files.
             self._sa_write_engine.dispose()
             self._sa_read_engine.dispose()
+            self._sa_control_read_engine.dispose()
 
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
@@ -578,7 +637,12 @@ class ControllerDB:
             self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
             # Read connections must not see auth tables — pass None so auth is not ATTACHed.
             self._sa_read_engine = _make_read_engine(self._db_path, None)
-            self._sa_auth_read_engine = _make_read_engine(self._auth_db_path, None)
+            self._sa_control_read_engine = _make_read_engine(
+                self._db_path, None, pool_size=CONTROL_READ_POOL_SIZE, max_overflow=CONTROL_READ_MAX_OVERFLOW
+            )
+            self._sa_auth_read_engine = _make_read_engine(
+                self._auth_db_path, None, pool_size=AUTH_READ_POOL_SIZE, max_overflow=AUTH_READ_MAX_OVERFLOW
+            )
 
         self.apply_migrations()
         for hook in self._reopen_hooks:

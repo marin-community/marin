@@ -15,7 +15,7 @@ FROM rust:1.91-slim AS rust-builder
 
 
 # Main build
-FROM rayproject/ray:2.53.0-py311-cpu
+FROM rayproject/ray:2.55.1-py312-cpu
 ARG VLLM_VERSION=0.11.1
 
 # For some reason, ray destroys the apt sources list, so we need to restore it
@@ -34,8 +34,8 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
       gdb \
       gnupg \
       liblz4-dev \
-      libpython3.11 \
-      libpython3.11-dev \
+      libpython3.12 \
+      libpython3.12-dev \
       libre2-dev \
       libssl-dev \
       libuchardet-dev \
@@ -77,7 +77,7 @@ ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/:/home/ray/anaconda3/lib
 
 COPY docker/marin/preemptible-fix.patch .
 # apply the patch to fix preemptible GCP in Ray in the installed ray package
-RUN patch -d /home/ray/anaconda3/lib/python3.11/site-packages/ -p2 < preemptible-fix.patch
+RUN patch -d /home/ray/anaconda3/lib/python3.12/site-packages/ -p2 < preemptible-fix.patch
 
 # to run docker containers, we need to be in the docker group
 RUN sudo usermod -aG docker ray

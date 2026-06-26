@@ -6,7 +6,7 @@ In this tutorial, you will install Marin on your local machine.
 
 Before you begin, ensure you have the following installed:
 
-- Python 3.11 or higher
+- Python 3.12 or higher
 - uv (Python package manager)
 - Git
 - Rust toolchain via [rustup](https://rustup.rs) (only needed for source builds of Rust crates; see Rust Crates section below)
@@ -33,7 +33,7 @@ Running on shared TPU/GPU capacity is handled by [Iris](https://github.com/marin
 
 2. Create and activate a virtual environment (~0s):
    ```bash
-   uv venv --python 3.11
+   uv venv --python 3.12
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 

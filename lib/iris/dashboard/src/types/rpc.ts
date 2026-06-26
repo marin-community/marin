@@ -98,6 +98,9 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
+  // Genuine application-failure count for this task. The list view attaches only
+  // the latest failed attempt, so this carries the true count for the badge.
+  failureCount?: number
 }
 
 // -- Jobs --
@@ -182,6 +185,11 @@ export interface LaunchJobRequest {
   replicas?: number
   priorityBand?: string
   submitArgv?: string[]
+  // Job aborts once more than this many tasks fail terminally (default 0).
+  maxTaskFailures?: number
+  // Per-task retry budget on failure (default 0) and on preemption.
+  maxRetriesFailure?: number
+  maxRetriesPreemption?: number
 }
 
 export interface GetTaskStatusResponse {
@@ -286,6 +294,8 @@ export interface VmInfo {
   stateChangedAt?: ProtoTimestamp
   workerId?: string
   workerHealthy?: boolean
+  /** WorkerUsability: "healthy" | "degraded" | "dead"; empty if not in the roster. */
+  usability?: string
   initPhase?: string
   initLogTail?: string
   initError?: string
@@ -309,16 +319,21 @@ export interface SliceInfo {
    * which is empty until a slice's workers register — a booting slice has none.
    */
   state?: string
-}
-
-export interface ScaleGroupConfig {
-  quotaPool?: string
-  allocationTier?: number
+  /** Count of DEGRADED (reachable-but-failing) hosts among `vms`, for detail display. */
+  degradedSlotCount?: number
+  /**
+   * Server-derived placement status of a ready slice: "available" | "in_use" |
+   * "idle" | "degraded". Empty for non-ready slices.
+   */
+  capacityStatus?: string
 }
 
 export interface ScaleGroupStatus {
   name: string
-  config?: ScaleGroupConfig
+  deviceType?: string
+  deviceVariant?: string
+  quotaPool?: string
+  allocationTier?: number
   currentDemand?: number
   peakDemand?: number
   backoffUntil?: ProtoTimestamp

@@ -16,7 +16,7 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 ## Guidelines for Humans
 
 ### Standard Workflow
-1. Run `uv run --extra pm scripts/pm/itemize_experiment_issues.py` to append new experiments.
+1. Run `uv run scripts/pm/itemize_experiment_issues.py` to append new experiments.
 2. Open the diff for `docs/reports/index.md` and identify the additions in `## Uncategorized`.
 3. For each experiment:
    - Match it to an existing section (e.g., `Training and Performance`, `Data Experiments`).
@@ -40,7 +40,7 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 
 ## Validation
 - `rg "^- " docs/reports/index.md` to confirm bullets exist only under curated sections, not under `## Uncategorized`.
-- Re-run `uv run --extra pm scripts/pm/itemize_experiment_issues.py` if unsure that all experiments were captured.
+- Re-run `uv run scripts/pm/itemize_experiment_issues.py` if unsure that all experiments were captured.
 - Optional: `markdownlint docs/reports/index.md` to catch formatting drift.
 
 ## See Also

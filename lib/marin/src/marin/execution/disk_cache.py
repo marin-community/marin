@@ -3,8 +3,6 @@
 
 """Run a function once, cache the result, and return it on subsequent calls."""
 
-from __future__ import annotations
-
 import functools
 import hashlib
 import logging

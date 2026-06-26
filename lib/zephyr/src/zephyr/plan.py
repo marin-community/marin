@@ -8,8 +8,6 @@ They encapsulate execution logic as callables, decoupling the backend from
 knowledge of logical operation types.
 """
 
-from __future__ import annotations
-
 import functools
 import heapq
 import logging
@@ -151,7 +149,7 @@ class Join:
     """Join two sorted streams."""
 
     fn: Callable[[Iterator, Iterator], Iterator]
-    right_plan: PhysicalPlan | None = None
+    right_plan: "PhysicalPlan | None" = None
 
 
 PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join

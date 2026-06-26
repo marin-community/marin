@@ -1,5 +1,22 @@
 # Contributing to Marin
 
+We welcome contributions that add missing features or fix serious issues. If you
+are unsure whether a change is wanted, open an issue or ask in the
+[Marin Discord](https://discord.gg/J9CTk7pqcM) before sending a PR. We are
+unlikely to merge typo fixes, stylistic rewrites, or speculative refactors that
+are not tied to an issue.
+
+## AI-generated contributions
+
+We use coding agents ourselves and accept contributions made with them. We do
+not accept drive-by PRs that an agent produced in one shot.
+
+The rule of thumb: if your agent can do it in one shot, so can ours, so please
+do not burden us with the PR. A throwaway agent-generated change costs us more to
+review than it cost you to file. If you do contribute agent-assisted work, hold
+it to the same bar as the rest of this guide: confirm the change is needed, that
+it is correct, and that you can explain why it matters.
+
 ## Setup
 
 1. Clone the repository
@@ -10,7 +27,7 @@
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
-uv venv --python 3.11
+uv venv --python 3.12
 source .venv/bin/activate
 uv sync --package marin-core --group dev
 make setup_pre_commit

@@ -11,8 +11,6 @@ These tests cover:
 - Failure injection (one-shot error injection for testing error paths)
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 from unittest.mock import MagicMock, patch
@@ -35,7 +33,7 @@ from iris.cluster.backends.types import (
     ResourceNotFoundError,
 )
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
+from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
 
 
@@ -50,7 +48,7 @@ def _tpu_request(
     accelerator_type: str = "v4-8",
     runtime_version: str = "tpu-ubuntu2204-base",
     labels: dict[str, str] | None = None,
-    capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+    capacity_type: CapacityType | None = CapacityType.PREEMPTIBLE,
 ) -> TpuCreateRequest:
     return TpuCreateRequest(
         name=name,

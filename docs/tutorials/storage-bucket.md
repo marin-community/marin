@@ -71,7 +71,7 @@ Clearing the policy ensures that once a training job deletes temporary files the
 
 For intermediate checkpoints and other short-lived data, Marin reserves a `tmp/` prefix on each `marin-{region}` bucket with lifecycle rules that delete objects based on a `tmp/ttl=Nd/` path prefix — for example, objects under `gs://marin-us-central2/tmp/ttl=3d/my-job/` are deleted three days after they are written.
 
-Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `lib/rigging/src/rigging/filesystem.py` (`ALLOWED_TTL_DAYS`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
+Supported TTLs: 1, 2, 3, 4, 5, 6, 7, 14, and 30 days. The canonical list lives in `config/marin.yaml` (`data.temp.ttl_days`); call `marin_temp_bucket(ttl_days=N, prefix=...)` to build a path.
 
 To re-apply lifecycle rules and confirm soft-delete is disabled across every regional `marin-*` bucket (idempotent; merges with any unrelated rules already present):
 
@@ -126,7 +126,16 @@ trainer:
     base_path: "$BUCKET/your-run"
 ```
 
-Commit these defaults in `.levanter.yaml` or `.envrc` so every launch script uses the same location.
+Put personal launch defaults in `~/.config/marin/config.yaml` so every launch script uses the same location:
+
+```yaml
+env:
+  MARIN_PREFIX: "gs://your-bucket"
+  WANDB_PROJECT: marin
+  WANDB_ENTITY: your-entity
+```
+
+Use a checkout-local `.levanter.yaml` only for values that should override your personal defaults for that repository.
 
 ## Ongoing Hygiene Checklist
 

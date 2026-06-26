@@ -5,6 +5,7 @@ import collections
 import copy
 import logging as pylogging
 import statistics
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
 
@@ -20,6 +21,50 @@ from levanter.tracker import log_optimizer_hyperparams
 from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
+
+
+@dataclass
+class InstantThroughput:
+    """Per-step throughput derived from a single step's wall-clock duration.
+
+    Fields are ``None`` when they cannot be computed: all rates require a
+    nonzero ``step_duration``; ``model_flops_per_second`` additionally needs
+    ``flops_per_example``; ``mfu`` additionally needs the device's theoretical
+    peak FLOPs.
+    """
+
+    examples_per_second: float | None = None
+    tokens_per_second: float | None = None
+    model_flops_per_second: float | None = None
+    mfu: float | None = None
+
+
+def aggregate_device_flops() -> float | None:
+    """Theoretical peak FLOPs summed over all local JAX devices, or ``None`` if unknown."""
+    flops_per_device = device_flops_for_jax_device(jax.devices()[0].device_kind)
+    if flops_per_device is None:
+        return None
+    return flops_per_device * jax.device_count()
+
+
+def compute_instant_throughput(
+    batch_size: int,
+    step_duration: float,
+    tokens_per_example: int,
+    flops_per_example: float | None = None,
+    theoretical_flops: float | None = None,
+) -> InstantThroughput:
+    """Compute examples/sec, tokens/sec, model FLOPs/sec, and MFU for one step."""
+    if step_duration <= 0.0:
+        return InstantThroughput()
+    examples_per_second = batch_size / step_duration
+    tokens_per_second = tokens_per_example * examples_per_second
+    model_flops_per_second = mfu = None
+    if flops_per_example is not None:
+        model_flops_per_second = flops_per_example / step_duration * batch_size
+        if theoretical_flops is not None:
+            mfu = model_flops_per_second / theoretical_flops * 100.0
+    return InstantThroughput(examples_per_second, tokens_per_second, model_flops_per_second, mfu)
 
 
 def log_step_info(total_steps: Optional[int]):
@@ -51,6 +96,7 @@ def log_performance_stats(
     device = jax.devices()[0]
 
     flops_per_device = device_flops_for_jax_device(device.device_kind)
+    theoretical_flops = flops_per_device * device_count if flops_per_device is not None else None
     levanter.tracker.log_summary(
         {
             wrap_key("device_kind"): device.device_kind,
@@ -58,8 +104,6 @@ def log_performance_stats(
     )
 
     if flops_per_device is not None:
-        theoretical_flops = flops_per_device * device_count
-
         levanter.tracker.log_summary(
             {
                 wrap_key("theoretical_flops_per_device"): flops_per_device,
@@ -88,19 +132,18 @@ def log_performance_stats(
             total_flops = flops_per_example * total_examples
             dict_to_log["total_gflops"] = total_flops / 1e9
 
-        if step_info.step_duration != 0.0:
-            dict_to_log["examples_per_second"] = float(this_batch_size) / step_info.step_duration
-            dict_to_log["tokens_per_second"] = float(tokens_per_example) / step_info.step_duration * this_batch_size
+        throughput = compute_instant_throughput(
+            this_batch_size, step_info.step_duration, tokens_per_example, flops_per_example, theoretical_flops
+        )
+        if throughput.examples_per_second is not None and throughput.tokens_per_second is not None:
+            dict_to_log["examples_per_second"] = throughput.examples_per_second
+            dict_to_log["tokens_per_second"] = throughput.tokens_per_second
             dict_to_log["duration"] = step_info.step_duration
-
-            if flops_per_example is not None:
-                model_flops_instant = flops_per_example / step_info.step_duration * this_batch_size
-                dict_to_log["gflops_per_second"] = model_flops_instant / 1e9
-
-                if flops_per_device is not None:
-                    mfu_instant = model_flops_instant / theoretical_flops * 100.0
-                    dict_to_log["mfu"] = mfu_instant
-                    mfu_window.append(mfu_instant)
+        if throughput.model_flops_per_second is not None:
+            dict_to_log["gflops_per_second"] = throughput.model_flops_per_second / 1e9
+        if throughput.mfu is not None:
+            dict_to_log["mfu"] = throughput.mfu
+            mfu_window.append(throughput.mfu)
 
         dict_to_log = {wrap_key(k): v for k, v in dict_to_log.items()}
         levanter.tracker.log(dict_to_log, step=step_info.step)

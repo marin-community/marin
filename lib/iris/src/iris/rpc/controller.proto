@@ -85,8 +85,11 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // Resource reservation. When set, the autoscaler pre-provisions capacity
-    // and the reserving job is held pending until the reservation is satisfied.
+    // DEPRECATED, back-compat only. Reservations were replaced by the hard
+    // availability:<variant> constraint. Current clients leave this empty; when a
+    // pre-availability client sets it, the server converts each entry into a hard
+    // availability constraint at ingestion and discards the field. Scheduled for
+    // removal once stragglers have upgraded — do not add new uses.
     iris.job.ReservationConfig reservation = 30;
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;
@@ -113,6 +116,11 @@ message Controller {
     // Nested submissions (is_root == false) are exempt. Empty string is
     // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
     string client_revision_date = 36;
+
+    // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
+    iris.job.ContainerProfile container_profile = 37;
   }
 
   message LaunchJobResponse {
@@ -336,6 +344,7 @@ message Controller {
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
     bool exact = 2;                  // If true, match prefix as an exact name instead
+    repeated string task_ids = 3;    // Wire-format task IDs; when set, only endpoints registered by these tasks are returned (ANDed with prefix/exact).
   }
 
   message ListEndpointsResponse {

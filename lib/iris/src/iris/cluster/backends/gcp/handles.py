@@ -9,8 +9,6 @@ GcpSliceHandle: TPU pod slice (describe, terminate)
 GcpVmSliceHandle: Single-VM GCE-backed slice
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import threading
@@ -30,8 +28,8 @@ from iris.cluster.backends.types import (
     SliceStatus,
     WorkerStatus,
 )
+from iris.cluster.config import SshConfig
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +242,7 @@ class GcpSliceHandle:
         _worker_port: int,
         _accelerator_variant: str,
         _gcp_service: GcpService,
-        _ssh_config: config_pb2.SshConfig | None = None,
+        _ssh_config: SshConfig | None = None,
         _service_account: str | None = None,
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
@@ -265,6 +263,10 @@ class GcpSliceHandle:
         self.is_queued_resource: bool = _is_queued_resource
         self._create_operation = _create_operation
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
+        # Failure detail captured when bootstrap fails (e.g. the create-LRO error
+        # "no more capacity ..."); surfaced via describe() so the autoscaler can
+        # classify the outcome (stockout vs error) instead of losing it.
+        self._bootstrap_error: str = ""
         self._bootstrap_lock = threading.Lock()
 
     @property
@@ -300,6 +302,7 @@ class GcpSliceHandle:
 
         with self._bootstrap_lock:
             bs = self._bootstrap_state
+            bootstrap_error = self._bootstrap_error
 
         effective_state = _composite_slice_state(cloud_state, bs)
 
@@ -307,6 +310,7 @@ class GcpSliceHandle:
             state=effective_state,
             worker_count=cloud_status.worker_count,
             workers=cloud_status.workers,
+            error_message=bootstrap_error if effective_state == CloudSliceState.FAILED else "",
         )
 
     def _describe_cloud(self) -> SliceStatus:
@@ -402,7 +406,7 @@ class GcpVmSliceHandle:
         _label_prefix: str,
         _worker_port: int,
         _gcp_service: GcpService,
-        _ssh_config: config_pb2.SshConfig | None = None,
+        _ssh_config: SshConfig | None = None,
         _service_account: str | None = None,
         _bootstrapping: bool = False,
     ):
@@ -419,6 +423,8 @@ class GcpVmSliceHandle:
         self._ssh_config = _ssh_config
         self._service_account = _service_account
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
+        # See GcpSliceHandle._bootstrap_error.
+        self._bootstrap_error: str = ""
         self._bootstrap_lock = threading.Lock()
 
     @property
@@ -447,6 +453,7 @@ class GcpVmSliceHandle:
 
         with self._bootstrap_lock:
             bs = self._bootstrap_state
+            bootstrap_error = self._bootstrap_error
 
         effective_state = _composite_slice_state(cloud_state, bs)
 
@@ -454,6 +461,7 @@ class GcpVmSliceHandle:
             state=effective_state,
             worker_count=cloud_status.worker_count,
             workers=cloud_status.workers,
+            error_message=bootstrap_error if effective_state == CloudSliceState.FAILED else "",
         )
 
     def _describe_cloud(self) -> SliceStatus:

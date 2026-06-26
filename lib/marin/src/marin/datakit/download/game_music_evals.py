@@ -3,8 +3,6 @@
 
 """Manifest-backed first-pass game/music ingestion helpers for long-tail PPL evals."""
 
-from __future__ import annotations
-
 import io
 import json
 import logging

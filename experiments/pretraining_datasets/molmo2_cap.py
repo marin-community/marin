@@ -10,7 +10,7 @@ from marin.execution.types import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 molmo2_cap_normalized = molmo2_cap_normalize_steps()[-1].as_executor_step()
 

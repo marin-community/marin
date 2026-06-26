@@ -99,8 +99,6 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
 from fray.types import TpuConfig
-from iris.cluster.constraints import WellKnownAttribute
-from iris.rpc import config_pb2
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
@@ -112,6 +110,7 @@ from rigging.filesystem import (
 )
 from rigging.log_setup import configure_logging
 
+from marin.execution.context import executor_context
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     StatusFile,
@@ -333,22 +332,15 @@ def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
 
     regions: set[str] = set()
     for group in autoscaler_status.status.groups:
-        resources = group.config.resources
-        if resources.device_type != config_pb2.ACCELERATOR_TYPE_TPU:
+        if group.device_type != "tpu":
             continue
-        group_variant = resources.device_variant.lower().strip()
+        group_variant = group.device_variant.lower().strip()
         if group_variant and group_variant != variant:
             continue
 
-        attrs = group.config.worker.attributes
-        region = attrs.get(WellKnownAttribute.REGION, "").strip().lower()
+        region = group.region.strip().lower()
         if region:
             regions.add(region)
-            continue
-
-        zone = attrs.get(WellKnownAttribute.ZONE, "").strip().lower()
-        if zone and "-" in zone:
-            regions.add(zone.rsplit("-", 1)[0])
 
     return regions or None
 
@@ -395,30 +387,6 @@ def _tpu_regions_for_remote_callable(
     if remote_fn.resources.device_alternatives:
         variants.extend(remote_fn.resources.device_alternatives)
     return _regions_for_tpu_variants_from_iris(variants, variant_region_cache=variant_region_cache)
-
-
-def _dag_tpu_regions(steps: list["ExecutorStep"]) -> list[str] | None:
-    """Infer allowed regions for TPU steps in this DAG, if any."""
-    tpu_region_intersection: set[str] | None = None
-    tpu_variant_region_cache: dict[str, set[str] | None] = {}
-
-    for step in steps:
-        step_fn = step.fn
-        if not isinstance(step_fn, RemoteCallable):
-            continue
-        step_regions = _tpu_regions_for_remote_callable(step_fn, variant_region_cache=tpu_variant_region_cache)
-        if not step_regions:
-            continue
-
-        if tpu_region_intersection is None:
-            tpu_region_intersection = set(step_regions)
-        else:
-            tpu_region_intersection &= step_regions
-
-        if not tpu_region_intersection:
-            raise ValueError("No common region satisfies all TPU steps in this DAG.")
-
-    return sorted(tpu_region_intersection) if tpu_region_intersection else None
 
 
 def _step_dag_tpu_regions(
@@ -639,15 +607,14 @@ def resolve_executor_step(
     # Short-circuit for StepSpec -> ExecutorStep -> StepSpec round-trip.
     original: StepSpec | None = getattr(step, "_original_step_spec", None)
     if original is not None:
-        # ``as_executor_step()`` pins ``override_output_path=original.output_path``
-        # on the ExecutorStep so the executor preserves the original placement.
-        # Mirror that pin on the resolved StepSpec — otherwise replacing deps
-        # with executor-built stubs (which lack the originals' ``hash_attrs``)
-        # would change ``name_with_hash`` and silently shift ``output_path``.
+        # Pin the executor-computed ``output_path`` — already anchored under the
+        # run prefix — rather than ``original.output_path`` (which resolves the
+        # build environment's region). Otherwise the StepSpec handed to
+        # ``StepRunner`` would write under the build region, not the run region.
         return dataclasses.replace(
             original,
             deps=deps or list(original.deps),
-            override_output_path=original.output_path,
+            override_output_path=output_path,
             resources=original.resources,
         )
 
@@ -1160,36 +1127,42 @@ class Executor:
         if max_concurrent is not None and max_concurrent < 1:
             raise ValueError(f"max_concurrent must be a positive integer, got {max_concurrent}")
 
-        # Gather all the steps, compute versions and output paths for all of them.
-        logger.info(f"### Inspecting the {len(steps)} provided steps ###")
-        for step in steps:
-            if isinstance(step, InputName):  # Interpret InputName as the underlying step
-                step = step.step
-            if step is not None:
-                self.compute_version(step, is_pseudo_dep=False)
+        # Building the graph rebuilds StepSpecs (via dataclasses.replace and fresh
+        # construction), which the build-phase guard requires inside a context.
+        # Scope it to graph resolution only: step *execution* below is not a build
+        # phase, so a step fn that constructs steps at run time is still caught.
+        with executor_context():
+            # Gather all the steps, compute versions and output paths for all of them.
+            logger.info(f"### Inspecting the {len(steps)} provided steps ###")
+            for step in steps:
+                if isinstance(step, InputName):  # Interpret InputName as the underlying step
+                    step = step.step
+                if step is not None:
+                    self.compute_version(step, is_pseudo_dep=False)
 
-        self.get_infos()
-        logger.info(f"### Reading {len(self.steps)} statuses ###")
+            self.get_infos()
+            logger.info(f"### Reading {len(self.steps)} statuses ###")
 
-        if run_only is not None:
-            steps_to_run = self._compute_transitive_deps(self.steps, run_only)
-        else:
-            steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
+            if run_only is not None:
+                steps_to_run = self._compute_transitive_deps(self.steps, run_only)
+            else:
+                steps_to_run = [step for step in self.steps if not self.is_pseudo_dep[step]]
 
-        if steps_to_run != self.steps:
-            logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
+            if steps_to_run != self.steps:
+                logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
-        if dry_run:
-            logger.info("### Skipping metadata write (dry run) ###")
-        else:
-            logger.info("### Writing metadata ###")
-            self.write_infos()
+            if dry_run:
+                logger.info("### Skipping metadata write (dry run) ###")
+            else:
+                logger.info("### Writing metadata ###")
+                self.write_infos()
+
+            resolved_steps = self._resolve_steps(steps_to_run)
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
         if max_concurrent is not None:
             logger.info(f"### Max concurrent steps: {max_concurrent} ###")
 
-        resolved_steps = self._resolve_steps(steps_to_run)
         StepRunner().run(
             resolved_steps,
             dry_run=dry_run,
@@ -1636,12 +1609,13 @@ def compute_output_path(
         prefix=resolved_prefix,
         executor_info_base_path=executor_info_base_path,
     )
-    step = ExecutorStep(
-        name=name,
-        fn=_noop_step_fn,
-        config=config,
-        override_output_path=override_output_path,
-    )
+    with executor_context():
+        step = ExecutorStep(
+            name=name,
+            fn=_noop_step_fn,
+            config=config,
+            override_output_path=override_output_path,
+        )
     executor.compute_version(step, is_pseudo_dep=False)
     return executor.output_paths[step]
 

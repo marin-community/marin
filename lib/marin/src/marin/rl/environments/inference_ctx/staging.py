@@ -3,8 +3,6 @@
 
 """Helpers for staging remote vLLM metadata locally before inflight startup."""
 
-from __future__ import annotations
-
 import dataclasses
 import hashlib
 import logging

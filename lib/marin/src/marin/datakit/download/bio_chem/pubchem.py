@@ -9,8 +9,6 @@
   shard. SDF entries are tens of KB each so the cap matters.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

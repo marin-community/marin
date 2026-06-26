@@ -20,6 +20,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from finelog.client.log_client import Table
+from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster.backends.gcp.fake import InMemoryGcpService
@@ -27,7 +29,14 @@ from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import find_free_port
 from iris.cluster.backends.vm_lifecycle import ControllerStatus
-from iris.cluster.config import make_local_config
+from iris.cluster.config import (
+    GcpPlatformConfig,
+    IrisClusterConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    WorkerConfig,
+    make_local_config,
+)
 from iris.cluster.constraints import worker_attributes_from_resources
 from iris.cluster.controller import writes
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
@@ -42,18 +51,18 @@ from iris.cluster.controller.controller import (
     ControllerConfig,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.token_store import store_token
+from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
-from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 
 def create_local_autoscaler(
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     controller_address: str,
     threads: ThreadContainer | None = None,
+    provisioning_table: Table | None = None,
 ) -> tuple[Autoscaler, tempfile.TemporaryDirectory]:
     """Create Autoscaler with GcpWorkerProvider(LOCAL) for all scale groups.
 
@@ -64,6 +73,7 @@ def create_local_autoscaler(
         config: Cluster configuration (with defaults already applied)
         controller_address: Address for workers to connect to
         threads: Optional thread container for testing
+        provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning outcomes.
 
     Returns:
         Tuple of (autoscaler, temp_dir). The caller owns the temp_dir and
@@ -88,15 +98,18 @@ def create_local_autoscaler(
     cpu_millicores_by_group: dict[str, int] = {}
     for name, sg_config in config.scale_groups.items():
         attrs: dict[str, str | int | float] = {}
-        if sg_config.HasField("resources"):
-            attrs.update(worker_attributes_from_resources(sg_config.resources))
-        if sg_config.HasField("worker") and sg_config.worker.attributes:
+        resources = sg_config.resources
+        if resources is not None:
+            attrs.update(worker_attributes_from_resources(resources))
+        if sg_config.worker.attributes:
             attrs.update(sg_config.worker.attributes)
         worker_attributes_by_group[name] = attrs
-        if sg_config.resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and sg_config.resources.device_count > 0:
-            gpu_count_by_group[name] = sg_config.resources.device_count
-        if sg_config.resources.cpu_millicores > 0:
-            cpu_millicores_by_group[name] = sg_config.resources.cpu_millicores
+        if resources is None:
+            continue
+        if resources.device_type == AcceleratorType.GPU and resources.device_count > 0:
+            gpu_count_by_group[name] = resources.device_count
+        if resources.cpu_millicores > 0:
+            cpu_millicores_by_group[name] = resources.cpu_millicores
 
     storage_prefix = config.storage.remote_state_dir or ""
 
@@ -114,7 +127,7 @@ def create_local_autoscaler(
         storage_prefix=storage_prefix,
         label_prefix=label_prefix,
     )
-    local_gcp_config = config_pb2.GcpPlatformConfig(project_id="local")
+    local_gcp_config = GcpPlatformConfig(project_id="local")
     platform = GcpWorkerProvider(
         gcp_config=local_gcp_config,
         label_prefix=label_prefix,
@@ -134,16 +147,16 @@ def create_local_autoscaler(
 
     # Build base_worker_config from defaults so auth_token (and other fields)
     # flow through the autoscaler to locally-spawned workers.
-    base_worker_config: config_pb2.WorkerConfig | None = None
+    base_worker_config: WorkerConfig | None = None
     if config.defaults.worker.auth_token:
-        base_worker_config = config_pb2.WorkerConfig()
-        base_worker_config.CopyFrom(config.defaults.worker)
+        base_worker_config = config.defaults.worker.model_copy(deep=True)
 
     autoscaler = Autoscaler.from_config(
         scale_groups=scale_groups,
         config=config.defaults.autoscaler,
         platform=platform,
         base_worker_config=base_worker_config,
+        provisioning_table=provisioning_table,
     )
     return autoscaler, temp_dir
 
@@ -161,7 +174,7 @@ class LocalCluster:
 
     def __init__(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         threads: ThreadContainer | None = None,
     ):
         self._config = config
@@ -196,11 +209,21 @@ class LocalCluster:
         controller_threads = self._threads.create_child("controller") if self._threads else None
         autoscaler_threads = controller_threads.create_child("autoscaler") if controller_threads else None
 
+        # The log stack is built before the autoscaler so its provisioning table
+        # is a constructor arg; the Controller owns it and tears it down at stop().
+        log_stack = build_log_stack(
+            log_service_address="",
+            local_log_dir=Path(self._db_dir.name) / "log-server",
+            host="127.0.0.1",
+            worker_token=auth.worker_token if auth.worker_token else None,
+        )
+
         # Autoscaler creates its own temp dirs for worker resources
         self._autoscaler, self._autoscaler_temp_dir = create_local_autoscaler(
             self._config,
             address,
             threads=autoscaler_threads,
+            provisioning_table=log_stack.provisioning_table,
         )
 
         # The backend owns the autoscaler; the controller drives it via
@@ -217,14 +240,13 @@ class LocalCluster:
                 auth_verifier=auth.verifier,
                 auth_provider=auth.provider,
                 auth=auth,
-                autoscaler_evaluation_interval=duration_from_proto(self._config.defaults.autoscaler.evaluation_interval),
-                # Fast worker-failure detection for local/e2e runs: ~10 unreachable
-                # reconcile passes (poll_interval default 1s) instead of the ~50s
-                # production grace. Mirrors the old fast ping tuning; the e2e chaos
-                # suite's RECONCILE_FAILURE_THRESHOLD must match round(grace / poll).
+                autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
+                # Fast worker-failure detection for local/e2e runs: reaped ~10s
+                # after the last successful reconcile, vs the ~50s production grace.
                 worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
             provider=provider,
+            log_stack=log_stack,
             threads=controller_threads,
             db=db,
         )
@@ -262,7 +284,7 @@ class LocalCluster:
             )
 
         cluster_name = self._config.name or "local"
-        store_token(cluster_name, url, jwt_token)
+        save_credentials(CredentialRecord(cluster=cluster_name, endpoint=url, app_token=jwt_token))
         self._auto_login_token = jwt_token
 
         return url
@@ -311,27 +333,25 @@ class LocalCluster:
         return ControllerStatus(running=False, address="", healthy=False)
 
 
-def make_local_cluster_config(max_workers: int) -> config_pb2.IrisClusterConfig:
+def make_local_cluster_config(max_workers: int) -> IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for local execution.
 
     Creates a minimal base config and transforms it via make_local_config()
     to ensure local defaults (fast autoscaler timings, etc.) are applied
     consistently from config.py.
     """
-    base_config = config_pb2.IrisClusterConfig()
-
-    sg = config_pb2.ScaleGroupConfig(
+    sg = ScaleGroupConfig(
         name="local-cpu",
         buffer_slices=1,
         max_slices=max_workers,
         num_vms=1,
-        resources=config_pb2.ScaleGroupResources(
+        resources=ScaleGroupResources(
             cpu_millicores=8000,
             memory_bytes=16 * 1024**3,
             disk_bytes=50 * 1024**3,
-            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
+            device_type=AcceleratorType.CPU,
         ),
     )
-    base_config.scale_groups["local-cpu"].CopyFrom(sg)
+    base_config = IrisClusterConfig(scale_groups={"local-cpu": sg})
 
     return make_local_config(base_config)

@@ -32,8 +32,6 @@ The bloom can also be built once and shared across many corpus marks via
 :func:`decon_to_parquet` as ``prebuilt_bloom_dir`` to skip the inline build.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 import os

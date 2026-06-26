@@ -328,7 +328,7 @@ def _vllm_env() -> dict[str, str]:
     cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", _default_jax_compilation_cache_dir())
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     env.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
-    # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
+    # TPU vLLM uses XLA compilation caches; this env var is the one it keys off.
     env.setdefault("VLLM_XLA_CACHE_PATH", cache_dir)
     # Cache aggressively for iterative bring-up workflows.
     env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")

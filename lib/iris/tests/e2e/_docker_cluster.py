@@ -21,14 +21,26 @@ from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import find_free_port
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import (
+    AutoscalerConfig,
+    ControllerVmConfig,
+    IrisClusterConfig,
+    LocalControllerConfig,
+    LocalPlatformConfig,
+    LocalSliceConfig,
+    PlatformConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+)
 from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
 # Factory type for creating per-worker environment providers.
@@ -41,38 +53,39 @@ def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
-def _make_e2e_config(num_workers: int) -> config_pb2.IrisClusterConfig:
+def _make_e2e_config(num_workers: int) -> IrisClusterConfig:
     """Build a fully-configured IrisClusterConfig for E2E tests with num_workers.
 
     Sets up controller.local, remote_state_dir, scale groups with local vm_type,
     and fast autoscaler evaluation for tests.
     """
-    config = config_pb2.IrisClusterConfig()
-
-    config.controller.local.port = 0
-    config.storage.remote_state_dir = ""
-    config.platform.local.SetInParent()
-
-    sg = config_pb2.ScaleGroupConfig(
-        name="local-cpu",
-        buffer_slices=num_workers,
-        max_slices=num_workers,
-        num_vms=1,
-        resources=config_pb2.ScaleGroupResources(
-            cpu_millicores=8000,
-            memory_bytes=16 * 1024**3,
-            disk_bytes=50 * 1024**3,
-            device_type=config_pb2.ACCELERATOR_TYPE_CPU,
-            device_count=0,
-            capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
-        ),
+    config = IrisClusterConfig(
+        platform=PlatformConfig(local=LocalPlatformConfig()),
+        controller=ControllerVmConfig(local=LocalControllerConfig(port=0)),
+        scale_groups={
+            "local-cpu": ScaleGroupConfig(
+                name="local-cpu",
+                buffer_slices=num_workers,
+                max_slices=num_workers,
+                num_vms=1,
+                resources=ScaleGroupResources(
+                    cpu_millicores=8000,
+                    memory_bytes=16 * 1024**3,
+                    disk_bytes=50 * 1024**3,
+                    device_type=AcceleratorType.CPU,
+                    device_count=0,
+                    capacity_type=CapacityType.ON_DEMAND,
+                ),
+                slice_template=SliceConfig(local=LocalSliceConfig()),
+            )
+        },
     )
-    config.scale_groups["local-cpu"].CopyFrom(sg)
-
-    config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
-    config.defaults.autoscaler.scale_up_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
-    config.defaults.autoscaler.scale_down_delay.CopyFrom(duration_to_proto(Duration.from_seconds(1)))
-
+    config.storage.remote_state_dir = ""
+    config.defaults.autoscaler = AutoscalerConfig(
+        evaluation_interval=Duration.from_seconds(0.5),
+        scale_up_delay=Duration.from_seconds(1),
+        scale_down_delay=Duration.from_seconds(1),
+    )
     return config
 
 
@@ -150,9 +163,16 @@ class E2ECluster:
             remote_state_dir=f"file://{bundle_dir}",
             local_state_dir=temp_path / "local",
         )
+        log_stack = build_log_stack(
+            log_service_address="",
+            local_log_dir=temp_path / "local" / "log-server",
+            host="127.0.0.1",
+            worker_token=None,
+        )
         self._controller = Controller(
             config=controller_config,
             provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
+            log_stack=log_stack,
         )
         self._controller.start()
 

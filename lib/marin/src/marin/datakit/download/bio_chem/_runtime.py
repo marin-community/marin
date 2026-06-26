@@ -8,8 +8,6 @@ parquet file with ``{id, text, source}`` rows where ``text`` is one packed
 document containing one or more original records preserved verbatim.
 """
 
-from __future__ import annotations
-
 import enum
 import hashlib
 import logging

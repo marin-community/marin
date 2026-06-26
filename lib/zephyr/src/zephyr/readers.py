@@ -6,8 +6,6 @@
 Supports reading from local filesystems, cloud storage (gs://, s3://) and HuggingFace Hub (hf://) via fsspec.
 """
 
-from __future__ import annotations
-
 import fnmatch
 import logging
 import zipfile

@@ -15,8 +15,8 @@ const routes = [
     component: () => import('./components/controller/FleetTab.vue'),
   },
   {
-    path: '/autoscaler',
-    component: () => import('./components/controller/AutoscalerTab.vue'),
+    path: '/capacity',
+    component: () => import('./components/controller/CapacityTab.vue'),
   },
   {
     path: '/cluster',
@@ -29,10 +29,6 @@ const routes = [
   {
     path: '/status',
     component: () => import('./components/controller/StatusTab.vue'),
-  },
-  {
-    path: '/scheduler',
-    component: () => import('./components/controller/SchedulerTab.vue'),
   },
   {
     path: '/account',

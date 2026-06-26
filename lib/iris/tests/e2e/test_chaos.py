@@ -31,9 +31,10 @@ from .helpers import TestJobs
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
-# LocalCluster sets worker_unreachable_grace=10s and poll_interval defaults to
-# 1s, so a worker is torn down after this many consecutive failed reconcile
-# passes. Must equal round(grace / poll_interval).
+# Worker-death detection is time-based: LocalCluster sets
+# worker_unreachable_grace=10s, so a worker continuously unreachable for ~10s is
+# torn down. With the default 1s reconcile cadence that is roughly this many
+# failed passes; the chaos cases size their max_failures relative to it.
 RECONCILE_FAILURE_THRESHOLD = 10
 
 
@@ -203,20 +204,12 @@ def test_dispatch_permanent_failure(cluster):
     assert status.state in (job_pb2.JOB_STATE_FAILED, job_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
-# The three `worker.ping` chaos tests (test_ping_temporary_failure,
-# test_ping_permanent_failure, test_ping_survives_transient_delay) were deleted:
-# `handle_ping` (their injection seam) no longer exists, and they were redundant
-# with the `controller.reconcile` threshold tests below, which cover the
-# below-threshold-recovers and at-threshold-kills paths via the live reconcile
-# keep-alive seam.
-
-
 # ---------------------------------------------------------------------------
 # Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
-# UNREACHABLE health events and is torn down once consecutive failures reach
-# RECONCILE_FAILURE_THRESHOLD. The reconcile RPC outcome is the only liveness
-# signal (no ping loop), so worker-failure detection is chaos-tested via
-# "controller.reconcile".
+# UNREACHABLE health events and is torn down once it has been continuously
+# unreachable for the grace (~RECONCILE_FAILURE_THRESHOLD failed passes at the
+# 1s local cadence). The reconcile RPC outcome is the only liveness signal (no
+# ping loop), so worker-failure detection is chaos-tested via "controller.reconcile".
 # ---------------------------------------------------------------------------
 
 

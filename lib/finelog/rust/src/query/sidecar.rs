@@ -315,7 +315,13 @@ mod tests {
         let parquet = dir.join(format!("seg_L1_{seq:019}.parquet"));
         // Write the sidecar directly (no parquet body needed for these unit
         // tests — the manager only ever reads `<parquet>.tgm`).
-        write_sidecar(&parquet, std::slice::from_ref(&batch), "data", Some("key")).unwrap();
+        write_sidecar(
+            &parquet,
+            std::slice::from_ref(&batch),
+            &["data"],
+            Some("key"),
+        )
+        .unwrap();
         parquet
     }
 
@@ -403,7 +409,13 @@ mod tests {
                 )
                 .unwrap();
                 let parquet = dir.join(format!("seg_L1_{:019}.parquet", i + 1));
-                write_sidecar(&parquet, std::slice::from_ref(&batch), "data", Some("key")).unwrap();
+                write_sidecar(
+                    &parquet,
+                    std::slice::from_ref(&batch),
+                    &["data"],
+                    Some("key"),
+                )
+                .unwrap();
                 parquet
             })
             .collect();

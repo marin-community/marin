@@ -7,8 +7,6 @@ Uses ``iris cluster start --local`` through Click's test runner, then submits
 a job through the IrisClient to verify the full stack works.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from pathlib import Path

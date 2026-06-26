@@ -16,9 +16,7 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 - `src/finelog/store/` — `MemStore` (in-memory) and `DuckDBLogStore` (Parquet + DuckDB)
 - `src/finelog/server/` — `LogServiceImpl`, `StatsServiceImpl`, ASGI builder, CLI launcher
 - `src/finelog/client/` — `LogClient` (single user-facing entry; covers logs and stats),
-  `RemoteLogHandler`, error types in `errors.py`. `proxy.py` hosts
-  `LogServiceProxy`, an internal server-side adapter used when iris mounts the
-  log service as a forwarding proxy; not re-exported.
+  `RemoteLogHandler`, error types in `errors.py`.
 - `tests/` — store + server tests
 - `deploy/` — Dockerfile, k8s manifests, GCP snippets
 
@@ -33,6 +31,29 @@ Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
   it composes interceptors itself when launching the server.
 - Keys are opaque strings. Any structure (`/system/...`, `/user/<job>/<task>:<attempt>`)
   is iris-side convention; finelog does not parse keys.
+
+## Packaging
+
+Finelog ships as two PyPI dists, released in lockstep by
+`finelog-release-wheels.yaml`:
+
+- `marin-finelog` — pure Python (this directory; hatchling).
+- `marin-finelog-server` — the native in-process server ext, importable as
+  top-level `finelog_server` (maturin project at `rust/`; the cdylib crate is
+  `rust/pyext`). Only `src/finelog/embedded.py` imports it.
+
+`marin-finelog` does **not** depend on `marin-finelog-server` at runtime — the
+pure client never needs the in-process server. Consumers that do (the iris
+controller) depend on `marin-finelog-server` explicitly. Here it is only a
+`dev` dependency, pulled in for the embedded-server smoke test and the
+dashboard demo.
+
+By default the extension comes from the pre-built PyPI wheel, so in-dir
+`uv run` never compiles Rust. To build it from source (live Rust dev), run
+`python scripts/rust_mode.py dev` at the repo root — it points
+`marin-finelog-server` at the local `rust/` tree in both the root and
+`lib/finelog` pyprojects. Run `python scripts/rust_mode.py user` before
+committing.
 
 ## Development
 

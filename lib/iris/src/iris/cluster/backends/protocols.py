@@ -11,13 +11,11 @@ Two protocols define the boundary between Iris orchestration and infrastructure:
 Concrete implementations live under providers/gcp/, providers/k8s/, etc.
 """
 
-from __future__ import annotations
-
 from contextlib import AbstractContextManager
 from typing import Protocol
 
 from iris.cluster.backends.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
-from iris.rpc import config_pb2
+from iris.cluster.config import ControllerVmConfig, IrisClusterConfig, SliceConfig, VmConfig, WorkerConfig
 
 
 class ControllerProvider(Protocol):
@@ -27,7 +25,7 @@ class ControllerProvider(Protocol):
     connectivity methods (tunnel, resolve_image, debug_report).
     """
 
-    def discover_controller(self, controller_config: config_pb2.ControllerVmConfig) -> str:
+    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
         """Discover controller address from platform-specific mechanism.
 
         Returns 'host:port' string. GCP queries VMs by label, Manual uses
@@ -35,7 +33,7 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start or discover existing controller. Returns address (host:port).
 
         If fresh=True, the controller starts with an empty database instead
@@ -43,17 +41,17 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def restart_controller(self, config: IrisClusterConfig) -> str:
         """Restart controller in-place without destroying underlying compute."""
         ...
 
-    def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
+    def stop_controller(self, config: IrisClusterConfig) -> None:
         """Stop the controller and clean up its resources."""
         ...
 
     def stop_all(
         self,
-        config: config_pb2.IrisClusterConfig,
+        config: IrisClusterConfig,
         dry_run: bool = False,
         label_prefix: str | None = None,
     ) -> list[str]:
@@ -99,14 +97,14 @@ class WorkerInfraProvider(Protocol):
     Handles creating and listing worker slices and standalone VMs.
     """
 
-    def create_vm(self, config: config_pb2.VmConfig) -> StandaloneWorkerHandle:
+    def create_vm(self, config: VmConfig) -> StandaloneWorkerHandle:
         """Create a single standalone VM (e.g., for the controller)."""
         ...
 
     def create_slice(
         self,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> SliceHandle:
         """Create a slice of connected workers (e.g., TPU pod, IB GPU cluster).
 

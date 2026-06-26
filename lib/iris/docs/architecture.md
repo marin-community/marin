@@ -60,7 +60,7 @@ the placement-constraint system (`constraints.py`), config loading/validation
 + provider/autoscaler factories (`config.py`), the pure proto→dict serializer
 (`config_serde.py`, a leaf both `config` and provider bootstrap depend on),
 content-addressed bundles (`bundle.py`), endpoint URI resolution, and small
-shared concerns (`redaction`, `service_mode`, `log_keys`, `token_store`,
+shared concerns (`redaction`, `service_mode`, `log_keys`,
 `process_status`, `dashboard_common`).
 
 **Execution substrate.** `backends/` covers two distinct abstractions:
@@ -92,7 +92,7 @@ sub-layered:
 |---|---|---|
 | Persistence spine | `schema` → `codec` → `db` → `reads`/`writes` · `projections/` | State at rest. `reads`/`writes` are the **only** sanctioned query/mutation surface; `projections/` are write-through caches. |
 | State predicates | `task_state` · `worker_health` · `audit` | What the rows *mean*. |
-| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/reservation/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
+| Decision kernels | `reconcile/` (lifecycle) · `scheduling/scheduler.py` (matching) · `scheduling/policy.py` (preemption/gating) · `autoscaler/` (capacity) | Compute what *should* change. Parameterized; no live I/O. |
 | Imperative shell | `ops/{job,task,worker}` · `reconcile/dispatch` · `pruner` | Load a snapshot, call a kernel, apply effects. |
 | Transport / loops | `controller.py` (loops) · `service.py` (RPC) · `dashboard.py` · `main.py` | Drive it / expose it. |
 

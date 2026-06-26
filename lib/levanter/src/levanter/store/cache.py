@@ -36,7 +36,7 @@ from levanter.data.dataset import AsyncDataset
 from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
-from levanter.data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
+from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch
 from levanter.data.sharded_datasource import ShardedDataSource
 from .jagged_array import JaggedArrayStore, _no_cache_read_context
 from .tree_store import TreeStore
@@ -811,7 +811,7 @@ class SerialCacheWriter:
         if isinstance(batch, pa.RecordBatch):
             batch = dict_from_record_batch(batch)
 
-        cbatch = _canonicalize_batch(batch)  # type: ignore[arg-type]
+        cbatch = canonicalize_batch(batch)  # type: ignore[arg-type]
         self._tree_store.extend(cbatch)
 
 
@@ -976,12 +976,12 @@ def _build_single_shard_cache(
             batch.append(example)
             if len(batch) >= options.batch_size:
                 processed = processor(batch)
-                yield from _canonicalize_batch(processed)
+                yield from canonicalize_batch(processed)
                 batch.clear()
             pbar.update(1)
         if batch:
             processed = processor(batch)
-            yield from _canonicalize_batch(processed)
+            yield from canonicalize_batch(processed)
 
     result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
 
@@ -1426,19 +1426,6 @@ def _render_path_elem(path_elem) -> str:
 def _sanitize_shard_name(name: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in name)
     return safe or "shard"
-
-
-def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
-    if isinstance(batch, pa.RecordBatch):
-        batch = dict_from_record_batch(batch)
-
-    if isinstance(batch, dict):
-        keys = list(batch.keys())
-        values = list(batch.values())
-        num_rows = len(values[0]) if values else 0
-        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
-    else:
-        return list(batch)
 
 
 def _try_load(path, metadata):

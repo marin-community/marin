@@ -10,13 +10,12 @@ and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
 import yaml
+from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget
 
 USER_CONFIG_DIR = Path.home() / ".config" / "marin" / "finelog"
 
@@ -56,6 +55,11 @@ class K8sDeployment:
     namespace: str
     storage_class: str | None = None
     storage_gb: int = 200
+    # S3-compatible endpoint (e.g. Cloudflare R2) for an `s3://` remote_log_dir.
+    # Required there: `finelog deploy up` mints a Secret holding this endpoint
+    # plus the operator's R2 creds, projected into the pod via envFrom so the
+    # server can authenticate. Unused for `gs://` (GCS uses workload identity).
+    object_storage_endpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,9 @@ class FinelogConfig:
     image: str
     remote_log_dir: str
     deployment: Deployment
+    # Rigging transport URL clients use to reach this server through the controller proxy
+    # (e.g. `iap+https://iris.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
+    client_url: str | None = None
 
 
 def _config_search_paths(name_or_path: str) -> list[Path]:
@@ -112,6 +119,7 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         namespace=raw["namespace"],
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
+        object_storage_endpoint=raw.get("object_storage_endpoint"),
     )
 
 
@@ -151,6 +159,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         image=raw["image"],
         remote_log_dir=raw.get("remote_log_dir", ""),
         deployment=deployment,
+        client_url=raw.get("client_url"),
     )
 
 
@@ -171,3 +180,24 @@ def derive_endpoint_uri(cfg: FinelogConfig) -> tuple[str, dict[str, str]]:
         f"k8s://{cfg.name}.{k8s.namespace}",
         {"port": str(cfg.port)},
     )
+
+
+def tunnel_target_for(cfg: FinelogConfig) -> TunnelTarget:
+    """Build a rigging tunnel target from a finelog deployment block.
+
+    The GCP path forwards ``deployment.gcp.service_account`` as the SSH
+    impersonation principal, matching the deploy CLI's own SSH calls, so this
+    target works wherever ``finelog deploy status`` does.
+    """
+    if cfg.deployment.gcp is not None:
+        gcp = cfg.deployment.gcp
+        return GcpSshForwardTarget(
+            project=gcp.project,
+            zone=gcp.zone,
+            instance=cfg.name,
+            port=cfg.port,
+            impersonate_service_account=gcp.service_account,
+        )
+    assert cfg.deployment.k8s is not None  # guaranteed by Deployment.__post_init__
+    k8s = cfg.deployment.k8s
+    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)

@@ -21,8 +21,6 @@ uniformly across GCP and Manual providers.  For local mode, use LocalCluster
 directly (fundamentally different mechanism: in-process, no SSH/Docker).
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Callable
@@ -40,7 +38,8 @@ from iris.cluster.backends.types import (
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
 )
-from iris.rpc import config_pb2
+from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
+from iris.cluster.inject_env import with_injected_task_env
 
 logger = logging.getLogger(__name__)
 
@@ -253,9 +252,9 @@ def wait_healthy(
     return False
 
 
-def _controller_port(config: config_pb2.IrisClusterConfig) -> int:
+def _controller_port(config: IrisClusterConfig) -> int:
     """Extract the controller port from config."""
-    which = config.controller.WhichOneof("controller")
+    which = config.controller.controller_kind()
     if which == "gcp":
         return config.controller.gcp.port or DEFAULT_CONTROLLER_PORT
     if which == "manual":
@@ -289,16 +288,16 @@ def _discover_controller_vm(
 
 
 def _build_controller_vm_config(
-    config: config_pb2.IrisClusterConfig,
-) -> config_pb2.VmConfig:
+    config: IrisClusterConfig,
+) -> VmConfig:
     """Build a VmConfig for the controller VM from cluster config."""
     label_prefix = config.platform.label_prefix or "iris"
     labels = Labels(label_prefix)
-    vm_config = config_pb2.VmConfig()
+    vm_config = VmConfig()
     vm_config.name = f"iris-controller-{label_prefix}"
     vm_config.labels[labels.iris_controller] = "true"
 
-    which = config.controller.WhichOneof("controller")
+    which = config.controller.controller_kind()
     if which == "gcp":
         gcp_ctrl = config.controller.gcp
 
@@ -306,21 +305,24 @@ def _build_controller_vm_config(
         if not zone:
             raise RuntimeError("controller.gcp.zone is required for GCP controller")
 
-        vm_config.gcp.zone = zone
-        vm_config.gcp.machine_type = gcp_ctrl.machine_type or "n2-standard-4"
-        vm_config.gcp.boot_disk_size_gb = gcp_ctrl.boot_disk_size_gb or DEFAULT_CONTROLLER_BOOT_DISK_SIZE_GB
-        vm_config.gcp.service_account = gcp_ctrl.service_account
+        vm_config.gcp = GcpVmConfig(
+            zone=zone,
+            machine_type=gcp_ctrl.machine_type or "n2-standard-4",
+            boot_disk_size_gb=gcp_ctrl.boot_disk_size_gb or DEFAULT_CONTROLLER_BOOT_DISK_SIZE_GB,
+            service_account=gcp_ctrl.service_account,
+        )
         for key, value in OS_LOGIN_METADATA.items():
             vm_config.metadata[key] = value
     elif which == "manual":
         manual_ctrl = config.controller.manual
         if not manual_ctrl.host:
             raise RuntimeError("controller.manual.host is required for manual controller")
-        vm_config.manual.host = manual_ctrl.host
         ssh = config.defaults.ssh
-        vm_config.manual.ssh_user = ssh.user or "root"
-        if ssh.key_file:
-            vm_config.manual.ssh_key_file = ssh.key_file
+        vm_config.manual = ManualVmConfig(
+            host=manual_ctrl.host,
+            ssh_user=ssh.user or "root",
+            ssh_key_file=ssh.key_file or "",
+        )
     else:
         raise ValueError(f"start_controller() does not support controller type: {which}. Use LocalCluster for local.")
 
@@ -329,7 +331,7 @@ def _build_controller_vm_config(
 
 def start_controller(
     platform: WorkerInfraProvider,
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
     fresh: bool = False,
@@ -380,9 +382,11 @@ def start_controller(
         vm.terminate(wait=True)
         raise RuntimeError(f"Controller VM {vm_config.name} did not become reachable within 300s")
 
-    # Bootstrap
+    # Bootstrap. Fold operator-injected env into task_env here: the launcher's
+    # shell is the only place the values exist, and the shipped config is the
+    # only channel to the controller VM and its workers.
     bootstrap_script = build_controller_bootstrap_script_from_config(
-        config,
+        with_injected_task_env(config),
         resolve_image=_resolve_image,
         fresh=fresh,
     )
@@ -404,7 +408,7 @@ def start_controller(
 
 def restart_controller(
     platform: WorkerInfraProvider,
-    config: config_pb2.IrisClusterConfig,
+    config: IrisClusterConfig,
     resolve_image: Callable[[str, str | None], str] | None = None,
     health_check_timeout: float = HEALTH_CHECK_TIMEOUT_SECONDS,
 ) -> tuple[str, StandaloneWorkerHandle]:
@@ -424,7 +428,9 @@ def restart_controller(
 
     logger.info("Restarting controller container in-place on VM %s", vm.vm_id)
 
-    bootstrap_script = build_controller_bootstrap_script_from_config(config, resolve_image=_resolve_image)
+    bootstrap_script = build_controller_bootstrap_script_from_config(
+        with_injected_task_env(config), resolve_image=_resolve_image
+    )
     vm.bootstrap(bootstrap_script)
 
     address = f"http://{vm.internal_address}:{port}"
@@ -435,7 +441,7 @@ def restart_controller(
     return address, vm
 
 
-def stop_controller(platform: WorkerInfraProvider, config: config_pb2.IrisClusterConfig) -> None:
+def stop_controller(platform: WorkerInfraProvider, config: IrisClusterConfig) -> None:
     """Find and terminate the controller VM.
 
     GCE instance deletion is synchronous (no --async), so the VM is fully gone

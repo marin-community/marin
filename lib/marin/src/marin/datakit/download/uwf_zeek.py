@@ -19,8 +19,6 @@ as the ``text`` field inside a gzipped JSONL document::
     {"id": str, "text": str, "source": str, "category": str, "row_index": int}
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging

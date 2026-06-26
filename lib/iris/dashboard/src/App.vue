@@ -18,11 +18,10 @@ const legendOpen = ref(false)
 // the backend must advertise (see backend_descriptor in backend.py).
 const ALL_TABS: (Tab & { requires?: string })[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
-  { key: 'scheduler', label: 'Scheduler', to: '/scheduler' },
+  { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
   { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
   { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
-  { key: 'autoscaler', label: 'Autoscaler', to: '/autoscaler', requires: 'autoscaler' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
@@ -33,11 +32,10 @@ const TABS = computed<Tab[]>(() =>
 
 const PATH_TO_TAB: Record<string, string> = {
   '/': 'jobs',
-  '/scheduler': 'scheduler',
+  '/capacity': 'capacity',
   '/fleet': 'fleet',
   '/cluster': 'cluster',
   '/endpoints': 'endpoints',
-  '/autoscaler': 'autoscaler',
   '/account': 'account',
   '/status': 'status',
 }

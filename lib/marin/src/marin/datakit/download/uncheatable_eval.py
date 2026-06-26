@@ -3,8 +3,6 @@
 
 """Download and normalize the latest Uncheatable Eval data dumps."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -233,7 +231,7 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
 
 
 def _download_and_convert_single(
-    task: DownloadTask,
+    task: "DownloadTask",
 ) -> dict[str, Any]:
     session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
 

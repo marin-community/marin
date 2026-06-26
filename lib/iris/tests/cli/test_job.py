@@ -5,6 +5,7 @@
 
 import click
 import pytest
+from click.testing import CliRunner
 from iris.cli.job import (
     _parse_tpu_alternatives,
     _render_job_summary_text,
@@ -12,9 +13,11 @@ from iris.cli.job import (
     build_job_summary,
     build_resources,
     build_tpu_alternatives,
+    run,
     validate_extra_resources,
     validate_region_zone,
 )
+from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     Constraint,
     WellKnownAttribute,
@@ -22,19 +25,16 @@ from iris.cluster.constraints import (
     preemptible_constraint,
     region_constraint,
 )
-from iris.rpc import config_pb2
 from iris.rpc import job_pb2 as _job_pb2
 
 
-def _make_config_with_zones(zones: list[str]) -> config_pb2.IrisClusterConfig:
+def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
     """Build a minimal IrisClusterConfig with scale groups for the given zones."""
-    config = config_pb2.IrisClusterConfig()
+    scale_groups: dict[str, ScaleGroupConfig] = {}
     for zone in zones:
         region = zone.rsplit("-", 1)[0]
-        sg = config.scale_groups[f"sg-{zone}"]
-        sg.worker.attributes["zone"] = zone
-        sg.worker.attributes["region"] = region
-    return config
+        scale_groups[f"sg-{zone}"] = ScaleGroupConfig(worker=WorkerSettings(attributes={"zone": zone, "region": region}))
+    return IrisClusterConfig(scale_groups=scale_groups)
 
 
 def test_validate_region_zone_valid_region():
@@ -182,6 +182,44 @@ def test_build_job_constraints_preemptible_true_overrides_heuristic():
 
     # Exactly one preemptible constraint, and it reflects the user's choice.
     assert _preemptible_values(constraints) == ["true"]
+
+
+def test_job_run_cli_accepts_task_image_override(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = "test-job"
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return FakeJob()
+
+    def fake_remote(controller_url, *, workspace, credentials=None):
+        captured["controller_url"] = controller_url
+        captured["workspace"] = workspace
+        captured["credentials"] = credentials
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+
+    result = CliRunner().invoke(
+        run,
+        [
+            "--task-image",
+            "ghcr.io/marin-community/iris-task-cuda-devel:test",
+            "--no-wait",
+            "--",
+            "python",
+            "train.py",
+        ],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["task_image"] == "ghcr.io/marin-community/iris-task-cuda-devel:test"
+    assert captured["controller_url"] == "http://controller.test"
+    assert captured["entrypoint"].command == ["python", "train.py"]
 
 
 # --tpu multi-variant parsing

@@ -3,8 +3,6 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
-from __future__ import annotations
-
 import pytest
 from iris.cluster.backends.k8s.types import K8sResource
 

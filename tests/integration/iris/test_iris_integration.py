@@ -15,7 +15,6 @@ import uuid
 import pytest
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import WellKnownAttribute, region_constraint
-from iris.cluster.types import ReservationEntry, ResourceSpec, gpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
@@ -82,23 +81,6 @@ def test_endpoint_registration(integration_cluster):
     job = integration_cluster.submit(register_endpoint, "itest-endpoint", prefix)
     status = integration_cluster.wait(job, timeout=integration_cluster.job_timeout)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_reservation_gates_scheduling(integration_cluster):
-    """Unsatisfiable reservation blocks scheduling; regular jobs proceed."""
-    with integration_cluster.launched_job(
-        quick,
-        "itest-reserved",
-        reservation=[
-            ReservationEntry(resources=ResourceSpec(cpu=1, memory="1g", device=gpu_device("NONEXISTENT-GPU-9999", 99)))
-        ],
-    ) as reserved:
-        reserved_status = integration_cluster.status(reserved)
-        assert reserved_status.state == job_pb2.JOB_STATE_PENDING
-
-        regular = integration_cluster.submit(quick, "itest-regular-while-reserved")
-        status = integration_cluster.wait(regular, timeout=integration_cluster.job_timeout)
-        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================
