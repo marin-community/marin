@@ -655,6 +655,7 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
             extras=extras,
         ),
         max_retries_failure=config.trace_labeled_eval_config.job_failure_max_retries,
+        max_task_failures=config.trace_labeled_eval_config.job_failure_max_retries,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)

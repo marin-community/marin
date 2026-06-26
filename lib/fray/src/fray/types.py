@@ -564,6 +564,8 @@ class JobRequest:
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        max_task_failures: Cumulative failed task attempts the job tolerates before it
+            fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
     """
@@ -575,6 +577,7 @@ class JobRequest:
     replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    max_task_failures: int = 0
     priority: int = 0
 
     def __post_init__(self):

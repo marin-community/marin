@@ -54,6 +54,7 @@ def test_multiple_attempts_preserve_logs(cluster, caplog):
             f"retry-logs-{run_id}",
             marker,
             max_retries_failure=1,
+            max_task_failures=1,
         )
 
         status = cluster.wait(job, timeout=60)
@@ -97,6 +98,7 @@ def test_superseding_attempt_logs_info(cluster):
         lambda: "ok",
         f"supersede-{run_id}",
         max_retries_failure=2,
+        max_task_failures=2,
     )
 
     status = cluster.wait(job, timeout=60)
@@ -119,6 +121,7 @@ def test_attempt_specific_log_fetch(cluster):
         f"attempt-filter-{run_id}",
         marker,
         max_retries_failure=1,
+        max_task_failures=1,
     )
 
     status = cluster.wait(job, timeout=60)

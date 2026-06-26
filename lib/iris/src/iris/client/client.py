@@ -607,6 +607,7 @@ class IrisClient:
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         user: str | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
@@ -630,6 +631,9 @@ class IrisClient:
             replicas: Number of tasks to create for gang scheduling (default: 1)
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
+            max_task_failures: Cumulative failed task attempts the job tolerates before
+                it fails (default: 0 = fail on the first failure). Counts across retries,
+                so set this to allow a job to ride out a few inconsistent failures.
             timeout: Per-task timeout (None = no timeout)
             user: Optional explicit user override for top-level jobs
             task_image: Optional override for the task container image. When None,
@@ -741,6 +745,7 @@ class IrisClient:
                 replicas=replicas,
                 max_retries_failure=max_retries_failure,
                 max_retries_preemption=max_retries_preemption,
+                max_task_failures=max_task_failures,
                 timeout=timeout,
                 preemption_policy=preemption_policy,
                 existing_job_policy=existing_job_policy,
