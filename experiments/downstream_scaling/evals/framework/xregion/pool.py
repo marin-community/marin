@@ -5,13 +5,11 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
 
 from fray.cluster import ResourceConfig
 from zephyr import Dataset, ShardInfo, ZephyrContext
@@ -27,6 +25,8 @@ class WorkerPoolConfig:
     pool_id: str
     num_workers: int
     worker_resources: ResourceConfig
+    vm_count: int
+    chips_per_vm: int
 
 
 @dataclass
@@ -38,29 +38,8 @@ class PoolRun:
     error_recorded: bool = False
 
 
-def claim_and_process_chunks(
-    _claimant_ids: Iterator[int],
-    shard_info: ShardInfo,
-    *,
-    ledger_path: str,
-    pool_id: str,
-    process_chunk: Callable[[dict[str, Any]], None],
-    poll_backoff: float,
-) -> Iterator[dict[str, Any]]:
-    owner = f"{pool_id}/shard-{shard_info.shard_idx}"
-
-    while True:
-        with ledger.claim_next_chunk(ledger_path, owner) as claim:
-            if claim is None:
-                summary = ledger.summarize(ledger_path)
-                if summary.done == summary.total:
-                    return
-                time.sleep(poll_backoff)
-                continue
-
-            process_chunk(claim.chunk)
-            ledger.mark_done(claim)
-            yield {"chunk_id": claim.chunk_id}
+ShardFn = Callable[[Iterator[int], ShardInfo], Iterator[dict[str, object]]]
+MakeShardFn = Callable[[WorkerPoolConfig], ShardFn]
 
 
 def _context_for_pool(pool: WorkerPoolConfig, heartbeat_timeout: float) -> ZephyrContext:
@@ -80,16 +59,9 @@ def run_pool(
     run: PoolRun,
     *,
     ledger_path: str,
-    process_chunk: Callable[[dict[str, Any]], None],
-    poll_backoff: float,
+    make_process_shard: MakeShardFn,
 ) -> None:
-    process_shard = functools.partial(
-        claim_and_process_chunks,
-        ledger_path=ledger_path,
-        pool_id=run.pool.pool_id,
-        process_chunk=process_chunk,
-        poll_backoff=poll_backoff,
-    )
+    process_shard = make_process_shard(run.pool)
     pipeline = Dataset.from_list(list(range(run.pool.num_workers))).map_shard(process_shard)
     if _is_complete(ledger_path):
         return
@@ -128,7 +100,7 @@ def run_worker_pools(
     *,
     worker_pools: tuple[WorkerPoolConfig, ...],
     ledger_path: str,
-    process_chunk: Callable[[dict[str, Any]], None],
+    make_process_shard: MakeShardFn,
     poll_backoff: float,
     heartbeat_timeout: float,
 ) -> None:
@@ -150,8 +122,7 @@ def run_worker_pools(
                 run_pool,
                 run,
                 ledger_path=ledger_path,
-                process_chunk=process_chunk,
-                poll_backoff=poll_backoff,
+                make_process_shard=make_process_shard,
             )
 
         while True:

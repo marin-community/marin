@@ -5,11 +5,19 @@
 
 from __future__ import annotations
 
+import argparse
 import functools
 import json
 import logging
 import os
-from dataclasses import dataclass
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import fsspec
@@ -17,7 +25,7 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, MirroredValue
 from marin.execution.remote import remote
 from marin.execution.types import this_output_path, versioned
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, ShardInfo, ZephyrContext
 
 from experiments.downstream_scaling.evals.framework.schema import (
     completions_file,
@@ -62,6 +70,7 @@ class IIDExecutionConfig:
     chunk_size: int = 512
     heartbeat_timeout: float = DEFAULT_HEARTBEAT_TIMEOUT
     poll_backoff: float = DEFAULT_POLL_BACKOFF
+    tensor_parallel_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -81,6 +90,7 @@ class IIDCompletionStepConfig:
     chunk_size: int
     heartbeat_timeout: float
     poll_backoff: float
+    tensor_parallel_size: int
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,18 @@ class IIDChunkSpec:
     chunk_end: int
     output_path: str
     success_path: str
+
+
+@dataclass(frozen=True)
+class IIDLocalEngineWorkerConfig:
+    model_path: str
+    prompts_path: str
+    sampling: IIDSamplingConfig
+    ledger_path: str
+    poll_backoff: float
+    tensor_parallel_size: int
+    owner: str
+    chip_group: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -112,7 +134,7 @@ class IIDCompletionAlgorithm:
 
 
 @functools.cache
-def _load_vllm(model_path: str):
+def _load_vllm(model_path: str, tensor_parallel_size: int):
     for key, value in VLLM_TPU_ENV_VARS.items():
         os.environ.setdefault(key, value)
 
@@ -122,16 +144,13 @@ def _load_vllm(model_path: str):
     resolved_model_path = localize_mirror_path(resolved_model_path)
     logger.info("Resolved %s -> %s", model_path, resolved_model_path)
 
-    with fsspec.open(f"{resolved_model_path}/config.json", "r") as f:
-        n_heads = json.load(f)["num_attention_heads"]
-    tp = 2 if n_heads % 2 == 0 else 1
-
     llm = LLM(
         model=resolved_model_path,
         trust_remote_code=True,
         load_format="runai_streamer",
         seed=VLLM_CONSTRUCTOR_SEED,
-        tensor_parallel_size=tp,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=1,
     )
     return llm, SamplingParams
 
@@ -180,6 +199,7 @@ def make_iid_completion_step(
             chunk_size=versioned(config.execution.chunk_size),  # type: ignore[arg-type]
             heartbeat_timeout=config.execution.heartbeat_timeout,
             poll_backoff=config.execution.poll_backoff,
+            tensor_parallel_size=config.execution.tensor_parallel_size,
         ),
     )
 
@@ -208,15 +228,22 @@ def _sampling_kwargs(sampling: IIDSamplingConfig) -> dict[str, Any]:
     }
 
 
-def _run_iid_chunk(chunk: IIDChunkSpec, *, config: IIDCompletionStepConfig) -> None:
-    llm, SamplingParams = _load_vllm(config.model_path)
-    prompt_ids, prompts = _load_prompts(config.prompts_path)
-    sampling_params = SamplingParams(n=1, **_sampling_kwargs(config.sampling))
-    n_samples = config.sampling.n_samples
+def _run_iid_chunk(
+    chunk: IIDChunkSpec,
+    *,
+    model_path: str,
+    prompts_path: str,
+    sampling: IIDSamplingConfig,
+    tensor_parallel_size: int,
+) -> None:
+    llm, SamplingParams = _load_vllm(model_path, tensor_parallel_size)
+    prompt_ids, prompts = _load_prompts(prompts_path)
+    sampling_params = SamplingParams(n=1, **_sampling_kwargs(sampling))
+    n_samples = sampling.n_samples
 
     # TPU vLLM ignores SamplingParams.seed, so resume-safety comes from
     # directly reseeding the sampler for each durable chunk.
-    llm.collective_rpc(_reseed_sampler, args=(config.sampling.seed + chunk.chunk_id,))
+    llm.collective_rpc(_reseed_sampler, args=(sampling.seed + chunk.chunk_id,))
 
     request_indices = range(chunk.chunk_start, chunk.chunk_end)
     chunk_prompt_ids = [prompt_ids[i // n_samples] for i in request_indices]
@@ -254,6 +281,233 @@ def _num_prompts(prompts_path: str) -> int:
     return sum(1 for _ in read_prompt_rows(prompts_path))
 
 
+def _child_config_from_file(path: str) -> IIDLocalEngineWorkerConfig:
+    with open(path) as f:
+        data = json.load(f)
+    return IIDLocalEngineWorkerConfig(
+        model_path=data["model_path"],
+        prompts_path=data["prompts_path"],
+        sampling=IIDSamplingConfig(**data["sampling"]),
+        ledger_path=data["ledger_path"],
+        poll_backoff=data["poll_backoff"],
+        tensor_parallel_size=data["tensor_parallel_size"],
+        owner=data["owner"],
+        chip_group=tuple(data["chip_group"]),
+    )
+
+
+def _run_iid_local_engine_worker(config: IIDLocalEngineWorkerConfig) -> None:
+    expected_visible_chips = ",".join(str(chip) for chip in config.chip_group)
+    actual_visible_chips = os.environ.get("TPU_VISIBLE_CHIPS")
+    if actual_visible_chips != expected_visible_chips:
+        raise ValueError(
+            f"TPU_VISIBLE_CHIPS={actual_visible_chips!r}, expected {expected_visible_chips!r}"
+        )
+
+    for key, value in VLLM_TPU_ENV_VARS.items():
+        os.environ.setdefault(key, value)
+
+    while True:
+        with ledger.claim_next_chunk(config.ledger_path, config.owner) as claim:
+            if claim is None:
+                summary = ledger.summarize(config.ledger_path)
+                if summary.done == summary.total:
+                    return
+                time.sleep(config.poll_backoff)
+                continue
+
+            _run_iid_chunk(
+                IIDChunkSpec(**claim.chunk),
+                model_path=config.model_path,
+                prompts_path=config.prompts_path,
+                sampling=config.sampling,
+                tensor_parallel_size=config.tensor_parallel_size,
+            )
+            ledger.mark_done(claim)
+
+
+def _chip_groups(chips_per_vm: int, tensor_parallel_size: int) -> list[tuple[int, ...]]:
+    if tensor_parallel_size <= 0:
+        raise ValueError(f"tensor_parallel_size must be positive, got {tensor_parallel_size}")
+    if chips_per_vm % tensor_parallel_size != 0:
+        raise ValueError(
+            f"chips_per_vm={chips_per_vm} must be divisible by tensor_parallel_size={tensor_parallel_size}"
+        )
+    return [
+        tuple(range(start, start + tensor_parallel_size))
+        for start in range(0, chips_per_vm, tensor_parallel_size)
+    ]
+
+
+def _child_owner(pool_id: str, shard_idx: int, chip_group: tuple[int, ...]) -> str:
+    chips = ",".join(str(chip) for chip in chip_group)
+    return f"{pool_id}/shard-{shard_idx}/chips-{chips}"
+
+
+def _write_child_config(tmpdir: Path, config: IIDLocalEngineWorkerConfig) -> Path:
+    chips = "-".join(str(chip) for chip in config.chip_group)
+    path = tmpdir / f"child_chips_{chips}.json"
+    with open(path, "wt") as f:
+        json.dump(asdict(config), f, sort_keys=True)
+    return path
+
+
+def _stream_child_output(proc: subprocess.Popen[str], *, label: str) -> list[threading.Thread]:
+    threads = []
+
+    def stream(pipe, stream_name: str) -> None:
+        assert pipe is not None
+        for line in pipe:
+            logger.info("iid local worker %s %s: %s", label, stream_name, line.rstrip())
+
+    for pipe, stream_name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+        thread = threading.Thread(target=stream, args=(pipe, stream_name), daemon=True)
+        thread.start()
+        threads.append(thread)
+    return threads
+
+
+def _spawn_child(
+    *,
+    tmpdir: Path,
+    config: IIDCompletionStepConfig,
+    ledger_path: str,
+    pool_id: str,
+    shard_idx: int,
+    chip_group: tuple[int, ...],
+) -> tuple[subprocess.Popen[str], list[threading.Thread]]:
+    child_config = IIDLocalEngineWorkerConfig(
+        model_path=config.model_path,
+        prompts_path=config.prompts_path,
+        sampling=config.sampling,
+        ledger_path=ledger_path,
+        poll_backoff=config.poll_backoff,
+        tensor_parallel_size=config.tensor_parallel_size,
+        owner=_child_owner(pool_id, shard_idx, chip_group),
+        chip_group=chip_group,
+    )
+    config_path = _write_child_config(tmpdir, child_config)
+    chip_label = ",".join(str(chip) for chip in chip_group)
+
+    env = os.environ.copy()
+    env["TPU_VISIBLE_CHIPS"] = chip_label
+    env["TPU_PROCESS_BOUNDS"] = "1,1,1"
+    env["TPU_CHIPS_PER_PROCESS_BOUNDS"] = f"{config.tensor_parallel_size},1,1"
+    env["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    env["JAX_COMPILATION_CACHE_DIR"] = str(tmpdir / f"jax_cache_{chip_label.replace(',', '_')}")
+    env["VLLM_ASSETS_CACHE"] = str(tmpdir / f"vllm_assets_{chip_label.replace(',', '_')}")
+
+    cmd = [
+        sys.executable,
+        "-u",
+        "-m",
+        "experiments.downstream_scaling.evals.algorithms.iid_xregion",
+        "--xregion-worker-child-config",
+        str(config_path),
+    ]
+    logger.info("Launching IID local worker shard=%d chips=%s", shard_idx, chip_label)
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    return proc, _stream_child_output(proc, label=chip_label)
+
+
+def _terminate_children(procs: list[subprocess.Popen[str]]) -> None:
+    for proc in procs:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in procs:
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+
+
+def _wait_for_children(procs: list[subprocess.Popen[str]], threads: list[threading.Thread], ledger_path: str) -> None:
+    while True:
+        summary = ledger.summarize(ledger_path)
+        ledger_complete = summary.done == summary.total
+        all_done = True
+
+        for proc in procs:
+            return_code = proc.poll()
+            if return_code is None:
+                all_done = False
+                continue
+            if return_code != 0:
+                if ledger_complete:
+                    logger.warning("IID local worker exited after ledger completion with rc=%d", return_code)
+                    continue
+                _terminate_children(procs)
+                raise RuntimeError(
+                    f"IID local worker failed with rc={return_code}; ledger is {summary.done}/{summary.total} done"
+                )
+
+        if ledger_complete and all_done:
+            break
+        if all_done:
+            raise RuntimeError(f"IID local workers exited before completion: {summary.done}/{summary.total} chunks done")
+
+        time.sleep(1.0)
+
+    for thread in threads:
+        thread.join(timeout=5)
+
+
+def _supervise_iid_worker(
+    _worker_ids: Iterator[int],
+    shard_info: ShardInfo,
+    *,
+    config: IIDCompletionStepConfig,
+    ledger_path: str,
+    pool: WorkerPoolConfig,
+) -> Iterator[dict[str, object]]:
+    if os.environ.get("TPU_VISIBLE_CHIPS") is not None:
+        raise ValueError("IID per-chip supervisor expects to own the full TPU VM; TPU_VISIBLE_CHIPS is already set")
+    if pool.vm_count != 1:
+        raise ValueError(f"IID per-chip workers support only single-VM TPU pools, got vm_count={pool.vm_count}")
+
+    groups = _chip_groups(pool.chips_per_vm, config.tensor_parallel_size)
+    logger.info(
+        "Starting IID per-chip supervisor pool=%s shard=%d chips_per_vm=%d tensor_parallel_size=%d groups=%s",
+        pool.pool_id,
+        shard_info.shard_idx,
+        pool.chips_per_vm,
+        config.tensor_parallel_size,
+        groups,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="iid_xregion_local_workers_") as tmp:
+        tmpdir = Path(tmp)
+        procs: list[subprocess.Popen[str]] = []
+        threads: list[threading.Thread] = []
+        try:
+            for group in groups:
+                proc, proc_threads = _spawn_child(
+                    tmpdir=tmpdir,
+                    config=config,
+                    ledger_path=ledger_path,
+                    pool_id=pool.pool_id,
+                    shard_idx=shard_info.shard_idx,
+                    chip_group=group,
+                )
+                procs.append(proc)
+                threads.extend(proc_threads)
+            _wait_for_children(procs, threads, ledger_path)
+        except Exception:
+            _terminate_children(procs)
+            raise
+
+    yield {"status": "done", "pool_id": pool.pool_id, "shard_idx": shard_info.shard_idx}
+
+
 def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
     if not config.worker_pools:
         raise ValueError("IID xregion requires at least one worker pool")
@@ -266,13 +520,18 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
     )
     ledger.ensure_manifest(ledger_path, chunks)
 
-    def process_chunk(chunk_record: dict[str, Any]) -> None:
-        _run_iid_chunk(IIDChunkSpec(**chunk_record), config=config)
+    def make_process_shard(pool: WorkerPoolConfig):
+        return functools.partial(
+            _supervise_iid_worker,
+            config=config,
+            ledger_path=ledger_path,
+            pool=pool,
+        )
 
     xregion_pool.run_worker_pools(
         worker_pools=config.worker_pools,
         ledger_path=ledger_path,
-        process_chunk=process_chunk,
+        make_process_shard=make_process_shard,
         poll_backoff=config.poll_backoff,
         heartbeat_timeout=config.heartbeat_timeout,
     )
@@ -308,3 +567,14 @@ def run_iid_completion_chunks(config: IIDCompletionStepConfig) -> None:
         coordinator_resources=ResourceConfig(cpu=0.1, ram="1g", preemptible=True),
     ).execute(aggregate_pipeline)
     logger.info("Wrote IID xregion completion rows to %s", path)
+
+
+def _main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--xregion-worker-child-config", required=True)
+    args = parser.parse_args()
+    _run_iid_local_engine_worker(_child_config_from_file(args.xregion_worker_child_config))
+
+
+if __name__ == "__main__":
+    _main()

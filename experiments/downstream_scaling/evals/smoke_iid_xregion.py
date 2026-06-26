@@ -35,10 +35,11 @@ from experiments.downstream_scaling.models.delphi import DELPHI_HF_DOWNLOADS
 logger = logging.getLogger(__name__)
 
 MODEL_KEY = "3e20"
-N_PROBLEMS = 32
+N_PROBLEMS = 128
 N_SAMPLES = 8
 NUM_WORKERS = 2
 CHUNK_SIZE = 32
+TENSOR_PARALLEL_SIZE = 1
 TPU_TYPES: tuple[str, ...] = ("v4-8", "v5p-8", "v6e-4", "v5litepod-4", "v6e-8", "v5litepod-8")
 
 TEMPERATURE = 0.6
@@ -80,6 +81,7 @@ def make_algorithm(
     chunk_size: int,
     n_samples: int,
     heartbeat_timeout: float,
+    tensor_parallel_size: int,
 ) -> IIDCompletionAlgorithm:
     return IIDCompletionAlgorithm(
         config=IIDConfig(
@@ -96,6 +98,7 @@ def make_algorithm(
                 worker_pools=worker_pools,
                 chunk_size=chunk_size,
                 heartbeat_timeout=heartbeat_timeout,
+                tensor_parallel_size=tensor_parallel_size,
             ),
         )
     )
@@ -152,13 +155,17 @@ def build_run_steps(
     n_problems: int,
     n_samples: int,
     heartbeat_timeout: float,
+    tensor_parallel_size: int,
 ) -> list[ExecutorStep]:
     if model_key not in DELPHI_HF_DOWNLOADS:
         raise ValueError(f"Unknown Delphi model key {model_key!r}; known: {sorted(DELPHI_HF_DOWNLOADS)}")
 
     pool_slug = "_".join(pool.pool_id for pool in worker_pools)
     completions = make_eval_step(
-        name=f"downstream_scaling/evals/smoke/iid_xregion_v2/{model_key}/{pool_slug}",
+        name=(
+            f"downstream_scaling/evals/smoke/iid_xregion_per_chip/"
+            f"{model_key}/tp={tensor_parallel_size}/{pool_slug}"
+        ),
         model_path=output_path_of(DELPHI_HF_DOWNLOADS[model_key]),
         task=make_task(n_problems),
         alg=make_algorithm(
@@ -166,11 +173,15 @@ def build_run_steps(
             chunk_size=chunk_size,
             n_samples=n_samples,
             heartbeat_timeout=heartbeat_timeout,
+            tensor_parallel_size=tensor_parallel_size,
         ),
         skip_grades=True,
     )
     validation = make_validation_step(
-        name=f"downstream_scaling/evals/smoke/iid_xregion_v2/{model_key}/{pool_slug}/validate",
+        name=(
+            f"downstream_scaling/evals/smoke/iid_xregion_per_chip/"
+            f"{model_key}/tp={tensor_parallel_size}/{pool_slug}/validate"
+        ),
         completions_path=output_path_of(completions) / COMPLETIONS_FILENAME,
         n_problems=n_problems,
         n_samples=n_samples,
@@ -248,6 +259,8 @@ def make_worker_pools(
             pool_id=pool_id_for_key(key),
             num_workers=num_workers,
             worker_resources=ResourceConfig.with_tpu(pool_tpu_types, regions=worker_regions),
+            vm_count=key[0],
+            chips_per_vm=key[1],
         )
         for key, pool_tpu_types in sorted(grouped.items())
     )
@@ -273,6 +286,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-problems", type=int, default=N_PROBLEMS)
     parser.add_argument("--n-samples", type=int, default=N_SAMPLES)
     parser.add_argument("--heartbeat-timeout", type=float, default=HEARTBEAT_TIMEOUT)
+    parser.add_argument("--tensor-parallel-size", type=int, default=TENSOR_PARALLEL_SIZE)
 
     args, remaining_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *remaining_args]
@@ -301,6 +315,7 @@ def main() -> None:
             n_problems=args.n_problems,
             n_samples=args.n_samples,
             heartbeat_timeout=args.heartbeat_timeout,
+            tensor_parallel_size=args.tensor_parallel_size,
         )
         description = "IID xregion smoke on a small GSM8K slice."
 
