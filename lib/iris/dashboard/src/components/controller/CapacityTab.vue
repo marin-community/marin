@@ -217,15 +217,21 @@ function formatSliceSummary(totals: Record<string, number>): string {
 // ===========================================================================
 
 const expandedSlices = ref<Set<string>>(new Set())
-const collapsedPools = ref<Set<string>>(new Set())
+// Explicit per-pool open/closed intent (set on user click). Every pool defaults to
+// collapsed — just its one-line state summary — since an operator usually cares about
+// one slice type and expands it. An override recorded here wins over that default.
+const poolOverrides = ref<Map<string, boolean>>(new Map())
+// Pools whose idle (zero-slice, idle-decision) tiers have been revealed. By default an
+// expanded pool shows only its active tiers plus a "+N idle sizes" toggle.
+const expandedIdleSizes = ref<Set<string>>(new Set())
 
 function toggleSet(set: Set<string>, key: string): Set<string> {
   const next = new Set(set)
   next.has(key) ? next.delete(key) : next.add(key)
   return next
 }
-function togglePool(pool: string) { collapsedPools.value = toggleSet(collapsedPools.value, pool) }
 function toggleSlices(name: string) { expandedSlices.value = toggleSet(expandedSlices.value, name) }
+function toggleIdleSizes(pool: string) { expandedIdleSizes.value = toggleSet(expandedIdleSizes.value, pool) }
 
 const sortedGroupStatuses = computed<GroupRoutingStatus[]>(() => {
   const statuses = routing.value?.groupStatuses ?? []
@@ -342,6 +348,12 @@ function groupStatusSummary(name: string): SliceStatusCount[] {
     .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
 }
 
+// Total slices the group holds, from the same status rollup the chips use (real ready
+// slices + in-flight lifecycle counts), so the tier ladder agrees with the chips.
+function groupSliceCountTotal(name: string): number {
+  return groupStatusSummary(name).reduce((n, c) => n + c.count, 0)
+}
+
 // Free = healthy slices that can take work now (available + idle). Both counts
 // are slice-granular — a fully-booked healthy slice is `in_use`, not free.
 function groupFreeSlices(name: string): number {
@@ -352,6 +364,65 @@ function groupFreeSlices(name: string): number {
 }
 function groupDegradedSliceCount(name: string): number {
   return countSliceStatus(groupSliceViews(name), 'degraded')
+}
+
+// -- Pool-level rollups (the one-line state summary on each pool header) --
+
+// Aggregate the slice-status chips across every group in a pool, in canonical order,
+// so a collapsed pool still says what it holds (e.g. "52 in use · 3 booting").
+function poolStatusSummary(section: PoolSection): SliceStatusCount[] {
+  const counts = new Map<SliceStatus, number>()
+  for (const gs of section.groups) {
+    for (const c of groupStatusSummary(gs.group)) {
+      counts.set(c.status, (counts.get(c.status) ?? 0) + c.count)
+    }
+  }
+  return SLICE_STATUS_SUMMARY_ORDER
+    .filter(s => (counts.get(s) ?? 0) > 0)
+    .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
+}
+function poolDemand(section: PoolSection): number {
+  return section.groups.reduce((n, gs) => n + groupDemand(gs.group), 0)
+}
+function poolLaunch(section: PoolSection): number {
+  return section.groups.reduce((n, gs) => n + (gs.launch ?? 0), 0)
+}
+
+// A group needs attention when its availability is constrained even if it holds no
+// slices yet — these stay visible rather than collapse into the idle remainder.
+function groupNeedsAttention(name: string): boolean {
+  const status = group(name)?.availabilityStatus
+  return status === 'quota_exceeded' || status === 'backoff' || status === 'at_capacity' || status === 'requesting'
+}
+function groupIsActive(gs: GroupRoutingStatus): boolean {
+  const decision = gs.decision ?? 'idle'
+  return (decision !== 'idle' && decision !== '') || groupNeedsAttention(gs.group)
+}
+
+// Every pool defaults to collapsed; only an explicit user toggle opens one.
+function isPoolCollapsed(section: PoolSection): boolean {
+  return poolOverrides.value.get(section.pool) ?? true
+}
+function togglePool(section: PoolSection) {
+  const next = new Map(poolOverrides.value)
+  next.set(section.pool, !isPoolCollapsed(section))
+  poolOverrides.value = next
+}
+
+// Tiers worth showing by default: any with slices, demand, a non-idle decision, or
+// constrained availability. The fully-idle remainder hides behind a "show N idle sizes"
+// toggle (but never hide all of a pool's tiers — keep them if none are active).
+function activeGroups(section: PoolSection): GroupRoutingStatus[] {
+  return section.groups.filter(gs => !isInactiveRow(gs) || groupIsActive(gs))
+}
+function visibleGroups(section: PoolSection): GroupRoutingStatus[] {
+  if (expandedIdleSizes.value.has(section.pool)) return section.groups
+  const active = activeGroups(section)
+  return active.length > 0 ? active : section.groups
+}
+function idleSizeCount(section: PoolSection): number {
+  const active = activeGroups(section)
+  return active.length > 0 ? section.groups.length - active.length : 0
 }
 
 // Shared layout/typography for the slice-status chips; each chip adds its own
@@ -672,27 +743,30 @@ function sliceIdShort(sliceId?: string): string {
     <!-- ===== Capacity summary strip ===== -->
     <section>
       <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        <MetricCard :value="`${onlineGroups} / ${groups.length}`" label="Pools online" />
-        <MetricCard :value="totalSlices" label="Slices" :detail="formatSliceSummary(sliceTotals)" />
+        <MetricCard size="sm" :value="`${onlineGroups} / ${groups.length}`" label="Pools online" />
+        <MetricCard size="sm" :value="totalSlices" label="Slices" :detail="formatSliceSummary(sliceTotals)" />
         <MetricCard
+          size="sm"
           :value="totalIdle"
           label="Idle spare"
           :variant="totalIdle > 0 ? 'warning' : 'default'"
         />
         <MetricCard
+          size="sm"
           :value="totalDegradedSlices"
           label="Degraded slices"
           :variant="totalDegradedSlices > 0 ? 'orange' : 'default'"
           :detail="totalDegradedSlices > 0 ? 'unschedulable' : undefined"
         />
-        <MetricCard :value="totalDemand" label="Demand" :variant="totalDemand > 0 ? 'accent' : 'default'" />
-        <MetricCard :value="launchPlanned" label="Launch planned" :variant="launchPlanned > 0 ? 'accent' : 'default'" />
+        <MetricCard size="sm" :value="totalDemand" label="Demand" :variant="totalDemand > 0 ? 'accent' : 'default'" />
+        <MetricCard size="sm" :value="launchPlanned" label="Launch planned" :variant="launchPlanned > 0 ? 'accent' : 'default'" />
         <MetricCard
+          size="sm"
           :value="aggregatedUnmet.length"
           label="Unmet jobs"
           :variant="aggregatedUnmet.length > 0 ? 'danger' : 'default'"
         />
-        <MetricCard :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
+        <MetricCard size="sm" :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
       </div>
     </section>
 
@@ -725,59 +799,94 @@ function sliceIdShort(sliceId?: string): string {
           </thead>
           <tbody>
             <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
-              <!-- Pool header row -->
+              <!-- Pool header row: toggle + name + tier chain on the left, an
+                   always-visible one-line state summary (slice chips + demand) on
+                   the right so a collapsed pool still tells its story. -->
               <tr class="bg-surface border-b border-surface-border hover:bg-surface-raised">
                 <td colspan="8" class="px-3 py-1.5">
-                  <div class="flex items-center gap-2">
-                    <button
-                      type="button"
-                      class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
-                      :aria-expanded="!collapsedPools.has(section.pool)"
-                      :aria-label="(collapsedPools.has(section.pool) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
-                      @click="togglePool(section.pool)"
-                    >
-                      <span class="text-[10px] text-text-muted">
-                        {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <button
+                        type="button"
+                        class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
+                        :aria-expanded="!isPoolCollapsed(section)"
+                        :aria-label="(isPoolCollapsed(section) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
+                        @click="togglePool(section)"
+                      >
+                        <span class="text-[10px] text-text-muted">
+                          {{ isPoolCollapsed(section) ? '▶' : '▼' }}
+                        </span>
+                        <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary whitespace-nowrap">
+                          {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                        </span>
+                      </button>
+                      <span
+                        v-if="section.blockedAtTier"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
+                               bg-status-danger-bg text-status-danger border-status-danger-border"
+                      >
+                        blocked at tier {{ section.blockedAtTier }}+
                       </span>
-                      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                        {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                      <!-- Tier ladder: slice count at each fallback tier (left = first
+                           tried). Position encodes the tier; the number is how many
+                           slices sit there. Hover for the tier label and group. -->
+                      <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
+                        <template v-for="(gs, idx) in section.groups" :key="gs.group">
+                          <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                          <span
+                            :title="`${tierLabel(gs) || 'tier'} · ${gs.group} · ${groupSliceCountTotal(gs.group)} slice${groupSliceCountTotal(gs.group) === 1 ? '' : 's'}`"
+                            :class="[
+                              'px-1 py-0.5 rounded border text-[11px] font-mono tabular-nums',
+                              isTierBlocked(gs, section)
+                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
+                                : group(gs.group)?.availabilityStatus === 'quota_exceeded'
+                                  ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
+                                  : group(gs.group)?.availabilityStatus === 'backoff'
+                                    ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
+                                    : groupSliceCountTotal(gs.group) > 0
+                                      ? 'bg-surface border-surface-border text-text-secondary'
+                                      : 'bg-surface border-surface-border text-text-muted',
+                            ]"
+                          >
+                            {{ groupSliceCountTotal(gs.group) }}
+                          </span>
+                        </template>
                       </span>
-                    </button>
-                    <span
-                      v-if="section.blockedAtTier"
-                      class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
-                             bg-status-danger-bg text-status-danger border-status-danger-border"
-                    >
-                      blocked at tier {{ section.blockedAtTier }}+
-                    </span>
-                    <!-- Tier chain visualization (not shown for unpooled groups) -->
-                    <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
-                      <template v-for="(gs, idx) in section.groups" :key="gs.group">
-                        <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                      <template v-if="poolStatusSummary(section).length">
                         <span
-                          :class="[
-                            'px-1 py-0.5 rounded border text-[11px] font-mono',
-                            isTierBlocked(gs, section)
-                              ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
-                              : group(gs.group)?.availabilityStatus === 'quota_exceeded'
-                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
-                                : group(gs.group)?.availabilityStatus === 'backoff'
-                                  ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
-                                  : 'bg-surface border-surface-border text-text-secondary',
-                          ]"
+                          v-for="b in poolStatusSummary(section)"
+                          :key="b.status"
+                          :class="[BADGE_BASE, b.style.bg, b.style.text, b.style.border]"
+                          :title="`${b.count} ${b.style.label} slice${b.count > 1 ? 's' : ''} — ${b.style.description}`"
                         >
-                          {{ tierLabel(gs) }}
+                          <span class="w-1.5 h-1.5 rounded-full" :class="b.style.dot" />
+                          {{ b.count }} {{ b.style.label }}
                         </span>
                       </template>
-                    </span>
+                      <span v-else class="text-xs text-text-muted">no slices</span>
+                      <span
+                        v-if="poolDemand(section) > 0"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border bg-accent-subtle text-accent border-accent-border"
+                      >
+                        demand {{ poolDemand(section) }}
+                      </span>
+                      <span
+                        v-if="poolLaunch(section) > 0"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border bg-accent-subtle text-accent border-accent-border"
+                      >
+                        launch {{ poolLaunch(section) }}
+                      </span>
+                    </div>
                   </div>
                 </td>
               </tr>
 
-              <template v-for="gs in section.groups" :key="gs.group">
+              <template v-for="gs in visibleGroups(section)" :key="gs.group">
                 <!-- Main row -->
                 <tr
-                  v-if="!collapsedPools.has(section.pool)"
+                  v-if="!isPoolCollapsed(section)"
                   :class="[
                     'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
                     isInactiveRow(gs) ? 'opacity-50' : '',
@@ -879,12 +988,27 @@ function sliceIdShort(sliceId?: string): string {
                 </tr>
 
                 <!-- Slice detail (expanded) -->
-                <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !collapsedPools.has(section.pool)" class="bg-surface-sunken">
+                <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !isPoolCollapsed(section)" class="bg-surface-sunken">
                   <td colspan="8" class="px-6 py-3">
                     <SliceList :slices="groupSlices(gs.group)" :worker-jobs="sliceWorkerJobs" :now="nowMs" />
                   </td>
                 </tr>
               </template>
+
+              <!-- Idle-tier toggle: an active pool hides its fully-idle sizes here. -->
+              <tr v-if="!isPoolCollapsed(section) && idleSizeCount(section) > 0" class="border-b border-surface-border-subtle">
+                <td colspan="8" class="px-3 py-1">
+                  <button
+                    type="button"
+                    class="ml-6 text-xs text-text-muted hover:text-text-secondary cursor-pointer"
+                    @click="toggleIdleSizes(section.pool)"
+                  >
+                    {{ expandedIdleSizes.has(section.pool)
+                      ? `hide ${idleSizeCount(section)} idle size${idleSizeCount(section) > 1 ? 's' : ''}`
+                      : `show ${idleSizeCount(section)} idle size${idleSizeCount(section) > 1 ? 's' : ''}` }}
+                  </button>
+                </td>
+              </tr>
             </template>
           </tbody>
         </table>
