@@ -4374,71 +4374,57 @@ def _recompute_snapshot(
     )
 
 
-def test_recompute_fails_job_when_a_task_exhausts_its_retries():
-    """All tasks terminal with a FAILED task within max_task_failures fails the job.
+@pytest.mark.parametrize(
+    "task_states",
+    [
+        [job_pb2.TASK_STATE_FAILED],
+        [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_SUCCEEDED],
+    ],
+    ids=["lone-failed", "failed-with-succeeded-siblings"],
+)
+def test_recompute_fails_job_when_all_tasks_terminal_with_a_failure(task_states):
+    """Once every task is terminal, a lone FAILED task fails the job.
 
-    Histogram {FAILED:1, SUCCEEDED:2} with max_task_failures=1: no FAILED-over-
-    threshold (so the early-abort branch did not fire), no worker_failed/
-    preempted/cosched, not all-succeeded. The one FAILED task exhausted its
-    retries and can never succeed, so the job as a whole FAILS. Pre-fix this fell
-    through the started_at branch and hung JOB_STATE_RUNNING forever.
+    The failure is within ``max_task_failures`` (so the cumulative-budget branch
+    did not fire) and no worker/preempt/cosched terminal state is present, but a
+    terminally FAILED task can never succeed, so the job as a whole fails instead
+    of hanging RUNNING.
     """
-    jid = JobName.from_wire("/u/tolerant")
-    task_states = [
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_SUCCEEDED,
-    ]
+    jid = JobName.from_wire("/u/terminal-failure")
     ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
 
     new_state = recompute_state(ws, jid)
 
-    # A terminal task that exhausted its retries fails the job, not RUNNING.
     assert new_state == job_pb2.JOB_STATE_FAILED
     assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
     assert ws.effects.jobs[jid].finished_at is not None
 
 
-def test_recompute_fails_job_on_single_terminally_failed_task():
-    """A single terminal-FAILED task with max_task_failures>=1 fails the job.
+@pytest.mark.parametrize(
+    "task_states, failure_counts, max_task_failures",
+    [
+        ([job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING], [1, 0], 0),
+        (
+            [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING],
+            [1, 1, 0],
+            1,
+        ),
+    ],
+    ids=["one-failure-retried", "failures-spread-across-tasks"],
+)
+def test_recompute_fails_job_on_cumulative_failures_while_active(task_states, failure_counts, max_task_failures):
+    """Cumulative hard failures fail the job even with no task currently FAILED.
 
-    The task is terminal FAILED with failure_count within budget, so it is never
-    rescheduled; it can never succeed, so the job FAILS rather than waiting. The
-    max_task_failures threshold only delays the failure to here (vs the early
-    FAILED-over-threshold abort). Pre-fix the job hung RUNNING.
-    """
-    jid = JobName.from_wire("/u/timed-out")
-    ws = Overlay(_recompute_snapshot(jid, [job_pb2.TASK_STATE_FAILED], max_task_failures=1))
-
-    new_state = recompute_state(ws, jid)
-
-    assert new_state == job_pb2.JOB_STATE_FAILED
-    assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
-
-
-def test_recompute_still_running_when_a_task_is_active():
-    """The terminal branch must not fire while any task is still active."""
-    jid = JobName.from_wire("/u/active")
-    task_states = [job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING]
-    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1))
-
-    new_state = recompute_state(ws, jid)
-
-    assert new_state == job_pb2.JOB_STATE_RUNNING
-
-
-def test_recompute_fails_job_when_cumulative_failures_exceed_budget_while_active():
-    """Cumulative failures fail the job even with no task currently in FAILED.
-
-    Models a coscheduled gang mid-crash-loop: one task hard-failed (charging
-    failure_count) and was retried back to PENDING while a sibling keeps RUNNING,
-    so the instantaneous histogram holds no FAILED task. With max_task_failures=0
-    the accumulated failure still fails the job, rather than letting the gang
-    crash-loop forever because the failure keeps landing on a different task.
+    Models a coscheduled gang mid-crash-loop: each crashed round charges a task's
+    ``failure_count`` and bounces it back to PENDING, so the instantaneous
+    histogram holds only a live RUNNING sibling and no FAILED task. The running
+    total of failures still exceeds ``max_task_failures`` and fails the job,
+    rather than letting the gang crash-loop forever because the failure keeps
+    landing on a different task that never exhausts its own per-task retries.
     """
     jid = JobName.from_wire("/u/gang")
-    task_states = [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING]
-    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=0, failure_counts=[1, 0]))
+    snap = _recompute_snapshot(jid, task_states, max_task_failures=max_task_failures, failure_counts=failure_counts)
+    ws = Overlay(snap)
 
     new_state = recompute_state(ws, jid)
 
@@ -4446,28 +4432,26 @@ def test_recompute_fails_job_when_cumulative_failures_exceed_budget_while_active
     assert ws.effects.jobs[jid].state == job_pb2.JOB_STATE_FAILED
 
 
-def test_recompute_tolerates_cumulative_failures_within_budget():
-    """A job under its cumulative budget keeps running so retries can proceed."""
-    jid = JobName.from_wire("/u/tolerant-gang")
-    task_states = [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING]
-    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=2, failure_counts=[1, 0]))
+@pytest.mark.parametrize(
+    "task_states, failure_counts, max_task_failures",
+    [
+        ([job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_RUNNING], None, 1),
+        ([job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING], [1, 0], 2),
+    ],
+    ids=["failed-with-active-sibling", "within-cumulative-budget"],
+)
+def test_recompute_keeps_job_running_within_budget(task_states, failure_counts, max_task_failures):
+    """An active task keeps the job RUNNING while failures stay within budget.
+
+    A task currently in FAILED does not finalize the job while a sibling is still
+    active, and failures retried back to PENDING keep the job RUNNING as long as
+    the cumulative total stays within ``max_task_failures`` so the retries can
+    proceed.
+    """
+    jid = JobName.from_wire("/u/active")
+    snap = _recompute_snapshot(jid, task_states, max_task_failures=max_task_failures, failure_counts=failure_counts)
+    ws = Overlay(snap)
 
     new_state = recompute_state(ws, jid)
 
     assert new_state == job_pb2.JOB_STATE_RUNNING
-
-
-def test_recompute_sums_failures_across_tasks_to_job_level():
-    """Failures spread across distinct tasks accumulate against the job budget.
-
-    Two different tasks each failed once (failure_count 1) and were retried, so no
-    single task reached its per-task retry limit; the job-level total (2) still
-    exceeds max_task_failures=1 and fails the job.
-    """
-    jid = JobName.from_wire("/u/spread")
-    task_states = [job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_PENDING, job_pb2.TASK_STATE_RUNNING]
-    ws = Overlay(_recompute_snapshot(jid, task_states, max_task_failures=1, failure_counts=[1, 1, 0]))
-
-    new_state = recompute_state(ws, jid)
-
-    assert new_state == job_pb2.JOB_STATE_FAILED
