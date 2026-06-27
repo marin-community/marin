@@ -1,17 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""EndpointLeaseRenewer: re-registers leased endpoints before they expire."""
+"""EndpointLeaseRenewer: re-registers leased endpoints before they expire.
 
-from iris.cluster.client.endpoint_lease import (
-    RENEW_RETRY_INTERVAL,
-    EndpointLeaseRenewer,
-    _Lease,
-    renew_interval,
-)
+The renewer is driven through its public surface: ``track`` registers a lease,
+``tick(now=...)`` advances the schedule to a chosen instant, and the fake
+register records every renewal RPC, so the tests assert on observable renewals
+rather than internal scheduler state.
+"""
+
+from iris.cluster.client.endpoint_lease import EndpointLeaseRenewer, renew_interval
 from iris.rpc import controller_pb2
 from iris.time_proto import duration_to_proto
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 
 class _FakeRegister:
@@ -39,65 +40,78 @@ def _request(endpoint_id: str = "e1") -> controller_pb2.Controller.RegisterEndpo
     )
 
 
-def _due_lease(request, interval: Duration) -> _Lease:
-    # next_renew in the past so a single _renew_due() tick fires the renewal.
-    return _Lease(request=request, interval=interval, next_renew=Timestamp.now().add(Duration.from_ms(-1)))
-
-
 def test_due_lease_is_reregistered_with_same_request():
     fake = _FakeRegister()
     renewer = EndpointLeaseRenewer(fake)
     request = _request()
-    renewer._leases["e1"] = _due_lease(request, Duration.from_hours(24))
+    start = Timestamp.now()
+    renewer.track(request, Duration.from_hours(24), now=start)
 
-    renewer._renew_due()
-
-    assert fake.requests == [request]  # same endpoint_id re-sent → server-side renew
-    assert renewer._leases["e1"].next_renew > Timestamp.now()  # rescheduled into the future
+    # Before the renewal is due nothing fires; once past it, the same request
+    # (same endpoint_id) is re-sent, which the server treats as a renew.
+    renewer.tick(now=start.add(renew_interval(Duration.from_hours(24))).add(Duration.from_ms(-1)))
+    assert fake.requests == []
+    renewer.tick(now=start.add(renew_interval(Duration.from_hours(24))).add(Duration.from_ms(1)))
+    assert fake.requests == [request]
 
 
 def test_renewal_paces_off_the_granted_lease():
+    # Lease asks for a 24h cadence but the server grants 30m; later renewals must
+    # follow the grant, not the original ask.
     fake = _FakeRegister(granted=Duration.from_minutes(30))
     renewer = EndpointLeaseRenewer(fake)
-    renewer._leases["e1"] = _due_lease(_request(), Duration.from_hours(24))
+    start = Timestamp.now()
+    renewer.track(_request(), Duration.from_hours(24), now=start)
 
-    renewer._renew_due()
+    first = start.add(renew_interval(Duration.from_hours(24)))
+    renewer.tick(now=first.add(Duration.from_ms(1)))
+    assert len(fake.requests) == 1
 
-    assert renewer._leases["e1"].interval == renew_interval(Duration.from_minutes(30))
+    # One granted interval (10m) later it renews again — far sooner than the 8h
+    # the original 24h lease would have implied.
+    granted_interval = renew_interval(Duration.from_minutes(30))
+    renewer.tick(now=first.add(granted_interval).add(Duration.from_ms(-1)))
+    assert len(fake.requests) == 1  # not yet due under the granted cadence
+    renewer.tick(now=first.add(granted_interval).add(Duration.from_ms(1)))
+    assert len(fake.requests) == 2
 
 
-def test_failed_renewal_reschedules_soon_and_keeps_lease():
+def test_failed_renewal_keeps_lease_and_retries():
     fake = _FakeRegister(raises=True)
     renewer = EndpointLeaseRenewer(fake)
-    renewer._leases["e1"] = _due_lease(_request(), Duration.from_hours(24))
+    start = Timestamp.now()
+    renewer.track(_request(), Duration.from_hours(24), now=start)
 
-    renewer._renew_due()  # must not raise
+    due = start.add(renew_interval(Duration.from_hours(24))).add(Duration.from_ms(1))
+    renewer.tick(now=due)  # must not raise
+    assert len(fake.requests) == 1
 
-    lease = renewer._leases["e1"]  # still tracked
-    expected = Timestamp.now().add(RENEW_RETRY_INTERVAL)
-    assert abs(lease.next_renew.epoch_ms() - expected.epoch_ms()) < 2000
+    # The lease is kept and retried: a later tick re-attempts the renewal rather
+    # than dropping the endpoint.
+    renewer.tick(now=due.add(Duration.from_minutes(10)))
+    assert len(fake.requests) == 2
 
 
 def test_untracked_lease_is_not_renewed():
     fake = _FakeRegister()
     renewer = EndpointLeaseRenewer(fake)
-    renewer._leases["e1"] = _due_lease(_request(), Duration.from_hours(24))
+    start = Timestamp.now()
+    renewer.track(_request(), Duration.from_hours(24), now=start)
 
     renewer.untrack("e1")
-    renewer._renew_due()
+    renewer.tick(now=start.add(Duration.from_hours(24)))
 
     assert fake.requests == []
 
 
-def test_close_stops_the_renewal_thread():
+def test_start_then_close_stops_the_renewer():
     fake = _FakeRegister()
     renewer = EndpointLeaseRenewer(fake)
-    renewer.track(_request(), Duration.from_hours(72))  # starts the daemon thread
-    thread = renewer._thread
-    assert thread is not None and thread.is_alive()
+    renewer.start()
+    assert renewer.is_running
 
     renewer.close()
-    thread.join(timeout=5)
-    assert not thread.is_alive()
-    # 72h lease → first renewal is ~24h out, so nothing fired during the test.
-    assert fake.requests == []
+    stopped = ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+        lambda: not renewer.is_running, timeout=Duration.from_seconds(5)
+    )
+    assert stopped

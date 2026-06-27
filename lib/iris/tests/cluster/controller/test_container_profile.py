@@ -18,7 +18,6 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.run_template import RunTemplateCache
@@ -53,10 +52,10 @@ def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> Controll
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 

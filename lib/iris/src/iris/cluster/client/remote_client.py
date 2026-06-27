@@ -406,6 +406,7 @@ class RemoteClusterClient:
         response = call_with_retry("register_endpoint", _call)
         # Renew the lease in the background until unregister (or process exit).
         self._endpoint_renewer.track(request, duration_from_proto(response.lease_duration))
+        self._endpoint_renewer.start()
         return response.endpoint_id
 
     def unregister_endpoint(self, endpoint_id: str) -> None:

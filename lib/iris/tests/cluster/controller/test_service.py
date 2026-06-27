@@ -23,7 +23,6 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile import dispatch
@@ -878,10 +877,10 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -908,10 +907,10 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1549,10 +1548,10 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1585,10 +1584,10 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
-        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
