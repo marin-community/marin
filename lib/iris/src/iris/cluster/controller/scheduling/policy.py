@@ -27,6 +27,7 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     is_availability_key,
     split_hard_soft,
+    strip_backend_constraints,
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -111,7 +112,10 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
         req_gpu_count=dc.gpu,
         req_tpu_count=dc.tpu,
         device_variant=device_variant_from_json(job.res_device_json),
-        constraints=constraints_from_json(job.constraints_json),
+        # The reserved ``backend`` routing directive is consumed by the
+        # meta-scheduler; strip it so it never reaches per-worker matching (no
+        # worker advertises a ``backend`` attribute, so it would starve the task).
+        constraints=strip_backend_constraints(constraints_from_json(job.constraints_json)),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
