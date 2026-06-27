@@ -10,8 +10,6 @@ desired attempt RUNNING then SUCCEEDED across reconcile rounds, recording the
 root over the network seam.
 """
 
-from typing import ClassVar
-
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
@@ -25,6 +23,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2, remote_agent_pb2, worker_pb2
 
@@ -91,19 +90,24 @@ class FakeClusterBackend:
     backend reports progress across reconcile rounds.
     """
 
-    capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.CLUSTER_VIEW})
-
-    def __init__(self, name: str = "fake") -> None:
+    def __init__(
+        self,
+        name: str = "fake",
+        capabilities: frozenset[BackendCapability] | None = None,
+    ) -> None:
         self.name = name
+        self.capabilities = capabilities if capabilities is not None else frozenset({BackendCapability.CLUSTER_VIEW})
         self.autoscaler: Autoscaler | None = None
         self._seen_count: dict[tuple[str, int], int] = {}
         self.last_seen_task_ids: set[str] = set()
+        self.last_running_tasks: list[RunningTaskEntry] = []
 
     def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
         return ScheduleResult()
 
     def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
         self.last_seen_task_ids = {req.task_id for req in snapshot.tasks_to_run}
+        self.last_running_tasks = list(snapshot.running_tasks)
         updates: list[TaskUpdate] = []
         for req in snapshot.tasks_to_run:
             key = (req.task_id, req.attempt_id)

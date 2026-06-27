@@ -20,7 +20,7 @@ from typing import Protocol
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
 from iris.cluster.agent.cache import AgentCache
-from iris.cluster.controller.backend import TaskBackend
+from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.types import JobName
@@ -81,6 +81,13 @@ class AgentLoop:
         transport: PollTransport,
         cache: AgentCache | None = None,
     ) -> None:
+        if BackendCapability.CLUSTER_VIEW not in local_backend.capabilities:
+            raise ValueError(
+                f"AgentLoop requires a CLUSTER_VIEW backend; {local_backend.name!r} has "
+                f"{sorted(c.value for c in local_backend.capabilities)}. The agent drives a backend "
+                "purely from the root's desired attempts, which a worker-daemon backend ignores "
+                "(it reconciles from worker snapshots, not tasks_to_run)."
+            )
         self._backend_id = backend_id
         self._local_backend = local_backend
         self._transport = transport
@@ -99,7 +106,14 @@ class AgentLoop:
             reconcile_rows=[],
             timeout_rows=[],
             tasks_to_run=desired,
-            running_tasks=[RunningTaskEntry(JobName.from_wire(req.task_id), req.attempt_id) for req in desired],
+            running_tasks=[
+                RunningTaskEntry(
+                    JobName.from_wire(req.task_id),
+                    req.attempt_id,
+                    coscheduled=bool(req.coscheduling.group_by),
+                )
+                for req in desired
+            ],
         )
         result = self._local_backend.reconcile(snapshot)
         for update in result.updates:
