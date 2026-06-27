@@ -42,7 +42,7 @@
   "job_workdir_files": [],
   "jobs": [
     {
-      "backend_id": "''",
+      "backend_id": "",
       "depth": 1,
       "error": "evicted-by-prod",
       "exit_code": null,
@@ -72,7 +72,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-0>",
-      "backend_id": "''",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "evicted-by-prod",
       "exit_code": null,
@@ -85,7 +85,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-1>",
-      "backend_id": "''",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched-preempt-term/0 failed",
       "exit_code": null,
@@ -98,7 +98,7 @@
   ],
   "tasks": [
     {
-      "backend_id": "''",
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -122,7 +122,7 @@
       "task_index": 0
     },
     {
-      "backend_id": "''",
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,

@@ -394,6 +394,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
     failure_count: int

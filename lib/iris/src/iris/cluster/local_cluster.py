@@ -53,7 +53,7 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.types import AcceleratorType
+from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 
@@ -245,7 +245,7 @@ class LocalCluster:
                 # after the last successful reconcile, vs the ~50s production grace.
                 worker_unreachable_grace=Duration.from_seconds(10.0),
             ),
-            provider=provider,
+            backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,
             threads=controller_threads,
             db=db,

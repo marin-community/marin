@@ -22,8 +22,8 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.composer import make_backend
-from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.composer import make_backends
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends
 from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
@@ -152,7 +152,7 @@ def run_controller_serve(
         host=host,
         worker_token=auth.worker_token if auth.worker_token else None,
     )
-    provider = make_backend(
+    backends = make_backends(
         cluster_config,
         db=db,
         auth=auth,
@@ -190,9 +190,10 @@ def run_controller_serve(
 
     controller = Controller(
         config=config,
-        provider=provider,
+        backends=backends,
         log_stack=log_stack,
         db=db,
+        backend_configs=resolve_backends(cluster_config),
     )
     logger.info("Controller instance created")
 

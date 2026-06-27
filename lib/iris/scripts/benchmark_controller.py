@@ -104,7 +104,7 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -2296,7 +2296,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
     )
     controller = Controller(
         config=config,
-        provider=cast(TaskBackend, _FakeProvider()),
+        backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
         log_stack=log_stack,
         db=db,
         threads=threads,

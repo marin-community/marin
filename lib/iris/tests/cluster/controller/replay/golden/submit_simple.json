@@ -42,7 +42,7 @@
   "job_workdir_files": [],
   "jobs": [
     {
-      "backend_id": "''",
+      "backend_id": "",
       "depth": 1,
       "error": null,
       "exit_code": null,
@@ -71,7 +71,7 @@
   "task_attempts": [],
   "tasks": [
     {
-      "backend_id": "''",
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": -1,
       "current_worker_address": null,

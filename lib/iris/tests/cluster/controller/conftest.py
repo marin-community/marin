@@ -75,6 +75,7 @@ from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
     TERMINAL_TASK_STATES,
     AcceleratorType,
     CapacityType,
@@ -263,6 +264,8 @@ def make_controller(tmp_path):
         config: ControllerConfig | None = None,
         *,
         provider=None,
+        backends: dict | None = None,
+        backend_configs: dict | None = None,
         db: ControllerDB | None = None,
         **config_kwargs,
     ) -> Controller:
@@ -278,11 +281,14 @@ def make_controller(tmp_path):
             host=config.host,
             worker_token=config.auth.worker_token if config.auth and config.auth.worker_token else None,
         )
+        if backends is None:
+            backends = {DEFAULT_BACKEND_ID: provider if provider is not None else FakeProvider()}
         controller = Controller(
             config=config,
-            provider=provider if provider is not None else FakeProvider(),
+            backends=backends,
             log_stack=log_stack,
             db=db,
+            backend_configs=backend_configs,
         )
         created.append(controller)
         return controller
@@ -334,6 +340,21 @@ def autoscale_once(ctrl: Controller) -> None:
         schedule_limiter=_spent_limiter(),
         reconcile_limiter=_spent_limiter(),
         autoscale_limiter=RateLimiter(interval_seconds=0.0),
+    )
+
+
+def schedule_once(ctrl: Controller) -> None:
+    """Drive exactly one schedule pass through the production control tick.
+
+    A wake forces the schedule phase while reconcile and autoscale are held off,
+    so only routing/placement (and its commit) runs this tick.
+    """
+    ctrl._force_reconcile = False
+    ctrl._control_tick(
+        woken=True,
+        schedule_limiter=RateLimiter(interval_seconds=0.0),
+        reconcile_limiter=_spent_limiter(),
+        autoscale_limiter=_spent_limiter(),
     )
 
 

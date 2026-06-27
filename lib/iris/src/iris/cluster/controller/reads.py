@@ -757,6 +757,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
 PENDING_TASK_COLS = (
     tasks_table.c.task_id,
     tasks_table.c.job_id,
+    tasks_table.c.backend_id,
     tasks_table.c.state,
     tasks_table.c.current_attempt_id,
     tasks_table.c.failure_count,
@@ -775,6 +776,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         failure_count=int(row.failure_count),
@@ -1468,6 +1470,16 @@ def all_worker_ids(tx: Tx) -> list[WorkerId]:
     """Return every persisted worker id."""
     rows = tx.execute(select(workers_table.c.worker_id)).all()
     return [WorkerId(str(row.worker_id)) for row in rows]
+
+
+def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
+    """Return ``{worker_id: scale_group}`` for every persisted worker.
+
+    The controller maps each worker's scale group to its owning backend to
+    partition the per-tick snapshot. Workers with no scale group map to ``""``.
+    """
+    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
+    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
 
 
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
