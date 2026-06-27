@@ -274,6 +274,7 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/buoy/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -290,6 +291,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "lib/buoy/src",
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
