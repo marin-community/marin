@@ -1728,3 +1728,130 @@ fix); (c) E4M3 + block scaling (principled, larger lift). See [[fp8-scaling-caus
 (2) the E5M2-on-Mosaic patch; (3) forward weight-transpose fusion (~8% e2e); (4) haliax `ragged_dot` f8 PR
 extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progress summary) + topic
 `grug-fp8-h100` updated.
+
+### 2026-06-26 — GFP8-035: mixed-FP8 wgmma patch PROTOTYPED + H100-VERIFIED; production needs a 1-line jaxlib C++ change
+Acted on GFP8-034. First re-confirmed the claim from primary sources (not just the prior pass): direct reads
+of our pinned `wgmma.py:359` gate + `:242` single-`el_ty` emission (still present on jax `main`); a verbatim
+**PTX ISA** quote (FP8 is the *named* exception to "`.atype` == `.btype`" for floating wgmma; `.atype,.btype ∈
+{.e4m3,.e5m2}` independently, `sm_90a`); **CUTLASS** emitting `wgmma.mma_async...f32.e4m3.e5m2` on SM90; and
+0 upstream jax issues/PRs. Claim **stands**.
+
+**Patch drafted + validated** (`experiments/grug/fp8/`): `mixed_fp8_wgmma_patch.py` (idempotent anchored
+in-place patcher) + `jax_mixed_fp8_wgmma.diff` (clean PR diff). Two Python gates relaxed to the {e4m3,e5m2}
+pair (`primitives.py:1203`, `wgmma.py:359`) + the emitter threads the A-operand dtype and emits
+`.{a_el_ty}.{b_el_ty}` (was `.{el_ty}.{el_ty}`). K-step/swizzle math is byte-width-driven (both fp8 = 1 byte)
+so it's untouched; f32 acc already accepts both fp8. Our `transposed_ragged_dot` same-dtype guard relaxed too.
+
+**H100 result (`test_mixed_fp8_wgmma.py`, jobs `mixed-fp8-wgmma-run2`/`-ptx`, cw-us-east-02a; 3.11 dep-context
+restore needed for `uv sync` — but the cluster image is now **3.12.13**, so the old 3.11 note is stale):**
+- **Lane path (pure-Python emitter): mixed E4M3×E5M2 WORKS.** Emitter logs the literal
+  `wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e5m2` (baseline logs `...e4m3.e4m3`), and the kernel is
+  **numerically exact** vs an f32 reference (max_abs = 0). So Hopper executes mixed fp8 correctly and the
+  Python emitter patch is right — the hardware/PTX is not the wall.
+- **Warpgroup path (our PRODUCTION kernels): blocked by a compiled jaxlib C++ verifier.**
+  `'mosaic_gpu.wgmma' op The 'a' and 'b' inputs must have the same element type.` The MLIR shows the op is
+  *built* correctly mixed (`memref<...f8E4M3FN>, memref<...f8E5M2>`); only `WGMMAOp::verify()` rejects it.
+  The dialect→LLVM lowering is Python (calls the patched emitter), so the verifier is the *sole* blocker.
+- Negative control: `e4m3 × bf16` still correctly rejected (only the fp8 pair was opened).
+
+**Feasibility verdict (corrects GFP8-034's "~10-line wgmma.py" cost):** the patch is **two-tier**.
+- *Lane* path → Python-only patch, works today (proven). But our production kernels don't use Lane.
+- *Warpgroup/production* path → Python patch **plus a 1-line relaxation in jaxlib C++**
+  `mosaic/dialect/gpu/mosaic_gpu.cc` `WGMMAOp::verify()` (the `a_el != b_el` check; ODS already permits both
+  fp8 operand types — see `experiments/grug/fp8/jaxlib_mixed_fp8_verifier.md`), which is **compiled into the
+  jaxlib wheel** → needs a jaxlib source/bazel rebuild or an upstream PR. Introduced jax `66f45d0`
+  (2024-12-11), never relaxed for fp8, untracked. The change itself is tiny and matches PTX-ISA/CUTLASS; the
+  *cost* is carrying a custom jaxlib (or upstreaming), not the diff size.
+
+**So:** E5M2-grad on the fast Mosaic path is reachable but gated on a jaxlib build, not stock JAX. Until then
+the genuine-f8 wgrad stays all-E4M3. Decision unchanged: the training-loss validation (GFP8-034 next-(1))
+still gates whether the E5M2 hybrid is even worth the jaxlib carry. Artifacts: `experiments/grug/fp8/`
+(`mixed_fp8_wgmma_patch.py`, `test_mixed_fp8_wgmma.py`, `jax_mixed_fp8_wgmma.diff`,
+`jaxlib_mixed_fp8_verifier.md`).
+
+### 2026-06-26 — GFP8-036: jaxlib C++ verifier change BUILT FROM SOURCE + production Warpgroup path H100-VERIFIED
+Closed GFP8-035's open gap ("the 1-line jaxlib `WGMMAOp::verify()` change is *documented* but never built/run").
+The change is now **built and exercised** end-to-end; the production Warpgroup path works.
+
+**What was built.** `jax-v0.10.0` (commit `a33ed614`), one patch to `jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc`
+`WGMMAOp::verify()` (line 408): replace the unconditional `a_el != b_el` reject with `a_el != b_el && !both_fp8`,
+where `both_fp8 = llvm::isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>(a_el) && (...)(b_el)`. Used the
+`llvm::isa<>` idiom already present in this TU (the MultimemLoad verifier ~line 1001), not the `.isFloat8E4M3FN()`
+method form drafted earlier — the header scope is guaranteed. Built **only** the base `jaxlib` wheel: the
+mosaic-GPU MLIR dialect (incl. this verifier, `_mosaic_gpu_ext`) lives in `jaxlib`, NOT in `jax-cuda13-plugin`
+(`jaxlib/BUILD` deps), so a **CPU-only** jaxlib pairs at runtime with the **stock** `jax-cuda13-plugin==0.10.0`
+for H100 execution — no CUDA toolchain in the build, ~11 min on 96 cores.
+
+**How (reproducible, two-phase, GPU-frugal):** `experiments/grug/fp8/build_patched_jaxlib.sh` runs in the
+iris-task image (python:3.12-slim, root) on the **`cpu-genoa`** scale group (192 cores, no GPU wasted): `apt
+install clang-19` + fetch bazel 7.7.0, clone+patch, `python build/build.py build --wheels=jaxlib
+--python_version=3.12`, upload the cp312 wheel to `s3://marin-na/marin/tmp/mixed-fp8/` via boto3. Then
+`run_h100_verify.sh` on `H100x1` pulls the wheel, `uv pip install --force-reinstall --no-deps` over stock
+jaxlib, and runs `test_mixed_fp8_wgmma.py`. (Build/run share the identical image → glibc/ABI match; the env is
+native Python **3.12** on this branch, so the old 3.11 dep-restore workaround is NOT needed — and would in fact
+break the cp312 wheel. Jobs: `/matt/mixed-fp8-jaxlib-build3`, `/matt/mixed-fp8-h100-verify`.)
+
+**H100 result (NVIDIA H100 80GB HBM3, jaxlib swapped `0.10.0` → `0.10.0.dev0+selfbuilt`):**
+- **PRODUCTION path `wgrad/Warpgroup/e4m3xe5m2` (haliax `transposed_ragged_dot`, E4M3 acts × E5M2 grad): OK,
+  max_abs=0.** This is the exact case stock jaxlib rejected with `'mosaic_gpu.wgmma' op The 'a' and 'b' inputs
+  must have the same element type`. With the rebuilt verifier it **compiles**, the patched emitter logs the
+  literal `wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e5m2`, and it is **numerically exact** vs f32.
+- `dense/Lane/e4m3xe5m2`: OK max_abs=0 (reproduces GFP8-035; Lane needs only the Python patch).
+- Negative control `e4m3 × bf16`: still correctly rejected.
+- *Caveat (orthogonal):* my toy `dense/Warpgroup` kernel errors with `AssertionError` in
+  `_copy_gmem_to_smem_lowering` (`assert swizzle is None`) — but it fails **identically for the same-dtype
+  baseline `e4m3xe4m3`**, so it is a pre-existing quirk of that toy kernel's GMEM→SMEM swizzle setup under
+  Warpgroup semantics, NOT a regression and NOT related to the verifier. The real production kernel (wgrad,
+  which uses haliax's correct Warpgroup setup) passes. (`ptx_has_needle=False` everywhere is the known
+  XLA-dump-misses-Mosaic-inline-asm artifact from GFP8-035; the emitter's own emit-log is the ground truth.)
+
+**Verdict update (supersedes GFP8-035's "documented, not built"):** the two-tier feasibility is now **fully
+de-risked by execution**, not inference. Tier-2 (production Warpgroup) = Python emitter patch + the 1-line
+jaxlib C++ verifier relaxation, built into a custom jaxlib wheel — proven to run correct mixed E4M3×E5M2 wgmma
+on H100. The remaining cost is purely *carrying* a custom jaxlib (or upstreaming the verifier PR to jax-ml/jax;
+the diff is tiny and matches PTX-ISA/CUTLASS, ODS already permits both fp8 operands). Decision still gated on
+GFP8-034 next-(1) training-loss validation: whether the E5M2-grad hybrid is worth that carry. Artifacts added:
+`build_patched_jaxlib.sh`, `run_h100_verify.sh`; wheel at `s3://marin-na/marin/tmp/mixed-fp8/`.
+
+### 2026-06-27 — GFP8-037: upstream change backported to jax/jaxlib **0.10.0** (the haliax pin) + H100-validated
+Backported the single mixed-E4M3/E5M2 wgmma commit (main PR branch `mcwitt/jax:mixed-fp8-wgmma` @ `0a9cd504`)
+onto the **`jax-v0.10.0`** release tag — the exact jax/jaxlib version marin/haliax pins (`uv.lock` resolves
+`jax==0.10.0`, `jaxlib==0.10.0`, `jax-cuda13-{plugin,pjrt}==0.10.0`), so the patched jaxlib wheel is a **drop-in**
+for the haliax env. Branch **`mcwitt/jax:mixed-fp8-wgmma-0.10.0`** @ `92352ad31` (force-pushed, no PR).
+
+**Key lesson — a context-only `git apply` silently misapplied the C++ verifier hunk across versions.**
+`mosaic_gpu.cc` has TWO verifier functions with the *identical* string `"The \`a\` and \`b\` inputs must have
+the same element type."`: `WGMMAOp::verify()` (Hopper, the target) and `TcGen05MMAOp::verify()` (Blackwell
+tcgen05, must NOT change). The file layout differs between main and `v0.10.0`, so `git apply` anchored the
+relaxation hunk to the **wrong** occurrence — it landed in `TcGen05MMAOp::verify()`, leaving Hopper wgmma still
+rejecting mixed FP8 *and* wrongly relaxing an unrelated Blackwell op. The diff still "applied clean / zero fuzz",
+so nothing flagged it. **codex review (`--base jax-v0.10.0`) caught it as a P1.** Fixed by hand-editing both
+functions, then *proved* the regenerated patch re-applies to the pristine `git archive jax-v0.10.0` tree with
+`is_fp8` inside `WGMMAOp::verify()` and `TcGen05MMAOp::verify()` byte-identical to the tag. Takeaway: for a
+cross-version backport, **verify the applied hunk landed in the intended symbol** (grep the function), don't
+trust a clean `git apply` — and an independent adversarial review (codex here) earns its keep. (The earlier
+`v0.10.2` attempt happened to anchor correctly because its layout matched; that branch was a wrong-version
+misstep and has been deleted from the fork.)
+
+**Validated with the same methodology as the main PR (full rebuild, not assumed from the identical intent):**
+- **jaxlib 0.10.0 built from source** (release-stamped via `ML_WHEEL_TYPE=release` so `jax.version ==
+  jaxlib.__version__` — else the dialect tests skip — and so the wheel cleanly overrides stock `jaxlib==0.10.0`).
+- **Dialect verifier test (CPU, exercises the C++ `WGMMAOp::verify()` change): 6/6 PASS** —
+  `test_wgmma_mixed_fp8_operands_are_allowed` PASS (direct proof the relaxation is now in the *right* verifier)
+  + negative `test_wgmma_types_match` still correctly rejected.
+- **Numeric mixed-FP8 wgmma on a real H100: 16/16 PASS** (both orderings e4m3×e5m2 / e5m2×e4m3 × m=(64,128) ×
+  swizzle=(64,128) × out=(f16,f32)). **Exact haliax stack:** jax 0.10.0 + custom jaxlib 0.10.0 + **stock
+  `jax-cuda13-{pjrt,plugin}==0.10.0`** from PyPI. The custom jaxlib drops in over stock jaxlib; the mosaic-GPU
+  dialect+verifier lives in jaxlib (not the plugin), so the stock cuda13 plugin just executes the relaxed kernel
+  — proving drop-in compatibility for haliax.
+- **No from-source cuda plugin build needed** (0.10.0 is a real release with matched stock wheels — unlike main
+  0.11.0.dev). This is also the proven GFP8-036 pairing (custom jaxlib + stock cuda13 plugin).
+- **Reviews 3/3 clean on the corrected commit** (`92352ad31`): codex, opencode glm-5.2, and a Claude reviewer
+  (the `/code-review` stand-in; that skill targets the marin session repo, not the jax clone). All three
+  raised only the *same* two non-blocking notes as the main review (A-in-registers mixed-FP8 path untested;
+  `wgmma_m64` validates only B's type, unreachable via the public `wgmma()` gate) — pre-existing, not introduced.
+
+Artifacts: `experiments/grug/fp8/jax_pr_0.10.0/` (`build_jaxlib_and_test.sh`, `run_jax_h100_test.sh`,
+`run_mixed_fp8_pytest.py`, `mixed_fp8_wgmma_0.10.0.patch`); wheel at `s3://marin-na/marin/tmp/mixed-fp8-pr-0.10.0/`.
+Iris jobs: `/matt/mixed-fp8-0100-jaxlib2` (A, succeeded — `jaxlib` v1 was the buggy-patch run, killed),
+`/matt/mixed-fp8-0100-h100` (C, succeeded).

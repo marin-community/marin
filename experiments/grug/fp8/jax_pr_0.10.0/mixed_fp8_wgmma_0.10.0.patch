@@ -1,0 +1,281 @@
+diff --git a/jax/_src/pallas/mosaic_gpu/primitives.py b/jax/_src/pallas/mosaic_gpu/primitives.py
+index db12cf392..7f0c89de5 100644
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py
+@@ -1200,8 +1200,15 @@ def wgmma(acc: gpu_core.WGMMAAbstractAccumulatorRef, a, b) -> None:
+         f" rhs={b.shape=}, acc={acc.shape}"
+     )
+ 
+-  if a.dtype != b.dtype:
+-    raise ValueError(f"Mixed input dtypes for matrix multiplication unsupported: lhs={a.dtype}, rhs={b.dtype}")
++  # A and B must share a dtype, except that the e4m3/e5m2 FP8 pair may be mixed:
++  # `wgmma` takes independent `.atype`/`.btype` operands for FP8.
++  fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
++  is_mixed_fp8 = a.dtype in fp8_dtypes and b.dtype in fp8_dtypes
++  if a.dtype != b.dtype and not is_mixed_fp8:
++    raise ValueError(
++        "Mixed input dtypes for matrix multiplication unsupported: "
++        f"lhs={a.dtype}, rhs={b.dtype}"
++    )
+ 
+   acc_transforms_leaves: list
+   if isinstance(acc, pallas_core.TransformedRef):
+diff --git a/jax/experimental/mosaic/gpu/wgmma.py b/jax/experimental/mosaic/gpu/wgmma.py
+index 68af3c390..8e9d2c981 100644
+--- a/jax/experimental/mosaic/gpu/wgmma.py
++++ b/jax/experimental/mosaic/gpu/wgmma.py
+@@ -127,6 +127,7 @@ def wgmma_m64(
+     n: int,
+     swizzle: int,
+     element_type: ir.Type,
++    a_element_type: ir.Type | None = None,
+ ):
+   out_ty = ir.VectorType(acc.flat[0].type).element_type
+   if not _supported_wgmma_types(out_ty, element_type):
+@@ -223,23 +224,32 @@ def wgmma_m64(
+   imm_regs = "".join(f", {r}" for r in take_regs(num_imm_regs))
+   assert next(reg_count) == len(reg_constraints_list)
+   k_instr = 32 // bytewidth(element_type)
+-  el_ty = str(element_type)
+-  if isinstance(element_type, ir.Float8E5M2Type):
+-    el_ty = "e5m2"
+-  elif isinstance(element_type, ir.Float8E4M3FNType):
+-    el_ty = "e4m3"
+-  elif isinstance(element_type, ir.IntegerType):
+-    # TODO(bchetioui): add u8 support in the future. Currently we always assume
+-    # that 8-bit integers are s8, and we would need to change the signature of
+-    # `wgmma` to indicate whether the input should be treated as signed or not.
+-    el_ty = "s8"
++
++  def ptx_operand_type(ty):
++    if isinstance(ty, ir.Float8E5M2Type):
++      return "e5m2"
++    if isinstance(ty, ir.Float8E4M3FNType):
++      return "e4m3"
++    if isinstance(ty, ir.IntegerType):
++      # TODO(bchetioui): add u8 support in the future. Currently we always
++      # assume that 8-bit integers are s8, and we would need to change the
++      # signature of `wgmma` to indicate whether the input should be treated as
++      # signed or not.
++      return "s8"
++    return str(ty)
++
++  # `a` and `b` share an element type except for the FP8 e4m3/e5m2 pair, which
++  # may be mixed: PTX `wgmma` takes independent `.atype`/`.btype`. When the
++  # caller does not specify `a_element_type`, `a` reuses `b`'s type.
++  b_el_ty = ptx_operand_type(element_type)
++  a_el_ty = b_el_ty if a_element_type is None else ptx_operand_type(a_element_type)
+ 
+   out_ty_str = str(out_ty)
+   if out_ty == i32:
+     out_ty_str = "s32"
+ 
+   wgmma_instr = (
+-      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{el_ty}.{el_ty} "
++      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{a_el_ty}.{b_el_ty} "
+       f"{acc_reg_vector}, {a_regs}, {b_desc_reg}, p{imm_regs};"
+   )
+   ptx = f"{{ .reg .pred p; setp.ne.b32 p, {use_out_reg}, 0; {wgmma_instr} }}\n"
+@@ -356,10 +366,16 @@ def wgmma(
+         "WGMMA requires A and B to have the same contraction dimension (K),"
+         f" got: {k2} and {k}"
+     )
+-  if element_type != element_type2:
++  fp8_types = (ir.Float8E4M3FNType, ir.Float8E5M2Type)
++  is_mixed_fp8 = isinstance(element_type, fp8_types) and isinstance(
++      element_type2, fp8_types
++  )
++  # A and B must share an element type, except that the e4m3/e5m2 FP8 pair may
++  # be mixed (PTX `wgmma` takes independent `.atype`/`.btype`).
++  if element_type != element_type2 and not is_mixed_fp8:
+     raise ValueError(
+-        "WGMMA requires A and B to have the same element type, got:"
+-        f" {element_type2} and {element_type}"
++        "WGMMA requires A and B to have the same element type (or be a mix of"
++        f" the e4m3/e5m2 FP8 types), got: {element_type2} and {element_type}"
+     )
+   if acc._value.shape != (m, n):
+     raise ValueError(
+@@ -408,6 +424,12 @@ def wgmma(
+   wgmma_element_type = (
+       ir.FloatTF32Type.get() if element_type == ir.F32Type.get() else element_type
+   )
++  # `a`'s PTX operand type, which differs from `b`'s only for the mixed FP8 case.
++  a_wgmma_element_type = (
++      ir.FloatTF32Type.get()
++      if element_type2 == ir.F32Type.get()
++      else element_type2
++  )
+ 
+   # Step 3. Compute the operand descriptors.
+   if a_in_regs:
+@@ -476,6 +498,7 @@ def wgmma(
+           swizzle=swizzle,
+           n=n_group_elems,
+           element_type=wgmma_element_type,
++          a_element_type=a_wgmma_element_type,
+           b_transpose=b_fastest != mma_utils.Dim.K,
+           b_k_stride=b_k_instr_stride,
+           **a_instr_params,
+diff --git a/jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc b/jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc
+index 9b1f721cd..ac8fa4297 100644
+--- a/jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc
++++ b/jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc
+@@ -405,7 +405,17 @@ llvm::LogicalResult WGMMAOp::verify() {
+   auto b_type = getB().getType();
+   auto acc_type = getAccumulator().getType();
+ 
+-  if (a_type.getElementType() != b_type.getElementType()) {
++  auto a_element_type = a_type.getElementType();
++  auto b_element_type = b_type.getElementType();
++  // FP8 is the exception to the "same element type" rule: the PTX
++  // `wgmma.mma_async` instruction takes independent `.atype`/`.btype` operand
++  // types, each of which may be `.e4m3` or `.e5m2`, so any mix of the two FP8
++  // types is a valid `a`/`b` pairing.
++  auto is_fp8 = [](mlir::Type t) {
++    return llvm::isa<mlir::Float8E4M3FNType, mlir::Float8E5M2Type>(t);
++  };
++  if (a_element_type != b_element_type &&
++      !(is_fp8(a_element_type) && is_fp8(b_element_type))) {
+     return error("The `a` and `b` inputs must have the same element type.");
+   }
+ 
+diff --git a/tests/mosaic/gpu_dialect_test.py b/tests/mosaic/gpu_dialect_test.py
+index 85a630574..6222561e7 100644
+--- a/tests/mosaic/gpu_dialect_test.py
++++ b/tests/mosaic/gpu_dialect_test.py
+@@ -510,6 +510,22 @@ class DialectTest(MosaicGpuTest):
+     ):
+       self.module.operation.verify()
+ 
++  def test_wgmma_mixed_fp8_operands_are_allowed(self):
++    # The e4m3/e5m2 FP8 pair may be mixed across `a` and `b` (PTX `wgmma` takes
++    # independent `.atype`/`.btype`), unlike other element-type mismatches.
++    e4m3 = ir.Float8E4M3FNType.get()
++    e5m2 = ir.Float8E5M2Type.get()
++    with ir.InsertionPoint(self.module.body):
++      for a_type, b_type in ((e4m3, e5m2), (e5m2, e4m3)):
++        acc, a, b = undefs(
++            ir.VectorType.get([128, 160], ir.F32Type.get()),
++            ir.MemRefType.get([128, 128], a_type),
++            ir.MemRefType.get([128, 160], b_type),
++        )
++        mgpu.dialect.wgmma(acc, a, b)
++
++    self.module.operation.verify()
++
+   def test_wgmma_acc_m_dim_not_multiple_of_64(self):
+     with ir.InsertionPoint(self.module.body):
+       acc, a, b = undefs(
+diff --git a/tests/mosaic/gpu_test.py b/tests/mosaic/gpu_test.py
+index 4468d1b26..850d27e9f 100644
+--- a/tests/mosaic/gpu_test.py
++++ b/tests/mosaic/gpu_test.py
+@@ -1056,6 +1056,35 @@ class WGMMATest(TestCase):
+         rhs_tiling_kind="small+no_transpose" if rhs_transpose else "small",
+     )
+ 
++  @parameterized.product(
++      lhs_rhs_dtype_cls=(
++          (ir.Float8E4M3FNType, ir.Float8E5M2Type),
++          (ir.Float8E5M2Type, ir.Float8E4M3FNType),
++      ),
++      m=(64, 128),
++      n=(128,),
++      swizzle=(64, 128),
++      jax_out_dtype=(jnp.float16, jnp.float32),
++  )
++  def test_wgmma_mixed_fp8(self, lhs_rhs_dtype_cls, m, n, swizzle, jax_out_dtype):
++    # The e4m3/e5m2 FP8 pair may be mixed across the two operands. FP8 wgmma does
++    # not support operand transposes, so the only valid layout is `a` row-major
++    # and `b` column-major (rhs_transpose=True).
++    lhs_dtype_cls, rhs_dtype_cls = lhs_rhs_dtype_cls
++    self._test_wgmma_basic(
++        m=m,
++        n=n,
++        k_steps=2,
++        in_mlir_dtype_cls=lhs_dtype_cls,
++        rhs_in_mlir_dtype_cls=rhs_dtype_cls,
++        lhs_transpose=False,
++        rhs_transpose=True,
++        swizzle=swizzle,
++        jax_out_dtype=jax_out_dtype,
++        lhs_tiling_kind="small",
++        rhs_tiling_kind="small+no_transpose",
++    )
++
+   @parameterized.product(
+       in_mlir_dtype_cls=(I8Type,),
+       m=(64, 128, 192),
+@@ -1125,7 +1154,12 @@ class WGMMATest(TestCase):
+       jax_out_dtype,
+       rhs_tiling_kind,
+       lhs_tiling_kind,
++      rhs_in_mlir_dtype_cls=None,
+   ):
++    # `b` reuses `a`'s element type unless a distinct one is given (only the
++    # e4m3/e5m2 FP8 pair may be mixed).
++    if rhs_in_mlir_dtype_cls is None:
++      rhs_in_mlir_dtype_cls = in_mlir_dtype_cls
+     if jax_out_dtype == jnp.int32 and in_mlir_dtype_cls != I8Type:
+       self.skipTest("s32 accumulator only supported with s8 inputs")
+     if jax_out_dtype != jnp.int32 and in_mlir_dtype_cls == I8Type:
+@@ -1168,6 +1202,24 @@ class WGMMATest(TestCase):
+       exponent_bits = mantissa_bits = None
+     else:
+       raise NotImplementedError(in_mlir_dtype)
++
++    # `b`'s dtype matches `a`'s except for the mixed e4m3/e5m2 FP8 case. Both FP8
++    # types are 1 byte, so the tiling/swizzle math (driven by `in_mlir_dtype`) is
++    # identical; only the operand values and `b`'s SMEM dtype differ.
++    if rhs_in_mlir_dtype_cls is in_mlir_dtype_cls:
++      rhs_in_jax_dtype = in_jax_dtype
++      rhs_exponent_bits, rhs_mantissa_bits = exponent_bits, mantissa_bits
++    elif rhs_in_mlir_dtype_cls == ir.Float8E5M2Type:
++      rhs_in_jax_dtype = jnp.float8_e5m2
++      rhs_exponent_bits, rhs_mantissa_bits = 5, 2
++    elif rhs_in_mlir_dtype_cls == ir.Float8E4M3FNType:
++      rhs_in_jax_dtype = jnp.float8_e4m3fn
++      rhs_exponent_bits, rhs_mantissa_bits = 4, 3
++    else:
++      raise NotImplementedError(
++          "Mixed-dtype WGMMA is only supported for the e4m3/e5m2 FP8 pair, got"
++          f" a={in_mlir_dtype_cls} b={rhs_in_mlir_dtype_cls}"
++      )
+     nk_tile = swizzle // bytewidth(in_mlir_dtype)
+     k = nk_tile * k_steps
+     if n % nk_tile:
+@@ -1218,7 +1270,7 @@ class WGMMATest(TestCase):
+       nvvm.wgmma_wait_group_sync_aligned(0)
+       acc.value.store_untiled(out, optimized=False)
+ 
+-    def quantize(x):
++    def quantize(x, exponent_bits, mantissa_bits):
+       # Quantize the input to avoid rounding when feeding the WGMMA
+       return jax.lax.reduce_precision(x, exponent_bits, mantissa_bits)
+ 
+@@ -1226,10 +1278,12 @@ class WGMMATest(TestCase):
+     y_shape = (n, k) if rhs_transpose else (k, n)
+     if in_mlir_dtype_cls == I8Type:
+       x = self.prng.integers(-128, 127, x_shape).astype(in_jax_dtype)
+-      y = self.prng.integers(-128, 127, y_shape).astype(in_jax_dtype)
++      y = self.prng.integers(-128, 127, y_shape).astype(rhs_in_jax_dtype)
+     else:
+-      x = quantize(self.prng.uniform(-1, 1, x_shape)).astype(in_jax_dtype)
+-      y = quantize(self.prng.uniform(-1, 1, y_shape)).astype(in_jax_dtype)
++      x = quantize(self.prng.uniform(-1, 1, x_shape),
++                   exponent_bits, mantissa_bits).astype(in_jax_dtype)
++      y = quantize(self.prng.uniform(-1, 1, y_shape),
++                   rhs_exponent_bits, rhs_mantissa_bits).astype(rhs_in_jax_dtype)
+     out_shape = jax.ShapeDtypeStruct((m, n), jax_out_dtype)
+     if transpose_rhs_tiles:
+       rhs_tiling_t = rhs_tiling[::-1] if rhs_transpose else rhs_tiling
+@@ -1243,7 +1297,7 @@ class WGMMATest(TestCase):
+       lhs_smem_shape = tile_shape(x_shape, lhs_tiling)
+     scratch_shape = [
+         jax.ShapeDtypeStruct(lhs_smem_shape, in_jax_dtype),
+-        jax.ShapeDtypeStruct(rhs_smem_shape, in_jax_dtype),
++        jax.ShapeDtypeStruct(rhs_smem_shape, rhs_in_jax_dtype),
+         mgpu.TMABarrier(2),
+     ]
+     z = mgpu.as_gpu_kernel(
