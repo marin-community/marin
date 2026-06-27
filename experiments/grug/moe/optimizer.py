@@ -232,6 +232,13 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    rmsnorm_to_adam: bool = False
+    """When True, force stacked-block ``rms_attn.weight`` / ``rms_mlp.weight``
+    leaves into the 'adam' group instead of muonh. Stacking promotes those
+    semantically-1D scale vectors to ndim=2, and the muonh fallback then runs
+    NS + a single-Frobenius hyperball over the whole ``(num_layers, hidden_dim)``
+    slab — which doesn't correspond to a meaningful update for RMSNorm scales.
+    Defaults to False to keep behaviour bit-equivalent to the unstacked path."""
     schedule_num_train_steps_override: int | None = None
     """When set, the LR scheduler (warmup + decay span + min_lr_ratio anchor)
     is parameterized by this value instead of the trainer's ``num_train_steps``.
@@ -305,6 +312,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            # Optionally route stacked RMSNorm scales to adam instead of letting
+            # them fall into the matrix bucket below.
+            if self.rmsnorm_to_adam and ("rms_attn" in path_lower or "rms_mlp" in path_lower):
+                return "adam"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"

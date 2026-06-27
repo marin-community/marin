@@ -11,18 +11,19 @@ Config:
 - d=2560 (V2 / MuonH heuristic; num_layers=26, NH=20, KV=5, HD=128,
   num_experts=256, num_experts_per_token=4, intermediate=1280,
   shared_expert_intermediate_dim=2560) → ~67B total params, ~2B active/token
-- BS=8192 sequences, seq=8192 → 67,108,864 tokens/step (~67M)
-- num_train_steps=150,000 → 10.07T total tokens
+- BS=4096 sequences, seq=8192 → 33,554,432 tokens/step (~33.5M)
+- num_train_steps=300,000 → 10.07T total tokens
 - LR: MuonH default schedule, ``min_lr_ratio=0.05`` (decay to 5% of peak)
 - z-loss: logit-only ``z_loss_weight=1e-4`` (router z-loss stays at the model
   default of 0.0)
 - Sliding window 2048, ``disable_pko=True``, ``disable_long_rope=True``
 - Stacked blocks + bf16 NS + distributed 4D MoE NS
-- EP=1, ``replica_axis_size=8`` on v4-2048: mesh (8, 128, 1, 1) — 8 DP
-  replicas of an FSDP-128 model, one cross-replica grad all-reduce per step,
-  no per-MoE-layer all-to-all. Requires the sharding.py change that drops
-  ``replica_dcn`` from the Pembed_vocab / Plm_head specs so replica becomes
-  true DP replication rather than a relabeling of FSDP.
+- EP=1, ``replica_axis_size=1`` on v4-1024: mesh (1, 512, 1, 1) — pure
+  FSDP across all 512 chips, no per-MoE-layer all-to-all, no cross-replica
+  grad reduction. The sharding.py change that drops ``replica_dcn`` from
+  Pembed_vocab / Plm_head is a no-op at replica=1 (the combined
+  ``(replica_dcn, data)`` axis was already just the data axis with size 1
+  on the leading slot).
 - Checkpoints: permanent saves every 3,000 steps; temp save every 10 min
   (default); ``load_checkpoint=None`` auto-resumes on preemption (via the
   launch.py fix landed in june_tpu_67b_a2b's parent)
@@ -50,11 +51,11 @@ from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _DIM: int = 2560
-_BS: int = 8192  # 8192 * 8192 = 67,108,864 tokens/step (~67M)
+_BS: int = 4096  # 4096 * 8192 = 33,554,432 tokens/step (~33.5M)
 _SEQ: int = 8192
-_STEPS: int = 150_000  # ~10.07T total tokens
+_STEPS: int = 300_000  # ~10.07T total tokens
 _EP: int = 1
-_REPLICA_AXIS: int = 8
+_REPLICA_AXIS: int = 16
 _SLICE: str = "v4-2048"
 _LOGIT_Z_LOSS_WEIGHT: float = 1e-4
 _CHECKPOINT_EVERY: int = 3_000
@@ -71,8 +72,11 @@ _model = dataclasses.replace(
 )
 _tokens = float(_STEPS * _BS * _SEQ)
 _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
+# Route stacked RMSNorm scales to plain Adam instead of muonh's NS+Frobenius
+# hyperball — see the d=512 rmsadam ablation.
+_optimizer = dataclasses.replace(_optimizer, rmsnorm_to_adam=True)
 
-_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_seq{_SEQ}_sw2k_v4_2048_10T"
+_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_seq{_SEQ}_sw2k_v4_2048_rmsadam_10T"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
@@ -106,6 +110,7 @@ step = ExecutorStep(
                 "seq8k",
                 "stacked",
                 "logit_z_loss",
+                "rmsadam",
                 "v4_2048",
                 "10T",
             ],
@@ -126,9 +131,9 @@ step = ExecutorStep(
         ),
         eval=versioned(
             GrugEvalConfig(
-                # v4-2048 = 1024 devices, replica=8, EP=1 → data=128.
+                # v4-2048 = 1024 devices, replica=16, EP=1 → data=64.
                 # Batch is sharded across (replica_dcn, data, expert) =
-                # 8 * 128 * 1 = 1024 shards, so eval_batch_size must be
+                # 16 * 64 * 1 = 1024 shards, so eval_batch_size must be
                 # divisible by 1024.
                 eval_batch_size=1024,
                 steps_per_eval=_STEPS_PER_EVAL,
