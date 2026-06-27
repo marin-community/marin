@@ -21,7 +21,7 @@ from finelog.client.log_client import Table
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
-from iris.cluster.config import IrisClusterConfig, WorkerConfig
+from iris.cluster.config import BackendConfig, IrisClusterConfig, WorkerConfig, resolve_backends
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.backend import BackendCapability, TaskBackend
@@ -217,3 +217,53 @@ def make_backend(
 
     provider.attach_autoscaler(autoscaler)
     return provider
+
+
+def _backend_subconfig(config: IrisClusterConfig, backend: BackendConfig) -> IrisClusterConfig:
+    """Project one ``BackendConfig`` back onto the top-level single-backend shape.
+
+    ``make_backend`` reads the provider/scale-group/platform fields off the
+    top-level config. A multi-backend cluster carries those per backend, so this
+    rebuilds the implicit single-backend view for one entry while sharing the
+    cluster-wide ``defaults``/``controller``/auth. The synthesized single
+    backend round-trips to exactly the original config.
+    """
+    sub = config.model_copy(deep=True)
+    sub.backends = None
+    sub.worker_provider = backend.worker_provider
+    sub.kubernetes_provider = backend.kubernetes_provider
+    sub.scale_groups = dict(backend.scale_groups)
+    sub.platform = backend.platform if backend.platform is not None else config.platform
+    return sub
+
+
+def make_backends(
+    config: IrisClusterConfig,
+    *,
+    db: ControllerDB,
+    auth: ControllerAuth,
+    remote_state_dir: str,
+    dry_run: bool,
+    log_stack: LogStack,
+) -> dict[str, TaskBackend]:
+    """Build the controller's ``{backend_id: TaskBackend}`` collection.
+
+    Iterates the resolved ``backends:`` map (or the implicit single entry keyed
+    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each backend
+    through the existing single-backend path, tagging it with its backend id.
+    Every entry is in-process for now.
+    """
+    backends: dict[str, TaskBackend] = {}
+    for backend_id, backend_cfg in resolve_backends(config).items():
+        provider = make_backend(
+            _backend_subconfig(config, backend_cfg),
+            db=db,
+            auth=auth,
+            remote_state_dir=remote_state_dir,
+            dry_run=dry_run,
+            log_stack=log_stack,
+        )
+        provider.name = backend_id
+        backends[backend_id] = provider
+        logger.info("Backend %r ready: %s", backend_id, type(provider).__name__)
+    return backends

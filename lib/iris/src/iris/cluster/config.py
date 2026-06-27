@@ -877,13 +877,6 @@ def _validate_backends(config: IrisClusterConfig) -> None:
             if backend.worker_provider is not None:
                 raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
 
-    in_process = sorted(bid for bid, backend in config.backends.items() if backend.transport == "in_process")
-    if len(in_process) > 1:
-        raise ValueError(
-            f"at most one backend may use transport 'in_process', got {len(in_process)}: "
-            f"{', '.join(in_process)}. The controller co-locates at most one in-process backend."
-        )
-
 
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""

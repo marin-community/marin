@@ -1932,15 +1932,20 @@ class TestBackendsConfig:
         with pytest.raises(ValueError, match="cannot be combined with top-level"):
             validate_config(config)
 
-    def test_more_than_one_in_process_backend_rejected(self):
+    def test_multiple_in_process_backends_validate(self):
+        # The controller partitions each tick by backend_id and drives N
+        # in-process backends from its single control thread, so more than one
+        # in_process backend is allowed.
         config = IrisClusterConfig(
             backends={
-                "cpu": _worker_daemon_backend(),
-                "tpu": _worker_daemon_backend(),
+                "cpu": _worker_daemon_backend(attributes={"device-type": "cpu"}),
+                "tpu": _worker_daemon_backend(attributes={"device-type": "tpu"}),
             },
         )
-        with pytest.raises(ValueError, match="at most one backend may use transport 'in_process'"):
-            validate_config(config)
+        validate_config(config)
+
+        resolved = resolve_backends(config)
+        assert set(resolved) == {"cpu", "tpu"}
 
     def test_remote_transport_rejected(self):
         config = IrisClusterConfig(
