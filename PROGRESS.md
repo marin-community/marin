@@ -102,14 +102,33 @@ mixture, no baked eval set — those were `default_train`'s sins.
 
 ## Checkpoints
 
-- [ ] Survey complete: full ExecutorStep inventory, Executor API consumers, example/test cleanup list
-- [ ] lib/marin infrastructure solid (identify + fill helper gaps: train, eval)
-- [ ] Exemplary self-describing experiment files written (PR1 examples)
-- [ ] Old lazy prototype experiments cleaned up
-- [ ] Bulk experiment migration complete
-- [ ] Executor deleted, all call sites updated, strict guard flipped
+- [x] Survey complete: full ExecutorStep inventory, Executor API consumers, example/test cleanup list
+- [x] lib/marin infrastructure solid — `train_lm` assembler added (the `default_train` replacement)
+- [x] Exemplary self-describing experiment files (PR1): dclm inline on `train_lm`, grug launch/phases
+- [x] `train_lm` covered by a standalone test that survives executor deletion
+- [x] Core pretraining catalogs cleaned + self-contained (nemotron/simple/paloma); common_pile migrated
+- [ ] Remaining dataset catalogs → lazy (eval_datasets, midtraining, ~12 small pretraining_datasets/*)
+- [ ] Migrate `defaults.py`/`tokenization.py` consumers; delete `default_train` & co.
+- [ ] Bulk experiment migration (tutorials, references, posttrain, training experiments)
+- [ ] Executor deleted, `materialize` rewritten, strict guard flipped, all call sites updated
+- [ ] Docs rewritten (train-an-lm.md teaches `train_lm`, not `default_train`)
 - [ ] Codex review of sample experiment files (self-describing criteria)
 - [ ] Split into two stacked PRs
+
+## Remaining ExecutorStep surface (import-time sites still to migrate)
+
+Big/non-dataset: `eval_datasets.py` (27, download→convert eval pipeline — different shape),
+`midtraining_datasets.py` (7), `evals/evals.py` (5), `defaults.py` (5),
+`references/reference_hyperparameter_sweep.py` (4), `posttrain/{preference,instruction}_datasets.py`
+(2 each), `tokenization.py` (2), `tutorials/hello_world.py` (2), `datakit/testbed/train.py` (2).
+Small uniform pretraining catalogs (1 each): climblab_ja, common_corpus, diagnostic_logs, dolma,
+dolmino (2), hplt, massive_function_calling, molmo2_cap, nemotron_v2, nsf_awards, svg, swe_zero_12m.
+Executor catalog originals (dclm/simple/nemotron/paloma) drop in the endgame once their
+executor-experiment consumers (exp1077/exp1078/references/golden) migrate.
+
+Follow-up: common_pile lazy handles tokenize to fresh `common_pile/<name>/v1` caches (the executor
+originals were content-addressed, no stable pin). Raw downloads are reused; first use re-tokenizes.
+Pin existing tokenized caches if their locations are recoverable.
 
 ## Log
 
