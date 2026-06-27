@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+// SPIKE S4 — minimal RemoteAgentService for the multi-backend dial-home wire.
+// Faithful-but-trimmed cut of spec.md §1 / §1.1. Only the fields the prototype
+// exercises are kept; capacity/health/autoscale are stubbed to keep the loopback
+// harness small. The interactive piggyback (pending_commands down, command_results
+// up) is implemented end-to-end.
+package s4.remote_agent;
+
+// ---- interactive op payloads (trimmed stand-ins for worker.ExecInContainer*) ----
+
+message ExecRequest {
+  repeated string command = 1;     // argv to run inside the target container
+  uint32 timeout_seconds = 2;
+}
+
+message ExecResponse {
+  int32  exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+}
+
+// ---- §1.1 interactive piggyback ----
+
+message InteractiveCommand {       // root -> agent, in PollResponse.pending_commands
+  string command_id = 1;
+  string target_task_id = 2;       // TaskTarget stand-in
+  string origin_user = 3;          // carried to the worker for audit
+  ExecRequest exec = 4;            // oneof op{} trimmed to the exec case
+}
+
+message CommandResult {            // agent -> root, in PollRequest.command_results
+  string command_id = 1;
+  string error = 2;                // set iff the op failed / unsupported
+  ExecResponse exec = 3;
+}
+
+// ---- §1 reconcile (trimmed) ----
+
+message DesiredAttempt {
+  string attempt_uid = 1;
+  uint64 desired_generation = 2;
+  string spec_json = 3;            // AttemptSpec stand-in (sent once)
+}
+
+message AttemptObservation {
+  string attempt_uid = 1;
+  uint64 desired_generation = 2;
+  string state = 3;                // RUNNING / SUCCEEDED / FAILED / ...
+  int32  exit_code = 4;
+}
+
+message PollRequest {                            // observed state goes UP
+  string backend_id = 1;
+  uint64 root_epoch_seen = 2;
+  uint64 last_sync_id = 3;
+  repeated AttemptObservation observations = 4;
+  repeated CommandResult command_results = 5;    // results for earlier pending_commands (§1.1)
+}
+
+message PollResponse {                           // desired state comes DOWN
+  uint64 root_epoch = 1;
+  uint64 new_sync_id = 2;
+  bool   snapshot = 3;
+  uint64 lease_duration_ms = 4;
+  repeated DesiredAttempt upserts = 5;
+  repeated string removals = 6;                  // fence = absence
+  repeated InteractiveCommand pending_commands = 7;  // ops to run now (§1.1)
+}
+
+// ---- held-stream variant (the S4 alternative to the poll piggyback) ----
+
+message StreamRequest { string backend_id = 1; }
+
+message ReportAck { bool ok = 1; }
+
+service RemoteAgentService {
+  // The ONLY steady-state call in the design: reconcile + interactive piggyback.
+  rpc Poll(PollRequest) returns (PollResponse);
+
+  // Held-stream alternative measured by this spike (server pushes commands as
+  // they arrive; the agent returns each result via the unary ReportResult).
+  rpc CommandStream(StreamRequest) returns (stream InteractiveCommand);
+  rpc ReportResult(CommandResult) returns (ReportAck);
+}
