@@ -146,13 +146,22 @@ Spike S3 measured the other terms of the reuse invariant: `kill_grace` ≈ the t
 leases are monotonic-duration — only rate drift counts). A short lease therefore targets **~20–30 s**
 re-placement with an **~8–9 s** floor.
 
-- **Worker-daemon backends** already self-fence via the lease (the worker self-terminates on a stale
-  lease).
-- **k8s backends need a NEW lease-sidecar self-fence.** `activeDeadlineSeconds` is the *job* timeout and
-  is disabled for Kueue gangs, so a lease-less pod **never self-fences** on lost contact. A sidecar (or
-  equivalent) that holds the lease and kills the pod on expiry is **required** for the §1 reuse
-  invariant to hold on k8s. This is the one term S3 could not measure offline; it needs a gated live run
-  before the k8s fence timing is trusted.
+- **Worker-daemon backends self-fence via the lease** (the worker self-terminates on a stale lease). The
+  worker is the *sole* authority over its own process during a partition, so this is required.
+- **k8s backends need NO pod self-fence.** The apiserver is a durable, independently-reachable authority
+  and the agent is recoverable, so any live agent reconciles an undesired pod away (poll-and-delete —
+  today's single-cluster model). Pods are named deterministically by `attempt_uid`, so reconcile is
+  **idempotent across agents** (create-if-absent / delete-if-undesired converge; two agents or a
+  restarted agent never fight or double-create) — this is what makes multiple agents on one cluster safe.
+  The two-phase reroute (remove from the old backend first; add to the new only after observed-drain or
+  the lease horizon) waits for the observed pod-drain; in the rare full-isolation case it falls back to
+  the lease horizon, leaving a **bounded, benign** double-run window
+  — benign because re-placement is a *fresh* attempt with a fresh `attempt_uid` writing to a fresh
+  `…/attempt=<uid>/` path, so the two pods never corrupt each other and the publish-gate picks the
+  winner (identical to single-cluster k8s today). A lease sidecar that kills the pod on expiry survives
+  only as an **opt-in hard-fence** for jobs with *external* side effects that cannot tolerate even brief
+  overlap. **Validation:** a local `kind` cluster (not gated infra) measures pod create/delete latency
+  and verifies the reconcile-delete + idempotent multi-agent path.
 
 ## 2. Root-side adapter & agent
 
@@ -346,6 +355,14 @@ A new idempotent migration (`controller/migrations/00NN_*.py`) adds to the **roo
 - `controller_state.root_epoch` — the monotonic leadership token.
 - **No `workers` table for worker-daemon backends** — the idle-worker inventory is recoverable cache,
   owned by the agent.
+- `worker_policy` table (**sparse** — only cordoned/draining workers): `(backend_id, worker_id) PK,
+  draining bool, reason, set_at_ms`. Operator cordon/drain is an authoritative *decision*, not derivable
+  from the substrate, so it lives in the root (low-cardinality) and rides down to the agent in the Poll
+  desired-state; the agent's local scheduler skips draining workers, and **drain** = cordon + re-place
+  running attempts via the normal path. This is a sparse *overlay*, not the worker roster — the root
+  still holds no full roster. k8s may instead use a native node cordon/taint (the agent projects the
+  flag onto the node); a worker-daemon may additionally persist the flag on local disk and re-report it
+  on registration (then it is also recoverable by construction).
 
 **Implicit backend id.** When `backends:` is absent, the single in-process backend is stamped with a
 reserved id derived from `config.name` (e.g. the cluster name); the migration backfills all existing

@@ -131,12 +131,15 @@ sequenceDiagram
 2. **Per-attempt monotonic launch-lease** — gates the *launch* (not just the kill), re-checked
    immediately after substrate create; a skew-safe `root_reuse > agent_self_fence` invariant guarantees
    the agent kills the old runner before the root reuses the task.
-3. **Execution-layer self-fence** — workers/pods self-kill on a lost lease, surviving a total
-   partition. The one irreducible mechanism (you cannot un-run running code over a dead link). It needs
-   a **dedicated short lease** (~20–30 s target, ~8–9 s floor — spike S3), not the worker's 600 s
-   heartbeat-timeout. On k8s the self-fence must be a real **lease sidecar**: `activeDeadlineSeconds` is
-   the job timeout and is disabled for Kueue gangs, so a lease-less pod never self-fences — the one
-   piece still needing live validation.
+3. **Execution-layer self-fence — worker-daemon only.** A partitioned *worker* is the sole authority
+   over its own process, so it self-terminates on a lost lease — a **dedicated short lease** (~20–30 s
+   target, ~8–9 s floor — spike S3), not the worker's 600 s heartbeat-timeout. **k8s needs no pod
+   self-fence:** the apiserver is a durable, independently-reachable authority and the agent is
+   recoverable, so any live agent reconciles an undesired pod away (poll-and-delete, today's model;
+   idempotent across agents because pods are named by `attempt_uid`). The two-phase reroute — remove from
+   the old backend first, add to the new only after observed-drain or the lease horizon — waits for that
+   drain. A lease sidecar survives only as an **opt-in hard-fence** for jobs with external side effects
+   that can't tolerate even a brief overlap.
 4. **Ack-gated terminal retention + CAS apply** — the substrate *is* the buffer (don't GC a terminal
    pod/container until the root acks); the root applies observations only under compare-and-swap on
    `attempt_uid`, returning `APPLIED` / `STALE_DISCARDED` / `RETRY_LATER`.
@@ -189,19 +192,25 @@ the design above folds in their results.
   global scheduler vs. root(task→backend from a summary) + agent(task→worker) placed 512/512 with 0
   starved, costing +0.15 tick mean wait and −0.6 pts utilization; the only losses are the accepted
   non-goals (cross-backend rebalancing / preemption). The `CapacitySummary` is pinned in `spec.md` §3.1.
-- **S3 — fence/reuse margins: ~20–30 s achievable.** With a dedicated short lease, post-partition
-  re-placement is ~20–30 s (vs. ~10 min on today's 600 s heartbeat); `kill_grace` ≈ 5 s and
-  `transport_grace` = 3 s dominate, skew is negligible. **Residual:** the k8s pod self-fence needs a
-  lease sidecar and one gated live measurement (harness ready).
+- **S3 — fence/reuse margins: ~20–30 s achievable.** With a dedicated short lease, worker-daemon
+  post-partition re-placement is ~20–30 s (vs. ~10 min on today's 600 s heartbeat); `kill_grace` ≈ 5 s
+  and `transport_grace` = 3 s dominate, skew negligible. **k8s needs no pod self-fence** — the agent
+  reconciles undesired pods against the durable apiserver (today's poll-and-delete, idempotent across
+  agents via `attempt_uid` pod naming); a brief reroute overlap is benign (fresh attempt → fresh
+  output path), and a lease sidecar is an opt-in hard-fence only for external-side-effect jobs. Validate
+  pod create/delete latency + idempotent reconcile locally via `kind` (no gated infra needed).
 - **S4 — transport: dial-home works.** A loopback Connect prototype runs the agent as a pure dialing
   client with `system:controller` auth and the §1.1 interactive piggyback end-to-end; interactive
   latency is ≈0.5× Poll cadence with a fast-follow re-poll, and an opt-in held stream covers
   latency-sensitive in-VPC backends.
 
-Still genuinely open:
+Two earlier "open questions" resolved on review:
 
-- **k8s lease-sidecar self-fence** (from S3) — the one gated live measurement to take before we trust
-  fence timing on k8s.
-- **Operator worker-policy** (cordon/drain) is the one non-recoverable class — it must live in the root
-  DB or as a substrate marker, never in the volatile agent cache. Which, and is the rare/authoritative
-  root-DB option simpler than a per-substrate marker?
+- **Operator cordon/drain — simple.** The root owns a `draining` flag per worker (low-cardinality,
+  authoritative) and pushes it down in the Poll desired-state; the agent's local scheduler skips
+  draining workers; **drain** = cordon + re-place running attempts via the normal path. Recoverability
+  is a non-issue — the root is authoritative across agent restarts, and a worker can also persist the
+  flag on local disk and re-report it (recoverable by construction). k8s gets it free via native
+  `kubectl cordon` (node taint), which the agent projects from the root flag. Not a new mechanism.
+- **k8s self-fence — not needed** (see safety mechanism 3 / `spec.md` §1.2). Remaining work is a local
+  `kind` smoke for pod create/delete latency + idempotent reconcile, not a gated live run.

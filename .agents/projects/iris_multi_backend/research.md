@@ -176,10 +176,12 @@ load-bearing claims before committing to the build order.
   `largest_gang`). Found two matcher gaps: set-valued backend attrs need a set-membership extension to
   the scalar `ConstraintIndex`, and `--backend X` must be stripped from the agent's local constraints.
 - **S3 — fence/reuse timing: ~20–30 s achievable.** A dedicated short lease (not the 600 s heartbeat)
-  gives ~20–30 s re-placement (~8–9 s floor); `kill_grace` ≈ 5 s and `transport_grace` = 3 s dominate,
-  skew negligible. **k8s self-fence is a real gap:** `activeDeadlineSeconds` (job timeout, disabled for
-  Kueue gangs) won't fence a lease-less pod, so k8s needs a lease sidecar — the one term needing a gated
-  live run.
+  gives ~20–30 s worker-daemon re-placement (~8–9 s floor); `kill_grace` ≈ 5 s and `transport_grace` =
+  3 s dominate, skew negligible. **k8s needs no pod self-fence** (corrected on review): the apiserver is
+  a durable authority and the agent is recoverable, so reconcile-and-delete (today's model, idempotent
+  across agents via `attempt_uid` pod naming) cleans the old pod; a brief reroute overlap is benign
+  (fresh attempt → fresh output path). A lease sidecar is an opt-in hard-fence only for external-side-
+  effect jobs. Validate pod latencies + idempotent reconcile locally with `kind` (no gated infra).
 - **S4 — transport: dial-home WORKS.** Loopback Connect prototype: agent as pure dialing client,
   `system:controller` bearer auth, the §1.1 interactive piggyback end-to-end. Interactive latency
   ≈1.5× cadence naively, ≈0.5× with a fast-follow re-poll; held stream ~2 ms (opt-in for in-VPC).
