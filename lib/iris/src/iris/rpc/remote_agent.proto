@@ -1,0 +1,136 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// RemoteAgentService: the agent <-> root reconcile wire for multi-backend Iris.
+//
+// One Iris root fronts several clusters. Each cluster runs an *agent* that owns a
+// real in-cluster TaskBackend (worker-daemon or k8s) and dials home to the root.
+// The root stays authoritative; the agent is a recoverable cache. The dial
+// direction is the agent->root (NAT/IAP-friendly), but the data flow is inverted
+// from the worker Reconcile it mirrors: the agent reports OBSERVED state up in the
+// request and receives DESIRED state down in the response.
+//
+// This is the worker `Reconcile` pattern (worker.proto) one level up, so it reuses
+// that file's leaf messages (AttemptSpec, WorkerHealth, StopReason, ExecInContainer
+// {Request,Response}) and job.proto's RunTaskRequest / TaskState / Constraint /
+// ProfileTask* / GetProcessStatus*. The Poll envelope adds what the root layer needs
+// over a single worker: a backend id, a leadership epoch, sync_id deltas, a renewal
+// lease, free-capacity reports for the meta-scheduler, and per-attempt fencing
+// generations.
+
+syntax = "proto3";
+
+package iris.cluster;
+
+import "google/protobuf/duration.proto";
+import "job.proto";
+import "worker.proto";
+
+// root = SERVER; the agent is the CLIENT (dials home). ONE RPC; interactive ops
+// piggyback on it (a dial-out agent cannot host server-side RPCs).
+service RemoteAgentService {
+  rpc Poll(PollRequest) returns (PollResponse);
+}
+
+// ---- observed state goes UP (agent -> root) ----
+message PollRequest {
+  string backend_id = 1;
+  uint64 root_epoch_seen = 2;                  // highest leader epoch the agent has seen
+  uint64 last_sync_id = 3;                      // 0 = fresh / cache lost -> root forces a full snapshot
+  AgentCapabilities caps = 4;                   // present on first poll / re-register
+  repeated AgentObservation observations = 5;   // changed + still-unacked attempts
+  Worker.WorkerHealth rolled_up_health = 6;     // backend-level rolled-up health (reuses worker.proto)
+  CapacitySummary capacity = 7;                 // free capacity for the root meta-scheduler (§3.1)
+  repeated CommandResult command_results = 8;   // results for earlier pending_commands (§1.1)
+}
+
+// ---- desired state comes DOWN (root -> agent) ----
+message PollResponse {
+  uint64 root_epoch = 1;                        // current leader epoch
+  uint64 new_sync_id = 2;                       // version of the desired set in this response
+  bool snapshot = 3;                            // true = full set; false = delta from last_sync_id
+  google.protobuf.Duration lease_duration = 4;  // applying ANY response renews ALL desired entries
+  repeated DesiredAttempt upserts = 5;          // run-intent
+  repeated string removals = 6;                 // attempt_uids; fence = absence: kill what's removed
+  repeated DesiredCapacity autoscale = 7;       // level-triggered target slice counts per scale group
+  repeated AckObservation acks = 8;             // disposition of the agent's earlier observations
+  repeated InteractiveCommand pending_commands = 9;  // interactive ops to run now (§1.1)
+}
+
+message DesiredAttempt {
+  string attempt_uid = 1;
+  uint64 desired_generation = 2;                // attempt ordinal (orders upsert vs removal)
+  Worker.AttemptSpec spec = 3;                  // sent on first appearance; cached after (sync_id deltas)
+  repeated iris.job.Constraint constraints = 4; // local task->worker placement constraints
+}
+
+message AgentObservation {
+  string attempt_uid = 1;
+  uint64 acted_root_epoch = 2;                  // epoch the agent acted under (root rejects non-current)
+  uint64 desired_generation = 3;
+  iris.job.TaskState state = 4;
+  string observed_worker = 5;                   // display-only; root never treats as authority
+  int32 exit_code = 6;
+  string message = 7;
+}
+
+enum AckDisposition {
+  ACK_DISPOSITION_APPLIED = 0;
+  ACK_DISPOSITION_STALE_DISCARDED = 1;          // CAS mismatch (superseded attempt); agent GCs anyway
+  ACK_DISPOSITION_RETRY_LATER = 2;              // root could not commit this tick; agent retains + re-reports
+}
+message AckObservation {
+  string attempt_uid = 1;
+  AckDisposition disposition = 2;
+}
+
+// First-poll / re-register descriptor. The root already holds the backend's static
+// attributes + scale groups from config; this carries only what the agent learns at
+// runtime and the root cannot configure.
+message AgentCapabilities {
+  string agent_version = 1;
+  repeated string device_variants = 2;          // device variants the cluster can actually place
+}
+
+// Free, dynamic capacity reported each Poll for the root meta-scheduler (§3.1). The
+// static config the root already holds is NOT repeated here.
+message CapacitySummary {
+  map<string, int32> allocatable = 1;           // free worker slots per device variant, now
+  int32 max_free_cpu_millicores = 2;            // largest single-worker free CPU bin
+  int64 max_free_memory_bytes = 3;              // largest single-worker free RAM bin
+  map<string, int32> largest_gang = 4;          // biggest coschedulable gang placeable now, per variant
+  int64 stale_ms = 5;                           // age of this summary (root discounts stale capacity)
+  map<string, int64> backoff_until_ms = 6;      // per-scale-group quota/cooldown until-ms
+}
+
+message DesiredCapacity {
+  string scale_group = 1;
+  int32 target_slices = 2;
+}
+
+// ---- interactive ops piggyback (§1.1) ----
+message TaskTarget {
+  string full_task_id = 1;
+  string attempt_uid = 2;
+}
+
+message InteractiveCommand {
+  string command_id = 1;
+  TaskTarget target = 2;
+  string origin_user = 3;                        // carried to the worker for audit
+  oneof op {
+    Worker.ExecInContainerRequest exec = 4;
+    iris.job.ProfileTaskRequest profile = 5;
+    iris.job.GetProcessStatusRequest status = 6;
+  }
+}
+
+message CommandResult {
+  string command_id = 1;
+  string error = 2;                              // set iff the op failed / ProviderUnsupportedError
+  oneof result {
+    Worker.ExecInContainerResponse exec = 3;
+    iris.job.ProfileTaskResponse profile = 4;
+    iris.job.GetProcessStatusResponse status = 5;
+  }
+}
