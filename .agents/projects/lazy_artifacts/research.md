@@ -119,6 +119,24 @@ pinned to branch `weaver/adopt-executor-context-for-remai` @ `4221dde`.
   flag dispatch) suggests splitting it. These are authoring-layer conveniences, not part of the
   low-level execution contract.
 
+  **Resolution direction — scheme-tagged `source`, and where it breaks down.** A single
+  `source: str` carrying a URL scheme cleanly *collapses three of the modes into one* and deletes the
+  `_looks_like_hf_id` heuristic (`data.py:56`, "one slash, no `://`, not absolute"): `hf://org/name`
+  → `HfTokenizeConfig`; `gs://…`, `file://…`, a bare/relative path, or a glob → `TokenizeConfig`;
+  multiple inputs become either a glob in the URL or a `list[str]` of URLs, retiring the separate
+  `paths` parameter. The scheme is explicit, so the id-vs-path guess disappears.
+
+  It **naturally breaks down at `raw=`+`glob`**, and that break is the useful signal. `raw` is not a
+  *location* — it is a **dependency edge**: the handle becomes a recipe `dep`, and its path isn't
+  known until lowering resolves `ctx.path(raw)`. A URL is a static string fixed at authoring time; a
+  dependency is a live Python object the recipe must close over (for `deps=` and run-time
+  resolution). You could *spell* it `artifact://name@version/glob`, but the builder would then have
+  to map that string back to the actual handle object to register the edge — re-introducing the
+  object the string was meant to replace. So the clean split is two parameters, not one: `source:
+  str` (scheme-tagged, external/static data) and `raw: Dataset` + `glob: str` (a dependency on
+  another artifact's output). The URL abstraction is right for locations and wrong for graph edges —
+  which is exactly the line the lazy model draws everywhere else (literals vs. `ctx`-pulled deps).
+
 ## Peer review (codex)
 
 A codex pass over `design.md` + `spec.md` against the code surfaced five issues; all incorporated:
@@ -141,3 +159,37 @@ A codex pass over `design.md` + `spec.md` against the code surfaced five issues;
    `name@version` with a duplicate-identity `ValueError` guard + a regression test.
 5. **Pin/adopt risk language** — `override_path` is unguarded (no record); `adopt` gives
    *pointer* not *content* immutability. Spec now has a three-tier guarantee table.
+
+A second codex pass, this time over the rewritten `spec.md` (the precise-contract version) against
+the code, raised ten findings; all incorporated:
+
+1. **Scope promise unmet** — opening claimed "every public symbol" but omitted the runner entry
+   point and payload IO. *Narrowed the scope statement* (core vs. authoring, reused-infra called out)
+   and *added* a `StepRunner.run` + `Artifact.save`/`from_path`/`PathMetadata` section.
+2. **`RunContext` signature incomplete** — it's a public dataclass with required `_dep_ref`/
+   `_run_args`. Spec now shows them and states construction is **factory-only**.
+3. **Remote payload behavior wrong** — the spec said remote steps write no payload sidecar, but
+   `_submit_iris_job` saves `raw_fn`'s return inside the Fray job (`step_runner.py:380`). Corrected:
+   `RemoteCallable.__call__` returns `None`, but the lowered remote path *does* persist a payload;
+   the real distinction is inline-return vs. write-to-`ctx.out`.
+4. **`materialized_config` overspecified** — it leaves `region=None` (no region parameter) while real
+   lowering passes `marin_region()`, so it isn't byte-identical to the run config. Spec now says so.
+5. **Adopted persisted shape muddled** — record is written at the canonical `{prefix}/{name}/{version}`
+   even for adopted data; consumers resolve to `adopt_source`. Spec now separates **registry-record
+   path** from **consumer-data path**.
+6. **Missing errors** — adopt `FileNotFoundError` (no data at source), `Artifact.from_path`
+   `FileNotFoundError`/`TypeError`, and propagated Fray failures. Added to the errors table.
+7. **`mixture` name-collision (real bug, fixed)** — same class as the `select` bug: `components[name]`
+   silently overwrote when two handles shared a `name`, and the empty-mixture case surfaced as a
+   confusing tokenizer-mismatch error. Fixed with explicit empty-check + duplicate-name `ValueError`
+   guards + a regression test (`test_mixture_rejects_components_with_colliding_names`); spec contract
+   updated.
+8. **Pre/postconditions too loose** — `name`/`version` grammar, `deps` duplicates, `run_args` key
+   types, `expected_fingerprint` format, `build_config` purity were unstated. Added an **Invariants &
+   preconditions** subsection marking each "accepted but undefined" / "not checked."
+9. **Concurrency/idempotency not a spec** — added a **Concurrency & idempotency** subsection stating
+   the observable guarantees (`lower()` repeatable-but-reads-git/user; fixed versions guarded by
+   record fingerprint; `dev` always rebuilds; concurrent first-builds can converge).
+10. **Design material in the spec** — moved the source-mode smell note and migration-plan detail out
+    of `spec.md` (smell resolution captured above; migration plan stays in `design.md`/here); trimmed
+    the spec's out-of-scope to API/persistence/error/operational boundaries only.

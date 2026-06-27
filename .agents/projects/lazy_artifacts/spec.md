@@ -1,44 +1,67 @@
 # Spec: Lazy Artifacts
 
-The public surface a reviewer is agreeing to, plus the canonical authoring patterns. Signatures
-are pinned to branch `weaver/adopt-executor-context-for-remai` @ `4221dde`.
+The contract a reviewer is agreeing to: each symbol this design introduces or relies on, with full
+signature, parameter types, defaults, and behavior; the persisted on-disk shapes; the errors;
+the concurrency and idempotency guarantees. On branch `weaver/adopt-executor-context-for-remai`.
 
-## Core handle + recipe (`marin.execution.lazy`)
+Two layers. **Core API** (`marin.execution.*`) is the low-level contract — the artifact model,
+lowering, registry, fingerprint, compute dispatch, and the runner entry point. **Authoring layer**
+(`marin.experiment.*`) is convenience built on the core; it could be replaced without touching it.
+The lower engine *reused as-is* (`StepRunner` internals `run_step`/`check_cache`/`step_lock`/
+`StatusFile`, and `StepSpec.as_executor_step`) is existing infrastructure, not new contract — only
+its observable entry point (`StepRunner.run`) and the guarantees it provides are pinned here.
+
+---
+
+## Core: handle, recipe, context (`marin.execution.lazy`)
 
 ```python
 @dataclass(frozen=True, eq=False)
 class Artifact:
     name: str
-    version: str                      # "vN"/CalVer immutable; "dev"/"*-dev" mutable
+    version: str
     recipe: "Recipe"
-    override_path: str | None = None          # pin to existing data; no identity effect
-    adopt_source: str | None = None           # register pre-existing data (set via adopt())
-    expected_fingerprint: str | None = None   # optional pin; lower() raises on mismatch
+    override_path: str | None = None
+    adopt_source: str | None = None
+    expected_fingerprint: str | None = None
 
-    def fingerprint_payload(self) -> str: ...  # canonical config JSON (or {"adopt_source": …})
-    def fingerprint(self) -> str: ...          # md5(payload)[:8]
+    def __post_init__(self) -> None: ...           # ValueError if adopt_source and override_path both set
+    def fingerprint_payload(self) -> str: ...
+    def fingerprint(self) -> str: ...
     def path(self, prefix: str | None = None) -> str: ...
 
 @dataclass(frozen=True, eq=False)
-class Dataset(Artifact): ...      # routes to dataset consumers
+class Dataset(Artifact): ...        # tokenized-dataset handle; routes to dataset consumers
 @dataclass(frozen=True, eq=False)
-class Checkpoint(Artifact): ...   # routes to initialize_from_checkpoint_path
+class Checkpoint(Artifact): ...     # Levanter checkpoint handle; routes to initialize_from_checkpoint_path
+```
 
+- `name` — logical path segment; the address is `{prefix}/{name}/{version}`. May contain slashes.
+- `version` — explicit. Immutable unless it equals `"dev"` or ends with `"-dev"` (then mutable: always rebuilds, guard skipped).
+- `recipe` — how to build it (below).
+- `override_path` — a **pin**: resolve this artifact (and consumers of it) to existing data at this location instead of `{name}/{version}`. Relative → resolved against the prefix; absolute/URL → used as-is. Writes **no** record (no provenance, no guard). Mutually exclusive with `adopt_source`.
+- `adopt_source` — register pre-existing data as this `name@version` (set via `adopt()`, below). Mutually exclusive with `override_path`.
+- `expected_fingerprint` — if set, `lower()` raises `FingerprintMismatchError` when the computed fingerprint differs. Checked before any build.
+
+`eq=False`: two handles are equal iff identical objects (so a handle can key a dict despite an unhashable `ResourceConfig` in its recipe); value-equality lives in `name@version` + the fingerprint.
+
+- `fingerprint_payload() -> str` — the canonical config bytes the fingerprint hashes. For a computed artifact: `canonical_json(recipe.build_config(RunContext.for_fingerprint(recipe.run_args.keys())))`. For an adopted artifact: `json.dumps({"adopt_source": adopt_source}, sort_keys=True)`.
+- `fingerprint() -> str` — `fingerprint_hash(fingerprint_payload())` (8 hex chars).
+- `path(prefix=None) -> str` — resolved location: `adopt_source` if adopted, else `override_path` if pinned, else `{prefix or marin_prefix()}/{name}/{version}`. Relative pins/sources are joined to the prefix; absolute ones returned as-is.
+
+```python
 @dataclass(frozen=True)
 class Recipe:
-    fn: Callable[[Any], Any]                       # fn(config); RemoteCallable to run on Fray
-    build_config: Callable[["RunContext"], Any]    # pure function of the context
+    fn: Callable[[Any], Any]
+    build_config: Callable[["RunContext"], Any]
     deps: tuple[Artifact, ...] = ()
     run_args: Mapping[str, Any] = field(default_factory=dict)
 ```
 
-**Contract.** An `Artifact` is inert — constructing it runs nothing. `eq=False`: two handles are
-the same iff they are the same object (so a handle can key a `mixture` dict despite an unhashable
-`ResourceConfig` in its recipe); value-equality lives in `name@version` + the fingerprint. A step
-produces its artifact by writing serialized output to `ctx.out`; an inline `fn` may instead
-`return` a value (the runner persists it), but a `remote` fn cannot (a Fray job returns nothing).
-
-## The identity line (`RunContext`)
+- `fn` — `fn(config)`. A plain callable runs inline in the runner; a `RemoteCallable` (`remote(fn, resources=…)`) dispatches a Fray job and returns `None` to its caller. The runner persists the value returned to it as the artifact's `.artifact.json` payload either way: an inline `fn`'s return value is saved; a `remote` `fn` returns `None`, so the sidecar holds `null` and the real output is whatever the Fray job wrote to `ctx.out`. So a step that must produce a readable payload (e.g. a sweep trial's metrics) should run inline; a step that produces data at `ctx.out` (tokenize, train) is the remote case.
+- `build_config` — `build_config(ctx) -> config`. Pure function of the context. Literals in it bear identity (enter the fingerprint); values pulled from `ctx` do not.
+- `deps` — artifacts that must materialize first; their **versions** enter the fingerprint, their paths are resolved at run time via `ctx.path(dep)`.
+- `run_args` — execution choices the config pulls via `ctx.run_arg(key)` (e.g. the accelerator). Excluded from the fingerprint. The declared keys are what `for_fingerprint` substitutes as placeholders.
 
 ```python
 @dataclass(frozen=True)
@@ -46,83 +69,142 @@ class RunContext:
     out: str
     prefix: str
     region: str | None
-    def path(self, dep: Artifact) -> str: ...      # dep's resolved (region-local) output path
-    def run_arg(self, key: str) -> Any: ...         # a recipe-declared run-arg's value
+    _dep_ref: Callable[[Artifact], str]      # private resolution hooks; not for direct construction
+    _run_args: Mapping[str, Any]
 
+    def path(self, dep: Artifact) -> str: ...
+    def run_arg(self, key: str) -> Any: ...                    # KeyError if key not in recipe.run_args
     @staticmethod
-    def for_run(out, prefix, *, region=None, run_args=None) -> "RunContext": ...
+    def for_run(out: str, prefix: str, *, region: str | None = None,
+                run_args: Mapping[str, Any] | None = None) -> "RunContext": ...
     @staticmethod
-    def for_fingerprint(run_arg_keys=()) -> "RunContext": ...   # placeholders for all pulls
+    def for_fingerprint(run_arg_keys: Iterable[str] = ()) -> "RunContext": ...
 ```
 
-**Contract — the rule that defines identity.** Values written as **literals** in `build_config`
-(model, hyperparameters, dep *versions*) enter the fingerprint. Values **pulled from `ctx`**
-(`ctx.out`, `ctx.path(dep)`, `ctx.prefix`, `ctx.region`, `ctx.run_arg(key)`) never do.
-`for_fingerprint()` substitutes placeholders for every pull, so a prefix/region/accelerator change
-cannot re-fingerprint. `run_arg(key)` raises `KeyError` if `key` is not declared in `recipe.run_args`.
+Construct a `RunContext` **only** through `for_run` / `for_fingerprint`; `_dep_ref` and `_run_args`
+are private resolution hooks (the direct constructor is not a public API).
 
-## Lowering + adoption
+- `for_run` binds the context to the live environment (real `out`/`prefix`/`region`, `path(dep)` → the dep's region-local output path, `run_arg(key)` → its real value).
+- `for_fingerprint` substitutes placeholders for every pull (`out="<out>"`, `prefix="<prefix>"`, `region="<region>"`, `path(dep)="{dep.name}@{dep.version}"`, `run_arg(key)="<key>"`) — so nothing pulled affects the fingerprint, and dep identity enters as `name@version`.
 
 ```python
 def lower(artifact: Artifact) -> StepSpec: ...
 def adopt(name: str, version: str, source: str, *, kind: type[Artifact] = Dataset) -> Artifact: ...
-def materialized_config(artifact: Artifact, prefix: str) -> Any: ...   # for inspection / golden tests
+def materialized_config(artifact: Artifact, prefix: str) -> Any: ...
 ```
 
-**`lower` contract.** Pure transform: recurses deps into a `StepSpec` graph addressed by explicit
-`{name}/{version}` (or the pin), carries `{fingerprint, version, deps}` in `hash_attrs` and the
-canonical payload in `StepSpec.fingerprint_payload`, and writes an `ArtifactRecord` on success.
-Never inspects `recipe.fn` (no Iris/Fray awareness). Raises `FingerprintMismatchError` when
-`expected_fingerprint` is set and differs from the computed fingerprint — *before* any build.
+- `lower(artifact)` — recurse `deps` into a `StepSpec` graph addressed by `{name}/{version}` (or the pin); compute the fingerprint once; raise `FingerprintMismatchError` if `expected_fingerprint` is set and differs; carry `{fingerprint, version, deps}` in `hash_attrs` and the canonical payload in `StepSpec.fingerprint_payload`; the step fn writes an `ArtifactRecord` on success (unless pinned). Pure transform — never inspects `recipe.fn`.
+- `adopt(name, version, source, *, kind=Dataset)` — return `kind(name, version, recipe=<noop>, adopt_source=source)`. Consumers resolve to `source` (no move, no recompute); lowering writes a record at the canonical address with `source` recorded; re-adopting `name@version` from a different `source` re-fingerprints → `ImmutableArtifactError`.
+- `materialized_config(artifact, prefix)` — `build_config` under `for_run(out=artifact.path(prefix), prefix=prefix)` with **`region=None`** and no run-args, for inspection / golden tests. Runs nothing. This is *not* identical to the run-time config: real lowering passes `region=marin_region()` and the recipe's `run_args`, so a `build_config` that reads `ctx.region`/`ctx.run_arg(...)` will see placeholders/`None` here.
 
-**`adopt` contract.** Registers `name@version` pointing at `source`; consumers resolve to `source`
-(no move, no recompute); a provenance record is written at the canonical address; re-adopting the
-same `name@version` from a different source raises `ImmutableArtifactError`.
-
-## Registry + fingerprint
+## Core: compute dispatch (`marin.execution.remote`)
 
 ```python
-# marin.execution.registry
 @dataclass(frozen=True)
-class ArtifactRecord:
-    name: str; version: str; fingerprint: str; output_path: str
-    git_commit: str | None; user: str | None; created_at: str; deps: list[str]
-    source: str | None = None
-    fingerprint_payload: str | None = None     # enables field-level conflict diffs
+class RemoteCallable(Generic[P, R]):
+    fn: Callable[P, R]
+    resources: ResourceConfig
+    env_vars: dict[str, str] = field(default_factory=dict)
+    pip_dependency_groups: list[str] | None = None
+    name: str | None = None
 
-def is_mutable_version(version: str) -> bool: ...        # "dev" or endswith("-dev")
-def guard_immutable(output_path, name, version, fingerprint, payload=None) -> None: ...
-def enforce_immutability(step: StepSpec) -> bool: ...    # True iff mutable (rebuild)
+    def named(self, name: str) -> "RemoteCallable": ...
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None: ...   # submits a Fray job; returns None
 
-# marin.execution.fingerprint
-def canonical_json(config: object) -> str: ...           # strict, deterministic
-def fingerprint_hash(payload: str) -> str: ...           # md5(payload)[:8]
+def remote(fn: Callable[P, R] | None = None, *, name: str | None = None,
+           resources: ResourceConfig | None = None, env_vars: dict[str, str] | None = None,
+           pip_dependency_groups: list[str] | None = None) -> RemoteCallable | Callable[..., RemoteCallable]: ...
 ```
 
-**Guard contract.** `guard_immutable` is a no-op when unbuilt, when the recorded fingerprint
-matches, or when the version is mutable; otherwise it raises `ImmutableArtifactError`. When both
-the recorded and current payloads are present it appends a field-level diff
-(`learning_rate: 3e-3 -> 4e-3`, capped at `_MAX_DIFF_LINES = 20`). The fingerprint covers the
-config `build_config` produces, **not** the source of `recipe.fn` — a behavior change inside a step
-fn that leaves the config unchanged is not detected. `enforce_immutability` runs in `StepRunner`
-*before* a cached SUCCESS is served; today it runs *before* `step_lock` and isn't re-checked on the
-already-done path, so concurrent first-builds with different fingerprints are not yet guarded
-(design.md Open Questions). The intended contract is guard-under-lock.
+`remote(fn, resources=…)` wraps a callable for Fray dispatch (also usable as a decorator
+`@remote(resources=…)`). `__call__` submits the job and **returns `None`** — a remote step
+communicates only by writing `ctx.out`. Resources ride on the callable, never on the `StepSpec`
+node, so they never enter the fingerprint.
 
-**Encoder contract.** `canonical_json` canonicalizes dataclasses (`asdict`), enums (value),
-`timedelta`/`Path`, numpy/jax dtypes (name), sets/frozensets (sorted members), and numpy/jax arrays
-(content + dtype + shape). It **raises `TypeError`** on callables and objects using the default
-`object.__repr__` — anything with no reproducible serialization — rather than falling back to
-`str(o)`. The same config always produces identical bytes across processes.
+## Core: the lowered step (`marin.execution.step_spec`)
 
-## Authoring layer (built on the core API — not part of the low-level contract)
+```python
+@dataclass(frozen=True)
+class StepSpec:
+    name: str
+    output_path_prefix: str | None = None
+    deps: list["StepSpec"] = field(default_factory=list)
+    hash_attrs: dict[str, Any] = field(default_factory=dict)
+    override_output_path: str | None = None
+    fingerprint_payload: str | None = None
+    fn: Callable[[str], Any] | None = None
+    resources: ResourceConfig | None = None
 
-`marin.experiment` ships convenience builders that construct ordinary `Artifact`/`Recipe`s for
-common cases. They are *not* low-level primitives — they are sugar an experiment author can use or
-ignore, and they could be replaced without touching the core contract above. The load-bearing
-spec is the core API; this layer is application code.
+    @cached_property
+    def output_path(self) -> str: ...        # override_output_path (prefix-joined if relative) else {prefix}/{name_with_hash}
+    @cached_property
+    def name_with_hash(self) -> str: ...      # f"{name}_{hash_id}"
+    @cached_property
+    def hash_id(self) -> str: ...             # sha256({name, attrs: hash_attrs, deps})[:8] — note: NOT fingerprint_payload
+```
 
-**Sweep / select** (`sweep.py`) — small and genuinely sweep-specific:
+`lower()` sets `override_output_path={name}/{version}` (or the pin), `hash_attrs={"fingerprint","version","deps"}`, and `fingerprint_payload=<canonical json>`. `fingerprint_payload` is **not** part of `hash_id` and is not logged — it exists only as provenance and for conflict diffs.
+
+## Core: runner entry point + payload IO (`marin.execution.step_runner`, `marin.execution.artifact`)
+
+```python
+class StepRunner:
+    def run(self, steps: Iterable[StepSpec], *, dry_run: bool = False,
+            force_run_failed: bool = True, max_concurrent: int | None = None) -> None: ...
+
+class Artifact:   # marin.execution.artifact — the output-payload sidecar, distinct from the registry record
+    @classmethod
+    def save(cls, artifact: T, base_path: str) -> None: ...
+    @classmethod
+    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T] = ...) -> "T | PathMetadata | dict": ...
+
+class PathMetadata(BaseModel): ...   # returned by from_path when a step SUCCEEDED but wrote no payload sidecar
+```
+
+`StepRunner().run([lower(artifact)])` is the entry point: it post-order schedules deps (deduped by
+output path), runs each through the guard → cache-check → lock → run → status protocol, bounded by
+`max_concurrent` (default 8). `dry_run` logs without touching remote status; `force_run_failed`
+(default `True`) reruns a previously-FAILED step instead of raising. `Artifact.save`/`from_path`
+read and write the `.artifact.json` payload sidecar (below); `from_path` returns `PathMetadata`
+when a step succeeded but produced no payload (a remote step that only wrote `ctx.out`).
+
+## Core: registry + fingerprint (`marin.execution.registry`, `marin.execution.fingerprint`)
+
+```python
+@dataclass(frozen=True)
+class ArtifactRecord:
+    name: str
+    version: str
+    fingerprint: str
+    output_path: str
+    git_commit: str | None
+    user: str | None
+    created_at: str
+    deps: list[str]                      # dependency identities as "name@version"
+    source: str | None = None            # adopted-source location; None for a computed artifact
+    fingerprint_payload: str | None = None
+
+class ImmutableArtifactError(Exception): ...
+class FingerprintMismatchError(Exception): ...
+
+def is_mutable_version(version: str) -> bool: ...                 # version == "dev" or endswith("-dev")
+def read_record(output_path: str) -> ArtifactRecord | None: ...  # parses {output_path}/.artifact_record.json
+def write_record(record: ArtifactRecord) -> None: ...            # writes it (indent=2)
+def guard_immutable(output_path: str, name: str, version: str,
+                    fingerprint: str, payload: str | None = None) -> None: ...
+def enforce_immutability(step: StepSpec) -> bool: ...            # returns True iff mutable (caller rebuilds)
+
+def canonical_json(config: object) -> str: ...
+def fingerprint_hash(payload: str) -> str: ...                   # md5(payload.encode()).hexdigest()[:8]
+```
+
+- `guard_immutable` — no-op when the version is mutable, when no record exists, or when the recorded fingerprint matches; otherwise raises `ImmutableArtifactError`. When both the recorded `fingerprint_payload` and the current `payload` are present, the message appends a field-level diff (`learning_rate: 3e-3 -> 4e-3`), capped at 20 lines.
+- `enforce_immutability(step)` — reads `fingerprint`/`version` from `step.hash_attrs`; returns `False` for a non-lazy step (no fingerprint); returns `True` for a mutable version; otherwise calls `guard_immutable(step.output_path, step.name, version, fingerprint, step.fingerprint_payload)` and returns `False`. Run by `StepRunner` before serving a cached SUCCESS. Known limitation: today it runs *before* `step_lock` and isn't re-checked on the already-done path, so concurrent first-builds with different fingerprints can both pass (design.md Open Questions).
+- `canonical_json` — deterministic JSON. Canonicalizes: dataclasses (`asdict`), `Enum` (`.value`), `timedelta` (`{days,seconds,microseconds}`), `Path` (str), `set`/`frozenset` (`{"__set__": sorted-by-canonical-form}`), numpy `dtype`/scalar-type (`{"__dtype__": name}`), numpy scalar (`.item()`), numpy/jax arrays (`{"__array__": tolist, "dtype", "shape"}`), other type objects (`{"__type__": "mod.qualname"}`). **Raises `TypeError`** on callables, `functools.partial`, and objects using the default `object.__repr__` — anything with no reproducible representation. Dict keys must be strings (`sort_keys=True`). The same config always yields identical bytes across processes.
+
+---
+
+## Authoring: sweep / select (`marin.experiment.sweep`)
 
 ```python
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]: ...
@@ -131,112 +213,186 @@ def select(name: str, version: str, trials: Sequence[Artifact], *,
            metric: str, mode: str = "min") -> Artifact: ...
 ```
 
-`select` depends on every trial, reads each trial's metrics payload at run time, and writes
-`{"winner", "score", "winner_path", "metrics", "scores"}`; `metric`/`mode` bear identity, trial
-*values* do not. It keys trials by full `name@version` and **raises `ValueError` if two trials
-share an identity** (so a same-name/different-version collision can't silently drop a trial); a
-`trial` builder must fold its swept values into both the config (distinct fingerprint) and the
-`name` (distinct address). `mode` not in `{"min","max"}` or an empty sweep also raise `ValueError`.
+- `grid(**axes)` — Cartesian product of the named axes as `{axis: value}` dicts, row-major (last axis fastest).
+- `sweep(trial, **axes)` — `[trial(**params) for params in grid(**axes)]`. The `trial` builder must fold each grid point's values into both its config (distinct fingerprint) and its `name` (distinct address).
+- `select(name, version, trials, *, metric, mode="min")` — a reducer `Artifact` depending on every trial. At run time it reads each trial's metrics payload (a `Mapping`) and writes `{"winner", "score", "winner_path", "metrics", "scores"}`. `metric`/`mode` bear identity; trial *values* are read at run time. Trials are keyed by full `name@version`. Raises `ValueError` if `mode not in {"min","max"}`, if `trials` is empty, or if two trials share a `name@version`. Each trial's `fn` must return a `Mapping` containing `metric` (else `TypeError`/`KeyError` at run time).
 
-**Data builders** (`data.py`) — each returns a `Dataset` whose recipe is a tokenize/download step:
+## Authoring: data builders (`marin.experiment.data`)
 
-- `tokenized(name, *, tokenizer, …) -> Dataset` — produce a tokenized cache. It currently spans
-  four source modes via optional kwargs (`pin` existing / `source` HF id / `paths` raw glob /
-  `raw`+`glob` download-dependent); exactly one applies. That breadth is a known smell — these read
-  as four functions wearing one signature, and splitting them (e.g. `tokenize_hf` / `tokenize_paths`
-  / `tokenize_from`) is an open design question, not a committed contract.
-- `pretokenized(name, *, repo_id, tokenizer, …) -> Dataset` — adopt an HF-hosted Levanter cache.
-- `raw_download(name, *, fn, build_config, …) -> Dataset` — a download step with a caller-supplied fn.
-- `mixture(ctx, train: Mapping[Dataset, float], *, validation=()) -> LmDataConfig` — resolves each
-  component's cache path via `ctx.path(handle)` and emits weight-0 entries for `validation` sets.
-
-## Canonical patterns
-
-**Single run** — `build()` returns a `Checkpoint`; every decision is plain config inline:
+`DEFAULT_VERSION = "v1"`. Each builder returns a `Dataset` whose recipe runs a tokenize/download
+step; `resources` (when given) dispatches that step to Fray via `remote`, otherwise it runs inline.
 
 ```python
-def build(*, version: str = "v1") -> Checkpoint:
-    train = dclm_datasets(tokenizer=llama3_tokenizer)
-    validation = [*paloma_validation(...), *uncheatable_validation(...)]
-    weighted = {train[n]: DCLM_MIXTURE_WEIGHTS[n] for n in train}
-    def build_config(ctx: RunContext) -> TrainLmOnPodConfig:
-        inner = TrainLmConfig(data=mixture(ctx, weighted, validation=validation),
-                              optimizer=AdamConfig(learning_rate=3e-3, ...), model=..., ...)
-        return TrainLmOnPodConfig(train_config=inner, resources=ctx.run_arg("train_resources"),
-                                  output_path=ctx.out, env_vars=None)
-    return Checkpoint(name="checkpoints/dclm_1b_1x_how_to", version=version,
-                      recipe=Recipe(fn=_train, build_config=build_config,
-                                    deps=(*train.values(), *validation),
-                                    run_args={"train_resources": TRAIN_RESOURCES}))
-# _train(cfg): remote(run_levanter_train_lm, resources=cfg.resources)(cfg)
-# run: StepRunner().run([lower(build())])
+def tokenized(name: str, *, tokenizer: str,
+              source: str | None = None,
+              paths: Sequence[str] | None = None,
+              raw: Dataset | None = None,
+              glob: str | None = None,
+              validation: bool = False,
+              pin: str | None = None,
+              text_key: str = "text",
+              version: str = "v1",
+              tags: Sequence[str] = (),
+              resources: ResourceConfig | None = None) -> Dataset: ...
 ```
 
-**Sweep + select** — fan out over a grid, pick by metric:
+Produce a tokenized cache. **Exactly one** raw-input mode (else `ValueError`):
+- `source` — a HuggingFace id `org/name` (detected: one slash, no `://`, not absolute) tokenized via `HfTokenizeConfig`; otherwise a single raw path tokenized via `TokenizeConfig`.
+- `paths` — raw globs, each resolved against `ctx.prefix`, tokenized via `TokenizeConfig`.
+- `raw` + `glob` — depend on a download handle and tokenize `f"{ctx.path(raw)}/{glob}"`. `raw` and `glob` must be given together (else `ValueError`); `raw` becomes a recipe dep.
+
+Other parameters: `tokenizer` (required) — tokenizer id; `validation` — route the data to the cache's validation split (`validation_paths`) instead of train; `pin` — reference already-tokenized data at an existing location (no recompute); `text_key` — the document text field (`TextLmDatasetFormat`); `version`; `tags` — passed through to the tokenize config; `resources` — Fray resources for the tokenize job.
 
 ```python
-trials = sweep(_train_and_eval, learning_rate=[3e-4, 6e-4, 1e-3], weight_decay=[0.0, 0.1, 0.2])
-best = select("sweeps/tiny/best", "v1", trials, metric="train/loss", mode="min")
+def pretokenized(name: str, *, repo_id: str, tokenizer: str,
+                 revision: str | None = None, version: str = "v1",
+                 pin: str | None = None, tags: Sequence[str] = (),
+                 resources: ResourceConfig | None = None) -> Dataset: ...
 ```
 
-**Multi-phase chain** — each phase initializes from its parent's checkpoint:
+Download an already-tokenized Levanter cache from HuggingFace `repo_id` (optional `revision`) into
+`ctx.out` via `PretokenizedCacheDownloadConfig` / `fetch_pretokenized_cache` — no re-tokenization.
+Consumed as a normal tokenized `Dataset`. `pin` references an already-downloaded cache.
 
 ```python
-def _phase(name, *, fn, steps, parent, ...) -> Checkpoint:
-    def build_config(ctx):
-        init_from = f"{ctx.path(parent)}/checkpoints" if parent is not None else None
-        return ...
-    deps = () if parent is None else (parent,)
-    return Checkpoint(name=name, version="v1", recipe=Recipe(fn=fn, build_config=build_config, deps=deps, ...))
-pretrain = _phase("…/pretrain", parent=None, ...)
-mid      = _phase("…/midtrain", parent=pretrain, ...)
+def raw_download(name: str, *, fn: Callable[[Any], Any],
+                 build_config: Callable[[RunContext], Any],
+                 version: str = "v1", pin: str | None = None,
+                 resources: ResourceConfig | None = None) -> Dataset: ...
 ```
 
-**Adopt pre-existing data** — register, don't recompute:
+A raw-data handle: `build_config(ctx)` produces a config and `fn(config)` writes the download to
+`ctx.out`. Returned as a `Dataset` so `tokenized(raw=…)` can depend on it; it is not itself a
+tokenized cache.
 
 ```python
-cache = adopt("tokenized/dclm_baseline", "v1", "gs://…/dclm_baseline-0206f1/", kind=Dataset)
+def mixture(ctx: RunContext, train: Mapping[Dataset, float], *,
+            validation: Sequence[Dataset] = (),
+            shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE) -> LmDataConfig: ...
 ```
 
-## Pins and adopted data — three tiers of guarantee
+Assemble a Levanter `LmDataConfig`. `train` maps each handle to its weight; `validation` handles
+are added at weight `0.0`. Each component is keyed by the handle's `name` and rooted at
+`ctx.path(handle)` (so the caller must pass the same handles as the recipe's `deps`).
+`permutation_type` is `"feistel"`. Raises `ValueError` when: there are no components (`train` and
+`validation` both empty); two handles share a `name` (they would collide in the component dict);
+or the components span more than one tokenizer. Each component handle's `build_config` must produce
+a tokenize config (`TokenizeConfigBase`) else `TypeError`.
 
-| Mechanism | What it guarantees | What it does NOT |
-|---|---|---|
-| `name@version` (normal) | build-once: content recorded + fingerprint-guarded | — |
-| `adopt(name, version, source)` | **pointer** immutability: the alias→source mapping is recorded and guarded (re-adopt from a different `source` raises) | **content** immutability — it fingerprints the `source` *string*, so external data mutating in place is invisible; a *relative* source under a moved prefix points the same fingerprint at different bytes |
-| `override_path` pin | nothing — resolves to existing data | writes no record: no provenance, no guard. An explicit, unguarded escape hatch |
+---
 
-## File layout
+## Persisted shapes
 
-| Piece | Path |
-|---|---|
-| Handles, recipe, context, `lower`, `adopt` | `lib/marin/src/marin/execution/lazy.py` |
-| Build-once guard, record, conflict diff | `lib/marin/src/marin/execution/registry.py` |
-| Strict deterministic encoder | `lib/marin/src/marin/execution/fingerprint.py` |
-| `StepSpec` (+ `fingerprint_payload` field) | `lib/marin/src/marin/execution/step_spec.py` |
-| Runner (guard before cache-skip) | `lib/marin/src/marin/execution/step_runner.py` |
-| Compute-on-the-fn | `lib/marin/src/marin/execution/remote.py` |
-| Sweep / select | `lib/marin/src/marin/experiment/sweep.py` |
-| Data builders + mixture | `lib/marin/src/marin/experiment/data.py` |
-| Catalogs (lazy) | `experiments/pretraining_datasets/{dclm,simple,nemotron}_lazy.py`, `experiments/paloma_lazy.py`, `experiments/evals/uncheatable_lazy.py` |
+Two paths, which coincide for a computed artifact but diverge for an adopted one:
+
+- **Registry-record path** — always `{prefix}/{name}/{version}/` (the `StepSpec` output path). The
+  build record is written here even for an adopted artifact.
+- **Consumer-data path** — where consumers resolve the artifact's bytes: the registry-record path
+  for a computed artifact, `adopt_source` for an adopted one, `override_path` for a pin.
+
+Sidecar files at the **registry-record path** (a pin writes none of them):
+
+- **`.artifact_record.json`** — the build-once record. JSON object with exactly the `ArtifactRecord`
+  fields: `name`, `version`, `fingerprint` (8 hex), `output_path`, `git_commit` (nullable),
+  `user` (nullable), `created_at` (ISO-8601), `deps` (`["name@version", …]`), `source` (the adopted
+  source location, else `null`), `fingerprint_payload` (the canonical config JSON string, or
+  `null`). Written `indent=2`.
+- **`.artifact.json`** — the output-payload sidecar holding the value the step fn returned to the
+  runner (`marin.execution.artifact.Artifact.save`/`from_path`). An inline fn's return value is
+  saved; a `remote` fn returns `None`, so the value is `null` and the real output is at `ctx.out`.
+  Legacy names `.artifact`, `artifact.json` are read but not written.
+- **`.executor_status`** — the status marker (`SUCCESS`/`FAILED`/…) written by `StatusFile`; the
+  cache check serves a cached artifact only when this reads `SUCCESS`.
+
+The **fingerprint payload** format is the `canonical_json` string described above; the same string
+appears in `ArtifactRecord.fingerprint_payload` and `StepSpec.fingerprint_payload`.
 
 ## Errors
 
 | Error | Raised when |
 |---|---|
-| `ImmutableArtifactError` | rebuild of a fixed `name@version` from a changed recipe (with field-level diff); re-adopt from a different source |
-| `FingerprintMismatchError` | `expected_fingerprint` set and the computed fingerprint differs (at `lower()` time, before build) |
-| `TypeError` (encoder) | a config value has no reproducible serialization (callable, default-`repr` object) |
-| `ValueError` | `select` mode not in `{"min","max"}`, an empty sweep, or trials with colliding `name@version` |
-| `KeyError` | `ctx.run_arg(key)` for a key not declared in `recipe.run_args` |
+| `ImmutableArtifactError` | rebuild of a fixed `name@version` from a changed recipe (message carries a field-level diff); re-adopt of `name@version` from a different `source` |
+| `FingerprintMismatchError` | `expected_fingerprint` is set and the computed fingerprint differs (at `lower()`, before any build) |
+| `FileNotFoundError` | an adopted step runs and no data exists at its source; `Artifact.from_path` finds no payload sidecar and either the typed caller wanted a non-`PathMetadata` type or `.executor_status` is not `SUCCESS` |
+| `TypeError` (encoder) | a config value has no reproducible serialization (callable, `partial`, default-`repr` object) |
+| `TypeError` (payload IO) | `Artifact.from_path` is given an `artifact_type` that isn't a pydantic `BaseModel` subclass |
+| `TypeError` (mixture / select) | a `mixture` component config isn't a tokenize config; a `select` trial payload isn't a `Mapping` |
+| `ValueError` | `Artifact` with both `adopt_source` and `override_path`; `tokenized` not given exactly one source mode, or `raw`/`glob` not paired; `mixture` is empty or its components span >1 tokenizer; `select` bad `mode`, empty sweep, or colliding trial `name@version` |
+| `KeyError` | `ctx.run_arg(key)` for a key not declared in `recipe.run_args`; a `select` trial payload missing `metric` |
+| *(Fray failure)* | a `remote` step's Fray job fails to submit or fails at run time — the underlying error propagates from `StepRunner.run` (the runner blocks on the job and re-raises) |
+
+## Invariants & preconditions
+
+What the contract requires of callers, and what it does **not** check (so the value is "accepted but
+undefined" — passing it is the caller's bug, not a guarded error):
+
+- **`name`** — used verbatim as a path segment; slashes are allowed (it nests). Empty strings, `..`,
+  leading/trailing slashes, and URL-like names are **not checked** and will produce malformed paths.
+- **`version`** — any string. Mutable iff it equals `"dev"` or ends with `"-dev"`; every other value
+  is treated as immutable. No grammar is enforced.
+- **`expected_fingerprint`** — compared as an opaque string against the 8-hex computed value; format
+  is **not validated** (a malformed pin simply never matches → `FingerprintMismatchError`).
+- **`deps`** — may contain duplicate artifacts; the runner dedupes scheduling by output path, so
+  duplicates are harmless but **not rejected**. Dep identity in the fingerprint is `name@version`, so
+  two deps with the same `name@version` but different recipes are indistinguishable to a consumer.
+- **`run_args` keys** — expected to be strings (they become `ctx.run_arg` lookups and
+  `for_fingerprint` placeholders); non-string keys are **not checked**.
+- **`build_config`** — must be a deterministic pure function of its `RunContext` for the fingerprint
+  to be stable across processes; I/O or env/time reads are **not prevented** but make the fingerprint
+  (and therefore the build-once guard) unreliable. This is a contract on the caller, not enforced.
+- **`recipe.fn` source** — **not** part of the fingerprint. Changing the function body while keeping
+  the config identical serves cached output; bump the version to force a rebuild.
+
+## Concurrency & idempotency
+
+- **`lower()` is repeatable but not pure.** Re-lowering the same handle yields the same `StepSpec`
+  and fingerprint, but the step fn it produces closes over `get_git_commit()`/`get_user()` read in
+  the launching process, so the `ArtifactRecord` it later writes embeds the launch commit/user.
+- **Fixed versions are guarded only by the recorded fingerprint.** The build-once guard compares the
+  current fingerprint against `{output_path}/.artifact_record.json`; with no record (first build) it
+  is a no-op. A pin (`override_path`) writes no record and is therefore unguarded.
+- **`dev` versions always rebuild,** even after a successful run — the guard and the SUCCESS
+  cache-check are both skipped.
+- **Concurrent first-builds can converge silently.** `enforce_immutability` runs *before* `step_lock`
+  and isn't re-checked on the already-done path, so two processes lowering different recipes to the
+  same unbuilt `name@version` can both pass the guard; one wins the lock and writes the record, the
+  other serves it as done. Tightening this (guard-under-lock) is an Open Question, not part of this
+  contract.
+
+## File layout
+
+| Piece | Path |
+|---|---|
+| Handles, recipe, context, `lower`, `adopt`, `materialized_config` | `lib/marin/src/marin/execution/lazy.py` |
+| Build-once guard, `ArtifactRecord`, conflict diff, errors | `lib/marin/src/marin/execution/registry.py` |
+| Strict deterministic encoder | `lib/marin/src/marin/execution/fingerprint.py` |
+| `StepSpec` (+ `fingerprint_payload`) | `lib/marin/src/marin/execution/step_spec.py` |
+| Runner (guard, lock, cache, dispatch) | `lib/marin/src/marin/execution/step_runner.py` |
+| Compute-on-the-fn (`remote`, `RemoteCallable`) | `lib/marin/src/marin/execution/remote.py` |
+| Payload sidecar (`Artifact.save`/`from_path`) | `lib/marin/src/marin/execution/artifact.py` |
+| Sweep / select | `lib/marin/src/marin/experiment/sweep.py` |
+| Data builders + mixture | `lib/marin/src/marin/experiment/data.py` |
+| Catalogs (lazy) | `experiments/pretraining_datasets/{dclm,simple,nemotron}_lazy.py`, `experiments/paloma_lazy.py`, `experiments/evals/uncheatable_lazy.py` |
+
+## Pins and adopted data — three tiers of guarantee
+
+| Mechanism | Guarantees | Does NOT guarantee |
+|---|---|---|
+| `name@version` (normal) | build-once: content recorded + fingerprint-guarded | — |
+| `adopt(name, version, source)` | **pointer** immutability: the alias→source mapping is recorded and guarded (re-adopt from a different `source` raises) | **content** immutability — it fingerprints the `source` *string*, so external data mutating in place, or a relative source under a moved prefix, is invisible |
+| `override_path` pin | nothing — resolves to existing data | no record: no provenance, no guard. An explicit, unguarded escape hatch |
 
 ## Out of scope
 
+These are contracts this spec does **not** pin (the migration plan and sequencing live in
+`design.md` / `research.md`):
+
 - **Deleting the Executor.** `Executor`/`executor_main`/`versioned`/`InputName`/`this_output_path`
-  stay until catalogs migrate; this design defines the target, not the deletion PR.
-- **Migrating the 113 remaining import-time sites.** Tracked separately; `defaults.py` + dataset
-  catalogs first.
-- **Flipping `MARIN_EXECUTOR_STRICT` default-on.** A sequencing decision (Open Question 1).
-- **Fingerprint attribution / tracing.** The field-level diff ships; per-field *why* (Open
-  Question 4) is deferred.
-- **Auto-versioning** (fingerprint-suffixed paths). Versions are author-chosen (Open Question 3).
+  remain importable; this spec defines the target surface, not their removal.
+- **The import-time guard's default.** `MARIN_EXECUTOR_STRICT` stays opt-in; flipping it default-on
+  is a sequencing decision, not an API change.
+- **Concurrency-tightening the build-once guard** (guard-under-lock) — see Concurrency & idempotency
+  above; the current contract is what's pinned.
+- **A scheme-tagged `tokenized(source=…)`** (`hf://`, `gs://`, …) collapsing the source-mode
+  heuristic — a proposed authoring-layer refinement (`research.md`), not committed here.
+- **Fingerprint attribution / tracing** and **auto-versioning** (fingerprint-suffixed paths).

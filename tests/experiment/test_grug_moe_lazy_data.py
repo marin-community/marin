@@ -7,8 +7,10 @@
 path entirely.
 """
 
-from marin.execution.lazy import Dataset, lower, materialized_config
+import pytest
+from marin.execution.lazy import Dataset, RunContext, lower, materialized_config
 from marin.execution.remote import RemoteCallable
+from marin.experiment.data import mixture, tokenized
 
 from experiments.grug.moe.launch_lazy import grug_moe_slimpajama
 
@@ -48,3 +50,12 @@ def test_mixture_resolves_dependency_path_without_executor():
     # The tokenize step itself writes its cache at the same explicit path.
     slim: Dataset = ckpt.recipe.deps[0]
     assert materialized_config(slim, prefix).cache_path == f"{prefix}/slimpajama-6b/v1"
+
+
+def test_mixture_rejects_components_with_colliding_names():
+    # Two distinct handles share a name -> keyed-by-name component dict would drop one.
+    ctx = RunContext.for_run(out="gs://m/out", prefix="gs://m")
+    a = tokenized("dupe", tokenizer="t", source="org/a")
+    b = tokenized("dupe", tokenizer="t", source="org/b")
+    with pytest.raises(ValueError, match="collide"):
+        mixture(ctx, {a: 1.0, b: 1.0})

@@ -206,9 +206,18 @@ def mixture(
 
     ``train`` maps each handle to its mixture weight; ``validation`` handles are added at
     weight 0. Each component's cache path is resolved with ``ctx.path(handle)``; the
-    component key is the handle's ``name``. Call this inside a consumer's ``build_config``
-    and pass the same handles as the recipe's ``deps`` so they materialize first.
+    component key is the handle's ``name``, so two handles that share a name are rejected
+    (rather than silently collapsing). Call this inside a consumer's ``build_config`` and
+    pass the same handles as the recipe's ``deps`` so they materialize first.
     """
+    handles = [*train, *validation]
+    if not handles:
+        raise ValueError("mixture needs at least one training or validation component")
+    names = [dataset.name for dataset in handles]
+    if len(set(names)) != len(names):
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        raise ValueError(f"mixture components are keyed by name, but these collide: {duplicates}")
+
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
     tokenizers: set[str] = set()
