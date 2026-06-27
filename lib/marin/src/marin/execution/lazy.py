@@ -3,9 +3,6 @@
 
 """Lazy artifacts addressed by an explicit ``name@version``.
 
-Prototype of the executor redesign (see
-``.agents/projects/executor-lazy-artifact-extraction.md``).
-
 The model:
 
 - An :class:`Artifact` is a lazy handle: ``(name, version, recipe)``. Building one
@@ -235,7 +232,7 @@ class Checkpoint(Artifact):
     """A Levanter checkpoint handle (routes to ``initialize_from_checkpoint_path``)."""
 
 
-def _adopt_noop(config: Any) -> None:
+def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
 
