@@ -1947,11 +1947,27 @@ class TestBackendsConfig:
         resolved = resolve_backends(config)
         assert set(resolved) == {"cpu", "tpu"}
 
-    def test_remote_transport_rejected(self):
+    def test_remote_transport_accepted_without_provider(self):
+        # A remote backend is fronted by an agent that owns the in-cluster
+        # provider; the root holds only its id, kind, attributes, and policy.
         config = IrisClusterConfig(
-            backends={"cpu": _worker_daemon_backend(transport="remote")},
+            backends={"edge": BackendConfig(kind="k8s", transport="remote", attributes={"device-type": "gpu"})},
         )
-        with pytest.raises(ValueError, match="remote transport lands in a later PR"):
+        validate_config(config)
+        assert resolve_backends(config)["edge"].transport == "remote"
+
+    def test_remote_transport_with_provider_rejected(self):
+        config = IrisClusterConfig(
+            backends={"edge": _worker_daemon_backend(transport="remote")},
+        )
+        with pytest.raises(ValueError, match="remote transport must not set a provider"):
+            validate_config(config)
+
+    def test_remote_transport_with_scale_groups_rejected(self):
+        config = IrisClusterConfig(
+            backends={"edge": BackendConfig(kind="k8s", transport="remote", scale_groups={"sg": _valid_scale_group()})},
+        )
+        with pytest.raises(ValueError, match="must not set scale_groups"):
             validate_config(config)
 
     def test_k8s_backend_requires_kubernetes_provider(self):

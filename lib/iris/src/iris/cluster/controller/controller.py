@@ -95,6 +95,7 @@ from iris.cluster.types import (
 )
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.remote_agent_connect import RemoteAgentService
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +292,7 @@ class Controller:
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
         backend_configs: dict[str, BackendConfig] | None = None,
+        remote_agent_service: RemoteAgentService | None = None,
     ):
         if not config.remote_state_dir:
             raise ValueError(
@@ -385,6 +387,7 @@ class Controller:
                 optional=config.auth.optional if config.auth else False,
                 iap_assertion_verifier=config.auth.iap_assertion_verifier if config.auth else None,
             ),
+            remote_agent_service=remote_agent_service,
         )
 
         # Wakes the control-tick driver. A submit triggers a schedule-only

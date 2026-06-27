@@ -19,6 +19,9 @@ import logging
 from finelog.client.log_client import Table
 
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
+from iris.cluster.backends.remote.backend import RemoteTaskBackend
+from iris.cluster.backends.remote.relay import RelayRegistry
+from iris.cluster.backends.remote.server import RemoteAgentServer
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
 from iris.cluster.config import BackendConfig, IrisClusterConfig, WorkerConfig, resolve_backends
@@ -245,25 +248,38 @@ def make_backends(
     remote_state_dir: str,
     dry_run: bool,
     log_stack: LogStack,
-) -> dict[str, TaskBackend]:
+) -> tuple[dict[str, TaskBackend], RemoteAgentServer | None]:
     """Build the controller's ``{backend_id: TaskBackend}`` collection.
 
     Iterates the resolved ``backends:`` map (or the implicit single entry keyed
-    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each backend
-    through the existing single-backend path, tagging it with its backend id.
-    Every entry is in-process for now.
+    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each backend,
+    tagging it with its backend id. An ``in_process`` backend is built through
+    the single-backend provider path; a ``remote`` backend becomes a
+    :class:`RemoteTaskBackend` whose relay is registered for the agent poll loop.
+
+    The second return value is a :class:`RemoteAgentServer` over those relays, or
+    ``None`` when no backend is remote — the controller mounts it so remote
+    agents can poll.
     """
     backends: dict[str, TaskBackend] = {}
+    registry = RelayRegistry()
     for backend_id, backend_cfg in resolve_backends(config).items():
-        provider = make_backend(
-            _backend_subconfig(config, backend_cfg),
-            db=db,
-            auth=auth,
-            remote_state_dir=remote_state_dir,
-            dry_run=dry_run,
-            log_stack=log_stack,
-        )
-        provider.name = backend_id
+        if backend_cfg.transport == "remote":
+            remote = RemoteTaskBackend(name=backend_id)
+            registry.register(backend_id, remote.relay)
+            provider: TaskBackend = remote
+        else:
+            provider = make_backend(
+                _backend_subconfig(config, backend_cfg),
+                db=db,
+                auth=auth,
+                remote_state_dir=remote_state_dir,
+                dry_run=dry_run,
+                log_stack=log_stack,
+            )
+            provider.name = backend_id
         backends[backend_id] = provider
         logger.info("Backend %r ready: %s", backend_id, type(provider).__name__)
-    return backends
+
+    has_remote = any(cfg.transport == "remote" for cfg in resolve_backends(config).values())
+    return backends, (RemoteAgentServer(registry) if has_remote else None)

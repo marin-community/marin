@@ -62,6 +62,7 @@ from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
+from iris.rpc.remote_agent_connect import RemoteAgentService, RemoteAgentServiceASGIApplication
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceASGIApplication
 from iris.rpc.stats_service import RpcStatsService
@@ -397,12 +398,14 @@ class ControllerDashboard:
         port: int = 8080,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        remote_agent_service: RemoteAgentService | None = None,
     ):
         self._service = service
         self._host = host
         self._port = port
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        self._remote_agent_service = remote_agent_service
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -513,6 +516,15 @@ class ControllerDashboard:
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_app.path, app=stats_app),
         ]
+        # A remote agent dials home to poll for desired state. Mounted only when
+        # a remote backend exists, on the same auth chain as the controller RPCs.
+        if self._remote_agent_service is not None:
+            remote_agent_app = RemoteAgentServiceASGIApplication(
+                service=self._remote_agent_service,
+                interceptors=controller_interceptors,
+                compressions=IRIS_RPC_COMPRESSIONS,
+            )
+            routes.append(Mount(remote_agent_app.path, app=remote_agent_app))
         routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(

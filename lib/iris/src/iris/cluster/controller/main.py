@@ -152,7 +152,7 @@ def run_controller_serve(
         host=host,
         worker_token=auth.worker_token if auth.worker_token else None,
     )
-    backends = make_backends(
+    backends, remote_agent_service = make_backends(
         cluster_config,
         db=db,
         auth=auth,
@@ -194,6 +194,7 @@ def run_controller_serve(
         log_stack=log_stack,
         db=db,
         backend_configs=resolve_backends(cluster_config),
+        remote_agent_service=remote_agent_service,
     )
     logger.info("Controller instance created")
 

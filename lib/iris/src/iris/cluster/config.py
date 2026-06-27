@@ -862,10 +862,20 @@ def _validate_backends(config: IrisClusterConfig) -> None:
 
     for backend_id, backend in config.backends.items():
         if backend.transport == "remote":
-            raise ValueError(
-                f"backend '{backend_id}': transport 'remote' is not supported yet — "
-                "remote transport lands in a later PR."
-            )
+            # A remote backend is fronted by an agent that owns the in-cluster
+            # provider and autoscaler; the root holds only its id, attributes,
+            # and policy and routes work to it over the agent poll loop.
+            if backend.worker_provider is not None or backend.kubernetes_provider is not None:
+                raise ValueError(
+                    f"backend '{backend_id}': remote transport must not set a provider; "
+                    "the provider belongs to the agent's local config."
+                )
+            if backend.scale_groups:
+                raise ValueError(
+                    f"backend '{backend_id}': remote transport must not set scale_groups; "
+                    "the agent owns capacity for a remote backend."
+                )
+            continue
         if backend.kind == "worker_daemon":
             if backend.worker_provider is None:
                 raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' requires worker_provider.")
