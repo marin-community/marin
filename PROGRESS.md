@@ -28,7 +28,36 @@ Do all the work in this one worktree (so the full migration surface is known), t
 
 ## Status
 
-🔄 **In progress** — building the `train_lm` assembler helper.
+🔄 **PR1 infra complete & verified.** Now executing PR2: the bulk migration.
+
+### PR1 — DONE (commits 63a60c2c95, a11760fcdf on top of d284eb3555)
+
+- `marin.experiment.train.train_lm` — the generic assembler (verified against
+  `default_train` by the golden test; standalone test added).
+- DCLM 1B/1x tutorial rewritten onto it (~165→78 lines, every decision still visible).
+- Data/sweep/evals helpers already solid. Example set for PR1: `dclm_1b_1x_inline`
+  (train_lm), `grug/moe/launch_lazy` (mixture/pins), `grug/moe/phases_lazy` (chain).
+
+### PR2 — ordered plan (gated: executor deletion is LAST, needs the whole tail)
+
+1. Make the `_lazy` catalogs self-contained (inline the PIN / `PALOMA_DATASETS_TO_DIR`
+   constants they pull from executor originals). [safe, additive]
+2. Migrate executor *experiments* → `train_lm` + lazy catalogs: tutorials
+   (`exp1077`, `exp1078`, `train_tiny_sweep_dclm_tpu`), `references/*`, training files.
+3. Migrate the big tokenize catalogs → lazy step-functions: `common_pile`
+   (32), `eval_datasets` (27), `midtraining_datasets` (7), `models`, remaining
+   `pretraining_datasets/*`; migrate their consumers.
+4. Rename `_lazy` → canonical, delete executor catalog originals.
+5. Migrate `defaults.py` / `tokenization.py` consumers; delete `default_train` & co.
+6. Rewrite `materialize` to drive `StepRunner`; move `infer_tpu_variant_regions_from_iris`
+   into `rl/placement.py`; fix `rl/rl_experiment_utils.py`.
+7. Delete executor content-addressing from `executor.py`; flip `MARIN_EXECUTOR_STRICT`
+   default-on; trim `execution/__init__`.
+8. Delete the golden migration harness + executor-only tests; clean prototype tests.
+9. Codex review of sample experiment files; split into two stacked PRs.
+
+Sweep tutorial (`train_tiny_sweep_tpu.py`) migrates in step 2 — it currently leans on
+the executor-era `prepare_lm_train` / `_run_training_on_worker` in `defaults.py`.
 
 ## Design decision: the training helper (resolved 2026-06-27)
 

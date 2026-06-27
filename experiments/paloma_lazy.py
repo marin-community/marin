@@ -12,10 +12,31 @@ from marin.execution.lazy import Dataset
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import PALOMA_DATASETS_TO_DIR
 
-# Pinned Paloma download (paloma.py: with_output_path("raw/paloma-fc6827").cd("65cd6fc")).
+# Pinned Paloma download.
 _PALOMA_RAW = "raw/paloma-fc6827/65cd6fc"
+
+# The Paloma eval subsets and their directories within the HF dataset
+# (https://huggingface.co/datasets/allenai/paloma). The subset name keys the handle;
+# the directory locates its shards.
+_PALOMA_SUBSETS = {
+    "4chan": "4chan_meta_sep",
+    "c4_100_domains": "c4_100_domains",
+    "c4_en": "c4_en",
+    "dolma-v1_5": "dolma-v1_5",
+    "dolma_100_programing_languages": "dolma_100_programing_languages",
+    "dolma_100_subreddits": "dolma_100_subreddits",
+    "falcon-refinedweb": "falcon-refinedweb",
+    "gab": "gab",
+    "m2d2_s2orc_unsplit": "m2d2_s2orc_unsplit",
+    "m2d2_wikipedia_unsplit": "m2d2_wikipedia_unsplit",
+    "manosphere_meta_sep": "manosphere_meta_sep",
+    "mc4": "mc4",
+    "ptb": "ptb",
+    "redpajama": "redpajama",
+    "twitterAAE_HELM_fixed": "twitterAAE_HELM_fixed",
+    "wikitext_103": "wikitext_103",
+}
 
 
 def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[Dataset]:
@@ -25,8 +46,8 @@ def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[Dataset]:
             f"paloma/{subset}",
             tokenizer=tokenizer,
             version="llama3",
-            paths=[f"{_PALOMA_RAW}/{path_part}/val/val*.jsonl.gz"],
+            paths=[f"{_PALOMA_RAW}/{directory}/val/val*.jsonl.gz"],
             validation=True,
         )
-        for subset, path_part in PALOMA_DATASETS_TO_DIR.items()
+        for subset, directory in _PALOMA_SUBSETS.items()
     ]
