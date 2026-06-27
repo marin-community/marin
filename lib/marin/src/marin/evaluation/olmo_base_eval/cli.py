@@ -17,7 +17,7 @@ from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.olmo_base_eval.run import OlmoBaseEvalConfig, olmo_base_eval
+from marin.evaluation.olmo_base_eval.run import DEFAULT_WANDB_PROJECT, OlmoBaseEvalConfig, olmo_base_eval
 
 
 def main() -> None:
@@ -27,7 +27,7 @@ def main() -> None:
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--name", required=True)
     parser.add_argument("--tokenizer", default=None)
-    parser.add_argument("--wandb-project", default="marin-eval")
+    parser.add_argument("--wandb-project", default=DEFAULT_WANDB_PROJECT)
     parser.add_argument("--wandb-group", default="olmo_base_eval_table9")
     parser.add_argument("--max-eval-length", type=int, default=8192)
     # fp32 reproduces the SC oracle exactly (the SC HF provider scored in fp32).

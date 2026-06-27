@@ -73,15 +73,21 @@ def test_convert_olmo_requests_extracts_gold_and_skips_unknown(tmp_path):
     _write_olmo_requests(
         requests_dir / "arc_easy_olmo3base_bpb-requests.jsonl",
         [
-            {"task_name": "arc_easy:olmo3base:bpb", "doc_id": 0,
-             "request": {"context": "Q\nAnswer:", "continuation": " yes", "continuations": [" yes"]}},
+            {
+                "task_name": "arc_easy:olmo3base:bpb",
+                "doc_id": 0,
+                "request": {"context": "Q\nAnswer:", "continuation": " yes", "continuations": [" yes"]},
+            },
         ],
     )
     _write_olmo_requests(
         requests_dir / "lab_bench_dbqa-requests.jsonl",
         [
-            {"task_name": "lab_bench_dbqa:bpb", "doc_id": 0,
-             "request": {"context": "x", "continuation": " a", "continuations": [" a"]}},
+            {
+                "task_name": "lab_bench_dbqa:bpb",
+                "doc_id": 0,
+                "request": {"context": "x", "continuation": " a", "continuations": [" a"]},
+            },
         ],
     )
     instances = convert_olmo_requests(str(tmp_path / "requests"))
@@ -95,9 +101,15 @@ def test_convert_olmo_requests_uses_singular_gold_for_multichoice(tmp_path):
     _write_olmo_requests(
         requests_dir / "piqa-requests.jsonl",
         [
-            {"task_name": "piqa:olmo3base:bpb", "doc_id": 0,
-             "request": {"context": "Goal\nAnswer:", "continuation": " gold two",
-                         "continuations": [" choice one", " gold two"]}},
+            {
+                "task_name": "piqa:olmo3base:bpb",
+                "doc_id": 0,
+                "request": {
+                    "context": "Goal\nAnswer:",
+                    "continuation": " gold two",
+                    "continuations": [" choice one", " gold two"],
+                },
+            },
         ],
     )
     instances = convert_olmo_requests(str(tmp_path / "requests"))
@@ -109,10 +121,8 @@ def test_convert_olmo_requests_rejects_duplicate_doc_id(tmp_path):
     _write_olmo_requests(
         requests_dir / "csqa-requests.jsonl",
         [
-            {"task_name": "csqa:bpb:olmo3base", "doc_id": 0,
-             "request": {"context": "c", "continuation": " a"}},
-            {"task_name": "csqa:bpb:olmo3base", "doc_id": 0,
-             "request": {"context": "c", "continuation": " b"}},
+            {"task_name": "csqa:bpb:olmo3base", "doc_id": 0, "request": {"context": "c", "continuation": " a"}},
+            {"task_name": "csqa:bpb:olmo3base", "doc_id": 0, "request": {"context": "c", "continuation": " b"}},
         ],
     )
     # Two requests for the same doc means per-choice accuracy, not gold-only BPB.

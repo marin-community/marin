@@ -43,6 +43,13 @@ def sc_mmlu_subject_key(subject: str) -> str:
     return f"{SC_PREFIX}/{subject}_rc/bpb"
 
 
+def sc_compat_metrics(leaf_bpb: Mapping[str, float], mmlu_subject_bpb: Mapping[str, float]) -> dict[str, float]:
+    """SC-compatible per-task keys for the leaf tasks and MMLU subjects."""
+    metrics = {sc_task_key(task): value for task, value in leaf_bpb.items()}
+    metrics.update({sc_mmlu_subject_key(subject): value for subject, value in mmlu_subject_bpb.items()})
+    return metrics
+
+
 def build_wandb_metrics(
     *,
     component_bpb: Mapping[str, float],
@@ -51,13 +58,8 @@ def build_wandb_metrics(
     macro_bpb: float,
 ) -> dict[str, float]:
     """Assemble the full W&B metric dict (Table 9 names + macro + SC-compat keys)."""
-    metrics: dict[str, float] = {}
-    for component in table9_components():
-        metrics[table9_component_key(component)] = component_bpb[component]
+    metrics: dict[str, float] = {table9_component_key(c): component_bpb[c] for c in table9_components()}
     metrics[TABLE9_MACRO_KEY] = macro_bpb
     metrics[TABLE9_MACRO_ALIAS_KEY] = macro_bpb
-    for task, value in leaf_bpb.items():
-        metrics[sc_task_key(task)] = value
-    for subject, value in mmlu_subject_bpb.items():
-        metrics[sc_mmlu_subject_key(subject)] = value
+    metrics.update(sc_compat_metrics(leaf_bpb, mmlu_subject_bpb))
     return metrics

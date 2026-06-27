@@ -37,7 +37,7 @@ from levanter.utils.tree_utils import inference_mode
 from marin.evaluation.olmo_base_eval.aggregate import assemble_table9, table9_macro
 from marin.evaluation.olmo_base_eval.bpb import EncodedInstance, encode_context_continuation, task_bpb
 from marin.evaluation.olmo_base_eval.components import leaf_components, mmlu_subjects, scored_tasks
-from marin.evaluation.olmo_base_eval.metrics import build_wandb_metrics, sc_mmlu_subject_key, sc_task_key
+from marin.evaluation.olmo_base_eval.metrics import build_wandb_metrics, sc_compat_metrics
 from marin.evaluation.olmo_base_eval.request_set import RequestInstance, load_request_set, read_manifest
 from marin.execution import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
@@ -225,10 +225,7 @@ def _build_metrics_and_results(task_scores: dict[str, float], manifest, config: 
         # Partial request set (e.g. a smoke subset): still emit SC-compatible keys.
         missing = sorted(set(scored_tasks()) - present)
         logger.warning("partial request set; %d scored tasks missing, skipping macro: %s", len(missing), missing[:10])
-        for task, value in leaves.items():
-            metrics[sc_task_key(task)] = value
-        for subject, value in subjects.items():
-            metrics[sc_mmlu_subject_key(subject)] = value
+        metrics = sc_compat_metrics(leaves, subjects)
 
     results = {
         "name": config.name,

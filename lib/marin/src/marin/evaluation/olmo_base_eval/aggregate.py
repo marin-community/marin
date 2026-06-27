@@ -49,7 +49,7 @@ def assemble_table9(leaf_bpb: Mapping[str, float], mmlu_subject_bpb: Mapping[str
         raise ValueError(f"missing leaf component BPB: {missing_leaves}")
     buckets = collapse_mmlu(mmlu_subject_bpb)
     return {
-        component: (buckets[component] if component in MMLU_BUCKETS else leaf_bpb[component])
+        component: buckets[component] if component in MMLU_BUCKETS else leaf_bpb[component]
         for component in table9_components()
     }
 
