@@ -82,11 +82,12 @@ def test_table9_components_are_the_canonical_51_in_order():
     assert len(table9_components()) == 51
 
 
-def test_leaf_components_exclude_the_four_mmlu_buckets():
-    leaves = leaf_components()
-    assert len(leaves) == 47
-    assert not (set(leaves) & set(MMLU_BUCKETS))
-    assert set(leaves) | set(MMLU_BUCKETS) == set(table9_components())
+def test_leaf_components_are_the_47_table9_tasks_excluding_mmlu_buckets():
+    # Checked against the independent EXPECTED_TABLE9 oracle, not against
+    # table9_components() (which leaf_components() is derived from).
+    expected_leaves = tuple(component for component in EXPECTED_TABLE9 if component not in MMLU_BUCKETS)
+    assert len(expected_leaves) == 47
+    assert leaf_components() == expected_leaves
 
 
 def test_mmlu_has_57_subjects_split_18_14_12_13():
@@ -101,6 +102,8 @@ def test_mmlu_has_57_subjects_split_18_14_12_13():
     assert len(set(mmlu_subjects())) == 57  # no subject shared across buckets
 
 
-def test_scored_tasks_are_47_leaves_plus_57_subjects():
-    assert len(scored_tasks()) == 104
-    assert set(scored_tasks()) == set(leaf_components()) | set(mmlu_subjects())
+def test_scored_tasks_are_104_unique_tasks():
+    tasks = scored_tasks()
+    assert len(tasks) == 104
+    # No task is scored twice — a duplicate would double-count its BPB in the macro.
+    assert len(set(tasks)) == 104

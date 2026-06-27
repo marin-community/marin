@@ -21,9 +21,10 @@ then ``build_request_set(<dir>/requests, out_dir, olmo_eval_git_sha=...)``.
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
+
+import fsspec
 
 from marin.evaluation.olmo_base_eval.components import scored_tasks
 from marin.evaluation.olmo_base_eval.request_set import RequestInstance, RequestSetManifest, write_request_set
@@ -60,11 +61,12 @@ def convert_olmo_requests(requests_dir: str) -> list[RequestInstance]:
     instances: list[RequestInstance] = []
     skipped_tasks: set[str] = set()
     seen: set[tuple[str, int]] = set()
-    paths = sorted(glob.glob(f"{requests_dir.rstrip('/')}/**/*-requests.jsonl", recursive=True))
+    fs, root = fsspec.core.url_to_fs(requests_dir)
+    paths = sorted(fs.glob(f"{root.rstrip('/')}/**/*-requests.jsonl"))
     if not paths:
         raise FileNotFoundError(f"no *-requests.jsonl under {requests_dir}")
     for path in paths:
-        with open(path) as handle:
+        with fs.open(path, "r") as handle:
             for line in handle:
                 record = json.loads(line)
                 task = normalize_olmo_task_name(record["task_name"])
