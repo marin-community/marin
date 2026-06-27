@@ -39,8 +39,8 @@ from iris.cluster.config import (
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.lifecycle import connect_cluster
+from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
-from iris.cluster.setup.factory import create_provider_bundle
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync

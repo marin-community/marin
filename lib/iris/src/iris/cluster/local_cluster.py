@@ -51,8 +51,8 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.vm_lifecycle import ControllerStatus
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.setup.vm_lifecycle import ControllerStatus
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer

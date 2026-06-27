@@ -30,6 +30,7 @@ from iris.cluster.config import (
     VmConfig,
     WorkerConfig,
 )
+from iris.cluster.platforms.gcp.controller import GcpControllerProvider
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.handles import (
     GcpSliceHandle,
@@ -45,11 +46,10 @@ from iris.cluster.platforms.gcp.workers import (
     _spawn_bootstrap_thread,
     _validate_slice_config,
 )
+from iris.cluster.platforms.manual.controller import ManualControllerProvider
 from iris.cluster.platforms.manual.workers import ManualWorkerProvider
 from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.service_mode import ServiceMode
-from iris.cluster.setup.gcp.controller import GcpControllerProvider
-from iris.cluster.setup.manual.controller import ManualControllerProvider
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from rigging.timing import Timestamp
@@ -248,10 +248,12 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     ssh_proc.wait.return_value = 0
 
     with (
-        unittest.mock.patch("iris.cluster.setup.gcp.controller._check_gcloud_ssh_key"),
-        unittest.mock.patch("iris.cluster.setup.gcp.controller.find_free_port", return_value=10042),
-        unittest.mock.patch("iris.cluster.setup.gcp.controller.wait_for_port"),
-        unittest.mock.patch("iris.cluster.setup.gcp.controller.subprocess.Popen", return_value=ssh_proc) as popen_mock,
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.platforms.gcp.controller.wait_for_port"),
+        unittest.mock.patch(
+            "iris.cluster.platforms.gcp.controller.subprocess.Popen", return_value=ssh_proc
+        ) as popen_mock,
     ):
         with controller.tunnel("unused") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"

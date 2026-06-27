@@ -45,7 +45,7 @@ from iris.cluster.config import (
     SliceConfig,
     VmConfig,
 )
-from iris.cluster.setup.vm_lifecycle import (
+from iris.cluster.platforms.vm_lifecycle import (
     _build_controller_vm_config,
     start_controller,
     stop_controller,
