@@ -11,13 +11,15 @@ sanity rows used to compare the Marin-native evaluator against the SC oracle.
 Submit from an east5-pinned Iris parent. Example:
 
     OLMO_EVAL_SCALING_MODE=sanity_pair \\
-    MARIN_PREFIX=gs://marin-us-east5 \\
+    MARIN_PREFIX=gs://marin-us-east5/ \\
     uv run --no-project --with-editable lib/iris --with-editable lib/rigging \\
       --with-editable lib/finelog iris --cluster=marin job run --no-wait \\
       --cpu=1 --memory=16G --disk=32G --enable-extra-resources \\
       --region us-east5 --zone us-east5-a --priority interactive \\
       --job-name dm-olmo-table9-scaling-native-20260627 \\
-      -e WANDB_API_KEY -e MARIN_PREFIX -e OLMO_EVAL_SCALING_MODE \\
+      -e WANDB_API_KEY $WANDB_API_KEY \\
+      -e MARIN_PREFIX gs://marin-us-east5/ \\
+      -e OLMO_EVAL_SCALING_MODE sanity_pair \\
       -- uv run python experiments/evals/olmo_base_eval_table9_scaling_validation.py
 """
 
