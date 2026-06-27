@@ -3,17 +3,10 @@
 
 """Add ``lease_deadline_ms`` to ``endpoints``.
 
-Endpoints become a lease: registration grants a deadline and re-registering
-renews it; a row past its deadline is hidden from reads and swept by the
-pruner, independent of the FK CASCADE that ties it to the owning task row.
-
-Existing rows are left NULL, which the projection treats as never-expiring, so
-endpoints already registered keep being served exactly as before until their
-registrant next re-registers (and is handed a real lease). Backfilling a
-``registered_at``-relative deadline would instead retroactively expire any
-endpoint older than the lease the moment this schema loads.
-
-Idempotent: re-run from scratch if the controller crashes mid-migration.
+Existing rows are left NULL (the projection treats NULL as never-expiring) so
+loading the new schema cannot retroactively expire an endpoint registered more
+than a lease ago; each is handed a real deadline on its next re-registration.
+Idempotent: safe to re-run after a mid-migration crash.
 """
 
 

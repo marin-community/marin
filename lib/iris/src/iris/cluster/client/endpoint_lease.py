@@ -3,17 +3,12 @@
 
 """Background renewal of leased service endpoints.
 
-The controller grants each registered endpoint a lease and drops it once the
-lease elapses without a renewal. :class:`EndpointLeaseRenewer` re-registers every
-tracked endpoint with the same ``endpoint_id`` — an idempotent upsert/renew on
-the controller — at a fraction of the granted lease, on one daemon thread.
-Renewal stops when the endpoint is untracked (on unregister) or the process
-dies, so a crashed task's endpoint expires on its own.
-
-The renewer is driven by :meth:`tick`, which renews every due lease and returns
-how long to wait before the next one. :meth:`start` runs that on a daemon thread;
-tests call :meth:`tick` directly with an injected ``now`` to step the schedule
-deterministically.
+:class:`EndpointLeaseRenewer` re-registers each tracked endpoint at a fraction
+of its granted lease, on one daemon thread, so the controller keeps serving it.
+Untracking (on unregister) or process exit stops renewal, so a crashed task's
+endpoint expires on its own. :meth:`tick` renews every due lease and returns the
+wait until the next; :meth:`start` drives it on the thread, while tests call
+:meth:`tick` with an injected ``now``.
 """
 
 import logging
@@ -28,17 +23,15 @@ from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# Renew this far into the lease, so a renewal plus a couple of retries still land
-# before expiry. The floor keeps short (e.g. test) leases from busy-renewing.
+# Renew a third of the way into the lease, leaving margin for retries; the floor
+# keeps short (e.g. test) leases from busy-renewing.
 RENEW_FRACTION = 1 / 3
 MIN_RENEW_INTERVAL = Duration.from_seconds(30)
-# After a failed renewal, back off from this initial delay up to this cap. Both
-# stay short relative to any real lease, so a transient controller blip costs
-# little lease margin while a sustained outage stops hammering the controller.
+# Exponential backoff bounds for failed renewals.
 RETRY_INITIAL = Duration.from_seconds(30)
 RETRY_MAXIMUM = Duration.from_minutes(5)
-# Cap on a single sleep so the loop revisits its state even if every lease is far
-# out; track()/untrack()/close() wake it sooner regardless.
+# Cap on a single sleep so the loop revisits its state; track/untrack/close wake
+# it sooner.
 _MAX_WAIT = Duration.from_minutes(5)
 
 RegisterFn = Callable[

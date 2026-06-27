@@ -49,10 +49,8 @@ class EndpointRow:
     task_id: JobName
     metadata: dict
     registered_at: Timestamp
-    # Lease expiry; ``None`` means the row never expires. Registrations always
-    # set it; ``None`` appears only for fixtures that don't exercise leasing.
-    # A row whose deadline has passed is hidden from reads and swept by
-    # :meth:`EndpointsProjection.sweep_expired`.
+    # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
+    # A passed deadline is hidden from reads and swept by ``sweep_expired``.
     lease_deadline: Timestamp | None = None
 
     def is_expired(self, now: Timestamp) -> bool:
@@ -346,12 +344,11 @@ class EndpointsProjection:
         return to_remove
 
     def sweep_expired(self, cur: db.Tx, now: Timestamp) -> list[str]:
-        """Delete endpoints whose lease deadline has passed. Returns removed ids.
+        """Delete endpoints whose lease deadline has passed; return removed ids.
 
-        Reads already hide expired rows, so this is storage reclamation: it
-        makes the lease the GC trigger, independent of the FK ``CASCADE`` that
-        ties an endpoint to its owning task row. A crashed task's endpoint
-        expires here even though its task row still exists.
+        Reads already hide expired rows, so this only reclaims storage, making
+        the lease (not the FK ``CASCADE``) the GC trigger: a crashed task's
+        endpoint expires here even while its task row still exists.
         """
         with self._lock:
             expired = [row.endpoint_id for row in self._by_id.values() if row.is_expired(now)]

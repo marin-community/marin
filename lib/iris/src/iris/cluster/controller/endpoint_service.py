@@ -3,20 +3,11 @@
 
 """EndpointService: the leased service-discovery registry.
 
-Registration grants a time-bounded lease. The registrant renews it by
-re-registering with the same ``endpoint_id`` before it elapses; an unrenewed
-endpoint expires — hidden from reads immediately, swept from storage by the
-pruner — independent of the owning task row's lifetime. ``RegisterEndpoint``
-returns the granted ``lease_duration`` so the client paces its renewals off the
-server's policy.
-
-The legacy ``ControllerService.{RegisterEndpoint,UnregisterEndpoint,
-ListEndpoints}`` RPCs forward into this backend in-process, so clients that call
-the old surface keep working; clients that want to renew call ``EndpointService``
-directly to learn their lease.
-
-``/system/`` endpoints (e.g. the log server) are served from an in-memory map
-rather than the leased table, so they never expire.
+Registration grants a lease, returned as ``lease_duration``; re-registering with
+the same ``endpoint_id`` renews it, and an unrenewed endpoint expires (hidden
+from reads, swept by the pruner) independent of its task row. The legacy
+``ControllerService`` endpoint RPCs forward here in-process. ``/system/``
+endpoints are served from an in-memory map and never expire.
 """
 
 import logging
@@ -40,11 +31,9 @@ from iris.time_proto import duration_to_proto
 
 logger = logging.getLogger(__name__)
 
-# Endpoint lease length. Generous so a client that registers once and never
-# renews keeps its endpoint served far longer than any realistic gap before it
-# re-registers (e.g. across a controller restart). A renewing client renews at a
-# fraction of this, so the absolute value only bounds how long a crashed task's
-# endpoint lingers before the sweep reclaims it.
+# Long only to support old clients that register once and never renew. Dropped
+# to ~10m once renewing clients have rolled out:
+# https://github.com/marin-community/marin/issues/6729
 ENDPOINT_LEASE = Duration.from_hours(72)
 
 
@@ -77,14 +66,10 @@ class EndpointServiceImpl:
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
         """Register or renew a service endpoint, returning the granted lease.
 
-        Re-registering with the same ``endpoint_id`` renews the lease (the
-        underlying upsert keys off ``endpoint_id``). The ``task_id`` field
-        carries the calling task's wire-format task ID; the endpoint is bound to
-        that task so retry cleanup removes endpoints from superseded attempts.
-
-        Endpoints register regardless of job state but only become visible to
-        clients (lookup/list) while the task is executing (not terminal) and the
-        lease is unexpired.
+        Re-registering with the same ``endpoint_id`` renews the lease. The
+        endpoint is bound to ``request.task_id`` so retry cleanup removes
+        endpoints from superseded attempts. It is visible to lookup/list only
+        while that task is non-terminal and the lease is unexpired.
         """
         endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
@@ -141,10 +126,8 @@ class EndpointServiceImpl:
     ) -> controller_pb2.Controller.ListEndpointsResponse:
         """List endpoints by name prefix (or exact name when ``request.exact`` is set).
 
-        When ``request.task_ids`` is set, only endpoints registered by those
-        tasks are returned, ANDed with any prefix/exact match. Expired leases are
-        excluded. Names starting with ``/system/`` resolve from the in-memory
-        system map instead of the leased table.
+        ``request.task_ids``, if set, ANDs with the name match. Expired leases
+        are excluded; ``/system/`` names resolve from the in-memory map.
         """
         prefix = request.prefix
         if prefix.startswith("/system/"):
