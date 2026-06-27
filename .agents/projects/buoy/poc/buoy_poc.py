@@ -115,20 +115,16 @@ def mirror_run(entity: str, project: str, run_id: str, *, refresh: bool = False)
     api = wandb.Api()
     run = api.run(f"{entity}/{project}/{run_id}")
 
-    # history: try parquet exports, else scan_history (the common path)
-    history_source = "scan"
-    rows: list[dict] = []
-    try:
-        res = run.download_history_exports(os.path.join(root, "hist"), require_complete_history=False)
-        if getattr(res, "paths", None):
-            history_source = "exports"
-            for p in res.paths:
-                rows.extend(pq.read_table(p).to_pylist())
-    except Exception:
-        pass
-    if not rows:
-        rows = list(run.scan_history())
-    hist = normalize_history(rows)
+    # History: scan ONLY the metrics we actually plot. A full-fidelity run has
+    # ~10^5 steps x ~400 keys/row; materializing all of it (scan_history() or the
+    # full-width parquet export) is multi-GB and OOM-kills the container. Since the
+    # POC only charts PLOT_METRICS, scoping scan_history(keys=...) to those present
+    # bounds the fetch to a handful of columns. The real service streams the full
+    # history to parquet out-of-core (see design.md) rather than narrowing it.
+    history_source = "scan-keys"
+    present = [k for k in PLOT_METRICS if k in run.summary._json_dict]
+    rows = list(run.scan_history(keys=["_step", *present])) if present else []
+    hist = normalize_history(rows) if rows else pd.DataFrame({"_step": pd.Series(dtype="float64")})
     pq.write_table(pa.Table.from_pandas(hist, preserve_index=False), os.path.join(root, "history.parquet"))
 
     with open(os.path.join(root, "config.json"), "w") as f:
