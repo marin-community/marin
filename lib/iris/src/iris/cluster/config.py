@@ -22,7 +22,7 @@ import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
@@ -30,7 +30,14 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSeriali
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
-from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode, WellKnownAttribute, parse_memory_string
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    AcceleratorType,
+    CapacityType,
+    GcpSliceMode,
+    WellKnownAttribute,
+    parse_memory_string,
+)
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -557,6 +564,40 @@ class EndpointSpec(_Config):
 
 
 # ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
+
+
+class AllowPolicy(_Config):
+    """Which users may route tasks to a backend. ``"*"`` matches all users."""
+
+    users: list[str] = Field(default_factory=lambda: ["*"])
+
+
+class BackendConfig(_Config):
+    """One task backend in a multi-backend cluster.
+
+    ``kind`` selects the provider arm: ``worker_daemon`` drives the worker-daemon
+    provider (``worker_provider``), ``k8s`` drives the Kubernetes provider
+    (``kubernetes_provider``). ``transport`` is ``in_process`` for now; ``remote``
+    is reserved for a later PR and rejected by :func:`validate_config`.
+
+    ``attributes`` values are comma-split into sets by
+    :func:`backend_attribute_sets` for the task→backend meta-scheduler (for
+    example ``device-variant: "v5e-4,v5p-8"``).
+    """
+
+    kind: Literal["worker_daemon", "k8s"]
+    transport: Literal["in_process", "remote"] = "in_process"
+    attributes: dict[str, str] = Field(default_factory=dict)
+    allow_policy: AllowPolicy = Field(default_factory=AllowPolicy)
+    worker_provider: WorkerProviderConfig | None = None
+    kubernetes_provider: KubernetesProviderConfig | None = None
+    scale_groups: dict[str, ScaleGroupConfig] = Field(default_factory=dict)
+    platform: PlatformConfig | None = None
+
+
+# ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
 
@@ -576,6 +617,10 @@ class IrisClusterConfig(_OneofConfig):
     auth: AuthConfig | None = None
     kubernetes_provider: KubernetesProviderConfig | None = None
     worker_provider: WorkerProviderConfig | None = None
+    # Explicit multi-backend map. Absent (None) = the implicit single-backend form,
+    # synthesized from the top-level platform/scale_groups/provider fields by
+    # resolve_backends. Mixing the two is rejected by validate_config.
+    backends: dict[str, BackendConfig] | None = None
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
     # When set, iris auto-derives /system/log-server from this finelog config name.
@@ -790,8 +835,59 @@ def validate_autoscaler_config(config: AutoscalerConfig, context: str = "autosca
         )
 
 
+def _validate_backends(config: IrisClusterConfig) -> None:
+    """Validate an explicit ``backends:`` map.
+
+    The implicit single-backend form (no ``backends:``) is covered by the
+    top-level validators and synthesized by :func:`resolve_backends`.
+    """
+    if config.backends is None:
+        return
+
+    conflicting = []
+    if config.scale_groups:
+        conflicting.append("scale_groups")
+    if config.worker_provider is not None:
+        conflicting.append("worker_provider")
+    if config.kubernetes_provider is not None:
+        conflicting.append("kubernetes_provider")
+    if config.platform.platform_kind() is not None:
+        conflicting.append("platform")
+    if conflicting:
+        raise ValueError(
+            f"backends: cannot be combined with top-level {', '.join(conflicting)}. "
+            "The top-level platform/scale_groups/provider fields are the implicit single-backend "
+            "form; move them under a backends: entry instead."
+        )
+
+    for backend_id, backend in config.backends.items():
+        if backend.transport == "remote":
+            raise ValueError(
+                f"backend '{backend_id}': transport 'remote' is not supported yet — "
+                "remote transport lands in a later PR."
+            )
+        if backend.kind == "worker_daemon":
+            if backend.worker_provider is None:
+                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' requires worker_provider.")
+            if backend.kubernetes_provider is not None:
+                raise ValueError(f"backend '{backend_id}': kind 'worker_daemon' must not set kubernetes_provider.")
+        elif backend.kind == "k8s":
+            if backend.kubernetes_provider is None:
+                raise ValueError(f"backend '{backend_id}': kind 'k8s' requires kubernetes_provider.")
+            if backend.worker_provider is not None:
+                raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
+
+    in_process = sorted(bid for bid, backend in config.backends.items() if backend.transport == "in_process")
+    if len(in_process) > 1:
+        raise ValueError(
+            f"at most one backend may use transport 'in_process', got {len(in_process)}: "
+            f"{', '.join(in_process)}. The controller co-locates at most one in-process backend."
+        )
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
+    _validate_backends(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
@@ -800,6 +896,42 @@ def validate_config(config: IrisClusterConfig) -> None:
     _validate_worker_defaults(config)
     _validate_gcp_service_accounts(config)
     validate_autoscaler_config(config.defaults.autoscaler, context="config.defaults.autoscaler")
+
+
+# ===========================================================================
+# Backend resolution
+# ===========================================================================
+
+
+def backend_attribute_sets(backend: BackendConfig) -> dict[str, set[str]]:
+    """Comma-split each ``attributes`` value into a normalized set.
+
+    ``device-variant: "v5e-4, v5p-8"`` becomes ``{"device-variant": {"v5e-4", "v5p-8"}}``.
+    Empty and whitespace-only entries are dropped. The task→backend meta-scheduler
+    uses this to expand set-valued attributes into posting lists.
+    """
+    return {key: {part.strip() for part in raw.split(",") if part.strip()} for key, raw in backend.attributes.items()}
+
+
+def resolve_backends(config: IrisClusterConfig) -> dict[str, BackendConfig]:
+    """Resolve the cluster's backends as a ``{backend_id: BackendConfig}`` map.
+
+    An explicit ``backends:`` map is returned as-is. A single-cluster config (no
+    ``backends:``) synthesizes exactly one entry keyed :data:`DEFAULT_BACKEND_ID`
+    from the top-level platform/scale_groups/provider fields.
+    """
+    if config.backends is not None:
+        return dict(config.backends)
+
+    kind = "k8s" if config.provider_kind() == "kubernetes_provider" else "worker_daemon"
+    backend = BackendConfig(
+        kind=kind,
+        worker_provider=config.worker_provider,
+        kubernetes_provider=config.kubernetes_provider,
+        scale_groups=dict(config.scale_groups),
+        platform=config.platform,
+    )
+    return {DEFAULT_BACKEND_ID: backend}
 
 
 # ===========================================================================

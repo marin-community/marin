@@ -1,4 +1,14 @@
 {
+  "backends": [
+    {
+      "allow_policy_json": "{}",
+      "attributes_json": "{}",
+      "backend_id": "default",
+      "kind": "",
+      "last_seen_ms": null,
+      "status": 0
+    }
+  ],
   "endpoints": [],
   "job_config": [
     {
@@ -32,6 +42,7 @@
   "job_workdir_files": [],
   "jobs": [
     {
+      "backend_id": "''",
       "depth": 1,
       "error": null,
       "exit_code": null,
@@ -61,6 +72,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-0>",
+      "backend_id": "''",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": null,
@@ -73,6 +85,7 @@
   ],
   "tasks": [
     {
+      "backend_id": "''",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": "w-endpoint:8080",

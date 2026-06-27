@@ -263,6 +263,7 @@ jobs_table = Table(
     Column("exit_code", Integer),
     Column("num_tasks", Integer, nullable=False),
     Column("name", String, nullable=False, server_default="''"),
+    Column("backend_id", String, nullable=False, server_default="''"),
     Index("idx_jobs_parent", "parent_job_id"),
     Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
     Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
@@ -339,8 +340,10 @@ tasks_table = Table(
     Column("container_id", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
+    Column("backend_id", String, nullable=False, server_default="''"),
     UniqueConstraint("job_id", "task_index", name="tasks_job_id_task_index_key"),
     Index("idx_tasks_job_state", "job_id", "state"),
+    Index("idx_tasks_backend_state", "backend_id", "state"),
     Index(
         "idx_tasks_pending",
         "state",
@@ -388,6 +391,7 @@ task_attempts_table = Table(
     Column("exit_code", Integer),
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
+    Column("backend_id", String, nullable=False, server_default="''"),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(
@@ -396,6 +400,19 @@ task_attempts_table = Table(
         sqlite_where=text("worker_id IS NOT NULL AND finished_at_ms IS NULL"),
     ),
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
+    Index("idx_task_attempts_backend", "backend_id"),
+)
+
+
+backends_table = Table(
+    "backends",
+    metadata,
+    Column("backend_id", String, primary_key=True),
+    Column("kind", String, nullable=False, server_default="''"),
+    Column("status", Integer, nullable=False, server_default="0"),
+    Column("attributes_json", String, nullable=False, server_default="'{}'"),
+    Column("allow_policy_json", String, nullable=False, server_default="'{}'"),
+    Column("last_seen_ms", Integer),
 )
 
 
