@@ -4,15 +4,15 @@
 """Tests for worker bootstrap script generation."""
 
 import pytest
-from iris.cluster.backends.gcp.bootstrap import (
+from iris.cluster.config import GcpPlatformConfig, WorkerConfig
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.worker_bootstrap import (
     build_worker_bootstrap_script,
     render_template,
     rewrite_ghcr_to_ar_remote,
     zone_to_multi_region,
 )
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.config import GcpPlatformConfig, WorkerConfig
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
 
 

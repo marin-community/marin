@@ -15,15 +15,6 @@ import threading
 import time
 
 import pytest
-from iris.cluster.backends.k8s.controller import (
-    _CONTROLLER_CPU_REQUEST,
-    _CONTROLLER_MEMORY_REQUEST,
-    _CONTROLLER_STATE_PVC_NAME,
-    _CONTROLLER_STATE_PVC_SIZE,
-    K8sControllerProvider,
-)
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.backends.types import (
     InfraError,
     Labels,
@@ -39,6 +30,15 @@ from iris.cluster.config import (
     ScaleGroupConfig,
     SliceConfig,
     StorageConfig,
+)
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.setup.k8s.controller import (
+    _CONTROLLER_CPU_REQUEST,
+    _CONTROLLER_MEMORY_REQUEST,
+    _CONTROLLER_STATE_PVC_NAME,
+    _CONTROLLER_STATE_PVC_SIZE,
+    K8sControllerProvider,
 )
 
 

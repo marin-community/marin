@@ -25,15 +25,6 @@ from typing import ClassVar
 from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
-from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.backends.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
-from iris.cluster.backends.k8s.service import K8sService
-from iris.cluster.backends.k8s.types import (
-    K8sResource,
-    KubectlError,
-    parse_k8s_quantity,
-    parse_k8s_timestamp,
-)
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
@@ -48,6 +39,18 @@ from iris.cluster.controller.backend import (
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
+from iris.cluster.platforms.k8s.service import K8sService
+from iris.cluster.platforms.k8s.types import (
+    IRIS_PRIORITY_CLASS_BATCH,
+    IRIS_PRIORITY_CLASS_INTERACTIVE,
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+    K8sResource,
+    KubectlError,
+    parse_k8s_quantity,
+    parse_k8s_timestamp,
+)
 from iris.cluster.runtime.env import (
     VENV_PATH,
     build_common_iris_env,
@@ -167,13 +170,6 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, tuple[str, bool]] = {
     "leafgroup": (CW_LABEL_LEAFGROUP, False),
     "nvlink.domain": (CW_LABEL_NVLINK_DOMAIN, True),
 }
-
-# Default PriorityClass names Iris creates at controller startup and uses when
-# the cluster config does not override priority_class_names. Override via
-# kubernetes_provider.priority_classes.
-IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
-IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
-IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
 
 _DEFAULT_PRIORITY_CLASS_NAMES: dict[int, str] = {
     job_pb2.PRIORITY_BAND_PRODUCTION: IRIS_PRIORITY_CLASS_PRODUCTION,

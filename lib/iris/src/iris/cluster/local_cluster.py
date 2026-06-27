@@ -24,11 +24,8 @@ from finelog.client.log_client import Table
 from rigging.credential_store import CredentialRecord, save_credentials
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import find_free_port
-from iris.cluster.backends.vm_lifecycle import ControllerStatus
 from iris.cluster.config import (
     GcpPlatformConfig,
     IrisClusterConfig,
@@ -52,7 +49,10 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.setup.vm_lifecycle import ControllerStatus
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer

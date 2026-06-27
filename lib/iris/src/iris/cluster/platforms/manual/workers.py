@@ -1,24 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ManualWorkerProvider and ManualControllerProvider for pre-existing hosts.
+"""ManualWorkerProvider for pre-existing hosts.
 
-Implements WorkerInfraProvider and ControllerProvider for manually managed
-hosts. Hosts are drawn from a configured pool and returned on slice
-termination. Remote execution uses DirectSshRemoteExec (raw ssh, no gcloud).
+Implements WorkerInfraProvider for manually managed hosts. Hosts are drawn from
+a configured pool and returned on slice termination. Remote execution uses
+DirectSshRemoteExec (raw ssh, no gcloud).
 """
 
 import logging
 import threading
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends._worker_base import RemoteExecWorkerBase
-from iris.cluster.backends.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.backends.remote_exec import DirectSshRemoteExec
 from iris.cluster.backends.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -27,15 +23,9 @@ from iris.cluster.backends.types import (
     ListedSlice,
     SliceStatus,
     WorkerStatus,
-    default_stop_all,
     generate_slice_suffix,
 )
-from iris.cluster.backends.vm_lifecycle import restart_controller as vm_restart_controller
-from iris.cluster.backends.vm_lifecycle import start_controller as vm_start_controller
-from iris.cluster.backends.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.config import (
-    ControllerVmConfig,
-    IrisClusterConfig,
     ManualSliceConfig,
     ManualVmConfig,
     SliceConfig,
@@ -43,6 +33,9 @@ from iris.cluster.config import (
     VmConfig,
     WorkerConfig,
 )
+from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
+from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
+from iris.cluster.platforms.remote_exec import DirectSshRemoteExec
 from iris.cluster.worker.env_probe import construct_worker_id
 
 logger = logging.getLogger(__name__)
@@ -437,78 +430,6 @@ class ManualWorkerProvider:
             if host in self._all_hosts:
                 self._available_hosts.add(host)
                 logger.debug("Host %s returned to pool", host)
-
-
-# ============================================================================
-# ManualControllerProvider
-# ============================================================================
-
-
-@dataclass
-class ManualControllerProvider:
-    """Controller lifecycle for manually managed hosts, wrapping a ManualWorkerProvider.
-
-    Implements ControllerProvider. Controller discovery uses the static host
-    from the ControllerVmConfig. Start/stop/restart use vm_lifecycle.py which
-    works uniformly across ManualWorkerProvider and GcpWorkerProvider.
-    """
-
-    worker_provider: ManualWorkerProvider
-
-    def discover_controller(self, controller_config: ControllerVmConfig) -> str:
-        manual = controller_config.manual
-        port = manual.port or 10000
-        return f"{manual.host}:{port}"
-
-    def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
-        address, _vm = vm_start_controller(
-            self.worker_provider,
-            config,
-            resolve_image=self.worker_provider.resolve_image,
-            fresh=fresh,
-        )
-        return address
-
-    def restart_controller(self, config: IrisClusterConfig) -> str:
-        address, _vm = vm_restart_controller(
-            self.worker_provider,
-            config,
-            resolve_image=self.worker_provider.resolve_image,
-        )
-        return address
-
-    def stop_controller(self, config: IrisClusterConfig) -> None:
-        vm_stop_controller(self.worker_provider, config)
-
-    def stop_all(
-        self,
-        config: IrisClusterConfig,
-        dry_run: bool = False,
-        label_prefix: str | None = None,
-    ) -> list[str]:
-        # label_prefix is accepted for protocol compatibility but not yet wired to
-        # list_all_slices filtering; the worker_provider always uses its own prefix.
-        return default_stop_all(
-            list_all_slices=self.worker_provider.list_all_slices,
-            stop_controller=lambda: self.stop_controller(config),
-            dry_run=dry_run,
-        )
-
-    def tunnel(
-        self,
-        address: str,
-        local_port: int | None = None,
-    ) -> AbstractContextManager[str]:
-        return nullcontext(address)
-
-    def resolve_image(self, image: str, zone: str | None = None) -> str:
-        return image
-
-    def debug_report(self) -> None:
-        pass
-
-    def shutdown(self) -> None:
-        self.worker_provider.shutdown()
 
 
 # ============================================================================

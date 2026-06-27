@@ -24,8 +24,8 @@ from iris.cli.connect import (
     rpc_client,
     rpc_client_for_ctx,
 )
-from iris.cluster.backends.k8s.controller import configure_client_s3
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.setup.k8s.controller import configure_client_s3
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 

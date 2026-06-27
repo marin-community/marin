@@ -10,9 +10,9 @@ drive cluster startup/shutdown.
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, validate_config
+from iris.cluster.local_cluster import LocalCluster
 
 
 @contextmanager

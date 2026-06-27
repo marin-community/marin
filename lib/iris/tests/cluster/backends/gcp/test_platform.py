@@ -13,24 +13,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.backends.gcp.controller import GcpControllerProvider
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.handles import (
-    GcpSliceHandle,
-    GcpVmSliceHandle,
-    _build_gce_resource_name,
-    _composite_slice_state,
-)
-from iris.cluster.backends.gcp.service import OperationStatus, TpuCreateRequest, VmCreateRequest
-from iris.cluster.backends.gcp.workers import (
-    GcpWorkerProvider,
-    _run_tpu_bootstrap,
-    _run_vm_slice_bootstrap,
-    _spawn_bootstrap_thread,
-    _validate_slice_config,
-)
-from iris.cluster.backends.manual.provider import ManualControllerProvider, ManualWorkerProvider
-from iris.cluster.backends.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.backends.types import (
     CloudSliceState,
     InfraError,
@@ -48,7 +30,26 @@ from iris.cluster.config import (
     VmConfig,
     WorkerConfig,
 )
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.handles import (
+    GcpSliceHandle,
+    GcpVmSliceHandle,
+    _build_gce_resource_name,
+    _composite_slice_state,
+)
+from iris.cluster.platforms.gcp.service import OperationStatus, TpuCreateRequest, VmCreateRequest
+from iris.cluster.platforms.gcp.workers import (
+    GcpWorkerProvider,
+    _run_tpu_bootstrap,
+    _run_vm_slice_bootstrap,
+    _spawn_bootstrap_thread,
+    _validate_slice_config,
+)
+from iris.cluster.platforms.manual.workers import ManualWorkerProvider
+from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.setup.gcp.controller import GcpControllerProvider
+from iris.cluster.setup.manual.controller import ManualControllerProvider
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
 from rigging.timing import Timestamp
@@ -247,12 +248,10 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
     ssh_proc.wait.return_value = 0
 
     with (
-        unittest.mock.patch("iris.cluster.backends.gcp.controller._check_gcloud_ssh_key"),
-        unittest.mock.patch("iris.cluster.backends.gcp.controller.find_free_port", return_value=10042),
-        unittest.mock.patch("iris.cluster.backends.gcp.controller.wait_for_port"),
-        unittest.mock.patch(
-            "iris.cluster.backends.gcp.controller.subprocess.Popen", return_value=ssh_proc
-        ) as popen_mock,
+        unittest.mock.patch("iris.cluster.setup.gcp.controller._check_gcloud_ssh_key"),
+        unittest.mock.patch("iris.cluster.setup.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.setup.gcp.controller.wait_for_port"),
+        unittest.mock.patch("iris.cluster.setup.gcp.controller.subprocess.Popen", return_value=ssh_proc) as popen_mock,
     ):
         with controller.tunnel("unused") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
@@ -634,7 +633,7 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
         cache_dir="/var/cache/iris",
     )
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers.threading.Thread"):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.threading.Thread"):
         platform.create_slice(cfg, worker_config=wc)
 
     assert wc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
@@ -860,7 +859,7 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
         cache_dir="/var/cache/iris",
     )
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers.threading.Thread"):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.threading.Thread"):
         platform.create_slice(cfg, worker_config=wc)
 
     # Verify the service's in-memory TPU has startup-script metadata with [iris-init] markers.
@@ -966,7 +965,7 @@ def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
     handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
 
     with unittest.mock.patch(
-        "iris.cluster.backends.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers._probe_worker_health",
         return_value=True,
     ):
         _run_vm_slice_bootstrap(
@@ -992,7 +991,7 @@ def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
     )
 
     with unittest.mock.patch(
-        "iris.cluster.backends.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers._probe_worker_health",
         return_value=False,
     ):
         _run_vm_slice_bootstrap(
@@ -1018,7 +1017,7 @@ def test_vm_bootstrap_serial_port_error_raises():
     )
 
     with unittest.mock.patch(
-        "iris.cluster.backends.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers._probe_worker_health",
         return_value=False,
     ):
         with pytest.raises(InfraError, match="bootstrap failed"):
@@ -1039,7 +1038,7 @@ def test_vm_bootstrap_phase2_has_independent_timeout():
     # Health probe never succeeds, serial port never shows complete.
     # With a very short bootstrap_timeout, this should fail with phase 2 message.
     with unittest.mock.patch(
-        "iris.cluster.backends.gcp.workers._probe_worker_health",
+        "iris.cluster.platforms.gcp.workers._probe_worker_health",
         return_value=False,
     ):
         with pytest.raises(InfraError, match=r"bootstrap did not complete within 0\.05s"):
@@ -1117,7 +1116,7 @@ def _make_tpu_slice_for_bootstrap(
         cache_dir="/var/cache/iris",
     )
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers.threading.Thread"):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.threading.Thread"):
         handle = platform.create_slice(cfg, worker_config=wc)
     assert isinstance(handle, GcpSliceHandle)
     return handle
@@ -1130,7 +1129,7 @@ def test_tpu_bootstrap_marks_ready_while_cloud_stuck_creating():
     handle = _make_tpu_slice_for_bootstrap(gcp_service)
     assert gcp_service.tpu_describe(handle.slice_id, handle.zone).state == "CREATING"
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers._probe_worker_health", return_value=True):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=True):
         _run_tpu_bootstrap(
             gcp_service,
             "test-project",
@@ -1162,7 +1161,7 @@ def test_tpu_bootstrap_fails_fast_on_create_operation_error(error_code, expected
         OperationStatus(done=True, error_code=error_code, error_message="boom"),
     )
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers._probe_worker_health", return_value=False):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=False):
         with pytest.raises(expected_exc):
             _run_tpu_bootstrap(
                 gcp_service,
@@ -1180,7 +1179,7 @@ def test_tpu_bootstrap_aborts_when_slice_enters_deleting():
     handle = _make_tpu_slice_for_bootstrap(gcp_service)
     gcp_service.advance_tpu_state(handle.slice_id, handle.zone, "DELETING")
 
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers._probe_worker_health", return_value=False):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers._probe_worker_health", return_value=False):
         with pytest.raises(InfraError):
             _run_tpu_bootstrap(
                 gcp_service,
@@ -1262,7 +1261,7 @@ def test_bootstrap_thread_captures_failure_reason(monkeypatch):
         def start(self):
             self._target()
 
-    monkeypatch.setattr("iris.cluster.backends.gcp.workers.threading.Thread", _SyncThread)
+    monkeypatch.setattr("iris.cluster.platforms.gcp.workers.threading.Thread", _SyncThread)
 
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     handle = _bootstrapping_tpu_handle(gcp_service)

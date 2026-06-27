@@ -28,10 +28,6 @@ from dataclasses import dataclass
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
-from iris.cluster.backends.gcp.bootstrap import (
-    build_controller_bootstrap_script_from_config,
-)
-from iris.cluster.backends.gcp.ssh import OS_LOGIN_METADATA
 from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.backends.types import (
     Labels,
@@ -40,6 +36,10 @@ from iris.cluster.backends.types import (
 )
 from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
 from iris.cluster.inject_env import with_injected_task_env
+from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
+from iris.cluster.setup.gcp.controller_bootstrap import (
+    build_controller_bootstrap_script_from_config,
+)
 
 logger = logging.getLogger(__name__)
 

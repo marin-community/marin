@@ -27,7 +27,7 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
-from iris.cluster.setup import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -664,7 +664,7 @@ class EnvironmentSpec:
     - ``setup_scripts`` set to a list runs those scripts verbatim before the
       command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
       image is used as-is). Build the default and tweak it via
-      ``iris.cluster.setup.default_setup_script``.
+      ``iris.cluster.setup_scripts.default_setup_script``.
 
     Whenever any setup runs (default or custom), iris appends its own
     ``iris_runtime_setup_script`` so cloudpickle/profiler support is always

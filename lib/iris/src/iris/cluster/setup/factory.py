@@ -5,14 +5,15 @@
 
 from dataclasses import dataclass
 
-from iris.cluster.backends.gcp.controller import GcpControllerProvider
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.backends.k8s.controller import K8sControllerProvider
-from iris.cluster.backends.manual.provider import ManualControllerProvider, ManualWorkerProvider
 from iris.cluster.backends.protocols import ControllerProvider, WorkerInfraProvider
 from iris.cluster.config import GcpPlatformConfig, IrisClusterConfig, PlatformConfig, SshConfig
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.manual.workers import ManualWorkerProvider
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.setup.gcp.controller import GcpControllerProvider
+from iris.cluster.setup.k8s.controller import K8sControllerProvider
+from iris.cluster.setup.manual.controller import ManualControllerProvider
 
 
 @dataclass

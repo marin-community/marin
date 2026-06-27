@@ -18,8 +18,6 @@ import logging
 
 from finelog.client.log_client import Table
 
-from iris.cluster.backends.factory import ProviderBundle, create_provider_bundle
-from iris.cluster.backends.k8s.service import CloudK8sService
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
@@ -30,6 +28,8 @@ from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
+from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.setup.factory import ProviderBundle, create_provider_bundle
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)

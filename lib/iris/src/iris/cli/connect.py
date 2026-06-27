@@ -16,9 +16,9 @@ from pathlib import Path
 import click
 from rigging.credentials import ClientCredentials
 
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IapAuthConfig, IrisClusterConfig
+from iris.cluster.local_cluster import LocalCluster
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
