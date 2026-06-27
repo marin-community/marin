@@ -36,9 +36,10 @@ from marin.execution.executor import executor_main
 REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 
 # v6e-8 is the parity-tested production path. Pin children to the east5
-# region, but not a zone: v6e capacity is not guaranteed in the v5p training
-# zone. The request set and checkpoints live in the regional us-east5 bucket.
-RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], disk="80g")
+# region and the v6e zone; otherwise nested Iris jobs inherit the east5-a parent
+# zone, where v6e-8 is unschedulable. The request set and checkpoints live in
+# the regional us-east5 bucket, so this remains region-local.
+RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
 
 
 @dataclass(frozen=True)
