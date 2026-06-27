@@ -24,11 +24,10 @@ import jmp
 import levanter
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.compat.hf_checkpoints import load_tokenizer as hf_load_tokenizer
 from levanter.data.loader import stack_tree
 from levanter.model_loading import load_hf_checkpoint
-from levanter.models.lm_model import LmExample
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -83,6 +82,24 @@ class OlmoBaseEvalOutput:
 def _bucket_length(length: int, max_length: int) -> int:
     bucketed = -(-length // FLASH_BLOCK) * FLASH_BLOCK  # round up to a multiple of FLASH_BLOCK
     return min(bucketed, max_length)
+
+
+def _model_config_from_checkpoint(checkpoint: str) -> LmConfig:
+    """Derive the Levanter model config from the checkpoint's ``model_type``.
+
+    Selects the Levanter config class by ``config.json``'s ``model_type`` instead
+    of ``HFCheckpointConverter.from_hf``, whose probe constructs every registered
+    config's converter and would try to load gated reference repos (e.g.
+    ``google/gemma-2b``) — which fails for non-Llama checkpoints when the matching
+    architecture is registered after a gated one.
+    """
+    with fsspec.open(f"{checkpoint.rstrip('/')}/config.json", "r") as handle:
+        model_type = json.load(handle)["model_type"]
+    choices = LmConfig.get_known_choices()
+    if model_type not in choices:
+        raise ValueError(f"unsupported model_type {model_type!r}; known: {sorted(choices)}")
+    converter = choices[model_type]().hf_checkpoint_converter()
+    return converter.config_from_hf_checkpoint(checkpoint)
 
 
 def _resolve_bos_token_id(hf_tokenizer, prepend_bos: bool | None) -> int | None:
@@ -263,8 +280,7 @@ def olmo_base_eval(config: OlmoBaseEvalConfig) -> None:
             raise ValueError(f"request set has tasks not in the Table 9 registry: {unknown}")
         logger.info("loaded %d tasks, %d instances", len(requests_by_task), sum(manifest.tasks.values()))
 
-        converter = HFCheckpointConverter.from_hf(checkpoint, trust_remote_code=False)
-        model_config = converter.config_from_hf_checkpoint(checkpoint)
+        model_config = _model_config_from_checkpoint(checkpoint)
         mp: jmp.Policy = config.trainer.mp
 
         with config.trainer.use_device_mesh():
