@@ -1,0 +1,181 @@
+<!doctype html>
+<!-- Copyright The Marin Authors / SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>buoy — wandb run viewer</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <style>
+    :root { font-family: system-ui, sans-serif; }
+    body { margin: 0; color: #1a1a1a; }
+    header { padding: .6em 1em; background: #0d3b66; color: #fff; display: flex; gap: .6em; align-items: center; flex-wrap: wrap; }
+    header h1 { font-size: 1.1em; margin: 0 1em 0 0; }
+    header input { padding: .3em; border: 0; border-radius: 3px; }
+    header button { padding: .35em .8em; border: 0; border-radius: 3px; background: #f4d35e; cursor: pointer; }
+    #status { padding: .5em 1em; color: #555; }
+    #meta { padding: .2em 1em; color: #333; }
+    .tabs { display: flex; gap: .5em; padding: 0 1em; border-bottom: 1px solid #ddd; }
+    .tab { padding: .5em 1em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; }
+    .tab.active { border-color: #ddd; border-radius: 4px 4px 0 0; background: #fafafa; font-weight: 600; }
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: .5em; padding: 1em; }
+    .chart { border: 1px solid #eee; border-radius: 4px; }
+    #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
+    .hidden { display: none; }
+    a { color: #0d3b66; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🛟 buoy</h1>
+    entity <input id="entity" size="16">
+    project <input id="project" size="12" value="marin_moe">
+    run <input id="run" size="60" placeholder="wandb run id">
+    <button id="load">load</button>
+  </header>
+  <div id="status"></div>
+  <div id="meta"></div>
+  <div class="tabs hidden" id="tabs">
+    <div class="tab active" data-pane="metrics-pane">metrics</div>
+    <div class="tab" data-pane="profile-pane">xprof profile</div>
+  </div>
+  <div id="metrics-pane"><div id="charts"></div></div>
+  <div id="profile-pane" class="hidden"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const DEFAULT_METRICS = [
+      "train/cross_entropy_loss", "train/loss", "optim/learning_rate",
+      "throughput/hook_time", "throughput/loading_time", "run_progress",
+    ];
+    const qs = (o) => new URLSearchParams(o).toString();
+    let current = null;          // { r, m } for the loaded run
+    let profileStarted = false;  // prepare the profile lazily, on first tab open
+
+    async function init() {
+      const d = await fetch("api/defaults").then((r) => r.json()).catch(() => ({}));
+      const p = new URLSearchParams(location.search);
+      $("entity").value = p.get("entity") || d.entity || "marin-community";
+      if (p.get("project")) $("project").value = p.get("project");
+      if (p.get("run")) { $("run").value = p.get("run"); load(); }
+    }
+
+    function refs() {
+      return { entity: $("entity").value.trim(), project: $("project").value.trim(), run: $("run").value.trim() };
+    }
+
+    function setTab(pane) {
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.pane === pane));
+      $("metrics-pane").classList.toggle("hidden", pane !== "metrics-pane");
+      $("profile-pane").classList.toggle("hidden", pane !== "profile-pane");
+      if (pane === "profile-pane" && current && current.m.profile && !profileStarted) {
+        profileStarted = true;
+        prepareProfile(current.r, $("profile-pane"));
+      }
+    }
+    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.pane)));
+
+    async function load() {
+      const r = refs();
+      if (!r.project || !r.run) { $("status").textContent = "enter a project and run id"; return; }
+      // Keep the SPA URL a shareable deep-link (the wrap frame stops xprof from clobbering it).
+      history.replaceState(null, "", "?" + qs(r));
+      $("charts").innerHTML = "";
+      $("meta").textContent = "";
+      $("tabs").classList.add("hidden");
+      profileStarted = false;
+      current = null;
+      $("status").textContent = "mirroring " + r.run + " … (first load of a large run can take ~1 min)";
+
+      await fetch("api/mirror", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run }),
+      });
+      poll(r);
+    }
+
+    async function poll(r) {
+      const s = await fetch("api/mirror_status?" + qs(r)).then((x) => x.json());
+      if (s.state === "running") { setTimeout(() => poll(r), 2000); return; }
+      if (s.state === "error") { $("status").textContent = "mirror failed: " + s.error; return; }
+      if (s.state === "absent") { $("status").textContent = "run not found"; return; }
+      render(r);
+    }
+
+    // Build the run header with textContent — display_name/url are user-controlled.
+    function renderMeta(m) {
+      const meta = $("meta");
+      meta.textContent = "";
+      const name = document.createElement("b");
+      name.textContent = m.display_name;
+      meta.appendChild(name);
+      meta.appendChild(document.createTextNode(
+        ` · state=${m.state} · ${m.history.rows} steps · ${m.history.columns.length} metrics · `));
+      const a = document.createElement("a");
+      a.textContent = "wandb ↗";
+      a.target = "_blank";
+      a.rel = "noopener";
+      if (/^https?:\/\//.test(m.url || "")) a.href = m.url;
+      meta.appendChild(a);
+    }
+
+    async function render(r) {
+      const m = await fetch("api/manifest?" + qs(r)).then((x) => x.json());
+      current = { r, m };
+      $("status").textContent = "";
+      renderMeta(m);
+      $("tabs").classList.remove("hidden");
+      setTab("metrics-pane");
+
+      const cols = new Set(m.history.columns);
+      const keys = DEFAULT_METRICS.filter((k) => cols.has(k));
+      const plotKeys = keys.length ? keys : m.history.columns.slice(0, 8);
+      const data = await fetch("api/metrics?" + qs({ ...r, keys: plotKeys.join(",") })).then((x) => x.json());
+      for (const key of plotKeys) drawChart(key, data.metrics[key] || []);
+
+      const pane = $("profile-pane");
+      pane.textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
+      pane.style.padding = "1em";
+    }
+
+    async function prepareProfile(r, pane) {
+      pane.textContent = "preparing profile (downloading + launching xprof)…";
+      await fetch("api/profile_prepare", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run }),
+      });
+      const poll = async () => {
+        const s = await fetch("api/profile_status?" + qs(r)).then((x) => x.json());
+        if (s.state === "ready") {
+          pane.textContent = "";
+          pane.style.padding = "0";
+          const f = document.createElement("iframe");
+          f.src = "wrap/" + [r.entity, r.project, r.run].map(encodeURIComponent).join("/");
+          pane.appendChild(f);
+          return;
+        }
+        if (s.state === "error") { pane.textContent = "profile failed: " + s.error; return; }
+        setTimeout(poll, 2000);
+      };
+      poll();
+    }
+
+    function drawChart(key, points) {
+      const div = document.createElement("div");
+      div.className = "chart";
+      $("charts").appendChild(div);
+      Plotly.newPlot(div, [{
+        x: points.map((p) => p.step), y: points.map((p) => p.value),
+        mode: "lines", line: { width: 1.5 }, name: key,
+      }], {
+        title: { text: key, font: { size: 13 } }, height: 280,
+        margin: { l: 48, r: 16, t: 34, b: 32 }, template: "plotly_white",
+      }, { displayModeBar: false, responsive: true });
+    }
+
+    $("load").addEventListener("click", load);
+    $("run").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+    init();
+  </script>
+</body>
+</html>
