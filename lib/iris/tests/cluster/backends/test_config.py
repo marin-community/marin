@@ -1959,6 +1959,25 @@ class TestBackendsConfig:
         with pytest.raises(ValueError, match="kind 'k8s' requires kubernetes_provider"):
             validate_config(config)
 
+    def test_backend_scale_group_names_injected(self, tmp_path: Path):
+        # A backend's scale groups must get their map key stamped onto `name`,
+        # exactly like top-level scale groups. Otherwise the worker registers
+        # under an empty scale group, which maps to DEFAULT_BACKEND_ID instead
+        # of the backend that owns it, and the backend never sees its workers.
+        config_path = tmp_path / "cluster.yaml"
+        config_path.write_text(
+            "name: c\n"
+            "backends:\n"
+            "  tpu:\n"
+            "    kind: worker_daemon\n"
+            "    worker_provider: {}\n"
+            "    scale_groups:\n"
+            "      sg-tpu:\n"
+            "        max_slices: 1\n"
+        )
+        config = load_config(config_path)
+        assert config.backends["tpu"].scale_groups["sg-tpu"].name == "sg-tpu"
+
     def test_single_cluster_synthesizes_one_default_backend(self):
         config = _config_with()  # no backends: — implicit single-backend form
         validate_config(config)

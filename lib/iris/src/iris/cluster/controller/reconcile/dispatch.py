@@ -315,6 +315,7 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
+        backend_id=backend_id,
     )
     running_tasks = [
         RunningTaskEntry(

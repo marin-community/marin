@@ -1108,15 +1108,29 @@ def _expand_multi_zone_groups(data: dict) -> None:
     _merge_zones_into_platform_gcp(data, all_expanded_zones)
 
 
-def _inject_scale_group_names(data: dict) -> None:
-    scale_groups = data.get("scale_groups")
+def _inject_scale_group_names_into(scale_groups: object) -> None:
     if not isinstance(scale_groups, dict):
         return
     for name, sg in scale_groups.items():
         if sg is None:
-            data["scale_groups"][name] = {"name": name}
+            scale_groups[name] = {"name": name}
         elif isinstance(sg, dict) and "name" not in sg:
             sg["name"] = name
+
+
+def _inject_scale_group_names(data: dict) -> None:
+    """Stamp each scale group's map key onto its ``name`` field.
+
+    Applies to the top-level ``scale_groups`` and to every backend's
+    ``scale_groups`` so a backend's workers register under the same scale-group
+    name the backend's routing is keyed by.
+    """
+    _inject_scale_group_names_into(data.get("scale_groups"))
+    backends = data.get("backends")
+    if isinstance(backends, dict):
+        for backend in backends.values():
+            if isinstance(backend, dict):
+                _inject_scale_group_names_into(backend.get("scale_groups"))
 
 
 def parse_config(data: dict) -> IrisClusterConfig:

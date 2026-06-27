@@ -1074,11 +1074,12 @@ def list_active_tasks(
     exclude_task_id: JobName | None = None,
     order_by_task_id: bool = False,
     limit: int | None = None,
+    backend_id: str | None = None,
 ) -> list[ActiveTaskRow]:
     """Return :class:`ActiveTaskRow` rows matching ``scope`` and ``states``.
 
     Exactly one scope field must be set. State filter is applied as an IN
-    predicate.
+    predicate. ``backend_id`` narrows to one backend's tasks (omit for all).
     """
     scope_set = sum(
         1 for x in (scope.job_id, scope.job_subtree, scope.worker_id, scope.worker_ids, scope.task_ids) if x is not None
@@ -1119,6 +1120,9 @@ def list_active_tasks(
 
     if exclude_task_id is not None:
         stmt = stmt.where(tasks_table.c.task_id != exclude_task_id)
+
+    if backend_id is not None:
+        stmt = stmt.where(tasks_table.c.backend_id == backend_id)
 
     stmt = stmt.where(tasks_table.c.state.in_(bindparam("active_states", expanding=True)))
     params["active_states"] = list(states_tuple)

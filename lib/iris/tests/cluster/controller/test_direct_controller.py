@@ -19,6 +19,7 @@ from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
+from iris.cluster.controller.writes import stamp_backend
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -177,6 +178,28 @@ def test_drain_redrives_assigned_null_worker(state):
     assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
     assert batch2.tasks_to_run[0].attempt_id == 0
     assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
+
+
+def test_drain_scopes_running_tasks_to_backend(state):
+    """A CLUSTER_VIEW backend's drain scopes ``running_tasks`` (the poll set) to
+    its own backend_id. Without it two K8s backends each poll the other's
+    running pods and, after the pod-not-found grace, mark them FAILED."""
+    [task_a] = submit_direct_job(state, "backend-a")
+    submit_direct_job(state, "backend-b")  # the other backend's task must not leak into a's poll set
+    with state._db.transaction() as cur:
+        stamp_backend(
+            cur,
+            [
+                (JobName.root("test-user", "backend-a"), "a"),
+                (JobName.root("test-user", "backend-b"), "b"),
+            ],
+        )
+
+    with state._db.transaction() as cur:
+        batch = dispatch.drain_for_dispatch(cur, cache=state._run_template_cache, backend_id="a")
+
+    assert [r.task_id for r in batch.tasks_to_run] == [task_a.to_wire()]
+    assert [e.task_id for e in batch.running_tasks] == [task_a]
 
 
 def test_drain_executing_goes_to_running_tasks(state):
