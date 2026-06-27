@@ -76,7 +76,7 @@ _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
 # hyperball — see the d=512 rmsadam ablation.
 _optimizer = dataclasses.replace(_optimizer, rmsnorm_to_adam=True)
 
-_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_seq{_SEQ}_sw2k_v4_2048_rmsadam_10T"
+_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS}_seq{_SEQ}_sw2k_v4_2048_muon_10T"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial,
@@ -111,6 +111,7 @@ step = ExecutorStep(
                 "stacked",
                 "logit_z_loss",
                 "rmsadam",
+                "muon",
                 "v4_2048",
                 "10T",
             ],

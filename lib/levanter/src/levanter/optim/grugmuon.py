@@ -221,14 +221,32 @@ def _grug_scale_with_muon(
                 mesh_shape_items = [(n, s) for n, s in mesh.shape.items() if s > 1]
                 if not mesh_shape_items:
                     return x
-                batch_shards = 1
-                for _, s in mesh_shape_items:
-                    batch_shards *= s
                 layers, expert_count, d, last = x.shape
                 merged = layers * expert_count
-                if merged % batch_shards != 0:
-                    return x
-                batch_axes = tuple(n for n, _ in mesh_shape_items)
+
+                # Pick the largest subset of batch mesh axes whose product divides
+                # `merged`. Using all of them maximises NS-sharding; if `merged`
+                # is not divisible by the full product (e.g. d=2560 MoE: merged
+                # = L*E = 26*256 = 6656 doesn't divide 1024 chips on v4-2048+
+                # rep=16), drop axes one at a time and replicate the NS work
+                # across the dropped axes rather than silently skipping NS.
+                best_axes: tuple[str, ...] = ()
+                best_shards = 0
+                for mask in range(1, 1 << len(mesh_shape_items)):
+                    subset = [mesh_shape_items[i] for i in range(len(mesh_shape_items)) if mask & (1 << i)]
+                    prod = 1
+                    for _, s in subset:
+                        prod *= s
+                    if merged % prod == 0 and prod > best_shards:
+                        best_axes = tuple(n for n, _ in subset)
+                        best_shards = prod
+                if not best_axes:
+                    raise ValueError(
+                        f"4D NS path: no subset of batch mesh axes {dict(mesh.shape)} "
+                        f"has a product that divides merged={merged} = layers={layers} "
+                        f"* experts={expert_count} for path {jax.tree_util.keystr(path)}."
+                    )
+                batch_axes = best_axes
 
                 # Detect whether this leaf is w_down (path attribute) so the
                 # intermediate 3D / 4D specs reflect the actual axis order.

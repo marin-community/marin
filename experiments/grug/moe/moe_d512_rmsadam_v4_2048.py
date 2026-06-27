@@ -54,8 +54,11 @@ _VARIANTS: tuple[tuple[int, int], ...] = (
     # Submitted earlier (kept here for documentation; commented so a re-run
     # won't duplicate iris tasks):
     # (2, 200),   ← bf16 baseline + fp32 + fp32+fp32NS variants already submitted
-    # (16, 200), (16, 1000)  ← from job 20260627-082159
-    (1024, 200),  # extreme DP regime: data=1, no FSDP within a replica
+    # (16, 200), (16, 1000)  ← from job 20260627-082159 — these silently skipped
+    #                          NS on the 4D MoE experts (merged=1536, full
+    #                          batch_shards=1024, 1536 % 1024 = 512 ≠ 0)
+    # (1024, 200)  ← submitted but would now fail-fast (no valid subset)
+    (16, 200),  # re-run with the grugmuon 4D NS subset-finder fix
 )
 
 steps: list[ExecutorStep] = []
@@ -63,7 +66,7 @@ for _replica_axis, _step_count in _VARIANTS:
     _tokens = float(_step_count * _BS * _SEQ)
     _optimizer = _heuristic.build_muonh_config(_BS, _tokens, _DIM, seq_len=_SEQ)
     _optimizer = dataclasses.replace(_optimizer, rmsnorm_to_adam=True)
-    _run_id = f"moe_d{_DIM}_rmsadam_rep{_replica_axis}_bs{_BS}_seq{_SEQ}_v4_2048_{_step_count}steps"
+    _run_id = f"moe_d{_DIM}_rmsadam_rep{_replica_axis}_bs{_BS}_seq{_SEQ}_v4_2048_muon_{_step_count}steps"
     steps.append(
         ExecutorStep(
             name=f"grug/{_run_id}",
@@ -92,6 +95,7 @@ for _replica_axis, _step_count in _VARIANTS:
                         "no_long_rope",
                         "stacked",
                         "rmsadam",
+                        "muon",
                         "v4_2048",
                         f"{_step_count}steps",
                     ],
