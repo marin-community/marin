@@ -248,6 +248,9 @@ def olmo_base_eval(config: OlmoBaseEvalConfig) -> None:
         raise NotImplementedError("native Levanter checkpoints are not yet supported; export to HF first")
 
     levanter.initialize(config)
+    # Parity eval: use full-precision matmuls so TPU fp32 reproduces the reference
+    # to ~1e-7 rather than the ~1e-4 of the default bf16x3-pass fp32 matmul.
+    jax.config.update("jax_default_matmul_precision", "highest")
     try:
         checkpoint = config.checkpoint_path
         tokenizer_source = config.tokenizer or checkpoint
@@ -313,12 +316,13 @@ def run_olmo_base_eval_on_pod(config: OlmoBaseEvalOnPodConfig) -> OlmoBaseEvalOu
 def olmo_base_eval_step(
     *,
     checkpoint: str | InputName,
-    request_set_dir: str,
+    request_set_dir: str | InputName,
     resource_config: ResourceConfig,
     checkpoint_is_hf: bool = True,
     tokenizer: str | None = None,
     per_device_batch_size: int = 4,
     max_eval_length: int = 8192,
+    dtype: str = "f32",  # fp32 + highest-precision matmuls reproduce the SC oracle to ~1e-7
     name: str | None = None,
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     wandb_tags=DEFAULT_WANDB_TAGS,
@@ -336,7 +340,7 @@ def olmo_base_eval_step(
                 name=name,
                 checkpoint_path=checkpoint,  # type: ignore[arg-type]
                 checkpoint_is_hf=checkpoint_is_hf,
-                request_set_dir=request_set_dir,
+                request_set_dir=request_set_dir,  # type: ignore[arg-type]
                 tokenizer=tokenizer,
                 max_eval_length=max_eval_length,
                 output_path=this_output_path(),
@@ -347,7 +351,7 @@ def olmo_base_eval_step(
                         JsonFileTrackerConfig(output_path=this_output_path()),
                     ),
                     per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
+                    mp=jmp.get_policy(dtype),
                 ),
             ),
             resources=resource_config,
