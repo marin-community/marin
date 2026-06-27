@@ -5,7 +5,6 @@
 
 import logging
 import time
-import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,7 +18,7 @@ from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
-from iris.cluster.client.endpoint_lease import EndpointLeaseRenewer
+from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -30,7 +29,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
-from iris.time_proto import duration_from_proto, duration_to_proto
+from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
@@ -107,17 +106,19 @@ class RemoteClusterClient:
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )
-        # Endpoint registry on its own service. RegisterEndpoint returns the
-        # granted lease; the renewer re-registers before it expires so the
-        # controller keeps serving the endpoint while the task runs.
-        self._endpoint_client = EndpointServiceClientSync(
-            address=controller_address,
-            timeout_ms=timeout_ms,
-            interceptors=interceptors,
-            accept_compression=IRIS_RPC_COMPRESSIONS,
-            send_compression=None,
+        # Endpoint registry on its own service. EndpointClient owns the RPC stub
+        # and the background lease renewal: register() keeps the endpoint alive
+        # until unregister()/close(), so the controller keeps serving it while
+        # the task runs.
+        self._endpoint_client = EndpointClient(
+            EndpointServiceClientSync(
+                address=controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
         )
-        self._endpoint_renewer = EndpointLeaseRenewer(self._endpoint_client.register_endpoint)
         # In-cluster clients resolve the finelog endpoint and write direct so
         # task-status pushes don't pile up on the controller's RPC thread pool;
         # external clients route through the controller, the only ingress they
@@ -390,38 +391,14 @@ class RemoteClusterClient:
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        endpoint_id = str(uuid.uuid4())
-        request = controller_pb2.Controller.RegisterEndpointRequest(
-            name=name,
-            address=address,
-            task_id=task_attempt.task_id.to_wire(),
-            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
-            metadata=metadata or {},
-            endpoint_id=endpoint_id,
-        )
-
-        def _call():
-            return self._endpoint_client.register_endpoint(request)
-
-        response = call_with_retry("register_endpoint", _call)
-        # Renew the lease in the background until unregister (or process exit).
-        self._endpoint_renewer.track(request, duration_from_proto(response.lease_duration))
-        self._endpoint_renewer.start()
-        return response.endpoint_id
+        return self._endpoint_client.register(name, address, task_attempt, metadata)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
-        self._endpoint_renewer.untrack(endpoint_id)
-        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        self._endpoint_client.unregister_endpoint(request)
+        self._endpoint_client.unregister(endpoint_id)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        def _call():
-            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
-            response = self._endpoint_client.list_endpoints(request, timeout_ms=10_000)
-            return list(response.endpoints)
-
-        return call_with_retry("list_endpoints", _call)
+        return self._endpoint_client.list_endpoints(prefix, exact=exact)
 
     def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
@@ -487,10 +464,9 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
-        self._endpoint_renewer.close()
+        self._endpoint_client.close()
         self._log_client.close()
         self._client.close()
-        self._endpoint_client.close()
 
     def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus:
         """Get status of a specific task within a job.

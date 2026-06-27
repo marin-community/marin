@@ -1,24 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Background renewal of leased service endpoints.
+"""Client for the leased service-endpoint registry.
 
-:class:`EndpointLeaseRenewer` re-registers each tracked endpoint at a fraction
-of its granted lease, on one daemon thread, so the controller keeps serving it.
-Untracking (on unregister) or process exit stops renewal, so a crashed task's
-endpoint expires on its own. :meth:`tick` renews every due lease and returns the
-wait until the next; :meth:`start` drives it on the thread, while tests call
-:meth:`tick` with an injected ``now``.
+:class:`EndpointClient` owns both the RPC stub and the background lease renewal,
+so callers never register an endpoint without keeping it alive: ``register``
+registers and starts renewing; ``unregister`` (or ``close``) stops renewing and
+deletes. :class:`EndpointLeaseRenewer` is the renewal engine ``EndpointClient``
+drives; a crashed task simply stops renewing and its lease expires.
 """
 
 import logging
 import threading
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
+from iris.cluster.types import TaskAttempt
 from iris.rpc import controller_pb2
+from iris.rpc.errors import call_with_retry
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
@@ -33,11 +36,115 @@ RETRY_MAXIMUM = Duration.from_minutes(5)
 # Cap on a single sleep so the loop revisits its state; track/untrack/close wake
 # it sooner.
 _MAX_WAIT = Duration.from_minutes(5)
+# Per-call deadline for ListEndpoints.
+_LIST_TIMEOUT_MS = 10_000
+# Short deadline for the best-effort unregisters on close() so an unreachable
+# controller can't stall shutdown; the lease expires on its own regardless.
+_CLOSE_TIMEOUT_MS = 5_000
 
 RegisterFn = Callable[
     [controller_pb2.Controller.RegisterEndpointRequest],
     controller_pb2.Controller.RegisterEndpointResponse,
 ]
+
+
+class EndpointStub(Protocol):
+    """The subset of ``EndpointServiceClientSync`` that :class:`EndpointClient` drives."""
+
+    def register_endpoint(
+        self,
+        request: controller_pb2.Controller.RegisterEndpointRequest,
+        *,
+        timeout_ms: int | None = ...,
+    ) -> controller_pb2.Controller.RegisterEndpointResponse: ...
+
+    def unregister_endpoint(
+        self,
+        request: controller_pb2.Controller.UnregisterEndpointRequest,
+        *,
+        timeout_ms: int | None = ...,
+    ) -> Any: ...
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest,
+        *,
+        timeout_ms: int | None = ...,
+    ) -> controller_pb2.Controller.ListEndpointsResponse: ...
+
+    def close(self) -> None: ...
+
+
+class EndpointClient:
+    """Registers service endpoints and keeps their leases renewed.
+
+    ``register`` registers an endpoint and starts renewing its lease on a daemon
+    thread; the lease is what keeps the controller serving the endpoint, so
+    registration without renewal is never exposed. ``close`` stops renewing and
+    best-effort unregisters everything still registered before disconnecting.
+    """
+
+    def __init__(self, stub: EndpointStub) -> None:
+        self._stub = stub
+        self._renewer = EndpointLeaseRenewer(stub.register_endpoint)
+        self._registered: set[str] = set()
+
+    def register(
+        self,
+        name: str,
+        address: str,
+        task_attempt: TaskAttempt,
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        """Register an endpoint and renew its lease until ``unregister`` or ``close``."""
+        endpoint_id = str(uuid.uuid4())
+        request = controller_pb2.Controller.RegisterEndpointRequest(
+            name=name,
+            address=address,
+            task_id=task_attempt.task_id.to_wire(),
+            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
+            metadata=metadata or {},
+            endpoint_id=endpoint_id,
+        )
+        response = call_with_retry("register_endpoint", lambda: self._stub.register_endpoint(request))
+        self._renewer.track(request, duration_from_proto(response.lease_duration))
+        self._renewer.start()
+        self._registered.add(response.endpoint_id)
+        return response.endpoint_id
+
+    def unregister(self, endpoint_id: str) -> None:
+        """Stop renewing ``endpoint_id`` and delete it. Idempotent."""
+        self._renewer.untrack(endpoint_id)
+        self._registered.discard(endpoint_id)
+        self._stub.unregister_endpoint(controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id))
+
+    def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
+        """List endpoints by name prefix (or exact name when ``exact`` is set)."""
+
+        def _call() -> list[controller_pb2.Controller.Endpoint]:
+            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
+            return list(self._stub.list_endpoints(request, timeout_ms=_LIST_TIMEOUT_MS).endpoints)
+
+        return call_with_retry("list_endpoints", _call)
+
+    def close(self) -> None:
+        """Stop renewing and best-effort unregister everything still registered.
+
+        Each delete uses a short deadline so an unreachable controller can't
+        stall shutdown; anything left registered expires once its lease lapses.
+        ``untrack`` waits out any in-flight renewal so the delete cannot be
+        undone by a renewal that was mid-RPC.
+        """
+        self._renewer.close()
+        for endpoint_id in list(self._registered):
+            self._renewer.untrack(endpoint_id)
+            request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
+            try:
+                self._stub.unregister_endpoint(request, timeout_ms=_CLOSE_TIMEOUT_MS)
+            except Exception as e:
+                logger.warning("Best-effort unregister of endpoint %s on close failed: %s", endpoint_id, e)
+        self._registered.clear()
+        self._stub.close()
 
 
 def renew_interval(lease: Duration) -> Duration:

@@ -1,16 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""EndpointLeaseRenewer: re-registers leased endpoints before they expire.
+"""EndpointClient + EndpointLeaseRenewer.
 
 The renewer is driven through its public surface: ``track`` registers a lease,
 ``tick(now=...)`` advances the schedule to a chosen instant, and the fake
 register records every renewal RPC, so the tests assert on observable renewals
-rather than internal scheduler state.
+rather than internal scheduler state. ``EndpointClient`` is exercised against a
+fake stub that records register/unregister RPCs.
 """
 
-from iris.cluster.client.endpoint_lease import EndpointLeaseRenewer, renew_interval
-from iris.rpc import controller_pb2
+from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
+from iris.cluster.types import JobName, TaskAttempt
+from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
@@ -115,3 +117,88 @@ def test_start_then_close_stops_the_renewer():
         lambda: not renewer.is_running, timeout=Duration.from_seconds(5)
     )
     assert stopped
+
+
+# --- EndpointClient ----------------------------------------------------------
+
+
+class _FakeStub:
+    """Records register/unregister RPCs and returns a configurable granted lease."""
+
+    def __init__(self, granted: Duration | None = None, unregister_raises: bool = False):
+        self.granted = granted
+        self.unregister_raises = unregister_raises
+        self.registered: list[controller_pb2.Controller.RegisterEndpointRequest] = []
+        self.unregistered: list[str] = []
+        self.closed = False
+
+    def register_endpoint(self, request, *, timeout_ms=None):
+        self.registered.append(request)
+        lease = self.granted if self.granted is not None else Duration.from_hours(72)
+        return controller_pb2.Controller.RegisterEndpointResponse(
+            endpoint_id=request.endpoint_id,
+            lease_duration=duration_to_proto(lease),
+        )
+
+    def unregister_endpoint(self, request, *, timeout_ms=None):
+        if self.unregister_raises:
+            raise RuntimeError("controller unavailable")
+        self.unregistered.append(request.endpoint_id)
+        return job_pb2.Empty()
+
+    def list_endpoints(self, request, *, timeout_ms=None):
+        return controller_pb2.Controller.ListEndpointsResponse()
+
+    def close(self):
+        self.closed = True
+
+
+def _attempt() -> TaskAttempt:
+    return TaskAttempt(task_id=JobName.from_wire("/u/j/0"), attempt_id=0)
+
+
+def test_register_returns_endpoint_id_and_registers():
+    stub = _FakeStub()
+    client = EndpointClient(stub)
+
+    endpoint_id = client.register("svc", "h:1", _attempt())
+
+    assert [r.endpoint_id for r in stub.registered] == [endpoint_id]
+    assert stub.registered[0].name == "svc"
+
+
+def test_close_unregisters_each_registered_endpoint():
+    stub = _FakeStub()
+    client = EndpointClient(stub)
+    first = client.register("a", "h:1", _attempt())
+    second = client.register("b", "h:2", _attempt())
+
+    client.close()
+
+    assert sorted(stub.unregistered) == sorted([first, second])
+    assert stub.closed
+
+
+def test_unregister_then_close_does_not_redelete():
+    stub = _FakeStub()
+    client = EndpointClient(stub)
+    endpoint_id = client.register("svc", "h:1", _attempt())
+
+    client.unregister(endpoint_id)
+    client.close()
+
+    # Unregistered exactly once: close() must not re-issue a delete for an
+    # endpoint already removed from the registry.
+    assert stub.unregistered == [endpoint_id]
+
+
+def test_close_is_best_effort_when_unregister_fails():
+    stub = _FakeStub(unregister_raises=True)
+    client = EndpointClient(stub)
+    client.register("svc", "h:1", _attempt())
+
+    # A failing delete must not abort shutdown; the stub is still closed and the
+    # lease is left to expire on its own.
+    client.close()
+
+    assert stub.closed
