@@ -49,14 +49,41 @@ def normalize_olmo_task_name(olmo_task_name: str) -> str | None:
     return base if base in set(scored_tasks()) else None
 
 
+def _gold_context_and_continuation(record: dict) -> tuple[str, str]:
+    """Return the (context, continuation) of the GOLD output for one record.
+
+    Mirrors how the OLMo-Eval provider scores BPB: it scores each
+    ``continuations[i]`` conditioned on ``continuation_prompts[i]`` (or the shared
+    ``context`` when there are no per-continuation prompts), and the BPB metric
+    selects the gold output. Two formatter shapes occur:
+
+    - PPL-formatted tasks (e.g. arc, squad, sciq) pre-select the gold into a
+      *single* continuation; ``gold_idx`` still holds the original choice index,
+      so the gold is ``continuations[0]`` (the metric's single-output path).
+    - Multiple-choice tasks list *all* choices, and the gold is ``continuations[gold_idx]``.
+    """
+    request = record["request"]
+    continuations = request.get("continuations")
+    if not continuations:
+        return request["context"], request["continuation"]
+    if len(continuations) == 1:
+        gold_idx = 0
+    else:
+        gold_idx = record.get("doc", {}).get("gold_idx")
+        if gold_idx is None:
+            gold_idx = 0
+    continuation_prompts = request.get("continuation_prompts")
+    context = continuation_prompts[gold_idx] if continuation_prompts else request["context"]
+    return context, continuations[gold_idx]
+
+
 def convert_olmo_requests(requests_dir: str) -> list[RequestInstance]:
     """Read OLMo-Eval ``*-requests.jsonl`` files into Table 9 request instances.
 
-    The scored gold continuation is the record's singular ``request.continuation``
-    (for MC tasks this is the gold choice; ``request.continuations`` lists every
-    choice and is not used). BPB scores one gold continuation per document, so a
-    repeated ``doc_id`` within a task indicates the task resolved to per-choice
-    accuracy requests instead of gold-only BPB, which is rejected.
+    The scored gold output is selected by ``gold_idx`` (see
+    ``_gold_context_and_continuation``). BPB scores one gold continuation per
+    document, so a repeated ``doc_id`` within a task indicates the task resolved
+    to per-choice accuracy requests instead of gold-only BPB, which is rejected.
     """
     instances: list[RequestInstance] = []
     skipped_tasks: set[str] = set()
@@ -80,15 +107,8 @@ def convert_olmo_requests(requests_dir: str) -> list[RequestInstance]:
                         "resolved to per-choice accuracy requests rather than gold-only BPB"
                     )
                 seen.add(key)
-                request = record["request"]
-                instances.append(
-                    RequestInstance(
-                        task=task,
-                        doc_id=key[1],
-                        context=request["context"],
-                        continuation=request["continuation"],
-                    )
-                )
+                context, continuation = _gold_context_and_continuation(record)
+                instances.append(RequestInstance(task=task, doc_id=key[1], context=context, continuation=continuation))
     if skipped_tasks:
         logger.info("skipped %d non-Table9 task ids: %s", len(skipped_tasks), sorted(skipped_tasks)[:20])
     return instances

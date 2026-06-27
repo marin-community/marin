@@ -94,26 +94,70 @@ def test_convert_olmo_requests_extracts_gold_and_skips_unknown(tmp_path):
     assert [(i.task, i.doc_id, i.continuation) for i in instances] == [("arc_easy", 0, " yes")]
 
 
-def test_convert_olmo_requests_uses_singular_gold_for_multichoice(tmp_path):
-    # piqa-style: continuations lists both choices; the singular continuation is
-    # the gold (here the second choice). Only the gold is scored.
+def test_convert_olmo_requests_selects_gold_by_index_not_first_continuation(tmp_path):
+    # MC task whose gold is choice 1 (not 0). The singular request.continuation is
+    # only continuations[0]; the converter must select continuations[gold_idx].
     requests_dir = tmp_path / "requests" / "mock"
     _write_olmo_requests(
-        requests_dir / "piqa-requests.jsonl",
+        requests_dir / "socialiqa-requests.jsonl",
         [
             {
-                "task_name": "piqa:olmo3base:bpb",
+                "task_name": "socialiqa:bpb:olmo3base",
                 "doc_id": 0,
+                "doc": {"gold_idx": 1},
                 "request": {
-                    "context": "Goal\nAnswer:",
-                    "continuation": " gold two",
-                    "continuations": [" choice one", " gold two"],
+                    "context": "Q\nAnswer:",
+                    "continuation": " first choice",
+                    "continuations": [" first choice", " gold choice"],
                 },
             },
         ],
     )
     instances = convert_olmo_requests(str(tmp_path / "requests"))
-    assert [(i.task, i.continuation) for i in instances] == [("piqa", " gold two")]
+    assert [(i.task, i.context, i.continuation) for i in instances] == [("socialiqa", "Q\nAnswer:", " gold choice")]
+
+
+def test_convert_olmo_requests_single_continuation_ignores_gold_idx(tmp_path):
+    # PPL-formatted tasks pre-select the gold into one continuation while gold_idx
+    # keeps the original choice index; the gold is continuations[0], not [gold_idx].
+    requests_dir = tmp_path / "requests" / "mock"
+    _write_olmo_requests(
+        requests_dir / "arc_easy-requests.jsonl",
+        [
+            {
+                "task_name": "arc_easy:olmo3base:bpb",
+                "doc_id": 0,
+                "doc": {"gold_idx": 2},
+                "request": {"context": "Q\nAnswer:", "continuation": " gold", "continuations": [" gold"]},
+            },
+        ],
+    )
+    instances = convert_olmo_requests(str(tmp_path / "requests"))
+    assert [(i.task, i.continuation) for i in instances] == [("arc_easy", " gold")]
+
+
+def test_convert_olmo_requests_uses_continuation_prompts_for_gold_context(tmp_path):
+    # winogrande-style: per-choice prompts; the gold is scored conditioned on
+    # continuation_prompts[gold_idx], not the shared context.
+    requests_dir = tmp_path / "requests" / "mock"
+    _write_olmo_requests(
+        requests_dir / "winogrande-requests.jsonl",
+        [
+            {
+                "task_name": "winogrande:bpb:olmo3base",
+                "doc_id": 0,
+                "doc": {"gold_idx": 1},
+                "request": {
+                    "context": "shared\nAnswer:",
+                    "continuation": " c0",
+                    "continuations": [" c0", " c1"],
+                    "continuation_prompts": ["prompt for c0", "prompt for c1"],
+                },
+            },
+        ],
+    )
+    instances = convert_olmo_requests(str(tmp_path / "requests"))
+    assert [(i.context, i.continuation) for i in instances] == [("prompt for c1", " c1")]
 
 
 def test_convert_olmo_requests_rejects_duplicate_doc_id(tmp_path):

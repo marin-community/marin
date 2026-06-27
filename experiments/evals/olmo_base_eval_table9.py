@@ -25,7 +25,7 @@ from marin.execution import InputName
 from marin.execution.executor import executor_main
 
 # Frozen Table 9 request set (51 components / 104 scored tasks), prefix-relative.
-REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v1")
+REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
 
 # Parity checkpoint: has an SC oracle (per-task BPB in the 300m wide results).
 PARITY_CHECKPOINT = InputName.hardcoded(
