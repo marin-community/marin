@@ -50,7 +50,7 @@ def _permute_by_global_expert(
     selected_experts_local: Int[Array, "Tlocal K"],
     *,
     num_experts: int,
-) -> tuple[Float[Array, "Tlocal K H"], Int[Array, "Tlocal K"], Int[Array, "E"]]:
+) -> tuple[Float[Array, "TK H"], Int[Array, "TK"], Int[Array, "E"]]:
     topk = selected_experts_local.shape[1]
     flat_selected = selected_experts_local.reshape(-1)
     sorted_indices = jnp.argsort(flat_selected)
@@ -61,8 +61,8 @@ def _permute_by_global_expert(
 
 
 def _unpermute_from_global_expert(
-    intermediate: Float[Array, "T K H"],
-    sorted_indices: Int[Array, "T K"],
+    intermediate: Float[Array, "TK H"],
+    sorted_indices: Int[Array, "TK"],
     combine_weights_local: Float[Array, "Tlocal K"],
     *,
     tokens_per_shard: int,

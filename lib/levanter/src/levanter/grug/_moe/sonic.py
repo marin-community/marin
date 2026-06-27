@@ -166,7 +166,7 @@ def _sonic_kernel_config(hidden_dim: int) -> tuple[int, int, int]:
     return block_h, block_k, num_warps
 
 
-def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "T"]:
+def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "T+1"]:
     return jnp.arange(0, tokens * topk + 1, topk, dtype=jnp.int32)
 
 
@@ -174,7 +174,7 @@ def _sonic_gather_sum_impl(
     dispatch_output: Float[Array, "M H"],
     weights_flat: Float[Array, "M"],
     positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "T"],
+    offsets: Int[Array, "T+1"],
     *,
     tokens: int,
     topk: int,
@@ -212,7 +212,7 @@ def _sonic_gather_sum_bwd_impl(
     dispatch_output: Float[Array, "M H"],
     weights_flat: Float[Array, "M"],
     positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "T"],
+    offsets: Int[Array, "T+1"],
     *,
     tokens: int,
     topk: int,
