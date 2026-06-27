@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """buoy POC — a single-file prototype that validates the buoy design end to end.
 
 This is NOT the real service. It cuts every corner that doesn't affect the design
@@ -27,10 +30,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -41,6 +46,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import uvicorn
 import wandb
+from iris.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
 from plotly.io import to_html
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -62,6 +69,7 @@ PLOT_METRICS = [
 
 
 # --------------------------------------------------------------------------- mirror
+
 
 def run_key(entity: str, project: str, run_id: str) -> str:
     return f"{entity}/{project}/{run_id}"
@@ -116,7 +124,7 @@ def mirror_run(entity: str, project: str, run_id: str, *, refresh: bool = False)
             history_source = "exports"
             for p in res.paths:
                 rows.extend(pq.read_table(p).to_pylist())
-    except Exception:  # noqa: BLE001 - POC: any export issue just falls through to scan
+    except Exception:
         pass
     if not rows:
         rows = list(run.scan_history())
@@ -153,6 +161,7 @@ def mirror_run(entity: str, project: str, run_id: str, *, refresh: bool = False)
 
 # ----------------------------------------------------------------------------- xprof
 
+
 @dataclass
 class _Xprof:
     proc: subprocess.Popen
@@ -174,7 +183,8 @@ class XprofManager:
         port = _free_port()
         proc = subprocess.Popen(
             [XPROF_BIN, "--logdir", logdir, "--port", str(port)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         self.procs[key] = _Xprof(proc, port, time.time())
         _wait_port(port)
@@ -203,6 +213,7 @@ XPROF = XprofManager()
 
 
 # ------------------------------------------------------------------------------ app
+
 
 def _plots_html(root: str, manifest: dict) -> str:
     hist = pq.read_table(os.path.join(root, "history.parquet")).to_pandas()
@@ -241,15 +252,47 @@ async def index(request: Request) -> HTMLResponse:
     plots = _plots_html(root, manifest)
     prof_html = "<p><i>no jax_profile artifact on this run</i></p>"
     if manifest.get("profile"):
-        src = f"/xprof/{e}/{p}/{r}/data/plugin/profile/"
+        # Point at the wrapper frame, not xprof directly. xprof is a TensorBoard
+        # plugin that writes its UI state into window.parent's history/location;
+        # the wrapper absorbs those writes one level down so they don't clobber
+        # this shell's ?entity&project&run query. Relative (no leading slash) so
+        # it resolves under whatever prefix the page is served at.
+        src = f"wrap/{e}/{p}/{r}"
         prof_html = f'<iframe src="{src}" style="width:100%;height:80vh;border:1px solid #ccc"></iframe>'
-    return HTMLResponse(f"""
+    return HTMLResponse(
+        f"""
     <h1>buoy POC — {manifest['display_name']}</h1>{form}
     <p>state=<b>{manifest['state']}</b> · history_source=<b>{manifest['history_source']}</b> ·
        {len(manifest['metric_keys'])} metrics · <a href="{manifest['url']}">wandb</a></p>
     <h2>metrics</h2>{plots}
     <h2>xprof profile</h2>{prof_html}
-    """)
+    """
+    )
+
+
+async def xprof_wrap(request: Request) -> HTMLResponse:
+    """Intermediate same-origin frame that hosts the real xprof iframe.
+
+    xprof embeds itself as a TensorBoard plugin: it writes its run/tag/host
+    selection into ``window.parent.history`` and reads ``window.parent.location``
+    for deep-linking. With xprof iframed directly into the buoy shell, those
+    writes overwrite the shell's ?entity&project&run query. Interposing this
+    wrapper makes xprof's parent THIS throwaway frame instead — the writes still
+    succeed (same origin, so xprof's own state read-back keeps working) but are
+    harmlessly absorbed here. The inner src is derived from this frame's own path
+    so it works behind any proxy prefix.
+    """
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset=utf-8>"
+        "<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style>"
+        "</head><body><script>"
+        "var p=location.pathname.replace('/wrap/','/xprof/');"
+        "if(!p.endsWith('/'))p+='/';"
+        "var f=document.createElement('iframe');"
+        "f.src=p+'data/plugin/profile/';"
+        "document.body.appendChild(f);"
+        "</script></body></html>"
+    )
 
 
 async def xprof_proxy(request: Request) -> Response:
@@ -264,26 +307,111 @@ async def xprof_proxy(request: Request) -> Response:
         return Response("run has no profile", status_code=409)
     port = await asyncio.to_thread(XPROF.ensure, run_key(e, p, r), manifest["profile"]["logdir"])
     url = "/" + sub + (("?" + request.url.query) if request.url.query else "")
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+    # xprof computes profile views lazily; the first request for a tag (e.g.
+    # overview_page) on a large logdir can take tens of seconds, so give it room.
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=120.0) as client:
         upstream = await client.get(url)
     drop = {"content-encoding", "content-length", "transfer-encoding"}
     headers = {k: v for k, v in upstream.headers.items() if k.lower() not in drop}
-    return Response(upstream.content, status_code=upstream.status_code, headers=headers,
-                    media_type=upstream.headers.get("content-type"))
+    return Response(
+        upstream.content,
+        status_code=upstream.status_code,
+        headers=headers,
+        media_type=upstream.headers.get("content-type"),
+    )
 
 
 async def api_mirror(request: Request) -> JSONResponse:
     body = await request.json()
-    m = await asyncio.to_thread(mirror_run, body["entity"], body["project"], body["run_id"],
-                                refresh=body.get("refresh", False))
+    m = await asyncio.to_thread(
+        mirror_run, body["entity"], body["project"], body["run_id"], refresh=body.get("refresh", False)
+    )
     return JSONResponse(m)
 
 
-app = Starlette(routes=[
-    Route("/", index),
-    Route("/api/mirror", api_mirror, methods=["POST"]),
-    Route("/xprof/{entity}/{project}/{run_id}/{sub:path}", xprof_proxy),
-])
+def build_app() -> Starlette:
+    return Starlette(
+        routes=[
+            Route("/", index),
+            Route("/api/mirror", api_mirror, methods=["POST"]),
+            Route("/wrap/{entity}/{project}/{run_id}", xprof_wrap),
+            Route("/xprof/{entity}/{project}/{run_id}/{sub:path}", xprof_proxy),
+        ]
+    )
+
+
+app = build_app()
+
+
+# ------------------------------------------------------------------------- iris job
+
+
+def _install_xprof() -> str:
+    """Install xprof into a scratch venv at container startup; return its bin path.
+
+    xprof drags in heavy, version-pinned deps (tensorboard, etc.) that would fight
+    the marin workspace env, so it lives in its own venv — the same split the POC
+    README uses locally.
+    """
+    # /tmp is mounted noexec in the Iris task container, so the xprof binary must
+    # live on an exec-allowed mount. The workdir (where /app/.venv already runs)
+    # qualifies; fall back to /tmp for local runs where cwd may be read-only.
+    venv = os.path.join(os.getcwd(), ".xprof-venv")
+    uv = shutil.which("uv") or "uv"
+    subprocess.run([uv, "venv", venv, "--python", "3.11"], check=True)
+    subprocess.run([uv, "pip", "install", "--python", f"{venv}/bin/python", "xprof"], check=True)
+    return f"{venv}/bin/xprof"
+
+
+def serve_buoy_in_job(endpoint_name: str = "/serve/buoy") -> None:
+    """Iris job entrypoint: install xprof, serve the app on the allocated port,
+    register the endpoint with the controller, and block.
+
+    Reachable through the controller proxy at /proxy/<endpoint, '/'->'.'>/.
+    """
+    global XPROF_BIN
+    logging.basicConfig(level=logging.INFO, format="[buoy] %(message)s")
+    log = logging.getLogger("buoy")
+
+    if not os.environ.get("WANDB_API_KEY"):
+        raise RuntimeError("WANDB_API_KEY was not injected into the buoy job")
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("serve_buoy_in_job must run inside an Iris job")
+    ctx = iris_ctx()
+    port = ctx.get_port("http")
+    advertise_host = job_info.advertise_host
+
+    if not XPROF_BIN:
+        log.info("installing xprof into a scratch venv (one-time, pulls deps)…")
+        XPROF_BIN = _install_xprof()
+    log.info("xprof binary at %s", XPROF_BIN)
+
+    # Serve on the advertised interface (the address the controller proxy connects
+    # to), in a background thread so we can register once it is actually listening.
+    server = uvicorn.Server(uvicorn.Config(build_app(), host=advertise_host, port=port, log_level="info"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        with socket.socket() as s:
+            if s.connect_ex((advertise_host, port)) == 0:
+                break
+        time.sleep(0.2)
+    else:
+        raise RuntimeError(f"buoy app did not bind on {advertise_host}:{port}")
+
+    address = f"http://{advertise_host}:{port}"
+    endpoint_id = ctx.registry.register(endpoint_name, address, {"kind": "buoy-poc"})
+    log.info("registered buoy endpoint name=%s address=%s id=%s", endpoint_name, address, endpoint_id)
+    try:
+        thread.join()
+    finally:
+        try:
+            ctx.registry.unregister(endpoint_id)
+        except Exception:
+            log.warning("failed to unregister buoy endpoint id=%s", endpoint_id, exc_info=True)
 
 
 if __name__ == "__main__":
