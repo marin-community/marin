@@ -367,6 +367,10 @@ message Controller {
 
   message RegisterEndpointResponse {
     string endpoint_id = 1;
+    // Lease granted for this endpoint. The registrant re-registers (renews)
+    // before this elapses; an unrenewed endpoint expires and is GC'd. Unset
+    // on the legacy ControllerService surface, which does not lease-renew.
+    iris.time.Duration lease_duration = 2;
   }
 
   message UnregisterEndpointRequest {
@@ -630,4 +634,21 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
+}
+
+// Service-discovery endpoint registry, leased.
+//
+// Registration grants a time-bounded lease; the registrant renews by
+// re-registering with the same endpoint_id before the lease elapses, and an
+// unrenewed endpoint expires (stops being served and is GC'd) independent of
+// the owning task's row lifetime. RegisterEndpoint returns the granted
+// lease_duration so the client can pace its renewals off the server's policy.
+//
+// The ControllerService.{RegisterEndpoint,UnregisterEndpoint,ListEndpoints}
+// RPCs forward here so clients that call the old surface keep working; clients
+// that want to renew call this service directly to learn their lease.
+service EndpointService {
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 }

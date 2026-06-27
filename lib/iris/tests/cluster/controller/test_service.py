@@ -21,6 +21,7 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -880,6 +881,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -909,6 +911,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1549,6 +1552,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1584,6 +1588,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))

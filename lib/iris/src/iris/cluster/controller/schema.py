@@ -455,6 +455,12 @@ endpoints_table = Table(
     Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
     Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
+    # Lease expiry. Registration grants a lease; re-registering renews it. A row
+    # past its deadline is hidden from reads and swept by the pruner, independent
+    # of the FK CASCADE. Nullable so it can be added to an existing DB without a
+    # backfill; a NULL deadline is treated as never-expiring until the registrant
+    # next re-registers with a real lease.
+    Column("lease_deadline_ms", TimestampMsType, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),

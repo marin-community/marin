@@ -17,6 +17,7 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
     resource_value,
 )
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -295,6 +296,7 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
 

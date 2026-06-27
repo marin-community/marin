@@ -30,6 +30,7 @@ from iris.cluster.controller.dashboard import (
     requires_auth,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -90,6 +91,7 @@ def service(state, tmp_path, log_client):
         health=WorkerHealthTracker(),
         endpoints=EndpointsProjection(state._db),
         worker_attrs=WorkerAttrsProjection(state._db),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=EndpointsProjection(state._db)),
     )
 
 
