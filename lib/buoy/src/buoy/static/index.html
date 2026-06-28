@@ -27,7 +27,7 @@
 </head>
 <body>
   <header>
-    <h1>🧭 buoy</h1>
+    <h1>buoy</h1>
     entity <input id="entity" list="entity-list" size="15" autocomplete="off">
     <datalist id="entity-list"></datalist>
     project <input id="project" list="project-list" size="13" autocomplete="off">
@@ -61,7 +61,7 @@
 
     // wandb run state -> status glyph, shown as a prefix in the run datalist.
     const STATE_ICON = {
-      running: "🟢", finished: "✅", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡",
+      running: "🟢", finished: "🏁", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡",
     };
     const ICONS = Object.values(STATE_ICON).concat("⚪");
     const stateIcon = (s) => STATE_ICON[s] || "⚪";
