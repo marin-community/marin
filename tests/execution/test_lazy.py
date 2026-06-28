@@ -13,8 +13,8 @@ from dataclasses import dataclass
 
 import pytest
 from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact, ArtifactTypeMismatchError, Checkpoint, JsonArtifact
-from marin.execution.lazy import OUT, Lazy, Recipe, RunContext, apply, lower, materialized_config, resolve, run
+from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
+from marin.execution.lazy import OUT, Lazy, Recipe, RunContext, apply, materialized_config, run
 from marin.execution.remote import remote
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -35,14 +35,14 @@ class TrainCfg:
     steps: int
 
 
-class Tokens(JsonArtifact):
+class Tokens(Artifact):
     out: str
     source: str
     tokenizer: str
     kind: str = "tokens"
 
 
-class Ckpt(JsonArtifact):
+class Ckpt(Artifact):
     out: str
     data: str
     lr: float
@@ -77,7 +77,7 @@ def dclm_1b(*, lr: float = 3e-3) -> Lazy[Ckpt]:
     data = dclm_tokens()
     return Lazy(
         name="checkpoints/dclm_1b",
-        version="v3",
+        version="2026.06.28",
         result_type=Ckpt,
         recipe=Recipe(
             fn=_make_ckpt,
@@ -97,7 +97,7 @@ def test_explicit_version_paths_and_cross_step_resolution():
 
     # Explicit name@version addressing, no hash.
     assert tokens_cfg.out == "gs://marin-spike/datasets/dclm_tokens/2026.06.25"
-    assert train_cfg.out == "gs://marin-spike/checkpoints/dclm_1b/v3"
+    assert train_cfg.out == "gs://marin-spike/checkpoints/dclm_1b/2026.06.28"
     # The hard part: the consumer's config resolves to the producer's output path.
     assert train_cfg.data == tokens_cfg.out
 
@@ -127,7 +127,7 @@ def test_dep_version_bump_changes_consumer_fingerprint():
         )
         return Lazy(
             name="checkpoints/dclm_1b",
-            version="v3",
+            version="2026.06.28",
             result_type=Ckpt,
             recipe=Recipe(
                 fn=_make_ckpt,
@@ -156,11 +156,11 @@ def test_resources_do_not_affect_identity():
     """Compute rides with the fn (``remote(fn, resources=…)``), never the config or the
     graph node, so changing the TPU a step runs on must not change its fingerprint."""
 
-    def on(resources: ResourceConfig) -> Lazy[Checkpoint]:
+    def on(resources: ResourceConfig) -> Lazy[Artifact]:
         return Lazy(
             name="checkpoints/dclm_1b",
-            version="v3",
-            result_type=Checkpoint,
+            version="2026.06.28",
+            result_type=Artifact,
             recipe=Recipe(
                 fn=remote(_make_ckpt, resources=resources),
                 build_config=lambda ctx: TrainCfg(out=ctx.out, data="gs://d", lr=3e-3, steps=10),
@@ -174,11 +174,11 @@ def test_run_arg_is_live_at_run_but_not_in_identity():
     """A run-arg is declared on the recipe and pulled via ``ctx.run_arg()``: it reaches the
     config at run time but is a ``<key>`` placeholder at fingerprint time."""
 
-    def on(tpu: str) -> Lazy[Checkpoint]:
+    def on(tpu: str) -> Lazy[Artifact]:
         return Lazy(
             name="checkpoints/dclm_1b",
-            version="v3",
-            result_type=Checkpoint,
+            version="2026.06.28",
+            result_type=Artifact,
             recipe=Recipe(
                 fn=_make_ckpt,
                 build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
@@ -195,8 +195,8 @@ def test_run_arg_is_live_at_run_but_not_in_identity():
 def test_pulling_an_undeclared_run_arg_fails_loudly():
     art = Lazy(
         name="checkpoints/dclm_1b",
-        version="v3",
-        result_type=Checkpoint,
+        version="2026.06.28",
+        result_type=Artifact,
         recipe=Recipe(
             fn=_make_ckpt,
             build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
@@ -214,38 +214,22 @@ def test_malformed_name_is_rejected(bad):
     with pytest.raises(ValueError):
         Lazy(
             name=bad,
-            version="v1",
+            version="2026.06.28",
             result_type=Artifact,
             recipe=Recipe(fn=lambda c: None, build_config=lambda ctx: None),
         )
 
 
-def test_malformed_version_is_rejected():
+@pytest.mark.parametrize("bad", ["", "v1", "llama3", "20260628", "2026-06-28"])
+def test_malformed_version_is_rejected(bad):
+    """A version must be a calendar version ``YYYY.MM.DD[.N]`` or ``dev``/``<label>-dev``."""
     with pytest.raises(ValueError):
         Lazy(
             name="ok",
-            version="",
+            version=bad,
             result_type=Artifact,
             recipe=Recipe(fn=lambda c: None, build_config=lambda ctx: None),
         )
-
-
-# --- lower-time guards ---------------------------------------------------------
-
-
-def test_json_artifact_with_remote_fn_is_rejected_at_lower():
-    """A value artifact must run inline — a Fray job returns nothing to the caller."""
-    handle = Lazy(
-        name="datasets/dclm_tokens",
-        version="v1",
-        result_type=Tokens,
-        recipe=Recipe(
-            fn=remote(_make_tokens, resources=ResourceConfig.with_cpu()),
-            build_config=lambda ctx: TokenizeCfg(out=ctx.out, source="s", tokenizer="t"),
-        ),
-    )
-    with pytest.raises(ValueError, match="remote"):
-        lower(handle)
 
 
 # --- end to end ----------------------------------------------------------------
@@ -257,7 +241,7 @@ def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
     run(dclm_1b())
 
     tokens_path = f"{tmp_path}/datasets/dclm_tokens/2026.06.25"
-    ckpt_path = f"{tmp_path}/checkpoints/dclm_1b/v3"
+    ckpt_path = f"{tmp_path}/checkpoints/dclm_1b/2026.06.28"
 
     saved_ckpt = Ckpt.load(ckpt_path)
     assert saved_ckpt.kind == "ckpt"
@@ -270,23 +254,23 @@ def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
     run(dclm_1b())
 
 
-def test_resolve_round_trips_a_json_artifact(tmp_path, monkeypatch):
+def test_resolve_round_trips_a_value_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    result = resolve(dclm_tokens())
+    result = dclm_tokens().resolve()
     assert isinstance(result, Tokens)
     assert (result.kind, result.tokenizer) == ("tokens", "llama3")
     assert result.path == f"{tmp_path}/datasets/dclm_tokens/2026.06.25"
 
 
-class OtherValue(JsonArtifact):
+class OtherValue(Artifact):
     note: str = ""
 
 
 def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
     """A value artifact whose type changed under a reused version is a hard error at load."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    resolve(dclm_tokens())  # records result_type Tokens at this address
+    dclm_tokens().resolve()  # records result_type Tokens at this address
 
     drifted = Lazy(
         name="datasets/dclm_tokens",
@@ -295,7 +279,7 @@ def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
         recipe=Recipe(fn=lambda cfg: OtherValue(), build_config=lambda ctx: {"out": ctx.out}),
     )
     with pytest.raises(ArtifactTypeMismatchError):
-        resolve(drifted)
+        drifted.resolve()
 
 
 # --- apply: the generic single-step builder ------------------------------------
@@ -318,24 +302,24 @@ def _transform(input_path: str, output_path: str) -> None:
 def test_apply_chains_steps_by_direct_call(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    staged = apply("raw/massive", _stage, output_path=OUT)
-    parts = apply("data/massive", _transform, input_path=staged, output_path=OUT)
+    staged = apply("raw/massive", _stage, version="2026.06.28", output_path=OUT)
+    parts = apply("data/massive", _transform, version="2026.06.28", input_path=staged, output_path=OUT)
     run(parts)
 
-    with open(tmp_path / "data" / "massive" / "v1" / "data.txt") as f:
+    with open(tmp_path / "data" / "massive" / "2026.06.28" / "data.txt") as f:
         assert f.read() == "STAGED"
 
 
 def test_apply_lazy_dep_and_literal_both_bear_identity():
-    a = apply("data/x", _transform, input_path="p", output_path=OUT)
-    b = apply("data/x", _transform, input_path="q", output_path=OUT)
+    a = apply("data/x", _transform, version="2026.06.28", input_path="p", output_path=OUT)
+    b = apply("data/x", _transform, version="2026.06.28", input_path="q", output_path=OUT)
     # A literal input change forks identity.
     assert a.fingerprint() != b.fingerprint()
 
 
 def test_apply_collects_lazy_deps():
-    staged = apply("raw/massive", _stage, output_path=OUT)
-    parts = apply("data/massive", _transform, input_path=staged, output_path=OUT)
+    staged = apply("raw/massive", _stage, version="2026.06.28", output_path=OUT)
+    parts = apply("data/massive", _transform, version="2026.06.28", input_path=staged, output_path=OUT)
     assert parts.recipe.deps == (staged,)
 
 
@@ -344,4 +328,4 @@ def test_apply_rejects_unbindable_inputs():
         return a
 
     with pytest.raises(TypeError):
-        apply("x/y", f, a=1, b=2)
+        apply("x/y", f, version="2026.06.28", a=1, b=2)
