@@ -26,11 +26,22 @@ class Shape:
         return f"{self.name}[T{self.tokens}/D{self.hidden}/F{self.intermediate}/E{self.experts}]"
 
 
-# Experts axis drives raggedness (tokens/expert): target ~1024, scale ~128.
+# Representative per-device Grug MoE expert ragged-dot shapes for the REAL d2560 model
+# (David's run / issue 6044: hidden D=2560, intermediate F=1280, num_experts=256, top_k=4, seq=4096,
+# capacity_factor=1). Per device: E_local = 256/EP, tokens/expert = B·S·top_k·EP/(devices·experts).
+# Ground-truthed against the GM2560-B16-EP8 profile (kernel grid 128,20,32 → E_local=32, 2F=2560,
+# T=16384, 512 tok/expert). The sweep maps the realistic regime: E_local {16,32,64} (EP 16/8/4) and
+# tokens/expert {512..4096} (memory-limited GPU profiling → David's EP4 full run ≈1024). All hidden=2560,
+# intermediate=1280; `experts` = E_local, `tokens` = E_local · tokens_per_expert (top_k folded in).
 SHAPE_GRID = {
-    "small": Shape("small", tokens=4096, hidden=512, intermediate=256, experts=8),
-    "target": Shape("target", tokens=8192, hidden=2048, intermediate=5632, experts=8),
-    "scale": Shape("scale", tokens=16384, hidden=3072, intermediate=1536, experts=128),
+    # tokens/expert = 1024 (≈ full-run load), sweeping E_local (EP 16 / 8 / 4):
+    "d2560_e16_t1k": Shape("d2560_e16_t1k", tokens=16384, hidden=2560, intermediate=1280, experts=16),
+    "d2560_e32_t1k": Shape("d2560_e32_t1k", tokens=32768, hidden=2560, intermediate=1280, experts=32),
+    "d2560_e64_t1k": Shape("d2560_e64_t1k", tokens=65536, hidden=2560, intermediate=1280, experts=64),
+    # E_local = 32 (EP8, the GPU-realistic case), sweeping tokens/expert 512 → 4096:
+    "d2560_e32_t512": Shape("d2560_e32_t512", tokens=16384, hidden=2560, intermediate=1280, experts=32),
+    "d2560_e32_t2k": Shape("d2560_e32_t2k", tokens=65536, hidden=2560, intermediate=1280, experts=32),
+    "d2560_e32_t4k": Shape("d2560_e32_t4k", tokens=131072, hidden=2560, intermediate=1280, experts=32),
 }
 
 # H100 usable shared memory per SM (bytes); prunes block configs whose pipeline cannot fit.

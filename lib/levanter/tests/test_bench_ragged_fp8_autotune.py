@@ -71,9 +71,14 @@ def test_candidate_lists_nonempty_and_deduped():
         assert len(keys) == len(set(keys))
 
 
-def test_shape_grid_matches_known_target():
-    t = cfg.SHAPE_GRID["target"]
-    assert (t.tokens, t.hidden, t.intermediate, t.experts) == (8192, 2048, 5632, 8)
+def test_shape_grid_is_d2560_with_consistent_tokens_per_expert():
+    # All grid points are the real d2560 model (D=2560, F=1280); tokens must be a whole multiple of
+    # experts (tokens/expert is integer), and the ground-truthed e32_t512 point must be E=32, T=16384.
+    for s in cfg.SHAPE_GRID.values():
+        assert s.hidden == 2560 and s.intermediate == 1280
+        assert s.tokens % s.experts == 0
+    gt = cfg.SHAPE_GRID["d2560_e32_t512"]
+    assert (gt.tokens, gt.experts) == (16384, 32)  # confirmed vs GM2560-B16-EP8 profile kernel grid
 
 
 # ---- orchestrator planning / selection ----
