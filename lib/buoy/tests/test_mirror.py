@@ -99,6 +99,36 @@ def test_divergent_schema_union(cfg, patch_wandb, monkeypatch):
     assert list(lr["_step"]) == [2, 3]
 
 
+def test_profile_reuse_skips_redownload(cfg, patch_wandb, profile_logdir):
+    art = FakeArtifact("jax_profile", "prof:v0", profile_logdir)
+    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(2, ("train/loss",)), artifacts=[art])
+    patch_wandb(run)
+    mirror_run(cfg, REF)
+    assert art.download_calls == 1
+    mirror_run(cfg, REF, refresh=True)  # same artifact version → reuse, no re-download
+    assert art.download_calls == 1
+
+
+def test_touch_running_noop_when_finished(cfg):
+    mgr = MirrorManager(cfg)
+    assert mgr.touch_running(REF, {"state": "finished"}) is None
+
+
+def test_watcher_refreshes_until_terminal(cfg, patch_wandb, monkeypatch):
+    monkeypatch.setattr("buoy.mirror.WATCH_INTERVAL", 0.001)
+    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
+    patch_wandb(run)
+    mgr = MirrorManager(cfg)
+    mirror_run(cfg, REF)  # initial running manifest
+    run.state = "finished"  # the watcher's next refresh observes a terminal state
+    thread = mgr.touch_running(REF, {"state": "running"})
+    assert thread is not None
+    thread.join(5)
+    assert not thread.is_alive()
+    prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
+    assert cache.read_manifest(prefix)["state"] == "finished"
+
+
 def test_manager_coalesces_concurrent(cfg, patch_wandb, monkeypatch):
     run = FakeRun(summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
     patch_wandb(run)
