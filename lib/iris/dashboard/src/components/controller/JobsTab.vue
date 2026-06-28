@@ -69,7 +69,11 @@ function queryStr(v: LocationQueryValue | LocationQueryValue[] | undefined): str
 
 const selectedUser = computed(() => queryStr(route.query.user))
 const showAll = computed(() => queryStr(route.query.all) === '1')
-const inJobList = computed(() => !!selectedUser.value || showAll.value)
+const backendId = computed(() => currentBackend(route))
+// Scoping to one backend drills straight into the (server-side backend-filtered)
+// job list: the cross-fleet UsersOverview is an all-backends aggregate and has no
+// per-backend filter, so it stays the "All backends" landing view.
+const inJobList = computed(() => !!selectedUser.value || showAll.value || !!backendId.value)
 
 function parseSort(v: string): SortField {
   return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
@@ -99,8 +103,6 @@ const JOB_STATES: JobState[] = [
 // Anchored prefix that scopes the root list to one owner. Job ids are wire
 // names of the form `/<user>/<job>`, so the prefix is `/<user>/`.
 const jobIdPrefix = computed(() => (selectedUser.value ? `/${selectedUser.value}/` : undefined))
-
-const backendId = computed(() => currentBackend(route))
 
 // Show the Backend column only in "All backends" mode (no scope selected) and
 // only when the controller has more than one backend.

@@ -509,6 +509,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.name,
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
+            jobs_table.c.backend_id,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,

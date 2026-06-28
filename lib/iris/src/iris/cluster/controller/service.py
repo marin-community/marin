@@ -1469,6 +1469,7 @@ class ControllerServiceImpl:
             resources=resources,
             has_children=has_children,
             parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
+            backend_id=job.backend_id or "",
             **_job_status_counts(summary, job.job_id),
         )
         if job.started_at_ms:
@@ -2354,6 +2355,7 @@ class ControllerServiceImpl:
 
         worker = detail.worker
         liveness = self._health.liveness(worker.worker_id)
+        scale_group = str(worker.scale_group or "")
         worker_health = controller_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
             healthy=liveness.healthy,
@@ -2363,6 +2365,8 @@ class ControllerServiceImpl:
             address=worker.address,
             metadata=worker_metadata_to_proto(worker, detail.attributes),
             status_message=worker_status_message(liveness),
+            scale_group=scale_group,
+            backend_id=self._controller.backend_id_for_scale_group(scale_group),
         )
 
         # Worker daemon logs are NOT inlined here — when the worker is
@@ -2935,7 +2939,6 @@ class ControllerServiceImpl:
                 kind = "unknown"
 
             adv: dict[str, set[str]] = backend.advertised_attributes()
-            adv_proto = {k: controller_pb2.StringList(values=sorted(v)) for k, v in adv.items()}
 
             cap_health: dict[str, int] = {}
             if backend.autoscaler is not None:
@@ -2957,7 +2960,11 @@ class ControllerServiceImpl:
                 has_autoscaler=backend.autoscaler is not None,
                 capacity_health=cap_health,
             )
-            summary.advertised_attributes.update(adv_proto)
+            # advertised_attributes is a proto map<string, StringList> (message
+            # values), which doesn't support dict-style assignment/update; populate
+            # each entry's repeated field in place.
+            for key, values in adv.items():
+                summary.advertised_attributes[key].values.extend(sorted(values))
             summaries.append(summary)
 
         unroutable = self._controller.last_unroutable_jobs

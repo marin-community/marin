@@ -1648,11 +1648,11 @@ def test_k8s_cluster_status_without_direct_provider(client):
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allowed_users=None):
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allowed_users=None, advertised=None):
     backend = Mock(capabilities=capabilities)
     backend.name = name
     backend.autoscaler = autoscaler
-    backend.advertised_attributes.return_value = {}
+    backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     backend.allowed_users = allowed_users if allowed_users is not None else frozenset({"*"})
     if cluster_status is not None:
         backend.get_cluster_status.return_value = cluster_status
@@ -1772,6 +1772,16 @@ def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
     assert matching[0]["backendId"] == "gcp"
 
 
+def test_job_backend_id_propagated_to_get_job_status(client, state, job_request):
+    """GetJobStatus surfaces backend_id stamped on the jobs row (job detail page)."""
+    job_id = submit_job(state, "backend-detail-job", job_request)
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id="gcp"))
+
+    resp = rpc_post(client, "GetJobStatus", {"jobId": job_id.to_wire()})
+    assert resp["job"]["backendId"] == "gcp"
+
+
 def test_list_jobs_filters_by_backend_id(client, state, job_request):
     """ListJobs.query.backendId restricts results to jobs on that backend."""
     gcp_job_id = submit_job(state, "gcp-job", job_request)
@@ -1813,6 +1823,28 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
     assert tpu_worker["scaleGroup"] == "tpu-v5e"
 
 
+def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp_path, log_client):
+    """GetWorkerStatus stamps backend_id (resolved via scale_group) and scale_group (worker detail page)."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
+    svc = ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+    client = TestClient(ControllerDashboard(svc).app)
+
+    register_worker(state, "w-tpu", "10.0.0.1", make_worker_metadata(), scale_group="tpu-v5e")
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w-tpu"})
+    assert resp["worker"]["backendId"] == "gcp"
+    assert resp["worker"]["scaleGroup"] == "tpu-v5e"
+
+
 def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_client):
     """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
     controller_mock = _make_controller_mock(state, scheduler)
@@ -1841,7 +1873,11 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
 def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, log_client):
     """ListBackends returns one BackendSummary per backend with correct kind and capabilities."""
     controller_mock = _make_controller_mock(state, scheduler)
-    gcp_backend = _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}))
+    gcp_backend = _backend_mock(
+        "gcp",
+        frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+        advertised={"device-variant": {"v6e-16", "v5e-4"}},
+    )
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1870,6 +1906,8 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     assert "cluster" in summaries["eu-k8s"]["capabilities"]
     assert summaries["gcp"]["scaleGroups"] == ["tpu-v5e"]
     assert summaries["eu-k8s"].get("scaleGroups", []) == []
+    # Advertised attributes round-trip through the proto map<string, StringList>.
+    assert summaries["gcp"]["advertisedAttributes"]["device-variant"]["values"] == ["v5e-4", "v6e-16"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
     assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"
