@@ -72,8 +72,6 @@
     let current = null;          // { r, m } for the loaded run
     let profileStarted = false;  // prepare the profile lazily, on first tab open
 
-    let runsCache = [];
-
     // wandb run state -> status glyph, shown as a prefix in the run datalist.
     const STATE_ICON = {
       running: "🟢", finished: "🏁", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡",
@@ -108,21 +106,20 @@
       fillList("project-list", (await jget("api/projects?" + qs({ entity: e }))).projects || []);
     }
 
-    async function loadRuns() {
+    let searchTimer;
+
+    // Runs are filtered server-side (user + name search) so any run is findable
+    // regardless of recency; results arrive newest-first.
+    async function fetchRuns({ search = "" } = {}) {
       const e = $("entity").value.trim(), p = $("project").value.trim();
       if (!e || !p) return;
-      fillList("run-list", []);
-      runsCache = [];
-      runsCache = (await jget("api/runs?" + qs({ entity: e, project: p, limit: 50 }))).runs || [];
-      // user filter options derived from the fetched runs
-      fillList("user-list", [...new Set(runsCache.map((r) => r.user).filter(Boolean))].sort());
-      renderRunList();
-    }
-
-    // Runs arrive newest-first; the run datalist keeps that order and filters by user.
-    function renderRunList() {
-      const u = $("user").value.trim().toLowerCase();
-      const runs = u ? runsCache.filter((r) => (r.user || "").toLowerCase() === u) : runsCache;
+      const user = $("user").value.trim();
+      const params = { entity: e, project: p, limit: 50 };
+      if (user) params.user = user;
+      if (search) params.search = search;
+      const runs = (await jget("api/runs?" + qs(params))).runs || [];
+      // Seed the user suggestions from an unfiltered listing only.
+      if (!user && !search) fillList("user-list", [...new Set(runs.map((r) => r.user).filter(Boolean))].sort());
       fillList("run-list", runs.map((r) => `${stateIcon(r.state)} ${r.id}`));
     }
 
@@ -134,7 +131,7 @@
       if (p.get("user")) $("user").value = p.get("user");
       loadEntities();
       await loadProjects();
-      if ($("project").value) await loadRuns();
+      if ($("project").value) await fetchRuns();
       if (p.get("run")) { $("run").value = p.get("run"); load(); }
     }
 
@@ -253,9 +250,15 @@
       }, { displayModeBar: false, responsive: true });
     }
 
-    $("entity").addEventListener("change", loadProjects);
-    $("project").addEventListener("change", loadRuns);
-    $("user").addEventListener("change", renderRunList);
+    $("entity").addEventListener("change", () => { loadProjects(); fetchRuns(); });
+    $("project").addEventListener("change", fetchRuns);
+    $("user").addEventListener("change", () => fetchRuns());
+    // Search server-side as the run name is typed (debounced); selecting an option loads it.
+    $("run").addEventListener("input", () => {
+      clearTimeout(searchTimer);
+      const txt = cleanRunId($("run").value);
+      searchTimer = setTimeout(() => fetchRuns({ search: txt }), 350);
+    });
     $("run").addEventListener("change", () => {
       const id = cleanRunId($("run").value);  // drop the status glyph once a run is picked
       if (id) { $("run").value = id; load(); }

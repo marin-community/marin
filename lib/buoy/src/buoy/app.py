@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import logging
 import posixpath
+import re
 from pathlib import Path
 
 import httpx
@@ -99,25 +100,32 @@ async def list_projects(request: Request) -> JSONResponse:
 async def list_runs(request: Request) -> JSONResponse:
     entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
     project = request.query_params.get("project", "")
-    # Each run lazily fetches its author, so keep the page small — the picker shows
-    # recent runs and relies on type-to-filter, not an exhaustive list.
+    # Each run lazily fetches its author, so keep the page small. user/search filter
+    # server-side so a run is findable regardless of recency (the recent-N window
+    # otherwise hides an older author's runs).
     limit = int(request.query_params.get("limit", "50"))
+    user = request.query_params.get("user", "").strip()
+    search = request.query_params.get("search", "").strip()
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
 
     def _fetch() -> list[dict]:
         api = wandb.Api()
-        # Most-recently-created first; the picker also surfaces the run author so
-        # the SPA can offer a user filter.
-        runs = api.runs(f"{entity}/{project}", per_page=min(limit, 100), order="-created_at")
+        clauses: list[dict] = []
+        if user:
+            clauses.append({"username": user})
+        if search:
+            clauses.append({"display_name": {"$regex": re.escape(search)}})
+        filters = {"$and": clauses} if len(clauses) > 1 else (clauses[0] if clauses else None)
+        runs = api.runs(f"{entity}/{project}", filters=filters, per_page=min(limit, 100), order="-created_at")
         out = []
         for run in runs:
-            user = getattr(run, "user", None)
+            author = getattr(run, "user", None)
             out.append(
                 {
                     "id": run.id,
                     "name": run.name,
-                    "user": getattr(user, "username", None) or getattr(user, "name", None),
+                    "user": getattr(author, "username", None) or getattr(author, "name", None),
                     "state": run.state,
                     "created_at": str(run.created_at),
                 }
