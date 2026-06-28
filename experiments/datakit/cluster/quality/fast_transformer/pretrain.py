@@ -54,6 +54,7 @@ from experiments.datakit.cluster.quality.fast_transformer.train import (
     TrainHParams,
     _metrics,
     _predict,
+    data_parallel_shardings,
     train_regressor,
 )
 
@@ -91,6 +92,8 @@ def pretrain_ntp(
     perm = rng.permutation(len(blocks))
     n_val = max(1, int(len(blocks) * val_frac))
     val_blocks, tr_blocks = blocks[perm[:n_val]], blocks[perm[n_val:]]
+    ndev, replicated, batch_shard = data_parallel_shardings()
+    batch_size = max(ndev, (batch_size // ndev) * ndev)  # divisible across chips
     steps_per_epoch = max(1, len(tr_blocks) // batch_size)
     total_steps = steps_per_epoch * epochs
     schedule = optax.warmup_cosine_decay_schedule(
@@ -101,15 +104,20 @@ def pretrain_ntp(
         end_value=lr * 0.05,
     )
     optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adamw(schedule, weight_decay=weight_decay))
-    opt_state = optimizer.init(eqx.filter(encoder, eqx.is_inexact_array))
+    encoder = jax.device_put(encoder, replicated)
+    opt_state = jax.device_put(optimizer.init(eqx.filter(encoder, eqx.is_inexact_array)), replicated)
+
+    def _lm_loss(enc, ids):
+        # Gradient-checkpointed: the [B, T, vocab] logits are recomputed in backward
+        # rather than stored, so the NTP softmax stops being the memory bottleneck.
+        logits = enc.lm_logits(enc.encode(ids, key=None, inference=False))[:, :-1]
+        return optax.softmax_cross_entropy_with_integer_labels(logits, ids[:, 1:]).mean()
+
+    lm_loss = eqx.filter_checkpoint(_lm_loss)
 
     @eqx.filter_jit
-    def step(encoder, opt_state, ids, key):
-        def loss_fn(enc):
-            logits = enc.lm_logits(enc.encode(ids, key=key, inference=False))[:, :-1]
-            return optax.softmax_cross_entropy_with_integer_labels(logits, ids[:, 1:]).mean()
-
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(encoder)
+    def step(encoder, opt_state, ids):
+        loss, grads = eqx.filter_value_and_grad(lm_loss)(encoder, ids)
         updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(encoder, eqx.is_inexact_array))
         return eqx.apply_updates(encoder, updates), opt_state, loss
 
@@ -125,18 +133,22 @@ def pretrain_ntp(
         ]
         return float(np.mean(losses))
 
-    key = jax.random.PRNGKey(seed)
     best_loss, best_encoder, no_improve = float("inf"), encoder, 0
     t0 = time.time()
     logger.info(
-        "NTP pretrain: %d train / %d val blocks, %d steps/epoch", len(tr_blocks), len(val_blocks), steps_per_epoch
+        "NTP pretrain: %d chips, %d train / %d val blocks, global batch=%d, %d steps/epoch",
+        ndev,
+        len(tr_blocks),
+        len(val_blocks),
+        batch_size,
+        steps_per_epoch,
     )
     for epoch in range(epochs):
         ep_perm = rng.permutation(len(tr_blocks))
         for s in range(steps_per_epoch):
             batch = ep_perm[s * batch_size : (s + 1) * batch_size]
-            key, step_key = jax.random.split(key)
-            encoder, opt_state, loss = step(encoder, opt_state, jnp.asarray(tr_blocks[batch]), step_key)
+            ids = jax.device_put(jnp.asarray(tr_blocks[batch]), batch_shard)
+            encoder, opt_state, loss = step(encoder, opt_state, ids)
         vl = val_loss(encoder)
         improved = vl < best_loss
         if improved:
@@ -172,7 +184,8 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--tokenizer", default="marin-community/marin-tokenizer")
     parser.add_argument("--max-tokens", type=int, default=2048)
-    parser.add_argument("--min-count", type=int, default=5, help="Vocab prune (higher -> smaller LM softmax)")
+    parser.add_argument("--min-count", type=int, default=3, help="Vocab prune (drop rare tokens)")
+    parser.add_argument("--max-vocab", type=int, default=32000, help="Cap vocab (top-K) to bound the NTP softmax")
     parser.add_argument("--dim", type=int, default=256)
     parser.add_argument("--layers", type=int, default=4)
     parser.add_argument("--max-blocks", type=int, default=40000)
@@ -189,7 +202,7 @@ def main() -> None:
     corpus_raw, _, _ = encode_corpus(args.tokenizer, args.corpus, args.max_tokens)
     tr_raw, tr_scores, _ = encode_corpus(args.tokenizer, args.train, args.max_tokens)
     ev_raw, ev_scores, ev_src = encode_corpus(args.tokenizer, args.eval, args.max_tokens)
-    remap = build_remap(corpus_raw + tr_raw, args.min_count)
+    remap = build_remap(corpus_raw + tr_raw, args.min_count, args.max_vocab)
     vocab_size = len(remap) + NUM_RESERVED
     logger.info("encoded: corpus=%d train=%d eval=%d vocab=%d", len(corpus_raw), len(tr_raw), len(ev_raw), vocab_size)
 
@@ -197,16 +210,21 @@ def main() -> None:
     train = pack(tr_raw, remap, tr_scores, [""] * len(tr_raw), args.max_tokens)
     holdout = pack(ev_raw, remap, ev_scores, ev_src, args.max_tokens)
 
-    # Token-level attention is O(T^2) and the LM softmax is O(T*vocab); size batches
-    # to keep those activations bounded on a single v6e chip.
+    # With remat the O(T^2) attention and [B,T,vocab] softmax are recomputed in
+    # backward, so per-chip batch is bounded by the forward materialization; size
+    # per chip, then x num_chips since training is data-parallel across the slice.
     t = args.max_tokens
-    pretrain_batch = max(2, min(600_000_000 // (t * vocab_size), 80_000_000 // (t * t)))
-    ft_batch = max(8, 80_000_000 // (t * t))
+    ndev = jax.device_count()
+    per_chip_pretrain = max(2, min(800_000_000 // (t * vocab_size), 120_000_000 // (t * t)))
+    per_chip_ft = max(8, 120_000_000 // (t * t))
+    pretrain_batch = per_chip_pretrain * ndev
+    ft_batch = per_chip_ft * ndev
     logger.info(
-        "LM blocks=%s oracle train=%s holdout=%s | pretrain_batch=%d ft_batch=%d",
+        "LM blocks=%s oracle train=%s holdout=%s | %d chips, pretrain_batch=%d ft_batch=%d",
         blocks.shape,
         train.ids.shape,
         holdout.ids.shape,
+        ndev,
         pretrain_batch,
         ft_batch,
     )
@@ -215,7 +233,7 @@ def main() -> None:
     logger.info("encoder: flops/token=%.0fK", config.flops_per_token() / 1e3)
 
     # Internal train/val split of the oracle labels for fine-tune model selection.
-    ft_hp = TrainHParams(lr=args.finetune_lr, batch_size=ft_batch)
+    ft_hp = TrainHParams(lr=args.finetune_lr, batch_size=ft_batch, remat=True)
     rng = np.random.default_rng(ft_hp.seed)
     perm = rng.permutation(train.n)
     n_val = max(1, int(train.n * ft_hp.val_frac))

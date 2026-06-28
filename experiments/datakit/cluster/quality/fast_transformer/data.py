@@ -101,14 +101,23 @@ def _encode(tokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
     return encoded
 
 
-def _build_vocab(train_ids: list[list[int]], min_count: int) -> dict[int, int]:
-    """Map raw token ids seen >= ``min_count`` times in train to dense ids."""
+def _build_vocab(train_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
+    """Map raw token ids seen >= ``min_count`` times to dense ids.
+
+    ``max_vocab`` caps the table to the most frequent tokens (everything else maps
+    to UNK). The cap matters for the NTP softmax, whose cost scales with vocab.
+    """
     counts: Counter[int] = Counter()
     for row in train_ids:
         counts.update(row)
-    kept = sorted(tok for tok, c in counts.items() if c >= min_count)
+    frequent = [(tok, c) for tok, c in counts.items() if c >= min_count]
+    if max_vocab is not None and len(frequent) > max_vocab:
+        frequent = sorted(frequent, key=lambda tc: -tc[1])[:max_vocab]
+    kept = sorted(tok for tok, _ in frequent)
     remap = {tok: i + NUM_RESERVED for i, tok in enumerate(kept)}
-    logger.info("vocab: %d raw tokens -> %d kept (min_count=%d)", len(counts), len(kept), min_count)
+    logger.info(
+        "vocab: %d raw tokens -> %d kept (min_count=%d, max_vocab=%s)", len(counts), len(kept), min_count, max_vocab
+    )
     return remap
 
 
@@ -139,8 +148,8 @@ def encode_corpus(
     return _encode(tokenizer, texts, max_tokens), scores, sources
 
 
-def build_remap(raw_ids: list[list[int]], min_count: int) -> dict[int, int]:
-    return _build_vocab(raw_ids, min_count)
+def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
+    return _build_vocab(raw_ids, min_count, max_vocab)
 
 
 def pack(
