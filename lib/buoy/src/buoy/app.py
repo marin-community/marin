@@ -198,7 +198,13 @@ async def xprof_proxy(request: Request) -> Response:
     # so whatever encoding xprof picks stays consistent with the headers we forward.
     accept_encoding = request.headers.get("accept-encoding", "identity")
     upstream = client.build_request("GET", f"http://127.0.0.1:{port}{url}", headers={"accept-encoding": accept_encoding})
-    resp = await client.send(upstream, stream=True)
+    try:
+        resp = await client.send(upstream, stream=True)
+    except httpx.TimeoutException:
+        return Response("xprof upstream timeout", status_code=504)
+    except httpx.HTTPError as exc:
+        logger.warning("xprof upstream error for %s: %s", ref.key, exc)
+        return Response(f"xprof upstream error: {exc!r}", status_code=502)
     headers = {k: v for k, v in resp.headers.items() if k.lower() not in _DROP_RESPONSE_HEADERS}
     return StreamingResponse(
         resp.aiter_raw(),
@@ -219,7 +225,15 @@ def build_app(cfg: BuoyConfig) -> Starlette:
         app.state.cfg = cfg
         app.state.mirror = MirrorManager(cfg)
         app.state.xprof = XprofManager(cfg)
-        app.state.http = httpx.AsyncClient(timeout=XPROF_PROXY_TIMEOUT, follow_redirects=False)
+        # max_keepalive_connections=0 disables connection reuse: the browser fires a
+        # burst of xprof asset/trace requests and cancels some on refresh, leaving a
+        # pooled connection half-read; the next request on it dies mid-stream with a
+        # RemoteProtocolError (intermittent 500s). Same fix as the controller proxy.
+        app.state.http = httpx.AsyncClient(
+            timeout=XPROF_PROXY_TIMEOUT,
+            follow_redirects=False,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=0),
+        )
         try:
             yield
         finally:
