@@ -55,8 +55,16 @@ from marin.execution.step_spec import StepSpec, _is_relative_path
 
 
 def _artifact_path(name: str, version: str, prefix: str) -> str:
-    """The explicit, hash-free address of an artifact under a storage prefix."""
-    return f"{prefix}/{name}/{version}"
+    """The explicit, hash-free address of an artifact under a storage prefix.
+
+    A prefix may already end in ``/`` — an empty-authority scheme like ``mirror://``,
+    or a ``MARIN_PREFIX`` written with a trailing slash — so the separator is not
+    doubled (``mirror://`` + ``name/version`` resolves to ``mirror://name/version``,
+    not ``mirror:///name/version``, which a regional filesystem reads as a distinct,
+    leading-slash key).
+    """
+    base = prefix if prefix.endswith("/") else f"{prefix}/"
+    return f"{base}{name}/{version}"
 
 
 @dataclass(frozen=True)

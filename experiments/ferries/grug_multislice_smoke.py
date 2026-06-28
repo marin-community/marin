@@ -23,11 +23,18 @@ import os
 
 import fsspec
 from fray.cluster import ResourceConfig
+from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import compute_output_path, unwrap_versioned_value
-from marin.execution.types import this_output_path, versioned
+from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
 
-from experiments.grug.base.launch import GrugBaseLaunchConfig, grug_base_launch, train_grug
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.llama import llama3_tokenizer
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.nemotron import nemotron_datasets
+from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,20 @@ CHILD_ENV_KEYS = (
     "WANDB_PROJECT",
 )
 
+# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
+# proof-pile at their published weights. Policy lives here, in the experiment.
+_NEMOTRON_WEIGHTS = {
+    "hq_actual": 0.91351,
+    "hq_synth": 2.72,
+    "medium_high": 0.82471,
+    "medium": 3.38,
+    "medium_low": 1.54,
+    "low_actual": 0.70123,
+    "low_synth": 0.62771,
+}
+_STARCODER_WEIGHT = 0.25
+_PROOFPILE_WEIGHT = 0.055
+
 
 def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key, "")
@@ -68,35 +89,73 @@ def multislice_smoke_resources() -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu_type, slice_count=slice_count, regions=[region])
 
 
-def multislice_smoke_launch():
+def build() -> Checkpoint:
+    """The Grug multislice smoke run as a lazy checkpoint, configured from the env.
+
+    The Nemotron mix and the WandB ``replicate_path`` depend on the run context, so
+    they are assembled inside ``build_config``; the TPU slice count/region is a
+    run-arg, so it never bears on identity. ``GRUG_MULTISLICE_OUTPUT_PATH`` pins the
+    output to an explicit location.
+    """
+    max_seq_len = _env_int("GRUG_MULTISLICE_MAX_SEQ_LEN", DEFAULT_MAX_SEQ_LEN)
     steps = _env_int("GRUG_MULTISLICE_STEPS", DEFAULT_STEPS)
     batch_size = _env_int("GRUG_MULTISLICE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
-    max_seq_len = _env_int("GRUG_MULTISLICE_MAX_SEQ_LEN", DEFAULT_MAX_SEQ_LEN)
     loss_implementation = os.environ.get("GRUG_MULTISLICE_CE_IMPL") or None
-    model = dataclasses.replace(unwrap_versioned_value(grug_base_launch.model), max_seq_len=max_seq_len)
-    grug_trainer = dataclasses.replace(
-        unwrap_versioned_value(grug_base_launch.grug_trainer),
-        loss_implementation=loss_implementation,
-    )
+    run_id = _run_id()
+    model = dataclasses.replace(GRUG_130M_MODEL, max_seq_len=max_seq_len)
+    override_output_path = _override_output_path()
 
-    return dataclasses.replace(
-        grug_base_launch,
-        run_id=_run_id(),
-        model=versioned(model),
-        resources=versioned(multislice_smoke_resources()),
-        steps=versioned(steps),
-        batch_size=versioned(batch_size),
-        tracker=WandbConfig(
-            entity=os.environ.get("WANDB_ENTITY") or None,
-            project=os.environ.get("WANDB_PROJECT", "marin"),
-            tags=["grug", "multislice", "smoke"],
-            group="grug-multislice-smoke",
-            name=None,
-            mode=os.environ.get("WANDB_MODE") or None,
-            replicate_path=this_output_path(),
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+
+    def build_config(ctx: RunContext) -> GrugBaseLaunchConfig:
+        return GrugBaseLaunchConfig(
+            model=model,
+            data=mixture(ctx, train, validation=validation),
+            output_path=ctx.out,
+            run_id=run_id,
+            resources=ctx.run_arg("train_resources"),
+            steps=steps,
+            batch_size=batch_size,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(
+                entity=os.environ.get("WANDB_ENTITY") or None,
+                project=os.environ.get("WANDB_PROJECT", "marin"),
+                tags=["grug", "multislice", "smoke"],
+                group="grug-multislice-smoke",
+                name=None,
+                mode=os.environ.get("WANDB_MODE") or None,
+                replicate_path=ctx.out,
+            ),
+            optimizer=AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                lr_schedule="cosine",
+                decay=0.2,
+                min_lr_ratio=0.1,
+                warmup=1000,
+            ),
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            log_every=1,
+            eval_batch_size=None,  # disables perplexity eval
+            loss_implementation=loss_implementation,
+        )
+
+    return Checkpoint(
+        name=CANARY_STEP_NAME,
+        version="v1",
+        recipe=Recipe(
+            fn=run_grug_base_trial,
+            build_config=build_config,
+            deps=(*train, *validation),
+            run_args={"train_resources": multislice_smoke_resources()},
         ),
-        grug_trainer=versioned(grug_trainer),
-        eval=None,
+        override_path=override_output_path,
     )
 
 
@@ -107,12 +166,11 @@ def _child_env_vars() -> dict[str, str]:
 def _override_output_path() -> str | None:
     """Read ``GRUG_MULTISLICE_OUTPUT_PATH`` and validate it.
 
-    If the env var is unset, returns ``None`` and the canary falls back to
-    its deterministic content-addressed path. If the env var is set, it
-    must be non-empty: an empty value would be interpreted by
-    :func:`compute_output_path` as a relative override joined with
-    ``MARIN_PREFIX``, which would point the pre-submit wipe at the prefix
-    root (e.g. ``gs://marin-us-east5``) and recursively delete it.
+    If the env var is unset, returns ``None`` and the run lands at its canonical
+    ``{prefix}/{name}/{version}`` path. If the env var is set, it must be non-empty:
+    an empty value is a relative pin joined with ``MARIN_PREFIX``, which would point
+    the pre-submit wipe at the prefix root (e.g. ``gs://marin-us-east5``) and
+    recursively delete it.
     """
     if "GRUG_MULTISLICE_OUTPUT_PATH" not in os.environ:
         return None
@@ -135,35 +193,29 @@ def wipe_path_if_exists(path: str) -> None:
     fs.rm(plain_path, recursive=True)
 
 
-def _wipe_canary_output(
-    name: str,
-    launch: GrugBaseLaunchConfig,
-    override_output_path: str | None,
-) -> None:
-    """Delete the canary's deterministic output directory if it exists.
+def _wipe_canary_output(checkpoint: Checkpoint) -> None:
+    """Delete the canary's output directory if it exists.
 
-    The canary writes to a content-addressed path that is stable across runs
-    (e.g. ``gs://marin-us-east5/grug/multislice-smoke-<hash>/``). When a
-    previous run left a checkpoint behind, Levanter resumes it and then the
-    final forced checkpoint write trips TensorStore's ``chunk_shape`` lock if
-    the sharding has drifted since the prior write (see issue #6253). The
-    canary is meant to be self-contained, so wipe the directory before
-    submitting the training job — each invocation starts from an empty path.
+    The canary writes to a path that is stable across runs
+    (e.g. ``gs://marin-us-east5/grug/multislice-smoke/v1/``). When a previous run
+    left a checkpoint behind, Levanter resumes it and the final forced checkpoint
+    write trips TensorStore's ``chunk_shape`` lock if the sharding has drifted since
+    the prior write. The canary is meant to be self-contained, so wipe the directory
+    before submitting the training job — each invocation starts from an empty path.
     """
-    output_path = compute_output_path(name, launch, override_output_path=override_output_path)
-    wipe_path_if_exists(output_path)
+    wipe_path_if_exists(checkpoint.path())
 
 
 def main() -> None:
-    launch = multislice_smoke_launch()
-    override_output_path = _override_output_path()
-    _wipe_canary_output(CANARY_STEP_NAME, launch, override_output_path)
-    train_grug(
-        CANARY_STEP_NAME,
-        launch,
-        override_output_path=override_output_path,
-        env_vars=_child_env_vars(),
-    )
+    # The StepRunner runs the grug launcher inline in this process and dispatches
+    # the training job from it; that dispatch builds the job environment from this
+    # process's env. Re-export the CI-forwarded child env here so every forwarded
+    # knob (R2/AWS creds, HF_TOKEN, WANDB credentials, MARIN_PREFIX) reaches the
+    # inline launcher and the training job it submits.
+    os.environ.update(_child_env_vars())
+    checkpoint = build()
+    _wipe_canary_output(checkpoint)
+    StepRunner().run([lower(checkpoint)])
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ class GrugBaseLaunchConfig:
     z_loss_weight: float = 1e-4
     ema_beta: float | None = None  # EMA coefficient for eval/checkpoint model; None disables EMA.
     log_every: int = 1
+    loss_implementation: str | tuple[str, ...] | None = None  # cross-entropy kernel; None uses the trainer default.
     eval_batch_size: int | None = 512  # None disables perplexity eval.
     steps_per_eval: int = 1000
     max_eval_batches: int = 8
@@ -156,6 +157,7 @@ def build_grug_run_config(launch: GrugBaseLaunchConfig) -> GrugRunConfig:
         z_loss_weight=launch.z_loss_weight,
         ema_beta=launch.ema_beta,
         log_every=launch.log_every,
+        loss_implementation=launch.loss_implementation,
     )
 
     eval_config = (

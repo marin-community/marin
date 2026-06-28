@@ -35,6 +35,9 @@ from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.lazy import materialized_config
+
+from experiments.ferries import canary_ferry
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -151,15 +154,8 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
     monkeypatch.setenv("CANARY_TRACKER", "json_logger")
     monkeypatch.setenv("RUN_ID", "test-thd")
 
-    # The canary ferry is migrated off the executor API separately from the grug
-    # launchers (it is wired into live CI). While it still imports the executor-era
-    # data-wiring symbols, skip rather than fail this grug-variant contract check.
-    canary_ferry = pytest.importorskip(
-        "experiments.ferries.canary_ferry",
-        reason="canary ferry pending its own executor->lazy migration",
-    )
-    canary_ferry = importlib.reload(canary_ferry)
-    data = canary_ferry.canary_moe_step.config.data
+    # build() reads the env at call time, so set it above before resolving the config.
+    data = materialized_config(canary_ferry.build(), "gs://test").data
 
     components = list(data.components.values())
     assert components
