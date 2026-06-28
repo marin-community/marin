@@ -4,17 +4,19 @@
 """Deterministic config fingerprinting for lazy artifacts.
 
 A lazy artifact's identity is its explicit ``name@version``; its *fingerprint* is a
-hash of the config its recipe builds, recorded so the build-once guard can tell a
-re-run of the same recipe (a cache hit) from a changed recipe (which needs a version
-bump). For that to mean anything, the serialization must be **identical across
-processes**: the same config must always produce the same bytes.
+hash of the config its recipe builds, recorded so a drift check can tell a re-run of
+the same recipe (a cache hit) from a changed recipe (which wants a version bump). For
+that to mean anything the serialization must be **identical across processes**: the
+same config must always produce the same bytes.
 
-So this encoder canonicalizes every value it understands — dataclasses, enums,
-paths, timedeltas, dtypes, sets (by sorted members), arrays (by content) — and
-*raises* on values it cannot serialize deterministically, such as a callable or an
-object that falls back to its default memory-address ``repr``. A permissive
-``str(o)`` fallback would let such a value silently fork the fingerprint from one
-run to the next, so it is rejected loudly at fingerprint time instead.
+The fingerprint is **advisory** — a mismatch is a warning, not a blocked build — so the
+encoder does not need to be perfectly total to be correct. It canonicalizes every value
+it understands (dataclasses, enums, paths, timedeltas, dtypes, sets by sorted members,
+arrays by content) and, for a type it has no canonical form for, degrades to a *defined*
+stable fallback with a one-time warning instead of raising. :func:`register_fingerprint`
+teaches it a precise canonical form for an identity-bearing custom type, and
+:func:`set_strict` (or ``MARIN_FINGERPRINT_STRICT``) restores the old raise-on-unknown
+for callers that want drift to be exact.
 """
 
 import dataclasses
@@ -22,12 +24,57 @@ import functools
 import hashlib
 import inspect
 import json
+import logging
+import os
+from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import jax
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Custom canonical encoders, keyed by type, consulted before the best-effort fallback.
+_REGISTRY: dict[type, Callable[[Any], object]] = {}
+
+# Type names already warned about, so the fallback logs once per type, not per value.
+_SEEN_UNFINGERPRINTABLE: set[str] = set()
+
+# None defers to the env var; True/False is an explicit override set via set_strict.
+_STRICT_OVERRIDE: bool | None = None
+
+
+def register_fingerprint(tp: type, encode: Callable[[Any], object]) -> None:
+    """Teach the encoder a canonical form for an identity-bearing custom type.
+
+    ``encode(value)`` must return a JSON-canonicalizable object (it is itself encoded).
+    Registered converters are consulted before the best-effort fallback, including for
+    subclasses of ``tp``.
+    """
+    _REGISTRY[tp] = encode
+
+
+def set_strict(enabled: bool) -> None:
+    """Toggle strict fingerprinting: when on, an unknown type raises instead of using the
+    best-effort fallback. Overrides the ``MARIN_FINGERPRINT_STRICT`` env var."""
+    global _STRICT_OVERRIDE
+    _STRICT_OVERRIDE = enabled
+
+
+def _is_strict() -> bool:
+    if _STRICT_OVERRIDE is not None:
+        return _STRICT_OVERRIDE
+    return os.environ.get("MARIN_FINGERPRINT_STRICT", "").lower() in ("1", "true", "yes")
+
+
+def _registered_encoder(tp: type) -> Callable[[Any], object] | None:
+    for klass in tp.__mro__:
+        if klass in _REGISTRY:
+            return _REGISTRY[klass]
+    return None
 
 
 def _unfingerprintable(o: object, why: str) -> str:
@@ -35,12 +82,17 @@ def _unfingerprintable(o: object, why: str) -> str:
     return (
         f"cannot fingerprint a config value of type {t.__module__}.{t.__qualname__}: {why}. "
         "A fingerprint must be identical across processes; make the value a dataclass, an Enum, or "
-        "another canonical type, or add a handler in marin.execution.fingerprint."
+        "another canonical type, register one via marin.execution.fingerprint.register_fingerprint, "
+        "or disable strict mode."
     )
 
 
 class _FingerprintEncoder(json.JSONEncoder):
-    """Canonical JSON for config fingerprints; raises on non-deterministic values."""
+    """Canonical JSON for config fingerprints.
+
+    Canonical handlers run first; then registered converters; then either a raise
+    (strict) or a defined best-effort fallback (advisory, the default).
+    """
 
     def default(self, o):
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
@@ -68,11 +120,40 @@ class _FingerprintEncoder(json.JSONEncoder):
                 return {"__dtype__": np.dtype(o).name}
             except TypeError:
                 return {"__type__": f"{o.__module__}.{o.__qualname__}"}
-        if inspect.isroutine(o) or isinstance(o, functools.partial):
-            raise TypeError(_unfingerprintable(o, "a callable has no stable identity"))
-        if type(o).__repr__ is object.__repr__:
-            raise TypeError(_unfingerprintable(o, "it uses the default object repr (a memory address)"))
-        raise TypeError(_unfingerprintable(o, "no deterministic serialization is known"))
+
+        encode = _registered_encoder(type(o))
+        if encode is not None:
+            return encode(o)
+
+        if _is_strict():
+            if inspect.isroutine(o) or isinstance(o, functools.partial):
+                raise TypeError(_unfingerprintable(o, "a callable has no stable identity"))
+            if type(o).__repr__ is object.__repr__:
+                raise TypeError(_unfingerprintable(o, "it uses the default object repr (a memory address)"))
+            raise TypeError(_unfingerprintable(o, "no deterministic serialization is known"))
+
+        return _fallback(o)
+
+
+def _fallback(o: object) -> dict[str, object]:
+    """A defined, stable representation for a type with no canonical form.
+
+    Identifies the type by qualified name and captures its ``vars()`` (canonicalized) when
+    it has a ``__dict__``, else its ``repr``. Warns once per type so a misfire is a noisy
+    advisory, not a blocked build. The object's own ``repr`` is avoided for the dict case
+    because a default ``repr`` embeds a memory address (non-deterministic)."""
+    t = type(o)
+    name = f"{t.__module__}.{t.__qualname__}"
+    if name not in _SEEN_UNFINGERPRINTABLE:
+        _SEEN_UNFINGERPRINTABLE.add(name)
+        logger.warning(
+            "fingerprint: no canonical form for %s; using a best-effort stable fallback. "
+            "Register one via marin.execution.fingerprint.register_fingerprint for an exact fingerprint.",
+            name,
+        )
+    if hasattr(o, "__dict__"):
+        return {"__repr__": name, "vars": vars(o)}
+    return {"__repr__": name, "str": repr(o)}
 
 
 def _canonical_key(o: object) -> str:

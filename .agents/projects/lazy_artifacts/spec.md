@@ -133,6 +133,10 @@ def resolve(handle: Lazy[T], *, max_concurrent: int = 8) -> T: ...
 def apply(name: str, fn: Callable[..., Any], *, version: str = "v1",
           result_type: type[T] = Artifact, resources: ResourceConfig | None = None,
           pin: str | None = None, **inputs: Any) -> Lazy[T]: ...
+def derived(name: str, *, fn: Callable[[Any], Any],
+            build_config: Callable[[RunContext], Any], deps: Iterable[Lazy] = (),
+            version: str = "v1", pin: str | None = None,
+            resources: ResourceConfig | None = None, kind: type[T] = Artifact) -> Lazy[T]: ...
 def adopt(name: str, version: str, source: str, *, kind: type[T] = Dataset) -> Lazy[T]: ...
 def materialized_config(handle: Lazy, prefix: str) -> Any: ...
 
@@ -144,11 +148,13 @@ OUT: Final = ...        # sentinel: in apply(**inputs), resolves to ctx.out
 - `resolve(handle) -> T` — `run(handle)`, then load via `handle.result_type.load(handle.path())`. Before loading, it checks the served record's `result_type` matches `handle.result_type` and raises `ArtifactTypeMismatchError` on a mismatch (guards against a drifted value artifact whose schema changed). For a value artifact returns the typed value; for a data artifact a path-bearing ref. No build on a cache hit (just `load`).
 - `apply(name, fn, **inputs)` — the generic single-step builder, **direct-call form**. Each value in `inputs` is classified, **recursing into `list`/`tuple`/`dict`**: a `Lazy` handle becomes a recipe dep and resolves to `ctx.path(handle)` at run time (its `name@version` enters identity); the `OUT` sentinel resolves to `ctx.out`; anything else is a literal that bears identity. The recipe's `fn(**resolved_inputs)` is called directly (no config object, no wrapper). A `Lazy`/`OUT` nested inside an *opaque* object (a dataclass/config instance, not a builtin container) is **not** resolved — use the `Lazy`+`Recipe` tier for that. `result_type` selects the produced `Artifact` type (default `Artifact`, a path ref); `resources` dispatches via `remote`; `pin` references existing data. Raises `TypeError` if `fn`'s signature can't bind the resolved kwargs (checked at lower via `inspect.signature`).
 - `adopt(name, version, source, *, kind=Dataset)` — return `kind`-typed `Lazy` with `adopt_source=source`. **Consumers always resolve to the handle's `source`** (a pure pointer — no move, no recompute); the record at the canonical address is provenance only. Re-adopting `name@version` from a different `source` is a drift case: it warns (the recorded source differs from the live one), and consumers follow the live handle. Pin the source or bump the version to make a source change unambiguous.
+- `derived(name, *, fn, build_config, deps=(), kind=Artifact, …)` — the generic single-step builder, **config-object form**: `fn(build_config(ctx))`. The tier beneath `apply` for the common case `apply` *can't* express — a step fn that takes a typed config object (a dataclass/pydantic config), or inputs derived from a dep path (`f"{ctx.path(dep)}/sub"`). `build_config(ctx)` pulls dep paths and `ctx.out` itself; pass the same handles in `deps`. `kind` selects the produced `Artifact` type (consumer routing); `resources`/`pin` as for `apply`. This is the workhorse for the dataset catalogs (transforms, conversions, filters) — it is the thin, named wrapper over the `Lazy`+`Recipe` construction, kept so a catalog author writes one call, not five lines of plumbing.
 - `materialized_config(handle, prefix)` — `build_config` under `for_run(out=handle.path(prefix), prefix=prefix, run_args=handle.recipe.run_args)` with `region=None`, for inspection / golden tests. Runs nothing. Passes the recipe's real `run_args` (so a `build_config` that reads `ctx.run_arg(...)` — e.g. `train_lm` — does not `KeyError`); still not identical to the run-time config, which also binds a real `region`.
 
-For full `RunContext` control (a typed config object, region/run-arg pulls), construct a `Lazy` +
-`Recipe` directly — that is the library tier the typed builders use. `apply` is the researcher
-sugar over the common direct-call case.
+Two researcher helpers, by fn shape: `apply` when the step fn takes keyword inputs (a bare `Lazy`
+resolves to its path, `OUT` to `ctx.out`); `derived` when it takes a typed config object or needs
+`build_config` to compose paths. Both return `Lazy[T]` and sit over the same `Lazy`+`Recipe` tier the
+typed builders (`tokenized`, `train_lm`, `mixture`) use directly for full `RunContext` control.
 
 ## Core: compute dispatch (`marin.execution.remote`)
 

@@ -18,8 +18,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import PathMetadata
-from marin.execution.lazy import Checkpoint, Recipe, RunContext
+from marin.execution.artifact import Artifact, Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
-ModelArtifact = Checkpoint | str
+ModelArtifact = Lazy[Checkpoint] | str
 
 
 @dataclasses.dataclass
@@ -156,9 +156,9 @@ def get_stop_tokens(model_type: str) -> list[str]:
 
 
 def _resolve_model_artifact_path(ctx: RunContext, artifact: ModelArtifact) -> str:
-    """Resolve a model artifact to a concrete path: a :class:`Checkpoint` to its
+    """Resolve a model artifact to a concrete path: a ``Lazy[Checkpoint]`` handle to its
     region-local output path, a string passes through unchanged."""
-    if isinstance(artifact, Checkpoint):
+    if isinstance(artifact, Lazy):
         return ctx.path(artifact)
     return artifact
 
@@ -352,8 +352,8 @@ def _build_rl_job_config(
     return job_config
 
 
-def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
-    """Build the RL job config and run it, returning the output path.
+def _run_rl_experiment_step(config: RLStepConfig) -> Artifact:
+    """Build the RL job config and run it, returning a path ref to the output.
 
     Runs inline on whatever host executes it; ``RLJob.run`` submits the coordinator
     (and its trainer/rollout workers) as its own Fray jobs.
@@ -369,7 +369,7 @@ def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
     )
     logger.info("Launching RL run %s with instance_id=%s", config.name, instance_id)
     RLJob(job_config).run(config.name)
-    return PathMetadata(path=config.output_path)
+    return Artifact(path=config.output_path)
 
 
 def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
@@ -385,15 +385,16 @@ def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
 
 def make_rl_step(
     name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str = "v1"
-) -> Checkpoint:
-    """Assemble an async RL training run as a lazy :class:`Checkpoint`.
+) -> Lazy[Checkpoint]:
+    """Assemble an async RL training run as a ``Lazy[Checkpoint]``.
 
-    The model artifact resolves at run time: a :class:`Checkpoint` becomes a dependency
-    and resolves to its region-local path, a string passes through. The launch-region
-    resources are a run-arg, so re-running on a different launch box never re-fingerprints.
+    The model artifact resolves at run time: a ``Lazy[Checkpoint]`` handle becomes a
+    dependency and resolves to its region-local path, a string passes through. The
+    launch-region resources are a run-arg, so re-running on a different launch box never
+    re-fingerprints.
     """
     artifact = config.model_config.artifact
-    deps = (artifact,) if isinstance(artifact, Checkpoint) else ()
+    deps = (artifact,) if isinstance(artifact, Lazy) else ()
 
     def build_config(ctx: RunContext) -> RLStepConfig:
         model_path = _resolve_model_artifact_path(ctx, artifact)
@@ -408,7 +409,7 @@ def make_rl_step(
             resources=ctx.run_arg("resources"),
         )
 
-    return Checkpoint(
+    return Lazy(
         name=f"rl_testing/{name}",
         version=version,
         recipe=Recipe(
@@ -417,4 +418,5 @@ def make_rl_step(
             deps=deps,
             run_args={"resources": executor_step_resources_for_rl_experiment(config)},
         ),
+        result_type=Checkpoint,
     )

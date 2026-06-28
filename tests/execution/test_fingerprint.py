@@ -5,7 +5,9 @@
 
 The fingerprint is only meaningful if the same config always serializes to the same
 bytes, so these tests pin the canonicalization (dtypes, timedeltas, paths, sets,
-arrays) and the strict refusal of values that have no stable representation.
+arrays). The fingerprint is advisory, so an unknown type degrades to a defined stable
+fallback (not a raise) unless strict mode is on; ``register_fingerprint`` teaches an
+exact form.
 """
 
 import dataclasses
@@ -14,9 +16,18 @@ from enum import Enum
 from pathlib import Path
 
 import jax.numpy as jnp
+import marin.execution.fingerprint as fingerprint_module
 import numpy as np
 import pytest
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
+from marin.execution.fingerprint import canonical_json, fingerprint_hash, register_fingerprint, set_strict
+
+
+@pytest.fixture(autouse=True)
+def _reset_strict():
+    """Restore the module-level strict override so a strict test never leaks into others."""
+    saved = fingerprint_module._STRICT_OVERRIDE
+    yield
+    fingerprint_module._STRICT_OVERRIDE = saved
 
 
 @dataclasses.dataclass(frozen=True)
@@ -66,12 +77,39 @@ def test_enum_uses_value():
     assert canonical_json({"c": _Color.RED}) == canonical_json({"c": "red"})
 
 
-def test_rejects_callable():
+def test_unknown_type_falls_back_to_a_stable_form():
+    """An unknown type with a ``__dict__`` fingerprints by its vars — deterministically, no raise."""
+
+    class Widget:
+        def __init__(self, n: int) -> None:
+            self.n = n
+
+    same = canonical_json({"w": Widget(1)})
+    assert same == canonical_json({"w": Widget(1)})
+    assert same != canonical_json({"w": Widget(2)})
+
+
+def test_register_fingerprint_gives_an_exact_form():
+    class Special:
+        def __init__(self, token: str) -> None:
+            self._opaque = object()  # not deterministically serializable on its own
+            self.token = token
+
+    register_fingerprint(Special, lambda s: {"special": s.token})
+    out = canonical_json({"s": Special("xyz")})
+    assert "xyz" in out
+    assert canonical_json({"s": Special("a")}) != canonical_json({"s": Special("b")})
+
+
+def test_strict_mode_rejects_callable_via_env(monkeypatch):
+    monkeypatch.setenv("MARIN_FINGERPRINT_STRICT", "1")
     with pytest.raises(TypeError, match="callable"):
         canonical_json({"fn": lambda x: x})
 
 
-def test_rejects_default_repr_object():
+def test_strict_mode_rejects_default_repr_object():
+    set_strict(True)
+
     class Opaque:  # relies on object.__repr__ -> a memory address, not reproducible
         pass
 

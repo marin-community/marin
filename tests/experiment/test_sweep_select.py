@@ -6,18 +6,17 @@
 The toy trials here *write* their metrics to their own output, the way a real
 training run does (``train_lm`` mirrors them to ``tracker_metrics.jsonl``), so the
 tests exercise the real fan-out/fan-in mechanics — lower, run, then read each
-trial's recorded metrics back through its :class:`AnnotatedCheckpoint` reader and
-reduce — without training anything.
+trial's recorded metrics back with the selection's reader and reduce — without
+training anything.
 """
 
 import json
 
 import fsspec
 import pytest
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import Checkpoint, Recipe, lower
-from marin.execution.step_runner import StepRunner
-from marin.experiment.sweep import AnnotatedCheckpoint, annotate, grid, select, sweep
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, resolve
+from marin.experiment.sweep import Selection, grid, select, sweep
 
 
 def _write_metrics(config: dict) -> None:
@@ -32,22 +31,21 @@ def _write_metrics(config: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def _trial(learning_rate: float, weight_decay: float) -> AnnotatedCheckpoint:
+def _trial(learning_rate: float, weight_decay: float) -> Lazy[Checkpoint]:
     """A toy trial that records ``loss = lr + wd`` to its output, like a real run."""
-    return annotate(
-        Checkpoint(
-            name=f"trials/lr{learning_rate}-wd{weight_decay}",
-            version="v1",
-            recipe=Recipe(
-                fn=_write_metrics,
-                build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {
-                    "out": ctx.out,
-                    "loss": lr + wd,
-                    "lr": lr,
-                    "wd": wd,
-                },
-            ),
-        )
+    return Lazy(
+        name=f"trials/lr{learning_rate}-wd{weight_decay}",
+        version="v1",
+        result_type=Checkpoint,
+        recipe=Recipe(
+            fn=_write_metrics,
+            build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {
+                "out": ctx.out,
+                "loss": lr + wd,
+                "lr": lr,
+                "wd": wd,
+            },
+        ),
     )
 
 
@@ -72,13 +70,14 @@ def test_select_records_the_lowest_loss_trial(tmp_path, monkeypatch):
     trials = sweep(_trial, learning_rate=[0.1, 0.3], weight_decay=[0.0, 0.2])
     best = select("sweeps/best", "v1", trials, metric="loss", mode="min")
 
-    StepRunner().run([lower(best)])
+    result = resolve(best)
 
-    result = Artifact.from_path(f"{tmp_path}/sweeps/best/v1")
-    assert result["score"] == pytest.approx(0.1)
-    assert result["metrics"]["learning_rate"] == pytest.approx(0.1)
-    assert result["winner_path"] == f"{tmp_path}/trials/lr0.1-wd0.0/v1"
-    assert len(result["scores"]) == 4
+    assert isinstance(result, Selection)
+    assert result.score == pytest.approx(0.1)
+    assert result.winner == "trials/lr0.1-wd0.0@v1"
+    assert result.metrics["learning_rate"] == pytest.approx(0.1)
+    assert result.winner_path == f"{tmp_path}/trials/lr0.1-wd0.0/v1"
+    assert len(result.scores) == 4
 
 
 def test_select_max_inverts_the_choice(tmp_path, monkeypatch):
@@ -86,15 +85,13 @@ def test_select_max_inverts_the_choice(tmp_path, monkeypatch):
     trials = sweep(_trial, learning_rate=[0.1, 0.3], weight_decay=[0.0])
     best = select("sweeps/top", "v1", trials, metric="loss", mode="max")
 
-    StepRunner().run([lower(best)])
-
-    assert Artifact.from_path(f"{tmp_path}/sweeps/top/v1")["score"] == pytest.approx(0.3)
+    assert resolve(best).score == pytest.approx(0.3)
 
 
-def test_select_returns_a_checkpoint_handle():
-    # The reduced sweep is a Checkpoint addressed at the given name@version, not a bespoke node.
+def test_select_returns_a_selection_handle():
+    # The reduced sweep is a Lazy[Selection] addressed at the given name@version.
     best = select("sweeps/x", "v1", [_trial(0.1, 0.0)], metric="loss")
-    assert (best.name, best.version) == ("sweeps/x", "v1")
+    assert (best.name, best.version, best.result_type) == ("sweeps/x", "v1", Selection)
 
 
 def test_select_rejects_an_unknown_mode():

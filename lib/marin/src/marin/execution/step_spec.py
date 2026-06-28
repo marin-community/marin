@@ -53,8 +53,15 @@ class StepSpec:
     fingerprint_payload: str | None = None
     """For a lazy artifact, the canonical config JSON behind its fingerprint
     (:mod:`marin.execution.fingerprint`). Recorded as provenance and used to render a
-    field-level diff when the build-once guard rejects a changed recipe. Diagnostics
-    only: it never enters :attr:`hash_id`."""
+    field-level diff when the drift check sees a changed recipe. Diagnostics only: it
+    never enters :attr:`hash_id`."""
+
+    writes_record: bool = False
+    """Whether the step's ``fn`` already writes its own :class:`~marin.execution.artifact.ArtifactRecord`.
+
+    Lazy-artifact steps set this so the runner does not overwrite the full record with a
+    minimal one. A plain ``StepSpec`` leaves it ``False`` and the runner saves the fn's
+    return via :func:`~marin.execution.artifact.write_artifact`."""
 
     # Execution
     fn: Callable[[str], Any] | None = None

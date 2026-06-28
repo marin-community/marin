@@ -7,11 +7,12 @@ from functools import cache
 from pathlib import Path
 
 import cloudpickle
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.disk_cache import disk_cache
 from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, distributed_lock
 from marin.execution.step_runner import check_cache, run_step
 from marin.execution.step_spec import StepSpec
+from pydantic import BaseModel
 
 
 def _make_fn():
@@ -69,28 +70,32 @@ def test_disk_cached_skips_when_another_worker_completed(tmp_path: Path):
     assert result == expected
 
 
+class _Val(BaseModel):
+    value: int
+
+
 def test_composition_with_save_load(tmp_path: Path):
     """disk_cached + distributed_lock + save/load (the StepRunner pattern)."""
     call_count = 0
 
-    def counting_fn(output_path: str) -> dict:
+    def counting_fn(output_path: str) -> _Val:
         nonlocal call_count
         call_count += 1
         os.makedirs(output_path, exist_ok=True)
-        return {"value": 42}
+        return _Val(value=42)
 
     output_path = StepSpec(name="comp", output_path_prefix=tmp_path.as_posix()).output_path
 
     cached_fn = disk_cache(
         distributed_lock(counting_fn),
         output_path=output_path,
-        save_fn=Artifact.save,
-        load_fn=Artifact.from_path,
+        save_fn=write_artifact,
+        load_fn=lambda path: read_artifact(path, _Val),
     )
 
     result1 = cached_fn(output_path)
     assert call_count == 1
-    assert result1 == {"value": 42}
+    assert result1 == _Val(value=42)
 
     result2 = cached_fn(output_path)
     assert call_count == 1

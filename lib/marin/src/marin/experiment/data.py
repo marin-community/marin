@@ -7,27 +7,25 @@ The library provides *mechanism* — concise builders — while an experiment st
 the *policy*: which datasets, at what weights. The split is deliberate, so mixture
 weights live in the experiment that chose them, not buried in a catalog constant.
 
-- :func:`tokenized` returns a :class:`~marin.execution.lazy.Dataset` handle. Its raw
-  input is one of: ``source`` (a HuggingFace id or single path), ``paths`` (raw globs
-  resolved against the run prefix), or ``raw=`` a download handle + ``glob`` within it
-  (a download -> tokenize dependency). ``pin`` references already-tokenized data at an
-  existing location instead of recomputing it.
-- :func:`raw_download` wraps a download function as a raw-data handle that
-  :func:`tokenized` can depend on; :func:`hf_download` is the HuggingFace-Hub case.
-- :func:`derived` is the generic single-step builder: ``fn(build_config(ctx))`` writing
-  to ``ctx.out``, with declared ``deps``. Use it for transforms/conversions/filters
-  (e.g. HF-dataset-to-eval-JSONL, Dolma conversions) that are neither a tokenize nor a
-  plain download.
+- :func:`tokenized` returns a ``Lazy[Dataset]`` handle. Its raw input is one of:
+  ``source`` (a HuggingFace id or single path), ``paths`` (raw globs resolved against
+  the run prefix), or ``raw=`` a download handle + ``glob`` within it (a download ->
+  tokenize dependency). ``pin`` references already-tokenized data at an existing location
+  instead of recomputing it.
+- :func:`hf_download` is a HuggingFace-Hub download as a raw-data ``Lazy[Dataset]`` that
+  :func:`tokenized` (via ``raw=``) can depend on; :func:`raw_download` is the same for a
+  non-Hub source. A generic single-step build (a transform, conversion, or filter) is
+  :func:`marin.execution.lazy.apply` (keyword inputs) or :func:`marin.execution.lazy.derived`
+  (a typed config object).
 - :func:`pretokenized` handles an already-tokenized Levanter cache hosted on
   HuggingFace (e.g. the fineweb-edu prebuilt subcaches): it downloads rather than
-  re-tokenizes, and is consumed like any other tokenized :class:`Dataset`.
+  re-tokenizes, and is consumed like any other tokenized ``Dataset``.
 - :func:`mixture` assembles a Levanter ``LmDataConfig`` from ``{handle: weight}``
   training components plus weight-0 ``validation`` handles, resolving each cache path
   with ``ctx.path(handle)``.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
 
 from fray.types import ResourceConfig
 from levanter.data.text import (
@@ -39,7 +37,8 @@ from levanter.data.text import (
 )
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.lazy import Artifact, Dataset, Recipe, RunContext
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, Recipe, RunContext, derived
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.data_configs import dataset_component
@@ -50,7 +49,7 @@ from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
 DEFAULT_VERSION = "v1"
 
 
-def _on(fn: Callable[[Any], Any], resources: ResourceConfig | None) -> Callable[[Any], Any]:
+def _on(fn: Callable[..., object], resources: ResourceConfig | None) -> Callable[..., object]:
     """Run ``fn`` on Fray with ``resources`` (via :func:`remote`), or inline when None.
 
     Resources ride with the function, so they stay off the step node and out of the
@@ -68,28 +67,6 @@ def _resolve(prefix: str, path: str) -> str:
     return f"{prefix}/{path}" if _is_relative_path(path) else path
 
 
-def raw_download(
-    name: str,
-    *,
-    fn: Callable[[Any], Any],
-    build_config: Callable[[RunContext], Any],
-    version: str = DEFAULT_VERSION,
-    pin: str | None = None,
-    resources: ResourceConfig | None = None,
-) -> Dataset:
-    """A raw-data download handle: ``build_config(ctx)`` writes the download to ``ctx.out``.
-
-    Returned as a :class:`Dataset` so :func:`tokenized` can depend on it; it is not a
-    tokenized cache itself.
-    """
-    return Dataset(
-        name=name,
-        version=version,
-        recipe=Recipe(fn=_on(fn, resources), build_config=build_config),
-        override_path=pin,
-    )
-
-
 def hf_download(
     name: str,
     *,
@@ -99,13 +76,13 @@ def hf_download(
     version: str = DEFAULT_VERSION,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
-) -> Dataset:
+) -> Lazy[Dataset]:
     """A HuggingFace-Hub dataset download as a raw-data handle.
 
     Wraps :func:`marin.datakit.download.huggingface.download_hf` into a handle that
-    :func:`tokenized` (via ``raw=``) or :func:`derived` can depend on. ``urls_glob``
-    restricts which files in the repo are fetched (empty = all). ``pin`` references an
-    existing download at a fixed location instead of re-fetching it.
+    :func:`tokenized` (via ``raw=``) or :func:`marin.execution.lazy.apply` can depend on.
+    ``urls_glob`` restricts which files in the repo are fetched (empty = all). ``pin``
+    references an existing download at a fixed location instead of re-fetching it.
     """
 
     def build_config(ctx: RunContext) -> DownloadConfig:
@@ -117,38 +94,32 @@ def hf_download(
             wait_for_completion=True,
         )
 
-    return raw_download(name, fn=download_hf, build_config=build_config, version=version, pin=pin, resources=resources)
+    return Lazy(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=_on(download_hf, resources), build_config=build_config),
+        result_type=Dataset,
+        override_path=pin,
+    )
 
 
-def derived(
+def raw_download(
     name: str,
     *,
-    fn: Callable[[Any], Any],
-    build_config: Callable[[RunContext], Any],
-    deps: Sequence[Artifact] = (),
+    fn: Callable[[object], object],
+    build_config: Callable[[RunContext], object],
     version: str = DEFAULT_VERSION,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
-    kind: type[Artifact] = Artifact,
-) -> Artifact:
-    """A single derived artifact: ``fn(build_config(ctx))`` writes its result to ``ctx.out``.
+) -> Lazy[Dataset]:
+    """A raw-data download as a ``Lazy[Dataset]`` that :func:`tokenized` can depend on.
 
-    The generic builder behind transforms, conversions, and filters — anything that is
-    neither a tokenize nor a plain download (e.g. HF-dataset-to-eval-JSONL, Dolma
-    conversions, extension filters). ``deps`` are the upstream handles the build consumes;
-    resolve each with ``ctx.path(dep)`` inside ``build_config`` and pass the same handles
-    here so they materialize first. ``kind`` selects the handle type for consumer routing
-    (:class:`~marin.execution.lazy.Dataset` for a tokenizable corpus,
-    :class:`~marin.execution.lazy.Checkpoint` for a model; the base
-    :class:`~marin.execution.lazy.Artifact` otherwise). ``pin`` references existing data
-    instead of recomputing it.
+    The generic download builder for a source that is not a HuggingFace-Hub dataset (use
+    :func:`hf_download` for that): ``fn(build_config(ctx))`` writes the download to ``ctx.out``.
+    Returned as a :class:`~marin.execution.artifact.Dataset` handle (it is raw, not a tokenized
+    cache). ``pin`` references an existing download instead of re-fetching it.
     """
-    return kind(
-        name=name,
-        version=version,
-        recipe=Recipe(fn=_on(fn, resources), build_config=build_config, deps=tuple(deps)),
-        override_path=pin,
-    )
+    return derived(name, fn=fn, build_config=build_config, version=version, pin=pin, resources=resources, kind=Dataset)
 
 
 def tokenized(
@@ -157,7 +128,7 @@ def tokenized(
     tokenizer: str,
     source: str | None = None,
     paths: Sequence[str] | None = None,
-    raw: Dataset | None = None,
+    raw: Lazy[Dataset] | None = None,
     glob: str | None = None,
     validation: bool = False,
     pin: str | None = None,
@@ -166,7 +137,7 @@ def tokenized(
     version: str = DEFAULT_VERSION,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
-) -> Dataset:
+) -> Lazy[Dataset]:
     """A tokenized-dataset handle.
 
     Provide exactly one raw input: ``source`` (a HuggingFace id ``org/name`` or a single
@@ -204,12 +175,13 @@ def tokenized(
             tags=[*tags],
         )
 
-    return Dataset(
+    return Lazy(
         name=name,
         version=version,
         recipe=Recipe(
             fn=_on(_tokenize_fn, resources), build_config=build_config, deps=(raw,) if raw is not None else ()
         ),
+        result_type=Dataset,
         override_path=pin,
     )
 
@@ -224,11 +196,11 @@ def pretokenized(
     pin: str | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
-) -> Dataset:
+) -> Lazy[Dataset]:
     """A handle to an already-tokenized Levanter cache hosted on HuggingFace.
 
     ``build_config(ctx)`` downloads the HF dataset repo ``repo_id`` into ``ctx.out`` as
-    a Levanter cache; the handle then reads as a tokenized :class:`Dataset` with no
+    a Levanter cache; the handle then reads as a tokenized ``Dataset`` with no
     re-tokenization. Use it where a tokenizing :func:`tokenized` handle would be too
     slow — e.g. the fineweb-edu prebuilt subcaches. ``pin`` references an
     already-downloaded cache at an existing location instead of fetching it again.
@@ -243,15 +215,16 @@ def pretokenized(
             tags=[*tags],
         )
 
-    return Dataset(
+    return Lazy(
         name=name,
         version=version,
         recipe=Recipe(fn=_on(fetch_pretokenized_cache, resources), build_config=build_config),
+        result_type=Dataset,
         override_path=pin,
     )
 
 
-def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
+def _component_for(dataset: Lazy, ctx: RunContext) -> DatasetComponent:
     """Build a Levanter mixture component for ``dataset``, rooted at its resolved path."""
     cache_path = ctx.path(dataset)
     config = dataset.recipe.build_config(
@@ -262,15 +235,15 @@ def _component_for(dataset: Dataset, ctx: RunContext) -> DatasetComponent:
     return dataset_component(config.as_lm_dataset_source_config(cache_path))
 
 
-def _tokenizer_of(dataset: Dataset) -> str:
+def _tokenizer_of(dataset: Lazy) -> str:
     return dataset.recipe.build_config(RunContext.for_fingerprint(dataset.recipe.run_args.keys())).tokenizer
 
 
 def mixture(
     ctx: RunContext,
-    train: Mapping[Dataset, float],
+    train: Mapping[Lazy[Dataset], float],
     *,
-    validation: Sequence[Dataset] = (),
+    validation: Sequence[Lazy[Dataset]] = (),
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
 ) -> LmDataConfig:
     """Assemble an ``LmDataConfig`` from dataset handles.

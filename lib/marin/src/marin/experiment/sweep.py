@@ -4,21 +4,18 @@
 """Hyperparameter sweeps over lazy checkpoints: fan out trials, select the best.
 
 A sweep is fan-out then fan-in over ``Lazy[Checkpoint]``. :func:`sweep` builds one
-checkpoint handle per grid point; :func:`select` reduces them to the one whose
-recorded metric is best. Both are ordinary
-:class:`~marin.execution.lazy.Artifact`\\ s, so a sweep lowers and runs through the
-normal pipeline — every trial trains (its own job), then the selection.
+checkpoint handle per grid point; :func:`select` reduces them to the one whose recorded
+metric is best, as a ``Lazy[Selection]``. The whole thing lowers and runs through the
+normal pipeline — every trial trains (its own job), then the selection runs inline.
 
 A trial is just a checkpoint-producing function (e.g. ``lambda **p: train_lm(...)``):
-there is no metrics payload to return. Selection reads each trial's metric from where
-the trial *wrote* it — its output path. The handle that pairs a checkpoint with "how
-to read my own metrics" is an :class:`AnnotatedCheckpoint`; :func:`annotate` wraps a
-plain :class:`~marin.execution.lazy.Checkpoint` into one. The default reader,
+there is no metrics payload to return. :func:`select` reads each trial's metrics from
+where the trial *wrote* them — its output path — with a single ``reader`` (a sweep is
+homogeneous, so every trial writes its metrics the same way). The default reader,
 :func:`read_replicated_metrics`, reads the ``tracker_metrics.jsonl`` that a
-:func:`~marin.experiment.train.train_lm` run mirrors next to its checkpoints (the
-WandB ``replicate_path``). :func:`select` itself stays generic: it knows nothing about
-where metrics live (the trial's reader does that) — only which ``metric`` key to rank
-by and which direction.
+:func:`~marin.experiment.train.train_lm` run mirrors next to its checkpoints (the WandB
+``replicate_path``). A custom metric source is a ``reader=`` argument to :func:`select`,
+not a per-trial wrapper.
 """
 
 import itertools
@@ -26,8 +23,24 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from marin.execution.lazy import Checkpoint, Recipe, RunContext
+from marin.execution.artifact import Checkpoint, JsonArtifact
+from marin.execution.lazy import Lazy, Recipe, RunContext
 from marin.scaling_laws.eval_metrics_reader import read_eval_records
+
+
+class Selection(JsonArtifact):
+    """The outcome of a :func:`select`: the winning trial and the scores it ranked."""
+
+    winner: str
+    """The winning trial's ``name@version``."""
+    score: float
+    """The winner's value of the selection ``metric``."""
+    winner_path: str
+    """The winner's resolved output path."""
+    scores: dict[str, float]
+    """Every trial's ``name@version`` -> its ``metric`` value."""
+    metrics: dict[str, Any]
+    """The winner's full recorded metrics summary."""
 
 
 def read_replicated_metrics(output_path: str) -> Mapping[str, Any]:
@@ -44,42 +57,6 @@ def read_replicated_metrics(output_path: str) -> Mapping[str, Any]:
     return records[-1]["summary"]
 
 
-@dataclass(frozen=True, eq=False)
-class AnnotatedCheckpoint(Checkpoint):
-    """A :class:`~marin.execution.lazy.Checkpoint` that also knows how to read its
-    own recorded metrics.
-
-    ``metrics_reader(output_path) -> Mapping`` reads the trial's metrics from its
-    materialized output (where training wrote them), so a sweep can rank trials
-    without each trial returning a metrics payload. The reader does not bear on
-    identity — it is read at run time, not built into the fingerprint.
-    """
-
-    metrics_reader: Callable[[str], Mapping[str, Any]] = read_replicated_metrics
-
-
-def annotate(
-    checkpoint: Checkpoint,
-    *,
-    metrics_reader: Callable[[str], Mapping[str, Any]] = read_replicated_metrics,
-) -> AnnotatedCheckpoint:
-    """Pair a checkpoint with a reader for its recorded metrics, for selection.
-
-    Wraps a plain :class:`~marin.execution.lazy.Checkpoint` (e.g. from
-    :func:`~marin.experiment.train.train_lm`) without changing its identity: same
-    ``name``/``version``/recipe, so it lowers and caches exactly as before.
-    """
-    return AnnotatedCheckpoint(
-        name=checkpoint.name,
-        version=checkpoint.version,
-        recipe=checkpoint.recipe,
-        override_path=checkpoint.override_path,
-        adopt_source=checkpoint.adopt_source,
-        expected_fingerprint=checkpoint.expected_fingerprint,
-        metrics_reader=metrics_reader,
-    )
-
-
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]:
     """The Cartesian product of named axes, as a list of parameter dicts.
 
@@ -91,13 +68,13 @@ def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]:
     return [dict(zip(keys, values, strict=True)) for values in itertools.product(*axes.values())]
 
 
-def sweep(trial: Callable[..., AnnotatedCheckpoint], **axes: Sequence[Any]) -> list[AnnotatedCheckpoint]:
+def sweep(trial: Callable[..., Lazy[Checkpoint]], **axes: Sequence[Any]) -> list[Lazy[Checkpoint]]:
     """One trial handle per grid point: ``trial(**params)`` for each combination.
 
     ``axes`` are the swept dimensions (see :func:`grid`); ``trial`` maps one parameter
-    set to an :class:`AnnotatedCheckpoint`. The trial must fold the swept values into
-    both its config (so each grid point gets a distinct fingerprint) and its ``name``
-    (so each gets a distinct, readable address); :func:`select` rejects trials whose
+    set to a ``Lazy[Checkpoint]``. The trial must fold the swept values into both its
+    config (so each grid point gets a distinct fingerprint) and its ``name`` (so each
+    gets a distinct, readable address); :func:`select` rejects trials whose
     ``name@version`` collide.
     """
     return [trial(**params) for params in grid(**axes)]
@@ -118,25 +95,24 @@ class _SelectConfig:
 def select(
     name: str,
     version: str,
-    trials: Sequence[AnnotatedCheckpoint],
+    trials: Sequence[Lazy[Checkpoint]],
     *,
     metric: str,
     mode: str = "min",
-) -> Checkpoint:
-    """The trial whose recorded ``metric`` is best (``min``/``max``), as a checkpoint.
+    reader: Callable[[str], Mapping[str, Any]] = read_replicated_metrics,
+) -> Lazy[Selection]:
+    """The trial whose recorded ``metric`` is best (``min``/``max``), as a ``Selection``.
 
-    Depends on every trial. At run time it reads each trial's metrics through that
-    trial's own reader (an :class:`AnnotatedCheckpoint` annotation), ranks them by
-    ``metric``, and writes its payload — ``{"winner", "score", "winner_path",
-    "metrics", "scores"}``. The returned handle is a
-    :class:`~marin.execution.lazy.Checkpoint` addressed at ``name@version``: read the
-    selection through it (``winner``/``winner_path``) to drive a follow-on run from the
-    winning trial.
+    Depends on every trial. At run time it reads each trial's metrics with ``reader``,
+    ranks them by ``metric``, and produces a :class:`Selection`
+    (``winner``/``score``/``winner_path``/``scores``/``metrics``). Read the selection back
+    (its ``winner``/``winner_path``) to drive a follow-on run from the winning trial.
 
     ``metric`` and ``mode`` bear identity (they enter the fingerprint): selecting by a
-    different metric or direction is a different artifact. The trial *values* do not
-    (they are read at run time), so the selection is identified by its inputs'
-    ``name@version`` and the selection rule.
+    different metric or direction is a different artifact. The trial *values* and the
+    ``reader`` do not — values are read at run time, and a callable has no stable
+    fingerprint, so swapping readers does not re-identify the selection (bump ``version``
+    if a reader change should be a new artifact).
     """
     if mode not in ("min", "max"):
         raise ValueError(f"select mode must be 'min' or 'max', got {mode!r}")
@@ -147,20 +123,19 @@ def select(
     if len(set(ids)) != len(ids):
         duplicates = sorted({i for i in ids if ids.count(i) > 1})
         raise ValueError(f"select trials must have distinct name@version; duplicates: {duplicates}")
-    readers = {tid: t.metrics_reader for tid, t in zip(ids, trials, strict=True)}
 
     def build_config(ctx: RunContext) -> _SelectConfig:
         return _SelectConfig(
             metric=metric, mode=mode, trials={tid: ctx.path(t) for tid, t in zip(ids, trials, strict=True)}
         )
 
-    def choose(config: _SelectConfig) -> dict[str, Any]:
+    def choose(config: _SelectConfig) -> Selection:
         maximize = config.mode == "max"
         scores: dict[str, float] = {}
         summaries: dict[str, Mapping[str, Any]] = {}
         best: tuple[str, float, str] | None = None
         for trial_id, trial_path in config.trials.items():
-            summary = readers[trial_id](trial_path)
+            summary = reader(trial_path)
             summaries[trial_id] = summary
             score = summary[config.metric]
             scores[trial_id] = score
@@ -168,12 +143,17 @@ def select(
                 best = (trial_id, score, trial_path)
         assert best is not None  # config.trials is non-empty (guarded at build time)
         winner_id, winner_score, winner_path = best
-        return {
-            "winner": winner_id,
-            "score": winner_score,
-            "winner_path": winner_path,
-            "metrics": dict(summaries[winner_id]),
-            "scores": scores,
-        }
+        return Selection(
+            winner=winner_id,
+            score=winner_score,
+            winner_path=winner_path,
+            scores=scores,
+            metrics=dict(summaries[winner_id]),
+        )
 
-    return Checkpoint(name=name, version=version, recipe=Recipe(fn=choose, build_config=build_config, deps=trials))
+    return Lazy(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=choose, build_config=build_config, deps=trials),
+        result_type=Selection,
+    )

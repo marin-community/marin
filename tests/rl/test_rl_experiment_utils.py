@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from levanter.models.llama import LlamaConfig
-from marin.execution.artifact import PathMetadata
-from marin.execution.lazy import Checkpoint, Recipe, materialized_config
+from marin.execution.artifact import Artifact, Checkpoint
+from marin.execution.lazy import Lazy, Recipe, materialized_config
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
@@ -125,9 +125,10 @@ def test_launcher_region_raises_when_root_region_conflicts_with_requested_comput
 
 def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
-    model_checkpoint = Checkpoint(
+    model_checkpoint = Lazy(
         name="models/test-llama",
         version="v1",
+        result_type=Checkpoint,
         recipe=Recipe(fn=_noop, build_config=lambda _ctx: _EmptyConfig()),
     )
     config = dataclasses.replace(
@@ -228,7 +229,7 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
 
 
-def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
+def test_run_rl_experiment_step_returns_a_path_ref(monkeypatch):
     calls = {}
 
     class _FakeRLJob:
@@ -262,4 +263,4 @@ def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
     assert calls["build_kwargs"]["instance_id"].startswith("exec-gcs-small-test-")
     assert calls["job_config"] == "job-config"
     assert calls["name"] == "exec-gcs-small-test"
-    assert result == PathMetadata(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")
+    assert result == Artifact(path="gs://marin-us-central1/rl_testing/exec-gcs-small-test")

@@ -1,0 +1,176 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""The artifact record: full-record provenance, advisory drift, dev mutability, pins.
+
+Drives the real lower -> StepRunner pipeline against a tmp prefix so the drift check is
+exercised exactly as it fires in production (before a cached SUCCESS is served), plus the
+manual ``read_artifact``/``write_artifact`` payload API.
+"""
+
+import dataclasses
+import logging
+
+import pytest
+from marin.execution.artifact import (
+    FingerprintMismatchError,
+    JsonArtifact,
+    read_artifact,
+    read_record,
+    write_artifact,
+)
+from marin.execution.lazy import Lazy, Recipe, lower, run
+from pydantic import BaseModel
+
+
+class Toy(JsonArtifact):
+    payload: str
+
+
+def _toy(version: str, payload: str) -> Lazy[Toy]:
+    """A toy value artifact whose recipe (and thus fingerprint) is keyed by ``payload``."""
+    return Lazy(
+        name="datasets/toy",
+        version=version,
+        result_type=Toy,
+        recipe=Recipe(
+            fn=lambda config: Toy(payload=config["payload"]),
+            build_config=lambda ctx: {"out": ctx.out, "payload": payload},
+        ),
+    )
+
+
+# --- the full record -----------------------------------------------------------
+
+
+def test_records_full_provenance_on_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy("v1", "a")
+    run(art)
+
+    record = read_record(f"{tmp_path}/datasets/toy/v1")
+    assert record is not None
+    assert (record.name, record.version, record.fingerprint) == ("datasets/toy", "v1", art.fingerprint())
+    # The unified record carries the full provenance, not just the payload.
+    assert record.result_type.endswith(".Toy")
+    assert record.command_line  # sys.argv of the launching process
+    assert record.result == {"path": "", "payload": "a"}
+
+
+def test_record_carries_fingerprint_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy("v1", "a")
+    run(art)
+
+    record = read_record(f"{tmp_path}/datasets/toy/v1")
+    assert record.fingerprint_payload == art.fingerprint_payload()
+
+
+def test_same_recipe_rerun_is_cache_hit(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    run(_toy("v1", "a"))
+    # Identical recipe + version: a cache hit, no error.
+    run(_toy("v1", "a"))
+
+
+# --- advisory drift (no more ImmutableArtifactError) ---------------------------
+
+
+def test_changed_recipe_warns_and_serves_cached(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    run(_toy("v1", "a"))
+
+    # Same name@version, different recipe: a warning, not an error, and the cached output stands.
+    with caplog.at_level(logging.WARNING):
+        run(_toy("v1", "b"))
+
+    messages = "\n".join(r.getMessage() for r in caplog.records)
+    assert "drift" in messages
+    assert "payload: 'a' -> 'b'" in messages  # the field-level diff names the changed value
+
+    record = read_record(f"{tmp_path}/datasets/toy/v1")
+    assert record.result == {"path": "", "payload": "a"}  # original output served, not rebuilt
+
+
+def test_expected_fingerprint_pin_raises_at_lower(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    art = _toy("v1", "a")
+
+    # A matching pin lowers cleanly; a stale pin fails even before the first build.
+    lower(dataclasses.replace(art, expected_fingerprint=art.fingerprint()))
+    with pytest.raises(FingerprintMismatchError):
+        lower(dataclasses.replace(art, expected_fingerprint="deadbeef"))
+
+
+def test_expected_fingerprint_pin_hard_fails_drift(tmp_path, monkeypatch):
+    """A pinned artifact rebuilt from a changed recipe is a hard error on the cache hit too."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    run(_toy("v1", "a"))
+
+    # Same address, different recipe, but now pinned to the *changed* recipe's fingerprint.
+    changed = _toy("v1", "b")
+    pinned = dataclasses.replace(changed, expected_fingerprint=changed.fingerprint())
+    with pytest.raises(FingerprintMismatchError):
+        run(pinned)
+
+
+def test_fixed_version_rejects_dev_dependency(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    dep = _toy("dev", "a")
+    parent = Lazy(
+        name="checkpoints/p",
+        version="v1",
+        result_type=Toy,
+        recipe=Recipe(
+            fn=lambda config: Toy(payload="p"),
+            build_config=lambda ctx: {"out": ctx.out, "data": ctx.path(dep)},
+            deps=(dep,),
+        ),
+    )
+    with pytest.raises(ValueError, match="mutable"):
+        lower(parent)
+
+
+def test_dev_version_is_mutable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    run(_toy("dev", "a"))
+    # A changed recipe under a dev version rebuilds in place instead of warning.
+    run(_toy("dev", "b"))
+
+    record = read_record(f"{tmp_path}/datasets/toy/dev")
+    assert record.result == {"path": "", "payload": "b"}
+
+
+# --- the manual typed-payload API ----------------------------------------------
+
+
+class _Doc(BaseModel):
+    title: str
+    tokens: int
+
+
+def test_write_then_read_artifact_round_trips_a_payload(tmp_path):
+    out = (tmp_path / "step").as_posix()
+    write_artifact(_Doc(title="x", tokens=7), out)
+
+    loaded = read_artifact(out, _Doc)
+    assert loaded == _Doc(title="x", tokens=7)
+
+
+def test_read_artifact_requires_a_pydantic_schema(tmp_path):
+    out = (tmp_path / "step").as_posix()
+    write_artifact(_Doc(title="x", tokens=7), out)
+    with pytest.raises(TypeError):
+        read_artifact(out, dict)
+
+
+def test_read_artifact_missing_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        read_artifact((tmp_path / "nothing").as_posix(), _Doc)
+
+
+def test_read_artifact_reads_legacy_bare_payload(tmp_path):
+    """Old outputs wrote a bare ``.artifact`` payload; the manual API still loads them."""
+    (tmp_path / ".artifact").write_text('{"title": "legacy", "tokens": 3}')
+    loaded = read_artifact(tmp_path.as_posix(), _Doc)
+    assert loaded == _Doc(title="legacy", tokens=3)

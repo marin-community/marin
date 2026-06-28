@@ -76,20 +76,28 @@ The core distinguishes **library authors** from **researchers**:
 - **Library** primitives — `Recipe(fn, build_config, deps, run_args)` and the typed builders
   (`tokenized`, `train_lm`, `mixture`). Full `RunContext` control; this is where the marin-on-TPU
   plumbing lives.
-- **Researcher** sugar — `apply`, the generic single-step builder, **in the lazy core** (it is not
-  about data, so it no longer lives in the data module). Its headline is a *direct-call* form that
-  removes the `build_config` lambda and the dict-wrapper functions experiments were writing:
+- **Researcher** sugar — two generic single-step builders, both **in the lazy core** (they are not
+  about data, so they no longer live in the data module), picked by the step function's shape:
 
-  ```python
-  # before: a _run_stage(cfg: dict) wrapper + a build_config lambda
-  staged = apply("raw/massive", stage_massive_raw, output_path=OUT)
-  parts  = apply("data/massive", transform_staged_massive, input_path=staged, output_path=OUT)
-  ```
+  - `apply` — the *direct-call* form, when the fn takes keyword inputs. It removes the
+    `build_config` lambda and dict-wrapper entirely:
 
-  A bare `Lazy` argument becomes a dependency and resolves to its path at run time; the `OUT`
-  sentinel resolves to `ctx.out`; every other value is a literal that bears identity. `apply`
-  calls the underlying function directly — no wrapper, no config object — which is the simplest
-  story for a non-Python-expert: *name an output, say which function makes it, pass its inputs.*
+    ```python
+    staged = apply("raw/massive", stage_massive_raw, output_path=OUT)
+    parts  = apply("data/massive", transform_staged_massive, input_path=staged, output_path=OUT)
+    ```
+
+    A bare `Lazy` argument becomes a dependency and resolves to its path at run time; the `OUT`
+    sentinel resolves to `ctx.out`; every other value is a literal that bears identity. `apply`
+    calls the underlying function directly — *name an output, say which function makes it, pass its
+    inputs.*
+
+  - `derived` — the *config-object* form, `fn(build_config(ctx))`, for the (common) case `apply`
+    can't express: a fn that takes a typed config dataclass, or inputs composed from a dep path
+    (`f"{ctx.path(dep)}/sub"`). It is the named one-liner over the `Lazy`+`Recipe` construction, and
+    the workhorse the dataset catalogs (transforms, conversions, filters) actually use. Keeping it —
+    rather than forcing every such site to spell out `Lazy`+`Recipe` inline — is the point: *a basic
+    set of helpers to make common actions simple.*
 
 The set is completed by `run(*handles)` (execute for side effects — the everyday entry point) and
 `resolve(handle) -> T` (run, then return the realized, typed `Artifact` via `T.load`). For a value
@@ -159,8 +167,10 @@ would be unsafe is closed without re-introducing the hard config guard.
 
 `lower()` is a pure transform with no Iris/Fray awareness, so catalogs migrate independently: a
 module that exposed module-level `ExecutorStep`s becomes a *function* returning `Lazy` handles
-(mechanism stays in the library, policy moves to the experiment). `apply`'s direct-call form
-collapses the dict-wrapper boilerplate; the tutorial tree collapses to fewer, parameterized scripts
+(mechanism stays in the library, policy moves to the experiment). A catalog's `derived(...)` calls
+keep their shape — only the import moves (`marin.experiment.data` → `marin.execution.lazy`) and
+`Dataset`/`Checkpoint` annotations become `Lazy[Dataset]`/`Lazy[Checkpoint]`; new simple steps use
+`apply`'s direct-call form; the tutorial tree collapses to fewer, parameterized scripts
 (`--device`, `--dataset`). The `Executor` content-addressing layer is already deleted on this
 branch; this redesign is the cleanup of the surface that replaced it.
 

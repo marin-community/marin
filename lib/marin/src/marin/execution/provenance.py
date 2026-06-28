@@ -1,15 +1,21 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run provenance: who/when/which-commit produced an artifact.
+"""Run provenance: who/when/which-commit/which-argv produced an artifact.
 
-Small, dependency-free helpers so the artifact registry can record provenance
-without pulling in the executor.
+Small, dependency-free helpers so an artifact record can capture provenance without
+pulling in the executor.
 """
 
 import os
 import subprocess
+import sys
 from datetime import datetime
+
+
+def get_command_line() -> list[str]:
+    """The launching process's command line (``sys.argv``), recorded as provenance."""
+    return list(sys.argv)
 
 
 def get_git_commit() -> str | None:
