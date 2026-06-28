@@ -408,10 +408,14 @@ backends_table = Table(
     "backends",
     metadata,
     Column("backend_id", String, primary_key=True),
-    Column("kind", String, nullable=False, server_default="''"),
+    # server_default is a literal value SQLAlchemy quotes into the DDL, so the
+    # stored default is exactly this string: "" (not "''") and "{}" (valid JSON,
+    # not "'{}'"). This matches migration 0032's raw-SQL CREATE TABLE so the
+    # fresh-DB create_all path and the migrated path agree.
+    Column("kind", String, nullable=False, server_default=""),
     Column("status", Integer, nullable=False, server_default="0"),
-    Column("attributes_json", String, nullable=False, server_default="'{}'"),
-    Column("allow_policy_json", String, nullable=False, server_default="'{}'"),
+    Column("attributes_json", String, nullable=False, server_default="{}"),
+    Column("allow_policy_json", String, nullable=False, server_default="{}"),
     Column("last_seen_ms", Integer),
 )
 
