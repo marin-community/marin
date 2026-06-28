@@ -24,10 +24,10 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.train import train_lm
 
-from experiments.evals.uncheatable_lazy import uncheatable_validation
+from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
-from experiments.paloma_lazy import paloma_validation
-from experiments.pretraining_datasets.dclm_lazy import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 from experiments.recipes import core_tasks
 
 SEQ_LEN = 2048

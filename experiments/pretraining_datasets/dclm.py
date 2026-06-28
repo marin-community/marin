@@ -1,68 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
+"""The DCLM 1B/1x training mixture as lazy ``Dataset`` handles.
 
-from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
-from marin.processing.tokenize import lm_mixture_data_config
+The catalog supplies inert handles (mechanism); the weights are the corpus's token
+proportions (policy). An experiment assembles them with ``mixture()``.
+"""
+
+from collections.abc import Mapping
+
+from marin.execution.lazy import Dataset
 
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets.simple import downloads, tokenized
-from experiments.tokenization import default_tokenize
+from experiments.pretraining_datasets.simple import dclm_baseline_dataset, proofpile_dataset, starcoder_dataset
 
-DCLM_MIXTURE_WEIGHTS = {
-    # token counts are for neox tokenizer
-    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
-    "starcoderdata": 0.25,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile_2": 0.055,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
+# DCLM 1B/1x mixture proportions (token counts measured with the neox tokenizer):
+# dclm-baseline ~3.8T, starcoderdata ~250B, proof-pile-2 ~55B.
+DCLM_MIXTURE_WEIGHTS: Mapping[str, float] = {
+    "dclm_baseline": 3.8,
+    "starcoderdata": 0.25,
+    "proofpile_2": 0.055,
 }
 
 
-DCLM_BASELINE_ONLY_MIXTURE = {
-    "dclm_baseline": 3.8,  # 3.8 trillion tokens https://huggingface.co/datasets/mlfoundations/dclm-baseline-1.0
-    "starcoderdata": 0,  # 250 billion tokens https://huggingface.co/datasets/bigcode/starcoderdata
-    "proofpile_2": 0,  # 55 billion tokens https://huggingface.co/datasets/EleutherAI/proof-pile-2
-}
-
-
-dclm_components_llama3 = {
-    "dclm_baseline": tokenized["dclm_baseline"],
-    "starcoderdata": tokenized["starcoderdata"],
-    "proofpile_2": tokenized["proofpile_2"],
-}
-dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
-
-
-## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
-# These are preserved for reproducibility, but future runs should use the correct data.
-# YOU SHOULD NOT USE THESE TOKENIZED DATASETS FOR TRAINING
-dclm_components_llama3_wrong = {
-    "dclm_baseline": dataclasses.replace(
-        default_tokenize(
-            name="dclm_baseline",
-            dataset=downloads["dclm_baseline_wrong"],
-            tokenizer=llama3_tokenizer,
-        ),
-        override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
-    ),
-    "starcoderdata": default_tokenize(
-        name="starcoderdata",
-        dataset=downloads["starcoderdata"],
-        tokenizer=llama3_tokenizer,
-        format=TextLmDatasetFormat(text_key="content"),
-    ),
-    "proofpile_2": default_tokenize(
-        name="proofpile_2",
-        dataset=downloads["proofpile_2"],
-        tokenizer=llama3_tokenizer,
-    ),
-}
-
-dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
-    components=dclm_components_llama3_wrong,
-    weights=DCLM_MIXTURE_WEIGHTS,
-)
-
-if __name__ == "__main__":
-    executor_main(steps=list(dclm_components_llama3.values()))
+def dclm_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+    """The DCLM training components as lazy handles, keyed to match ``DCLM_MIXTURE_WEIGHTS``."""
+    return {
+        "dclm_baseline": dclm_baseline_dataset(tokenizer=tokenizer),
+        "starcoderdata": starcoder_dataset(tokenizer=tokenizer),
+        "proofpile_2": proofpile_dataset(tokenizer=tokenizer),
+    }

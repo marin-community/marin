@@ -33,15 +33,15 @@ from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, pretokenized, tokenized
 
-from experiments.evals.uncheatable_lazy import uncheatable_validation
+from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import RESOLVED_RUN_ID, GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.paloma_lazy import paloma_validation
-from experiments.pretraining_datasets.nemotron_lazy import nemotron_datasets
-from experiments.pretraining_datasets.simple_lazy import proofpile_dataset, starcoder_dataset
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.nemotron import nemotron_datasets
+from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 # Tokenization runs as its own Fray job (keeps the launcher pod light).
 _TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
