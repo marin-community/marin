@@ -403,3 +403,66 @@ sites and the tutorials migrate to real dates (`version="20260628"`).
 - **Multiple artifacts per step.** Letting one step emit several independently-addressable
   artifacts (e.g. a checkpoint *and* a standalone `Lazy[TrainMetrics]`). The semantic-method
   approach covers today's need without it; revisit when an output must be addressed on its own.
+
+## Codex review #2 resolutions (implementation spec)
+
+The settled answers to codex's implementation-readiness gaps; these are the contracts to build.
+
+- **`RunContext.is_fingerprint: bool`** — a real field. `for_run(...)` sets `False`,
+  `for_fingerprint(...)` sets `True`. `mixture` branches on it.
+- **`Artifact.result_payload()`** uses **declared fields** — `type(self).model_fields` minus
+  `path` — not `model_dump()` (which would sweep in `extra="allow"` extras). Data refs declare
+  none → `None`. Schema drift within a reused version is the author's call (bump the version).
+- **`mixture`, run time** — `TokenizedCache.as_component()` builds, uniformly for tokenized / HF /
+  pretokenized / adopted caches (a *built* cache is just a dir + format; no per-type
+  discrimination):
+  ```python
+  dataset_component(UrlDatasetSourceConfig(
+      cache_dir=self.cache_dir, format=self.format, train_urls=[], validation_urls=[], tags=self.tags))
+  ```
+  with `self.cache_dir = self.record.source or self.path` (adopted → its source dir),
+  `tokenizer = self.record.config["tokenizer"]`, and `self.format` draccus-decoded from
+  `self.record.config["format"]` (default `TextLmDatasetFormat()`). These come from
+  `record.config`, which the launcher writes — `build_config` runs launcher-side even when
+  `recipe.fn` dispatches remote — so they exist for every produced cache.
+- **`mixture`, fingerprint time** (`ctx.is_fingerprint`) — return an `LmDataConfig` whose
+  components are keyed by `handle.name`, each a `DatasetComponent` with
+  `cache_dir=ctx.path(handle)` (renders to `name@version`), a placeholder
+  `format=TextLmDatasetFormat()` and empty urls; `train_weights = {name: weight}` for train and
+  `{name: 0.0}` for validation; `tokenizer="<tokenizer>"` placeholder. Identity is thus the sorted
+  `name@version` + weights, nothing from records.
+- **Adopted tokenized caches** — `data.py` gains `adopt_tokenized_cache(name, version, source, *,
+  tokenizer, format=TextLmDatasetFormat())`, which adopts and records a synthetic
+  `config={"tokenizer", "format"}` so `as_component()` reads it the same way. (Generic `adopt`
+  stays metadata-free for non-dataset dirs.)
+- **`ArtifactRecord.provenance: Provenance | None = None`** — optional, so low-level
+  `write_artifact(...)` writes a minimal record; the lazy runner fills it via a private
+  `_lower(handle, provenance)` that both `Lazy.lower()` and `run(*handles)` call after one
+  `Provenance.capture()` per entry (single launch timestamp).
+- **`LevanterCheckpoint.training_metrics()`** parses `<path>/tracker_metrics.jsonl`'s `summary`
+  (levanter keys: `train/loss`, `eval/loss`, `eval/<name>/loss`): returns
+  `TrainMetrics(summary=<full dict>, train_loss=summary.get("train/loss"),
+  eval_loss=summary.get("eval/loss"))` with `eval_loss` optional; `summary` is the escape hatch
+  for per-task keys. `FileNotFoundError` if the file is absent.
+- **`raw_download` → `Lazy[Artifact]`** (raw shards are not a `TokenizedCache` and must not feed
+  `mixture`); `tokenized(raw=...)` accepts `Lazy[Artifact]`.
+- **`TokenizedCache` stays self-contained** — it does not import `data_configs`,
+  `download_pretokenized`, or `experiment.data` (would cycle); it constructs
+  `UrlDatasetSourceConfig` directly.
+
+## Migration plan (call-site sweep)
+
+Implement in codex's order (core → lazy → TokenizedCache → adopt → mixture/train_lm →
+training_metrics → deletions+migration). The mechanical call-site sweep (sonnet, disjoint
+directories) follows the stable core, per the inventory:
+
+| Change | Rule | Scale |
+|---|---|---|
+| `Dataset` (from artifact) | → `TokenizedCache` from `marin.processing.tokenize.tokenize`; `Lazy[Dataset]`→`Lazy[TokenizedCache]` | ~30 files |
+| `Checkpoint` (from artifact) | → `LevanterCheckpoint` from `marin.training.training`; `Lazy[Checkpoint]`→`Lazy[LevanterCheckpoint]` | ~19 files |
+| `JsonArtifact` | → `Artifact` (tests' `Tokens`/`Ckpt`/`Toy` subclass `Artifact`) | tests + sweep |
+| `derived(name, fn=F, build_config=BC, deps=D, kind=K, version=V, pin=P)` | → `Lazy(name, version=V, result_type=K, override_path=P, recipe=Recipe(fn=F, build_config=BC, deps=tuple(D)))` (wrap `F` in `remote(...)` only if it passed `resources=`) | ~18 files |
+| free `lower(x)` / `resolve(x)` | → `x.lower()` / `x.resolve()`; `StepRunner().run([lower(x)])` → `x.run()` | ~16 files |
+| `version="v1"`/`"llama3"`, `DEFAULT_VERSION` | → calver `"20260628"`; remove the `DEFAULT_VERSION` constants and builder defaults | ~all builders |
+| `select`/`Selection`/`read_replicated_metrics` | deleted — tutorial + `test_sweep_select.py` rewrite to `run(*trials)` + `min(...)` over `t.resolve().training_metrics()` | tutorial + 1 test |
+| `marin.execution.executor_step_status` | → `marin.execution.step_status` | ~6 files |
