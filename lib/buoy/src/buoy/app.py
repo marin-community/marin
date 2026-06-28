@@ -99,7 +99,9 @@ async def list_projects(request: Request) -> JSONResponse:
 async def list_runs(request: Request) -> JSONResponse:
     entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
     project = request.query_params.get("project", "")
-    limit = int(request.query_params.get("limit", "100"))
+    # Each run lazily fetches its author, so keep the page small — the picker shows
+    # recent runs and relies on type-to-filter, not an exhaustive list.
+    limit = int(request.query_params.get("limit", "50"))
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
 
@@ -107,7 +109,7 @@ async def list_runs(request: Request) -> JSONResponse:
         api = wandb.Api()
         # Most-recently-created first; the picker also surfaces the run author so
         # the SPA can offer a user filter.
-        runs = api.runs(f"{entity}/{project}", per_page=min(limit, 200), order="-created_at")
+        runs = api.runs(f"{entity}/{project}", per_page=min(limit, 100), order="-created_at")
         out = []
         for run in runs:
             user = getattr(run, "user", None)
