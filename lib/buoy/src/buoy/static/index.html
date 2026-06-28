@@ -195,7 +195,8 @@
       const keys = DEFAULT_METRICS.filter((k) => cols.has(k));
       const plotKeys = keys.length ? keys : m.history.columns.slice(0, 8);
       const data = await fetch("api/metrics?" + qs({ ...r, keys: plotKeys.join(",") })).then((x) => x.json());
-      for (const key of plotKeys) drawChart(key, data.metrics[key] || []);
+      const metrics = data.metrics || {};
+      for (const key of plotKeys) drawChart(key, metrics[key] || []);
 
       const pane = $("profile-pane");
       pane.textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
