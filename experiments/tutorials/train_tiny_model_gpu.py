@@ -1,67 +1,57 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-This is a tutorial on how to train a tiny model on a small dataset using a GPU.
+"""Tutorial: Training a tiny model on Wikitext-2 using a GPU (lazy-artifact style).
 
 This script demonstrates how to:
-1. Train a tiny model on Wikitext-2 using a single GPU
-2. Use GPU-specific training configuration
-3. Run a quick training experiment
+1. Tokenize Wikitext-2 inline and register it as a lazy dataset handle.
+2. Define all training decisions inline: model, optimizer, batch size, steps.
+3. Run the full pipeline with :class:`~marin.execution.step_runner.StepRunner`.
 
-For CPU training, see train_tiny_model_cpu.py
+For CPU training, see train_tiny_model_cpu.py.
 """
 
 from fray.cluster import ResourceConfig
-from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
-from marin.execution.types import versioned
+from levanter.optim import AdamConfig
+from marin.execution.lazy import Checkpoint, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture, tokenized
+from marin.experiment.train import train_lm
 
-from experiments.defaults import default_train
 from experiments.llama import llama_nano
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tokenization import default_tokenize
 
-# 1. Choose a dataset
-wikitext_hf_id = "dlwh/wikitext_2_detokenized"
-
-# For this tutorial, we limit to 1000 documents per shard
-wikitext_tokenized = default_tokenize(
-    name=wikitext_hf_id,
-    dataset=wikitext_hf_id,
+# 1. Choose a dataset and tokenize it inline.
+# sample_count=1000 caps documents per shard for a quick tutorial run.
+tok = tokenized(
+    "dlwh/wikitext_2_detokenized",
     tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
+    source="dlwh/wikitext_2_detokenized",
+    sample_count=1000,
 )
 
 
-nano_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
-    train_batch_size=256,
-    num_train_steps=100,
-    learning_rate=6e-4,
-    weight_decay=0.1,
-)
-
-nano_wikitext_model = default_train(
-    name="llama-nano-wikitext",
-    # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
-    tokenized=wikitext_tokenized,
-    model_config=llama_nano,
-    train_config=nano_train_config,
-    tags=["llama", "nano", "wikitext", "tutorial"],
-    # no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    use_default_validation=False,
-)
+def build(*, version: str = "v1") -> Checkpoint:
+    """A tiny Llama model trained on Wikitext-2 (GPU), every decision stated inline."""
+    return train_lm(
+        name="checkpoints/llama-nano-wikitext",
+        version=version,
+        model=llama_nano,
+        optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
+        # 2. Single-component mixture: all training tokens from Wikitext-2.
+        data=lambda ctx: mixture(ctx, {tok: 1.0}),
+        deps=(tok,),
+        batch_size=256,
+        seq_len=llama_nano.max_seq_len,  # 512
+        num_train_steps=100,
+        z_loss_weight=None,
+        evals=None,  # no point running evals on such a tiny model
+        resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
+        tags=["llama", "nano", "wikitext", "tutorial"],
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            wikitext_tokenized,
-            nano_wikitext_model,
-        ]
-    )
+    # Lower the checkpoint to a StepSpec graph and run it: Wikitext-2 tokenizes
+    # (cached), then one GPU training job runs.
+    StepRunner().run([lower(build())])

@@ -1,74 +1,63 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-This is a tutorial on how to train a tiny model on a small dataset using CPU.
+"""Tutorial: Training a tiny model on TinyStories using CPU (lazy-artifact style).
 
 This script demonstrates how to:
-1. Train a tiny model on TinyStories using CPU
-2. Use CPU-specific training configuration
-3. Run a quick training experiment
+1. Tokenize TinyStories inline and register it as a lazy dataset handle.
+2. Define all training decisions inline: model, optimizer, batch size, steps.
+3. Run the full pipeline with :class:`~marin.execution.step_runner.StepRunner`.
 
-For GPU training, see train_tiny_model_gpu.py
+For GPU training, see train_tiny_model_gpu.py.
 """
 
 from fray import ResourceConfig
-from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import executor_main
-from marin.execution.types import versioned
+from levanter.optim import AdamConfig
+from marin.execution.lazy import Checkpoint, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture, tokenized
+from marin.experiment.train import train_lm
 
-from experiments.defaults import default_train
 from experiments.llama import llama_nano
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tokenization import default_tokenize
 
-# 1. Choose a dataset
-tinystories_hf_id = "roneneldan/TinyStories"
-
-# 2. Tokenize the dataset with sampling
-# For this tutorial, we limit to 1000 documents per shard
-tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,
-    dataset=tinystories_hf_id,
+# 1. Choose a dataset and tokenize it inline.
+# sample_count=1000 caps documents per shard; it bears identity (a sampled cache
+# differs from the full one).
+tok = tokenized(
+    "roneneldan/TinyStories",
     tokenizer=marin_tokenizer,
-    format=TextLmDatasetFormat(),
+    source="roneneldan/TinyStories",
     sample_count=1000,
 )
 
 
-# 3. Define training configuration
-nano_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_cpu(),
-    train_batch_size=4,
-    num_train_steps=100,
-    # set hyperparameters
-    learning_rate=6e-4,
-    weight_decay=0.1,
-    # keep eval quick for tutorial
-    max_eval_batches=4,
-)
+def build(*, version: str = "v1") -> Checkpoint:
+    """A tiny Llama model trained on TinyStories (CPU), every decision stated inline.
 
-# 4. Train the model
-nano_tinystories_model = default_train(
-    name="marin-nano-tinystories",
-    # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
-    tokenized=tinystories_tokenized,
-    model_config=versioned(llama_nano),
-    train_config=nano_train_config,
-    # wandb tags
-    tags=["llama", "nano", "tinystories", "tutorial"],
-    # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
-    # during training, but there's no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    # to keep tutorial fast, skip default validation sets
-    use_default_validation=False,
-)
+    max_eval_batches=4 from the original SimpleTrainConfig tutorial has no equivalent
+    in train_lm; at 100 steps the run is fast enough without it.
+    """
+    return train_lm(
+        name="checkpoints/marin-nano-tinystories",
+        version=version,
+        # 2-layer, 32-dim Llama — the smallest sensible model for a quick tutorial.
+        model=llama_nano,
+        optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
+        # 3. Single-component mixture: all training tokens from TinyStories.
+        data=lambda ctx: mixture(ctx, {tok: 1.0}),
+        deps=(tok,),
+        batch_size=4,
+        seq_len=llama_nano.max_seq_len,  # 512
+        num_train_steps=100,
+        z_loss_weight=None,
+        evals=None,  # no point running evals on such a tiny model
+        resources=ResourceConfig.with_cpu(),
+        tags=["llama", "nano", "tinystories", "tutorial"],
+    )
+
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[
-            nano_tinystories_model,
-        ]
-    )
+    # Lower the checkpoint to a StepSpec graph and run it: TinyStories tokenizes
+    # (cached), then one CPU training job runs.
+    StepRunner().run([lower(build())])

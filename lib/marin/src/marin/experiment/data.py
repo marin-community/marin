@@ -162,6 +162,7 @@ def tokenized(
     validation: bool = False,
     pin: str | None = None,
     text_key: str = "text",
+    sample_count: int | None = None,
     version: str = DEFAULT_VERSION,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
@@ -171,8 +172,9 @@ def tokenized(
     Provide exactly one raw input: ``source`` (a HuggingFace id ``org/name`` or a single
     raw path), ``paths`` (raw globs resolved against the run prefix), or ``raw`` + ``glob``
     (a download handle and a subpath glob within it). ``validation=True`` routes the data
-    to the cache's validation split. ``pin`` references already-tokenized data at an existing
-    location instead of recomputing it.
+    to the cache's validation split. ``sample_count`` caps the documents tokenized per shard
+    (it bears identity — a sampled cache differs from the full one). ``pin`` references
+    already-tokenized data at an existing location instead of recomputing it.
     """
     if sum(x is not None for x in (source, paths, raw)) != 1:
         raise ValueError(f"{name}: provide exactly one of source, paths, or raw")
@@ -183,7 +185,9 @@ def tokenized(
 
     def build_config(ctx: RunContext) -> TokenizeConfigBase:
         if source is not None and _looks_like_hf_id(source):
-            return HfTokenizeConfig(id=source, cache_path=ctx.out, tokenizer=tokenizer, format=fmt, tags=[*tags])
+            return HfTokenizeConfig(
+                id=source, cache_path=ctx.out, tokenizer=tokenizer, format=fmt, sample_count=sample_count, tags=[*tags]
+            )
         if raw is not None:
             resolved = [f"{ctx.path(raw)}/{glob}"]
         elif paths is not None:
@@ -196,6 +200,7 @@ def tokenized(
             cache_path=ctx.out,
             tokenizer=tokenizer,
             format=fmt,
+            sample_count=sample_count,
             tags=[*tags],
         )
 
