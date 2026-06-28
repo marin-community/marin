@@ -1,30 +1,32 @@
 # Default Pipeline Steps
 
-Marin comes with a set of default pipeline steps that can be used to build experiments.
-These steps are defined in `experiments.defaults` and are intended to be used as building blocks for experiments.
+Marin provides a set of standard builders for the common stages of an LM experiment:
+data download, tokenization, mixture assembly, training, and evaluation. Reach for these
+before writing custom step code.
 
-In general, you should reach for the default steps before writing your own.
-
-## Downloading
-
-::: experiments.tokenization.default_download
-
-## Exporting and Uploading
-
-::: marin.export.upload_dir_to_hf
+All builders return lazy artifact handles (`Dataset`, `Checkpoint`, or a step spec) that
+`StepRunner` materializes on demand.
 
 ## Tokenization
 
-::: experiments.tokenization.default_tokenize
+::: marin.experiment.data.tokenized
+
+::: marin.experiment.data.hf_download
+
+::: marin.experiment.data.derived
+
+::: marin.experiment.data.pretokenized
+
+## Mixture assembly
+
+::: marin.experiment.data.mixture
 
 ## Training
 
-::: experiments.defaults.default_train
-
-::: experiments.defaults.default_sft
-
-::: experiments.defaults.simulated_epoching_train
+::: marin.experiment.train.train_lm
 
 ## Evaluation
 
 ::: experiments.evals.evals.default_eval
+
+::: experiments.evals.evals.default_key_evals

@@ -119,9 +119,9 @@ If the dataset already lives on Hugging Face and can be read directly, use
 `HfDatasetSpec`. If the dataset must be pinned to an exact revision, stage the
 heldout rows to a versioned GCS path or extend the HF source API first.
 
-If the source needs ETL, create an `ExecutorStep` that writes a small heldout
-artifact to GCS. Raw-text scoring expects JSONL or JSONL gzip rows with a `text`
-field:
+If the source needs ETL, create a `derived` artifact (from `marin.experiment.data`)
+that writes a small heldout artifact to GCS. Raw-text scoring expects JSONL or JSONL
+gzip rows with a `text` field:
 
 ```json
 {"text": "..."}
@@ -170,7 +170,7 @@ For reusable model and bundle coverage, register a bundle in
 bundles and models into score and pairwise gap steps.
 
 For a one-off exploratory run that should not enter the dashboard suite, define
-`DATASETS`, model configs, score steps, gap steps, and an `executor_main(...)`
+`DATASETS`, model configs, score steps, gap steps, and a `StepRunner().run([...])`
 block in a dedicated experiment file. Keep `MAX_DOCS_PER_DATASET` and
 `MAX_DOC_BYTES` explicit. Pick descriptive step names so output paths can be
 traced back to the run.
@@ -230,9 +230,9 @@ Confirm that dataset count, model count, and step names match what you expect.
 
 ## 5. Submit the gap run
 
-Submit the experiment as a CPU parent job. The parent uses `executor_main`; the
-model score children request TPU resources through `RESOURCE_CONFIG`. The
-committed gap step currently runs inside the dependency chain after the score
+Submit the experiment as a CPU parent job. The parent script calls
+`StepRunner().run([...])`, which dispatches the model scoring children as TPU
+jobs through Fray. The gap step runs inside the dependency chain after the score
 artifacts are available.
 
 ```bash

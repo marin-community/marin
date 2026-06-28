@@ -165,4 +165,4 @@ language models.
 
 1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment.
 2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models.
-3. Read the [Executor 101](executor-101.md) tutorial to learn how Marin's execution model works.
+3. Read [Lazy artifacts](../explanations/lazy-artifacts.md) to understand Marin's execution model.
