@@ -10,16 +10,16 @@ using the DCLM 1B/1x baseline as a concrete example.
 
 ## How a training script is structured
 
-A Marin training script builds a lazy `Checkpoint` handle, lowers it to a runnable step
-graph, and passes it to `StepRunner`. Nothing executes at import time.
+A Marin training script builds a lazy `ArtifactStep[LevanterCheckpoint]` handle, lowers it to
+a runnable step graph, and passes it to `StepRunner`. Nothing executes at import time.
 
 ```python
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, lower
+from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
-def build() -> Lazy[Checkpoint]:
+def build() -> ArtifactStep[LevanterCheckpoint]:
     ...  # assemble the checkpoint handle
 
 if __name__ == "__main__":
@@ -57,8 +57,8 @@ Pre-defined configurations for common sizes live in `experiments/llama.py`.
 
 ## Building the data mixture
 
-Training data is expressed as a dict of `Lazy[Dataset]` handles to weights. Pass this dict
-as `datasets=` to `train_lm`; it assembles the Levanter data mixture internally:
+Training data is expressed as a dict of `ArtifactStep[TokenizedCache]` handles to weights. Pass
+this dict as `datasets=` to `train_lm`; it assembles the Levanter data mixture internally:
 
 ```python
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
@@ -68,8 +68,8 @@ train = dclm_datasets(tokenizer=llama3_tokenizer)
 weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
 ```
 
-`dclm_datasets` returns a dict of pre-tokenized `Lazy[Dataset]` handles, one per DCLM
-component. To tokenize a custom dataset instead, use `tokenized` from `marin.experiment.data`:
+`dclm_datasets` returns a dict of pre-tokenized `ArtifactStep[TokenizedCache]` handles, one per
+DCLM component. To tokenize a custom dataset instead, use `tokenized` from `marin.experiment.data`:
 
 ```python
 from marin.experiment.data import tokenized
@@ -79,6 +79,7 @@ my_data = tokenized(
     name="tokenized/my-dataset",
     source="org/my-hf-dataset",  # HuggingFace dataset id
     tokenizer=marin_tokenizer,
+    version="2026.06.28",
 )
 ```
 
@@ -90,10 +91,10 @@ of them. The complete `build()` function for DCLM 1B/1x:
 ```python
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, lower
+from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_validation
@@ -102,7 +103,7 @@ from experiments.recipes import core_tasks
 
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
 
-def build(*, version: str = "v1") -> Lazy[Checkpoint]:
+def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     train = dclm_datasets(tokenizer=llama3_tokenizer)
     validation = [
         *paloma_validation(tokenizer=llama3_tokenizer),
@@ -143,14 +144,14 @@ if __name__ == "__main__":
 | `version` | Artifact version; bump this to produce a new run without overwriting the old one |
 | `model` | Levanter `LmConfig` (architecture and hyperparameters) |
 | `optimizer` | Levanter `OptimizerConfig` (learning rate, schedule, weight decay) |
-| `datasets` | Dict of `Lazy[Dataset]` handles to weights; `train_lm` assembles the data mixture |
-| `validation` | Sequence of `Lazy[Dataset]` handles for held-out loss tracking (optional) |
+| `datasets` | Dict of `ArtifactStep[TokenizedCache]` handles to weights; `train_lm` assembles the data mixture |
+| `validation` | Sequence of `ArtifactStep[TokenizedCache]` handles for held-out loss tracking (optional) |
 | `batch_size` | Training batch size in sequences |
 | `seq_len` | Sequence length |
 | `num_train_steps` | Total number of optimizer steps |
 | `z_loss_weight` | Auxiliary z-loss coefficient; pass `None` to omit |
 | `evals` | `EvalSuite` or `None`; pass `None` to opt out of harness evals |
-| `resources` | The hardware to dispatch training onto (a run-arg, excluded from fingerprint) |
+| `resources` | The hardware to dispatch training onto (a runtime arg, excluded from fingerprint) |
 
 `train_lm` owns the mechanical plumbing that is identical across runs: the data-parallel
 mesh, the rolling resumption checkpointer, W&B metric replication, and the Fray dispatch of

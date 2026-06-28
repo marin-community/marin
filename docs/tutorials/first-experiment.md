@@ -31,8 +31,8 @@ if __name__ == "__main__":
 
 ## Step 1: Tokenize the dataset
 
-`tokenized` from `marin.experiment.data` returns a `Lazy[Dataset]` handle — a lazy
-reference to a Levanter tokenized cache. The tokenization step runs before training, and
+`tokenized` from `marin.experiment.data` returns an `ArtifactStep[TokenizedCache]` handle — a
+lazy reference to a Levanter tokenized cache. The tokenization step runs before training, and
 its output is cached for future runs.
 
 ```python
@@ -43,11 +43,12 @@ tinystories_tokenized = tokenized(
     name="tokenized/tinystories",
     source="roneneldan/TinyStories",  # HuggingFace dataset id
     tokenizer=marin_tokenizer,
+    version="2026.06.28",
     sample_count=1000,  # cap at 1 000 samples per shard to keep the tutorial fast
 )
 ```
 
-`tinystories_tokenized` is a `Lazy[Dataset]` handle. Constructing it does not download or
+`tinystories_tokenized` is an `ArtifactStep[TokenizedCache]` handle. Constructing it does not download or
 tokenize anything. The actual work happens when `StepRunner` encounters this step in the
 dependency graph.
 
@@ -77,25 +78,25 @@ from experiments.llama import llama_nano
 ## Step 3: Assemble the training run
 
 `train_lm` from `marin.experiment.train` takes every experiment decision as an explicit
-argument and returns a `Lazy[Checkpoint]` handle. It handles the mechanical plumbing —
-the mesh, the checkpointer, the Fray dispatch — while you supply the policy.
+argument and returns an `ArtifactStep[LevanterCheckpoint]` handle. It handles the mechanical
+plumbing — the mesh, the checkpointer, the Fray dispatch — while you supply the policy.
 
 ```python
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
 BATCH_SIZE = 4
 SEQ_LEN = 2048
 NUM_TRAIN_STEPS = 100
 
 
-def build() -> Lazy[Checkpoint]:
+def build() -> ArtifactStep[LevanterCheckpoint]:
     return train_lm(
         name="checkpoints/marin-nano-tinystories",
-        version="v1",
+        version="2026.06.28",
         model=llama_nano,
         optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
         datasets={tinystories_tokenized: 1.0},
@@ -111,8 +112,8 @@ def build() -> Lazy[Checkpoint]:
 Key arguments:
 
 - `name` and `version` form the output path `{prefix}/{name}/{version}`.
-- `datasets` is a dict of `Lazy[Dataset]` handles to weights; `train_lm` assembles the
-  Levanter data mixture and resolves each dataset to its path at run time. Dataset
+- `datasets` is a dict of `ArtifactStep[TokenizedCache]` handles to weights; `train_lm`
+  assembles the Levanter data mixture and resolves each dataset to its path at run time. Dataset
   dependencies are inferred automatically — no separate `deps` list is needed.
 - `resources=ResourceConfig.with_cpu()` keeps the run local (no TPU or GPU needed).
 
@@ -153,8 +154,8 @@ After the run, your prefix directory contains:
 
 ```
 local_store/
-  tokenized/tinystories/v1/    # the tokenized dataset cache
-  checkpoints/marin-nano-tinystories/v1/  # the model checkpoint
+  tokenized/tinystories/2026.06.28/    # the tokenized dataset cache
+  checkpoints/marin-nano-tinystories/2026.06.28/  # the model checkpoint
 ```
 
 Each artifact is at a stable, human-readable path determined by its `name` and `version`.

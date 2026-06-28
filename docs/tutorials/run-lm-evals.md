@@ -4,7 +4,7 @@ This guide shows the current evaluation entrypoints in Marin. For a high-level o
 
 ## Prerequisites
 
-- A trained model checkpoint in Hugging Face format, or a `Checkpoint` handle from a
+- A trained model checkpoint in Hugging Face format, or a `ArtifactStep[LevanterCheckpoint]` handle from a
   completed training run.
 - Access to the TPU or GPU resources required by the evaluator you choose.
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     StepRunner().run([core_eval_step])
 ```
 
-- `default_eval` accepts a checkpoint path or a `Checkpoint` handle from a training run.
+- `default_eval` accepts a checkpoint path or a `ArtifactStep[LevanterCheckpoint]` handle from a training run.
 - To include MMLU, pass `evals=CORE_TASKS_PLUS_MMLU`.
 
 ## 2. Run the Current Key-Evals Bundle
@@ -147,7 +147,7 @@ These scripts launch the requested hardware, load the selected checkpoint or mod
 
 ### `default_eval`
 
-- `step`: checkpoint path or `Checkpoint` handle to evaluate.
+- `step`: checkpoint path or `ArtifactStep[LevanterCheckpoint]` handle to evaluate.
 - `resource_config`: hardware configuration for the evaluator.
 - `evals`: optional override for the task list. Defaults to `CORE_TASKS`.
 - `max_eval_instances`: optional cap on evaluated examples.
@@ -156,7 +156,7 @@ These scripts launch the requested hardware, load the selected checkpoint or mod
 
 ### `default_key_evals`
 
-- `step`: checkpoint path or `Checkpoint` handle to evaluate.
+- `step`: checkpoint path or `ArtifactStep[LevanterCheckpoint]` handle to evaluate.
 - `resource_config`: hardware configuration for both returned steps.
 - `model_name`: optional override for the logged model name.
 - `max_eval_instances`: optional cap on evaluated examples.

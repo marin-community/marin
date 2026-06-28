@@ -2,64 +2,72 @@
 
 Marin's execution model is built around **lazy artifacts**: typed, identity-keyed handles
 that describe what to build without doing any work at definition time. An experiment script
-constructs `Lazy[T]` handles, lowers them to a runnable step graph, and hands the graph to
-`StepRunner`. Tokenization, training, and every other step execute exactly once and are
-cached for future runs.
+constructs `ArtifactStep[T]` handles, lowers them to a runnable step graph, and hands the
+graph to `StepRunner`. Tokenization, training, and every other step execute exactly once and
+are cached for future runs.
 
 ## Artifacts: `name@version` handles
 
-A **handle** is a `Lazy[T]` — a frozen object whose identity is its `name` and `version`.
-Constructing one does not run anything. The type parameter `T` is the materialized result
-type produced when the step runs:
+A **handle** is an `ArtifactStep[T]` — a frozen object whose identity is its `name` and
+`version`. Constructing one does not run anything. The type parameter `T` is the
+materialized result type produced when the step runs:
 
-- `Lazy[Dataset]` — a handle whose step produces a tokenized dataset (consumed by
-  `train_lm` and other data assemblers).
-- `Lazy[Checkpoint]` — a handle whose step produces a Levanter model checkpoint (consumed
-  by `train_lm`, `init_from`, and eval steps).
+- `ArtifactStep[TokenizedCache]` — a handle whose step produces a tokenized dataset
+  (consumed by `train_lm` and other data assemblers).
+- `ArtifactStep[LevanterCheckpoint]` — a handle whose step produces a Levanter model
+  checkpoint (consumed by `train_lm`'s `init_from` and by eval steps).
 
-`Dataset`, `Checkpoint`, and `Artifact` are pydantic value types in
-`marin.execution.artifact`; they describe the materialized result, not the handle itself.
-Import the handle wrapper from `marin.execution.lazy`:
+The result types are `Artifact` subclasses that live with their producers:
+`TokenizedCache` in `marin.processing.tokenize.tokenize`, `LevanterCheckpoint` in
+`marin.training.training`. They describe the materialized result, not the handle itself.
+Import the handle from `marin.execution.lazy`:
 
 ```python
-from marin.execution.artifact import Dataset, Checkpoint   # materialized result types
-from marin.execution.lazy import Lazy                       # handle wrapper
+from marin.execution.lazy import ArtifactStep              # the handle
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint     # materialized result types
 ```
 
 A handle's storage address is its explicit `{prefix}/{name}/{version}` path. There is no
-content hash in the path. Changing the name or version creates a distinct artifact;
-changing the recipe for an existing `name@version` produces an advisory drift warning and
-serves the cached output (see [Advisory drift](#advisory-drift)).
+content hash in the path. The `version` is a calendar version, `YYYY.MM.DD` (with an
+optional `.N` suffix), or a `dev` string during development. Changing the name or version
+creates a distinct artifact; changing how an existing `name@version` is built produces an
+advisory drift warning and serves the cached output (see [Advisory drift](#advisory-drift)).
 
-In practice, experiment scripts rarely construct `Lazy(...)` directly. Helpers such as
-`tokenized`, `hf_download`, `derived`, and `train_lm` return the appropriate `Lazy[T]`
-handle from high-level arguments.
+In practice, experiment scripts rarely construct `ArtifactStep(...)` directly. Helpers such
+as `tokenized`, `hf_download`, and `train_lm` return the appropriate `ArtifactStep[T]` handle
+from high-level arguments.
 
-## Recipes and RunContext
+## Steps and StepContext
 
-A `Recipe` is the build specification attached to a handle:
+An `ArtifactStep` is flat — there is no separate recipe object. Its fields split cleanly
+into identity (`name`, `version`, `artifact_type`) and build instructions:
 
 ```python
-@dataclass(frozen=True)
-class Recipe:
-    fn: Callable                              # step function, or remote(fn, resources=…)
-    build_config: Callable[[RunContext], Any] # assembles the config from the run context
-    deps: tuple[Lazy[...], ...]               # upstream handles this step reads
-    run_args: Mapping[str, Any]               # execution choices excluded from fingerprint
+ArtifactStep(
+    name="checkpoints/my-run",        # identity: the {name}/{version} address
+    version="2026.06.28",             # identity: calendar version
+    artifact_type=LevanterCheckpoint, # the materialized result type
+    run=_train_job,                   # the step fn, or remote(fn, resources=…)
+    build_config=build_config,        # assembles the config from the StepContext
+    deps=(dataset,),                  # upstream handles this step reads
+    runtime_args={"train_resources": resources},  # execution choices, excluded from identity
+)
 ```
 
-`build_config` is a pure function of a `RunContext`. The context is the dividing line
+`build_config` is a pure function of a `StepContext`. The context is the dividing line
 between what an artifact *is* and *where/how* it runs:
 
 ```python
 @dataclass(frozen=True)
-class RunContext:
-    out: str           # this artifact's output path (excluded from fingerprint)
-    prefix: str        # the live storage prefix (excluded)
-    region: str | None # the GCP region, resolved at run time (excluded)
+class StepContext:
+    output_path: str    # this artifact's output path (excluded from fingerprint)
+    prefix: str         # the live storage prefix (excluded)
+    region: str | None  # the GCP region, resolved at run time (excluded)
+    is_fingerprint: bool # True only while computing the fingerprint
 
-    def path(self, dep: Lazy[...]) -> str: ...   # dependency's output path (excluded)
-    def run_arg(self, key: str) -> Any: ...      # recipe-declared run-arg (excluded)
+    def artifact_path(self, dep: ArtifactStep) -> str: ...  # a dependency's output path
+    def runtime_arg(self, key: str) -> Any: ...             # a step-declared runtime arg
 ```
 
 Values written as literals in `build_config` — model architecture, hyperparameters, dep
@@ -72,7 +80,7 @@ A concrete example from `experiments/tutorials/exp1078_reproduce_dclm_7b1x.py`:
 ```python
 return train_lm(
     name="checkpoints/dclm_7b_1x_how_to",
-    version="v1",
+    version="2026.06.28",
     model=llama_7b_dclm,         # literal → bears identity
     optimizer=AdamConfig(
         learning_rate=2e-3,      # literal → bears identity
@@ -82,23 +90,24 @@ return train_lm(
     validation=validation,
     batch_size=BATCH_SIZE,       # literal → bears identity
     ...
-    resources=TRAIN_RESOURCES,   # run-arg → excluded from fingerprint
+    resources=TRAIN_RESOURCES,   # runtime arg → excluded from fingerprint
 )
 ```
 
-`train_lm` builds the `Recipe` internally. The `resources` argument goes into `run_args`
-so changing the TPU never re-fingerprints the checkpoint.
+`train_lm` constructs the `ArtifactStep` internally and passes `resources` as a
+`runtime_arg`, so changing the TPU never re-fingerprints the checkpoint.
 
 ## Lowering and running
 
-`lower(handle)` converts a `Lazy[T]` graph into a `StepSpec` graph that `StepRunner` can
-execute. It traverses dependencies recursively.
+`lower(handle)` converts an `ArtifactStep[T]` graph into a `StepSpec` graph that
+`StepRunner` can execute; it traverses dependencies recursively. `run(handle)` lowers and
+runs in one call, and `handle.resolve()` runs the handle then loads its typed result.
 
 ```python
 from marin.execution.lazy import lower
 from marin.execution.step_runner import StepRunner
 
-checkpoint = build()                      # returns Lazy[Checkpoint]; nothing runs yet
+checkpoint = build()                      # returns ArtifactStep[LevanterCheckpoint]; nothing runs yet
 StepRunner().run([lower(checkpoint)])     # materializes deps, then runs training
 ```
 
@@ -124,15 +133,15 @@ of the storage prefix, region, or hardware.
 When the runner encounters an existing artifact record, it compares the current fingerprint
 against the recorded one. A mismatch is **advisory**: the runner logs a warning and serves
 the cached output rather than raising an error. To produce a new result from an updated
-recipe, bump the `version`:
+build, bump the `version`:
 
 ```python
-# bump version to force a rebuild when the recipe changes
-return train_lm(name="checkpoints/dclm_7b_1x", version="v2", ...)
+# bump version to force a rebuild when the build changes
+return train_lm(name="checkpoints/dclm_7b_1x", version="2026.07.01", ...)
 ```
 
-During development, use a `dev` version string (e.g. `"v1-dev"`) to opt out of the cache
-entirely and always rebuild.
+During development, use a `dev` version string (e.g. `"dev"` or `"mylabel-dev"`) to opt out
+of the cache entirely and always rebuild.
 
 ## Adopting pre-existing data
 
@@ -140,14 +149,14 @@ entirely and always rebuild.
 or recomputing it:
 
 ```python
-from marin.execution.artifact import Dataset
 from marin.execution.lazy import adopt
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 dclm_tokenized = adopt(
     "tokenized/dclm-baseline",
-    "v1",
+    "2026.06.28",
     source="gs://marin-us-central1/tokenized/dclm/...",
-    kind=Dataset,
+    kind=TokenizedCache,
 )
 ```
 
@@ -162,24 +171,29 @@ dependency graph with full provenance tracking.
 
 ## Data builders
 
-`marin.experiment.data` provides concise builders that return `Lazy[Dataset]` handles:
+`marin.experiment.data` provides concise builders that return `ArtifactStep[TokenizedCache]`
+handles:
 
-- `tokenized(name, *, tokenizer, source=…, paths=…, raw=…, glob=…)` — tokenize a HuggingFace
-  dataset or a raw path glob into a Levanter cache. Provide exactly one of `source`, `paths`,
-  or `raw+glob`.
-- `hf_download(name, *, hf_id, revision, urls_glob=…)` — download a HuggingFace repo to GCS
-  as a raw-data handle for `tokenized` to consume.
-- `pretokenized(…)` — a pre-built Levanter cache hosted on HuggingFace (downloads rather
-  than re-tokenizes).
+- `tokenized(name, *, tokenizer, version, source=…, paths=…, raw=…, glob=…)` — tokenize a
+  HuggingFace dataset or a raw path glob into a Levanter cache. Provide exactly one of
+  `source`, `paths`, or `raw+glob`.
+- `hf_download(name, *, hf_id, revision, version, urls_glob=…)` — download a HuggingFace
+  repo to GCS as a raw-data `ArtifactStep[Artifact]` for `tokenized` to consume.
+- `raw_download(name, *, fn, build_config, version)` — a raw-data download driven by a custom
+  `fn`/`build_config`, for sources `hf_download` does not cover.
+- `pretokenized(name, *, repo_id, tokenizer, version)` — a pre-built Levanter cache hosted on
+  HuggingFace (downloads rather than re-tokenizes).
 
-For custom single-step transforms (filter, conversion, format change), `marin.execution.lazy`
-provides two generic builders:
+For a custom single step (a filter, conversion, or format change), construct an
+`ArtifactStep(...)` directly, or use `apply` for the common keyword-input shape:
 
-- `derived(name, *, fn, build_config, deps=…, kind=Artifact)` — the general form; `fn`
-  receives a typed config assembled by `build_config(ctx)`.
-- `apply(name, fn, *, version="v1", result_type=Artifact, **inputs)` — a simpler form
-  where `fn` receives keyword arguments directly; bare `Lazy` inputs are resolved to paths
-  automatically.
+```python
+from marin.execution.lazy import OUT, apply
+
+# fn receives the resolved inputs as keyword arguments; OUT resolves to the output path,
+# and any ArtifactStep input is resolved to its output path automatically.
+shards = apply("data/sharded", shard_parquet, version="2026.06.28", source=raw, output_path=OUT)
+```
 
 ## How this differs from the old content-addressed executor
 

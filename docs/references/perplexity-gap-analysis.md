@@ -119,8 +119,8 @@ If the dataset already lives on Hugging Face and can be read directly, use
 `HfDatasetSpec`. If the dataset must be pinned to an exact revision, stage the
 heldout rows to a versioned GCS path or extend the HF source API first.
 
-If the source needs ETL, create a `derived` artifact (from `marin.experiment.data`)
-that writes a small heldout artifact to GCS. Raw-text scoring expects JSONL or JSONL
+If the source needs ETL, create a custom `ArtifactStep` (or use `raw_download` from
+`marin.experiment.data`) that writes a small heldout artifact to GCS. Raw-text scoring expects JSONL or JSONL
 gzip rows with a `text` field:
 
 ```json
