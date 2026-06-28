@@ -8,9 +8,10 @@ decide which backend each job pins to (or why it cannot be placed). No DB, no
 scheduler, no controller.
 """
 
-from iris.cluster.config import AllowPolicy, BackendConfig
+from iris.cluster.config import AllowPolicy, BackendConfig, backend_attribute_sets
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.controller.scheduling.meta_scheduler import (
+    BackendRouting,
     RoutableJob,
     build_backend_index,
     route_jobs_to_backends,
@@ -30,8 +31,21 @@ def _job(name: str, *constraints: Constraint, user: str = "alice") -> RoutableJo
     return RoutableJob(job_id=JobName.root(user, name), user=user, constraints=list(constraints))
 
 
+def _routing(configs: dict[str, BackendConfig]) -> dict[str, BackendRouting]:
+    """Mirror how the composer/controller derive each backend's routing metadata."""
+    routing: dict[str, BackendRouting] = {}
+    for backend_id, cfg in configs.items():
+        allowed = frozenset(cfg.allow_policy.users)
+        routing[backend_id] = BackendRouting(
+            advertised=backend_attribute_sets(cfg),
+            admits=lambda user, allowed=allowed: "*" in allowed or user in allowed,
+        )
+    return routing
+
+
 def _route(configs: dict[str, BackendConfig], *jobs: RoutableJob):
-    return route_jobs_to_backends(list(jobs), configs, build_backend_index(configs))
+    routing = _routing(configs)
+    return route_jobs_to_backends(list(jobs), routing, build_backend_index(routing))
 
 
 def test_constraint_routes_to_the_backend_advertising_it():

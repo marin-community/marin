@@ -1933,9 +1933,9 @@ class TestBackendsConfig:
             validate_config(config)
 
     def test_multiple_in_process_backends_validate(self):
-        # The controller partitions each tick by backend_id and drives N
-        # in-process backends from its single control thread, so more than one
-        # in_process backend is allowed.
+        # The controller routes tasks to N in-process backends by backend_id and
+        # drives them from its single control thread, so more than one in_process
+        # backend is allowed.
         config = IrisClusterConfig(
             backends={
                 "cpu": _worker_daemon_backend(attributes={"device-type": "cpu"}),

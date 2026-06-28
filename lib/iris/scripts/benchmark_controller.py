@@ -53,12 +53,17 @@ from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFacto
 from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskBackend,
+    WorkerSource,
+    assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -168,9 +173,31 @@ class _FakeProvider:
 
     def __init__(self) -> None:
         self._scheduler = Scheduler()
+        self.worker_source: WorkerSource | None = None
+        self.advertised: dict[str, set[str]] = {}
+        self.allowed_users: frozenset[str] = frozenset({"*"})
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        assert self.worker_source is not None
+        context = assemble_scheduling_context(self.worker_source.scheduling_inputs(), request)
+        return run_scheduling_decision(
+            self._scheduler,
+            ScheduleInput(
+                context=context,
+                max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
+                trace=request.trace,
+            ),
+        )
 
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
@@ -178,15 +205,20 @@ class _FakeProvider:
     def attach_autoscaler(self, autoscaler) -> None:
         pass
 
+    def attach_worker_source(self, source: WorkerSource) -> None:
+        self.worker_source = source
+
     def set_log_sink(self, *args, **kwargs):
         pass
 
     def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
+        assert self.worker_source is not None
+        snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         return ReconcileResult(
             worker_results=[
@@ -195,7 +227,7 @@ class _FakeProvider:
             health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
         )
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
     def close(self):
@@ -2666,6 +2698,27 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
+@dataclasses.dataclass
+class _PrebuiltWorkerSource:
+    """Hands the backend a reconcile snapshot the benchmark built itself.
+
+    The synthetic reconcile benchmark times snapshot assembly separately, then
+    drives ``RpcTaskBackend.reconcile`` against the prebuilt snapshot; the backend
+    sources its snapshot through this O(1) stub so only the RPC fan-out is timed.
+    """
+
+    snapshot: ControlSnapshot
+
+    def reconcile_snapshot(self) -> ControlSnapshot:
+        return self.snapshot
+
+    def scheduling_inputs(self):
+        raise NotImplementedError
+
+    def worker_status(self):
+        raise NotImplementedError
+
+
 def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
@@ -2678,7 +2731,11 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
         job_specs=inputs.job_specs,
     )
     t2 = time.perf_counter()
-    worker_results = provider.reconcile(snapshot).worker_results
+    # The backend sources its own reconcile snapshot; the benchmark prebuilds it
+    # (measured above) and hands it back through a stub source so the RPC fan-out
+    # is what t2..t3 times.
+    provider.attach_worker_source(_PrebuiltWorkerSource(snapshot))
+    worker_results = provider.reconcile(ReconcileRequest()).worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.db.transaction() as cur:

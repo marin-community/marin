@@ -698,6 +698,40 @@ def _sort_pending_tasks_by_resolved_band(
     )
 
 
+@dataclass(frozen=True)
+class RoutingInputs:
+    """Controller-owned (S1) per-tick scheduling state: pending tasks + budgets.
+
+    Carries no worker data — the controller routes and budgets from this, then
+    each backend sources its own workers and assembles its full scheduling
+    context from this plus its worker view. This is the worker-free counterpart
+    to :class:`SchedulingContext`.
+    """
+
+    pending_task_rows: list[PendingTask]
+    requested_bands: dict[JobName, int]
+    user_spend: dict[str, int]
+    user_budget_limits: dict[str, int]
+    user_budget_defaults: UserBudgetDefaults
+
+
+def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInputs:
+    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads).
+
+    The meta-scheduler and per-user budget threading run off this; workers are
+    read by each backend, not here.
+    """
+    pending = reads.pending_tasks_with_jobs(snap)
+    requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
+    return RoutingInputs(
+        pending_task_rows=_sort_pending_tasks_by_resolved_band(pending, requested_bands),
+        requested_bands=requested_bands,
+        user_spend=compute_user_spend(snap),
+        user_budget_limits=reads.get_all_user_budget_limits(snap),
+        user_budget_defaults=defaults,
+    )
+
+
 def build_scheduling_context(
     snap: Tx,
     health: WorkerHealthTracker,

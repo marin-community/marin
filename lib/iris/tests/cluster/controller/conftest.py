@@ -44,13 +44,18 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
     ProviderUnsupportedError,
+    ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerSource,
+    assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -58,7 +63,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
@@ -111,6 +116,23 @@ def check_is_job_finished(j) -> bool:
     return is_job_finished(j.state)
 
 
+def run_worker_daemon_schedule(
+    scheduler: Scheduler, worker_source: WorkerSource | None, request: ScheduleRequest
+) -> ScheduleResult:
+    """Assemble the scheduling context from the attached source and run the Iris
+    pipeline — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.schedule``."""
+    assert worker_source is not None, "worker-daemon backend scheduled before worker source attached"
+    context = assemble_scheduling_context(worker_source.scheduling_inputs(), request)
+    return run_scheduling_decision(
+        scheduler,
+        ScheduleInput(
+            context=context,
+            max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
+            trace=request.trace,
+        ),
+    )
+
+
 class FakeProvider:
     """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
@@ -123,24 +145,44 @@ class FakeProvider:
         # through ``schedule`` now, so the fake must run the real pipeline for
         # scheduler/preemption tests to exercise placement.
         self._scheduler = Scheduler()
+        # Attached by the controller, exactly as for RpcTaskBackend; the fake
+        # sources its own workers through it rather than the controller slicing one.
+        self.worker_source: WorkerSource | None = None
+        self.advertised: dict[str, set[str]] = {}
+        self.allowed_users: frozenset[str] = frozenset({"*"})
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
-        # Mirror RpcTaskBackend: build plans from the snapshot, report every
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        # Mirror RpcTaskBackend: source the snapshot, build plans, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs).
+        assert self.worker_source is not None, "FakeProvider.reconcile called before worker source attached"
+        snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler
+
+    def attach_worker_source(self, source: WorkerSource) -> None:
+        self.worker_source = source
 
     def get_process_status(
         self,

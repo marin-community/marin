@@ -21,7 +21,13 @@ from finelog.client.log_client import Table
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import local_queue_name
-from iris.cluster.config import BackendConfig, IrisClusterConfig, WorkerConfig, resolve_backends
+from iris.cluster.config import (
+    BackendConfig,
+    IrisClusterConfig,
+    WorkerConfig,
+    backend_attribute_sets,
+    resolve_backends,
+)
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.controller.backend import BackendCapability, TaskBackend
@@ -264,6 +270,7 @@ def make_backends(
             log_stack=log_stack,
         )
         provider.name = backend_id
+        provider.configure_routing(backend_attribute_sets(backend_cfg), frozenset(backend_cfg.allow_policy.users))
         backends[backend_id] = provider
         logger.info("Backend %r ready: %s", backend_id, type(provider).__name__)
     return backends

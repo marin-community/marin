@@ -21,13 +21,15 @@ import pytest
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    ReconcileRequest,
     ReconcileResult,
-    ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
+    WorkerSource,
     plans_from_snapshot,
-    run_scheduling_decision,
 )
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
@@ -71,6 +73,7 @@ from .conftest import (
     query_worker,
     reconcile_once,
     register_worker,
+    run_worker_daemon_schedule,
     submit_job,
 )
 
@@ -553,17 +556,43 @@ def _reconcile_snapshot(worker_addresses: dict[WorkerId, str]) -> ControlSnapsho
     )
 
 
+@dataclass
+class _StubWorkerSource:
+    """A worker source that hands the backend a fixed reconcile snapshot.
+
+    The dispatch-layer tests exercise ``RpcTaskBackend.reconcile``'s fan-out and
+    health-event derivation given a known snapshot; the backend now sources that
+    snapshot itself, so the test supplies it through this stub.
+    """
+
+    snapshot: ControlSnapshot
+
+    def reconcile_snapshot(self) -> ControlSnapshot:
+        return self.snapshot
+
+    def scheduling_inputs(self):
+        raise NotImplementedError
+
+    def worker_status(self):
+        raise NotImplementedError
+
+
+def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> ReconcileResult:
+    provider.attach_worker_source(_StubWorkerSource(_reconcile_snapshot(worker_addresses)))
+    return provider.reconcile(ReconcileRequest())
+
+
 def _reconcile_one(provider: RpcTaskBackend, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
     # The backend now builds plans from the snapshot; ``plan`` here only fixes
     # which worker is reconciled. The RPC fan-out and observation surfacing are
     # what these dispatch-layer tests exercise.
-    result = provider.reconcile(_reconcile_snapshot({plan.worker_id: address}))
+    result = _reconcile_with(provider, {plan.worker_id: address})
     return [r for _, r in result.worker_results]
 
 
 def test_dispatch_reconcile_plans_empty_short_circuits():
     provider, _ = _provider_with_stub()
-    assert provider.reconcile(_reconcile_snapshot({})).worker_results == []
+    assert _reconcile_with(provider, {}).worker_results == []
 
 
 def test_reconcile_rpc_forwards_observations():
@@ -607,7 +636,7 @@ def test_reconcile_matching_responder_id_is_reached():
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
     provider = RpcTaskBackend(stub_factory=factory)
 
-    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
     assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
     assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
@@ -632,7 +661,7 @@ def test_reconcile_recycled_address_is_unreachable_not_reached():
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
     provider = RpcTaskBackend(stub_factory=factory)
 
-    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
     assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
     # The stale stub is evicted so the next tick re-resolves the address.
@@ -1119,13 +1148,26 @@ class _ScriptedProvider:
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
     name: str = "worker"
     autoscaler: Any = None
+    worker_source: WorkerSource | None = None
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1133,13 +1175,18 @@ class _ScriptedProvider:
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler
 
+    def attach_worker_source(self, source: WorkerSource) -> None:
+        self.worker_source = source
+
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        assert self.worker_source is not None, "_ScriptedProvider.reconcile called before worker source attached"
+        snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         self.calls.append((plans, dict(snapshot.worker_addresses)))
         tick = len(self.calls) - 1
@@ -1270,15 +1317,33 @@ class _UnreachableProvider:
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
     name: str = "worker"
     autoscaler: Any = None
+    worker_source: WorkerSource | None = None
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def attach_worker_source(self, source: WorkerSource) -> None:
+        self.worker_source = source
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        assert self.worker_source is not None, "_UnreachableProvider.reconcile called before worker source attached"
+        snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
         events: list[WorkerHealthEvent] = []
@@ -1307,10 +1372,10 @@ class _UnreachableProvider:
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
         return ReconcileResult(worker_results=worker_results, health_events=events)
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
-        self.autoscale_calls.append(list(dead_workers))
-        removed: list[WorkerId] = list(dead_workers)
-        for dead in dead_workers:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
+        self.autoscale_calls.append(list(request.dead_workers))
+        removed: list[WorkerId] = list(request.dead_workers)
+        for dead in request.dead_workers:
             removed.extend(WorkerId(sib) for sib in self.siblings.get(str(dead), []))
         return AutoscaleResult(removed_workers=removed)
 

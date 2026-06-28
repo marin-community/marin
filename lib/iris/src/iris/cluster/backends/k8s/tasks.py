@@ -26,17 +26,18 @@ from finelog.client.log_client import Table
 from rigging.timing import Timestamp
 
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
     ProviderUnsupportedError,
+    ReconcileRequest,
     ReconcileResult,
-    ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerSource,
 )
-from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
@@ -67,7 +68,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.types import JobName, WorkerId, get_gpu_count
+from iris.cluster.types import JobName, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
@@ -1385,7 +1386,7 @@ class K8sTaskProvider:
     A cluster :class:`~iris.cluster.controller.backend.TaskBackend`: Kueue owns
     placement, so ``schedule`` and ``autoscale`` are no-ops; ``reconcile``
     consumes the dispatch drain (``tasks_to_run`` + ``running_tasks``) carried on
-    the :class:`ControlSnapshot` and returns neutral task ``updates``. K8s pods
+    the :class:`ReconcileRequest` and returns neutral task ``updates``. K8s pods
     are launched and monitored directly via kubectl rather than through a worker
     gRPC daemon.
 
@@ -1436,6 +1437,9 @@ class K8sTaskProvider:
     # Tests set this to 0.0 so every reconcile scans.
     cluster_scan_interval: float = 5.0
     name: str = "kubernetes"
+    # Routing metadata the meta-scheduler reads, set by the composer via configure_routing.
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1458,16 +1462,21 @@ class K8sTaskProvider:
             )
         return self._resource_collector
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""
         return ScheduleResult()
 
-    def autoscale(
-        self,
-        snapshot: ControlSnapshot,
-        residual_demand: list[DemandEntry],
-        dead_workers: list[WorkerId],
-    ) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """No-op: the cluster autoscaler + Kueue provision nodes; K8s has no
         Iris-managed slices to tear down."""
         return AutoscaleResult()
@@ -1476,7 +1485,11 @@ class K8sTaskProvider:
         """Never called: K8s provisions its own capacity, so no autoscaler is attached."""
         raise AssertionError("K8sTaskProvider manages its own capacity; no autoscaler should be attached")
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def attach_worker_source(self, source: "WorkerSource") -> None:
+        """Never called: a cluster backend owns its own placement, with no Iris workers."""
+        raise AssertionError("K8sTaskProvider sources its own placement; no worker source should be attached")
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1494,11 +1507,11 @@ class K8sTaskProvider:
         # Free GPU capacity for incoming gangs before their pods are created:
         # Kueue TAS computes node capacity at admission, so blockers must be
         # gone (or terminating) by the time it evaluates the new Workload.
-        if self.preempt_namespaces and any(r.coscheduling.group_by for r in snapshot.tasks_to_run):
+        if self.preempt_namespaces and any(r.coscheduling.group_by for r in request.tasks_to_run):
             self._evict_preemptible_blockers(reason="coscheduled gang submission", force=True)
 
         apply_failures: list[TaskUpdate] = []
-        for run_req in snapshot.tasks_to_run:
+        for run_req in request.tasks_to_run:
             try:
                 self._apply_pod(run_req)
             except KubectlError as exc:
@@ -1535,12 +1548,12 @@ class K8sTaskProvider:
             self._evict_preemptible_blockers(reason="gang pods held SchedulingGated awaiting Kueue admission")
 
         desired_keys: set[tuple[str, int]] = set()
-        for run_req in snapshot.tasks_to_run:
+        for run_req in request.tasks_to_run:
             desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
-        for entry in snapshot.running_tasks:
+        for entry in request.running_tasks:
             desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
         self._delete_stray_pods(managed_pods, desired_keys)
-        updates = apply_failures + self._poll_pods(snapshot.running_tasks, managed_pods)
+        updates = apply_failures + self._poll_pods(request.running_tasks, managed_pods)
 
         try:
             nodes = self.kubectl.list_json(K8sResource.NODES)

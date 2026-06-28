@@ -6,16 +6,18 @@
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
     ProviderUnsupportedError,
+    ReconcileRequest,
     ReconcileResult,
-    ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerSource,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
-from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
@@ -39,21 +41,40 @@ class FakeDirectProvider:
 
     name = "kubernetes"
     capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
+    autoscaler = None
 
     def __init__(self):
-        self.sync_calls: list[ControlSnapshot] = []
+        self.sync_calls: list[ReconcileRequest] = []
         self.sync_result = ReconcileResult()
         self.closed = False
+        self.advertised: dict[str, set[str]] = {}
+        self.allowed_users: frozenset[str] = frozenset({"*"})
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
-        self.sync_calls.append(snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        self.sync_calls.append(request)
         return self.sync_result
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
+
+    def attach_autoscaler(self, autoscaler) -> None:
+        raise AssertionError("cluster-view backend manages its own capacity")
+
+    def attach_worker_source(self, source: WorkerSource) -> None:
+        raise AssertionError("cluster-view backend sources its own placement")
 
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")
