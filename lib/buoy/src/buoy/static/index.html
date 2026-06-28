@@ -58,11 +58,26 @@
     .kv-col td { padding: .32em .5em; border-bottom: 1px solid #eef2f6; vertical-align: top; word-break: break-word; }
     .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
     .kv-col td.v { font-family: ui-monospace, monospace; }
-    #metric-list {
-      display: flex; flex-wrap: wrap; gap: .25em 1.1em; max-height: 190px; overflow: auto;
-      padding: .6em .8em; border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; margin-bottom: 1.1em;
+    .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
+    .chip {
+      display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff;
+      border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace;
     }
-    #metric-list label { font-size: 12px; font-family: ui-monospace, monospace; white-space: nowrap; cursor: pointer; }
+    .chip button {
+      border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px;
+      line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0;
+    }
+    .chip button:hover { background: rgba(255, 255, 255, .5); }
+    .combo { position: relative; width: min(560px, 92vw); margin-bottom: 1.1em; }
+    .combo .search { margin-bottom: 0; width: 100%; box-sizing: border-box; }
+    .options {
+      position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: #fff;
+      border: 1px solid #cbd5e0; border-radius: 8px; box-shadow: 0 8px 22px rgba(0, 0, 0, .14);
+      max-height: 300px; overflow: auto;
+    }
+    .option { padding: .5em .8em; font-size: 12.5px; font-family: ui-monospace, monospace; cursor: pointer; }
+    .option:hover { background: #eef4fb; }
+    .option.muted { color: #94a3b8; font-style: italic; cursor: default; }
     @media (max-width: 760px) { .kv-cols { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -96,8 +111,11 @@
   </div>
 
   <div id="charts-pane" class="pane hidden">
-    <input id="metric-search" class="search" placeholder="search metrics to plot…">
-    <div id="metric-list"></div>
+    <div id="metric-chips" class="chips"></div>
+    <div class="combo">
+      <input id="metric-search" class="search" placeholder="add a metric to plot…" autocomplete="off">
+      <div id="metric-options" class="options hidden"></div>
+    </div>
     <div id="charts"></div>
   </div>
 
@@ -271,19 +289,52 @@
       fillKV("config-table", current.config, q);
     }
 
-    function buildMetricList(cols) {
-      const box = $("metric-list");
+    // ---- charts tab: chip multi-select with a searchable dropdown ----
+    function renderChips() {
+      const box = $("metric-chips");
       box.textContent = "";
-      for (const c of cols) {
-        const lab = el("label");
-        lab.dataset.key = c.toLowerCase();
-        const cb = el("input"); cb.type = "checkbox"; cb.value = c;
-        lab.append(cb, " " + c);
-        box.appendChild(lab);
+      for (const k of selectedMetrics) {
+        const chip = el("span", "chip");
+        chip.append(document.createTextNode(k));
+        const x = el("button", null, "×");
+        x.title = "remove";
+        x.addEventListener("click", () => removeMetric(k));
+        chip.appendChild(x);
+        box.appendChild(chip);
       }
     }
-    function syncMetricChecks() {
-      document.querySelectorAll("#metric-list input").forEach((cb) => { cb.checked = selectedMetrics.includes(cb.value); });
+    function addMetric(k) {
+      if (!selectedMetrics.includes(k)) selectedMetrics.push(k);
+      $("metric-search").value = "";
+      hideOptions();
+      renderChips();
+      plotSelected();
+    }
+    function removeMetric(k) {
+      selectedMetrics = selectedMetrics.filter((m) => m !== k);
+      renderChips();
+      plotSelected();
+    }
+    const hideOptions = () => $("metric-options").classList.add("hidden");
+    function showOptions() {
+      const cols = current ? current.m.history.columns : [];
+      const q = $("metric-search").value.trim().toLowerCase();
+      const matches = cols.filter((c) => !selectedMetrics.includes(c) && (!q || c.toLowerCase().includes(q)));
+      const opts = $("metric-options");
+      opts.textContent = "";
+      if (!q && !matches.length) { hideOptions(); return; }
+      if (!matches.length) {
+        opts.appendChild(el("div", "option muted", "no metrics match"));
+      } else {
+        for (const c of matches.slice(0, 50)) {
+          const o = el("div", "option", c);
+          // mousedown (not click) so it fires before the input blur
+          o.addEventListener("mousedown", (e) => { e.preventDefault(); addMetric(c); });
+          opts.appendChild(o);
+        }
+        if (matches.length > 50) opts.appendChild(el("div", "option muted", `+${matches.length - 50} more — keep typing`));
+      }
+      opts.classList.remove("hidden");
     }
     async function plotSelected() {
       const charts = $("charts");
@@ -306,10 +357,9 @@
       current.summary = flatten(summ.error ? {} : summ);
       renderKV();
 
-      buildMetricList(m.history.columns);
       selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
       if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
-      syncMetricChecks();
+      renderChips();
       plotSelected();
 
       $("profile-pane").textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
@@ -368,19 +418,18 @@
 
     // summary tab: filter both tables; charts tab: filter the metric list + toggle plots
     $("summary-search").addEventListener("input", () => { if (current) renderKV(); });
-    $("metric-search").addEventListener("input", () => {
-      const q = $("metric-search").value.trim().toLowerCase();
-      document.querySelectorAll("#metric-list label").forEach((l) => {
-        l.style.display = (!q || l.dataset.key.includes(q)) ? "" : "none";
-      });
+    $("metric-search").addEventListener("input", showOptions);
+    $("metric-search").addEventListener("focus", showOptions);
+    $("metric-search").addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { hideOptions(); return; }
+      if (e.key === "Enter") {
+        const cols = current ? current.m.history.columns : [];
+        const q = $("metric-search").value.trim().toLowerCase();
+        const first = cols.find((c) => !selectedMetrics.includes(c) && (!q || c.toLowerCase().includes(q)));
+        if (first) addMetric(first);
+      }
     });
-    $("metric-list").addEventListener("change", (e) => {
-      if (!e.target.matches('input[type="checkbox"]')) return;
-      const v = e.target.value;
-      if (e.target.checked) { if (!selectedMetrics.includes(v)) selectedMetrics.push(v); }
-      else selectedMetrics = selectedMetrics.filter((k) => k !== v);
-      plotSelected();
-    });
+    document.addEventListener("mousedown", (e) => { if (!e.target.closest(".combo")) hideOptions(); });
     init();
   </script>
 </body>
