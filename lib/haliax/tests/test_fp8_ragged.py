@@ -15,6 +15,12 @@ import numpy as np
 import pytest
 
 from haliax._src.fp8_ragged import fp8_scaled_ragged_dot
+from haliax._src.fp8_ragged_guards import (
+    Fp8Contraction,
+    assert_fp8_contraction,
+    fp8_ragged_lowered_text,
+    lowering_contains_fp8,
+)
 from haliax.nn.ragged_dot import ragged_dot
 
 _AMAX_LEN = 1024
@@ -77,7 +83,9 @@ def test_backward_layouts_track_bf16():
         return jnp.sum(_fp8(lhs, rhs, group_sizes).astype(jnp.float32))
 
     def bf16_loss(lhs, rhs):
-        return jnp.sum(ragged_dot(lhs, rhs, group_sizes, implementation="xla").astype(jnp.float32))
+        return jnp.sum(
+            ragged_dot(lhs, rhs, group_sizes, implementation="xla").astype(jnp.float32)
+        )
 
     g_lhs_fp8, g_rhs_fp8 = jax.grad(fp8_loss, argnums=(0, 1))(lhs, rhs)
     g_lhs_bf16, g_rhs_bf16 = jax.grad(bf16_loss, argnums=(0, 1))(lhs, rhs)
@@ -107,8 +115,12 @@ def test_delayed_scaling_state_captures_amax():
     state_grad = jax.grad(loss)(_state())
 
     # Newest history slot records this step's amax for each tensor.
-    assert np.allclose(state_grad["lhs_amax_history"][0], float(jnp.max(jnp.abs(lhs))), rtol=1e-3)
-    assert np.allclose(state_grad["rhs_amax_history"][0], float(jnp.max(jnp.abs(rhs))), rtol=1e-3)
+    assert np.allclose(
+        state_grad["lhs_amax_history"][0], float(jnp.max(jnp.abs(lhs))), rtol=1e-3
+    )
+    assert np.allclose(
+        state_grad["rhs_amax_history"][0], float(jnp.max(jnp.abs(rhs))), rtol=1e-3
+    )
     # Output cotangent of sum(y) is 1 everywhere a token is assigned, so the grad amax is 1.
     assert np.allclose(state_grad["grad_amax_history"][0], 1.0, rtol=1e-3)
 
@@ -128,3 +140,44 @@ def test_fp8_runs_under_jit(M):
     out = jax.jit(_fp8)(lhs, rhs, group_sizes)
     assert out.shape == (M, rhs.shape[2])
     assert jnp.all(jnp.isfinite(out.astype(jnp.float32)))
+
+
+def test_assert_fp8_contraction_accepts_genuine_mixed_recipe():
+    """The hybrid recipe: forward all-E4M3, both backward dots genuine mixed E5M2×E4M3."""
+    a = jnp.ones((4, 4), jnp.float8_e4m3fn)
+    g = jnp.ones((4, 4), jnp.float8_e5m2)
+    assert_fp8_contraction(
+        a, a, contraction=Fp8Contraction.FORWARD, grad_dtype=jnp.float8_e5m2
+    )
+    assert_fp8_contraction(
+        g, a, contraction=Fp8Contraction.DLHS, grad_dtype=jnp.float8_e5m2
+    )
+    assert_fp8_contraction(
+        a, g, contraction=Fp8Contraction.DRHS, grad_dtype=jnp.float8_e5m2
+    )
+
+
+def test_assert_fp8_contraction_rejects_bf16_fallback():
+    """A backward operand that dequantized to bf16 (QDQ regression) must fail loudly."""
+    a = jnp.ones((4, 4), jnp.float8_e4m3fn)
+    g_bf16 = jnp.ones((4, 4), jnp.bfloat16)
+    with pytest.raises(AssertionError, match="genuine f8 operands"):
+        assert_fp8_contraction(
+            g_bf16, a, contraction=Fp8Contraction.DLHS, grad_dtype=jnp.float8_e5m2
+        )
+
+
+def test_assert_fp8_contraction_rejects_all_e4m3_collapse():
+    """An E5M2-grad recipe whose gradient collapsed to E4M3 is no longer the required mix."""
+    a = jnp.ones((4, 4), jnp.float8_e4m3fn)
+    with pytest.raises(AssertionError, match="all-E4M3 collapse"):
+        assert_fp8_contraction(
+            a, a, contraction=Fp8Contraction.DLHS, grad_dtype=jnp.float8_e5m2
+        )
+
+
+def test_forward_lowers_with_operands_still_fp8():
+    """The compiled forward keeps f8 operands at the GEMM — not pre-dequantized to bf16."""
+    lhs, rhs, group_sizes = _inputs()
+    text = fp8_ragged_lowered_text(_fp8, lhs, rhs, group_sizes)
+    assert lowering_contains_fp8(text)
