@@ -579,8 +579,8 @@ class BackendConfig(_Config):
 
     ``kind`` selects the provider arm: ``worker_daemon`` drives the worker-daemon
     provider (``worker_provider``), ``k8s`` drives the Kubernetes provider
-    (``kubernetes_provider``). ``transport`` is ``in_process`` for now; ``remote``
-    is reserved for a later PR and rejected by :func:`validate_config`.
+    (``kubernetes_provider``). ``transport`` must be ``in_process``; ``remote`` is
+    rejected by :func:`validate_config`.
 
     ``attributes`` values are comma-split into sets by
     :func:`backend_attribute_sets` for the task→backend meta-scheduler (for

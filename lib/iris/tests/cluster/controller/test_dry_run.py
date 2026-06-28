@@ -57,13 +57,13 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
 
 def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
     controller = dry_run_controller
-    controller._task_backend.autoscale = MagicMock()
+    controller._representative_backend.autoscale = MagicMock()
 
     # In dry-run the control tick short-circuits to the schedule-only path, so
     # the autoscale phase never reaches the backend even when forced.
     autoscale_once(controller)
 
-    controller._task_backend.autoscale.assert_not_called()
+    controller._representative_backend.autoscale.assert_not_called()
 
 
 def test_dry_run_checkpoint_returns_sentinel(dry_run_controller):

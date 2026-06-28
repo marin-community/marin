@@ -254,7 +254,7 @@ class BackendSchedulingInputs:
 
 @dataclass(frozen=True)
 class ScheduleRequest:
-    """Controller-owned (S1) inputs for one backend's scheduling tick.
+    """Controller-owned inputs for one backend's scheduling tick.
 
     Carries only the routed pending tasks and the per-user budget state — never
     worker data. The backend sources its own workers (a
@@ -275,7 +275,7 @@ class ScheduleRequest:
 
 @dataclass(frozen=True)
 class ReconcileRequest:
-    """Controller-owned (S1) inputs for one backend's reconcile tick.
+    """Controller-owned inputs for one backend's reconcile tick.
 
     A worker-daemon backend sources its own worker/placement snapshot and ignores
     this; a ``CLUSTER_VIEW`` backend that owns placement receives the dispatch
@@ -300,6 +300,11 @@ class AutoscaleRequest:
 
     residual_demand: list[DemandEntry] = field(default_factory=list)
     dead_workers: list[WorkerId] = field(default_factory=list)
+
+
+def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
+    """Whether an allow policy permits ``user`` (``"*"`` matches any user)."""
+    return "*" in allowed_users or user in allowed_users
 
 
 def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
@@ -441,7 +446,7 @@ def apply_placements(
 
 
 class WorkerSource(Protocol):
-    """A worker-daemon backend's live worker + placement read surface (S2/S3).
+    """A worker-daemon backend's live worker + placement read surface.
 
     The backend reads its own workers, placement and worker-status through this;
     the controller never partitions a worker snapshot for it. In-process backends

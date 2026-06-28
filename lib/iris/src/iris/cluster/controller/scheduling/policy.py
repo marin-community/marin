@@ -700,7 +700,7 @@ def _sort_pending_tasks_by_resolved_band(
 
 @dataclass(frozen=True)
 class RoutingInputs:
-    """Controller-owned (S1) per-tick scheduling state: pending tasks + budgets.
+    """Controller-owned per-tick scheduling state: pending tasks + budgets.
 
     Carries no worker data — the controller routes and budgets from this, then
     each backend sources its own workers and assembles its full scheduling

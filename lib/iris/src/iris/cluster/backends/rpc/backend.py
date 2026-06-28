@@ -36,6 +36,7 @@ from iris.cluster.controller.backend import (
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
+    user_admitted,
 )
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
@@ -178,7 +179,7 @@ class RpcTaskBackend:
         return self.advertised
 
     def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
+        return user_admitted(self.allowed_users, user)
 
     def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
         self.advertised = advertised

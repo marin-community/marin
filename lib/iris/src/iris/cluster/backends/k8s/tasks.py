@@ -37,6 +37,7 @@ from iris.cluster.controller.backend import (
     ScheduleResult,
     TaskTarget,
     WorkerSource,
+    user_admitted,
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -1466,7 +1467,7 @@ class K8sTaskProvider:
         return self.advertised
 
     def admits(self, user: str) -> bool:
-        return "*" in self.allowed_users or user in self.allowed_users
+        return user_admitted(self.allowed_users, user)
 
     def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
         self.advertised = advertised

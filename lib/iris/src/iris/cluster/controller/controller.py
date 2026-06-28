@@ -143,8 +143,8 @@ _SCHEDULING_TRACE_INTERVAL = 50
 class _TickInputs:
     """Per-tick inputs the control driver assembles for the due phases.
 
-    The controller reads only its own (S1) state: ``routing`` carries the pending
-    tasks + budgets the meta-scheduler and per-user budget thread off of;
+    The controller reads only its own task-lifecycle state: ``routing`` carries
+    the pending tasks + budgets the meta-scheduler and per-user budget thread off of;
     ``reconcile_requests`` carries each ``CLUSTER_VIEW`` backend's dispatch drain
     (worker-daemon backends source their own reconcile snapshot, so they have no
     entry); ``timeout_rows`` is the global execution-timeout sweep. Workers are
@@ -154,6 +154,20 @@ class _TickInputs:
     routing: RoutingInputs | None = None
     reconcile_requests: dict[str, ReconcileRequest] = field(default_factory=dict)
     timeout_rows: Sequence[Row] = ()
+
+
+@dataclass(frozen=True)
+class SchedulePhaseResult:
+    """One schedule phase's outputs, before any DB write.
+
+    ``results`` is the per-backend placement decision; ``pins`` are the
+    ``(job_id, backend_id)`` routings the meta-scheduler chose this tick; and
+    ``unschedulable`` are the ``(task, reason)`` pairs no backend could take.
+    """
+
+    results: dict[str, ScheduleResult]
+    pins: list[tuple[JobName, str]]
+    unschedulable: list[tuple[PendingTask, str]]
 
 
 @dataclass
@@ -769,7 +783,8 @@ class Controller:
         backend_pins: list[tuple[JobName, str]] = []
         routing_unschedulable: list[tuple[PendingTask, str]] = []
         if run_schedule:
-            sched_results, backend_pins, routing_unschedulable = self._schedule_phase(inputs)
+            sched = self._schedule_phase(inputs)
+            sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
 
         recon_results: dict[str, ReconcileResult] = {}
         timeout_decisions: list[TerminalDecision] = []
@@ -890,9 +905,7 @@ class Controller:
             for wid, scale_group in reads.worker_scale_groups(snap).items()
         }
 
-    def _schedule_phase(
-        self, inputs: _TickInputs
-    ) -> tuple[dict[str, ScheduleResult], list[tuple[JobName, str]], list[tuple[PendingTask, str]]]:
+    def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
         """Route unpinned jobs, then run each backend's scheduler over its tasks.
 
         Returns the per-backend ``ScheduleResult``s, the ``(job_id, backend_id)``
@@ -905,7 +918,7 @@ class Controller:
         """
         routing = inputs.routing
         if routing is None:
-            return {}, [], []
+            return SchedulePhaseResult({}, [], [])
         self._scheduling_round += 1
         trace = self._scheduling_round % _SCHEDULING_TRACE_INTERVAL == 0
 
@@ -941,7 +954,7 @@ class Controller:
             results[backend_id] = result
             self._accumulate_user_spend(user_spend, result.assignments, routing)
 
-        return results, list(pins.items()), routing_unschedulable
+        return SchedulePhaseResult(results, list(pins.items()), routing_unschedulable)
 
     def _route_pending(self, routing: RoutingInputs) -> tuple[dict[JobName, str], list[tuple[PendingTask, str]]]:
         """Run the task->backend meta-scheduler over this tick's unpinned jobs.
@@ -1541,11 +1554,6 @@ class Controller:
         processing order. With a single backend this is that backend.
         """
         return self._backends.get(DEFAULT_BACKEND_ID) or self._backends[self._backend_ids[0]]
-
-    @property
-    def _task_backend(self) -> TaskBackend:
-        """Back-compat alias for the representative backend."""
-        return self._representative_backend
 
     @property
     def backends(self) -> dict[str, TaskBackend]:
