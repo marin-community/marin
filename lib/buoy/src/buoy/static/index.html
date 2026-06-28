@@ -33,6 +33,7 @@
     .tabs { display: flex; gap: .5em; padding: .4em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
     .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
     .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
+    .live { margin-left: auto; align-self: center; padding-right: 1em; font-size: 12px; color: #2f855a; font-weight: 600; }
     #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
     .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
     #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
@@ -99,6 +100,7 @@
     <div class="tab active" data-pane="summary-pane">summary</div>
     <div class="tab" data-pane="charts-pane">charts</div>
     <div class="tab" data-pane="profile-pane">profile</div>
+    <span id="live" class="live"></span>
   </div>
 
   <div id="summary-pane" class="pane">
@@ -131,6 +133,8 @@
     let current = null;          // { r, m } for the loaded run
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
+    let liveTimer = null;        // running-run auto-refresh timer
+    const LIVE_INTERVAL = 30000;
 
     // wandb run state -> status glyph, shown as a prefix in the run datalist.
     const STATE_ICON = {
@@ -217,7 +221,9 @@
       history.replaceState(null, "", "?" + qs(u ? { ...r, user: u } : r));
       $("charts").innerHTML = "";
       $("info").textContent = "";
+      $("live").textContent = "";
       $("tabs").classList.add("hidden");
+      clearTimeout(liveTimer);
       profileStarted = false;
       current = null;
       $("status").textContent = "mirroring " + r.run + " … (first load of a large run can take ~1 min)";
@@ -363,6 +369,36 @@
       plotSelected();
 
       $("profile-pane").textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
+      scheduleLive(r);
+    }
+
+    // While the run is still running, poll for fresh data and redraw (the server
+    // keeps re-mirroring the cache until the run finishes; the poll also keeps that
+    // watcher alive). Selected chips and the active tab are preserved.
+    const liveStamp = () => "live · updated " + new Date().toLocaleTimeString();
+    function scheduleLive(r) {
+      clearTimeout(liveTimer);
+      if (!current || current.m.state !== "running") { $("live").textContent = ""; return; }
+      $("live").textContent = liveStamp();
+      liveTimer = setTimeout(() => refreshLive(r), LIVE_INTERVAL);
+    }
+    const stillCurrent = (r) =>
+      current && current.r.entity === r.entity && current.r.project === r.project && current.r.run === r.run;
+    async function refreshLive(r) {
+      if (!stillCurrent(r)) return;  // user navigated to another run
+      const m = await jget("api/manifest?" + qs(r));
+      if (!stillCurrent(r)) return;
+      if (!m || m.error || !m.history) { scheduleLive(r); return; }  // transient failure — keep polling
+      current.m = m;
+      renderInfo(m);
+      const [cfg, summ] = await Promise.all([jget("api/config?" + qs(r)), jget("api/summary?" + qs(r))]);
+      if (!stillCurrent(r)) return;
+      current.config = flatten(cfg.error ? {} : cfg);
+      current.summary = flatten(summ.error ? {} : summ);
+      renderKV();
+      await plotSelected();
+      if (!stillCurrent(r)) return;
+      scheduleLive(r);
     }
 
     async function prepareProfile(r, pane) {

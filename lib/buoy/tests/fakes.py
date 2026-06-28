@@ -19,8 +19,10 @@ class FakeArtifact:
     name: str
     local_dir: str
     size: int = 4096
+    download_calls: int = 0
 
     def download(self, root: str | None = None) -> str:
+        self.download_calls += 1
         return self.local_dir
 
 
