@@ -130,6 +130,25 @@ def _cache_key(train_path: str, eval_path: str, tokenizer_name: str, max_tokens:
     return hashlib.sha1(blob.encode()).hexdigest()[:16]
 
 
+def encode_corpus(
+    tokenizer_name: str, parquet_path: str, max_tokens: int
+) -> tuple[list[list[int]], np.ndarray, list[str]]:
+    """Read + tokenize one oracle-schema parquet (no vocab remap yet)."""
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    texts, scores, sources = _read_scored(parquet_path)
+    return _encode(tokenizer, texts, max_tokens), scores, sources
+
+
+def build_remap(raw_ids: list[list[int]], min_count: int) -> dict[int, int]:
+    return _build_vocab(raw_ids, min_count)
+
+
+def pack(
+    raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, sources: list[str], max_tokens: int
+) -> PackedSplit:
+    return _pack(raw_ids, remap, scores, sources, max_tokens)
+
+
 def load_packed(
     *,
     train_path: str,

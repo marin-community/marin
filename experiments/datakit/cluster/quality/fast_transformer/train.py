@@ -142,11 +142,21 @@ class FitResult:
     flops_per_token: float
 
 
-def fit(config: FastTransformerConfig, data: PackedData, hp: TrainHParams) -> FitResult:
-    """Train one model, selecting the checkpoint with the best internal-val Spearman."""
+def fit(
+    config: FastTransformerConfig,
+    data: PackedData,
+    hp: TrainHParams,
+    *,
+    init_model: FastTransformer | None = None,
+) -> FitResult:
+    """Train one model, selecting the checkpoint with the best internal-val Spearman.
+
+    ``init_model`` continues training from existing weights (e.g. fine-tuning a
+    pretrained model) instead of fresh init.
+    """
     key = jax.random.PRNGKey(hp.seed)
     model_key, key = jax.random.split(key)
-    model = FastTransformer(config, key=model_key)
+    model = init_model if init_model is not None else FastTransformer(config, key=model_key)
     n_params = count_params(model)
     flops = config.flops_per_token()
     logger.info(
