@@ -18,8 +18,8 @@ Three themes, each from several comments:
 
    A `Checkpoint`'s on-disk shape, its `load`, and the `checkpoints/` subdir are all known by
    `run_levanter_train_lm` — the thing that *writes* it. Splitting the type from its producer
-   means the format is described in two places. `Selection` already lives next to `select`
-   (sweep.py:31); that is the pattern, applied everywhere.
+   means the format is described in two places. The rule: an artifact type lives with the
+   function that writes its bytes, applied everywhere.
 
 2. **`Lazy` is only the produce-via-step-runner model — it must not know concrete types.**
    > "`Lazy` shouldn't know anything about Datasets?" (lazy.py:48)
@@ -51,9 +51,9 @@ cleanups".
 | `execution/provenance.py` | free `get_git_commit`/`get_user`/… | a `Provenance` **BaseModel** + `Provenance.capture()` |
 | `execution/remote.py` | `remote`/`RemoteCallable` | unchanged — this *is* the "run a fn on iris easily" helper |
 | `execution/executor_step_status.py` | per-output status + lock | renamed `execution/step_status.py` |
-| `training/training.py` | producer fn only | + `LevanterCheckpoint(Artifact)` and the inline `training_metrics` result step |
+| `training/training.py` | producer fn only | + `LevanterCheckpoint(Artifact)` with a `training_metrics()` method (+ `TrainMetrics` value model) |
 | `processing/tokenize/tokenize.py` | producer fn only | + `TokenizedCache(Artifact)` (was `Dataset`), exposing the metadata `mixture` needs |
-| `experiment/sweep.py` | `select(metric=, reader=)` | `select(key=, mode=)` over typed result artifacts; `Selection` stays |
+| `experiment/sweep.py` | `grid`/`sweep`/`select`/`Selection`/`read_*` | collapses to an optional `grid(**axes)`; `select`/`Selection`/readers **deleted** — selection is user code |
 
 Dependency edges (verified against current imports): `lazy → artifact → {fingerprint,
 provenance, step_spec}` — note `artifact.py` already imports `StepSpec`/`_is_relative_path`
@@ -186,8 +186,9 @@ class Artifact(BaseModel):
 
 - **Data refs declare no fields, only properties.** `LevanterCheckpoint(Artifact)` has a
   `checkpoint_dir` property; `result_payload()` → `None`; consumers read the attribute.
-- **Value artifacts declare fields.** `Selection(Artifact)` / `TrainMetrics(Artifact)` declare
-  `winner`/`score`/`eval_loss`; the base persists and reloads them with no override.
+- **Value artifacts declare fields.** A user's `EvalResult(Artifact)` with `accuracy: float`
+  (or a promoted standalone `TrainMetrics` — see the deferred item) persists and reloads its
+  fields with no override; the base round-trips them through `record.result`.
 - **Either can expose record-derived attributes.** `TokenizedCache(Artifact)` declares no value
   fields but exposes `tokenizer` / `as_component()` that read `self.record.config`.
 
@@ -247,9 +248,9 @@ The revision makes this a hard contract, not a follow-up:
   `{name@version: weight}` summary with placeholder components; run → assemble the full
   `LmDataConfig` from records.
 
-This is the load-bearing decision in the revision (see Open Questions #1): it changes the
-training fingerprint's data contribution from "the reserialized tokenize configs" to "the
-dataset `name@version`s + weights," and requires dataset `adopt` to record tokenizer/format.
+This changes the training fingerprint's data contribution from "the reserialized tokenize
+configs" to "the dataset `name@version`s + weights" (the dataset version encodes its tokenizer,
+so identity is covered — Decision 1), and requires dataset `adopt` to record its `config`.
 
 ## Provenance as one object
 
@@ -276,49 +277,54 @@ through recursive `lower` into every step's record — so a remote step still re
 commit/argv, and all steps of one invocation share one launch timestamp. (No back-compat:
 nothing has written real records yet.)
 
-## Sweep/select over typed results
+## Sweep/select: a semantic checkpoint, user-written reduction
 
-Today `select(metric="eval/loss", reader=read_replicated_metrics)` bakes in *how a `train_lm`
-trial stores metrics* (`tracker_metrics.jsonl`) — the framework knows too much about the
-producer (sweep.py:28). Invert it: the producer emits a **typed result**, and `select` is a
-trivial, generic reduction the user parameterizes.
+Today `select(metric="eval/loss", reader=read_replicated_metrics)` bakes *how a `train_lm` trial
+stores metrics* (`tracker_metrics.jsonl`) into the framework (sweep.py:28), and ships a
+`grid`/`sweep`/`select`/`Selection`/`read_*` stack. Most of it isn't pulling its weight: fan-out
+is a list comprehension, and selection is one-liner user code over the concrete outputs.
 
-**The producer-side metrics step** (in `training/`, next to `train_lm`):
+**Make the checkpoint semantic instead** (the right approach for today). `LevanterCheckpoint`
+carries a method that reads its own final metrics — the artifact is the place to attach whatever
+semantics the output has:
 
 ```python
-class TrainMetrics(Artifact):           # value fields -> persisted to record.result by the base
+class TrainMetrics(BaseModel):                 # a plain value read on demand — not a build step
     eval_loss: float
     train_loss: float
-    summary: dict[str, float]          # the full final summary, for ad-hoc keys
+    summary: dict[str, float]                  # full final summary, for ad-hoc keys
 
-def training_metrics(ckpt: Lazy[LevanterCheckpoint], *, version: str) -> Lazy[TrainMetrics]:
-    """Read a finished run's final metrics into a typed value artifact.
-
-    Runs INLINE (it returns a value), depends only on `ckpt` (so it runs after training), and
-    reads `<ckpt path>/tracker_metrics.jsonl` from storage. Raises FileNotFoundError if the run
-    wrote no metrics. Owns the 'where train_lm puts metrics' knowledge, co-located with train_lm.
-    """
+class LevanterCheckpoint(Artifact):
+    @property
+    def checkpoint_dir(self) -> str: ...
+    def training_metrics(self) -> TrainMetrics:
+        """This run's final metrics, read from <path>/tracker_metrics.jsonl.
+        Raises FileNotFoundError if the run wrote none."""
 ```
 
-**`select` reduces typed results with a user key:**
+**A sweep is then fan-out + an ordinary reduction over the resolved, typed outputs** — no
+`select`, no `Selection`, no metric-string or reader in the framework:
 
 ```python
-def select(name, version, results: Sequence[Lazy[T]], *,
-           key: Callable[[T], float], mode: Literal["min", "max"]) -> Lazy[Selection]: ...
-
-best = select("sweeps/lr", "20260628",
-              [training_metrics(t, version="20260628") for t in sweep(trial, learning_rate=[...])],
-              key=lambda m: m.eval_loss, mode="min")
+trials = [trial(learning_rate=lr) for lr in (3e-4, 6e-4, 1e-3)]   # list[Lazy[LevanterCheckpoint]]
+run(*trials)
+scored = [(t, t.resolve().training_metrics().eval_loss) for t in trials]
+best, best_loss = min(scored, key=lambda s: s[1])
+# persist the outcome if you want it addressable later, with the low-level API:
+write_artifact({"winner": best.name, "eval_loss": best_loss}, "sweeps/lr/20260628")
 ```
 
-Defined behaviors (codex P2): **ties** → first trial in input order wins (strict `<`/`>`
-comparison keeps the earlier one); **missing key** → the user's `key` raising `KeyError`/
-`AttributeError` propagates with the trial id in context; **NaN** → `select` raises
-`ValueError` (a NaN score is never silently "best" or "worst"). **Identity:** the selection's
-identity is its `name@version` + the trial `name@version`s (deps) + `mode`. The `key` callable
-is **not** fingerprinted (callables have no stable identity — same stance as the old `reader`);
-changing the ranking logic requires a version bump. This is documented on `select`; an alternate
-design (a fingerprintable `key_name`/policy enum) is noted in Open Questions #2.
+`sweep.py` collapses to an optional `grid(**axes)` axis-expansion helper; `select`, `Selection`,
+`read_replicated_metrics`, and `read_eval_records` are **deleted**. Selection logic is the
+user's, written over typed outputs and persisted (when wanted) with the low-level
+`write_artifact`.
+
+**Deferred — multiple artifacts per step.** `TrainMetrics` *could* instead be its own
+addressable `Lazy[TrainMetrics]` (useful when a result is reused across experiments, or produced
+by an expensive standalone eval). That raises "does one step write several artifacts?" — a real
+question (a `train_lm` emitting both a checkpoint and a metrics artifact) we are **not** resolving
+now. The semantic-method approach needs no multi-artifact step, so it ships first; the
+own-artifact form is added later when something needs it.
 
 ## Versions: calendar, not `v1`
 
@@ -327,14 +333,14 @@ design (a fingerprintable `key_name`/policy enum) is noted in Open Questions #2.
 Remove every `DEFAULT_VERSION = "v1"` and the `version="v1"` defaults. **`version` is required**
 and validated by `Lazy.__post_init__` to one of:
 
-- a calendar version `YYYYMMDD` or `YYYYMMDD.N` (the `.N` disambiguates two immutable revisions
-  on the same day — codex P2),
-- a semantic version `MAJOR.MINOR.PATCH` (the review's "or at least major.minor.patch"),
+- a calendar version `YYYYMMDD` (optionally `YYYYMMDD.N` to disambiguate two immutable revisions
+  on the same day),
 - the mutable forms `dev` / `<label>-dev` (always rebuild, drift check skipped).
 
-`v1`-style strings are rejected. Validation is by shape (8 digits `[.N]`, or `N.N.N`, or the
-`dev` forms); the date is the authoring date (local; no timezone ceremony). Tutorials/examples
-pass real values (`version="20260628"`).
+**Calver only to start** — semver is deliberately not accepted yet, to keep one convention
+(Decision 3). `v1`/`llama3`-style strings are rejected. Validation is by shape (8 digits `[.N]`,
+or the `dev` forms); the date is the authoring date (local). The ~8 existing `v1`/`llama3` call
+sites and the tutorials migrate to real dates (`version="20260628"`).
 
 ## Smaller cleanups
 
@@ -363,7 +369,7 @@ pass real values (`version="20260628"`).
 | lazy.py:495 / train.py:45 — `v1` not a version | §"Versions" |
 | lazy.py:258 — free fn vs method | §"lazy core" — methods; free `lower`/`resolve` deleted |
 | provenance.py:21 — Provenance dataclass | §"Provenance as one object" (BaseModel, capture-once) |
-| sweep.py:28 — embeds sweep knowledge | §"Sweep/select over typed results" |
+| sweep.py:28 — embeds sweep knowledge | §"Sweep/select" — `select`/`Selection`/readers deleted; selection is user code over outputs |
 | artifact.py:220 — `_diff_json` in fingerprint? | §"Smaller cleanups" |
 | executor_step_status.py:5 — rename | §"Smaller cleanups" |
 | data.py:227/238 — Lazy subtype | §"Smaller cleanups" + `TokenizedCache.as_component` |
@@ -371,24 +377,29 @@ pass real values (`version="20260628"`).
 | codex P1 — lazy "purity" wording | §"lazy core" — framework-vs-concrete clarified |
 | codex P1 — `checkpoint_dir` in build_config | §"Artifacts live with producers" — `LevanterCheckpoint(path=…).checkpoint_dir` |
 | codex P1 / biggest risk — mixture `dep.recipe` leak | §"TokenizedCache must expose what mixture needs" |
-| codex P2 — `result_payload()` None ambiguity | §"lazy core" — value-vs-data contract + `MissingResultError` |
-| codex P2 — select key/ties/NaN/missing | §"Sweep/select" — defined behaviors |
-| codex P2 — version too rigid | §"Versions" — `YYYYMMDD[.N]` + semver |
+| codex P2 — `result_payload()` None ambiguity | §"lazy core" — uniform payload; a value subclass missing its `result` fails with a clear pydantic error |
+| codex P2 — select key/ties/NaN/missing | moot — `select` removed; reduction is user code |
+| codex P2 — version too rigid | §"Versions" — `YYYYMMDD[.N]` (calver only) |
 | user — why `Artifact` **and** `JsonArtifact`? | §"One `Artifact`, no `JsonArtifact`" — collapsed to one base; rich subclasses expose attributes |
+| user — `training_metrics` as a method | §"Sweep/select" — `LevanterCheckpoint.training_metrics()`; own-artifact form deferred |
 | npm_registry_metadata.py:40 — file issue | external write blocked by sandbox; needs the user to file or grant permission |
 
-## Open questions (for review)
+## Decisions (settled in review)
 
-1. **Mixture / training-fingerprint contract** (the load-bearing one). The revision makes the
-   training fingerprint's data contribution `{dataset name@version: weight}` and reads
-   tokenizer/format from `TokenizedCache` records at run time (fixing adopted caches and the
-   `dep.recipe` leak). The alternative keeps a build-time `CacheMetadata` (tokenizer/format) on
-   the handle so the tokenizer stays *in* the fingerprint. Recommendation: the record-based
-   contract — confirm before implementing.
-2. **`select` key identity.** Accept that `key` is not fingerprintable (consistent with the old
-   `reader`; bump version to re-rank), or require a fingerprintable `key_name`/policy enum so a
-   changed ranking forks identity automatically? Recommendation: not fingerprinted + document.
-3. **`TokenizedCache` name** (replacing `Dataset`) — `LmDataset` / `LevanterCache` are
-   alternatives. Bikeshed; pick one.
-4. **Version format** — calver `YYYYMMDD[.N]` + semver covers the review's ask; is semver worth
-   keeping, or calver-only for one convention?
+1. **Mixture / training fingerprint** = sorted `{dataset name@version: weight}`. The dataset
+   version encodes its tokenizer, so identity is covered; tokenizer/format are read from
+   `TokenizedCache` records at run time (fixing adopted caches and the `dep.recipe` leak).
+2. **No `select`.** Selection is ordinary user code over resolved, typed outputs
+   (`ckpt.resolve().training_metrics()`), persisted when wanted with low-level `write_artifact`.
+   `select`/`Selection`/`read_replicated_metrics`/`read_eval_records` are deleted; `key` was never
+   fingerprintable anyway.
+3. **Versions: calver only** — `YYYYMMDD` (`.N` for same-day), `dev`/`-dev`; no semver yet.
+4. **`TokenizedCache`** name kept.
+5. **One `Artifact` base** (no `JsonArtifact`); richer subclasses expose what consumers need as
+   attributes/methods (`LevanterCheckpoint.training_metrics()`, `TokenizedCache.as_component()`).
+
+### Deferred
+
+- **Multiple artifacts per step.** Letting one step emit several independently-addressable
+  artifacts (e.g. a checkpoint *and* a standalone `Lazy[TrainMetrics]`). The semantic-method
+  approach covers today's need without it; revisit when an output must be addressed on its own.
