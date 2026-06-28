@@ -151,7 +151,6 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
 
 
 class WorkerState(enum.Enum):
-    INIT = "init"
     READY = "ready"
     BUSY = "busy"
     FAILED = "failed"

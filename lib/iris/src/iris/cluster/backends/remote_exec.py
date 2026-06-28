@@ -327,6 +327,18 @@ SSH_MAX_RETRIES = 3
 
 SSH_RETRYABLE_EXIT_CODES = {255}  # SSH connection failures
 
+# gcloud caches credentials and impersonated tokens in a local SQLite database.
+# When many gcloud invocations run concurrently (e.g. a wide worker-restart
+# batch), that database can fail to acquire its lock and gcloud aborts with a
+# non-zero exit *before* the remote command runs. The remote host is healthy, so
+# treat this local-contention crash as retryable rather than a command failure.
+GCLOUD_TRANSIENT_CRASH_SIGNATURES = ("database is locked",)
+
+
+def _is_transient_gcloud_crash(output_lines: list[str]) -> bool:
+    tail = "\n".join(output_lines[-15:])
+    return any(signature in tail for signature in GCLOUD_TRANSIENT_CRASH_SIGNATURES)
+
 
 def run_streaming_with_retry(
     conn: RemoteExec,
@@ -364,6 +376,11 @@ def run_streaming_with_retry(
             if returncode in SSH_RETRYABLE_EXIT_CODES:
                 last_error = f"SSH exit code {returncode}"
                 logger.warning("SSH: Connection failed on attempt %d (exit code %d)", attempt + 1, returncode)
+            elif returncode != 0 and _is_transient_gcloud_crash(output_lines):
+                last_error = "gcloud crashed locally (transient credential 'database is locked')"
+                logger.warning(
+                    "SSH: transient gcloud crash on attempt %d (exit code %d); will retry", attempt + 1, returncode
+                )
             else:
                 return subprocess.CompletedProcess(proc.args, returncode, "\n".join(output_lines), "")
 

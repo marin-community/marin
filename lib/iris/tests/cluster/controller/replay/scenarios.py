@@ -139,6 +139,7 @@ def _job_request(
     replicas: int = 1,
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
     coscheduled: bool = False,
 ) -> tuple[JobName, controller_pb2.Controller.LaunchJobRequest]:
     job_name = JobName.root("test-user", name)
@@ -149,6 +150,7 @@ def _job_request(
         environment=job_pb2.EnvironmentConfig(),
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
         replicas=replicas,
     )
     if coscheduled:
@@ -248,9 +250,13 @@ def scenario_register_assign_run_succeed(transitions: ControllerTestState, clock
 
 
 def scenario_task_failure_with_retry(transitions: ControllerTestState, clock: FrozenClock) -> None:
-    """Submit with retry budget, fail once, observe retry to PENDING, then succeed."""
+    """Submit with retry budget, fail once, observe retry to PENDING, then succeed.
+
+    ``max_task_failures`` must cover the cumulative failure so the job tolerates
+    the one failed attempt instead of failing on it.
+    """
     worker_id = _register_worker(transitions, clock, "w-retry")
-    job_id = _submit(transitions, clock, "retry-job", max_retries_failure=2)
+    job_id = _submit(transitions, clock, "retry-job", max_retries_failure=2, max_task_failures=2)
     (task_id,) = _task_ids(transitions, job_id)
     apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
     first_attempt = _current_attempt(transitions, task_id)
@@ -344,6 +350,9 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
     budget remaining. Siblings must bounce to PENDING so the retry re-coschedules
     atomically — otherwise the lone PENDING retry can land on a different slice
     and split the SPMD mesh.
+
+    ``max_task_failures`` covers the cumulative failure so the gang retries the
+    round instead of the job failing on the first crash.
     """
     worker_a = _register_worker(transitions, clock, "w-cosched-fail-a", address="w-cosched-fail-a:8080")
     worker_b = _register_worker(transitions, clock, "w-cosched-fail-b", address="w-cosched-fail-b:8080")
@@ -354,6 +363,7 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         replicas=2,
         coscheduled=True,
         max_retries_failure=2,
+        max_task_failures=2,
     )
     tasks = _task_ids(transitions, job_id)
     apply_event(

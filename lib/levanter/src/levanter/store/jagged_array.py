@@ -13,6 +13,8 @@ import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 
+from rigging.filesystem import is_cross_region_url, record_transfer, url_to_fs
+
 from levanter.tensorstore_serialization import build_kvstore_spec
 from levanter.utils import fsspec_utils
 from levanter.utils.thread_utils import future_from_value
@@ -38,6 +40,42 @@ def _read_context() -> ts.Context:
             # TensorStore only shares cache_pool entries across stores that share a Context.
             _READ_CONTEXT = ts.Context({"cache_pool": _READ_CACHE_SETTINGS})
     return _READ_CONTEXT
+
+
+# Distinct datastore paths already charged against the cross-region transfer
+# budget in this process. Reads of the bulk token/offset chunks go through
+# tensorstore's native GCS driver, which bypasses fsspec and the cross-region
+# guard, so we charge a store's full on-disk size once when its reader opens.
+_charged_store_reads: set[str] = set()
+_charged_store_reads_lock = threading.Lock()
+
+
+def charge_store_read_budget(path: Optional[str]) -> None:
+    """Charge a tokenized datastore's on-disk size to the cross-region budget.
+
+    Stats the store at ``path`` and records its total size against the shared
+    transfer budget, so a job streaming a remote datastore is accounted for by
+    the same budget that guards fsspec reads. The full size is charged once, up
+    front, rather than per batch, since the tensorstore reads themselves are
+    invisible to the budget. Each distinct store path is charged once per
+    process; a no-op for local or same-region paths.
+
+    The ``du`` stat pass only runs when ``path`` is actually cross-region, so
+    the common same-region and local opens pay nothing beyond a cached region
+    lookup.
+    """
+    if not path or path == "memory" or not is_cross_region_url(path):
+        return
+    with _charged_store_reads_lock:
+        if path in _charged_store_reads:
+            return
+        _charged_store_reads.add(path)
+    fs, fs_path = url_to_fs(path)
+    try:
+        total_bytes = fs.du(fs_path, total=True)
+    except FileNotFoundError:
+        return
+    record_transfer(total_bytes, path)
 
 
 @contextlib.contextmanager

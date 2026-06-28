@@ -1480,6 +1480,7 @@ def _setup_coscheduled_running_pair(
     *,
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
     sibling_assigned: bool = False,
 ) -> _CoschedPair:
     """Submit a 2-replica coscheduled job and place both replicas on workers.
@@ -1497,6 +1498,7 @@ def _setup_coscheduled_running_pair(
         replicas=2,
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     req.coscheduling.group_by = "job"
     tasks = submit_job(state, "cosched-job", req)
@@ -1578,7 +1580,7 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
     raw snapshot (attempt still RUNNING), revived t1, and split the gang.
     """
     with make_controller_state() as state:
-        pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+        pair = _setup_coscheduled_running_pair(state, max_retries_failure=1, max_task_failures=1)
         plans = {
             WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
             WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
@@ -1655,7 +1657,7 @@ def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
 
     def run(trigger_first_order: bool) -> dict[str, Any]:
         with make_controller_state() as state:
-            pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+            pair = _setup_coscheduled_running_pair(state, max_retries_failure=1, max_task_failures=1)
             plans = {
                 WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
                 WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),

@@ -665,6 +665,11 @@ exec {quoted_cmd}
         # containers from transient build containers that should be cleaned up.
         phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
         cmd.extend(["--label", f"iris.phase={phase}"])
+        # Host-port reservations, so a restarted worker can re-mark them as
+        # taken when it adopts this container (otherwise the ports are dropped
+        # and can be double-allocated to a new task).
+        if config.ports:
+            cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
@@ -1035,6 +1040,7 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )
 

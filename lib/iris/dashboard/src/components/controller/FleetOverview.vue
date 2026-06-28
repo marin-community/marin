@@ -99,7 +99,7 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     const chip = chipFromGroupName(g.name)
     if (chip == null) continue
     const region = regionFromGroupName(g.name)
-    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [], regions: new Map(), bands: new Map<string, number>(), capacityByRegion: new Map<string, string[]>() }
+    const entry = chips.get(chip) ?? { total: 0, inUse: 0, uptimes: [] as number[], regions: new Map<string, number>(), bands: new Map<string, number>(), capacityByRegion: new Map<string, string[]>() }
 
     const readyCount = g.sliceStateCounts?.['ready'] ?? 0
     const readySlices = (g.slices ?? []).filter(s => {
@@ -189,34 +189,48 @@ const fleetSummary = computed<FleetChipSummary[]>(() => {
     .sort((a, b) => b.total - a.total)
 })
 
-/** Stable color index for a region across all chip types. */
-const allRegions = computed<Map<string, number>>(() => {
-  const regionTotals = new Map<string, number>()
+// Fleet-wide region totals, largest first. The single place region aggregation
+// happens: the shared legend renders these, and both the per-region color index and
+// the bar colors follow this order so a region keeps one color across every card.
+const legendRegions = computed<RegionCount[]>(() => {
+  const totals = new Map<string, number>()
   for (const c of fleetSummary.value) {
-    for (const r of c.regions) {
-      regionTotals.set(r.region, (regionTotals.get(r.region) ?? 0) + r.count)
-    }
+    for (const r of c.regions) totals.set(r.region, (totals.get(r.region) ?? 0) + r.count)
   }
-  const seen = new Map<string, number>()
-  for (const [region] of Array.from(regionTotals.entries()).sort((a, b) => b[1] - a[1])) {
-    seen.set(region, seen.size)
-  }
-  return seen
+  return Array.from(totals.entries())
+    .map(([region, count]) => ({ region, count }))
+    .sort((a, b) => b.count - a.count)
+})
+
+const regionColorIndex = computed<Map<string, number>>(() => {
+  const index = new Map<string, number>()
+  legendRegions.value.forEach((r, i) => index.set(r.region, i))
+  return index
 })
 
 function regionColor(region: string): string {
-  const idx = allRegions.value.get(region) ?? 0
+  const idx = regionColorIndex.value.get(region) ?? 0
   return CATEGORICAL_COLORS[idx % CATEGORICAL_COLORS.length]
 }
 
-function capacityTooltip(capacity: RegionCapacity[]): string {
-  if (capacity.length === 0) return ''
-  return 'Capacity:\n' + capacity
-    .map(c => {
-      const icon = c.status === 'available' ? '✓' : c.status === 'limited' ? '~' : '✗'
-      return `  ${icon} ${c.region}: ${c.detail}`
-    })
-    .join('\n')
+function cardTooltip(c: FleetChipSummary): string {
+  const lines: string[] = []
+  if (c.bands.length > 0) {
+    lines.push('Running by band:')
+    for (const b of c.bands) {
+      const share = c.total > 0 ? Math.round((b.count / c.total) * 100) : 0
+      lines.push(`  ${share}% ${b.band}`)
+    }
+  }
+  if (c.capacity.length > 0) {
+    if (lines.length > 0) lines.push('')
+    lines.push('Capacity:')
+    for (const cap of c.capacity) {
+      const icon = cap.status === 'available' ? '✓' : cap.status === 'limited' ? '~' : '✗'
+      lines.push(`  ${icon} ${cap.region}: ${cap.detail}`)
+    }
+  }
+  return lines.join('\n')
 }
 
 function formatUptimeShort(ms: number | null): string {
@@ -231,50 +245,50 @@ function formatUptimeShort(ms: number | null): string {
 
 <template>
   <section v-if="fleetSummary.length > 0">
-    <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider mb-3">
-      Fleet Overview
-    </h3>
-    <div class="grid grid-cols-4 gap-2">
+    <!-- Heading + one shared region legend; per-card bars reuse these colors. -->
+    <div class="flex items-baseline justify-between gap-x-4 gap-y-1 flex-wrap mb-2">
+      <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">
+        Fleet Overview
+      </h3>
+      <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
+        <span v-for="r in legendRegions" :key="r.region" class="flex items-center gap-1 whitespace-nowrap">
+          <span class="rounded-full inline-block" :style="{ backgroundColor: regionColor(r.region), width: '7px', height: '7px' }" />
+          {{ r.region }} {{ r.count }}
+        </span>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-2">
       <div
         v-for="c in fleetSummary"
         :key="c.chip"
-        class="rounded-lg border border-surface-border bg-surface px-4 py-2"
-        :title="capacityTooltip(c.capacity)"
+        class="rounded-lg border border-surface-border bg-surface px-3 py-1.5"
+        :title="cardTooltip(c)"
       >
-        <div class="flex items-baseline gap-[0.4vw] mb-1" style="font-size: clamp(10px, 0.75vw, 14px)">
-          <span class="font-semibold font-mono tabular-nums text-text" style="font-size: clamp(14px, 1.1vw, 22px)">{{ c.total }}</span>
+        <!-- Count + chip, inline region bar (regions read from the shared legend;
+             exact per-region counts on hover), in-use share. -->
+        <div class="flex items-center gap-2" style="font-size: clamp(9px, 0.7vw, 12px)">
+          <span class="font-semibold font-mono tabular-nums text-text leading-none" style="font-size: clamp(14px, 1.05vw, 20px)">{{ c.total }}</span>
           <span class="font-medium text-text-secondary uppercase whitespace-nowrap">{{ c.chip }}</span>
-          <span class="tabular-nums" :class="c.total > 0 && c.inUse === c.total ? 'text-status-warning' : 'text-text-muted'">
+          <div class="flex flex-1 min-w-[40px] rounded-full overflow-hidden bg-surface-sunken" style="height: clamp(5px, 0.45vw, 9px)">
+            <div
+              v-for="r in c.regions"
+              :key="r.region"
+              class="transition-all"
+              :title="`${r.region}: ${r.count}`"
+              :style="{ width: (r.count / c.total * 100) + '%', backgroundColor: regionColor(r.region) }"
+            />
+          </div>
+          <span class="tabular-nums whitespace-nowrap" :class="c.total > 0 && c.inUse === c.total ? 'text-status-warning' : 'text-text-muted'">
             {{ c.total > 0 ? Math.round(c.inUse / c.total * 100) : 0 }}% in use
           </span>
-          <span class="text-text-muted tabular-nums whitespace-nowrap">
-            avg uptime {{ formatUptimeShort(c.avgUptimeMs) }}
-          </span>
         </div>
-        <!-- Region bar -->
-        <div class="flex rounded-full overflow-hidden bg-surface-sunken" style="height: clamp(4px, 0.4vw, 8px)">
-          <div
-            v-for="r in c.regions"
-            :key="r.region"
-            class="transition-all"
-            :style="{ width: (r.count / c.total * 100) + '%', backgroundColor: regionColor(r.region) }"
-          />
-        </div>
-        <div class="flex flex-wrap gap-x-[0.5vw] gap-y-0.5 mt-0.5" style="font-size: clamp(8px, 0.6vw, 11px)">
-          <span
-            v-for="r in c.regions"
-            :key="r.region"
-            class="text-text-muted flex items-center gap-0.5"
-          >
-            <span class="rounded-full inline-block" :style="{ backgroundColor: regionColor(r.region), width: 'clamp(4px, 0.4vw, 8px)', height: 'clamp(4px, 0.4vw, 8px)' }" />
-            {{ r.region }} ({{ r.count }})
-          </span>
-        </div>
-        <!-- Priority band breakdown -->
-        <div v-if="c.bands.length > 0" class="mt-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
-          <span v-for="(b, i) in c.bands" :key="b.band">
-            <span v-if="i > 0">, </span>
-            {{ c.total > 0 ? Math.round(b.count / c.total * 100) : 0 }}% {{ b.band }}
+        <!-- Band mix is shown only for genuine mixes; a lone 100% band stays in the tooltip. -->
+        <div class="flex items-center justify-between gap-2 mt-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
+          <span class="whitespace-nowrap tabular-nums">avg {{ formatUptimeShort(c.avgUptimeMs) }}</span>
+          <span v-if="c.bands.length > 1" class="truncate text-right">
+            <span v-for="(b, i) in c.bands" :key="b.band">
+              <span v-if="i > 0"> · </span>{{ c.total > 0 ? Math.round(b.count / c.total * 100) : 0 }}% {{ b.band }}
+            </span>
           </span>
         </div>
       </div>

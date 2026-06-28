@@ -8,7 +8,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -210,7 +209,7 @@ def write_model_score_files(
         json.dump(summary, f, indent=2, sort_keys=True)
 
     table = _scored_documents_table(scored_documents)
-    with fsspec.open(scored_documents_path, "wb") as f:
+    with open_url(scored_documents_path, "wb") as f:
         pq.write_table(table, f)
 
     token_count_summary, token_count_table = _token_count_artifacts(
@@ -220,7 +219,7 @@ def write_model_score_files(
     )
     with open_url(token_count_summary_path, "w") as f:
         json.dump(token_count_summary, f, indent=2, sort_keys=True)
-    with fsspec.open(token_counts_path, "wb") as f:
+    with open_url(token_counts_path, "wb") as f:
         pq.write_table(token_count_table, f)
 
 
@@ -232,7 +231,7 @@ def read_model_score_summary(output_path: str) -> dict[str, Any]:
 
 def read_scored_documents(output_path: str) -> list[ScoredDocument]:
     scored_documents_path = os.path.join(output_path, SCORED_DOCUMENTS_FILENAME)
-    with fsspec.open(scored_documents_path, "rb") as f:
+    with open_url(scored_documents_path, "rb") as f:
         table = pq.read_table(f)
     return [_scored_document_from_row(row) for row in table.to_pylist()]
 

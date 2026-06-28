@@ -152,6 +152,7 @@ class ServiceTestHarness:
         user: str = "test-user",
         replicas: int = 1,
         max_retries_failure: int = 0,
+        max_task_failures: int = 0,
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
@@ -163,6 +164,7 @@ class ServiceTestHarness:
             environment=job_pb2.EnvironmentConfig(),
             replicas=replicas,
             max_retries_failure=max_retries_failure,
+            max_task_failures=max_task_failures,
         )
         self.service.launch_job(request, None)
         return job_id

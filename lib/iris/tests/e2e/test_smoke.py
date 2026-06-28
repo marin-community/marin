@@ -454,13 +454,20 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
         wait_for_dashboard_ready(smoke_page)
 
+        # Placement constraints live in the collapsible "Scheduling" pane, which
+        # stays collapsed unless the job has pending tasks. Open it to inspect the chips.
         smoke_page.wait_for_function(
-            "() => document.body.textContent.includes('Constraints')",
+            "() => document.body.textContent.includes('Scheduling')",
             timeout=5000,
+        )
+        smoke_page.evaluate(
+            "() => [...document.querySelectorAll('details')]"
+            ".filter(d => d.querySelector('summary')?.textContent.includes('Scheduling'))"
+            ".forEach(d => { d.open = true })"
         )
         assert_visible(smoke_page, "text=region")
         smoke_screenshot(
-            "constraints", "Job detail page showing constraint chips for region, env-tag, and device-variant"
+            "constraints", "Job detail Scheduling pane showing constraint chips for region, env-tag, and device-variant"
         )
 
 

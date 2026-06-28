@@ -78,6 +78,16 @@ SMALL_LINE_SUBSTRINGS = (
     "failed to upload logs",
 )
 
+# Filename Levanter writes at the root of a tokenized datastore. The ledger
+# itself is a tiny JSON, but loading it is the only fsspec-visible step of
+# opening a datastore: the bulk token chunks are then streamed through
+# tensorstore's native GCS driver, which bypasses fsspec and emits no gs:// log
+# line of its own. So the ledger load is the only proxy this log-based report
+# has for a datastore read that can move hundreds of GB cross-region — we tag it
+# `large` (see classify_size_tier) so a job streaming a remote datastore shows
+# up as a large-egress offender instead of hiding behind the `.json` suffix.
+LEVANTER_DATASTORE_LEDGER = "shard_ledger.json"
+
 
 def _extension(path: str) -> str:
     name = path.rsplit("/", 1)[-1].lower()
@@ -96,6 +106,12 @@ def _extension(path: str) -> str:
 
 
 def classify_size_tier(path: str) -> str:
+    lower = path.lower()
+    # Levanter datastore ledger: a small JSON that stands in for a bulk
+    # tensorstore read. Checked before the extension fallback, which would
+    # otherwise tag the `.json` ledger `small`.
+    if lower.endswith("/" + LEVANTER_DATASTORE_LEDGER):
+        return "large"
     ext = _extension(path)
     if ext in LARGE_EXTS:
         return "large"
@@ -103,7 +119,6 @@ def classify_size_tier(path: str) -> str:
         return "medium"
     if ext in SMALL_EXTS:
         return "small"
-    lower = path.lower()
     # Path patterns that override a missing/ambiguous extension.
     if "compilation-cache" in lower or "cache_ledger" in lower:
         return "small"

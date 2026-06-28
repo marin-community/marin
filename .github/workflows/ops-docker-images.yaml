@@ -62,7 +62,7 @@ jobs:
           docker buildx build --file lib/iris/Dockerfile \
             --target ${{ matrix.target }} \
             --cache-from type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }} \
-            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }},mode=max \
+            --cache-to type=registry,ref=ghcr.io/marin-community/iris-cache:${{ matrix.target }},mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
             --output type=image,compression=zstd,compression-level=3,push=true \
             --provenance=false \
             --build-arg IRIS_GIT_HASH=${{ steps.set-tags.outputs.HASH_TAG }} \
@@ -101,7 +101,7 @@ jobs:
         run: |
           docker buildx build --file lib/finelog/deploy/Dockerfile \
             --cache-from type=registry,ref=ghcr.io/marin-community/finelog-cache:latest \
-            --cache-to type=registry,ref=ghcr.io/marin-community/finelog-cache:latest,mode=max \
+            --cache-to type=registry,ref=ghcr.io/marin-community/finelog-cache:latest,mode=max,compression=zstd,compression-level=3,oci-mediatypes=true,image-manifest=true \
             --output type=image,compression=zstd,compression-level=3,push=true \
             --provenance=false \
             --tag ghcr.io/marin-community/finelog:latest \

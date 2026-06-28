@@ -116,15 +116,18 @@ def _bulk_load_job_state_basis(
                 started_at=started_at,
                 max_task_failures=max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
             continue
 
         rows = all_tasks_by_job.get(job_id, ())
         histogram: dict[int, int] = {}
+        total_failures = 0
         first_error: str | None = None
         for row in rows:
             histogram[row.state] = histogram.get(row.state, 0) + 1
+            total_failures += row.failure_count
             if first_error is None and row.error is not None:
                 first_error = row.error
 
@@ -134,6 +137,7 @@ def _bulk_load_job_state_basis(
             started_at=started_at,
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
+            total_failures=total_failures,
             first_task_error=first_error,
         )
     return result
@@ -150,6 +154,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
             tasks_table.c.job_id,
             tasks_table.c.task_index,
             tasks_table.c.state,
+            tasks_table.c.failure_count,
             tasks_table.c.error,
         ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
@@ -161,6 +166,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 task_id=r.task_id,
                 task_index=int(r.task_index),
                 state=int(r.state),
+                failure_count=int(r.failure_count),
                 error=str(r.error) if r.error is not None else None,
             )
         )

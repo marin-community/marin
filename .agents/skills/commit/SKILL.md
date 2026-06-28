@@ -121,23 +121,38 @@ force-push.
 ## 8. Open or update the PR
 
 Do this once the branch is ready for review. The PR description becomes the
-squash-merge commit message — write it as plain text.
+squash-merge commit message, so **write it the way you'd write a good commit
+message a reviewer reads in `git log`.**
 
 **Title:** short imperative sentence; optional `[scope]` tag.
-**Body:** what changed and why. End with an issue link if one exists.
+
+**Body:** Lead with what the change does, in plain language, then the motivation —
+the problem it fixes or the reason it's shaped this way. Include only what a
+reviewer needs to understand and approve it. The body should stand on its own: a
+reader who never saw the diff should come away knowing what happened and why.
+
+Write for the reviewer, not for a template. Most PRs are a paragraph or two with
+no headings. Markdown earns its place when it makes the change *clearer* — a
+short list of the distinct things that changed, a table, a mermaid diagram of a
+new flow are all welcome when they help. Reach for them to aid the reviewer,
+never to fill in a standard set of sections. Let the change decide the shape; do
+not impose a What/Change/Scope/Testing scaffold.
 
 Keep the title and body aligned with the branch's actual scope — including when
 you change a branch that already has a PR.
 
 **Hard rules — violations are rejected:**
 
-- No "Validation" / "Testing" / "written by …" filler. The body is *what & why*,
-  not *how I tested it* or *who wrote it*.
+- No "Testing" / "Validation" / "Test plan" section, and no "how I verified it"
+  narration. The body is *what & why*. If a test result is the very thing that
+  justifies the change, fold that one fact into the *why*; otherwise leave it out.
+- No empty boilerplate headings — a `## Summary` that restates the title, a
+  `## Changes` that just lists the touched files. If a heading's body adds nothing
+  the reviewer can't get from the title or the diff, delete the heading.
+- No "written by …" / "Created by Claude" notes; don't credit yourself.
 - No checkboxes (`- [ ]`, `- [x]`), no emoji.
 - No filler openers ("This PR…", "I noticed…", "Summary of changes:").
-- Under ~500 words.
-- Don't credit yourself, no "Created by Claude" filler.
-- Only use Markdown & sections if this is a large change that requires structured description
+- Under ~500 words. Shorter is better; a one-line change gets a one-line body.
 
 Example:
 
