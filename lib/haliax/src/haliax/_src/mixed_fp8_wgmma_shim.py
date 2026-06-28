@@ -48,8 +48,8 @@ from __future__ import annotations  # vendored emitter signatures (np/ir/fa) sta
 import contextlib
 import functools
 import importlib
-import inspect
 import logging
+import re
 import types
 
 import jax
@@ -509,19 +509,53 @@ def _install_emitter() -> None:
 # --------------------------------------------------------------------------------------
 
 
-def _relax_inline_dtype_guard(module, func_name: str, old: str, new: str) -> None:
-    """Widen a single ``if x.dtype != y.dtype:`` guard in ``module.func_name`` to allow the
-    mixed FP8 pair, by re-execing the function's own source with the guard line replaced."""
+def _top_level_function_source(fn) -> str:
+    """Read a top-level function's source straight from its file.
+
+    ``inspect.getsource`` goes through ``linecache``, which under heavy import load was observed
+    to intermittently return truncated/guard-less content for jax internals — making exact source
+    matching non-deterministic. Reading the file at ``co_firstlineno`` and taking the def block by
+    indentation is deterministic. Assumes a column-0 ``def`` (true for the jax 0.10.0 functions
+    this shim targets — the version gate enforces that).
+    """
+    with open(fn.__code__.co_filename) as handle:
+        lines = handle.readlines()
+    start = fn.__code__.co_firstlineno - 1
+    block = [lines[start]]
+    for line in lines[start + 1:]:
+        # Stop at the next top-level definition. A bare column-0 line that is not a def/class/
+        # decorator (e.g. a multi-line signature's closing paren, or a trailing constant) stays
+        # in the block; re-execing those extra statements is harmless since only the target
+        # function is read back out.
+        if re.match(r"(def |class |@)", line):
+            break
+        block.append(line)
+    return "".join(block)
+
+
+def _relax_inline_dtype_guard(module, func_name: str, lhs: str, rhs: str) -> None:
+    """Widen the ``if <lhs>.dtype != <rhs>.dtype:`` guard in ``module.func_name`` to allow the
+    mixed FP8 pair, by re-execing the function's own source with the guard widened in place.
+
+    The guard is located with a regex anchored on the operand names and tolerant of indentation,
+    trailing whitespace, and line endings — exact-substring matching is too brittle across the
+    minor source-formatting differences that occur even within one jax release.
+    """
     fn = getattr(module, func_name)
-    src = inspect.getsource(fn)
-    count = src.count(old)
-    if count != 1:
+    src = _top_level_function_source(fn)
+    guard = re.compile(rf"(?m)^([ \t]*)if {re.escape(lhs)}\.dtype != {re.escape(rhs)}\.dtype:")
+    matches = guard.findall(src)
+    if len(matches) != 1:
         raise RuntimeError(
-            f"mixed-fp8 shim: expected exactly one {old!r} in {module.__name__}.{func_name}, "
-            f"found {count} (jax {jax.__version__} drift?)"
+            f"mixed-fp8 shim: expected exactly one `if {lhs}.dtype != {rhs}.dtype:` guard in "
+            f"{module.__name__}.{func_name}, found {len(matches)} (jax {jax.__version__} drift?)"
         )
     module.__dict__.setdefault("_haliax_is_mixed_f8", _is_mixed_f8)
-    new_src = src.replace(old, new)
+    new_src = guard.sub(
+        rf"\1if {lhs}.dtype != {rhs}.dtype and not _haliax_is_mixed_f8({lhs}, {rhs}):",
+        src,
+        count=1,
+    )
     namespace: dict = {}
     exec(compile(new_src, module.__file__, "exec"), module.__dict__, namespace)
     setattr(module, func_name, namespace[func_name])
@@ -532,23 +566,13 @@ def _install_dtype_guards() -> None:
     _plgpu = importlib.import_module("jax.experimental.pallas.mosaic_gpu")
     _ragged = importlib.import_module("jax.experimental.pallas.ops.gpu.ragged_dot_mgpu")
 
-    # (3) pallas wgmma primitive: ``  if a.dtype != b.dtype:``
-    _relax_inline_dtype_guard(
-        _primitives,
-        "wgmma",
-        "  if a.dtype != b.dtype:\n",
-        "  if a.dtype != b.dtype and not _haliax_is_mixed_f8(a, b):\n",
-    )
+    # (3) pallas wgmma primitive: ``if a.dtype != b.dtype:``
+    _relax_inline_dtype_guard(_primitives, "wgmma", "a", "b")
     # ``plgpu.wgmma`` is a by-value re-export of ``primitives.wgmma`` — repoint it too.
     _plgpu.wgmma = _primitives.wgmma
 
-    # (4) ragged_dot_mgpu grouped GEMM (the dlhs is mixed e5m2 x e4m3):
-    _relax_inline_dtype_guard(
-        _ragged,
-        "ragged_dot",
-        "  if lhs.dtype != rhs.dtype:\n",
-        "  if lhs.dtype != rhs.dtype and not _haliax_is_mixed_f8(lhs, rhs):\n",
-    )
+    # (4) ragged_dot_mgpu grouped GEMM (the dlhs is mixed e5m2 x e4m3): ``if lhs.dtype != rhs.dtype:``
+    _relax_inline_dtype_guard(_ragged, "ragged_dot", "lhs", "rhs")
 
 
 # ======================================================================================
@@ -586,14 +610,34 @@ def _verification_disabled():
         passmanager.PassManager.parse = orig_parse
 
 
-def _install_scoped_verify_disable() -> None:
-    """Wrap the Mosaic-GPU module-construction entrypoints so the C++ ``WGMMAOp::verify`` gate
-    (which rejects a mixed FP8 pair) is skipped for our kernels only — not process-wide."""
-    core = importlib.import_module("jax.experimental.mosaic.gpu.core")
+# Mosaic-GPU lowering entrypoints that invoke MLIR verification. Wrapping these disables
+# verification for the dynamic extent of Mosaic-GPU lowering, which is where the C++
+# ``WGMMAOp::verify`` gate rejects a mixed FP8 pair. SCOPE CAVEAT: this is NOT limited to the
+# mixed-fp8 kernel — any Mosaic-GPU kernel lowered while a wrapped call is on the stack also skips
+# verification (a single op's C++ verifier cannot be disabled from Python). It is, however, scoped
+# to Mosaic lowering only: XLA and every non-mosaic compilation keep verification, and it is
+# restored the moment the wrapped call returns. The forked-jaxlib path has no such caveat — it
+# fixes WGMMAOp::verify precisely.
+_VERIFY_DISABLE_TARGETS = (
+    # The pallas mosaic path our pl.pallas_call kernels take: encloses the whole build, including
+    # core._lower_as_gpu_kernel's verify (core.py:918) and any post-dialect-lowering verify.
+    ("jax._src.pallas.mosaic_gpu.lowering", "lower_pipelined_jaxpr_to_module"),
+    # core build entrypoints: _lower_as_gpu_kernel holds the verify the pallas path hits directly;
+    # _kernel_to_module / _run_serde_pass cover the as_gpu_kernel + serialization paths.
+    ("jax.experimental.mosaic.gpu.core", "_lower_as_gpu_kernel"),
+    ("jax.experimental.mosaic.gpu.core", "_run_serde_pass"),
+    ("jax.experimental.mosaic.gpu.core", "_kernel_to_module"),
+)
 
-    for name in ("_kernel_to_module", "_run_serde_pass"):
-        orig = getattr(core, name)
-        if getattr(orig, "_haliax_mixed_f8_wrapped", False):
+
+def _install_scoped_verify_disable() -> None:
+    """Wrap the Mosaic-GPU lowering entrypoints so MLIR verification — and with it the C++
+    ``WGMMAOp::verify`` gate that rejects a mixed FP8 pair — is disabled for the dynamic extent of
+    Mosaic-GPU lowering. See :data:`_VERIFY_DISABLE_TARGETS` for the scope caveat."""
+    for module_path, name in _VERIFY_DISABLE_TARGETS:
+        module = importlib.import_module(module_path)
+        orig = getattr(module, name, None)
+        if orig is None or getattr(orig, "_haliax_mixed_f8_wrapped", False):
             continue
 
         @functools.wraps(orig)
@@ -602,7 +646,7 @@ def _install_scoped_verify_disable() -> None:
                 return _orig(*args, **kwargs)
 
         wrapper._haliax_mixed_f8_wrapped = True
-        setattr(core, name, wrapper)
+        setattr(module, name, wrapper)
 
 
 _activated = False

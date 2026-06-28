@@ -49,12 +49,14 @@ def _probe_module(tmp_path, name: str, src: str):
 
 def test_relax_inline_dtype_guard_changes_behavior(tmp_path):
     """The relaxation must let a mixed FP8 pair through while still rejecting a real mismatch."""
+    # Deeper indentation than the real jax guards (4 spaces) — the regex matcher must preserve it.
     module = _probe_module(
         tmp_path,
         "probe_guard",
         "def f(a, b):\n"
-        "    if a.dtype != b.dtype:\n"
-        "        raise ValueError('mismatch')\n"
+        "    if True:\n"
+        "        if a.dtype != b.dtype:\n"
+        "            raise ValueError('mismatch')\n"
         "    return 'ok'\n",
     )
     e5m2, e4m3, bf16 = _operand("float8_e5m2"), _operand("float8_e4m3fn"), _operand("bfloat16")
@@ -62,12 +64,7 @@ def test_relax_inline_dtype_guard_changes_behavior(tmp_path):
     with pytest.raises(ValueError):
         module.f(e5m2, e4m3)  # stock guard rejects the mixed pair
 
-    shim._relax_inline_dtype_guard(
-        module,
-        "f",
-        "    if a.dtype != b.dtype:\n",
-        "    if a.dtype != b.dtype and not _haliax_is_mixed_f8(a, b):\n",
-    )
+    shim._relax_inline_dtype_guard(module, "f", "a", "b")
 
     assert module.f(e5m2, e4m3) == "ok"  # the e4m3/e5m2 pair now lowers
     assert module.f(e4m3, e4m3) == "ok"  # same-dtype unaffected
@@ -87,7 +84,7 @@ def test_relax_inline_dtype_guard_rejects_ambiguous_match(tmp_path):
         "        return 2\n",
     )
     with pytest.raises(RuntimeError, match="exactly one"):
-        shim._relax_inline_dtype_guard(module, "g", "    if a.dtype != b.dtype:\n", "x")
+        shim._relax_inline_dtype_guard(module, "g", "a", "b")
 
 
 def test_verification_disabled_restores():
@@ -125,9 +122,13 @@ def test_activate_installs_overlay():
     assert plgpu.wgmma is primitives.wgmma
     assert "_haliax_is_mixed_f8" in ragged.ragged_dot.__code__.co_names
 
-    # (1) verifier-disable scoped to the two Mosaic-GPU module-construction entrypoints, once.
+    # (1) verifier-disable wraps every Mosaic-GPU lowering entrypoint that verifies, including the
+    # core._lower_as_gpu_kernel the pallas path hits directly and the pallas lowering entry itself.
+    lowering = importlib.import_module("jax._src.pallas.mosaic_gpu.lowering")
+    assert getattr(core._lower_as_gpu_kernel, "_haliax_mixed_f8_wrapped", False)
     assert getattr(core._kernel_to_module, "_haliax_mixed_f8_wrapped", False)
     assert getattr(core._run_serde_pass, "_haliax_mixed_f8_wrapped", False)
-    wrapped = core._kernel_to_module
+    assert getattr(lowering.lower_pipelined_jaxpr_to_module, "_haliax_mixed_f8_wrapped", False)
+    wrapped = core._lower_as_gpu_kernel
     shim.activate()  # idempotent: no double-wrap
-    assert core._kernel_to_module is wrapped
+    assert core._lower_as_gpu_kernel is wrapped
