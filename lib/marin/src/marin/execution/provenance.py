@@ -58,7 +58,9 @@ class Provenance(BaseModel):
 
 
 def _current_user() -> str | None:
+    # getpass.getuser() raises when no username can be resolved from the environment or the
+    # password database; provenance is best-effort metadata, so a missing user is not an error.
     try:
         return getpass.getuser()
-    except Exception:
+    except (OSError, KeyError):
         return None

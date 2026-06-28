@@ -5,7 +5,7 @@
 
 :func:`train_lm` turns the *meaningful* decisions of a training run — the model, the
 optimizer, the data, the token budget, the regularization, the evals — into a lazy
-:class:`~marin.execution.lazy.Checkpoint`. Every one of those is a required argument:
+``ArtifactStep[LevanterCheckpoint]``. Every one of those is a required argument:
 the helper defaults none of them, so reading the call shows the whole experiment. What
 it *does* own is the mechanical marin-on-TPU plumbing that is identical across runs and
 carries no experiment meaning: the data-parallel mesh and token ``compute_mapping``,

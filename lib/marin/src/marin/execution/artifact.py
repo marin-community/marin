@@ -3,8 +3,8 @@
 
 """The realized artifact, its on-disk record, and the drift check.
 
-An :class:`Artifact` is the produced, persisted output of a step; a
-:class:`marin.execution.lazy.Lazy` is the inert handle that builds one. This module owns the
+An :class:`Artifact` is the produced, persisted output of a step; an ``ArtifactStep`` is the
+inert handle that builds one. This module owns the
 framework — one base type and the record around it — while concrete artifact types live with
 their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``TokenizedCache`` in
 ``marin.processing.tokenize.tokenize``):

@@ -35,9 +35,14 @@ from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import materialized_config
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.llama import llama3_tokenizer
+
+_TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -148,14 +153,34 @@ def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
     assert long_mask.segment_ids is mask.segment_ids
 
 
-def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch):
+def _seed_cache_records(step, prefix: str) -> None:
+    """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
+    ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
+    datasets materialize first as build dependencies)."""
+    for dep in step.deps:
+        if dep.artifact_type is TokenizedCache:
+            write_record(
+                ArtifactRecord(
+                    name=dep.name,
+                    version=dep.version,
+                    output_path=dep.path(prefix),
+                    result_type=_TOKENIZED_CACHE,
+                    config={"tokenizer": llama3_tokenizer, "format": {"text_key": "text"}},
+                )
+            )
+
+
+def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tmp_path):
     monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
     monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
     monkeypatch.setenv("CANARY_TRACKER", "json_logger")
     monkeypatch.setenv("RUN_ID", "test-thd")
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
     # build() reads the env at call time, so set it above before resolving the config.
-    data = materialized_config(canary_ferry.build(), "gs://test").data
+    step = canary_ferry.build()
+    _seed_cache_records(step, str(tmp_path))
+    data = materialized_config(step, str(tmp_path)).data
 
     components = list(data.components.values())
     assert components
