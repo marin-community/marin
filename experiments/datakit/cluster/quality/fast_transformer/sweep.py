@@ -29,6 +29,7 @@ import json
 import logging
 from dataclasses import asdict, replace
 
+import jax
 from rigging.filesystem import open_url
 from rigging.log_setup import configure_logging
 
@@ -112,6 +113,7 @@ def run_sweep(*, train_path: str, eval_path: str, out_dir: str, tokenizer: str, 
         min_count=min_count,
         cache_dir=cache_dir,
     )
+    logger.info("jax backend=%s devices=%s", jax.default_backend(), jax.devices())
     grid = build_grid(data.vocab_size)
     logger.info(
         "running %d configs; baseline AUC=%.3f spearman=%.3f", len(grid), BASELINE["auc"], BASELINE["spearman_rho"]
