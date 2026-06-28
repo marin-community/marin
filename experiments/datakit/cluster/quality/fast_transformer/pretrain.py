@@ -28,6 +28,8 @@ Submit on a v6e slice (long-context flag set in sweep.py)::
 """
 
 import argparse
+import hashlib
+import io
 import json
 import logging
 import time
@@ -38,12 +40,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from rigging.filesystem import open_url
+from jaxtyping import Array
+from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import (
     NUM_RESERVED,
+    PAD_ID,
     UNK_ID,
+    PackedSplit,
     build_remap,
     encode_corpus,
     pack,
@@ -61,6 +66,41 @@ from experiments.datakit.cluster.quality.fast_transformer.train import (
 logger = logging.getLogger(__name__)
 
 BASELINE = {"auc": 0.846, "spearman_rho": 0.641}  # fasttext, for reference
+
+# The NTP softmax logits are [tokens, vocab]; computing the loss in token-tiles of
+# this size keeps that tensor bounded regardless of batch or vocab, so the full
+# tokenizer vocabulary stays affordable (no lossy top-K cap) and the per-chip
+# batch is limited only by the O(T^2) attention (which remat already handles).
+_LM_CHUNK_TOKENS = 4096
+
+
+def ntp_loss(enc: TokenEncoder, ids: Array, *, inference: bool) -> Array:
+    """Mean next-token cross-entropy with the LM head/softmax chunked over tokens.
+
+    Predicts ``ids[:, 1:]`` from ``ids[:, :-1]``. The logits are produced in
+    tiles of :data:`_LM_CHUNK_TOKENS` via :func:`jax.lax.scan`, so the
+    ``[tokens, vocab]`` tensor never fully materializes -- vocab size costs FLOPs,
+    not memory. PAD targets are masked out of the mean.
+    """
+    hidden = enc.encode(ids, key=None, inference=inference)  # [B, T, d]
+    h = hidden[:, :-1].reshape(-1, hidden.shape[-1])  # [N, d]
+    tgt = ids[:, 1:].reshape(-1)  # [N]
+    chunk = _LM_CHUNK_TOKENS
+    pad = (-h.shape[0]) % chunk
+    if pad:
+        h = jnp.concatenate([h, jnp.zeros((pad, h.shape[1]), h.dtype)], axis=0)
+        tgt = jnp.concatenate([tgt, jnp.full((pad,), PAD_ID, tgt.dtype)], axis=0)
+    h = h.reshape(-1, chunk, h.shape[-1])  # [nC, chunk, d]
+    tgt = tgt.reshape(-1, chunk)  # [nC, chunk]
+
+    def tile(_, xs):
+        hc, tc = xs
+        tok = optax.softmax_cross_entropy_with_integer_labels(enc.lm_logits(hc), tc)  # [chunk]
+        mask = (tc != PAD_ID).astype(tok.dtype)
+        return None, (jnp.sum(tok * mask), jnp.sum(mask))
+
+    _, (sums, counts) = jax.lax.scan(tile, None, (h, tgt))
+    return sums.sum() / jnp.maximum(counts.sum(), 1.0)
 
 
 def _pack_lm_blocks(raw_ids: list[list[int]], remap: dict[int, int], max_tokens: int, max_blocks: int) -> np.ndarray:
@@ -107,29 +147,28 @@ def pretrain_ntp(
     encoder = jax.device_put(encoder, replicated)
     opt_state = jax.device_put(optimizer.init(eqx.filter(encoder, eqx.is_inexact_array)), replicated)
 
-    def _lm_loss(enc, ids):
-        # Gradient-checkpointed: the [B, T, vocab] logits are recomputed in backward
-        # rather than stored, so the NTP softmax stops being the memory bottleneck.
-        logits = enc.lm_logits(enc.encode(ids, key=None, inference=False))[:, :-1]
-        return optax.softmax_cross_entropy_with_integer_labels(logits, ids[:, 1:]).mean()
-
-    lm_loss = eqx.filter_checkpoint(_lm_loss)
+    # Gradient-checkpoint the whole loss: the O(T^2) attention is recomputed in
+    # backward rather than stored, and the chunked softmax keeps the logits small.
+    train_loss = eqx.filter_checkpoint(lambda enc, ids: ntp_loss(enc, ids, inference=False))
 
     @eqx.filter_jit
     def step(encoder, opt_state, ids):
-        loss, grads = eqx.filter_value_and_grad(lm_loss)(encoder, ids)
+        loss, grads = eqx.filter_value_and_grad(train_loss)(encoder, ids)
         updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(encoder, eqx.is_inexact_array))
         return eqx.apply_updates(encoder, updates), opt_state, loss
 
     @eqx.filter_jit
     def batch_val_loss(encoder, ids):
-        logits = encoder.lm_logits(encoder.encode(ids, key=None, inference=True))[:, :-1]
-        return optax.softmax_cross_entropy_with_integer_labels(logits, ids[:, 1:]).mean()
+        return ntp_loss(encoder, ids, inference=True)
 
     def val_loss(encoder) -> float:
+        # Sharded like training so eval doesn't put the whole batch's attention on
+        # one chip. Tile val to a whole number of (chip-divisible) batches.
+        nb = max(batch_size, -(-len(val_blocks) // batch_size) * batch_size)
+        vb = val_blocks[np.arange(nb) % len(val_blocks)]
         losses = [
-            float(batch_val_loss(encoder, jnp.asarray(val_blocks[i : i + batch_size])))
-            for i in range(0, len(val_blocks), batch_size)
+            float(batch_val_loss(encoder, jax.device_put(jnp.asarray(vb[i : i + batch_size]), batch_shard)))
+            for i in range(0, nb, batch_size)
         ]
         return float(np.mean(losses))
 
@@ -176,6 +215,64 @@ def _evaluate(model, holdout_ids, holdout_scores, label: str, batch_size: int) -
     return asdict(m)
 
 
+def _load_or_build_data(args) -> tuple[np.ndarray, PackedSplit, PackedSplit, int]:
+    """Tokenize + remap + pack (corpus LM blocks, oracle train, oracle holdout).
+
+    Tokenizing the corpus is the slow part, so the packed arrays are cached to the
+    region-local temp bucket keyed by every parameter that affects them; reruns
+    with the same settings skip tokenization entirely.
+    """
+    spec = [
+        args.tokenizer,
+        args.corpus,
+        args.train,
+        args.eval,
+        args.max_tokens,
+        args.min_count,
+        args.max_vocab,
+        args.max_blocks,
+    ]
+    key = hashlib.sha1(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+    cache_path = marin_temp_bucket(30, f"fast_transformer/tok-cache/{key}.npz", source_prefix=args.corpus)
+    fs, resolved = url_to_fs(cache_path)
+    if fs.exists(resolved):
+        logger.info("loading tokenization cache %s", cache_path)
+        with fs.open(resolved, "rb") as fh:
+            z = np.load(io.BytesIO(fh.read()), allow_pickle=True)
+        train = PackedSplit(z["tr_ids"], z["tr_len"], z["tr_score"], list(z["tr_src"]))
+        holdout = PackedSplit(z["ev_ids"], z["ev_len"], z["ev_score"], list(z["ev_src"]))
+        return z["blocks"], train, holdout, int(z["vocab_size"])
+
+    corpus_raw, _, _ = encode_corpus(args.tokenizer, args.corpus, args.max_tokens)
+    tr_raw, tr_scores, _ = encode_corpus(args.tokenizer, args.train, args.max_tokens)
+    ev_raw, ev_scores, ev_src = encode_corpus(args.tokenizer, args.eval, args.max_tokens)
+    remap = build_remap(corpus_raw + tr_raw, args.min_count, args.max_vocab)
+    vocab_size = len(remap) + NUM_RESERVED
+    logger.info("encoded: corpus=%d train=%d eval=%d vocab=%d", len(corpus_raw), len(tr_raw), len(ev_raw), vocab_size)
+    blocks = _pack_lm_blocks(corpus_raw, remap, args.max_tokens, args.max_blocks)
+    train = pack(tr_raw, remap, tr_scores, [""] * len(tr_raw), args.max_tokens)
+    holdout = pack(ev_raw, remap, ev_scores, ev_src, args.max_tokens)
+
+    buf = io.BytesIO()
+    np.savez_compressed(
+        buf,
+        blocks=blocks,
+        tr_ids=train.ids,
+        tr_len=train.lengths,
+        tr_score=train.scores,
+        tr_src=np.asarray(train.sources, dtype=object),
+        ev_ids=holdout.ids,
+        ev_len=holdout.lengths,
+        ev_score=holdout.scores,
+        ev_src=np.asarray(holdout.sources, dtype=object),
+        vocab_size=vocab_size,
+    )
+    with fs.open(resolved, "wb") as fh:
+        fh.write(buf.getvalue())
+    logger.info("wrote tokenization cache %s", cache_path)
+    return blocks, train, holdout, vocab_size
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", required=True, help="Unlabeled text parquet for NTP pretraining")
@@ -184,11 +281,12 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--tokenizer", default="marin-community/marin-tokenizer")
     parser.add_argument("--max-tokens", type=int, default=2048)
-    parser.add_argument("--min-count", type=int, default=3, help="Vocab prune (drop rare tokens)")
-    parser.add_argument("--max-vocab", type=int, default=32000, help="Cap vocab (top-K) to bound the NTP softmax")
+    parser.add_argument("--min-count", type=int, default=2, help="Vocab prune (drop tokens seen < this)")
+    parser.add_argument("--max-vocab", type=int, default=None, help="Optional top-K vocab cap (default: full vocab)")
     parser.add_argument("--dim", type=int, default=256)
     parser.add_argument("--layers", type=int, default=4)
-    parser.add_argument("--max-blocks", type=int, default=40000)
+    parser.add_argument("--max-blocks", type=int, default=100000, help="Cap on NTP LM blocks (corpus size)")
+    parser.add_argument("--per-chip-batch", type=int, default=24, help="Sequences per chip; global batch = this x chips")
     parser.add_argument("--pretrain-lr", type=float, default=3e-4)
     parser.add_argument("--pretrain-epochs", type=int, default=20)
     parser.add_argument("--pretrain-patience", type=int, default=2)
@@ -199,34 +297,24 @@ def main() -> None:
     configure_logging(logging.INFO)
     logger.info("jax backend=%s devices=%s", jax.default_backend(), jax.devices())
 
-    corpus_raw, _, _ = encode_corpus(args.tokenizer, args.corpus, args.max_tokens)
-    tr_raw, tr_scores, _ = encode_corpus(args.tokenizer, args.train, args.max_tokens)
-    ev_raw, ev_scores, ev_src = encode_corpus(args.tokenizer, args.eval, args.max_tokens)
-    remap = build_remap(corpus_raw + tr_raw, args.min_count, args.max_vocab)
-    vocab_size = len(remap) + NUM_RESERVED
-    logger.info("encoded: corpus=%d train=%d eval=%d vocab=%d", len(corpus_raw), len(tr_raw), len(ev_raw), vocab_size)
-
-    blocks = _pack_lm_blocks(corpus_raw, remap, args.max_tokens, args.max_blocks)
-    train = pack(tr_raw, remap, tr_scores, [""] * len(tr_raw), args.max_tokens)
-    holdout = pack(ev_raw, remap, ev_scores, ev_src, args.max_tokens)
-
-    # With remat the O(T^2) attention and [B,T,vocab] softmax are recomputed in
-    # backward, so per-chip batch is bounded by the forward materialization; size
-    # per chip, then x num_chips since training is data-parallel across the slice.
     t = args.max_tokens
+    blocks, train, holdout, vocab_size = _load_or_build_data(args)
+
+    # Per-chip batch is set explicitly (memory is bounded by the O(T^2) attention,
+    # which remat handles; the chunked softmax makes vocab memory-free). The global
+    # batch is per-chip x chips since training/eval are data-parallel.
     ndev = jax.device_count()
-    per_chip_pretrain = max(2, min(800_000_000 // (t * vocab_size), 120_000_000 // (t * t)))
-    per_chip_ft = max(8, 120_000_000 // (t * t))
-    pretrain_batch = per_chip_pretrain * ndev
-    ft_batch = per_chip_ft * ndev
+    global_batch = args.per_chip_batch * ndev
+    pretrain_batch = ft_batch = global_batch
     logger.info(
-        "LM blocks=%s oracle train=%s holdout=%s | %d chips, pretrain_batch=%d ft_batch=%d",
+        "LM blocks=%s oracle train=%s holdout=%s vocab=%d | %d chips x %d/chip = global batch %d",
         blocks.shape,
         train.ids.shape,
         holdout.ids.shape,
+        vocab_size,
         ndev,
-        pretrain_batch,
-        ft_batch,
+        args.per_chip_batch,
+        global_batch,
     )
 
     config = EncoderConfig(vocab_size=vocab_size, max_tokens=t, dim=args.dim, num_layers=args.layers, num_heads=8)
