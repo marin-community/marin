@@ -26,7 +26,13 @@ from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
+from iris.cluster.constraints import (
+    Constraint,
+    backend_directive,
+    constraints_from_resources,
+    merge_constraints,
+    validate_tpu_request,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
@@ -1346,16 +1352,27 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
 
         # Reject jobs that no backend could ever schedule so they fail fast
-        # instead of sitting in the pending queue. The job is feasible if any
-        # backend can host its shape; a backend without an autoscaler (e.g. a
-        # cluster-view backend) can't prove infeasibility here, so its presence
-        # means we don't fast-fail. For coscheduled jobs this also verifies the
-        # replica count is compatible with some group's num_vms.
+        # instead of sitting in the pending queue. A job pinned to one backend
+        # (--backend directive) is checked only against that backend, since the
+        # meta-scheduler will route it nowhere else; an unpinned job is feasible
+        # if any backend can host its shape. A backend without an autoscaler
+        # (e.g. a cluster-view backend) can't prove infeasibility here, so its
+        # presence means we don't fast-fail. For coscheduled jobs this also
+        # verifies the replica count is compatible with some group's num_vms.
         replicas = request.replicas if request.HasField("coscheduling") else None
         constraints = [Constraint.from_proto(c) for c in request.constraints]
+        directive = backend_directive(constraints)
+        if directive is not None:
+            # A directive to a non-existent backend is left for the meta-scheduler
+            # to finalize unschedulable (the reason names the backend); checking an
+            # empty candidate set here just skips the fast-fail.
+            pinned = self._controller.backends.get(directive)
+            candidate_backends = [pinned] if pinned is not None else []
+        else:
+            candidate_backends = list(self._controller.backends.values())
         feasibility_errors: list[str] = []
         feasible = False
-        for backend in self._controller.backends.values():
+        for backend in candidate_backends:
             autoscaler = backend.autoscaler
             if autoscaler is None:
                 feasible = True

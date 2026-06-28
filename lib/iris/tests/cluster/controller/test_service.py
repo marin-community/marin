@@ -17,7 +17,14 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key, device_variant_constraint
+from iris.cluster.constraints import (
+    BACKEND_CONSTRAINT_KEY,
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    availability_key,
+    device_variant_constraint,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
@@ -192,6 +199,23 @@ def test_launch_job_rejected_when_all_backends_infeasible(service):
 
     with pytest.raises(ConnectError) as exc_info:
         service.launch_job(make_job_request("multi-backend-bad"), None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_pinned_backend_checks_only_that_backend(service):
+    """A job pinned with --backend is checked only against the pinned backend: it
+    fails fast when that backend rejects, even if another backend is feasible."""
+    rejecting = Mock()
+    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    admitting = Mock()
+    admitting.autoscaler = _FeasibilityAutoscaler(None)
+    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+
+    request = make_job_request("pinned-bad")
+    request.constraints.append(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp").to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 

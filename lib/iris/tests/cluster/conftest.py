@@ -25,7 +25,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
@@ -119,10 +119,15 @@ class _HarnessController:
         self.wake = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
-        self.autoscaler = None
         self.provider: object = Mock()
+        self.provider.autoscaler = None
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = new_run_template_cache()
+        self.scale_group_to_backend: dict[str, str] = {}
+        self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
+
+    def backend_id_for_scale_group(self, scale_group: str) -> str:
+        return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
 
 
 @dataclass
