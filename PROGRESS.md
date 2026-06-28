@@ -60,15 +60,10 @@ god module `defaults.py` (slated for deletion): `defaults.py` imports
 This is the expected WIP state of the PR2 bulk branch — the fix is the dismantle below, not a
 patch. The migrated catalog/tutorial modules all import and build handles in isolation.
 
-The catalog renames also broke the committed grug-lazy example **tests**, which import old
-public catalog names. Re-expose or update these in the grug phase:
-- `experiments.evals.uncheatable_lazy` → `experiments.evals.uncheatable` (module renamed).
-- `paloma.PALOMA_DATASETS_TO_DIR` → now `_PALOMA_SUBSETS` (private).
-- `nemotron.NEMOTRON_DATASETS` / `NEMOTRON_LLAMA3_OVERRIDES` → now `NEMOTRON_SPLIT_GLOBS` /
-  `_NEMOTRON_LLAMA3_PINS`.
-- `simple.PROOFPILE_LLAMA3_PIN` / `STARCODER_LLAMA3_PIN` → now `_PROOFPILE_LLAMA3_PIN` /
-  `_STARCODER_LLAMA3_PIN` (private). Decide: re-expose as public catalog reference constants
-  (tests legitimately assert pins) or update the tests to the new names.
+The grug-moe lazy *prototype* examples (`launch_lazy`/`phases_lazy`) and their tests were
+deleted (per the user — they were design-validation scaffolding superseded by the real
+migration). The `tests/experiment/` suite is green (12 passed). The canonical lazy example is
+now `tutorials/dclm_1b_1x_inline.py` + the catalogs themselves.
 
 ### Remaining PR2 tail (the careful second phase)
 
@@ -78,10 +73,10 @@ public catalog names. Re-expose or update these in the grug phase:
    `train_lm`) or consumer rewrites. `default_validation_sets` → `recipes.default_validation`.
    Then delete `defaults.py` + `tokenization.py` (`default_download`/`default_tokenize`).
 2. **Test-coupled bespoke launchers** (run their tests after each):
-   - `grug/*` (5) — `tests/test_grug_*`, `tests/experiment/test_grug_moe_*`. The grug-lazy
-     example (`launch_lazy`/`phases_lazy`) currently imports the old executor `launch.py`;
-     decouple it. The non-lazy launchers (`launch`, `launch_cw_scale`,
-     `launch_datakit_moe_mix`, `base/launch`) migrate or delete (judge if superseded).
+   - `grug/*` (4 old executor launchers: `launch`, `launch_cw_scale`,
+     `launch_datakit_moe_mix`, `base/launch`) — `tests/test_grug_launch_checkpoint_paths`,
+     `tests/test_grug_variant_contracts`. Migrate or delete (judge if superseded). The lazy
+     prototypes were already deleted.
    - `datakit/testbed/*` (4) — `tests/datakit/testbed/test_*`.
    - `ferries/*` (3) — CI smoke/daily jobs; high-stakes, migrate carefully.
    - `references/*` (2), `scaling_law_sweeps/completed_adamh` (likely delete — historical).
