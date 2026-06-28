@@ -106,8 +106,8 @@ for SHAPE in target small scale; do
     --gpu H100x8 --enable-extra-resources --extra gpu \
     --cpu 32 --memory 128GB --disk 64GB --no-wait \
     -- bash -lc "set -euo pipefail; nvidia-smi -L; \
-       uv run --no-sync python lib/levanter/scripts/bench/fp8_wheel_cache.py get /tmp/jaxlib.whl; \
-       JAXLIB_WHEEL=/tmp/jaxlib.whl bash lib/levanter/scripts/bench/mixed_fp8_fork_setup.sh; \
+       uv run --no-sync python lib/levanter/scripts/bench/fp8_wheel_cache.py get /tmp/wheels; \
+       JAXLIB_WHEEL=\$(ls /tmp/wheels/*.whl | head -1) bash lib/levanter/scripts/bench/mixed_fp8_fork_setup.sh; \
        uv run --no-sync python lib/levanter/scripts/bench/orchestrate_fp8_autotune.py \
          --shapes $SHAPE --num-gpus 8 --out-dir /app/scratch/fp8_sweep_$SHAPE --worker-timeout 900"
 done

@@ -23,6 +23,9 @@ import sys
 
 # Override with FP8_WHEEL_URI. Lives under MARIN_PREFIX (s3://marin-na/marin), which task pods can write.
 WHEEL_URI = os.environ.get("FP8_WHEEL_URI", "s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.0-cp312-cw.whl")
+# uv/pip require a PEP440-valid wheel filename, so `get` restores the original basename. `put` records it
+# in a sidecar; this is the fallback for the first wheel (stashed before the sidecar existed).
+_DEFAULT_WHEEL_NAME = "jaxlib-0.10.0.dev0+selfbuilt-cp312-cp312-manylinux_2_27_x86_64.whl"
 
 
 def _fs():
@@ -46,23 +49,39 @@ def _sha256(path):
     return h.hexdigest()
 
 
+def _wheel_name(fs):
+    """Original wheel basename (PEP440-valid), from the sidecar if present else the known default."""
+    name_uri = WHEEL_URI + ".name"
+    try:
+        if fs.exists(name_uri):
+            with fs.open(name_uri, "r") as f:
+                return f.read().strip() or _DEFAULT_WHEEL_NAME
+    except Exception:
+        pass
+    return _DEFAULT_WHEEL_NAME
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p_put = sub.add_parser("put", help="upload a local wheel to the cache")
+    p_put = sub.add_parser("put", help="upload a local wheel to the cache (records its basename)")
     p_put.add_argument("local")
-    p_get = sub.add_parser("get", help="download the cached wheel to a local path")
-    p_get.add_argument("local")
+    p_get = sub.add_parser("get", help="download the cached wheel into a dir under its valid basename")
+    p_get.add_argument("dest_dir")
     sub.add_parser("exists", help="print yes/no whether the cached wheel exists")
     args = ap.parse_args()
 
     fs = _fs()
     if args.cmd == "put":
         fs.put(args.local, WHEEL_URI)
-        print(f"FP8_WHEEL_PUT uri={WHEEL_URI} sha256={_sha256(args.local)} bytes={os.path.getsize(args.local)}", flush=True)
+        with fs.open(WHEEL_URI + ".name", "w") as f:
+            f.write(os.path.basename(args.local))
+        print(f"FP8_WHEEL_PUT uri={WHEEL_URI} name={os.path.basename(args.local)} sha256={_sha256(args.local)} bytes={os.path.getsize(args.local)}", flush=True)
     elif args.cmd == "get":
-        fs.get(WHEEL_URI, args.local)
-        print(f"FP8_WHEEL_GET uri={WHEEL_URI} sha256={_sha256(args.local)} bytes={os.path.getsize(args.local)}", flush=True)
+        os.makedirs(args.dest_dir, exist_ok=True)
+        dest = os.path.join(args.dest_dir, _wheel_name(fs))
+        fs.get(WHEEL_URI, dest)
+        print(f"FP8_WHEEL_GET uri={WHEEL_URI} path={dest} sha256={_sha256(dest)} bytes={os.path.getsize(dest)}", flush=True)
     elif args.cmd == "exists":
         print("yes" if fs.exists(WHEEL_URI) else "no", flush=True)
 
