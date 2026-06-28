@@ -1052,3 +1052,651 @@ When committing: `./infra/pre-commit.py --changed-files --fix`, then commit, the
 
 ## What's NOT done (available, not started — all on these CPT checkpoints)
 The other original experiments (#1 decontaminated re-eval, #2–#6) are untouched and unaffected by this study.
+
+## 2026-06-21 - 2D Chinchilla with base-loss variants
+
+Added `scripts/analysis/delphi_midtraining_2d_chinchilla.py` to test whether a two-resource Chinchilla fit should
+be constrained by base-model math validation losses at zero midtraining tokens.
+
+Command:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_fit.json`
+
+Setup:
+
+- Endpoint rows are the p33m67/lr50 iso-token ladder plus K=0.20 iso-FLOP ladder.
+- Training split is still 3e18 through 3e20; 1e21 and 1e22 remain held out.
+- Base-loss rows come from
+  `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_points.csv`, filtered to
+  `metric_label == "math_val_loss"` and `step == 0`.
+- The HTML dropdown switches among:
+  1. endpoints only,
+  2. base as D=epsilon with `epsilon=0.05B`,
+  3. separate base-loss curve plus midtraining improvement term.
+
+Held-out summary:
+
+| model | n | MAE % | RMSE % | bias % | note |
+|---|---:|---:|---:|---:|---|
+| endpoints only | 12 | 2.08 | 4.21 | +0.93 | current two-resource fit |
+| base as D=epsilon | 14 | 8.55 | 10.03 | -1.60 | worsens endpoint and base heldout fit |
+| separate base component | 14 | 6.31 | 9.24 | -0.34 | fits heldout base points well, but overpredicts K=0.20 at 1e22 |
+| K=0.20-only Chinchilla | 2 | 10.75 | 13.29 | +10.75 | right-plot baseline only |
+
+Interpretation: adding base losses is a useful constraint check but does not improve the held-out endpoint
+errors in this first parameterization. The epsilon-token version is too rigid at D=0 and badly overpredicts
+heldout base losses; the separate-base version handles D=0 cleanly but its improvement term extrapolates poorly
+to the 32B-token K=0.20 1e22 point.
+
+## 2026-06-21 - Tiny epsilon rerun
+
+Changed the shifted-token base-loss mode from `epsilon=0.05B` to `epsilon=1e-7B`. Since `tokens_b` is in
+billions, the previous value was 50M tokens; the new value is about 100 tokens. Also decoupled the
+separate-base model from that epsilon: mode 3 now fits its own positive token scale for the improvement term,
+while still forcing zero improvement at `D=0`.
+
+Command:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py
+```
+
+Updated artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_fit.json`
+
+Held-out summary after the tiny-epsilon rerun:
+
+| model | n | MAE % | RMSE % | bias % |
+|---|---:|---:|---:|---:|
+| endpoints only | 12 | 2.08 | 4.21 | +0.93 |
+| base as D=epsilon (`1e-7B`) | 14 | 10.80 | 15.03 | +6.46 |
+| separate base component | 14 | 4.92 | 7.14 | -0.60 |
+| K=0.20-only Chinchilla | 2 | 10.75 | 13.29 | +10.75 |
+
+Interpretation: the near-zero shifted-token variant is a poor constraint for this additive inverse-token form.
+The separate-base parameterization is less bad and keeps the heldout base points close, but endpoints-only still
+has the best heldout endpoint error in this comparison.
+
+## 2026-06-21 - HTML explanation pass
+
+Updated `scripts/analysis/delphi_midtraining_2d_chinchilla.py` so the generated HTML is a small report rather
+than a bare Plotly figure. The page now explains:
+
+- what `C`, `D`, `epsilon`, and prediction error mean,
+- how to interpret positive versus negative held-out error,
+- what each dropdown mode is fitting,
+- what the `tok*`, `K=0.20`, and `base` series mean,
+- why the K=0.20-only Chinchilla line stays visible on the right plot,
+- why modes 2 and 3 have more held-out points than mode 1.
+
+Regenerated `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla.html` and verified the changed-file
+pre-commit checks pass.
+
+## 2026-06-21 - Removed shifted-token mode
+
+Removed the `base as D=epsilon` fit from `scripts/analysis/delphi_midtraining_2d_chinchilla.py` and regenerated
+the report. The HTML dropdown now only compares:
+
+- `1) endpoints only`
+- `2) separate base component`
+
+The K=0.20-only Chinchilla line remains as the right-panel baseline. Verified that the regenerated HTML/CSV/JSON
+outputs no longer contain epsilon-mode references and that `./infra/pre-commit.py --changed-files --fix` passes.
+
+## 2026-06-21 - Added log-log mode pair
+
+Added two log-log variants to `scripts/analysis/delphi_midtraining_2d_chinchilla.py` and regenerated the report.
+The HTML dropdown now compares four modes:
+
+- `1) Chinchilla endpoints only`
+- `2) Chinchilla separate base component`
+- `3) log-log endpoints only`
+- `4) log-log separate base component`
+
+Implementation notes:
+
+- The endpoints-only log-log mode fits `log L = a + b log C + c log D`.
+- The separate-base log-log mode fits a pure power-law base loss from the `D=0` base rows, then fits
+  `log(L_base(C) - L(C,D)) = a + b log C + c log D` on positive-token endpoint rows. The improvement is still
+  exactly zero at `D=0`.
+
+Held-out summary after adding log-log modes:
+
+| model | n | MAE % | RMSE % | bias % |
+|---|---:|---:|---:|---:|
+| Chinchilla endpoints only | 12 | 2.08 | 4.21 | +0.93 |
+| Chinchilla separate base component | 14 | 4.92 | 7.14 | -0.60 |
+| log-log endpoints only | 12 | 3.70 | 5.16 | -1.22 |
+| log-log separate base component | 14 | 4.70 | 6.10 | -2.21 |
+| K=0.20-only Chinchilla baseline | 2 | 10.75 | 13.29 | +10.75 |
+
+Interpretation: log-log separate-base is a little better than Chinchilla separate-base on held-out MAE/RMSE, but
+the original Chinchilla endpoints-only fit still has the lowest held-out error in this comparison.
+
+## 2026-06-21 - Iso-token-only 2D scaling report
+
+Added separate output stems to `scripts/analysis/delphi_midtraining_2d_chinchilla.py` so the combined report and
+the iso-token-only report can coexist. The default output is still:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla.html`
+
+Running with `--exclude-isoflop` now writes:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_isotoken_only.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_isotoken_only_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_isotoken_only_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_2d_chinchilla_isotoken_only_fit.json`
+
+Command:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py --exclude-isoflop
+```
+
+The iso-token-only report excludes the K=0.20 iso-FLOP ladder and the K=0.20-only baseline line. Held-out
+summary:
+
+| model | n | MAE % | RMSE % | bias % |
+|---|---:|---:|---:|---:|
+| Chinchilla endpoints only | 10 | 1.14 | 1.30 | -0.44 |
+| Chinchilla separate base component | 12 | 3.40 | 4.18 | -2.03 |
+| log-log endpoints only | 10 | 3.05 | 3.53 | -3.00 |
+| log-log separate base component | 12 | 4.13 | 5.06 | -3.67 |
+
+Interpretation: on iso-token runs alone, Chinchilla endpoints-only is clearly best. Adding the separate base
+component still hurts, and log-log fits are worse than Chinchilla in this split.
+
+## 2026-06-21 - Parameter-aware Chinchilla report
+
+Added `--include-parameter-chinchilla` to `scripts/analysis/delphi_midtraining_2d_chinchilla.py`. The report now
+can add a fifth endpoint-only mode:
+
+```text
+L(N,C,D)=E + A*N^-alpha + B*C^-beta + G*D^-gamma
+```
+
+where `N` is trainable parameters in billions, sourced from the canonical Delphi registry
+`experiments.delphi_models.DELPHI_BY_FLOPS_KEY`.
+
+Commands:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py --include-parameter-chinchilla
+
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py --exclude-isoflop --include-parameter-chinchilla
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_fit.json`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_isotoken_only.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_isotoken_only_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_isotoken_only_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_chinchilla_isotoken_only_fit.json`
+
+Held-out summary:
+
+| report | baseline Chinchilla endpoints MAE | parameter Chinchilla MAE | parameter Chinchilla RMSE |
+|---|---:|---:|---:|
+| iso-token plus K=0.20 | 2.08% | 1.99% | 4.13% |
+| iso-token-only | 1.14% | 0.93% | 1.21% |
+
+Fit exponents:
+
+| report | params exponent | pretraining FLOPs exponent | midtraining tokens exponent |
+|---|---:|---:|---:|
+| iso-token plus K=0.20 | 0.340 | 0.131 | 0.140 |
+| iso-token-only | 0.352 | 0.131 | 0.137 |
+
+Interpretation: adding parameter count improves held-out MAE slightly in both reports, but this is exploratory.
+`N` and `C` are strongly correlated across the Delphi ladder, so the separate parameter and FLOP exponents are not
+independently identified by this dataset.
+
+## 2026-06-21 - Parameter/data Chinchilla report
+
+Replaced the optional `N + C + D_mid` Chinchilla mode in
+`scripts/analysis/delphi_midtraining_2d_chinchilla.py` with a FLOPs-free parameter/data mode:
+
+```text
+L(N,D_pre,D_mid)=E + A*N^-alpha + B*D_pre^-beta + G*D_mid^-gamma
+```
+
+where `N` is trainable parameters in billions from `experiments.delphi_models.DELPHI_BY_FLOPS_KEY`,
+`D_pre` is pretraining tokens in billions, and `D_mid` is midtraining tokens in billions. The HTML hovers now show
+`N`, `D_pre`, `D_mid`, and `D_total`.
+
+Commands:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py --include-parameter-data-chinchilla
+
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_2d_chinchilla.py --exclude-isoflop --include-parameter-data-chinchilla
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_fit.json`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_isotoken_only.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_isotoken_only_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_isotoken_only_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_param_data_chinchilla_isotoken_only_fit.json`
+
+Held-out summary:
+
+| report | baseline Chinchilla endpoints MAE | parameter/data Chinchilla MAE | parameter/data Chinchilla RMSE |
+|---|---:|---:|---:|
+| iso-token plus K=0.20 | 2.08% | 1.99% | 4.14% |
+| iso-token-only | 1.14% | 0.93% | 1.23% |
+
+Fit exponents:
+
+| report | params exponent | pretraining-data exponent | midtraining-data exponent |
+|---|---:|---:|---:|
+| iso-token plus K=0.20 | 0.348 | 0.256 | 0.137 |
+| iso-token-only | 0.360 | 0.239 | 0.135 |
+
+Interpretation: decomposing pretraining FLOPs into `N` and `D_pre` gives the same small held-out improvement as
+the prior parameter-aware fit, while making the Chinchilla resources explicit. The caveat remains that `N` and
+`D_pre` are strongly correlated on this ladder.
+
+## 2026-06-21 - Broad fit-family report with math-token resources
+
+Starting a broader report for Delphi midtraining prediction-error fits. Goal: compare endpoint-only and
+separate-base forms over multiple resource choices, including raw midtraining tokens, math midtraining tokens,
+pretraining tokens, token ratios, and estimated midtraining compute. The report should keep the 1e21/1e22
+heldout split and add explicit 1e22 prediction columns because that is the primary target.
+
+Implemented `scripts/analysis/delphi_midtraining_fit_family_report.py`.
+
+Commands:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_fit_family_report.py
+
+uv run --with scipy --with plotly --with pandas --with wandb \
+  python scripts/analysis/delphi_midtraining_fit_family_report.py --exclude-isoflop
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_1e22_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_fit_table.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_fit.json`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_isotoken_only.html`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_isotoken_only_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_isotoken_only_1e22_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_isotoken_only_fit_table.csv`
+- `sk_midtrain_analysis_fable/delphi_midtraining_fit_family_report_isotoken_only_fit.json`
+
+Fit families now covered:
+
+- endpoint Chinchilla: `L = E + sum_i A_i x_i^-alpha_i`
+- endpoint log-log: `log L = a + sum_i b_i log x_i`
+- separate Chinchilla: base curve plus saturating improvement, exactly zero at `D=0`
+- separate log-improvement: base curve plus power-law improvement on positive-token endpoints
+
+Resource choices include `C_pre`, `N`, `D_pre`, `D_mid`, `D_math`, `D_total`, `K_mid`, `K_math`,
+`D_math/N`, `C_mid`, and `C_mid_math`. The HTML explains each resource, provides a Plotly dropdown over all
+successful fit modes, and adds explicit summary columns for the focus 1e22 prediction (`k0p20` in the combined
+report, `tok8b` in the iso-token-only report).
+
+Headline results:
+
+| report | best model | heldout endpoint MAE | 1e22 focus pred | 1e22 focus actual | 1e22 focus error |
+|---|---|---:|---:|---:|---:|
+| iso-token + K=0.20 | `N + D_pre + D_mid` Chinchilla | 1.99% | 0.63847 (`k0p20`) | 0.56102 | +13.81% |
+| iso-token + K=0.20 | `N + D_pre + D_math` Chinchilla | 1.99% | 0.63847 (`k0p20`) | 0.56102 | +13.81% |
+| iso-token-only | `N + D_pre + D_math` Chinchilla | 0.93% | 0.73745 (`tok8b`) | 0.72012 | +2.41% |
+
+As expected for this p33m67-only slice, `D_math = 0.67 * D_mid`, so `D_math` and `D_mid` variants tie when the
+fit has a free amplitude. The math-token feature is still represented explicitly for pooled-mix follow-up.
+
+Verified with `./infra/pre-commit.py --changed-files --fix`.
+
+## 2026-06-28 - K=0.20 seen-partition validation plot
+
+Added a focused plot for the completed K=0.20 lr0.50 seen-partition eval sweep:
+
+- New eval root:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_seen_partition_1e22_k020_lr50`
+- Script: `scripts/analysis/plot_k020_seen_partition_scaling.py`
+- Plot: `sk_midtrain_analysis_fable/delphi_k020_seen_partition_scaling.png`
+- Points CSV: `sk_midtrain_analysis_fable/delphi_k020_seen_partition_scaling_points.csv`
+- Fit summary CSV: `sk_midtrain_analysis_fable/delphi_k020_seen_partition_scaling_fit_summary.csv`
+
+The plot compares the same K=0.20 lr0.50 ladder across old full 4plus, retained clean-seen, and dropped
+contaminated subsets. Fits use the same floor+power Chinchilla form through `3e20` and score `1e21`/`1e22`
+as heldout.
+
+1e22 heldout prediction errors:
+
+| target | actual | predicted | error |
+|---|---:|---:|---:|
+| old full 4plus | 0.561143 | 0.665313 | +18.56% |
+| retained clean | 0.824991 | 0.848331 | +2.83% |
+| dropped contaminated | 0.665261 | 0.765120 | +15.01% |
+
+Verified with:
+
+```bash
+uv run python -m py_compile scripts/analysis/plot_k020_seen_partition_scaling.py
+./infra/pre-commit.py --changed-files --fix
+```
+
+Follow-up: update the same plot and summary table to report absolute loss-unit error alongside relative percent
+error, because the old full 4plus and dropped contaminated targets have similar signed loss error but different
+percent errors due to different 1e22 loss denominators.
+
+Follow-up: generated a static old-vs-clean version of the iso-token endpoint plot.
+
+Artifact:
+
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_vs_old_endpoint_scaling.png`
+
+Script:
+
+- `scripts/analysis/plot_isotoken_clean_seen_vs_old_endpoint_scaling.py`
+
+Visual encoding:
+
+- old 4plus validation: dotted Chinchilla fits and hollow actual markers
+- clean-seen validation: solid Chinchilla fits and filled actual markers
+
+The plot uses the trusted clean-seen series only: iso-token 2B, 4B, 8B, and K=0.20. It deliberately omits 500M
+and 1B because there is no trusted clean-seen 1e22 row for those budgets yet.
+
+Verified with:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with gcsfs --with matplotlib \
+  python scripts/analysis/plot_isotoken_clean_seen_vs_old_endpoint_scaling.py
+uv run --with matplotlib --with scipy --with plotly --with pandas --with gcsfs \
+  python -m py_compile scripts/analysis/plot_isotoken_clean_seen_vs_old_endpoint_scaling.py
+./infra/pre-commit.py --changed-files --fix
+```
+
+## 2026-06-21 - Add corrected iso-token 1B clean-seen row and simplify static plot
+
+The corrected iso-token 1B clean-seen eval finished:
+
+- Summary CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.csv`
+- Summary JSON:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.json`
+- Corrected 1e22/1B row:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/delphi-1e22-p33m67-tok1b-lr50-a008/step-237/metrics.jsonl/eval_results.json`
+
+Plan:
+
+- Include 1B in the unified old-vs-clean report.
+- Regenerate sidecar CSV/JSON/HTML artifacts.
+- Replace the noisy static overlay with a cleaner primary PNG that emphasizes 1e22 fit error and 1e22 old-vs-clean
+  loss, while preserving the old-vs-clean marker semantics.
+
+Outcome: updated `scripts/analysis/delphi_isotoken_clean_seen_unified_report.py` so 1B/2B/4B/8B are all trusted.
+Regenerated:
+
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report.html`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_points.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_fit_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report.json`
+
+Also replaced `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_vs_old_endpoint_scaling.png` with a cleaner
+two-panel 1e22 summary:
+
+- left: 1e22 heldout prediction error after fitting through `3e20`
+- right: 1e22 actual validation loss by token budget
+- old 4plus: dotted + hollow
+- clean-seen: solid + filled
+
+1e22 actual losses:
+
+| series | old 4plus | clean-seen | clean - old |
+|---|---:|---:|---:|
+| iso-token 1B | 0.917658 | 0.996622 | +0.078963 |
+| iso-token 2B | 0.856535 | 0.958299 | +0.101764 |
+| iso-token 4B | 0.794952 | 0.926756 | +0.131804 |
+| iso-token 8B | 0.720246 | 0.894756 | +0.174510 |
+| K=0.20 iso-FLOP | 0.561143 | 0.824991 | +0.263848 |
+
+1e22 fit errors:
+
+| series | old 4plus error | clean-seen error |
+|---|---:|---:|
+| iso-token 1B | -3.75% | -2.38% |
+| iso-token 2B | -3.59% | -2.31% |
+| iso-token 4B | -3.72% | -2.74% |
+| iso-token 8B | -3.06% | -2.82% |
+| K=0.20 iso-FLOP | +18.56% | +2.83% |
+
+Verified with:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with gcsfs \
+  python scripts/analysis/delphi_isotoken_clean_seen_unified_report.py
+uv run --with scipy --with plotly --with pandas --with gcsfs --with matplotlib \
+  python scripts/analysis/plot_isotoken_clean_seen_vs_old_endpoint_scaling.py
+uv run --with matplotlib --with scipy --with plotly --with pandas --with gcsfs \
+  python -m py_compile scripts/analysis/delphi_isotoken_clean_seen_unified_report.py \
+    scripts/analysis/plot_isotoken_clean_seen_vs_old_endpoint_scaling.py
+./infra/pre-commit.py --changed-files --fix
+```
+
+## 2026-06-21 - Unified iso-token clean-seen validation report
+
+Built a focused report comparing the old 4plus validation target against the new clean-seen target for the
+trusted p33m67/lr0.50 iso-token clean-seen reruns.
+
+Inputs:
+
+- Iso-token clean-seen summary:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.csv`
+- K=0.20 clean-seen summary:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_p33m67_clean_seen_1e22_k020.csv`
+- Verified 1e22 iso-token per-run JSONs for 2B, 4B, and 8B.
+
+Excluded the current 1B/1e22 iso-token row because it is `complete_by_step=False` from
+`delphi-1e22-p33m67-tok1b-lr50-a004` at step 50. The corrected a008/step-237 eval should be used once it is
+rerun and the summary is regenerated.
+
+Artifacts:
+
+- `scripts/analysis/delphi_isotoken_clean_seen_unified_report.py`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report.html`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_points.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report_fit_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report.json`
+
+1e22 actual losses:
+
+| series | old 4plus | clean-seen | clean - old | clean/old - 1 |
+|---|---:|---:|---:|---:|
+| iso-token 2B | 0.856535 | 0.958299 | +0.101764 | +11.88% |
+| iso-token 4B | 0.794952 | 0.926756 | +0.131804 | +16.58% |
+| iso-token 8B | 0.720246 | 0.894756 | +0.174510 | +24.23% |
+| K=0.20 iso-FLOP | 0.561143 | 0.824991 | +0.263848 | +47.02% |
+
+1e22 Chinchilla fit errors when fitting through `3e20`:
+
+| target | iso-token 2B | iso-token 4B | iso-token 8B | K=0.20 iso-FLOP |
+|---|---:|---:|---:|---:|
+| old 4plus | -3.59% | -3.72% | -3.06% | +18.56% |
+| clean-seen | -2.31% | -2.74% | -2.82% | +2.83% |
+
+The new HTML only exposes the two intended targets: `old_4plus_loss` and `clean_seen_loss`. It does not contain
+`eval_loss`, `macro_loss`, old eval, or old macro labels.
+
+Verified with:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with gcsfs \
+  python scripts/analysis/delphi_isotoken_clean_seen_unified_report.py
+python -m py_compile scripts/analysis/delphi_isotoken_clean_seen_unified_report.py
+./infra/pre-commit.py --changed-files --fix
+```
+
+## 2026-06-21 - Unified iso-token old-vs-clean validation report
+
+Starting a unified report that extends the K=0.20 old-vs-clean comparison with the corrected 1e22 iso-token
+clean-seen evals for p33m67/lr0.50 at 2B, 4B, and 8B tokens.
+
+Inputs:
+
+- Existing iso-token artifacts in `sk_midtrain_analysis_fable/`, especially `delphi_isotoken_all_budgets_vs_isoflop.png`
+  and the cached old-val endpoint CSVs.
+- New clean-seen iso-token summary:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_isotoken_p33m67_lr50/summary_p33m67_isotoken_clean_seen_1e22.csv`
+- Per-run clean-seen eval result files for 1e22 tok2b/tok4b/tok8b, if the summary needs validation.
+
+Caveat from the eval handoff: ignore the current 1B row in the clean-seen iso-token summary until the corrected
+a008/step-237 eval is rerun.
+
+Planned artifact:
+
+- `sk_midtrain_analysis_fable/delphi_isotoken_clean_seen_unified_report.html`
+
+## 2026-06-21 - K=0.20 old-vs-clean validation comparison outcome
+
+Implemented `scripts/analysis/delphi_k020_old_vs_clean_val_report.py`.
+
+Command:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with gcsfs \
+  python scripts/analysis/delphi_k020_old_vs_clean_val_report.py
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report.html`
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report_best_by_target.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report_1e22_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report_cached_old_val_check.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report_fit.json`
+
+Best comparable scale/LR fit by target, excluding anchor-calibration fits so targets are compared under the same
+model family set:
+
+| target | best model | heldout MAE | 1e22 MAE | 1e22 lr0.50 error | 1e22 lr0.67 error |
+|---|---|---:|---:|---:|---:|
+| old macro math val | per-LR log-log: `N` | 1.15% | 0.68% | +0.76% | +0.82% |
+| new clean-seen loss | pooled Chinchilla + LR quadratic: `N + D_pre` | 1.44% | 2.11% | +2.47% | +1.33% |
+| old eval/loss aggregate | pooled Chinchilla + LR quadratic: `D_math` | 6.49% | 11.73% | +12.66% | +10.45% |
+| old 4plus math val | pooled Chinchilla + LR quadratic: `D_pre` | 7.05% | 12.94% | +13.91% | +11.64% |
+
+The same-sweep old 4plus anchors match the older cached `math_val_loss` values closely where cells overlap:
+about +0.01% to +0.03%, including +0.016% at 1e21/lr0.50 and +0.022% at 1e22/lr0.50. This makes a cache/key
+mismatch unlikely. The result is more specific than "all old validation was bad": the old 4plus target and old
+eval/loss aggregate extrapolate badly, while the macro aggregate and clean-seen target extrapolate well.
+
+Verified with `./infra/pre-commit.py --changed-files --fix`.
+
+Follow-up: reframed the HTML around the two primary targets only:
+
+- old 4plus math val = `anchor_4plus_loss`, the earlier K=0.20 math validation target
+- new clean-seen loss = `clean_seen_loss`
+
+The `eval_loss` and `macro_loss` targets remain in collapsed auxiliary diagnostics because they are useful sanity
+checks from the same eval jobs, but they are not the main old-vs-clean comparison. Regenerated and reopened
+`sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report.html`; checks still pass.
+
+Follow-up: removed the auxiliary diagnostics from the HTML entirely. The loss plot, target table, fit explorer,
+and visible report tables now show only `anchor_4plus_loss` versus `clean_seen_loss`. The full diagnostic CSVs are
+still written by the script, but the HTML no longer contains `eval_loss`, `macro_loss`, old eval/loss, or old macro
+labels. Regenerated and reopened the report; checks still pass.
+
+## 2026-06-21 - K=0.20 old-vs-clean validation comparison
+
+Starting a comparison report for the K=0.20 p33m67 ladder that runs the same fit family against the old validation
+losses and the new decontaminated clean-seen losses.
+
+Inputs:
+
+- New clean-seen CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_p33m67_clean_seen_1e22_k020.csv`
+- Old validation source: to be recovered from local analysis files/logbooks.
+
+Planned artifact:
+
+- `sk_midtrain_analysis_fable/delphi_k020_old_vs_clean_val_fit_report.html`
+
+Follow-up: made report tables client-side sortable. The `All 1e22 endpoint predictions` table now includes both
+signed error and absolute error, defaults to sorting by absolute error ascending, and every column header can be
+clicked to sort numerically or lexicographically. Regenerated both combined and iso-token-only HTML/CSV artifacts.
+
+## 2026-06-21 - K=0.20 clean-seen fit-family report
+
+Starting a K=0.20-only fit-family report based on the new p33m67 clean-seen eval sweep:
+
+- Input CSV:
+  `gs://marin-us-east5/scratch/ahmed/midtrain_dedup/decon_val_sets/evals_clean_seen_1e22_k020/summary_p33m67_clean_seen_1e22_k020.csv`
+- Input rows: 36 = 9 scales x 4 LR factors.
+- Target metric: `clean_seen_loss`.
+- Holdout split: fit through `3e20`, score `1e21` and `1e22`.
+- Primary reporting: explicit 1e22 prediction/error columns by LR.
+
+Implemented `scripts/analysis/delphi_k020_clean_seen_fit_family_report.py`.
+
+Command:
+
+```bash
+uv run --with scipy --with plotly --with pandas --with gcsfs \
+  python scripts/analysis/delphi_k020_clean_seen_fit_family_report.py
+```
+
+Artifacts:
+
+- `sk_midtrain_analysis_fable/delphi_k020_clean_seen_fit_family_report.html`
+- `sk_midtrain_analysis_fable/delphi_k020_clean_seen_fit_family_report_summary.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_clean_seen_fit_family_report_1e22_predictions.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_clean_seen_fit_family_report_fit_table.csv`
+- `sk_midtrain_analysis_fable/delphi_k020_clean_seen_fit_family_report_fit.json`
+
+Headline result: the best heldout model is the pooled Chinchilla fit with LR quadratic terms over `N + D_pre`.
+It reaches 1.44% heldout MAE across the heldout `1e21` and `1e22` rows. On the explicit `1e22` rows, its
+absolute errors are:
+
+| LR factor | actual clean-seen loss | prediction | error |
+|---|---:|---:|---:|
+| 0.33 | 0.83148 | 0.86392 | +3.90% |
+| 0.50 | 0.82499 | 0.84541 | +2.47% |
+| 0.67 | 0.82340 | 0.83438 | +1.33% |
+| 0.83 | 0.82477 | 0.83084 | +0.74% |
+
+The per-LR Chinchilla fits over `C_pre` or `C_mid_math` are close by heldout MAE (1.70%) but are uniformly high
+on the 1e22 rows by about 2.55% to 3.13%. The report includes sortable summary and 1e22 prediction tables,
+plus dropdown-selectable Plotly views for every successful fit mode.
+
+Verified with `./infra/pre-commit.py --changed-files --fix`.

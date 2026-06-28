@@ -20,6 +20,12 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from delphi_small_final_loss_scaling import (
+    MATH_FRACTION,
+    MIDTRAIN_BUDGET_FRACTION,
+    SCALE_PARAMS_B,
+    SCALE_PRETRAIN_TOKENS_B,
+)
 from scipy.optimize import curve_fit
 
 OUT_DIR = Path("midtrain_analysis_outputs/small_final_loss_scaling")
@@ -107,6 +113,22 @@ def floor_power_model(x: np.ndarray, floor: float, amplitude: float, alpha: floa
     return floor + amplitude * np.power(x, -alpha)
 
 
+def parameter_data_chinchilla_model(
+    features: tuple[np.ndarray, np.ndarray],
+    floor: float,
+    params_amplitude: float,
+    params_exponent: float,
+    data_amplitude: float,
+    data_exponent: float,
+) -> np.ndarray:
+    params_b, data_b = features
+    return (
+        floor
+        + params_amplitude * np.power(params_b, -params_exponent)
+        + data_amplitude * np.power(data_b, -data_exponent)
+    )
+
+
 def fit_floor_power(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
     if xs.size < 3:
         return None
@@ -140,6 +162,37 @@ def fit_floor_power(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
     }
 
 
+def fit_parameter_data_chinchilla(params_b: np.ndarray, data_b: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
+    if ys.size < 5:
+        return None
+    floor0 = float(min(ys)) * 0.35
+    spread = max(float(max(ys)) - floor0, 1e-3)
+    try:
+        fitted, _ = curve_fit(
+            parameter_data_chinchilla_model,
+            (params_b, data_b),
+            ys,
+            p0=(floor0, spread * 0.5, 0.1, spread * 0.5, 0.1),
+            bounds=([0.0, 0.0, 0.0, 0.0, 0.0], [float(min(ys)) * 0.999, np.inf, 5.0, np.inf, 5.0]),
+            maxfev=100_000,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    predicted = parameter_data_chinchilla_model((params_b, data_b), *fitted)
+    ss_res = float(np.sum((ys - predicted) ** 2))
+    ss_tot = float(np.sum((ys - ys.mean()) ** 2))
+    return {
+        "floor": float(fitted[0]),
+        "params_amplitude": float(fitted[1]),
+        "params_exponent": float(fitted[2]),
+        "data_amplitude": float(fitted[3]),
+        "data_exponent": float(fitted[4]),
+        "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else None,
+        "rmse": math.sqrt(ss_res / ys.size),
+        "n": int(ys.size),
+    }
+
+
 def fit_log_linear(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
     if xs.size < 2:
         return None
@@ -161,13 +214,37 @@ def fit_log_linear(xs: np.ndarray, ys: np.ndarray) -> dict[str, float] | None:
     }
 
 
+def attach_endpoint_scaling_features(frame: pd.DataFrame) -> pd.DataFrame:
+    enriched = frame.copy()
+    enriched["params_b"] = enriched["scale"].map(SCALE_PARAMS_B).astype(float)
+    enriched["pretrain_tokens_b"] = enriched["scale"].map(SCALE_PRETRAIN_TOKENS_B).astype(float)
+    enriched["math_fraction"] = enriched["mix"].map(MATH_FRACTION).astype(float)
+    enriched["midtrain_tokens_b"] = enriched["pretrain_tokens_b"] * MIDTRAIN_BUDGET_FRACTION
+    enriched["dmath_b"] = enriched["midtrain_tokens_b"] * enriched["math_fraction"]
+    return enriched
+
+
 def endpoint_scaling_data() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, Any]]]:
     """Load endpoints + held-out targets and fit per-(mix, LR) scaling laws at each cutoff."""
-    endpoint_columns = ["run_id", "run_name", "scale", "scale_flops", "mix", "lr", "value"]
+    endpoint_columns = [
+        "run_id",
+        "run_name",
+        "scale",
+        "scale_flops",
+        "params_b",
+        "pretrain_tokens_b",
+        "midtrain_tokens_b",
+        "math_fraction",
+        "dmath_b",
+        "mix",
+        "lr",
+        "value",
+    ]
     if ENDPOINTS_PATH.exists():
         endpoints = pd.read_csv(ENDPOINTS_PATH, dtype={"scale": str, "lr": str})
         endpoints = endpoints[endpoints["metric_label"].eq(METRIC_LABEL) & endpoints["complete"].astype(bool)].copy()
         endpoints["scale_flops"] = endpoints["scale_flops"].astype(float)
+        endpoints = attach_endpoint_scaling_features(endpoints)
         endpoints = endpoints[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
     else:
         endpoints = pd.DataFrame(columns=endpoint_columns)
@@ -175,6 +252,7 @@ def endpoint_scaling_data() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, 
         targets = pd.read_csv(EXTRAPOLATION_TARGETS_PATH, dtype={"scale": str, "lr": str})
         targets = targets[targets["metric_label"].eq(METRIC_LABEL) & targets["complete"].astype(bool)].copy()
         targets["scale_flops"] = targets["scale_flops"].astype(float)
+        targets = attach_endpoint_scaling_features(targets)
         targets = targets[endpoint_columns].sort_values(["scale_flops", "mix", "lr"])
     else:
         targets = pd.DataFrame(columns=endpoint_columns)
@@ -204,29 +282,33 @@ def endpoint_scaling_data() -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, 
                 included = group[mask]
                 if included.empty:
                     continue
-                xs = included["scale_flops"].to_numpy(dtype=float)
+                flops = included["scale_flops"].to_numpy(dtype=float)
+                params_b = included["params_b"].to_numpy(dtype=float)
+                dmath_b = included["dmath_b"].to_numpy(dtype=float)
                 ys = included["value"].to_numpy(dtype=float)
                 row: dict[str, Any] = {
                     "mix": mix,
                     "lr": str(lr),
                     "cutoff_index": cutoff_index,
                     "cutoff_scale": cutoff_scale,
-                    "n": int(xs.size),
+                    "n": int(ys.size),
                     "min_scale": str(included["scale"].iloc[0]),
                     "max_scale": str(included["scale"].iloc[-1]),
                 }
-                fp = fit_floor_power(xs, ys)
-                if fp:
+                pd_fit = fit_parameter_data_chinchilla(params_b, dmath_b, ys)
+                if pd_fit:
                     row.update(
                         {
-                            "fp_floor": fp["floor"],
-                            "fp_amplitude": fp["amplitude"],
-                            "fp_alpha": fp["alpha"],
-                            "fp_r2": fp["r2"],
-                            "fp_rmse": fp["rmse"],
+                            "pd_floor": pd_fit["floor"],
+                            "pd_params_amplitude": pd_fit["params_amplitude"],
+                            "pd_params_exponent": pd_fit["params_exponent"],
+                            "pd_data_amplitude": pd_fit["data_amplitude"],
+                            "pd_data_exponent": pd_fit["data_exponent"],
+                            "pd_r2": pd_fit["r2"],
+                            "pd_rmse": pd_fit["rmse"],
                         }
                     )
-                ll = fit_log_linear(xs, ys)
+                ll = fit_log_linear(flops, ys)
                 if ll:
                     row.update(
                         {
@@ -355,6 +437,10 @@ def payload(points_path: Path, predictions_path: Path) -> dict[str, Any]:
         "smallLadderScales": list(SMALL_LADDER_SCALES),
         "heldOutScales": list(HELD_OUT_SCALES),
         "cutoffScales": list(CUTOFF_SCALES),
+        "scaleParamsB": SCALE_PARAMS_B,
+        "scalePretrainTokensB": SCALE_PRETRAIN_TOKENS_B,
+        "midtrainBudgetFraction": MIDTRAIN_BUDGET_FRACTION,
+        "mathFraction": MATH_FRACTION,
         "mixOrder": list(MIX_ORDER),
         "lrOrder": list(LR_ORDER),
         "methodOrder": list(METHOD_ORDER),
@@ -617,21 +703,17 @@ HTML_TEMPLATE = r"""<!doctype html>
     </section>
 
     <section>
-      <h2>Endpoint Scaling Law (Compute Vs Final Loss)</h2>
+      <h2>Endpoint Chinchilla Scaling Law (Parameters And Data)</h2>
       <p>
-        Chinchilla-style 3-parameter fit: \(L_\infty(C) = E + A\,(C/10^{18})^{-\alpha}\), where \(E\) is the
-        irreducible-loss floor, \(C\) is base-model FLOPs, and \(L_\infty\) is final
-        \(\texttt{math\_val\_loss}\). Fit per \((\textrm{mix}, \textrm{LR})\) on the small ladder
-        (3e18 → 3e20) by \(\texttt{scipy.optimize.curve\_fit}\) with \(E < \min y\), \(A,\alpha \ge 0\).
-        The 1e21 and 1e22 cells are never used by the fit; their actuals are plotted as triangles for the
-        extrapolation check. The two-parameter log-log fit \(\log L = a + b\,\log C\) is available as a
-        toggle for comparison — it lacks the asymptote so it under-predicts loss at very large compute.
+        Chinchilla-style parameter/data fit:
+        \(L_\infty(N,D_\mathrm{math}) = E + A\,N^{-\alpha} + B\,D_\mathrm{math}^{-\beta}\).
+        \(N\) is trainable parameters in billions and \(D_\mathrm{math}\) is math midtraining tokens in
+        billions: pretraining tokens times the \(K=0.20\) midtraining budget times the selected mixture's math
+        fraction. Fit per \((\textrm{mix}, \textrm{LR})\) on the small ladder (3e18 → 3e20) by
+        \(\texttt{scipy.optimize.curve\_fit}\) with \(E < \min y\), nonnegative amplitudes, and nonnegative
+        exponents. The 1e21 and 1e22 cells are plotted as triangles for the extrapolation check.
       </p>
       <div class="target-controls">
-        <label>fit type <select id="scalingFitType">
-          <option value="floor_power" selected>floor + power (Chinchilla)</option>
-          <option value="log_linear">log-log linear (2-param)</option>
-        </select></label>
         <label>mix <select id="scalingMix"></select></label>
         <div>
           <div class="note">learning rates</div>
@@ -643,7 +725,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         </label>
       </div>
       <p class="note">
-        Slider sets the upper compute bound used to fit. Drop it to 2e20 to see how the held-out predictions
+        Slider sets the upper scale included in the fit. Drop it to 2e20 to see how the held-out predictions
         degrade when the largest small-ladder cell is unavailable; drop further to see the fit collapse as
         the lever shrinks. Open circles mark training cells dropped by the current cutoff.
       </p>
@@ -768,6 +850,9 @@ HTML_TEMPLATE = r"""<!doctype html>
     const scalingFits = DATA.scalingFits || [];
     const colors = {"33": "#4C78A8", "50": "#F58518", "67": "#54A24B", "83": "#E45756"};
     const scaleFlops = {"3e18": 3e18, "9e18": 9e18, "2e19": 2e19, "3e19": 3e19, "9e19": 9e19, "2e20": 2e20, "3e20": 3e20, "1e21": 1e21, "1e22": 1e22};
+    const scalePretrainTokensB = DATA.scalePretrainTokensB || {};
+    const midtrainBudgetFraction = Number(DATA.midtrainBudgetFraction || 0.2);
+    const mathFraction = DATA.mathFraction || {};
 
     function methodLabel(method) {
       return methodLabels[method] || method;
@@ -1146,25 +1231,43 @@ HTML_TEMPLATE = r"""<!doctype html>
         && Number(row.cutoff_index) === Number(cutoffIndex));
     }
 
-    function activeFitOk(fit, fitType) {
+    function activeFitOk(fit) {
       if (!fit) {
         return false;
       }
-      if (fitType === "floor_power") {
-        return fit.fp_floor != null && fit.fp_amplitude != null && fit.fp_alpha != null;
-      }
-      return fit.ll_slope != null && fit.ll_intercept != null;
+      return fit.pd_floor != null
+        && fit.pd_params_amplitude != null
+        && fit.pd_params_exponent != null
+        && fit.pd_data_amplitude != null
+        && fit.pd_data_exponent != null;
     }
 
-    function predictScaling(fit, fitType, flops) {
-      if (!activeFitOk(fit, fitType)) {
+    function predictScaling(fit, row) {
+      if (!activeFitOk(fit)) {
         return null;
       }
-      if (fitType === "floor_power") {
-        const xn = flops / 1e18;
-        return Number(fit.fp_floor) + Number(fit.fp_amplitude) * Math.pow(xn, -Number(fit.fp_alpha));
-      }
-      return Math.exp(Number(fit.ll_intercept) + Number(fit.ll_slope) * Math.log(flops));
+      const paramsB = Number(row.params_b);
+      const dataB = Number(row.dmath_b);
+      return Number(fit.pd_floor)
+        + Number(fit.pd_params_amplitude) * Math.pow(paramsB, -Number(fit.pd_params_exponent))
+        + Number(fit.pd_data_amplitude) * Math.pow(dataB, -Number(fit.pd_data_exponent));
+    }
+
+    function scalingX(row) {
+      return Number(row.dmath_b);
+    }
+
+    function cutoffDataTokens(mix, scale) {
+      return Number(scalePretrainTokensB[scale]) * midtrainBudgetFraction * Number(mathFraction[mix]);
+    }
+
+    function scalingHover(row, suffix = "") {
+      return `${row.scale}${suffix}<br>${row.run_name}`
+        + `<br>N=${Number(row.params_b).toFixed(3)}B params`
+        + `<br>D_math=${Number(row.dmath_b).toFixed(3)}B`
+        + `<br>D_mid=${Number(row.midtrain_tokens_b).toFixed(3)}B`
+        + `<br>math fraction=${Number(row.math_fraction).toFixed(2)}`
+        + `<br>FLOPs=${Number(row.scale_flops).toExponential(2)}`;
     }
 
     function selectedScalingLrs() {
@@ -1189,7 +1292,6 @@ HTML_TEMPLATE = r"""<!doctype html>
       const cutoffIndex = Number(document.getElementById("scalingCutoff").value);
       const cutoffScale = cutoffScales[cutoffIndex];
       const cutoffFlops = scaleFlops[cutoffScale];
-      const fitType = document.getElementById("scalingFitType").value;
       document.getElementById("scalingCutoffValue").textContent = cutoffScale;
 
       const filteredEndpoints = endpoints.filter(
@@ -1238,9 +1340,6 @@ HTML_TEMPLATE = r"""<!doctype html>
       const fitTableRows = [];
       const predTableRows = [];
 
-      const minFlop = Math.min(...smallLadderScales.map((scale) => scaleFlops[scale]));
-      const maxFlop = scaleFlops[heldOutScales[heldOutScales.length - 1]];
-
       for (const key of recipeKeys) {
         const recipe = recipes.get(key);
         const color = scalingPalette(recipe.mix, recipe.lr);
@@ -1248,20 +1347,20 @@ HTML_TEMPLATE = r"""<!doctype html>
 
         if (recipe.trainRows.length) {
           traces.push({
-            x: recipe.trainRows.map((row) => row.scale_flops),
+            x: recipe.trainRows.map((row) => scalingX(row)),
             y: recipe.trainRows.map((row) => row.value),
             mode: "markers",
             type: "scatter",
             name: `${labelBase} train`,
             legendgroup: labelBase,
             marker: {symbol: "circle", size: 9, color},
-            hovertext: recipe.trainRows.map((row) => `${row.scale} ${row.run_name}`),
-            hovertemplate: "%{hovertext}<br>flops=%{x:.3e}<br>loss=%{y:.5f}<extra></extra>",
+            hovertext: recipe.trainRows.map((row) => scalingHover(row)),
+            hovertemplate: "%{hovertext}<br>loss=%{y:.5f}<extra></extra>",
           });
         }
         if (recipe.dropRows.length) {
           traces.push({
-            x: recipe.dropRows.map((row) => row.scale_flops),
+            x: recipe.dropRows.map((row) => scalingX(row)),
             y: recipe.dropRows.map((row) => row.value),
             mode: "markers",
             type: "scatter",
@@ -1269,26 +1368,18 @@ HTML_TEMPLATE = r"""<!doctype html>
             legendgroup: labelBase,
             showlegend: false,
             marker: {symbol: "circle-open", size: 10, color, line: {width: 2, color}},
-            hovertext: recipe.dropRows.map((row) => `${row.scale} (excluded by cutoff)<br>${row.run_name}`),
-            hovertemplate: "%{hovertext}<br>flops=%{x:.3e}<br>loss=%{y:.5f}<extra></extra>",
+            hovertext: recipe.dropRows.map((row) => scalingHover(row, " (excluded by cutoff)")),
+            hovertemplate: "%{hovertext}<br>loss=%{y:.5f}<extra></extra>",
           });
         }
 
         const fit = lookupScalingFit(recipe.mix, recipe.lr, cutoffIndex);
-        if (activeFitOk(fit, fitType)) {
-          const lineX = [];
-          const lineY = [];
-          const logLo = Math.log10(minFlop);
-          const logHi = Math.log10(maxFlop);
-          for (let index = 0; index <= 60; index += 1) {
-            const lf = logLo + ((logHi - logLo) * index) / 60;
-            const flops = Math.pow(10, lf);
-            lineX.push(flops);
-            lineY.push(predictScaling(fit, fitType, flops));
-          }
+        if (activeFitOk(fit)) {
+          const lineRows = [...recipe.trainRows, ...recipe.dropRows, ...recipe.heldRows]
+            .sort((left, right) => scalingX(left) - scalingX(right));
           traces.push({
-            x: lineX,
-            y: lineY,
+            x: lineRows.map((row) => scalingX(row)),
+            y: lineRows.map((row) => predictScaling(fit, row)),
             mode: "lines",
             type: "scatter",
             name: `${labelBase} fit`,
@@ -1297,33 +1388,23 @@ HTML_TEMPLATE = r"""<!doctype html>
             line: {color, dash: "dot", width: 2},
             hoverinfo: "skip",
           });
-          if (fitType === "floor_power") {
-            fitTableRows.push({
-              recipe: labelBase,
-              n: fit.n,
-              p1: Number(fit.fp_floor),
-              p2: Number(fit.fp_amplitude),
-              p3: Number(fit.fp_alpha),
-              r2: fit.fp_r2 == null ? null : Number(fit.fp_r2),
-              rmse: fit.fp_rmse == null ? null : Number(fit.fp_rmse),
-            });
-          } else {
-            fitTableRows.push({
-              recipe: labelBase,
-              n: fit.n,
-              p1: Number(fit.ll_slope),
-              p2: Number(fit.ll_intercept),
-              p3: null,
-              r2: fit.ll_r2 == null ? null : Number(fit.ll_r2),
-              rmse: fit.ll_rmse_log == null ? null : Number(fit.ll_rmse_log),
-            });
-          }
+          fitTableRows.push({
+            recipe: labelBase,
+            n: fit.n,
+            floor: Number(fit.pd_floor),
+            paramsAmplitude: Number(fit.pd_params_amplitude),
+            paramsExponent: Number(fit.pd_params_exponent),
+            dataAmplitude: Number(fit.pd_data_amplitude),
+            dataExponent: Number(fit.pd_data_exponent),
+            r2: fit.pd_r2 == null ? null : Number(fit.pd_r2),
+            rmse: fit.pd_rmse == null ? null : Number(fit.pd_rmse),
+          });
         }
 
         const heldRows = recipe.heldRows;
         if (heldRows.length) {
           traces.push({
-            x: heldRows.map((row) => row.scale_flops),
+            x: heldRows.map((row) => scalingX(row)),
             y: heldRows.map((row) => row.value),
             mode: "markers",
             type: "scatter",
@@ -1331,15 +1412,15 @@ HTML_TEMPLATE = r"""<!doctype html>
             legendgroup: labelBase,
             showlegend: false,
             marker: {symbol: "triangle-up", size: 13, color, line: {color: "#111", width: 1}},
-            hovertext: heldRows.map((row) => `${row.scale} held-out actual<br>${row.run_name}`),
-            hovertemplate: "%{hovertext}<br>flops=%{x:.3e}<br>actual=%{y:.5f}<extra></extra>",
+            hovertext: heldRows.map((row) => scalingHover(row, " held-out actual")),
+            hovertemplate: "%{hovertext}<br>actual=%{y:.5f}<extra></extra>",
           });
         }
-        if (activeFitOk(fit, fitType)) {
+        if (activeFitOk(fit)) {
           for (const row of heldRows) {
-            const predicted = predictScaling(fit, fitType, Number(row.scale_flops));
+            const predicted = predictScaling(fit, row);
             traces.push({
-              x: [row.scale_flops],
+              x: [scalingX(row)],
               y: [predicted],
               mode: "markers",
               type: "scatter",
@@ -1347,8 +1428,8 @@ HTML_TEMPLATE = r"""<!doctype html>
               legendgroup: labelBase,
               showlegend: false,
               marker: {symbol: "x", size: 12, color, line: {width: 2}},
-              hovertext: [`${row.scale} predicted (cutoff ${cutoffScale})<br>${labelBase}`],
-              hovertemplate: "%{hovertext}<br>flops=%{x:.3e}<br>predicted=%{y:.5f}<extra></extra>",
+              hovertext: [`${scalingHover(row, ` predicted (cutoff ${cutoffScale})`)}<br>${labelBase}`],
+              hovertemplate: "%{hovertext}<br>predicted=%{y:.5f}<extra></extra>",
             });
             const actual = Number(row.value);
             const error = predicted - actual;
@@ -1356,6 +1437,8 @@ HTML_TEMPLATE = r"""<!doctype html>
             predTableRows.push({
               recipe: labelBase,
               scale: row.scale,
+              paramsB: Number(row.params_b),
+              dataB: Number(row.dmath_b),
               actual,
               predicted,
               error,
@@ -1367,11 +1450,25 @@ HTML_TEMPLATE = r"""<!doctype html>
         }
       }
 
+      const cutoffShapes = [...new Set(recipeKeys.map((key) => recipes.get(key).mix))]
+        .map((activeMix) => cutoffDataTokens(activeMix, cutoffScale))
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .map((xValue) => ({
+          type: "line",
+          xref: "x",
+          yref: "paper",
+          x0: xValue,
+          x1: xValue,
+          y0: 0,
+          y1: 1,
+          line: {color: "#94a3b8", dash: "dash", width: 1},
+        }));
+
       const layout = {
         height: 620,
         margin: {l: 80, r: 20, t: 30, b: 60},
         xaxis: {
-          title: "training compute (FLOPs, log scale)",
+          title: "math midtraining tokens D_math (billions, log scale)",
           type: "log",
           showgrid: true,
         },
@@ -1381,18 +1478,9 @@ HTML_TEMPLATE = r"""<!doctype html>
           showgrid: true,
         },
         legend: {orientation: "v"},
-        shapes: [{
-          type: "line",
-          xref: "x",
-          yref: "paper",
-          x0: cutoffFlops,
-          x1: cutoffFlops,
-          y0: 0,
-          y1: 1,
-          line: {color: "#94a3b8", dash: "dash", width: 1},
-        }],
+        shapes: cutoffShapes,
         annotations: [{
-          x: Math.log10(cutoffFlops),
+          x: cutoffShapes.length ? cutoffShapes[0].x0 : 1,
           xref: "x",
           y: 1.04,
           yref: "paper",
@@ -1403,27 +1491,22 @@ HTML_TEMPLATE = r"""<!doctype html>
       };
       Plotly.react("scalingPlot", traces, layout, {responsive: true});
 
-      const fitColumns = fitType === "floor_power"
-        ? [
-          {key: "recipe", label: "recipe"},
-          {key: "n", label: "n"},
-          {key: "p1", label: "floor E", format: (value) => value.toFixed(4)},
-          {key: "p2", label: "amplitude A", format: (value) => value.toFixed(4)},
-          {key: "p3", label: "alpha", format: (value) => value.toFixed(4)},
-          {key: "r2", label: "R^2", format: (value) => value == null ? "—" : value.toFixed(4)},
-          {key: "rmse", label: "RMSE", format: (value) => value == null ? "—" : value.toFixed(4)},
-        ]
-        : [
-          {key: "recipe", label: "recipe"},
-          {key: "n", label: "n"},
-          {key: "p1", label: "slope b", format: (value) => value.toFixed(4)},
-          {key: "p2", label: "intercept", format: (value) => value.toFixed(4)},
-          {key: "r2", label: "R^2", format: (value) => value == null ? "—" : value.toFixed(4)},
-          {key: "rmse", label: "RMSE (log)", format: (value) => value == null ? "—" : value.toFixed(4)},
-        ];
+      const fitColumns = [
+        {key: "recipe", label: "recipe"},
+        {key: "n", label: "n"},
+        {key: "floor", label: "floor E", format: (value) => value.toFixed(4)},
+        {key: "paramsAmplitude", label: "A_N", format: (value) => value.toFixed(4)},
+        {key: "paramsExponent", label: "alpha_N", format: (value) => value.toFixed(4)},
+        {key: "dataAmplitude", label: "B_D", format: (value) => value.toFixed(4)},
+        {key: "dataExponent", label: "beta_D", format: (value) => value.toFixed(4)},
+        {key: "r2", label: "R^2", format: (value) => value == null ? "—" : value.toFixed(4)},
+        {key: "rmse", label: "RMSE", format: (value) => value == null ? "—" : value.toFixed(4)},
+      ];
       const predColumns = [
         {key: "recipe", label: "recipe"},
         {key: "scale", label: "scale"},
+        {key: "paramsB", label: "N (B)", format: (value) => value.toFixed(3)},
+        {key: "dataB", label: "D_math (B)", format: (value) => value.toFixed(3)},
         {key: "actual", label: "actual", format: (value) => value.toFixed(5)},
         {key: "predicted", label: "predicted", format: (value) => value.toFixed(5)},
         {key: "error", label: "error", format: (value) => value.toFixed(5)},
