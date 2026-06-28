@@ -7,11 +7,10 @@ Like ``train_tiny_sweep_tpu``, but on the DCLM mixture with held-out validation 
 CORE eval harness wired in, and selecting on a held-out loss instead of the train loss:
 
 - the DCLM training components and the Paloma + Uncheatable validation sets are
-  :class:`~marin.execution.lazy.Dataset` handles, tokenized once and shared by every
+  :class:`~marin.execution.artifact.Dataset` handles, tokenized once and shared by every
   trial;
 - :func:`~marin.experiment.sweep.sweep` fans out one
-  :func:`~marin.experiment.train.train_lm` trial per grid point, wrapped with
-  :func:`~marin.experiment.sweep.annotate` so the sweep can read each trial's score;
+  :func:`~marin.experiment.train.train_lm` trial per grid point;
 - each trial dispatches its own TPU training job, which records its validation loss next
   to its checkpoints;
 - :func:`~marin.experiment.sweep.select` reads each trial's recorded ``eval/loss`` (the
@@ -25,11 +24,10 @@ Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional
 
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.artifact import Artifact as ArtifactIO
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower, resolve
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture
-from marin.experiment.sweep import AnnotatedCheckpoint, annotate, select, sweep
+from marin.experiment.sweep import Selection, select, sweep
 from marin.experiment.train import train_lm
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -53,22 +51,21 @@ _validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_vali
 _weighted = {_train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in _train}
 
 
-def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> AnnotatedCheckpoint:
+def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> Lazy[Checkpoint]:
     """One sweep trial: a 30M llama trained on the DCLM mixture, ready to select over.
 
     The swept hyperparameters are literals in the optimizer, so each grid point gets a
     distinct ``name@version`` and fingerprint; the TPU is a run-arg, excluded from
-    identity. :func:`~marin.experiment.sweep.annotate` pairs the checkpoint with the
-    default reader for ``train_lm`` metrics, so :func:`select` can rank it by
-    ``SELECTION_METRIC``.
+    identity. :func:`select` reads the checkpoint's recorded ``train_lm`` metrics and
+    ranks it by ``SELECTION_METRIC``.
     """
-    checkpoint = train_lm(
+    return train_lm(
         name=f"checkpoints/tutorial-dclm-30m-sweep/lr{learning_rate}-wd{weight_decay}",
         version=version,
         model=llama_30m,
         optimizer=AdamConfig(learning_rate=learning_rate, weight_decay=weight_decay),
-        data=lambda ctx: mixture(ctx, _weighted, validation=_validation),
-        deps=(*_weighted, *_validation),
+        datasets=_weighted,
+        validation=_validation,
         batch_size=128,
         seq_len=llama_30m.max_seq_len,
         num_train_steps=10000,
@@ -77,10 +74,9 @@ def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> 
         resources=RESOURCES,
         tags=["llama", "30m", "dclm", "tutorial", "sweep", "test20251117"],
     )
-    return annotate(checkpoint)
 
 
-def best_trial(*, version: str = "v1") -> Checkpoint:
+def best_trial(*, version: str = "v1") -> Lazy[Selection]:
     """The full LR/WD sweep, reduced to its lowest validation-loss trial."""
     trials = sweep(
         trial,
@@ -96,5 +92,5 @@ if __name__ == "__main__":
     best = best_trial()
     StepRunner().run([lower(best)])
 
-    selection = ArtifactIO.from_path(best.path())
-    print(f"best trial: {selection['winner']} ({SELECTION_METRIC}={selection['score']:.4f})")
+    selection = resolve(best)
+    print(f"best trial: {selection.winner} ({SELECTION_METRIC}={selection.score:.4f})")

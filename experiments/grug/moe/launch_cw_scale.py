@@ -50,7 +50,8 @@ from levanter.data.text import BlockShuffleConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 
@@ -123,7 +124,7 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def build_scale_checkpoint(*, version: str = "v1") -> Checkpoint:
+def build_scale_checkpoint(*, version: str = "v1") -> Lazy[Checkpoint]:
     """Assemble the CoreWeave scale run as a lazy :class:`Checkpoint` from SCALE_* env."""
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
@@ -212,7 +213,7 @@ def build_scale_checkpoint(*, version: str = "v1") -> Checkpoint:
             checkpointer=checkpointer,
         )
 
-    return Checkpoint(
+    return Lazy(
         name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         version=version,
         recipe=Recipe(
@@ -221,6 +222,7 @@ def build_scale_checkpoint(*, version: str = "v1") -> Checkpoint:
             deps=(slim,),
             run_args={"train_resources": resources},
         ),
+        result_type=Checkpoint,
     )
 
 

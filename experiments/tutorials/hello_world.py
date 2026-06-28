@@ -8,7 +8,7 @@ Steps:
 2. Read the file and compute summary statistics (sum, min, max).
 
 This is the simplest illustration of the Marin lazy-artifact pattern: each step is an
-:class:`~marin.execution.lazy.Artifact` built by :func:`~marin.experiment.data.derived`.
+:class:`~marin.execution.artifact.Artifact` built by :func:`~marin.execution.lazy.derived`.
 Its ``build_config`` receives a :class:`~marin.execution.lazy.RunContext` that resolves
 output paths at run time. :func:`~marin.execution.step_runner.StepRunner` executes the
 dependency graph in topological order — the data step runs first, then the stats step.
@@ -19,9 +19,9 @@ import logging
 import os
 from dataclasses import dataclass
 
-from marin.execution.lazy import Artifact, lower
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import Lazy, derived, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import derived
 from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ _stats = derived(
 )
 
 
-def build() -> Artifact:
+def build() -> Lazy[Artifact]:
     """The stats computation as a lazy artifact, with its data dependency declared."""
     return _stats
 

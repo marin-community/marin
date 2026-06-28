@@ -11,7 +11,8 @@ experiment that chooses them.
 """
 
 from marin.datakit.download.dolma import DOLMA_DATASETS
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -58,7 +59,7 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One :class:`Dataset` handle per Dolma 1.7 split, keyed by ``dolma/<split>``."""
     return {
         f"dolma/{dataset}": tokenized(

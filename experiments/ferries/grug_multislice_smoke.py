@@ -25,7 +25,8 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 
@@ -89,7 +90,7 @@ def multislice_smoke_resources() -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu_type, slice_count=slice_count, regions=[region])
 
 
-def build() -> Checkpoint:
+def build() -> Lazy[Checkpoint]:
     """The Grug multislice smoke run as a lazy checkpoint, configured from the env.
 
     The Nemotron mix and the WandB ``replicate_path`` depend on the run context, so
@@ -146,7 +147,7 @@ def build() -> Checkpoint:
             loss_implementation=loss_implementation,
         )
 
-    return Checkpoint(
+    return Lazy(
         name=CANARY_STEP_NAME,
         version="v1",
         recipe=Recipe(
@@ -155,6 +156,7 @@ def build() -> Checkpoint:
             deps=(*train, *validation),
             run_args={"train_resources": multislice_smoke_resources()},
         ),
+        result_type=Checkpoint,
         override_path=override_output_path,
     )
 
@@ -193,7 +195,7 @@ def wipe_path_if_exists(path: str) -> None:
     fs.rm(plain_path, recursive=True)
 
 
-def _wipe_canary_output(checkpoint: Checkpoint) -> None:
+def _wipe_canary_output(checkpoint: Lazy[Checkpoint]) -> None:
     """Delete the canary's output directory if it exists.
 
     The canary writes to a path that is stable across runs

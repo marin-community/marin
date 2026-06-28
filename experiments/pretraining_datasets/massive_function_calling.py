@@ -10,8 +10,9 @@ from marin.datakit.download.massive import (
     transform_staged_massive,
 )
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, raw_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import raw_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -34,7 +35,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
     """MASSIVE function-calling corpus as a tokenized Dataset handle."""
     staged = raw_download(
         "raw/massive",

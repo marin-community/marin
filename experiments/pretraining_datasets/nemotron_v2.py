@@ -10,8 +10,9 @@ marin.datakit.download.nemotron_v2; subsets and their globs are defined there.
 
 from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, hf_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import hf_download, tokenized
 
 from experiments.llama import llama3_tokenizer
 
@@ -27,12 +28,12 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def nemotron_v2_family_datasets(family: str, *, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def nemotron_v2_family_datasets(family: str, *, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One Dataset handle per subset of a Nemotron v2 family, keyed by ``{family}/{subset}``."""
     info = NEMOTRON_V2_DATASETS[family]
     dl = hf_download(f"raw/{family}", hf_id=info.hf_dataset_id, revision=info.revision, pin=info.override_output_path)
 
-    result: dict[str, Dataset] = {}
+    result: dict[str, Lazy[Dataset]] = {}
     for subset, glob_pattern in info.subsets.items():
         subset_dir = glob_pattern.split("/**")[0]
         text_field = info.subset_text_fields.get(subset, "text")
@@ -61,9 +62,9 @@ def nemotron_v2_family_datasets(family: str, *, tokenizer: str = llama3_tokenize
     return result
 
 
-def nemotron_v2_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def nemotron_v2_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One Dataset handle per (family, subset) for all Nemotron v2 families."""
-    all_datasets: dict[str, Dataset] = {}
+    all_datasets: dict[str, Lazy[Dataset]] = {}
     for family in NEMOTRON_V2_DATASETS:
         all_datasets.update(nemotron_v2_family_datasets(family, tokenizer=tokenizer))
     return all_datasets

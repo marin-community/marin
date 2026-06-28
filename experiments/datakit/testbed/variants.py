@@ -22,8 +22,8 @@ from collections.abc import Sequence
 
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset, read_artifact
+from marin.execution.lazy import Lazy
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
@@ -63,7 +63,7 @@ def _minhash_step(src_name: str, sampled: StepSpec, **params: int) -> StepSpec:
             "seed": params["seed"],
         },
         fn=lambda output_path, sampled=sampled: compute_minhash_attrs(
-            source=Artifact.from_path(sampled, NormalizedData),
+            source=read_artifact(sampled.output_path, NormalizedData),
             output_path=output_path,
             num_perms=params["num_perms"],
             num_bands=params["num_bands"],
@@ -81,7 +81,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
         deps=list(minhash_steps),
         hash_attrs={"cc_max_iterations": cc_max_iterations},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(mh, MinHashAttrData) for mh in minhash_steps],
+            inputs=[read_artifact(mh.output_path, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
@@ -100,14 +100,14 @@ def _deduped_step(src_name: str, sampled: StepSpec, fuzzy_dups: StepSpec) -> Ste
         name=f"data/datakit/deduped/{src_name}",
         deps=[sampled, fuzzy_dups],
         fn=lambda output_path, sampled=sampled: consolidate(
-            input_path=Artifact.from_path(sampled, NormalizedData).main_output_dir,
+            input_path=read_artifact(sampled.output_path, NormalizedData).main_output_dir,
             output_path=os.path.join(output_path, "outputs/main"),
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.from_path(fuzzy_dups, FuzzyDupsAttrData)
-                    .sources[Artifact.from_path(sampled, NormalizedData).main_output_dir]
+                    attribute_path=read_artifact(fuzzy_dups.output_path, FuzzyDupsAttrData)
+                    .sources[read_artifact(sampled.output_path, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
@@ -124,7 +124,7 @@ def dedup(
     *,
     name: str,
     tokenizer: str,
-    validation: Sequence[Dataset],
+    validation: Sequence[Lazy[Dataset]],
     fuzzy_dedup_num_perms: int = 286,
     fuzzy_dedup_num_bands: int = 26,
     fuzzy_dedup_ngram_size: int = 5,

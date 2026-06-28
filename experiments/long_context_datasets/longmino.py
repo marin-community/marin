@@ -3,7 +3,8 @@
 
 """Longmino (dolma3_longmino_pool) dataset with length-bucket breakdowns."""
 
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import hf_download, tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -36,7 +37,7 @@ longmino_bucket_token_counts = {
 }
 
 
-def longmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def longmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """Tokenized Longmino buckets, keyed by length-bucket name."""
     raw = hf_download(
         "dolma3_longmino_pool",

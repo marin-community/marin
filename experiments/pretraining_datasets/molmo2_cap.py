@@ -6,8 +6,9 @@
 from fray.types import ResourceConfig
 from marin.datakit.download.molmo2_cap import HF_DATASET_ID, HF_REVISION, transform
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, hf_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -23,7 +24,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
     """Tokenize the normalized Molmo2-Cap captions."""
     dl = hf_download(
         "raw/molmo2-cap",

@@ -13,7 +13,8 @@ experiment's job (via :func:`marin.experiment.data.mixture`).
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import hf_download, tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -143,17 +144,17 @@ COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
 }
 
 
-def _download_handle(source: CommonPileSource) -> Dataset:
+def _download_handle(source: CommonPileSource) -> Lazy[Dataset]:
     """A HuggingFace-download handle for ``source``, pinned to its existing raw download."""
     return hf_download(source.download_name, hf_id=source.hf_id, revision=source.revision, pin=source.raw_path)
 
 
-def stackv2_edu_filtered_download() -> Dataset:
+def stackv2_edu_filtered_download() -> Lazy[Dataset]:
     """Raw download handle for the Common Pile stackv2_edu filtered split."""
     return _download_handle(COMMON_PILE_SOURCES["stackv2_edu"])
 
 
-def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One tokenized :class:`Dataset` handle per Common Pile split, keyed ``common_pile/<name>``.
 
     Each handle tokenizes from a pinned ``download_hf`` of the filtered HuggingFace split, so

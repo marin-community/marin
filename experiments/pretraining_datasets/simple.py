@@ -7,7 +7,8 @@ The llama3-tokenized caches are pinned to their existing locations so referencin
 them never re-tokenizes the corpora (~250B and ~55B tokens).
 """
 
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -24,7 +25,7 @@ _STARCODER_LLAMA3_PIN = "tokenized/starcoderdata-12f018/"
 _PROOFPILE_LLAMA3_PIN = "tokenized/proofpile_2-4a35c7/"
 
 
-def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """DCLM-baseline as a tokenized ``Dataset`` handle."""
     return tokenized(
         "dclm_baseline",
@@ -35,7 +36,7 @@ def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
     )
 
 
-def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """StarCoder as a tokenized ``Dataset`` handle (text lives under the ``content`` key)."""
     return tokenized(
         "starcoderdata",
@@ -47,7 +48,7 @@ def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
     )
 
 
-def proofpile_dataset(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+def proofpile_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """Proof-Pile 2 as a tokenized ``Dataset`` handle."""
     return tokenized(
         "proofpile_2",

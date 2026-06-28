@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
 from marin.utils import fsspec_glob
@@ -264,7 +264,7 @@ def compute_minhash_attrs_step(
         name=name,
         deps=[normalize],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.from_path(normalize, NormalizedData),
+            source=read_artifact(normalize.output_path, NormalizedData),
             output_path=output_path,
             num_perms=num_perms,
             num_bands=num_bands,

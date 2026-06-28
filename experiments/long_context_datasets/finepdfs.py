@@ -8,7 +8,8 @@ Uses the HuggingFace repos HuggingFaceFW/finepdfs and HuggingFaceFW/finepdfs-edu
 Step-functions return per-language tokenized Dataset handles.
 """
 
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import hf_download, tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -28,7 +29,7 @@ finepdfs_token_counts = {
 finepdfs_edu_token_counts = {"eng_Latn": 140e9}
 
 
-def _finepdfs_raw() -> Dataset:
+def _finepdfs_raw() -> Lazy[Dataset]:
     return hf_download(
         "finepdfs_eng_Latn",
         hf_id=FINEPDFS_HF_ID,
@@ -38,7 +39,7 @@ def _finepdfs_raw() -> Dataset:
     )
 
 
-def _finepdfs_edu_raw() -> Dataset:
+def _finepdfs_edu_raw() -> Lazy[Dataset]:
     return hf_download(
         "finepdfs_edu_eng_Latn",
         hf_id=FINEPDFS_EDU_HF_ID,
@@ -48,7 +49,7 @@ def _finepdfs_edu_raw() -> Dataset:
     )
 
 
-def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """Tokenized FinePDFs train data per language (English only for now)."""
     raw = _finepdfs_raw()
     return {
@@ -61,7 +62,7 @@ def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset
     }
 
 
-def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """Tokenized FinePDFs validation data per language."""
     raw = _finepdfs_raw()
     return {
@@ -75,7 +76,7 @@ def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[s
     }
 
 
-def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """Tokenized FinePDFs-edu train data per language."""
     raw = _finepdfs_edu_raw()
     return {

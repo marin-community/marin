@@ -14,9 +14,10 @@ subsequent runs.
 
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture, pretokenized
+from marin.experiment.data import pretokenized
 from marin.experiment.train import train_lm
 
 from experiments.llama import llama_150m
@@ -31,7 +32,7 @@ tok = pretokenized(
 )
 
 
-def build(*, version: str = "v1") -> Checkpoint:
+def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     """A ~125M Llama model trained on FineWeb-Edu (GPU), every decision stated inline."""
     return train_lm(
         name="checkpoints/llama-150m-fineweb-edu-gpu",
@@ -39,8 +40,7 @@ def build(*, version: str = "v1") -> Checkpoint:
         model=llama_150m,
         optimizer=AdamConfig(learning_rate=3e-4, weight_decay=0.1),
         # 2. Single-component mixture: all training tokens from FineWeb-Edu.
-        data=lambda ctx: mixture(ctx, {tok: 1.0}),
-        deps=(tok,),
+        datasets={tok: 1.0},
         batch_size=32,
         seq_len=llama_150m.max_seq_len,  # 1024
         num_train_steps=1000,

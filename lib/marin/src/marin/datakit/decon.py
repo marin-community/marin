@@ -48,7 +48,7 @@ from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_fi
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob
 
@@ -613,7 +613,7 @@ def merge_eval_blooms(
     n_records = 0
     for d in per_eval_bloom_dirs:
         try:
-            up: EvalBloom = Artifact.from_path(d, EvalBloom)
+            up: EvalBloom = read_artifact(d, EvalBloom)
         except FileNotFoundError:
             continue
         if estimated == 0:
@@ -780,7 +780,7 @@ def decon_step(
         return StepSpec(
             name=name,
             fn=lambda output_path: decon_to_parquet(
-                normalized_data=Artifact.from_path(normalized, NormalizedData),
+                normalized_data=read_artifact(normalized.output_path, NormalizedData),
                 prebuilt_bloom_dir=bloom_step.output_path,
                 output_path=output_path,
                 text_field=text_field,
@@ -806,7 +806,7 @@ def decon_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
-            normalized_data=Artifact.from_path(normalized, NormalizedData),
+            normalized_data=read_artifact(normalized.output_path, NormalizedData),
             eval_data_sources=[s.output_path for s in eval_steps],
             output_path=output_path,
             text_field=text_field,

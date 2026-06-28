@@ -9,8 +9,9 @@ prompt/response JSONL for log-prob evaluation or to dolma text format for decont
 
 import dataclasses
 
-from marin.execution.lazy import Artifact
-from marin.experiment.data import derived, hf_download
+from marin.execution.artifact import Artifact, Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import hf_download
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 
@@ -20,7 +21,7 @@ class EvalDataset:
 
     org: str
     name: str
-    steps: list[Artifact]
+    steps: list[Lazy[Artifact]]
     tags: list[str] = dataclasses.field(default_factory=list)
 
 
@@ -316,7 +317,7 @@ def eval_datasets() -> list[EvalDataset]:
     ]
 
 
-def decontamination_datasets() -> list[Artifact]:
+def decontamination_datasets() -> list[Lazy[Artifact]]:
     """Build and return datasets in dolma text format for decontamination pipelines."""
     mmlu_raw = hf_download(
         "raw/cais/mmlu",
@@ -348,7 +349,7 @@ def decontamination_datasets() -> list[Artifact]:
     return [mmlu_convert_dolma]
 
 
-def extra_raw_downloads() -> dict[str, Artifact]:
+def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
     """Build and return standalone raw download handles for additional evaluation datasets."""
     return {
         "mmlu_pro_raw": hf_download(

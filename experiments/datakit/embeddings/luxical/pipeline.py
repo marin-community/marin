@@ -39,7 +39,7 @@ import pyarrow as pa
 from fray import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import write_artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import marin_temp_bucket, url_to_fs
@@ -82,7 +82,7 @@ class EmbeddingAttrData(BaseModel):
     Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
     One output parquet shard per source shard, sharing basename and row order
     (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
-    Load via ``Artifact.from_path(step, EmbeddingAttrData)``.
+    Load via ``read_artifact(step.output_path, EmbeddingAttrData)``.
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
@@ -291,5 +291,5 @@ def embed_source(
         batch_size=batch_size,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

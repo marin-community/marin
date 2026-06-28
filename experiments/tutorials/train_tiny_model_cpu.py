@@ -13,9 +13,10 @@ For GPU training, see train_tiny_model_gpu.py.
 
 from fray import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture, tokenized
+from marin.experiment.data import tokenized
 from marin.experiment.train import train_lm
 
 from experiments.llama import llama_nano
@@ -32,7 +33,7 @@ tok = tokenized(
 )
 
 
-def build(*, version: str = "v1") -> Checkpoint:
+def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     """A tiny Llama model trained on TinyStories (CPU), every decision stated inline.
 
     max_eval_batches=4 from the original SimpleTrainConfig tutorial has no equivalent
@@ -45,8 +46,7 @@ def build(*, version: str = "v1") -> Checkpoint:
         model=llama_nano,
         optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
         # 3. Single-component mixture: all training tokens from TinyStories.
-        data=lambda ctx: mixture(ctx, {tok: 1.0}),
-        deps=(tok,),
+        datasets={tok: 1.0},
         batch_size=4,
         seq_len=llama_nano.max_seq_len,  # 512
         num_train_steps=100,

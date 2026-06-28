@@ -27,9 +27,9 @@ from dataclasses import asdict, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import marin_prefix, open_url, url_to_fs
 
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_spec import StepSpec, _is_relative_path
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,15 @@ def is_mutable_version(version: str) -> bool:
     return version == "dev" or version.endswith("-dev")
 
 
+def _resolved(output_path: str) -> str:
+    """A relative output path is rooted at ``marin_prefix()``; an absolute/URL path is used as-is.
+
+    Mirrors the launcher's path resolution so a manual ``read_artifact``/``read_record`` of a
+    relative step name reads the same location the runner wrote.
+    """
+    return f"{marin_prefix()}/{output_path}" if _is_relative_path(output_path) else output_path
+
+
 def _join(output_path: str, filename: str) -> str:
     return f"{output_path.rstrip('/')}/{filename}"
 
@@ -164,6 +173,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
     A corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
+    output_path = _resolved(output_path)
     for filename in (RECORD_FILENAME, *_LEGACY_RECORD_FILENAMES):
         text = _read_text(output_path, filename)
         if text is not None:
@@ -193,6 +203,7 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
     """
     if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
         raise TypeError(f"schema must be a pydantic BaseModel subclass, got {schema!r}")
+    output_path = _resolved(output_path)
     record = read_record(output_path)
     if record is not None and record.result is not None:
         return cast(M, schema.model_validate(record.result))

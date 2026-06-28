@@ -5,8 +5,9 @@
 
 from marin.datakit.download.nsf_awards import MAX_YEAR, MIN_YEAR, download_nsf_awards
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, raw_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import raw_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -25,7 +26,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
     """NSF awards corpus as a tokenized Dataset handle."""
     dl = raw_download(
         "raw/nsf-awards",

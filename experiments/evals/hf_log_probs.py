@@ -16,8 +16,9 @@ from fray.types import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LMMixtureDatasetConfig
 from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
-from marin.execution.lazy import Artifact, Checkpoint, Dataset, RunContext
-from marin.experiment.data import derived, mixture
+from marin.execution.artifact import Artifact, Checkpoint, Dataset
+from marin.execution.lazy import Lazy, RunContext, derived
+from marin.experiment.data import mixture
 
 
 @dataclass
@@ -61,14 +62,14 @@ def default_hf_lm_log_probs(
     *,
     hf_repo_id: str,
     hf_revision: str,
-    checkpoint: Checkpoint | str,
-    validation_datasets: Sequence[Dataset],
+    checkpoint: Lazy[Checkpoint] | str,
+    validation_datasets: Sequence[Lazy[Dataset]],
     resource_config: ResourceConfig,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
     name: str | None = None,
     wandb_tags: list[str] | None = None,
-) -> Artifact:
+) -> Lazy[Artifact]:
     """Build a log-probs eval artifact that fetches its HF model config at runtime."""
     if name is None:
         if isinstance(checkpoint, str):
@@ -79,12 +80,12 @@ def default_hf_lm_log_probs(
             name = checkpoint.name.replace("/", "--")
 
     step_name = f"analysis/log_probs/{name}"
-    deps: tuple[Artifact, ...] = (
-        (checkpoint, *validation_datasets) if isinstance(checkpoint, Checkpoint) else tuple(validation_datasets)
+    deps: tuple[Lazy, ...] = (
+        (checkpoint, *validation_datasets) if isinstance(checkpoint, Lazy) else tuple(validation_datasets)
     )
 
     def build_config(ctx: RunContext) -> HfLogProbsConfig:
-        checkpoint_path = ctx.path(checkpoint) if isinstance(checkpoint, Checkpoint) else checkpoint
+        checkpoint_path = ctx.path(checkpoint) if isinstance(checkpoint, Lazy) else checkpoint
         data = mixture(ctx, {}, validation=list(validation_datasets), shuffle=False)
         return HfLogProbsConfig(
             name=name,

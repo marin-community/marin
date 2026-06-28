@@ -20,7 +20,8 @@ with ChatLmDatasetFormat via a custom Dataset handle.
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 
@@ -53,7 +54,7 @@ _MODEL = GrugModelConfig(
 )
 
 
-def build(*, version: str = "v1") -> Checkpoint:
+def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
     dolmino_math = tokenize_dolmino(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
@@ -89,7 +90,7 @@ def build(*, version: str = "v1") -> Checkpoint:
             steps_per_eval=500,
         )
 
-    return Checkpoint(
+    return Lazy(
         name="references/reference-pipeline",
         version=version,
         recipe=Recipe(
@@ -98,6 +99,7 @@ def build(*, version: str = "v1") -> Checkpoint:
             deps=(*train, *validation),
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
+        result_type=Checkpoint,
     )
 
 

@@ -12,7 +12,8 @@ from marin.datakit.download.uncheatable_eval import (
     UncheatableEvalDownloadConfig,
     download_latest_uncheatable_eval,
 )
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import raw_download, tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -29,7 +30,7 @@ UNCHEATABLE_SUBSETS = {
 }
 
 
-def uncheatable_raw() -> Dataset:
+def uncheatable_raw() -> Lazy[Dataset]:
     """The Uncheatable Eval GitHub dump as a raw-download handle."""
     return raw_download(
         "raw/uncheatable_eval",
@@ -44,7 +45,7 @@ def uncheatable_raw() -> Dataset:
     )
 
 
-def uncheatable_validation(*, tokenizer: str = llama3_tokenizer) -> list[Dataset]:
+def uncheatable_validation(*, tokenizer: str = llama3_tokenizer) -> list[Lazy[Dataset]]:
     """One validation ``Dataset`` handle per Uncheatable Eval subset, keyed by
     ``uncheatable_eval/<subset>``, each tokenizing from the shared raw download."""
     raw = uncheatable_raw()

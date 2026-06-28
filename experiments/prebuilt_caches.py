@@ -17,7 +17,8 @@ Example usage::
     data = lambda ctx: mixture(ctx, {fineweb_edu_10B_dataset(): 1.0})
 """
 
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import pretokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -26,7 +27,7 @@ fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
 
 
-def fineweb_edu_10B_dataset() -> Dataset:
+def fineweb_edu_10B_dataset() -> Lazy[Dataset]:
     """Pretokenized fineweb-edu 10B-token subcache as a lazy Dataset handle."""
     return pretokenized(
         "fineweb-edu-10B",
@@ -35,7 +36,7 @@ def fineweb_edu_10B_dataset() -> Dataset:
     )
 
 
-def fineweb_edu_10M_dataset() -> Dataset:
+def fineweb_edu_10M_dataset() -> Lazy[Dataset]:
     """Pretokenized fineweb-edu 10M-token subcache as a lazy Dataset handle."""
     return pretokenized(
         "fineweb-edu-10M",

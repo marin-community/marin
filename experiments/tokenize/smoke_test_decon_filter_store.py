@@ -28,7 +28,7 @@ import os
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
 from rigging.filesystem import url_to_fs
@@ -87,7 +87,7 @@ def _load_contam_ids(decon_dirs: list[str]) -> set[str]:
 def _all_tokenize_shards(split: str) -> list[str]:
     shards: list[str] = []
     for _, _, tok_dir in SOURCES:
-        tok = Artifact.from_path(tok_dir, TokenizedAttrData)
+        tok = read_artifact(tok_dir, TokenizedAttrData)
         split_dir = tok.output_dirs.get(split)
         if split_dir is None:
             raise FileNotFoundError(f"{tok_dir}: no '{split}' split")

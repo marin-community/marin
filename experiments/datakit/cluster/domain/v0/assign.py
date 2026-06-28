@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray import ResourceConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import write_artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import open_url
@@ -224,5 +224,5 @@ def assign_source(
         k_views=k_views,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

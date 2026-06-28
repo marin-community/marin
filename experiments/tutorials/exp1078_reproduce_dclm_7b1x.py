@@ -8,7 +8,7 @@ Link: https://arxiv.org/pdf/2406.11794
 Every training decision is stated inline: the model, the data mixture, the optimizer,
 the token budget, the z-loss, and the eval cadence. The library's
 :func:`~marin.experiment.train.train_lm` assembles them into a lazy
-:class:`~marin.execution.lazy.Checkpoint`, handling only the mechanical marin-on-TPU
+:class:`~marin.execution.artifact.Checkpoint`, handling only the mechanical marin-on-TPU
 plumbing (the mesh, the resumption checkpointer, the eval-harness wiring, the Fray
 dispatch). It bakes in no optimizer, mixture, or eval suite of its own.
 
@@ -19,9 +19,9 @@ parameters).
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture
 from marin.experiment.train import train_lm
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -52,7 +52,7 @@ llama_7b_dclm = LlamaConfig(
 )
 
 
-def build(*, version: str = "v1") -> Checkpoint:
+def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     """The DCLM 7B/1x training run as a lazy checkpoint, every decision stated inline."""
     train = dclm_datasets(tokenizer=llama3_tokenizer)
     validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
@@ -63,8 +63,8 @@ def build(*, version: str = "v1") -> Checkpoint:
         version=version,
         model=llama_7b_dclm,
         optimizer=AdamConfig(learning_rate=2e-3, weight_decay=0.05, warmup=5000, min_lr_ratio=0.1),
-        data=lambda ctx: mixture(ctx, weighted, validation=validation),
-        deps=(*weighted, *validation),
+        datasets=weighted,
+        validation=validation,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
         num_train_steps=NUM_TRAIN_STEPS,

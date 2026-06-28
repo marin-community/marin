@@ -47,8 +47,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from marin.execution.lazy import Artifact, Dataset
-from marin.experiment.data import derived, tokenized
+from marin.execution.artifact import Artifact, Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import tokenized
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
@@ -602,7 +603,7 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> Dataset:
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> Lazy[Dataset]:
     """Lazy handle that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
@@ -650,7 +651,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> Dataset:
     )
 
 
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> Dataset:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> Lazy[Dataset]:
     """Lazy handle for an instruction dataset by HF id, optionally overriding splits."""
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
@@ -664,7 +665,7 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-def tulu_3_in_dolma() -> Artifact:
+def tulu_3_in_dolma() -> Lazy[Artifact]:
     """Tulu-3 SFT mixture converted to Dolma flat-text format."""
     tulu3 = get_instruction_dataset("allenai/tulu-3-sft-mixture")
     return derived(
@@ -679,7 +680,7 @@ def tulu_3_in_dolma() -> Artifact:
 
 
 # levanter treats validation and training as separate so we tokenize twice.
-def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """Tulu-3 Dolma corpus tokenized as a validation split.
 
     "flat" means all chat messages are interpolated into a single string per doc.
@@ -695,7 +696,7 @@ def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenize
     )
 
 
-def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> Dataset:
+def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """Tulu-3 Dolma corpus tokenized as a training split.
 
     "flat" means all chat messages are interpolated into a single string per doc.

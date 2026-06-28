@@ -10,7 +10,8 @@ weights; the mixture weights are policy and live in the experiment that chooses 
 """
 
 from fray.types import ResourceConfig
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -45,7 +46,7 @@ _NEMOTRON_LLAMA3_PINS = {
 _TOKENIZE_RESOURCES = ResourceConfig(ram="32g", cpu=2)
 
 
-def nemotron_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def nemotron_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One :class:`Dataset` handle per Nemotron CC split, keyed by split name."""
     return {
         split: tokenized(

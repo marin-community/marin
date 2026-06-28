@@ -11,7 +11,8 @@ them.
 """
 
 from marin.datakit.download.dolmino import DOLMINO_DATASETS
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -37,7 +38,7 @@ DOLMINO_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
     """One :class:`Dataset` handle per Dolmino split, keyed by ``dolmino/<split>``."""
     return {
         f"dolmino/{split}": tokenized(
@@ -50,13 +51,13 @@ def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]
     }
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> Dataset:
+def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """The :class:`Dataset` handle for a single named Dolmino split."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
 
 
-def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> Dataset:
+def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
     """Combined math-only :class:`Dataset` handle (all ``math/*`` splits merged)."""
     math_paths = [
         f"{_DOLMINO_BASE}/{split}/{pattern}"

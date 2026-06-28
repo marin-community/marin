@@ -11,8 +11,9 @@ normalized (reading from the ``content`` column), and tokenized.
 from fray.types import ResourceConfig
 from marin.datakit.download.starcoder2_extras import HF_DATASET_ID, HF_REVISION, SUBSETS
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, hf_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -31,7 +32,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[Dataset]:
+def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[Lazy[Dataset]]:
     """One tokenized Dataset handle per starcoder2data-extras subset."""
     datasets = []
     for subset in SUBSETS:

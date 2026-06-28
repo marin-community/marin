@@ -65,7 +65,7 @@ from levanter.store.cache import (
     _merge_sharded_ledgers,
 )
 from marin.datakit.decon import DeconAttributes
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.utils import fsspec_exists, fsspec_glob
@@ -104,7 +104,7 @@ class ClusteredStoreData(BaseModel):
     """Outcome of :func:`build_clustered_store`: one Levanter cache per (cluster, quality) bucket.
 
     Persisted as ``<output_path>/artifact.json``. Load via
-    ``Artifact.from_path(output_path, ClusteredStoreData)``.
+    ``read_artifact(output_path, ClusteredStoreData)``.
 
     Attributes:
         cache_path: Root directory. Each bucket's cache lives at
@@ -781,5 +781,5 @@ def build_clustered_store(
         tokenizer=tokenizer,
         counters=counters,
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

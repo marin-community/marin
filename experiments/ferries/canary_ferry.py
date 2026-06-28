@@ -39,7 +39,8 @@ from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from rigging.filesystem import marin_prefix, marin_temp_bucket
@@ -148,7 +149,7 @@ def _tpu_types_from_env() -> list[str]:
     return types or list(_DEFAULT_CANARY_TPU_TYPES)
 
 
-def build() -> Checkpoint:
+def build() -> Lazy[Checkpoint]:
     """The Grug MoE canary as a lazy checkpoint, configured from the env.
 
     The data mixture and the WandB ``replicate_path`` depend on the run context, so
@@ -337,7 +338,7 @@ def build() -> Checkpoint:
             ),
         )
 
-    return Checkpoint(
+    return Lazy(
         name=step_name,
         version="v1",
         recipe=Recipe(
@@ -346,6 +347,7 @@ def build() -> Checkpoint:
             deps=deps,
             run_args={"train_resources": resources},
         ),
+        result_type=Checkpoint,
         override_path=override_output_path,
     )
 

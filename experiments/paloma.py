@@ -8,7 +8,8 @@ tokenizes its ``val`` split straight from that location into a fresh explicit ca
 — no re-download.
 """
 
-from marin.execution.lazy import Dataset
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy
 from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
@@ -39,7 +40,7 @@ _PALOMA_SUBSETS = {
 }
 
 
-def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[Dataset]:
+def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[Lazy[Dataset]]:
     """One validation ``Dataset`` handle per Paloma subset, keyed by ``paloma/<subset>``."""
     return [
         tokenized(

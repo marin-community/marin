@@ -10,8 +10,9 @@ normalized, and tokenized.
 
 from marin.datakit.download.swe_zero_12m import HF_DATASET_ID, HF_REVISION, transform
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.lazy import Dataset
-from marin.experiment.data import derived, hf_download, tokenized
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, derived
+from marin.experiment.data import hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -24,7 +25,7 @@ def _run_normalize(cfg: dict) -> None:
     normalize_to_parquet(input_path=cfg["input_path"], output_path=cfg["output_path"])
 
 
-def swe_zero_12m_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+def swe_zero_12m_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
     """SWE-ZERO-12M-trajectories as a tokenized Dataset handle."""
     dl = hf_download("raw/swe-zero-12m-trajectories", hf_id=HF_DATASET_ID, revision=HF_REVISION)
     processed = derived(

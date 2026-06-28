@@ -3,8 +3,8 @@
 
 """HuggingFace model download handles for experiments.
 
-Each module-level name is a lazy :class:`~marin.execution.lazy.Checkpoint`
-handle; building the handle runs nothing. Pass a handle to a training or
+Each module-level name is a lazy ``Lazy[Checkpoint]`` handle; building the
+handle runs nothing. Pass a handle to a training or
 evaluation step that reads ``initialize_from_checkpoint_path`` to materialize
 the download on first use.
 
@@ -15,8 +15,8 @@ To register a new model, add a ``ModelConfig`` entry and call
 from dataclasses import dataclass
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.lazy import Checkpoint, RunContext
-from marin.experiment.data import derived
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, RunContext, derived
 from marin.utils import get_directory_friendly_name
 
 
@@ -29,8 +29,8 @@ class ModelConfig:
 MODEL_OUTPUT_SUBDIR = "models"
 
 
-def download_model(model_config: ModelConfig) -> Checkpoint:
-    """Return a :class:`Checkpoint` handle that downloads ``model_config`` from HuggingFace.
+def download_model(model_config: ModelConfig) -> Lazy[Checkpoint]:
+    """Return a lazy handle that downloads ``model_config`` from HuggingFace.
 
     The output path is pinned to ``models/{repo}--{revision}`` for a stable,
     human-readable address that matches the layout expected by downstream

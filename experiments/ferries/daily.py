@@ -21,9 +21,9 @@ from dataclasses import replace
 
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture
 from marin.experiment.train import train_lm
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -81,7 +81,7 @@ FERRY_DATE = os.environ.get("FERRY_DATE", dt.date.today().isoformat())
 RUN_NAME = f"ferry_daily_125m_{FERRY_DATE}"
 
 
-def build() -> Checkpoint:
+def build() -> Lazy[Checkpoint]:
     """The daily 125M-ish nemotron integration run as a lazy checkpoint."""
     nem = nemotron_datasets(tokenizer=llama3_tokenizer)
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
@@ -101,8 +101,8 @@ def build() -> Checkpoint:
             min_lr_ratio=0.1,
             warmup=1000,
         ),
-        data=lambda ctx: mixture(ctx, train, validation=validation),
-        deps=(*train, *validation),
+        datasets=train,
+        validation=validation,
         batch_size=TRAIN_BATCH_SIZE,
         seq_len=TRAIN_SEQ_LEN,
         num_train_steps=NUM_TRAIN_STEPS,

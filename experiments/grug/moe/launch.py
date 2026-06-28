@@ -29,7 +29,8 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.lazy import Checkpoint, Dataset, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint, Dataset
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
 from marin.training.training import temporary_checkpoint_base_path
@@ -103,7 +104,7 @@ def env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
-def slimpajama_6b_dataset() -> Dataset:
+def slimpajama_6b_dataset() -> Lazy[Dataset]:
     """SlimPajama-6B, llama3-tokenized — a small corpus for GPU smoke/scale runs.
 
     Returns the tokenized :class:`Dataset` handle; the launcher assembles it into an
@@ -197,7 +198,7 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
+def grug_moe_baseline(*, version: str = "v1") -> Lazy[Checkpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
@@ -233,7 +234,7 @@ def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
             ),
         )
 
-    return Checkpoint(
+    return Lazy(
         name="grug/4_10_baseline_moe",
         version=version,
         recipe=Recipe(
@@ -242,6 +243,7 @@ def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
             deps=(*train, *validation),
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
+        result_type=Checkpoint,
     )
 
 

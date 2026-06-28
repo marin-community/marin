@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from fray.cluster import ResourceConfig
-from marin.execution.lazy import Artifact, lower
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
 
 from experiments.evals.hf_log_probs import default_hf_lm_log_probs
@@ -63,8 +64,8 @@ def truncate_model_name(model_name: str, max_length: int = 62) -> str:
 
 
 @lru_cache(maxsize=1)
-def build_steps() -> list[Artifact]:
-    steps: list[Artifact] = []
+def build_steps() -> list[Lazy[Artifact]]:
+    steps: list[Lazy[Artifact]] = []
     for model_config in models:
         tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
         validation_datasets = uncheatable_validation(tokenizer=tokenizer)

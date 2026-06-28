@@ -24,7 +24,8 @@ from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.lazy import Dataset, lower, materialized_config
+from marin.execution.artifact import Dataset
+from marin.execution.lazy import Lazy, lower, materialized_config
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from rigging.filesystem import marin_prefix
@@ -126,7 +127,7 @@ def run_testbed_config(
     name: str,
     tokenized_buckets: dict[str, StepSpec],
     weights_step: StepSpec,
-    validation: Sequence[Dataset],
+    validation: Sequence[Lazy[Dataset]],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,

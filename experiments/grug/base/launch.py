@@ -28,7 +28,8 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.lazy import Checkpoint, Recipe, RunContext, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, Recipe, RunContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.training.training import temporary_checkpoint_base_path
@@ -192,7 +193,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_grug(build_grug_run_config(config))
 
 
-def grug_base_trial(*, version: str = "v1") -> Checkpoint:
+def grug_base_trial(*, version: str = "v1") -> Lazy[Checkpoint]:
     """The base grug trial on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
@@ -243,7 +244,7 @@ def grug_base_trial(*, version: str = "v1") -> Checkpoint:
             eval_ema=False,
         )
 
-    return Checkpoint(
+    return Lazy(
         name="grug/base-trial",
         version=version,
         recipe=Recipe(
@@ -252,6 +253,7 @@ def grug_base_trial(*, version: str = "v1") -> Checkpoint:
             deps=(*train, *validation),
             run_args={"train_resources": _TRAIN_RESOURCES},
         ),
+        result_type=Checkpoint,
     )
 
 
