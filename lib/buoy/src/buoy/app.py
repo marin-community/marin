@@ -41,8 +41,11 @@ logger = logging.getLogger("buoy.app")
 # Read the SPA at import so it travels with the (cloudpickle-by-value) deploy
 # rather than depending on a static file being present on the worker.
 INDEX_HTML = (Path(__file__).parent / "static" / "index.html").read_text()
-# Hop-by-hop + sensitive headers we never forward back from xprof.
-_DROP_RESPONSE_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding", "connection"})
+# Hop-by-hop headers only. Content-Encoding/Content-Length are forwarded so the
+# browser can decode xprof's responses — xprof serves some assets pre-gzipped
+# regardless of Accept-Encoding, and we stream the raw body verbatim, so its
+# encoding/length headers must travel with it (mirrors the controller proxy).
+_DROP_RESPONSE_HEADERS = frozenset({"transfer-encoding", "connection", "keep-alive"})
 XPROF_PROXY_TIMEOUT = 120.0
 
 
@@ -191,10 +194,10 @@ async def xprof_proxy(request: Request) -> Response:
 
     url = "/" + sub + (("?" + request.url.query) if request.url.query else "")
     client: httpx.AsyncClient = request.app.state.http
-    # Force identity so the raw stream we forward is already decoded — otherwise we'd
-    # ship compressed bytes while dropping Content-Encoding, and the browser would
-    # mis-read them (drops Content-Length/Transfer-Encoding via _DROP_RESPONSE_HEADERS).
-    upstream = client.build_request("GET", f"http://127.0.0.1:{port}{url}", headers={"accept-encoding": "identity"})
+    # Forward the client's Accept-Encoding and stream the raw body back unchanged,
+    # so whatever encoding xprof picks stays consistent with the headers we forward.
+    accept_encoding = request.headers.get("accept-encoding", "identity")
+    upstream = client.build_request("GET", f"http://127.0.0.1:{port}{url}", headers={"accept-encoding": accept_encoding})
     resp = await client.send(upstream, stream=True)
     headers = {k: v for k, v in resp.headers.items() if k.lower() not in _DROP_RESPONSE_HEADERS}
     return StreamingResponse(

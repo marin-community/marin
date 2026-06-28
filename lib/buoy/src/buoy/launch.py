@@ -27,10 +27,11 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
+from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
 from rigging.config_discovery import resolve_cluster_config
 from rigging.connect import proxy_path
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, region_from_prefix
 from rigging.timing import Duration
 
 from buoy import app as buoy_app
@@ -91,7 +92,11 @@ def cli(
     # reads/writes the cache cross-region.
     if not cache_root:
         cache_root = marin_temp_bucket(CACHE_TTL_DAYS, CACHE_PREFIX, source_prefix=config.storage.remote_state_dir)
-    logger.info("cache_root %s", cache_root)
+    # Pin the worker to the cache's region so the service never moves history/profile
+    # data cross-region (the cache bucket determines the region).
+    region = region_from_prefix(cache_root)
+    constraints = [region_constraint([region])] if region else None
+    logger.info("cache_root %s region %s", cache_root, region)
     bundle = provider_bundle(config)
     controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
     logger.info("opening tunnel to controller %s", controller_address)
@@ -106,6 +111,7 @@ def cli(
             resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk),
             environment=EnvironmentSpec(env_vars={"BUOY_CACHE_ROOT": cache_root}),
             ports=["http"],
+            constraints=constraints,
             timeout=Duration.from_seconds(timeout) if timeout else None,
             max_retries_failure=0,
             max_retries_preemption=max_retries_preemption,
