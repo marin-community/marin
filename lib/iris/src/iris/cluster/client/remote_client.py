@@ -134,6 +134,7 @@ class RemoteClusterClient:
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
@@ -162,6 +163,7 @@ class RemoteClusterClient:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
@@ -506,6 +508,25 @@ class RemoteClusterClient:
             return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)
+
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override)."""
+
+        def _call():
+            request = controller_pb2.Controller.KickTasksRequest(
+                targets=targets,
+                desired_state=desired_state,
+                reason=reason,
+            )
+            response = self._client.kick_tasks(request)
+            return list(response.results)
+
+        return call_with_retry(f"kick_tasks({', '.join(targets)})", _call)
 
     def fetch_logs(
         self,

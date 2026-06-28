@@ -9,8 +9,6 @@ work (``ShardTask``), its result (``TaskResult``), the strategy that executes it
 disk (pickle chunks for map stages, scattered shuffle files for reduce stages).
 """
 
-from __future__ import annotations
-
 import itertools
 import logging
 import pickle
@@ -75,7 +73,7 @@ class PickleDiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
+    def write(cls, path: str, data: list) -> "PickleDiskChunk":
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on

@@ -10,8 +10,6 @@ back to the controller, and surfaces the per-worker liveness it observed
 (REACHED / UNREACHABLE) as health events the controller folds.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading
@@ -19,8 +17,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
-from finelog.client.log_client import Table
-from finelog.types import LogWriterProtocol
 from rigging.timing import Duration
 
 from iris.chaos import chaos
@@ -147,9 +143,9 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
-    # The Iris autoscaler that provisions capacity for this backend. Attached by
-    # the controller's main() after construction (mirrors set_log_sink); None for
-    # clusters with no scale groups, where capacity calls are no-ops.
+    # The Iris autoscaler that provisions capacity for this backend, attached by
+    # the composer after it builds the autoscaler from the provider bundle; None
+    # for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
@@ -275,14 +271,6 @@ class RpcTaskBackend:
             min_log_level=request.min_log_level,
         )
         return asyncio.run(stub.get_process_status(forwarded, timeout_ms=10000))
-
-    def set_log_sink(
-        self,
-        log_client: LogWriterProtocol,
-        task_stats_table: Table,
-        profile_table: Table,
-    ) -> None:
-        """No-op: worker daemons write their own log/resource/profile rows."""
 
     def profile_task(
         self,

@@ -11,8 +11,6 @@ operations (status queries, terminate, labels, etc.).
 Local handles use subprocess rather than SSH, so they do not use this base.
 """
 
-from __future__ import annotations
-
 import logging
 import shlex
 from collections.abc import Callable
@@ -20,12 +18,12 @@ from dataclasses import dataclass, field
 
 from rigging.timing import Duration
 
-from iris.cluster.backends.remote_exec import (
+from iris.cluster.backends.types import CommandResult
+from iris.cluster.platforms.remote_exec import (
     RemoteExec,
     run_streaming_with_retry,
     wait_for_connection,
 )
-from iris.cluster.backends.types import CommandResult
 
 logger = logging.getLogger(__name__)
 

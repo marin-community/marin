@@ -1,7 +1,5 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-from __future__ import annotations
-
 import json
 import logging
 from dataclasses import dataclass

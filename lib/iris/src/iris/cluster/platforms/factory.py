@@ -5,14 +5,15 @@
 
 from dataclasses import dataclass
 
-from iris.cluster.backends.gcp.controller import GcpControllerProvider
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
-from iris.cluster.backends.k8s.controller import K8sControllerProvider
-from iris.cluster.backends.manual.provider import ManualControllerProvider, ManualWorkerProvider
 from iris.cluster.backends.protocols import ControllerProvider, WorkerInfraProvider
+from iris.cluster.config import GcpPlatformConfig, IrisClusterConfig, PlatformConfig, SshConfig
+from iris.cluster.platforms.gcp.controller import GcpControllerProvider
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.k8s.controller import K8sControllerProvider
+from iris.cluster.platforms.manual.controller import ManualControllerProvider
+from iris.cluster.platforms.manual.workers import ManualWorkerProvider
 from iris.cluster.service_mode import ServiceMode
-from iris.rpc import config_pb2
 
 
 @dataclass
@@ -28,10 +29,10 @@ class ProviderBundle:
 
 
 def create_provider_bundle(
-    platform_config: config_pb2.PlatformConfig,
+    platform_config: PlatformConfig,
     worker_port: int,
-    cluster_config: config_pb2.IrisClusterConfig | None = None,
-    ssh_config: config_pb2.SshConfig | None = None,
+    cluster_config: IrisClusterConfig | None = None,
+    ssh_config: SshConfig | None = None,
 ) -> ProviderBundle:
     """Create a ControllerProvider + WorkerInfraProvider bundle from configuration.
 
@@ -45,10 +46,9 @@ def create_provider_bundle(
     Raises:
         ValueError: If platform type is unspecified or unknown.
     """
-    if not platform_config.HasField("platform"):
+    which = platform_config.platform_kind() if platform_config is not None else None
+    if which is None:
         raise ValueError("platform is required")
-
-    which = platform_config.WhichOneof("platform")
     label_prefix = platform_config.label_prefix or "iris"
 
     if which == "gcp":
@@ -65,7 +65,7 @@ def create_provider_bundle(
                 worker_provider=worker_provider,
                 controller_service_account=(
                     cluster_config.controller.gcp.service_account
-                    if cluster_config and cluster_config.controller.WhichOneof("controller") == "gcp"
+                    if cluster_config and cluster_config.controller.controller_kind() == "gcp"
                     else None
                 ),
             ),
@@ -84,7 +84,7 @@ def create_provider_bundle(
         )
 
     if which == "local":
-        local_gcp_config = config_pb2.GcpPlatformConfig(project_id="local")
+        local_gcp_config = GcpPlatformConfig(project_id="local")
         gcp_service = InMemoryGcpService(mode=ServiceMode.LOCAL, project_id="local", label_prefix=label_prefix)
         worker_provider = GcpWorkerProvider(
             gcp_config=local_gcp_config,

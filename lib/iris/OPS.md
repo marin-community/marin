@@ -29,6 +29,61 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 
 **Shipping a code change ≠ restarting.** marin pins `iris-controller:latest` (`config/marin.yaml:33`), so a restart only re-pulls whatever `:latest` currently is. To deploy a merged controller fix you must first rebuild the image (`gh workflow run "Ops - Docker Images"`, or wait for the Sunday build) and *then* restart — restarting against a stale `:latest` ships nothing. Confirm the controller is running the `:<git-short-hash>` you expect, not just that it came back up. Skipping the rebuild cost ~5 red-canary days (`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`).
 
+### Controller Checkpoint Rollback (wedged / OOM recovery)
+
+**When.** The controller is wedged by a bloated local DB — typically a controller-VM OOM after a large job backlog: RPCs hang and the healthcheck times out. A plain restart does **not** help: startup reuses the local DB whenever it is present (`download_checkpoint_to_local` only runs when the db dir is absent — see `controller/main.py`), so `docker restart` / `gcloud compute reset` just reload the same bloated DB and re-wedge.
+
+The fix is to roll the local DB back to a pre-spike checkpoint by hand. Run the steps below on the controller VM. **Do this only when the user has asked you to recover a wedged controller.**
+
+Definitions used below — read them from the cluster config (`config/marin.yaml`):
+
+- `STATE_DIR` — controller local state dir, default `/var/cache/iris/controller` (override: `storage.local_state_dir`). The DB lives in `$STATE_DIR/db`.
+- `REMOTE` — `storage.remote_state_dir` (e.g. `gs://marin-us-central2/iris/state`). Checkpoints live at `$REMOTE/controller-state/<epoch_ms>/{controller.sqlite3.zst,auth.sqlite3.zst}`.
+
+```bash
+# 0. SSH to the controller VM (the GCE instance labelled iris-<prefix>-controller=true),
+#    then set STATE_DIR/REMOTE from the cluster config so the commands below resolve.
+gcloud compute ssh iris-controller-marin --zone <zone> --tunnel-through-iap
+export STATE_DIR=/var/cache/iris/controller
+export REMOTE=gs://<bucket>/iris/state
+
+# 1. Pick a pre-spike checkpoint. The DB size is a good proxy for backlog/health:
+#    a checkpoint much larger than its neighbours was already bloated — pick an
+#    earlier, smaller one. Each subdir is named with its epoch_ms.
+gcloud storage ls --long --readable-sizes "$REMOTE/controller-state/**/controller.sqlite3.zst"
+
+# 2. Stop the controller (frees the RAM the bloated DB is consuming).
+sudo docker stop iris-controller
+
+# 3. Move the bloated DB ASIDE — never delete it. Startup reloads $STATE_DIR/db
+#    if present, so this is what forces a fresh restore; keeping it makes the
+#    rollback reversible.
+sudo mv "$STATE_DIR/db" "$STATE_DIR/db.bloated.bak.$(date +%s)"
+
+# 4. Restore the chosen checkpoint into $STATE_DIR/db using the controller image's
+#    own download_checkpoint_to_local (handles the GCS pull, zstd decompress, and
+#    the paired auth DB). Run it in a one-shot container so it reuses the VM's
+#    ambient GCS credentials. Substitute <epoch_ms> from step 1.
+IMAGE="$(sudo docker inspect --format='{{.Config.Image}}' iris-controller)"
+sudo docker run --rm --network=host -v /var/cache/iris:/var/cache/iris "$IMAGE" \
+    .venv/bin/python -c "from pathlib import Path; \
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local as restore; \
+ok = restore('$REMOTE', Path('$STATE_DIR/db'), checkpoint_dir='$REMOTE/controller-state/<epoch_ms>'); \
+raise SystemExit(0 if ok else 1)"
+
+# 5. Confirm the restore actually produced a DB BEFORE starting (if it didn't, the
+#    controller would reload the latest — often still-bloated — checkpoint on start).
+test -f "$STATE_DIR/db/controller.sqlite3" || echo "RESTORE FAILED — do not start; move the backup back"
+
+# 6. Start and verify it serves.
+sudo docker start iris-controller
+curl -sf http://localhost:10000/health && echo " controller healthy"
+```
+
+**Rollback cost.** Jobs and state created *after* the chosen checkpoint are dropped. Workers on separate VMs and other infrastructure are unaffected — they re-register with the recovered controller.
+
+**If it goes wrong.** The previous DB is preserved at `$STATE_DIR/db.bloated.bak.<ts>`. To undo the rollback, `docker stop`, `rm -rf $STATE_DIR/db`, `mv` the backup back, and `docker start`.
+
 ## Job Management
 
 ```bash
@@ -69,6 +124,25 @@ The exec session is non-interactive and buffers output. To run a command that su
 iris task exec /user/job/0 -- bash -c "nohup bash -c 'your-command > /tmp/out.log 2>&1' &"
 iris task exec /user/job/0 -- cat /tmp/out.log   # check later
 ```
+
+### Kicking a wedged task (emergency override)
+
+When a scheduling bug or stuck node strands a task on a machine, force its
+current attempt terminal without touching the rest of the job:
+
+```bash
+iris job kick /user/job/0                       # preempt task 0 (reschedules if budget remains)
+iris job kick /user/job/0 --state failed        # fail task 0 with no retry
+iris job kick /user/job/0:3                      # only if attempt 3 is still current (guards against a race)
+iris job kick /user/job --reason "stuck node"   # kick every active task in the job
+```
+
+The kick is queued on the controller and applied on the next control tick
+through the same finalization path the scheduler's preemptions use, so it shares
+one write transaction with the scheduler instead of racing it. Only tasks
+running on a worker (ASSIGNED / BUILDING / RUNNING) can be kicked; pending or
+already-terminal tasks are rejected with a reason. `preempted` charges the
+preemption budget; `failed` is terminal with no retry.
 
 ## Process Inspection & Profiling
 

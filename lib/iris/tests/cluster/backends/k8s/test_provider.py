@@ -3,8 +3,6 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -29,9 +27,9 @@ from iris.cluster.backends.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.backends.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.controller.backend import TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError, PodResourceUsage
 from iris.cluster.types import JobName
 from iris.cluster.worker.stats import IrisTaskStat
 from iris.rpc import job_pb2

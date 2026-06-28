@@ -7,8 +7,6 @@ samples are logged to stdout (picked up by Cloud Logging on COS) and fanned to t
 sinks.
 """
 
-from __future__ import annotations
-
 import logging
 import tempfile
 import time

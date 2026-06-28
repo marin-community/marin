@@ -20,8 +20,6 @@ training step. The whole pipeline (ferry → tokenize → weights → train) liv
 dependencies are satisfied.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 

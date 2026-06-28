@@ -3,8 +3,6 @@
 
 """Tests for format conversion transforms to Dolma."""
 
-from __future__ import annotations
-
 import gzip
 import hashlib
 import json

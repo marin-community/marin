@@ -3,11 +3,16 @@
 
 """Shared data types for the k8s cluster layer."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+
+# Default PriorityClass names Iris creates at controller startup and uses when
+# the cluster config does not override priority_class_names. Override via
+# kubernetes_provider.priority_classes.
+IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
+IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
 
 
 class KubectlError(RuntimeError):
@@ -84,7 +89,7 @@ class K8sResource(Enum):
         return f"{self.collection_path(namespace)}/{name}"
 
     @classmethod
-    def from_kind(cls, kind: str) -> K8sResource:
+    def from_kind(cls, kind: str) -> "K8sResource":
         """Look up a resource by its manifest kind string."""
         for member in cls:
             if member.kind == kind:

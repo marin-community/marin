@@ -10,6 +10,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
     WORKER_USER,
@@ -25,7 +26,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
 from rigging.server_auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
@@ -69,7 +70,7 @@ def _make_service(db, log_client, auth=None):
 
 
 def test_static_preload_inserts_keys(db):
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice", "tok-b": "bob"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice", "tok-b": "bob"}})
     auth = create_controller_auth(config, db=db)
     assert auth.verifier is not None
     assert auth.provider == "static"
@@ -89,7 +90,7 @@ def test_static_preload_inserts_keys(db):
 
 
 def test_static_preload_is_idempotent(db):
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     create_controller_auth(config, db=db)
     create_controller_auth(config, db=db)  # Should not raise
 
@@ -98,7 +99,7 @@ def test_static_preload_is_idempotent(db):
 
 
 def test_worker_token_in_api_keys(db):
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
 
     # Worker token is a JWT — verify it resolves to WORKER_USER
@@ -108,7 +109,7 @@ def test_worker_token_in_api_keys(db):
 
 
 def test_iap_provider_uses_id_token_login_verifier(db):
-    config = config_pb2.AuthConfig(iap={"audiences": ["desktop-client-id"]})
+    config = AuthConfig(iap={"audiences": ["desktop-client-id"]})
     auth = create_controller_auth(config, db=db)
 
     # IAP login proof is an OIDC ID token verified by IapIdTokenVerifier.
@@ -118,13 +119,13 @@ def test_iap_provider_uses_id_token_login_verifier(db):
 
 
 def test_iap_provider_requires_audiences(db):
-    config = config_pb2.AuthConfig(iap={"url": "https://iris-marin.example.com"})
+    config = AuthConfig(iap={"url": "https://iris-marin.example.com"})
     with pytest.raises(ValueError, match="at least one audience"):
         create_controller_auth(config, db=db)
 
 
 def test_worker_token_differs_after_restart(db):
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth1 = create_controller_auth(config, db=db)
     token1 = auth1.worker_token
 
@@ -141,7 +142,7 @@ def test_worker_token_differs_after_restart(db):
 
 
 def test_admin_users_bootstrapped(db):
-    config = config_pb2.AuthConfig(
+    config = AuthConfig(
         static={"tokens": {"tok-a": "alice"}},
         admin_users=["alice"],
     )
@@ -151,14 +152,14 @@ def test_admin_users_bootstrapped(db):
 
 
 def test_login_verifier_set_for_gcp(db):
-    config = config_pb2.AuthConfig(gcp={"project_id": "test-project"})
+    config = AuthConfig(gcp={"project_id": "test-project"})
     auth = create_controller_auth(config, db=db)
     assert auth.login_verifier is not None
     assert auth.provider == "gcp"
 
 
 def test_login_verifier_set_for_static(db):
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
     # Static auth now also sets login_verifier (StaticTokenVerifier)
     assert auth.login_verifier is not None
@@ -267,7 +268,7 @@ def test_login_not_available_without_login_verifier(db, log_client):
 
 def test_create_api_key_returns_raw_token(db, log_client):
     """CreateApiKey returns a working JWT token."""
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -291,7 +292,7 @@ def test_create_api_key_returns_raw_token(db, log_client):
 
 def test_list_api_keys_never_exposes_hash(db, log_client):
     """ListApiKeys returns key info without exposing hashes."""
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -312,7 +313,7 @@ def test_list_api_keys_never_exposes_hash(db, log_client):
 
 def test_revoke_key_owner_only(db, log_client):
     """Non-admin user cannot revoke another user's key."""
-    config = config_pb2.AuthConfig(
+    config = AuthConfig(
         static={"tokens": {"tok-a": "alice", "tok-b": "bob"}},
     )
     auth = create_controller_auth(config, db=db)
@@ -337,7 +338,7 @@ def test_revoke_key_owner_only(db, log_client):
 
 def test_admin_can_revoke_any_key(db, log_client):
     """Admin user can revoke any user's key."""
-    config = config_pb2.AuthConfig(
+    config = AuthConfig(
         static={"tokens": {"tok-a": "alice", "tok-b": "bob"}},
         admin_users=["bob"],
     )
@@ -370,7 +371,7 @@ def test_admin_can_revoke_any_key(db, log_client):
 
 def test_get_auth_info_returns_gcp_provider(db, log_client):
     """GetAuthInfo returns provider and project_id for GCP auth."""
-    config = config_pb2.AuthConfig(gcp={"project_id": "test-project"})
+    config = AuthConfig(gcp={"project_id": "test-project"})
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -381,7 +382,7 @@ def test_get_auth_info_returns_gcp_provider(db, log_client):
 
 def test_get_auth_info_returns_static_provider(db, log_client):
     """GetAuthInfo returns provider=static with no project_id."""
-    config = config_pb2.AuthConfig(static={"tokens": {"tok-a": "alice"}})
+    config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -392,7 +393,7 @@ def test_get_auth_info_returns_static_provider(db, log_client):
 
 def test_get_auth_info_returns_empty_when_no_auth(db, log_client):
     """GetAuthInfo returns empty provider when auth is disabled."""
-    config = config_pb2.AuthConfig()
+    config = AuthConfig()
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -445,7 +446,7 @@ def test_discovery_login_flow(db, log_client):
 
 def test_null_auth_creates_anonymous_admin_and_worker_token(db):
     """No auth config + DB bootstraps anonymous admin and generates worker token."""
-    config = config_pb2.AuthConfig()
+    config = AuthConfig()
     auth = create_controller_auth(config, db=db)
     with db.read_snapshot() as snap:
         assert reads.get_user_role(snap, "anonymous") == "admin"
@@ -457,7 +458,7 @@ def test_null_auth_creates_anonymous_admin_and_worker_token(db):
 
 def test_null_auth_rpcs_work_with_anonymous_token(db, log_client):
     """Auth RPCs work in null-auth mode via JwtTokenManager."""
-    config = config_pb2.AuthConfig()
+    config = AuthConfig()
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 
@@ -493,7 +494,7 @@ def test_null_auth_rpcs_work_with_anonymous_token(db, log_client):
 
 def test_null_auth_get_current_user(db, log_client):
     """GetCurrentUser returns anonymous/admin in null-auth mode."""
-    config = config_pb2.AuthConfig()
+    config = AuthConfig()
     auth = create_controller_auth(config, db=db)
     service = _make_service(db, log_client, auth=auth)
 

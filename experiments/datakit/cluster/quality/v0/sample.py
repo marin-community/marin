@@ -29,8 +29,6 @@ Run from anywhere that can read ``gs://marin-eu-west4/datakit/...``:
         --total-size 7000 --floor-per-source 20 --seed 42
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import math

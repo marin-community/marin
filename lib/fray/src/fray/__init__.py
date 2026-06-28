@@ -3,7 +3,7 @@
 
 """Fray: minimal job and actor scheduling interface."""
 
-from iris.cluster.setup import default_setup_script, iris_runtime_setup_script
+from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
 
 from fray.actor import (
     ActorContext,

@@ -24,16 +24,16 @@ from iris.cli.connect import (
     rpc_client,
     rpc_client_for_ctx,
 )
-from iris.cluster.backends.k8s.controller import configure_client_s3
-from iris.cluster.config import IrisConfig
-from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.controller import configure_client_s3
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
 
 
 def resolve_cluster_name(
-    config: config_pb2.IrisClusterConfig | None,
+    config: IrisClusterConfig | None,
     controller_url: str | None,
     cli_cluster_name: str | None,
 ) -> str:
@@ -41,20 +41,20 @@ def resolve_cluster_name(
         return cli_cluster_name
     if config and config.name:
         return config.name
-    if config and config.controller.WhichOneof("controller") == "local":
+    if config and config.controller.controller_kind() == "local":
         return "local"
     if controller_url:
         return cluster_name_from_url(controller_url)
     return "default"
 
 
-def _cluster_auth_from_proto(auth: config_pb2.AuthConfig) -> ClusterAuth:
-    """Adapt iris's proto ``AuthConfig`` to rigging's ``ClusterAuth``.
+def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
+    """Adapt iris's ``AuthConfig`` to rigging's ``ClusterAuth``.
 
     The single boundary where iris's wire config meets the shared credential
     vocabulary; everything downstream resolves through ``rigging.credentials``.
     """
-    provider = auth.WhichOneof("provider")
+    provider = auth.provider_kind()
     if provider == "iap":
         # ``audiences`` are the login audiences the controller accepts; they
         # include the desktop client id (interactive flow). A service-account
@@ -80,13 +80,13 @@ def _cluster_auth_from_proto(auth: config_pb2.AuthConfig) -> ClusterAuth:
     return ClusterAuth(AuthProvider.NONE)
 
 
-def client_credentials(config: config_pb2.IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
+def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
     """Resolve the cluster's client credentials via the shared rigging resolver."""
-    if config is None or not config.HasField("auth"):
+    if config is None or config.auth is None:
         return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
     auth = config.auth
-    static_token = next(iter(auth.static.tokens), None) if auth.WhichOneof("provider") == "static" else None
-    return credentials_for(cluster_name, _cluster_auth_from_proto(auth), static_token=static_token)
+    static_token = next(iter(auth.static.tokens), None) if auth.provider_kind() == "static" else None
+    return credentials_for(cluster_name, _cluster_auth_from_config(auth), static_token=static_token)
 
 
 def _configure_client_s3(config) -> None:
@@ -154,14 +154,14 @@ def iris(
 
     # Load config if provided
     if config_file:
-        iris_config = IrisConfig.load(config_file)
-        ctx.obj["config"] = iris_config.proto
+        config = load_config(config_file)
+        ctx.obj["config"] = config
         ctx.obj["config_file"] = config_file
-        _configure_client_s3(iris_config.proto)
+        _configure_client_s3(config)
 
-        name = resolve_cluster_name(iris_config.proto, controller_url, cluster_name)
+        name = resolve_cluster_name(config, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-        ctx.obj["credentials"] = client_credentials(iris_config.proto, name)
+        ctx.obj["credentials"] = client_credentials(config, name)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
@@ -173,7 +173,7 @@ def iris(
         ctx.obj["controller_url"] = controller_url
 
 
-def _login_iap(controller_url: str, iap: config_pb2.IapAuthConfig, cluster_name: str) -> None:
+def _login_iap(controller_url: str, iap: IapAuthConfig, cluster_name: str) -> None:
     """Two-step IAP login: desktop OAuth -> Iris JWT, caching both credentials.
 
     Authenticates to IAP via the browser desktop flow, then exchanges the OIDC
@@ -220,8 +220,8 @@ def login(ctx):
         _login_iap(controller_url, iap, cluster_name)
         return
 
-    if config and config.HasField("auth"):
-        provider = config.auth.WhichOneof("provider")
+    if config and config.auth is not None:
+        provider = config.auth.provider_kind()
     else:
         with rpc_client(controller_url) as client:
             try:

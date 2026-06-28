@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from iris.cluster.setup import cuda_toolchain_setup_script, wants_gpu_extra
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, wants_gpu_extra
 from iris.cluster.types import EnvironmentSpec
 
 

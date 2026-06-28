@@ -14,8 +14,6 @@ This script:
 The default mode analyzes the last 24 hours.
 """
 
-from __future__ import annotations
-
 import csv
 import datetime as dt
 import json
@@ -32,7 +30,7 @@ import click
 import duckdb
 import fsspec
 from finelog.deploy.config import load_finelog_config
-from iris.cluster.config import IrisConfig
+from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
 
@@ -80,6 +78,16 @@ SMALL_LINE_SUBSTRINGS = (
     "failed to upload logs",
 )
 
+# Filename Levanter writes at the root of a tokenized datastore. The ledger
+# itself is a tiny JSON, but loading it is the only fsspec-visible step of
+# opening a datastore: the bulk token chunks are then streamed through
+# tensorstore's native GCS driver, which bypasses fsspec and emits no gs:// log
+# line of its own. So the ledger load is the only proxy this log-based report
+# has for a datastore read that can move hundreds of GB cross-region — we tag it
+# `large` (see classify_size_tier) so a job streaming a remote datastore shows
+# up as a large-egress offender instead of hiding behind the `.json` suffix.
+LEVANTER_DATASTORE_LEDGER = "shard_ledger.json"
+
 
 def _extension(path: str) -> str:
     name = path.rsplit("/", 1)[-1].lower()
@@ -98,6 +106,12 @@ def _extension(path: str) -> str:
 
 
 def classify_size_tier(path: str) -> str:
+    lower = path.lower()
+    # Levanter datastore ledger: a small JSON that stands in for a bulk
+    # tensorstore read. Checked before the extension fallback, which would
+    # otherwise tag the `.json` ledger `small`.
+    if lower.endswith("/" + LEVANTER_DATASTORE_LEDGER):
+        return "large"
     ext = _extension(path)
     if ext in LARGE_EXTS:
         return "large"
@@ -105,7 +119,6 @@ def classify_size_tier(path: str) -> str:
         return "medium"
     if ext in SMALL_EXTS:
         return "small"
-    lower = path.lower()
     # Path patterns that override a missing/ambiguous extension.
     if "compilation-cache" in lower or "cache_ledger" in lower:
         return "small"
@@ -330,10 +343,10 @@ def validate_parquet_files(paths: list[Path]) -> list[Path]:
     return good
 
 
-def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
-    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.proto.storage.remote_state_dir)
+def download_checkpoint(config: IrisClusterConfig, outdir: Path, checkpoint_dir: str | None) -> Path:
+    chosen = checkpoint_dir or _find_latest_checkpoint_dir(config.storage.remote_state_dir)
     if chosen is None:
-        raise RuntimeError(f"No checkpoint found under {config.proto.storage.remote_state_dir}")
+        raise RuntimeError(f"No checkpoint found under {config.storage.remote_state_dir}")
     # Key the local cache on the remote checkpoint id so reruns that pick up
     # a newer checkpoint don't collide with a stale one.
     checkpoint_id = chosen.rstrip("/").rsplit("/", 1)[-1]
@@ -344,7 +357,7 @@ def download_checkpoint(config: IrisConfig, outdir: Path, checkpoint_dir: str | 
         logging.info(f"Checkpoint {checkpoint_id} already cached at {db_path}")
         return db_path
     logging.info(f"Downloading checkpoint {chosen}")
-    ok = download_checkpoint_to_local(config.proto.storage.remote_state_dir, checkpoint_outdir, chosen)
+    ok = download_checkpoint_to_local(config.storage.remote_state_dir, checkpoint_outdir, chosen)
     if not ok:
         raise RuntimeError(f"Failed to download checkpoint from {chosen}")
     if not db_path.exists():
@@ -904,15 +917,15 @@ def main(
     logging.info(f"Starting cross-region analysis for {window.start.isoformat()} to {window.end.isoformat()}")
     logging.info(f"Output directory: {out_path}")
 
-    cfg = IrisConfig.load(config)
-    if not cfg.proto.log_server_config:
+    cfg = load_config(config)
+    if not cfg.log_server_config:
         raise click.ClickException(
             f"Iris config {config!r} has no log_server_config; cross-region analysis "
             "requires logs shipped via finelog."
         )
-    finelog_cfg = load_finelog_config(cfg.proto.log_server_config)
+    finelog_cfg = load_finelog_config(cfg.log_server_config)
     if not finelog_cfg.remote_log_dir:
-        raise click.ClickException(f"finelog config {cfg.proto.log_server_config!r} has no remote_log_dir.")
+        raise click.ClickException(f"finelog config {cfg.log_server_config!r} has no remote_log_dir.")
     remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
 
     log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)

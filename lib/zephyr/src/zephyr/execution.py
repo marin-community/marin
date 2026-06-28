@@ -11,8 +11,6 @@ up when the coordinator exits or is killed — preventing stale-coordinator
 bugs where orphaned coordinators and workers consume resources indefinitely.
 """
 
-from __future__ import annotations
-
 import enum
 import logging
 import os
@@ -153,7 +151,6 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
 
 
 class WorkerState(enum.Enum):
-    INIT = "init"
     READY = "ready"
     BUSY = "busy"
     FAILED = "failed"

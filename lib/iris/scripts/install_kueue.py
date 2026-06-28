@@ -66,7 +66,7 @@ import time
 
 import click
 import yaml
-from iris.cluster.backends.k8s.coreweave_topology import (
+from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_FLAVOR_INFINIBAND,
     CW_LABEL_FABRIC,
     CW_LABEL_FLAVOR,

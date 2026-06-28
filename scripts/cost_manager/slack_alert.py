@@ -16,8 +16,6 @@ from I/O (:func:`post_slack_message`) so the threshold logic is testable without
 the network and the runner can print-instead-of-post on a dry run.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import logging
 from collections.abc import Iterable

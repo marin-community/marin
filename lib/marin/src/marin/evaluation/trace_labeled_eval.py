@@ -12,9 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-import equinox as eqx
 import fsspec
-import haliax as hax
 import jax
 import jmp
 import levanter
@@ -22,8 +20,6 @@ from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-from levanter.checkpoint import load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
 from levanter.data.text import (
     LmDatasetSourceConfigBase,
@@ -32,11 +28,11 @@ from levanter.data.text import (
     dataset_for_trace_chat_format,
 )
 from levanter.eval import LabeledEvaluator, eval_labeled_model
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 
 logger = logging.getLogger(__name__)
 
@@ -528,7 +524,6 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
     try:
         tokenizer = load_marin_tokenizer(config.tokenizer)
 
-        hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
         EvalBatch = config.trainer.EvalBatch
         Pos = config.model.max_Pos.resize(config.max_eval_length)
 
@@ -545,25 +540,23 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
 
             mp: jmp.Policy = config.trainer.mp
 
-            if config.checkpoint_path is not None and not config.checkpoint_is_hf:
-                with use_cpu_device():
-                    model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                    model = load_checkpoint(model, config.checkpoint_path, subpath="model")
-                model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-            elif hf_checkpoint is not None:
-                model_config = config.model
-                if not hasattr(model_config, "hf_checkpoint_converter"):
-                    raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-                converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-                converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-                model = converter.load_pretrained(
-                    model_config.model_type,
-                    ref=hf_checkpoint,
+            assert config.checkpoint_path is not None  # ensured by _validate_eval_config
+            if config.checkpoint_is_hf:
+                model = load_hf_checkpoint(
+                    config.model,
+                    config.checkpoint_path,
                     axis_mapping=parameter_axis_mapping,
-                    dtype=mp.compute_dtype,
+                    tokenizer=tokenizer,
+                    compute_dtype=mp.compute_dtype,
                 )
             else:
-                raise AssertionError("Should not get here")
+                model = load_levanter_checkpoint(
+                    config.model,
+                    config.checkpoint_path,
+                    Vocab=Vocab,
+                    axis_mapping=parameter_axis_mapping,
+                    key=key,
+                )
 
             results = _load_or_create_results(config)
             dataset_results = _dataset_results(results)
@@ -650,6 +643,7 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
             extras=extras,
         ),
         max_retries_failure=config.trace_labeled_eval_config.job_failure_max_retries,
+        max_task_failures=config.trace_labeled_eval_config.job_failure_max_retries,
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)

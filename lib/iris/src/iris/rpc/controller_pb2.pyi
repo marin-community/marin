@@ -202,6 +202,31 @@ class Controller(_message.Message):
         TASKS_FIELD_NUMBER: _ClassVar[int]
         tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ...) -> None: ...
+    class KickTasksRequest(_message.Message):
+        __slots__ = ("targets", "desired_state", "reason")
+        TARGETS_FIELD_NUMBER: _ClassVar[int]
+        DESIRED_STATE_FIELD_NUMBER: _ClassVar[int]
+        REASON_FIELD_NUMBER: _ClassVar[int]
+        targets: _containers.RepeatedScalarFieldContainer[str]
+        desired_state: _job_pb2.TaskState
+        reason: str
+        def __init__(self, targets: _Optional[_Iterable[str]] = ..., desired_state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    class KickResult(_message.Message):
+        __slots__ = ("target", "task_id", "queued", "detail")
+        TARGET_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        QUEUED_FIELD_NUMBER: _ClassVar[int]
+        DETAIL_FIELD_NUMBER: _ClassVar[int]
+        target: str
+        task_id: str
+        queued: bool
+        detail: str
+        def __init__(self, target: _Optional[str] = ..., task_id: _Optional[str] = ..., queued: _Optional[bool] = ..., detail: _Optional[str] = ...) -> None: ...
+    class KickTasksResponse(_message.Message):
+        __slots__ = ("results",)
+        RESULTS_FIELD_NUMBER: _ClassVar[int]
+        results: _containers.RepeatedCompositeFieldContainer[Controller.KickResult]
+        def __init__(self, results: _Optional[_Iterable[_Union[Controller.KickResult, _Mapping]]] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
         __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

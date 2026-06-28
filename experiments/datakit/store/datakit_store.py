@@ -43,8 +43,6 @@ writes the small ``<output>/cluster=<C>/quality=<Q>/shard_ledger.json``. No
 second Zephyr context.
 """
 
-from __future__ import annotations
-
 import bisect
 import contextlib
 import dataclasses

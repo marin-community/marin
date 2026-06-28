@@ -8,8 +8,6 @@ Handles type conversion between fray types and Iris types, actor hosting
 via submitted jobs, and deferred actor handle resolution.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import sys
@@ -320,7 +318,7 @@ class IrisActorHandle:
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
             return self._client
 
-    def __getattr__(self, method_name: str) -> _IrisActorMethod:
+    def __getattr__(self, method_name: str) -> "_IrisActorMethod":
         if method_name.startswith("_"):
             raise AttributeError(method_name)
         return _IrisActorMethod(self, method_name)
@@ -570,7 +568,7 @@ class FrayIrisClient:
         self._iris = IrisClientLib.remote(controller_address, workspace=workspace, bundle_id=bundle_id)
 
     @staticmethod
-    def from_iris_client(iris_client: IrisClientLib) -> FrayIrisClient:
+    def from_iris_client(iris_client: IrisClientLib) -> "FrayIrisClient":
         """Create a FrayIrisClient by wrapping an existing IrisClient.
 
         This avoids creating a new connection when we already have an IrisClient
@@ -601,6 +599,7 @@ class FrayIrisClient:
                 replicas=replicas,
                 max_retries_failure=request.max_retries_failure,
                 max_retries_preemption=request.max_retries_preemption,
+                max_task_failures=request.max_task_failures,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
                 priority_band=request.priority,
@@ -690,6 +689,11 @@ class FrayIrisClient:
         retry_kwargs: dict[str, Any] = {}
         if actor_config.max_task_retries is not None:
             retry_kwargs["max_retries_failure"] = actor_config.max_task_retries
+            # max_task_failures is a cumulative job-level budget: a job fails once the
+            # running total of hard task failures exceeds it. Mirror the per-task retry
+            # count so an actor group tolerates that many failures across its replicas
+            # rather than dying on the first crash.
+            retry_kwargs["max_task_failures"] = actor_config.max_task_retries
 
         job = self._iris.submit(
             entrypoint=entrypoint,

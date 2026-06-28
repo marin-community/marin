@@ -10,8 +10,6 @@ distributed locking, heartbeats, and status writes are handled explicitly in
 easy to follow and debug.
 """
 
-from __future__ import annotations
-
 import contextvars
 import json
 import logging

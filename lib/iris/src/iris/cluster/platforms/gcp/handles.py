@@ -9,8 +9,6 @@ GcpSliceHandle: TPU pod slice (describe, terminate)
 GcpVmSliceHandle: Single-VM GCE-backed slice
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import threading
@@ -18,10 +16,6 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.backends._worker_base import RemoteExecWorkerBase
-from iris.cluster.backends.gcp.service import GcpService
-from iris.cluster.backends.gcp.ssh import ssh_impersonate_service_account
-from iris.cluster.backends.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.backends.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -30,8 +24,12 @@ from iris.cluster.backends.types import (
     SliceStatus,
     WorkerStatus,
 )
+from iris.cluster.config import SshConfig
+from iris.cluster.platforms._worker_base import RemoteExecWorkerBase
+from iris.cluster.platforms.gcp.service import GcpService
+from iris.cluster.platforms.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.tpu_topology import get_tpu_topology
-from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +242,7 @@ class GcpSliceHandle:
         _worker_port: int,
         _accelerator_variant: str,
         _gcp_service: GcpService,
-        _ssh_config: config_pb2.SshConfig | None = None,
+        _ssh_config: SshConfig | None = None,
         _service_account: str | None = None,
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
@@ -408,7 +406,7 @@ class GcpVmSliceHandle:
         _label_prefix: str,
         _worker_port: int,
         _gcp_service: GcpService,
-        _ssh_config: config_pb2.SshConfig | None = None,
+        _ssh_config: SshConfig | None = None,
         _service_account: str | None = None,
         _bootstrapping: bool = False,
     ):

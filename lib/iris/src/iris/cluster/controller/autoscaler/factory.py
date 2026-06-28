@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Factory for building an :class:`Autoscaler` from proto configuration.
+"""Factory for building an :class:`Autoscaler` from cluster configuration.
 
 Imports from both :mod:`iris.cluster.config` and the rest of the autoscaler
 package. The autoscaler package ``__init__`` does not import this module, so
@@ -12,9 +12,13 @@ resolves against the already-initialized package).
 
 import logging
 
+from finelog.client.log_client import Table
+
 from iris.cluster.backends.protocols import WorkerInfraProvider
 from iris.cluster.config import (
-    scale_groups_to_config,
+    AutoscalerConfig,
+    ScaleGroupConfig,
+    WorkerConfig,
     validate_autoscaler_config,
     validate_scale_group_resources,
 )
@@ -24,18 +28,17 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
-from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
 
 def create_autoscaler(
     platform: WorkerInfraProvider,
-    autoscaler_config: config_pb2.AutoscalerConfig,
-    scale_groups: dict[str, config_pb2.ScaleGroupConfig],
+    autoscaler_config: AutoscalerConfig,
+    scale_groups: dict[str, ScaleGroupConfig],
     label_prefix: str,
-    base_worker_config: config_pb2.WorkerConfig | None = None,
+    base_worker_config: WorkerConfig | None = None,
+    provisioning_table: Table | None = None,
 ) -> Autoscaler:
     """Create autoscaler from WorkerInfraProvider and explicit config.
 
@@ -46,6 +49,8 @@ def create_autoscaler(
         label_prefix: Prefix for labels on managed resources
         base_worker_config: Base worker configuration passed through to platform.create_slice().
             None disables bootstrap (test/local mode).
+        provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning
+            outcomes. None disables emission (test/local mode without finelog).
 
     Returns:
         Configured Autoscaler instance
@@ -54,9 +59,9 @@ def create_autoscaler(
         ValueError: If autoscaler_config has invalid timing values
     """
     validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
-    validate_scale_group_resources(scale_groups_to_config(scale_groups))
+    validate_scale_group_resources(scale_groups)
 
-    scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
+    scale_down_delay = autoscaler_config.scale_down_delay
 
     scaling_groups: dict[str, ScalingGroup] = {}
     for name, group_config in scale_groups.items():
@@ -69,15 +74,19 @@ def create_autoscaler(
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
         )
         resources = group_config.resources
-        worker_attrs = dict(group_config.worker.attributes) if group_config.HasField("worker") else {}
+        worker_attrs = dict(group_config.worker.attributes)
         slice_template = group_config.slice_template
-        cw_instance = slice_template.coreweave.instance_type if slice_template.HasField("coreweave") else ""
+        cw_instance = (
+            slice_template.coreweave.instance_type
+            if slice_template is not None and slice_template.coreweave is not None
+            else ""
+        )
         logger.info(
             "Scale group %s: device=%s:%s device_count=%d num_vms=%d buffer=%d max=%d instance=%s worker_attrs=%s",
             name,
-            resources.device_type,
-            resources.device_variant,
-            resources.device_count,
+            resources.device_type if resources is not None else None,
+            resources.device_variant if resources is not None else "",
+            resources.device_count if resources is not None else 0,
             group_config.num_vms,
             group_config.buffer_slices,
             group_config.max_slices,
@@ -88,7 +97,7 @@ def create_autoscaler(
     def make_draining_group(name: str) -> ScalingGroup:
         """Build a scale-to-zero group: ``max_slices=0`` blocks scale-up; idle scaledown drains it."""
         return ScalingGroup(
-            config=config_pb2.ScaleGroupConfig(name=name, max_slices=0),
+            config=ScaleGroupConfig(name=name, max_slices=0),
             platform=platform,
             label_prefix=label_prefix,
             idle_threshold=scale_down_delay,
@@ -101,4 +110,5 @@ def create_autoscaler(
         platform=platform,
         base_worker_config=base_worker_config,
         make_draining_group=make_draining_group,
+        provisioning_table=provisioning_table,
     )

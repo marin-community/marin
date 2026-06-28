@@ -14,8 +14,6 @@ pages (``text_by_page_src``); we fall back when the corrected list is
 missing or empty. Pages are joined with a blank line.
 """
 
-from __future__ import annotations
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 

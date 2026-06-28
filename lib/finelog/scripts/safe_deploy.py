@@ -18,8 +18,6 @@ Usage:
     uv run python lib/finelog/scripts/safe_deploy.py status marin-dev
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 from datetime import UTC, datetime

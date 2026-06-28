@@ -3,8 +3,6 @@
 
 """Tests for the log-shipper sidecar: CRI parsing, tailing, rotation, key derivation."""
 
-from __future__ import annotations
-
 import threading
 import time
 
@@ -162,8 +160,10 @@ def test_tail_ships_full_lines(tmp_path):
     entries = writer.entries()
     by_data = {e.data: e for e in entries}
     assert by_data["starting up"].source == "stdout"
+    assert by_data["starting up"].level == str_to_log_level("INFO")
     assert by_data["starting up"].attempt_id == 1
     assert by_data["it broke"].source == "stderr"
+    assert by_data["it broke"].level == str_to_log_level("ERROR")
     assert all(key == "/u/job/0:1" for key, _batch in writer.batches)
 
 

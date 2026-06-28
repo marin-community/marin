@@ -3,8 +3,6 @@
 
 """Public diagnostic-log source inventory and GHALogs extraction helpers."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -23,7 +21,7 @@ import fsspec
 import requests
 from fray import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import marin_prefix, open_url
+from rigging.filesystem import marin_prefix, open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.ingestion_manifest import (
@@ -341,7 +339,7 @@ class _DocumentIdentityPseudonymizer:
     username_ids: dict[str, str]
 
     @classmethod
-    def from_text(cls, text: str) -> _DocumentIdentityPseudonymizer:
+    def from_text(cls, text: str) -> "_DocumentIdentityPseudonymizer":
         pseudonymizer = cls(identity_ids={}, username_ids={})
         for match in _EMAIL_RE.finditer(text):
             pseudonymizer._register_email(match.group(0))
@@ -483,7 +481,7 @@ def _write_jsonl_records(output_file: str, records: Iterable[dict[str, str]]) ->
     bytes_written = 0
     output_dir = os.path.dirname(output_file)
     fsspec_mkdirs(output_dir, exist_ok=True)
-    with fsspec.open(output_file, "wt", encoding="utf-8") as writer:
+    with open_url(output_file, "wt", encoding="utf-8") as writer:
         for record in records:
             kept_records += 1
             payload = json.dumps(record, ensure_ascii=False)
@@ -523,7 +521,7 @@ def _normalize_input_path(path: str) -> str:
 
 
 def _path_exists(path: str) -> bool:
-    fs, relative_path = fsspec.core.url_to_fs(path)
+    fs, relative_path = url_to_fs(path)
     return fs.exists(relative_path)
 
 
@@ -532,7 +530,7 @@ def _download_to_path(url: str, destination_path: str) -> None:
     logger.info("Downloading %s to %s", url, destination_path)
     with requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT) as response:
         response.raise_for_status()
-        with fsspec.open(destination_path, "wb") as writer:
+        with open_url(destination_path, "wb") as writer:
             for chunk in response.iter_content(chunk_size=_DOWNLOAD_CHUNK_BYTES):
                 if chunk:
                     writer.write(chunk)
@@ -562,7 +560,7 @@ def _stage_loghub_if_missing(destination_dir: str) -> str:
                 continue
             destination_path = os.path.join(loghub_root, relative_path)
             fsspec_mkdirs(os.path.dirname(destination_path), exist_ok=True)
-            with archive.open(member, "r") as reader, fsspec.open(destination_path, "wb") as writer:
+            with archive.open(member, "r") as reader, open_url(destination_path, "wb") as writer:
                 shutil.copyfileobj(reader, writer)
     return destination_dir
 
@@ -758,10 +756,10 @@ def extract_ghalogs(
         output_file_paths[partition.value] = os.path.join(partition_dir, "data-00000-of-00001.jsonl")
 
     logger.info("Extracting at most %d members from %s", max_members, archive_path)
-    with fsspec.open(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
+    with open_url(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
         with ExitStack() as stack:
             writers = {
-                partition.value: stack.enter_context(fsspec.open(path, "wt", encoding="utf-8"))
+                partition.value: stack.enter_context(open_url(path, "wt", encoding="utf-8"))
                 for partition, path in (
                     (partition, output_file_paths[partition.value]) for partition in DiagnosticPartition
                 )
@@ -821,7 +819,7 @@ def extract_ghalogs(
 
 def _iter_logchunks_records(archive_path: str, max_examples: int) -> Iterable[dict[str, str]]:
     seen_examples = 0
-    with fsspec.open(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
+    with open_url(archive_path, "rb") as archive_handle, zipfile.ZipFile(archive_handle) as archive:
         for member in archive.infolist():
             if seen_examples >= max_examples:
                 break
@@ -889,7 +887,7 @@ def _source_path(fs: fsspec.AbstractFileSystem, relative_path: str) -> str:
 
 
 def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
-    fs, relative_root = fsspec.core.url_to_fs(input_path)
+    fs, relative_root = url_to_fs(input_path)
     pattern = os.path.join(relative_root.rstrip("/"), "**", "*_2k.log")
     paths = sorted(fs.glob(pattern, recursive=True))
     return [_source_path(fs, path) for path in paths[:max_files]]
@@ -897,7 +895,7 @@ def _list_loghub_files(input_path: str, max_files: int) -> list[str]:
 
 def _iter_loghub_records(input_path: str, max_files: int) -> Iterable[dict[str, str]]:
     for log_path in _list_loghub_files(input_path, max_files):
-        with fsspec.open(log_path, "rb") as handle:
+        with open_url(log_path, "rb") as handle:
             record = loghub_file_to_record(log_path, handle.read())
         if record is not None:
             yield record

@@ -1,17 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import hashlib
 from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
 from finelog.client import LogClient
-from iris.cluster.backends.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
@@ -27,6 +23,8 @@ from iris.cluster.controller.run_template import RunTemplateCache, new_run_templ
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -154,6 +152,7 @@ class ServiceTestHarness:
         user: str = "test-user",
         replicas: int = 1,
         max_retries_failure: int = 0,
+        max_task_failures: int = 0,
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
@@ -165,6 +164,7 @@ class ServiceTestHarness:
             environment=job_pb2.EnvironmentConfig(),
             replicas=replicas,
             max_retries_failure=max_retries_failure,
+            max_task_failures=max_task_failures,
         )
         self.service.launch_job(request, None)
         return job_id

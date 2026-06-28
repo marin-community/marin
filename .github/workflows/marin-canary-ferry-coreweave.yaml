@@ -216,7 +216,7 @@ jobs:
 
       - name: Upload diagnostics bundle
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-diag-${{ github.run_id }}
           path: /tmp/canary-diag
@@ -248,7 +248,7 @@ jobs:
       # hides the transcript with "full output hidden for security".
       - name: Upload Claude triage log
         if: (failure() || cancelled()) && github.event_name == 'schedule'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-triage-log-${{ github.run_id }}
           path: /home/runner/work/_temp/claude-execution-output.json
@@ -262,7 +262,7 @@ jobs:
       # https://github.com/marin-community/marin/actions/runs/24498461666.
       - name: Upload Slack message
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: slack-message
           path: slack_message.md

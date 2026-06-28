@@ -18,8 +18,6 @@ Examples:
   uv run python experiments/evals/served_qwen3_humaneval.py --local
 """
 
-from __future__ import annotations
-
 import shlex
 import subprocess
 from dataclasses import dataclass, replace

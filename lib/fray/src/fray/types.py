@@ -9,8 +9,6 @@ ResourceConfig to JobRequest (it's a job-level gang-scheduling concern,
 not a per-task resource requirement).
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -361,7 +359,7 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_tpu(tpu_type: str | Sequence[str], *, slice_count: int = 1, **kwargs: Any) -> "ResourceConfig":
         """Create a resource config for TPU(s).
 
         When ``tpu_type`` is a list, the first entry is canonical (used for
@@ -403,12 +401,12 @@ class ResourceConfig:
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> ResourceConfig:
+    def with_gpu(gpu_type: str, count: int = 1, **kwargs: Any) -> "ResourceConfig":
         device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu(**kwargs: Any) -> ResourceConfig:
+    def with_cpu(**kwargs: Any) -> "ResourceConfig":
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
@@ -541,11 +539,11 @@ class Entrypoint:
         c: Callable[..., Any],
         args: Sequence[Any] = (),
         kwargs: dict[str, Any] | None = None,
-    ) -> Entrypoint:
+    ) -> "Entrypoint":
         return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
     @staticmethod
-    def from_binary(command: str, args: Sequence[str]) -> Entrypoint:
+    def from_binary(command: str, args: Sequence[str]) -> "Entrypoint":
         return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
@@ -566,6 +564,8 @@ class JobRequest:
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
+        max_task_failures: Cumulative failed task attempts the job tolerates before it
+            fails (0 = fail on the first failure). Counts across retries.
         priority: Forwarded to the underlying backend if supported. 0 leaves
             the backend to use its default priority.
     """
@@ -577,6 +577,7 @@ class JobRequest:
     replicas: int | None = None
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
+    max_task_failures: int = 0
     priority: int = 0
 
     def __post_init__(self):
@@ -595,5 +596,5 @@ class JobStatus(StrEnum):
     STOPPED = "stopped"
 
     @staticmethod
-    def finished(status: JobStatus) -> bool:
+    def finished(status: "JobStatus") -> bool:
         return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)

@@ -27,8 +27,6 @@ in coordinator RAM.
 Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile

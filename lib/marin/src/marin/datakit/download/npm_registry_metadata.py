@@ -16,8 +16,6 @@ We intentionally exclude README blobs and maintainer identity fields so the slic
 stays focused on dependency metadata rather than free-form package docs.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import posixpath

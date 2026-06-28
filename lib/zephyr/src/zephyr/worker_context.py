@@ -3,8 +3,6 @@
 
 """Worker-side execution context exposed to user task code."""
 
-from __future__ import annotations
-
 import enum
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -29,7 +27,7 @@ class CounterEntry:
     stage: str | None = None
     count: int = 1  # number of observations; used for rolling average via update_counter
 
-    def merge(self, other: CounterEntry) -> None:
+    def merge(self, other: "CounterEntry") -> None:
         """Fold *other* into this entry in-place using this entry's aggregation.
 
         ``other.count`` is respected for AVERAGE so that merging two accumulated
@@ -65,7 +63,7 @@ class CounterSnapshot:
     generation: int
 
     @staticmethod
-    def empty(generation: int = 0) -> CounterSnapshot:
+    def empty(generation: int = 0) -> "CounterSnapshot":
         return CounterSnapshot(counters={}, generation=generation)
 
 

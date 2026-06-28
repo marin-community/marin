@@ -188,8 +188,7 @@ def _poll_until_ready(
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
             raise TimeoutError(
-                f"vLLM server at {models_url} did not become ready within {timeout_seconds}s "
-                f"(elapsed {elapsed:.1f}s)."
+                f"vLLM server at {models_url} did not become ready within {timeout_seconds}s (elapsed {elapsed:.1f}s)."
             )
 
         time.sleep(poll_interval_seconds)

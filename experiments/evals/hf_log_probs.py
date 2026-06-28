@@ -8,8 +8,6 @@
 the step actually executes (which is also when the model itself is downloaded).
 """
 
-from __future__ import annotations
-
 import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass

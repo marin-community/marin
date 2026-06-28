@@ -17,8 +17,6 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
-import equinox as eqx
-import fsspec
 import haliax as hax
 import jax
 import jmp
@@ -29,16 +27,15 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import DatasetComponent, LmDataConfig
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
+from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +76,8 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
     levanter.initialize(config)
     tokenizer = config.data.the_tokenizer
 
-    hf_checkpoint = RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None
+    if config.checkpoint_path is None:
+        raise ValueError("save_logprobs requires checkpoint_path")
 
     EvalBatch = config.trainer.EvalBatch
     Pos = config.model.max_Pos.resize(config.max_eval_length)
@@ -125,22 +123,22 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             TopK = top_k_values.resolve_axis("top_k")
             return top_k_values.rearrange((EvalBatch, Pos, TopK)), top_k_indices.rearrange((EvalBatch, Pos, TopK))
 
-        # Load model
-        if config.checkpoint_path is not None and not config.checkpoint_is_hf:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
-                model = load_checkpoint(model, checkpoint_path, subpath="model")
-            model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
-        elif hf_checkpoint is not None:
-            model_config = config.model
-            if not hasattr(model_config, "hf_checkpoint_converter"):
-                raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
-            model = converter.load_pretrained(model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype)
+        if config.checkpoint_is_hf:
+            model = load_hf_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=mp.compute_dtype,
+            )
         else:
-            raise AssertionError("Should not get here")
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
+            )
 
         for name, dataset in validation_sets.items():
             loader = DataLoader(
@@ -151,7 +149,7 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
             )
 
             output_file = os.path.join(config.output_path, name, "outputs.jsonl.gz")
-            cm = fsspec.open(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
+            cm = open_url(output_file, "wt", compression="gzip") if jax.process_index() == 0 else nullcontext()
             with cm as f:
                 for batch in loader:
                     with hax.axis_mapping(compute_axis_mapping):

@@ -37,6 +37,7 @@ from iris.cluster.backends.types import (
     SliceHandle,
     SliceStatus,
 )
+from iris.cluster.config import AutoscalerConfig, WorkerConfig
 from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
@@ -73,8 +74,8 @@ from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, Wo
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import WorkerStatusMap
-from iris.rpc import config_pb2, job_pb2, vm_pb2
-from iris.time_proto import duration_from_proto, timestamp_to_proto
+from iris.rpc import job_pb2, vm_pb2
+from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -199,10 +200,11 @@ class Autoscaler:
         scale_groups: dict[str, ScalingGroup],
         evaluation_interval: Duration,
         platform: WorkerInfraProvider,
-        base_worker_config: config_pb2.WorkerConfig | None = None,
+        base_worker_config: WorkerConfig | None = None,
         unresolvable_timeout: Duration = DEFAULT_UNRESOLVABLE_TIMEOUT,
         create_rate_limit: int = DEFAULT_CREATE_RATE_LIMIT,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
+        provisioning_table: Table | None = None,
     ):
         """Create autoscaler with explicit parameters.
 
@@ -218,6 +220,8 @@ class Autoscaler:
             make_draining_group: Builds a scale-to-zero ``ScalingGroup`` for a scale group that has
                 left config but still has live VMs (see ``restore_autoscaler_state``). None disables
                 drain adoption (test/local mode); the factory always wires it in prod.
+            provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning
+                outcomes. None disables emission (test/local mode without finelog).
         """
         self._groups = scale_groups
         self._make_draining_group = make_draining_group
@@ -237,10 +241,10 @@ class Autoscaler:
         # Bounded log of recent autoscaler actions for dashboard/debugging
         self._action_log: deque[vm_pb2.AutoscalerAction] = deque(maxlen=100)
 
-        # finelog table for the iris.provisioning namespace, injected by the
-        # controller once its log client is up (set_provisioning_sink). None in
-        # test/local mode disables emission.
-        self._provisioning_table: Table | None = None
+        # finelog table for the iris.provisioning namespace, built from the
+        # controller's log client before construction. None in test/local mode
+        # disables emission.
+        self._provisioning_table: Table | None = provisioning_table
 
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
 
@@ -254,30 +258,33 @@ class Autoscaler:
     def from_config(
         cls,
         scale_groups: dict[str, ScalingGroup],
-        config: config_pb2.AutoscalerConfig,
+        config: AutoscalerConfig,
         platform: WorkerInfraProvider,
-        base_worker_config: config_pb2.WorkerConfig | None = None,
+        base_worker_config: WorkerConfig | None = None,
         make_draining_group: Callable[[str], ScalingGroup] | None = None,
+        provisioning_table: Table | None = None,
     ) -> "Autoscaler":
-        """Create autoscaler from proto config.
+        """Create autoscaler from config.
 
         Args:
             scale_groups: Map of scale group name to ScalingGroup instance
-            config: Autoscaler configuration proto (with defaults already applied)
+            config: Autoscaler configuration (with defaults already applied)
             platform: WorkerInfraProvider instance for shutdown lifecycle
             base_worker_config: Base worker config merged with per-group overrides
             make_draining_group: Builds a scale-to-zero group for a retired-but-live scale group
                 (see ``Autoscaler.__init__`` / ``restore_autoscaler_state``).
+            provisioning_table: finelog ``iris.provisioning`` table for slice-provisioning outcomes.
 
         Returns:
             Configured Autoscaler instance
         """
         return cls(
             scale_groups=scale_groups,
-            evaluation_interval=duration_from_proto(config.evaluation_interval),
+            evaluation_interval=config.evaluation_interval,
             platform=platform,
             base_worker_config=base_worker_config,
             make_draining_group=make_draining_group,
+            provisioning_table=provisioning_table,
         )
 
     def shutdown(self) -> None:
@@ -296,9 +303,6 @@ class Autoscaler:
 
     def __exit__(self, *exc) -> None:
         self.shutdown()
-
-    def set_provisioning_sink(self, table: Table) -> None:
-        self._provisioning_table = table
 
     def _record_provisioning_outcome(
         self,
@@ -599,7 +603,7 @@ class Autoscaler:
         group.record_create_failed(ts)
         self._record_provisioning_outcome(group, ProvisioningOutcome.ERROR, error_message=str(error))
 
-    def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
+    def _per_group_worker_config(self, group: ScalingGroup) -> WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
         return build_worker_config_for_group(self._base_worker_config, group.config)
 

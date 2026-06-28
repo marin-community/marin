@@ -16,8 +16,6 @@ to preserve the per-source shares over the shortened horizon (see
 ``levanter/data/text/datasets.py:763-770``).
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import os

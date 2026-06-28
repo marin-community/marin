@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import json
 import logging
 import re
@@ -20,16 +18,17 @@ import httpx
 from google.cloud import tpu_v2alpha1
 from rigging.timing import ExponentialBackoff, Timestamp, retry_with_backoff
 
-from iris.cluster.backends.gcp.local import LocalSliceHandle
 from iris.cluster.backends.types import (
     InfraError,
     InfraUnavailableError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
+from iris.cluster.config import SliceConfig, WorkerConfig
+from iris.cluster.platforms.gcp.local import LocalSliceHandle
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import TPU_TOPOLOGIES
-from iris.rpc import config_pb2
+from iris.cluster.types import CapacityType
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +163,7 @@ class TpuCreateRequest:
     zone: str
     accelerator_type: str
     runtime_version: str
-    capacity_type: int  # config_pb2.CapacityType enum value
+    capacity_type: CapacityType | None
     labels: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, str] = field(default_factory=dict)
     service_account: str | None = None
@@ -291,8 +290,8 @@ class GcpService(Protocol):
     def create_local_slice(
         self,
         slice_id: str,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Create an in-process slice. Only valid in LOCAL mode."""
         ...
@@ -590,7 +589,7 @@ class CloudGcpService:
             body["labels"] = request.labels
         if request.metadata:
             body["metadata"] = request.metadata
-        if request.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE:
+        if request.capacity_type == CapacityType.PREEMPTIBLE:
             body["schedulingConfig"] = {"preemptible": True}
         if request.service_account:
             body["serviceAccount"] = {"email": request.service_account}
@@ -986,8 +985,8 @@ class CloudGcpService:
     def create_local_slice(
         self,
         slice_id: str,
-        config: config_pb2.SliceConfig,
-        worker_config: config_pb2.WorkerConfig | None = None,
+        config: SliceConfig,
+        worker_config: WorkerConfig | None = None,
     ) -> LocalSliceHandle:
         raise RuntimeError("create_local_slice is not supported in CLOUD mode")
 

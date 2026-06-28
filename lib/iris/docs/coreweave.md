@@ -264,7 +264,7 @@ CUDA 13.x.
 The `gpu` extra also pulls the CUDA toolchain wheels (`ptxas`/`nvlink` from
 `nvidia-cuda-nvcc`, `libdevice.10.bc` from `nvidia-nvvm`) into the task venv. A
 GPU job's setup scripts then expose them (see
-`iris.cluster.setup.cuda_toolchain_setup_script`): the toolchain binaries are
+`iris.cluster.setup_scripts.cuda_toolchain_setup_script`): the toolchain binaries are
 symlinked into the venv's `bin` (already on `PATH` once the venv is activated),
 and `libdevice.10.bc` is staged into XLA's default CUDA data dir
 (`./cuda_sdk_lib`) and the working directory, where XLA and Mosaic probe.

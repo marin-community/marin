@@ -27,6 +27,15 @@ class PortAllocator:
                 ports.append(port)
             return ports
 
+    def reserve(self, ports: list[int]) -> None:
+        """Mark an externally-known port set as taken.
+
+        Used during worker restart to re-claim the host ports of an adopted
+        container so the allocator never re-hands them to a new task.
+        """
+        with self._lock:
+            self._allocated.update(ports)
+
     def release(self, ports: list[int]) -> None:
         with self._lock:
             for port in ports:

@@ -20,8 +20,6 @@ The push is unauthenticated: the finelog log service performs no auth, the same
 posture under which the controller writes its own logs.
 """
 
-from __future__ import annotations
-
 import glob
 import logging
 import os
@@ -34,11 +32,10 @@ from datetime import datetime
 
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.types import str_to_log_level
-from rigging.log_setup import parse_log_level
 from rigging.timing import Timestamp
 
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.log_keys import classify_log_level
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -132,7 +129,7 @@ def _rfc3339_to_epoch_ms(timestamp_str: str) -> int | None:
 
 def _make_log_entry(line: CriLogLine, attempt_id: int) -> logging_pb2.LogEntry:
     """Build a finelog LogEntry from a parsed CRI line."""
-    level = str_to_log_level(parse_log_level(line.message))
+    level = classify_log_level(line.stream, line.message)
     entry = logging_pb2.LogEntry(source=line.stream, data=line.message, attempt_id=attempt_id, level=level)
     entry.timestamp.epoch_ms = line.epoch_ms
     return entry

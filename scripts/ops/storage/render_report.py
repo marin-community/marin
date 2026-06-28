@@ -22,8 +22,6 @@ PARQUET_DIR (a local dir or gs:// path) is required; it points at the parquet
 segments written by the scan stage.
 """
 
-from __future__ import annotations
-
 import hashlib
 import re
 import sys

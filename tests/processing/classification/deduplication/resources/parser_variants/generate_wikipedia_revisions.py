@@ -26,8 +26,6 @@ Run with::
 
     HF_TOKEN=... uv run tests/.../parser_variants/generate_wikipedia_revisions.py [--dry-run]
 """
-from __future__ import annotations
-
 import sys
 from collections.abc import Iterator
 from pathlib import Path
