@@ -124,6 +124,11 @@ def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int | None = N
     """
     if batch_size is None:
         batch_size = max(8, _PREDICT_TOKEN_BUDGET // ids.shape[1])
+    # Inference is data-parallel too: callers pass the global batch (sized for the
+    # whole slice), so shard each chunk across chips -- otherwise a single device
+    # would try to hold the full global-batch attention tensor and OOM/segfault.
+    ndev, _, batch_shard = data_parallel_shardings()
+    batch_size = max(ndev, (batch_size // ndev) * ndev)
     out: list[np.ndarray] = []
     n = ids.shape[0]
     for start in range(0, n, batch_size):
@@ -131,7 +136,7 @@ def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int | None = N
         pad = batch_size - chunk.shape[0]
         if pad:
             chunk = np.concatenate([chunk, np.zeros((pad, ids.shape[1]), dtype=ids.dtype)], axis=0)
-        preds = np.asarray(_predict_batch(model, jnp.asarray(chunk)))
+        preds = np.asarray(_predict_batch(model, jax.device_put(jnp.asarray(chunk), batch_shard)))
         out.append(preds[: batch_size - pad] if pad else preds)
     return np.concatenate(out)
 
