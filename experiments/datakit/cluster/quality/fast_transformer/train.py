@@ -131,7 +131,19 @@ class RunResult:
     train_seconds: float
 
 
-def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams) -> RunResult:
+@dataclass
+class FitResult:
+    model: FastTransformer
+    val_ids: np.ndarray
+    val_scores: np.ndarray
+    best_epoch: int
+    train_seconds: float
+    params: int
+    flops_per_token: float
+
+
+def fit(config: FastTransformerConfig, data: PackedData, hp: TrainHParams) -> FitResult:
+    """Train one model, selecting the checkpoint with the best internal-val Spearman."""
     key = jax.random.PRNGKey(hp.seed)
     model_key, key = jax.random.split(key)
     model = FastTransformer(config, key=model_key)
@@ -216,10 +228,22 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
             best_epoch,
         )
     train_seconds = time.time() - t0
+    return FitResult(
+        model=best_model,
+        val_ids=val_ids,
+        val_scores=val_scores,
+        best_epoch=best_epoch,
+        train_seconds=train_seconds,
+        params=n_params,
+        flops_per_token=flops,
+    )
 
-    val_pred = _predict(best_model, val_ids)
-    holdout_pred = _predict(best_model, data.eval.ids)
-    val_metrics = _metrics(val_pred, val_scores)
+
+def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams) -> RunResult:
+    fitted = fit(config, data, hp)
+    val_pred = _predict(fitted.model, fitted.val_ids)
+    holdout_pred = _predict(fitted.model, data.eval.ids)
+    val_metrics = _metrics(val_pred, fitted.val_scores)
     holdout_metrics = _metrics(holdout_pred, data.eval.scores)
     logger.info(
         "HOLDOUT: AUC=%.4f spearman=%.4f acc=%.4f F1=%.4f (params=%.2fM flops/tok=%.0fK)",
@@ -227,16 +251,16 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
         holdout_metrics.spearman_rho,
         holdout_metrics.accuracy,
         holdout_metrics.f1,
-        n_params / 1e6,
-        flops / 1e3,
+        fitted.params / 1e6,
+        fitted.flops_per_token / 1e3,
     )
     return RunResult(
         config={k: v for k, v in asdict(config).items()},
         hparams=asdict(hp),
-        params=n_params,
-        flops_per_token=flops,
+        params=fitted.params,
+        flops_per_token=fitted.flops_per_token,
         val=val_metrics,
         holdout=holdout_metrics,
-        best_epoch=best_epoch,
-        train_seconds=train_seconds,
+        best_epoch=fitted.best_epoch,
+        train_seconds=fitted.train_seconds,
     )
