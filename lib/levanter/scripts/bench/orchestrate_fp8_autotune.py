@@ -91,14 +91,18 @@ def _write_spec(unit, common, path):
         json.dump(spec, f)
 
 
-def run_pool(units, common, *, num_gpus, out_dir, tag, simulate, log):
-    """Run work units across ``num_gpus`` pinned worker subprocesses; return all parsed result rows."""
+def run_pool(units, common, *, num_gpus, out_dir, tag, simulate, log, worker_timeout):
+    """Run work units across ``num_gpus`` pinned worker subprocesses; return all parsed result rows.
+
+    A worker exceeding ``worker_timeout`` seconds is killed and marked failed, so a hung mosaic
+    compile cannot stall the whole job (its configs are simply absent from the results).
+    """
     if not units:
         return []
     os.makedirs(out_dir, exist_ok=True)
     queue = list(units)
     free = list(range(num_gpus))
-    running = {}  # gpu_id -> (proc, rows_out, unit, logfile)
+    running = {}  # gpu_id -> (proc, rows_out, unit, logfile, start_time)
     rows = []
 
     def launch(unit, gpu):
@@ -113,7 +117,7 @@ def run_pool(units, common, *, num_gpus, out_dir, tag, simulate, log):
             env["CUDA_VISIBLE_DEVICES"] = str(gpu)
         cmd = [sys.executable, _HARNESS, "--worker", "--work-file", wf, "--rows-out", ro]
         proc = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT)
-        running[gpu] = (proc, ro, unit, lf)
+        running[gpu] = (proc, ro, unit, lf, time.monotonic())
 
     while queue and free:
         launch(queue.pop(), free.pop())
@@ -121,15 +125,20 @@ def run_pool(units, common, *, num_gpus, out_dir, tag, simulate, log):
 
     while running:
         time.sleep(1.0)
-        for gpu, (proc, ro, unit, lf) in list(running.items()):
-            if proc.poll() is None:
+        for gpu, (proc, ro, unit, lf, started) in list(running.items()):
+            timed_out = proc.poll() is None and (time.monotonic() - started) > worker_timeout
+            if timed_out:
+                proc.kill()
+                proc.wait()
+                log(f"  [{tag}] WORKER u{unit['uid']} (shape={unit['shape']}) TIMED OUT after {worker_timeout}s; killed")
+            elif proc.poll() is None:
                 continue
             lf.close()
             del running[gpu]
-            if proc.returncode == 0 and os.path.exists(ro):
+            if not timed_out and proc.returncode == 0 and os.path.exists(ro):
                 with open(ro) as f:
                     rows.extend(json.loads(line) for line in f if line.strip())
-            else:
+            elif not timed_out:
                 log(f"  [{tag}] WORKER u{unit['uid']} (shape={unit['shape']}) failed rc={proc.returncode}; see log")
             if queue:
                 launch(queue.pop(), gpu)
@@ -160,6 +169,7 @@ def main():
     ap.add_argument("--numerics-tol", type=float, default=0.25)
     ap.add_argument("--num-gpus", type=int, default=None, help="default: detect via nvidia-smi")
     ap.add_argument("--max-reqs-per-worker", type=int, default=4)
+    ap.add_argument("--worker-timeout", type=float, default=1200.0, help="kill a worker exceeding this (s)")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--simulate", action="store_true", help="CPU plumbing check: bf16-only, JAX_PLATFORMS=cpu")
     ap.add_argument("--no-fp8", action="store_true", help="bf16 sweep only (skip the mosaic/wgrad waves)")
@@ -209,7 +219,7 @@ def main():
                 )
         reqs1[s.name] = rs
     units1 = plan_units(reqs1, num_gpus, args.max_reqs_per_worker)
-    rows1 = run_pool(units1, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave1", simulate=args.simulate, log=log)
+    rows1 = run_pool(units1, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave1", simulate=args.simulate, log=log, worker_timeout=args.worker_timeout)
     all_rows += rows1
 
     per_shape = {}
@@ -243,7 +253,7 @@ def main():
                 for i, cfg in enumerate(wgrad_candidate_dicts())
             ]
         units2 = plan_units(reqs2, num_gpus, args.max_reqs_per_worker)
-        rows2 = run_pool(units2, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave2", simulate=args.simulate, log=log)
+        rows2 = run_pool(units2, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave2", simulate=args.simulate, log=log, worker_timeout=args.worker_timeout)
         all_rows += rows2
         for s in shapes:
             if s.name in reqs2:
@@ -269,7 +279,7 @@ def main():
         reqs3[s.name] = rs
     # One unit per shape so its two arms run back-to-back on one GPU (clean A/B).
     units3 = [{"uid": i, "shape": s.name, "requests": reqs3[s.name]} for i, s in enumerate(shapes) if reqs3[s.name]]
-    rows3 = run_pool(units3, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave3", simulate=args.simulate, log=log)
+    rows3 = run_pool(units3, common, num_gpus=num_gpus, out_dir=out_dir, tag="wave3", simulate=args.simulate, log=log, worker_timeout=args.worker_timeout)
     all_rows += rows3
 
     results = []
