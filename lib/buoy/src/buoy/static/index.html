@@ -84,7 +84,7 @@
       if (!e || !p) return;
       fillList("run-list", []);
       runsCache = [];
-      runsCache = (await jget("api/runs?" + qs({ entity: e, project: p, limit: 200 }))).runs || [];
+      runsCache = (await jget("api/runs?" + qs({ entity: e, project: p, limit: 50 }))).runs || [];
       // user filter options derived from the fetched runs
       fillList("user-list", [...new Set(runsCache.map((r) => r.user).filter(Boolean))].sort());
       renderRunList();
