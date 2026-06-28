@@ -13,11 +13,12 @@ from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
-from marin.execution.artifact import Artifact, Checkpoint
-from marin.execution.lazy import Lazy, RunContext, derived, lower
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.inference.vllm_server import validate_vllm_mode_env
+from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
 from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
@@ -41,19 +42,19 @@ EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 logger = logging.getLogger(__name__)
 
 
-def _model_deps(model: Lazy[Checkpoint] | str) -> tuple[Lazy, ...]:
-    """A Checkpoint handle becomes a dependency; a path string carries no dep."""
-    return (model,) if isinstance(model, Lazy) else ()
+def _model_deps(model: ArtifactStep[LevanterCheckpoint] | str) -> tuple[ArtifactStep, ...]:
+    """A LevanterCheckpoint handle becomes a dependency; a path string carries no dep."""
+    return (model,) if isinstance(model, ArtifactStep) else ()
 
 
-def _model_path(ctx: RunContext, model: Lazy[Checkpoint] | str) -> str:
-    """Resolve a Checkpoint handle to its output path; pass a path string through."""
-    return ctx.path(model) if isinstance(model, Lazy) else model
+def _model_path(ctx: StepContext, model: ArtifactStep[LevanterCheckpoint] | str) -> str:
+    """Resolve a LevanterCheckpoint handle to its output path; pass a path string through."""
+    return ctx.artifact_path(model) if isinstance(model, ArtifactStep) else model
 
 
 def evaluate_lm_evaluation_harness(
     model_name: str,
-    model: Lazy[Checkpoint] | str,
+    model: ArtifactStep[LevanterCheckpoint] | str,
     evals: list[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
@@ -62,13 +63,13 @@ def evaluate_lm_evaluation_harness(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     env_vars: dict[str, str] | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Create an eval artifact for the model using LM Evaluation Harness.
 
     Args:
         model_name: Name of the model.
-        model: Checkpoint handle or path string to the model.
+        model: LevanterCheckpoint handle or path string to the model.
         evals: List of evaluations to run with LM Evaluation Harness.
         env_vars: Extra env vars to set on the child iris worker.
             Needed for vLLM-on-TPU bring-up (e.g. ``VLLM_ENABLE_V1_MULTIPROCESSING=0``)
@@ -78,13 +79,13 @@ def evaluate_lm_evaluation_harness(
     """
     deps = _model_deps(model)
 
-    def build_config(ctx: RunContext) -> EvaluationConfig:
+    def build_config(ctx: StepContext) -> EvaluationConfig:
         model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
             model_path=model_path,
-            evaluation_path=ctx.out,
+            evaluation_path=ctx.output_path,
             evals=evals,
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=discover_latest_checkpoint,
@@ -94,9 +95,11 @@ def evaluate_lm_evaluation_harness(
             wandb_tags=wandb_tags,
         )
 
-    return derived(
-        f"evaluation/lm_evaluation_harness/{model_name}",
-        fn=remote(
+    return ArtifactStep(
+        name=f"evaluation/lm_evaluation_harness/{model_name}",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=remote(
             evaluate,
             resources=resource_config,
             pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
@@ -119,39 +122,41 @@ def _infer_model_name_for_path(model_path: str) -> str:
     return "_".join(model_path.split("/")[-2:])
 
 
-def extract_model_name_and_path(step: Lazy[Checkpoint] | str) -> tuple[str, Lazy[Checkpoint] | str]:
+def extract_model_name_and_path(
+    step: ArtifactStep[LevanterCheckpoint] | str,
+) -> tuple[str, ArtifactStep[LevanterCheckpoint] | str]:
     """
     Extract the model name and path from a step or string.
 
-    Returns the model name and the original step (Lazy[Checkpoint] or str) for use in deps.
+    Returns the model name and the original step (ArtifactStep[LevanterCheckpoint] or str) for use in deps.
     """
-    if isinstance(step, Lazy):
+    if isinstance(step, ArtifactStep):
         return step.name, step
     return _infer_model_name_for_path(step), step
 
 
 def evaluate_levanter_lm_evaluation_harness(
     model_name: str,
-    model: Lazy[Checkpoint] | str,
+    model: ArtifactStep[LevanterCheckpoint] | str,
     evals: list[EvalTaskConfig],
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Create an eval artifact for the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
     deps = _model_deps(model)
 
-    def build_config(ctx: RunContext) -> EvaluationConfig:
+    def build_config(ctx: StepContext) -> EvaluationConfig:
         model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
             model_path=model_path,
-            evaluation_path=ctx.out,
+            evaluation_path=ctx.output_path,
             evals=evals,
             discover_latest_checkpoint=discover_latest_checkpoint,
             max_eval_instances=max_eval_instances,
@@ -159,27 +164,29 @@ def evaluate_levanter_lm_evaluation_harness(
             apply_chat_template=apply_chat_template,
         )
 
-    return derived(
-        f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+    return ArtifactStep(
+        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
         build_config=build_config,
         deps=deps,
     )
 
 
 def default_eval(
-    step: Lazy[Checkpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint] | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Create an eval artifact for the model using LM Evaluation Harness on a step.
 
     Args:
-        step: Checkpoint handle or path string to evaluate.
+        step: LevanterCheckpoint handle or path string to evaluate.
         evals: List of evals to run. Defaults to CORE_TASKS.
         max_eval_instances: Maximum number of evaluation instances to run.
     """
@@ -204,13 +211,13 @@ def default_eval(
 
 
 def default_base_eval(
-    step: Lazy[Checkpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint] | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
     discover_latest_checkpoint: bool = True,
-) -> list[Lazy[Artifact]]:
+) -> list[ArtifactStep[Artifact]]:
     eval_jobs = []
     core_grouped = default_eval(
         step=step,
@@ -260,14 +267,14 @@ def default_base_eval(
 
 
 def default_sft_eval(
-    step: Lazy[Checkpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint] | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
     apply_chat_template: bool = True,
     use_levanter_inference: bool = False,
-) -> list[Lazy[Artifact]]:
+) -> list[ArtifactStep[Artifact]]:
     eval_jobs = []
     leaderboard_grouped = default_eval(
         step=step,
@@ -335,12 +342,12 @@ def default_sft_eval(
 
 
 def default_key_evals(
-    step: Lazy[Checkpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint] | str,
     resource_config: ResourceConfig,
     model_name: str | None = None,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-) -> list[Lazy[Artifact]]:
+) -> list[ArtifactStep[Artifact]]:
     """
     Create a list of eval artifacts for the model using LM Evaluation Harness.
     """
@@ -388,7 +395,7 @@ def evaluate_harbor(
     n_concurrent: int = 4,
     env: str = "local",
     agent_kwargs: dict | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Evaluate on ANY Harbor dataset from the registry.
 
@@ -441,12 +448,12 @@ def evaluate_harbor(
 
     dispatch_resources = ResourceConfig.with_cpu() if model_path else resource_config
 
-    def build_config(ctx: RunContext) -> EvaluationConfig:
+    def build_config(ctx: StepContext) -> EvaluationConfig:
         return EvaluationConfig(
             evaluator="harbor",
             model_name=model_name,
             model_path=model_path,
-            evaluation_path=ctx.out,
+            evaluation_path=ctx.output_path,
             evals=[],
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=False,
@@ -457,9 +464,11 @@ def evaluate_harbor(
             generation_params=generation_params,
         )
 
-    return derived(
-        f"evaluation/harbor/{model_name}-{dataset}-{version}",
-        fn=remote(
+    return ArtifactStep(
+        name=f"evaluation/harbor/{model_name}-{dataset}-{version}",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=remote(
             evaluate,
             resources=dispatch_resources,
             env_vars=env_vars_from_keys(HARBOR_EVAL_ENV_KEYS),
@@ -471,7 +480,7 @@ def evaluate_harbor(
 
 def evaluate_evalchemy(
     model_name: str,
-    model: Lazy[Checkpoint] | str,
+    model: ArtifactStep[LevanterCheckpoint] | str,
     evals: Sequence[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
@@ -481,13 +490,13 @@ def evaluate_evalchemy(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     base_eval_run_name: str | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Create an eval artifact for the model using Evalchemy.
 
     Args:
         model_name: Name of the model.
-        model: Checkpoint handle or path string to the model.
+        model: LevanterCheckpoint handle or path string to the model.
         evals: Evaluations to run with Evalchemy.
         max_eval_instances: Maximum number of evaluation instances to run.
         engine_kwargs: Additional engine kwargs for vLLM.
@@ -507,13 +516,13 @@ def evaluate_evalchemy(
     step_name = f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}"
     deps = _model_deps(model)
 
-    def build_config(ctx: RunContext) -> EvaluationConfig:
+    def build_config(ctx: StepContext) -> EvaluationConfig:
         model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="evalchemy",
             model_name=model_name,
             model_path=model_path,
-            evaluation_path=ctx.out,
+            evaluation_path=ctx.output_path,
             evals=evals,
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=discover_latest_checkpoint,
@@ -525,16 +534,18 @@ def evaluate_evalchemy(
             base_eval_run_name=base_eval_run_name,
         )
 
-    return derived(
-        step_name,
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVALCHEMY_DEPENDENCY_GROUPS),
+    return ArtifactStep(
+        name=step_name,
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVALCHEMY_DEPENDENCY_GROUPS),
         build_config=build_config,
         deps=deps,
     )
 
 
 def default_evalchemy_eval(
-    step: Lazy[Checkpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint] | str,
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v5p-8"),
     evals: Sequence[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
@@ -543,12 +554,12 @@ def default_evalchemy_eval(
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
     base_eval_run_name: str | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Create an eval artifact for the model using Evalchemy reasoning benchmarks.
 
     Args:
-        step: Checkpoint handle or path string to evaluate.
+        step: LevanterCheckpoint handle or path string to evaluate.
         resource_config: Resource configuration (defaults to v5p-8 TPU).
         evals: List of evals to run. Defaults to EVALCHEMY_CORE_TASKS.
         max_eval_instances: Maximum number of evaluation instances to run.
@@ -591,12 +602,12 @@ def default_evalchemy_eval(
 
 
 def compile_evalchemy_results(
-    steps: list[Lazy[Artifact]],
+    steps: list[ArtifactStep[Artifact]],
     seeds: list[int] | None = None,
     base_eval_run_name: str | None = None,
     model_path: str | None = None,
     task_name: str | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """
     Compile results from multiple Evalchemy evaluation artifacts into aggregated metrics.
 
@@ -623,20 +634,22 @@ def compile_evalchemy_results(
     task_suffix = f"_{task_name}" if task_name else ""
     compile_step_name = f"evaluation/evalchemy/{model_id}/compile{task_suffix}_avg{num_seeds}seeds"
 
-    def build_config(ctx: RunContext) -> dict:
-        input_paths = [ctx.path(step) + "/results.json" for step in steps]
+    def build_config(ctx: StepContext) -> dict:
+        input_paths = [ctx.artifact_path(step) + "/results.json" for step in steps]
         return {
             "input_paths": input_paths,
-            "output_path": ctx.out,
+            "output_path": ctx.output_path,
             "seeds": seeds or [],
             "base_eval_run_name": base_eval_run_name,
             "model_path": model_path,
             "task_name": task_name,
         }
 
-    return derived(
-        compile_step_name,
-        fn=compile_evalchemy_results_fn,
+    return ArtifactStep(
+        name=compile_step_name,
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=compile_evalchemy_results_fn,
         build_config=build_config,
         deps=tuple(steps),
     )
@@ -650,7 +663,7 @@ def build_evalchemy_eval_steps(
     engine_kwargs: dict | None = None,
     apply_chat_template: bool = True,
     discover_latest_checkpoint: bool = False,
-) -> tuple[list[Lazy[Artifact]], list[Lazy[Artifact]]]:
+) -> tuple[list[ArtifactStep[Artifact]], list[ArtifactStep[Artifact]]]:
     """Build evaluation and compilation artifacts for an evalchemy experiment.
 
     Creates one evaluation artifact per (checkpoint, task, seed) combination, plus
@@ -671,8 +684,8 @@ def build_evalchemy_eval_steps(
     Returns:
         Tuple of (eval_artifacts, compile_artifacts).
     """
-    eval_steps: list[Lazy[Artifact]] = []
-    compile_steps: list[Lazy[Artifact]] = []
+    eval_steps: list[ArtifactStep[Artifact]] = []
+    compile_steps: list[ArtifactStep[Artifact]] = []
 
     for base_eval_run_name, checkpoint_paths in checkpoints.items():
         for checkpoint in checkpoint_paths:
@@ -681,7 +694,7 @@ def build_evalchemy_eval_steps(
                 task_seed_pairs += [(t, seeds) for t in tasks]
 
             for task, seeds in task_seed_pairs:
-                task_steps: list[Lazy[Artifact]] = []
+                task_steps: list[ArtifactStep[Artifact]] = []
                 for seed in seeds:
                     generation_params = {**base_generation_params, "seed": seed}
                     step = default_evalchemy_eval(
@@ -746,4 +759,4 @@ def run_evalchemy_experiment(
     )
 
     all_artifacts = eval_steps + compile_steps
-    StepRunner().run([lower(x) for x in all_artifacts], max_concurrent=max_parallel_jobs)
+    StepRunner().run([x.lower() for x in all_artifacts], max_concurrent=max_parallel_jobs)

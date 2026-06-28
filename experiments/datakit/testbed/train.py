@@ -24,10 +24,10 @@ from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, lower, materialized_config
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
+from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import marin_prefix
 
 from experiments.datakit.testbed.mixture import read_bucket_weights
@@ -127,7 +127,7 @@ def run_testbed_config(
     name: str,
     tokenized_buckets: dict[str, StepSpec],
     weights_step: StepSpec,
-    validation: Sequence[Lazy[Dataset]],
+    validation: Sequence[ArtifactStep[TokenizedCache]],
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
@@ -250,7 +250,7 @@ def run_testbed_config(
         )
         run_testbed_trial(TestbedTrialConfig(weights_path=weights_step.output_path, grug_config=grug_config))
 
-    deps = [weights_step, *buckets.values(), *(lower(handle) for handle in validation)]
+    deps = [weights_step, *buckets.values(), *(handle.lower() for handle in validation)]
     return StepSpec(
         name=f"data/datakit/train/{name}",
         deps=deps,

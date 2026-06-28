@@ -25,10 +25,10 @@ import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
@@ -90,7 +90,7 @@ def multislice_smoke_resources() -> ResourceConfig:
     return ResourceConfig.with_tpu(tpu_type, slice_count=slice_count, regions=[region])
 
 
-def build() -> Lazy[Checkpoint]:
+def build() -> ArtifactStep[LevanterCheckpoint]:
     """The Grug multislice smoke run as a lazy checkpoint, configured from the env.
 
     The Nemotron mix and the WandB ``replicate_path`` depend on the run context, so
@@ -112,13 +112,13 @@ def build() -> Lazy[Checkpoint]:
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
     validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
 
-    def build_config(ctx: RunContext) -> GrugBaseLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=model,
             data=mixture(ctx, train, validation=validation),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=steps,
             batch_size=batch_size,
             seed=0,
@@ -130,7 +130,7 @@ def build() -> Lazy[Checkpoint]:
                 group="grug-multislice-smoke",
                 name=None,
                 mode=os.environ.get("WANDB_MODE") or None,
-                replicate_path=ctx.out,
+                replicate_path=ctx.output_path,
             ),
             optimizer=AdamConfig(
                 learning_rate=3e-3,
@@ -147,16 +147,14 @@ def build() -> Lazy[Checkpoint]:
             loss_implementation=loss_implementation,
         )
 
-    return Lazy(
+    return ArtifactStep(
         name=CANARY_STEP_NAME,
-        version="v1",
-        recipe=Recipe(
-            fn=run_grug_base_trial,
-            build_config=build_config,
-            deps=(*train, *validation),
-            run_args={"train_resources": multislice_smoke_resources()},
-        ),
-        result_type=Checkpoint,
+        version="2026.06.28",
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_base_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": multislice_smoke_resources()},
         override_path=override_output_path,
     )
 
@@ -195,7 +193,7 @@ def wipe_path_if_exists(path: str) -> None:
     fs.rm(plain_path, recursive=True)
 
 
-def _wipe_canary_output(checkpoint: Lazy[Checkpoint]) -> None:
+def _wipe_canary_output(checkpoint: ArtifactStep[LevanterCheckpoint]) -> None:
     """Delete the canary's output directory if it exists.
 
     The canary writes to a path that is stable across runs
@@ -217,7 +215,7 @@ def main() -> None:
     os.environ.update(_child_env_vars())
     checkpoint = build()
     _wipe_canary_output(checkpoint)
-    StepRunner().run([lower(checkpoint)])
+    StepRunner().run([checkpoint.lower()])
 
 
 if __name__ == "__main__":

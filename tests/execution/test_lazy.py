@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behaviour tests for the lazy-artifact runtime (``marin.execution.lazy``).
+"""Behaviour tests for the artifact-step runtime (``marin.execution.lazy``).
 
 Drives the hardest path — a config that references its own output path AND a dependency's
 output path — end-to-end through the real ``StepRunner``, plus the ``apply`` sugar, the
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
-from marin.execution.lazy import OUT, Lazy, Recipe, RunContext, apply, materialized_config, run
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
 from marin.execution.remote import remote
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -61,29 +61,25 @@ def _make_ckpt(config: TrainCfg) -> Ckpt:
 # --- How it looks: the user-facing experiment ----------------------------------
 
 
-def dclm_tokens() -> Lazy[Tokens]:
-    return Lazy(
+def dclm_tokens() -> ArtifactStep[Tokens]:
+    return ArtifactStep(
         name="datasets/dclm_tokens",
         version="2026.06.25",
-        result_type=Tokens,
-        recipe=Recipe(
-            fn=_make_tokens,
-            build_config=lambda ctx: TokenizeCfg(out=ctx.out, source="gs://raw/dclm", tokenizer="llama3"),
-        ),
+        artifact_type=Tokens,
+        run=_make_tokens,
+        build_config=lambda ctx: TokenizeCfg(out=ctx.output_path, source="gs://raw/dclm", tokenizer="llama3"),
     )
 
 
-def dclm_1b(*, lr: float = 3e-3) -> Lazy[Ckpt]:
+def dclm_1b(*, lr: float = 3e-3) -> ArtifactStep[Ckpt]:
     data = dclm_tokens()
-    return Lazy(
+    return ArtifactStep(
         name="checkpoints/dclm_1b",
         version="2026.06.28",
-        result_type=Ckpt,
-        recipe=Recipe(
-            fn=_make_ckpt,
-            build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.path(data), lr=lr, steps=54931),
-            deps=(data,),
-        ),
+        artifact_type=Ckpt,
+        run=_make_ckpt,
+        build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.artifact_path(data), lr=lr, steps=54931),
+        deps=(data,),
     )
 
 
@@ -112,28 +108,24 @@ def test_fingerprint_is_prefix_independent_but_drift_sensitive():
 
 def test_dep_version_bump_changes_consumer_fingerprint():
     """Bumping a dependency's version changes the consumer's fingerprint, because
-    build_config embeds ctx.path(dep) = name@version."""
+    build_config embeds ctx.artifact_path(dep) = name@version."""
     before = dclm_1b().fingerprint()
 
-    def bumped() -> Lazy[Ckpt]:
-        data = Lazy(
+    def bumped() -> ArtifactStep[Ckpt]:
+        data = ArtifactStep(
             name="datasets/dclm_tokens",
             version="2026.07.01",  # bumped
-            result_type=Tokens,
-            recipe=Recipe(
-                fn=_make_tokens,
-                build_config=lambda ctx: TokenizeCfg(out=ctx.out, source="gs://raw/dclm", tokenizer="llama3"),
-            ),
+            artifact_type=Tokens,
+            run=_make_tokens,
+            build_config=lambda ctx: TokenizeCfg(out=ctx.output_path, source="gs://raw/dclm", tokenizer="llama3"),
         )
-        return Lazy(
+        return ArtifactStep(
             name="checkpoints/dclm_1b",
             version="2026.06.28",
-            result_type=Ckpt,
-            recipe=Recipe(
-                fn=_make_ckpt,
-                build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.path(data), lr=3e-3, steps=54931),
-                deps=(data,),
-            ),
+            artifact_type=Ckpt,
+            run=_make_ckpt,
+            build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.artifact_path(data), lr=3e-3, steps=54931),
+            deps=(data,),
         )
 
     assert bumped().fingerprint() != before
@@ -141,49 +133,44 @@ def test_dep_version_bump_changes_consumer_fingerprint():
 
 def test_region_is_pulled_live_at_run_time():
     """The region is a runtime-only attribute: ``build_config`` reads it from the
-    ``RunContext``, so one recipe resolves against whatever region the step runs in."""
+    ``StepContext``, so one step resolves against whatever region it runs in."""
 
-    def build_config(ctx: RunContext) -> TokenizeCfg:
-        return TokenizeCfg(out=ctx.out, source=f"gs://raw-{ctx.region}/dclm", tokenizer="llama3")
+    def build_config(ctx: StepContext) -> TokenizeCfg:
+        return TokenizeCfg(out=ctx.output_path, source=f"gs://raw-{ctx.region}/dclm", tokenizer="llama3")
 
-    recipe = Recipe(fn=_make_tokens, build_config=build_config)
-    east = recipe.build_config(RunContext.for_run(out="o", prefix="p", region="us-east5"))
-    central = recipe.build_config(RunContext.for_run(out="o", prefix="p", region="us-central2"))
+    east = build_config(StepContext.for_run(output_path="o", prefix="p", region="us-east5"))
+    central = build_config(StepContext.for_run(output_path="o", prefix="p", region="us-central2"))
     assert (east.source, central.source) == ("gs://raw-us-east5/dclm", "gs://raw-us-central2/dclm")
 
 
 def test_resources_do_not_affect_identity():
-    """Compute rides with the fn (``remote(fn, resources=…)``), never the config or the
+    """Compute rides with the run fn (``remote(fn, resources=…)``), never the config or the
     graph node, so changing the TPU a step runs on must not change its fingerprint."""
 
-    def on(resources: ResourceConfig) -> Lazy[Artifact]:
-        return Lazy(
+    def on(resources: ResourceConfig) -> ArtifactStep[Artifact]:
+        return ArtifactStep(
             name="checkpoints/dclm_1b",
             version="2026.06.28",
-            result_type=Artifact,
-            recipe=Recipe(
-                fn=remote(_make_ckpt, resources=resources),
-                build_config=lambda ctx: TrainCfg(out=ctx.out, data="gs://d", lr=3e-3, steps=10),
-            ),
+            artifact_type=Artifact,
+            run=remote(_make_ckpt, resources=resources),
+            build_config=lambda ctx: TrainCfg(out=ctx.output_path, data="gs://d", lr=3e-3, steps=10),
         )
 
     assert on(ResourceConfig.with_tpu("v5p-8")).fingerprint() == on(ResourceConfig.with_tpu("v6e-8")).fingerprint()
 
 
-def test_run_arg_is_live_at_run_but_not_in_identity():
-    """A run-arg is declared on the recipe and pulled via ``ctx.run_arg()``: it reaches the
+def test_runtime_arg_is_live_at_run_but_not_in_identity():
+    """A runtime arg is declared on the step and pulled via ``ctx.runtime_arg()``: it reaches the
     config at run time but is a ``<key>`` placeholder at fingerprint time."""
 
-    def on(tpu: str) -> Lazy[Artifact]:
-        return Lazy(
+    def on(tpu: str) -> ArtifactStep[Artifact]:
+        return ArtifactStep(
             name="checkpoints/dclm_1b",
             version="2026.06.28",
-            result_type=Artifact,
-            recipe=Recipe(
-                fn=_make_ckpt,
-                build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
-                run_args={"tpu": tpu},
-            ),
+            artifact_type=Artifact,
+            run=_make_ckpt,
+            build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.runtime_arg("tpu"), lr=3e-3, steps=10),
+            runtime_args={"tpu": tpu},
         )
 
     # Live at run time: the materialized config carries the declared value.
@@ -192,15 +179,13 @@ def test_run_arg_is_live_at_run_but_not_in_identity():
     assert on("v5p-8").fingerprint() == on("v6e-8").fingerprint()
 
 
-def test_pulling_an_undeclared_run_arg_fails_loudly():
-    art = Lazy(
+def test_pulling_an_undeclared_runtime_arg_fails_loudly():
+    art = ArtifactStep(
         name="checkpoints/dclm_1b",
         version="2026.06.28",
-        result_type=Artifact,
-        recipe=Recipe(
-            fn=_make_ckpt,
-            build_config=lambda ctx: TrainCfg(out=ctx.out, data=ctx.run_arg("tpu"), lr=3e-3, steps=10),
-        ),
+        artifact_type=Artifact,
+        run=_make_ckpt,
+        build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.runtime_arg("tpu"), lr=3e-3, steps=10),
     )
     with pytest.raises(KeyError, match="tpu"):
         art.fingerprint()
@@ -212,11 +197,12 @@ def test_pulling_an_undeclared_run_arg_fails_loudly():
 @pytest.mark.parametrize("bad", ["", "/leading", "trailing/", "has/../dots", "gs://scheme/x"])
 def test_malformed_name_is_rejected(bad):
     with pytest.raises(ValueError):
-        Lazy(
+        ArtifactStep(
             name=bad,
             version="2026.06.28",
-            result_type=Artifact,
-            recipe=Recipe(fn=lambda c: None, build_config=lambda ctx: None),
+            artifact_type=Artifact,
+            run=lambda c: None,
+            build_config=lambda ctx: None,
         )
 
 
@@ -224,11 +210,12 @@ def test_malformed_name_is_rejected(bad):
 def test_malformed_version_is_rejected(bad):
     """A version must be a calendar version ``YYYY.MM.DD[.N]`` or ``dev``/``<label>-dev``."""
     with pytest.raises(ValueError):
-        Lazy(
+        ArtifactStep(
             name="ok",
             version=bad,
-            result_type=Artifact,
-            recipe=Recipe(fn=lambda c: None, build_config=lambda ctx: None),
+            artifact_type=Artifact,
+            run=lambda c: None,
+            build_config=lambda ctx: None,
         )
 
 
@@ -270,19 +257,20 @@ class OtherValue(Artifact):
 def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
     """A value artifact whose type changed under a reused version is a hard error at load."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    dclm_tokens().resolve()  # records result_type Tokens at this address
+    dclm_tokens().resolve()  # records artifact type Tokens at this address
 
-    drifted = Lazy(
+    drifted = ArtifactStep(
         name="datasets/dclm_tokens",
         version="2026.06.25",
-        result_type=OtherValue,
-        recipe=Recipe(fn=lambda cfg: OtherValue(), build_config=lambda ctx: {"out": ctx.out}),
+        artifact_type=OtherValue,
+        run=lambda cfg: OtherValue(),
+        build_config=lambda ctx: {"out": ctx.output_path},
     )
     with pytest.raises(ArtifactTypeMismatchError):
         drifted.resolve()
 
 
-# --- apply: the generic single-step builder ------------------------------------
+# --- apply: the keyword-input single-step builder ------------------------------
 
 
 def _stage(output_path: str) -> None:
@@ -320,7 +308,7 @@ def test_apply_lazy_dep_and_literal_both_bear_identity():
 def test_apply_collects_lazy_deps():
     staged = apply("raw/massive", _stage, version="2026.06.28", output_path=OUT)
     parts = apply("data/massive", _transform, version="2026.06.28", input_path=staged, output_path=OUT)
-    assert parts.recipe.deps == (staged,)
+    assert parts.deps == (staged,)
 
 
 def test_apply_rejects_unbindable_inputs():

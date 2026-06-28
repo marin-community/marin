@@ -16,9 +16,11 @@ from fray.types import ResourceConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.data.text import LMMixtureDatasetConfig
 from marin.evaluation.log_probs import EvalLmConfig, evaluate_lm_log_probs
-from marin.execution.artifact import Artifact, Checkpoint, Dataset
-from marin.execution.lazy import Lazy, RunContext, derived
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.data import mixture
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint
 
 
 @dataclass
@@ -62,14 +64,14 @@ def default_hf_lm_log_probs(
     *,
     hf_repo_id: str,
     hf_revision: str,
-    checkpoint: Lazy[Checkpoint] | str,
-    validation_datasets: Sequence[Lazy[Dataset]],
+    checkpoint: ArtifactStep[LevanterCheckpoint] | str,
+    validation_datasets: Sequence[ArtifactStep[TokenizedCache]],
     resource_config: ResourceConfig,
     per_device_batch_size: int = 4,
     max_samples_per_dataset: int | None = None,
     name: str | None = None,
     wandb_tags: list[str] | None = None,
-) -> Lazy[Artifact]:
+) -> ArtifactStep[Artifact]:
     """Build a log-probs eval artifact that fetches its HF model config at runtime."""
     if name is None:
         if isinstance(checkpoint, str):
@@ -80,12 +82,12 @@ def default_hf_lm_log_probs(
             name = checkpoint.name.replace("/", "--")
 
     step_name = f"analysis/log_probs/{name}"
-    deps: tuple[Lazy, ...] = (
-        (checkpoint, *validation_datasets) if isinstance(checkpoint, Lazy) else tuple(validation_datasets)
+    deps: tuple[ArtifactStep, ...] = (
+        (checkpoint, *validation_datasets) if isinstance(checkpoint, ArtifactStep) else tuple(validation_datasets)
     )
 
-    def build_config(ctx: RunContext) -> HfLogProbsConfig:
-        checkpoint_path = ctx.path(checkpoint) if isinstance(checkpoint, Lazy) else checkpoint
+    def build_config(ctx: StepContext) -> HfLogProbsConfig:
+        checkpoint_path = ctx.artifact_path(checkpoint) if isinstance(checkpoint, ArtifactStep) else checkpoint
         data = mixture(ctx, {}, validation=list(validation_datasets), shuffle=False)
         return HfLogProbsConfig(
             name=name,
@@ -95,10 +97,17 @@ def default_hf_lm_log_probs(
             datasets=data,
             resource_config=resource_config,
             per_device_batch_size=per_device_batch_size,
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             log_entropy=True,
             max_samples_per_dataset=max_samples_per_dataset,
             wandb_tags=wandb_tags,
         )
 
-    return derived(step_name, fn=evaluate_hf_log_probs, build_config=build_config, deps=deps)
+    return ArtifactStep(
+        name=step_name,
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=evaluate_hf_log_probs,
+        build_config=build_config,
+        deps=deps,
+    )

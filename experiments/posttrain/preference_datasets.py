@@ -22,9 +22,10 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from marin.execution.artifact import Artifact, Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.conversation.transform_preference_data import (
     TransformPreferenceDatasetConfig,
     transform_hf_preference_dataset,
@@ -84,21 +85,22 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> Lazy[Dataset]:
-    """Lazy download handle for a preference dataset from HuggingFace."""
+def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> ArtifactStep[TokenizedCache]:
+    """ArtifactStep download handle for a preference dataset from HuggingFace."""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
     return hf_download(
         f"raw/{dataset_name}",
         hf_id=dataset.hf_dataset_id,
         revision=dataset.revision,
         pin=f"raw/{dataset_name}-{dataset.revision}",
+        version="2026.06.28",
     )
 
 
 def transform_preference_dataset_step(
-    dataset_cfg: PreferenceDatasetConfig, download_step: Lazy[Dataset]
-) -> Lazy[Artifact]:
-    """Lazy handle that preprocesses and shards the preference dataset.
+    dataset_cfg: PreferenceDatasetConfig, download_step: ArtifactStep[Artifact]
+) -> ArtifactStep[Artifact]:
+    """ArtifactStep handle that preprocesses and shards the preference dataset.
 
     ===========================================================================
     dataset_cfg: {
@@ -130,8 +132,8 @@ def transform_preference_dataset_step(
 
     def _build_config(ctx, _cfg=dataset_cfg, _dl=download_step, _name=adapter_name):
         return TransformPreferenceDatasetConfig(
-            input_path=ctx.path(_dl),
-            output_path=ctx.out,
+            input_path=ctx.artifact_path(_dl),
+            output_path=ctx.output_path,
             shard_size=5000,
             metadata_columns=_cfg.metadata_columns,
             filetype=_cfg.filetype,
@@ -141,17 +143,19 @@ def transform_preference_dataset_step(
             adapter_name=_name,
         )
 
-    return derived(
-        f"preference/{dataset_name}",
-        fn=transform_hf_preference_dataset,
+    return ArtifactStep(
+        name=f"preference/{dataset_name}",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=transform_hf_preference_dataset,
         build_config=_build_config,
         deps=(download_step,),
-        pin=pin,
+        override_path=pin,
     )
 
 
-def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> Lazy[Artifact]:
-    """Lazy handle for a preference dataset by HF id, optionally overriding splits."""
+def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ArtifactStep[Artifact]:
+    """ArtifactStep handle for a preference dataset by HF id, optionally overriding splits."""
     assert hf_dataset_id in PREFERENCE_DATASET_NAME_TO_CONFIG, f"Unknown preference dataset: {hf_dataset_id}"
 
     original_config = PREFERENCE_DATASET_NAME_TO_CONFIG[hf_dataset_id]

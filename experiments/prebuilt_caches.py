@@ -17,9 +17,9 @@ Example usage::
     data = lambda ctx: mixture(ctx, {fineweb_edu_10B_dataset(): 1.0})
 """
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import pretokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -27,19 +27,21 @@ fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
 
 
-def fineweb_edu_10B_dataset() -> Lazy[Dataset]:
-    """Pretokenized fineweb-edu 10B-token subcache as a lazy Dataset handle."""
+def fineweb_edu_10B_dataset() -> ArtifactStep[TokenizedCache]:
+    """Pretokenized fineweb-edu 10B-token subcache as a lazy TokenizedCache handle."""
     return pretokenized(
         "fineweb-edu-10B",
         repo_id=fineweb_edu_10B_repo_id,
         tokenizer=marin_tokenizer,
+        version="2026.06.28",
     )
 
 
-def fineweb_edu_10M_dataset() -> Lazy[Dataset]:
-    """Pretokenized fineweb-edu 10M-token subcache as a lazy Dataset handle."""
+def fineweb_edu_10M_dataset() -> ArtifactStep[TokenizedCache]:
+    """Pretokenized fineweb-edu 10M-token subcache as a lazy TokenizedCache handle."""
     return pretokenized(
         "fineweb-edu-10M",
         repo_id=fineweb_edu_10M_repo_id,
         tokenizer=marin_tokenizer,
+        version="2026.06.28",
     )

@@ -1,29 +1,32 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lazy artifacts addressed by an explicit ``name@version``.
+"""Artifact steps addressed by an explicit ``name@version``.
 
 The model:
 
-- A :class:`Lazy` is a content-free handle: ``(name, version, recipe, result_type)``.
-  Building one runs nothing; :meth:`Lazy.run` / :meth:`Lazy.resolve` execute it.
-- A :class:`Recipe` is ``(fn, build_config, deps, run_args)``. ``build_config`` is a pure
-  function of a :class:`RunContext`, which draws the line between identity and execution:
-  values written as literals (model, hyperparameters) bear identity, while values *pulled*
-  from the context — ``ctx.out``, ``ctx.path(dep)``, ``ctx.prefix``, ``ctx.region``,
-  ``ctx.run_arg(key)`` — are where/how the step runs and never do.
-- ``fn(config)`` is the step function: a plain callable. It returns the produced
+- An :class:`ArtifactStep` is a content-free handle to a versioned artifact:
+  ``(name, version, artifact_type)`` plus how to build it — ``run``, ``build_config``, ``deps``.
+  Constructing one runs nothing; :func:`run` / :meth:`ArtifactStep.resolve` execute it.
+- ``build_config(ctx)`` is a pure function of a :class:`StepContext`, which draws the line between
+  identity and execution: values written as literals (model, hyperparameters, dep *versions*)
+  bear identity, while values *pulled* from the context — ``ctx.output_path``,
+  ``ctx.artifact_path(dep)``, ``ctx.prefix``, ``ctx.region``, ``ctx.runtime_arg(key)`` — are
+  where/how the step runs and never do.
+- ``run(config)`` is the step function: a plain callable. It returns the produced
   :class:`~marin.execution.artifact.Artifact` (a data ref or a value), or ``None`` for a data
-  step that writes its bytes to ``ctx.out``. To run a step on Fray, wrap your own function with
-  :func:`~marin.execution.remote.remote` and pass that as ``fn`` — the lazy layer does no remote
-  dispatch and knows nothing about resources.
+  step that writes its bytes to ``ctx.output_path``. To run a step on Fray, wrap your own function
+  with :func:`~marin.execution.remote.remote` and pass that as ``run`` — the step layer does no
+  remote dispatch and knows nothing about resources.
 - Identity is the explicit ``{prefix}/{name}/{version}`` path — no content hash. The recipe
-  *fingerprint* (config built with dep versions in place of paths and placeholders for
+  *fingerprint* (the config built with dep versions in place of paths and placeholders for
   everything pulled from ``ctx``) is recorded for an advisory drift check, never in the path.
 
-Pre-existing data is brought in with :func:`adopt`. :meth:`Lazy.run`/:meth:`Lazy.resolve` are
-the entry points; :func:`run` runs several handles together; :func:`apply` (keyword-input form)
-and :func:`derived` (config-object form) are the generic single-step builders.
+Pre-existing data is brought in with :func:`adopt`. :func:`run` runs handles for their side
+effects; :meth:`ArtifactStep.resolve` runs one and loads its typed artifact. A custom step is
+just a function that constructs and returns an ``ArtifactStep`` (see ``marin.experiment.data`` /
+``marin.experiment.train`` for the dataset and training builders) — there is no generic wrapper to
+learn.
 """
 
 import inspect
@@ -100,108 +103,106 @@ def _validate_version(version: str) -> None:
 
 
 @dataclass(frozen=True)
-class RunContext:
-    """What a recipe resolves its config against — and the dividing line for identity.
+class StepContext:
+    """What a step resolves its config against — and the dividing line for identity.
 
-    Values written as literals in ``build_config`` (the model, hyperparameters, dep
-    *versions*) bear identity and enter the fingerprint; values pulled from the context never
-    do. :meth:`for_run` binds the live environment; :meth:`for_fingerprint` substitutes
-    placeholders, which is what realizes the exclusion.
+    Values written as literals in ``build_config`` (the model, hyperparameters, dep *versions*)
+    bear identity and enter the fingerprint; values pulled from the context never do.
+    :meth:`for_run` binds the live environment; :meth:`for_fingerprint` substitutes placeholders,
+    which is what realizes the exclusion.
 
-    Pull points: ``ctx.out`` (this output path), ``ctx.path(dep)`` (a dep's resolved path),
-    ``ctx.prefix`` (the live storage prefix), ``ctx.region`` (the live region), and
-    ``ctx.run_arg(key)`` (a recipe-declared run-arg, e.g. the TPU a dispatched job runs on).
-    ``is_fingerprint`` is ``True`` only under :meth:`for_fingerprint`, for a ``build_config`` that
-    must emit an identity summary (rather than read records that do not exist yet).
+    Pull points: ``ctx.output_path`` (this step's output dir), ``ctx.artifact_path(dep)`` (a dep's
+    resolved path), ``ctx.prefix`` (the live storage prefix), ``ctx.region`` (the live region),
+    and ``ctx.runtime_arg(key)`` (a step-declared runtime arg, e.g. the TPU a dispatched job runs
+    on). ``is_fingerprint`` is ``True`` only under :meth:`for_fingerprint`, for a ``build_config``
+    that must emit an identity summary (rather than read records that do not exist yet).
     """
 
-    out: str
+    output_path: str
     prefix: str
     region: str | None
     is_fingerprint: bool
-    _dep_ref: Callable[["Lazy"], str]
-    _run_args: Mapping[str, Any]
+    _dep_ref: Callable[["ArtifactStep"], str]
+    _runtime_args: Mapping[str, Any]
 
-    def path(self, dep: "Lazy") -> str:
+    def artifact_path(self, dep: "ArtifactStep") -> str:
+        """The resolved output path of a dependency this step builds on."""
         return self._dep_ref(dep)
 
-    def run_arg(self, key: str) -> Any:
-        """A recipe-declared run-arg: its real value at run time, a ``<key>`` placeholder at
-        fingerprint time. Pull execution choices through here so they reach the step but
-        never bear on its identity."""
+    def runtime_arg(self, key: str) -> Any:
+        """A step-declared runtime arg: its real value at run time, a ``<key>`` placeholder at
+        fingerprint time. Pull execution choices through here so they reach the step but never
+        bear on its identity."""
         try:
-            return self._run_args[key]
+            return self._runtime_args[key]
         except KeyError:
             raise KeyError(
-                f"run-arg {key!r} is not declared in the recipe's run_args {sorted(self._run_args)}"
+                f"runtime arg {key!r} is not declared in the step's runtime_args {sorted(self._runtime_args)}"
             ) from None
 
     @staticmethod
     def for_run(
-        out: str, prefix: str, *, region: str | None = None, run_args: Mapping[str, Any] | None = None
-    ) -> "RunContext":
-        return RunContext(
-            out=out,
+        output_path: str, prefix: str, *, region: str | None = None, runtime_args: Mapping[str, Any] | None = None
+    ) -> "StepContext":
+        return StepContext(
+            output_path=output_path,
             prefix=prefix,
             region=region,
             is_fingerprint=False,
             _dep_ref=lambda d: d.path(prefix),
-            _run_args=run_args or {},
+            _runtime_args=runtime_args or {},
         )
 
     @staticmethod
-    def for_fingerprint(run_arg_keys: Iterable[str] = ()) -> "RunContext":
-        return RunContext(
-            out="<out>",
+    def for_fingerprint(runtime_arg_keys: Iterable[str] = ()) -> "StepContext":
+        return StepContext(
+            output_path="<output_path>",
             prefix="<prefix>",
             region="<region>",
             is_fingerprint=True,
             _dep_ref=lambda d: f"{d.name}@{d.version}",
-            _run_args={key: f"<{key}>" for key in run_arg_keys},
+            _runtime_args={key: f"<{key}>" for key in runtime_arg_keys},
         )
 
 
-@dataclass(frozen=True)
-class Recipe:
-    """How to build an artifact: the step fn, a config builder, deps, run-args."""
-
-    fn: Callable[[Any], "Artifact | None"]
-    """``fn(config)`` — a plain callable returning the produced ``Artifact`` (or ``None`` for a
-    data step that writes to ``ctx.out``). Wrap it with
-    :func:`~marin.execution.remote.remote` to dispatch on Fray; the lazy layer just calls it."""
-    build_config: Callable[[RunContext], Any]
-    """``build_config(ctx) -> config``. Pulls paths and live attributes from the RunContext."""
-    deps: tuple["Lazy", ...] = ()
-    run_args: Mapping[str, Any] = field(default_factory=dict)
-    """Execution choices the config pulls via ``ctx.run_arg(key)``. Excluded from the
-    fingerprint, so changing one never forks identity."""
-
-
-# eq=False gives handles object identity (hashable despite unhashable values in their recipe),
+# eq=False gives handles object identity (hashable despite unhashable values in their config),
 # so a handle can key a mixture dict. Value-equality lives in name@version and the fingerprint.
 @dataclass(frozen=True, eq=False)
-class Lazy(Generic[T]):
-    """A lazy, content-free handle to a versioned artifact producing a ``result_type``."""
+class ArtifactStep(Generic[T]):
+    """A lazy, content-free handle to a versioned artifact and how to build it.
+
+    ``run(build_config(ctx))`` produces the artifact: ``build_config`` assembles the config from
+    the :class:`StepContext` (literals bear identity; pulled values do not), and ``run`` is the
+    plain callable that does the work, returning the produced ``artifact_type`` (or ``None`` for a
+    data step that writes to ``ctx.output_path``). ``deps`` are the handles this step builds on;
+    pass the same handles ``build_config`` reads via ``ctx.artifact_path`` so they materialize
+    first.
+    """
 
     name: str
     version: str
-    recipe: Recipe
-    result_type: type[T]
+    artifact_type: type[T]
+    run: Callable[[Any], "Artifact | None"]
+    build_config: Callable[[StepContext], Any]
+    deps: tuple["ArtifactStep", ...] = ()
+    runtime_args: Mapping[str, Any] = field(default_factory=dict)
+    """Execution choices the config pulls via ``ctx.runtime_arg(key)``. Excluded from the
+    fingerprint, so changing one never forks identity."""
     override_path: str | None = None
     """Pin the artifact to an existing location instead of ``{name}/{version}``. A relative
     pin is resolved against the prefix; an absolute one is used as-is. Writes no record.
     Mutually exclusive with ``adopt_source``."""
     adopt_source: str | None = None
     """Adopt pre-existing data at this location as a managed ``name@version`` (set via
-    :func:`adopt`). Consumers resolve to ``adopt_source``; lowering writes a provenance
+    :func:`adopt`). Consumers resolve to ``adopt_source``; running it writes a provenance
     record at the canonical address. Mutually exclusive with ``override_path``."""
     adopt_config: dict | None = None
     """For an adopted artifact, the synthetic ``config`` to record (e.g. a tokenized cache's
     tokenizer/format), so consumers read metadata the same way as for a produced artifact."""
     expected_fingerprint: str | None = None
-    """Opt-in hard pin: when set, :meth:`lower` raises :class:`FingerprintMismatchError` if
-    the config now fingerprints to something else, and the drift check raises rather than
-    warns. Leave ``None`` to opt out."""
+    """Opt-in hard pin: when set, :meth:`lower` raises :class:`FingerprintMismatchError` if the
+    config now fingerprints to something else, and the drift check raises rather than warns. Leave
+    ``None`` to opt out."""
 
     def __post_init__(self) -> None:
         _validate_segment("name", self.name)
@@ -215,7 +216,7 @@ class Lazy(Generic[T]):
         values; for an adopted one, its source location and recorded config."""
         if self.adopt_source is not None:
             return json.dumps({"adopt_source": self.adopt_source, "config": self.adopt_config}, sort_keys=True)
-        config = self.recipe.build_config(RunContext.for_fingerprint(self.recipe.run_args.keys()))
+        config = self.build_config(StepContext.for_fingerprint(self.runtime_args.keys()))
         return canonical_json(config)
 
     def fingerprint(self) -> str:
@@ -241,39 +242,32 @@ class Lazy(Generic[T]):
         """
         return _lower(self, Provenance.capture())
 
-    def run(self, *, max_concurrent: int = 8, dry_run: bool = False, force_run_failed: bool = True) -> None:
-        """Lower and run this handle for side effects."""
-        run(self, max_concurrent=max_concurrent, dry_run=dry_run, force_run_failed=force_run_failed)
-
-    def resolve(self: "Lazy[T]", *, max_concurrent: int = 8) -> T:
-        """Run this handle then load its realized, typed :class:`Artifact` via ``result_type.load``.
+    def resolve(self: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:
+        """Run this handle then load its realized, typed :class:`Artifact` via ``artifact_type.load``.
 
         Checks the served record's ``result_type`` matches and raises
         :class:`ArtifactTypeMismatchError` on a mismatch (a value artifact whose schema changed
         under a reused version) before loading. No build on a cache hit.
         """
-        self.run(max_concurrent=max_concurrent)
+        run(self, max_concurrent=max_concurrent)
         path = self.path()
         record = read_record(path)
-        expected = _result_type_name(self.result_type)
+        expected = _result_type_name(self.artifact_type)
         if record is not None and record.result_type and record.result_type != expected:
             raise ArtifactTypeMismatchError(
                 f"{self.name}@{self.version}: recorded result_type is {record.result_type}, "
                 f"but the handle requests {expected}. The value type changed under a reused version — "
                 "bump the version."
             )
-        return self.result_type.load(path)
+        return self.artifact_type.load(path)
 
 
-def _result_type_name(result_type: type[Artifact]) -> str:
-    return f"{result_type.__module__}.{result_type.__qualname__}"
+def _result_type_name(artifact_type: type[Artifact]) -> str:
+    return f"{artifact_type.__module__}.{artifact_type.__qualname__}"
 
 
 def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
-
-
-_ADOPT_RECIPE = Recipe(fn=_adopt_noop, build_config=lambda _ctx: None)
 
 
 def adopt(
@@ -283,52 +277,58 @@ def adopt(
     *,
     kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
     config: dict | None = None,
-) -> "Lazy[T]":
+) -> "ArtifactStep[T]":
     """Register pre-existing data at ``source`` as a managed ``name@version``.
 
     The data is neither moved nor recomputed: a consumer that depends on the returned handle
-    resolves to ``source``. Lowering writes a provenance record at the canonical
+    resolves to ``source``. Running it writes a provenance record at the canonical
     ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
-    ``result_type`` for consumer routing (:class:`Artifact` by default). ``config`` records
+    ``artifact_type`` for consumer routing (:class:`Artifact` by default). ``config`` records
     synthetic metadata (e.g. a tokenized cache's tokenizer/format) so consumers read it the same
     way as for a produced artifact.
     """
-    return Lazy(
-        name=name, version=version, recipe=_ADOPT_RECIPE, result_type=kind, adopt_source=source, adopt_config=config
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=kind,
+        run=_adopt_noop,
+        build_config=lambda _ctx: None,
+        adopt_source=source,
+        adopt_config=config,
     )
 
 
-def materialized_config(handle: "Lazy", prefix: str) -> Any:
+def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
     """The concrete config a run would receive, for inspection/golden tests.
 
-    Resolves ``ctx.out`` / ``ctx.path(dep)`` against ``prefix`` and passes the recipe's real
-    ``run_args`` (so a ``build_config`` that reads ``ctx.run_arg(...)`` does not ``KeyError``)
-    without running anything. Region is ``None``, so this is not identical to the run-time
-    config, which also binds a real region.
+    Resolves ``ctx.output_path`` / ``ctx.artifact_path(dep)`` against ``prefix`` and passes the
+    handle's real ``runtime_args`` (so a ``build_config`` that reads ``ctx.runtime_arg(...)`` does
+    not ``KeyError``) without running anything. Region is ``None``, so this is not identical to the
+    run-time config, which also binds a real region.
     """
-    return handle.recipe.build_config(
-        RunContext.for_run(out=handle.path(prefix), prefix=prefix, run_args=handle.recipe.run_args)
+    return handle.build_config(
+        StepContext.for_run(output_path=handle.path(prefix), prefix=prefix, runtime_args=handle.runtime_args)
     )
 
 
-def _output_path_spec(handle: "Lazy") -> str:
+def _output_path_spec(handle: "ArtifactStep") -> str:
     """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
-def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
+def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
-    fingerprint, version, result_type, and dep identities travel in ``hash_attrs`` so the runner
+    fingerprint, version, artifact type, and dep identities travel in ``hash_attrs`` so the runner
     applies the drift check before serving a cached output, and the step fn writes a full
     :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
-    inspects ``recipe.fn``.
+    inspects ``handle.run``.
 
     Raises :class:`FingerprintMismatchError` if ``expected_fingerprint`` is set and differs;
     :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep.
     """
-    dep_specs = [_lower(dep, provenance) for dep in handle.recipe.deps]
+    dep_specs = [_lower(dep, provenance) for dep in handle.deps]
     payload = handle.fingerprint_payload()
     fingerprint = fingerprint_hash(payload)
     if handle.expected_fingerprint is not None and fingerprint != handle.expected_fingerprint:
@@ -339,7 +339,7 @@ def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
         )
 
     if not is_mutable_version(handle.version):
-        for dep in handle.recipe.deps:
+        for dep in handle.deps:
             if is_mutable_version(dep.version):
                 raise ValueError(
                     f"{handle.name}@{handle.version} is a fixed version but depends on mutable "
@@ -347,12 +347,12 @@ def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
                     "cached. Make the parent dev, or pin the dep."
                 )
 
-    dep_refs = [f"{d.name}@{d.version}" for d in handle.recipe.deps]
-    result_type_name = _result_type_name(handle.result_type)
+    dep_refs = [f"{d.name}@{d.version}" for d in handle.deps]
+    result_type_name = _result_type_name(handle.artifact_type)
     # A pin references existing data; it writes no record. Everything else records provenance.
     record_provenance = handle.override_path is None
 
-    def fn(output_path: str, _handle: "Lazy" = handle) -> Any:
+    def fn(output_path: str, _handle: "ArtifactStep" = handle) -> Any:
         if _handle.adopt_source is not None:
             # Adoption registers pre-existing data: no compute, the record points at it.
             source = _handle.path(marin_prefix())
@@ -363,11 +363,14 @@ def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
             config_json: dict[str, Any] | None = _handle.adopt_config
             result_json: dict[str, Any] | None = None
         else:
-            ctx = RunContext.for_run(
-                out=output_path, prefix=marin_prefix(), region=marin_region(), run_args=_handle.recipe.run_args
+            ctx = StepContext.for_run(
+                output_path=output_path,
+                prefix=marin_prefix(),
+                region=marin_region(),
+                runtime_args=_handle.runtime_args,
             )
-            config = _handle.recipe.build_config(ctx)
-            result = _handle.recipe.fn(config)
+            config = _handle.build_config(ctx)
+            result = _handle.run(config)
             source = None
             config_json = json.loads(canonical_json(config))
             result_json = result.result_payload() if isinstance(result, Artifact) else None
@@ -410,12 +413,12 @@ def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
 
 
 def run(
-    *handles: "Lazy",
+    *handles: "ArtifactStep",
     max_concurrent: int = 8,
     dry_run: bool = False,
     force_run_failed: bool = True,
 ) -> None:
-    """Lower and run ``handles`` for side effects — the entry point for several handles at once.
+    """Lower and run ``handles`` for side effects — the entry point for one or several handles.
 
     Provenance is captured once for the whole invocation, so every artifact built records the
     same launch. ``dry_run`` logs without touching remote status; ``force_run_failed`` reruns a
@@ -430,8 +433,25 @@ def run(
     )
 
 
+def lower(handle: "ArtifactStep") -> StepSpec:
+    """Lower ``handle``'s graph into a ``StepSpec`` the ``StepRunner`` can run.
+
+    The free-function form of :meth:`ArtifactStep.lower`, for the
+    ``StepRunner().run([lower(step) for step in steps])`` idiom.
+    """
+    return handle.lower()
+
+
+def resolve(handle: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:
+    """Run ``handle`` then load its realized, typed :class:`Artifact`.
+
+    The free-function form of :meth:`ArtifactStep.resolve`.
+    """
+    return handle.resolve(max_concurrent=max_concurrent)
+
+
 class _OutSentinel:
-    """The :data:`OUT` sentinel for :func:`apply`: resolves to ``ctx.out`` at run time."""
+    """The :data:`OUT` sentinel for :func:`apply`: resolves to ``ctx.output_path`` at run time."""
 
     def __repr__(self) -> str:
         return "OUT"
@@ -440,14 +460,14 @@ class _OutSentinel:
 OUT: Final = _OutSentinel()
 
 
-def _collect_deps(inputs: Mapping[str, Any]) -> list["Lazy"]:
-    """The ``Lazy`` handles in ``inputs`` (recursing list/tuple/dict), deduped by identity,
-    in first-seen order."""
-    deps: list[Lazy] = []
+def _collect_deps(inputs: Mapping[str, Any]) -> list["ArtifactStep"]:
+    """The ``ArtifactStep`` handles in ``inputs`` (recursing list/tuple/dict), deduped by
+    identity, in first-seen order."""
+    deps: list[ArtifactStep] = []
     seen: set[int] = set()
 
     def walk(value: Any) -> None:
-        if isinstance(value, Lazy):
+        if isinstance(value, ArtifactStep):
             if id(value) not in seen:
                 seen.add(id(value))
                 deps.append(value)
@@ -463,13 +483,13 @@ def _collect_deps(inputs: Mapping[str, Any]) -> list["Lazy"]:
     return deps
 
 
-def _resolve_input(value: Any, ctx: RunContext) -> Any:
-    """Resolve one ``apply`` input against ``ctx``: a ``Lazy`` to its path, ``OUT`` to
-    ``ctx.out``, recursing builtin containers; anything else is a literal."""
-    if isinstance(value, Lazy):
-        return ctx.path(value)
+def _resolve_input(value: Any, ctx: StepContext) -> Any:
+    """Resolve one ``apply`` input against ``ctx``: an ``ArtifactStep`` to its path, ``OUT`` to
+    ``ctx.output_path``, recursing builtin containers; anything else is a literal."""
+    if isinstance(value, ArtifactStep):
+        return ctx.artifact_path(value)
     if value is OUT:
-        return ctx.out
+        return ctx.output_path
     if isinstance(value, list):
         return [_resolve_input(item, ctx) for item in value]
     if isinstance(value, tuple):
@@ -479,53 +499,24 @@ def _resolve_input(value: Any, ctx: RunContext) -> Any:
     return value
 
 
-def derived(
-    name: str,
-    *,
-    fn: Callable[[Any], "Artifact | None"],
-    build_config: Callable[[RunContext], Any],
-    version: str,
-    deps: Iterable["Lazy"] = (),
-    pin: str | None = None,
-    kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
-) -> "Lazy[T]":
-    """The generic single-step builder, config-object form: ``fn(build_config(ctx))``.
-
-    The tier beneath :func:`apply` for a step whose function takes a typed config object (a
-    dataclass/pydantic config) rather than keyword inputs, or whose inputs derive from a dep path
-    (``f"{ctx.path(dep)}/sub"``) — neither of which ``apply`` expresses. ``build_config`` pulls dep
-    paths and ``ctx.out`` itself; pass the same handles in ``deps`` so they materialize first.
-    ``kind`` selects the produced :class:`~marin.execution.artifact.Artifact` type. To dispatch
-    ``fn`` on Fray, wrap it with :func:`~marin.execution.remote.remote` yourself — the lazy layer
-    adds no remote behavior. ``pin`` references existing data instead of recomputing.
-    """
-    return Lazy(
-        name=name,
-        version=version,
-        recipe=Recipe(fn=fn, build_config=build_config, deps=tuple(deps)),
-        result_type=kind,
-        override_path=pin,
-    )
-
-
 def apply(
     name: str,
     fn: Callable[..., Any],
     *,
     version: str,
-    result_type: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
+    artifact_type: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
     pin: str | None = None,
     **inputs: Any,
-) -> "Lazy[T]":
-    """The generic single-step builder: *name an output, say which function makes it, pass its
-    inputs.*
+) -> "ArtifactStep[T]":
+    """A single-step builder that calls ``fn(**inputs)`` directly — for a step whose function
+    takes keyword arguments rather than a config object.
 
-    Each value in ``inputs`` is classified, recursing into ``list``/``tuple``/``dict``: a
-    :class:`Lazy` handle becomes a dep and resolves to ``ctx.path(handle)`` at run time (its
-    ``name@version`` enters identity); the :data:`OUT` sentinel resolves to ``ctx.out``;
-    anything else is a literal that bears identity. The recipe calls ``fn(**resolved_inputs)``
-    directly. To dispatch on Fray, pass an already-wrapped ``remote(fn, resources=…)`` as ``fn``.
-    ``result_type`` selects the produced :class:`Artifact` type; ``pin`` references existing data.
+    Each value in ``inputs`` is classified, recursing into ``list``/``tuple``/``dict``: an
+    :class:`ArtifactStep` handle becomes a dep and resolves to ``ctx.artifact_path(handle)`` at run
+    time (its ``name@version`` enters identity); the :data:`OUT` sentinel resolves to
+    ``ctx.output_path``; anything else is a literal that bears identity. To dispatch on Fray, pass
+    an already-wrapped ``remote(fn, resources=…)`` as ``fn``. ``artifact_type`` selects the
+    produced :class:`Artifact` type; ``pin`` references existing data.
 
     Raises :class:`TypeError` if ``fn``'s signature cannot bind the inputs.
     """
@@ -537,11 +528,18 @@ def apply(
 
     deps = _collect_deps(inputs)
 
-    def build_config(ctx: RunContext) -> dict[str, Any]:
+    def build_config(ctx: StepContext) -> dict[str, Any]:
         return {key: _resolve_input(value, ctx) for key, value in inputs.items()}
 
     def step_fn(config: dict[str, Any], _fn: Callable[..., Any] = fn) -> Any:
         return _fn(**config)
 
-    recipe = Recipe(fn=step_fn, build_config=build_config, deps=tuple(deps))
-    return Lazy(name=name, version=version, recipe=recipe, result_type=result_type, override_path=pin)
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=artifact_type,
+        run=step_fn,
+        build_config=build_config,
+        deps=tuple(deps),
+        override_path=pin,
+    )

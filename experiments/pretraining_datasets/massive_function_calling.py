@@ -10,9 +10,9 @@ from marin.datakit.download.massive import (
     transform_staged_massive,
 )
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import raw_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -35,7 +35,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
+def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """MASSIVE function-calling corpus as a tokenized Dataset handle."""
     staged = raw_download(
         "raw/massive",
@@ -43,31 +43,36 @@ def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> La
         build_config=lambda ctx: {
             "tarball_url": MASSIVE_TARBALL_URL,
             "version": MASSIVE_VERSION,
-            "output_path": ctx.out,
+            "output_path": ctx.output_path,
         },
+        version="2026.06.28",
     )
-    transformed = derived(
-        "processed/massive_function_calling",
-        fn=_run_transform,
+    transformed = ArtifactStep(
+        name="processed/massive_function_calling",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_transform,
         build_config=lambda ctx: {
-            "input_path": ctx.path(staged),
-            "output_path": ctx.out,
+            "input_path": ctx.artifact_path(staged),
+            "output_path": ctx.output_path,
             "schema_version": "v1",
         },
         deps=(staged,),
-        kind=Dataset,
     )
-    norm = derived(
-        "normalized/massive_function_calling",
-        fn=_run_normalize,
+    norm = ArtifactStep(
+        name="normalized/massive_function_calling",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_normalize,
         build_config=lambda ctx: {
-            "input_path": ctx.path(transformed),
-            "output_path": ctx.out,
+            "input_path": ctx.artifact_path(transformed),
+            "output_path": ctx.output_path,
             "text_field": "text",
             "id_field": "id",
             "file_extensions": [".parquet"],
         },
         deps=(transformed,),
-        kind=Dataset,
     )
-    return tokenized("massive_function_calling", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet")
+    return tokenized(
+        "massive_function_calling", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28"
+    )

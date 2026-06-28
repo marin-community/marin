@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lazy dataset handles for mid-training: math, code, medical QA, and pile validation."""
+"""ArtifactStep dataset handles for mid-training: math, code, medical QA, and pile validation."""
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
@@ -30,12 +30,13 @@ megamath_token_counts = {
 }
 
 
-def finemath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def finemath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Finemath-3plus tokenized dataset handle."""
     finemath_download = hf_download(
         "raw/finemath",
         hf_id="HuggingFaceTB/finemath",
         revision="8f233cf",
+        version="2026.06.28",
     )
     return {
         "finemath_3_plus": tokenized(
@@ -44,24 +45,26 @@ def finemath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Da
             raw=finemath_download,
             glob="finemath-3plus/**/*.parquet",
             pin="tokenized/finemath_3_plus-a26b0f/",
+            version="2026.06.28",
         ),
     }
 
 
-def stackv2_edu_python_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def stackv2_edu_python_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized Python-filtered stackv2_edu Common Pile split."""
     stackv2_edu_dl = stackv2_edu_filtered_download()
-    python_filter = derived(
-        "documents/common_pile/stackv2_edu_filtered_python",
-        fn=filter_dataset_by_metadata_extension,
+    python_filter = ArtifactStep(
+        name="documents/common_pile/stackv2_edu_filtered_python",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=filter_dataset_by_metadata_extension,
         build_config=lambda ctx: FilterByMetadataExtensionConfig(
-            input_path=ctx.path(stackv2_edu_dl),
-            output_path=ctx.out,
+            input_path=ctx.artifact_path(stackv2_edu_dl),
+            output_path=ctx.output_path,
             allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
             input_glob="stack-edu-*.json.gz",
         ),
         deps=(stackv2_edu_dl,),
-        kind=Dataset,
     )
     return {
         "common_pile_stackv2_edu_filtered_python": tokenized(
@@ -69,11 +72,12 @@ def stackv2_edu_python_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[st
             tokenizer=tokenizer,
             raw=python_filter,
             glob="**/*.jsonl.gz",
+            version="2026.06.28",
         ),
     }
 
 
-def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized MegaMath splits, one handle per source partition."""
     megamath_download = hf_download(
         "raw/llm360/megamath",
@@ -81,6 +85,7 @@ def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Da
         revision="3cbc64616594d6bc8759abaa0b2a71858f880f0d",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/llm360/megamath",
+        version="2026.06.28",
     )
     _split_globs = {
         "megamath/qa": "megamath-qa/**/*.parquet",
@@ -90,12 +95,12 @@ def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Da
         "megamath/web": "megamath-web/*/*.parquet",
     }
     return {
-        name: tokenized(name, tokenizer=tokenizer, raw=megamath_download, glob=glob)
+        name: tokenized(name, tokenizer=tokenizer, raw=megamath_download, glob=glob, version="2026.06.28")
         for name, glob in _split_globs.items()
     }
 
 
-def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Pile PubMed validation tokenized dataset handles."""
     pile_pubmed_abstracts_download = hf_download(
         "raw/pile_pubmed_abstracts",
@@ -103,6 +108,7 @@ def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, 
         revision="139fdbf",
         urls_glob=["val.json"],
         pin="raw/pile_pubmed_abstracts",
+        version="2026.06.28",
     )
     pile_pubmed_central_download = hf_download(
         "raw/pile_pubmed_central",
@@ -110,6 +116,7 @@ def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, 
         revision="783dc95",
         urls_glob=["val.json"],
         pin="raw/pile_pubmed_central",
+        version="2026.06.28",
     )
     return {
         "pile_pubmed_central": tokenized(
@@ -118,6 +125,7 @@ def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, 
             raw=pile_pubmed_central_download,
             glob="val.json",
             validation=True,
+            version="2026.06.28",
         ),
         "pile_pubmed_abstracts": tokenized(
             "pile_pubmed_abstracts",
@@ -125,28 +133,31 @@ def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, 
             raw=pile_pubmed_abstracts_download,
             glob="val.json",
             validation=True,
+            version="2026.06.28",
         ),
     }
 
 
-def lavita_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def lavita_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Medical QA (lavita) tokenized dataset handles."""
     lavita_download = hf_download(
         "raw/lavita_medical_qa",
         hf_id="lavita/medical-qa-datasets",
         revision="59d48e2",
         pin="raw/lavita_medical_qa",
+        version="2026.06.28",
     )
 
-    def _lavita_derived(name: str, subset: str, split: str) -> Lazy[Dataset]:
-        return derived(
-            name,
-            fn=convert_lavita_split_to_dolma,
+    def _lavita_derived(name: str, subset: str, split: str) -> ArtifactStep[TokenizedCache]:
+        return ArtifactStep(
+            name=name,
+            version="2026.06.28",
+            artifact_type=TokenizedCache,
+            run=convert_lavita_split_to_dolma,
             build_config=lambda ctx: LavitaToDolmaConfig(
-                input_path=ctx.path(lavita_download), output_path=ctx.out, subset=subset, split=split
+                input_path=ctx.artifact_path(lavita_download), output_path=ctx.output_path, subset=subset, split=split
             ),
             deps=(lavita_download,),
-            kind=Dataset,
         )
 
     lavita_pubmed = _lavita_derived("documents/lavita_pubmed", "pubmed-qa", "train")
@@ -157,16 +168,33 @@ def lavita_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Data
 
     return {
         "lavita_allprocessed": tokenized(
-            "lavita_allprocessed", tokenizer=tokenizer, raw=lavita_allprocessed, glob="**/*.parquet"
+            "lavita_allprocessed",
+            tokenizer=tokenizer,
+            raw=lavita_allprocessed,
+            glob="**/*.parquet",
+            version="2026.06.28",
         ),
-        "lavita_medmcqa": tokenized("lavita_medmcqa", tokenizer=tokenizer, raw=lavita_medmcqa, glob="**/*.parquet"),
-        "lavita_pubmedqa": tokenized("lavita_pubmedqa", tokenizer=tokenizer, raw=lavita_pubmed, glob="**/*.parquet"),
+        "lavita_medmcqa": tokenized(
+            "lavita_medmcqa",
+            tokenizer=tokenizer,
+            raw=lavita_medmcqa,
+            glob="**/*.parquet",
+            version="2026.06.28",
+        ),
+        "lavita_pubmedqa": tokenized(
+            "lavita_pubmedqa",
+            tokenizer=tokenizer,
+            raw=lavita_pubmed,
+            glob="**/*.parquet",
+            version="2026.06.28",
+        ),
         "lavita_pubmedqa_validation": tokenized(
             "lavita_pubmedqa_validation",
             tokenizer=tokenizer,
             raw=lavita_pubmed_validation,
             glob="**/*.parquet",
             validation=True,
+            version="2026.06.28",
         ),
         "lavita_medmcqa_validation": tokenized(
             "lavita_medmcqa_validation",
@@ -174,5 +202,6 @@ def lavita_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Data
             raw=lavita_medmcqa_validation,
             glob="**/*.parquet",
             validation=True,
+            version="2026.06.28",
         ),
     }

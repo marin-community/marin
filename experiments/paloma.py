@@ -8,9 +8,9 @@ tokenizes its ``val`` split straight from that location into a fresh explicit ca
 — no re-download.
 """
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -40,13 +40,13 @@ _PALOMA_SUBSETS = {
 }
 
 
-def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[Lazy[Dataset]]:
-    """One validation ``Dataset`` handle per Paloma subset, keyed by ``paloma/<subset>``."""
+def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
+    """One validation ``TokenizedCache`` handle per Paloma subset, keyed by ``paloma/<subset>-llama3``."""
     return [
         tokenized(
-            f"paloma/{subset}",
+            f"paloma/{subset}-llama3",
             tokenizer=tokenizer,
-            version="llama3",
+            version="2026.06.28",
             paths=[f"{_PALOMA_RAW}/{directory}/val/val*.jsonl.gz"],
             validation=True,
         )

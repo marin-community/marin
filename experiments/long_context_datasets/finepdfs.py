@@ -8,9 +8,9 @@ Uses the HuggingFace repos HuggingFaceFW/finepdfs and HuggingFaceFW/finepdfs-edu
 Step-functions return per-language tokenized Dataset handles.
 """
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -29,27 +29,29 @@ finepdfs_token_counts = {
 finepdfs_edu_token_counts = {"eng_Latn": 140e9}
 
 
-def _finepdfs_raw() -> Lazy[Dataset]:
+def _finepdfs_raw() -> ArtifactStep[TokenizedCache]:
     return hf_download(
         "finepdfs_eng_Latn",
         hf_id=FINEPDFS_HF_ID,
         revision=FINEPDFS_REVISION,
         urls_glob=["data/eng_Latn/*/*.parquet"],
         pin="finepdfs_eng_Latn",
+        version="2026.06.28",
     )
 
 
-def _finepdfs_edu_raw() -> Lazy[Dataset]:
+def _finepdfs_edu_raw() -> ArtifactStep[TokenizedCache]:
     return hf_download(
         "finepdfs_edu_eng_Latn",
         hf_id=FINEPDFS_EDU_HF_ID,
         revision=FINEPDFS_EDU_REVISION,
         urls_glob=["data/eng_Latn/train/*.parquet"],
         pin="finepdfs_edu_eng_Latn",
+        version="2026.06.28",
     )
 
 
-def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized FinePDFs train data per language (English only for now)."""
     raw = _finepdfs_raw()
     return {
@@ -58,11 +60,12 @@ def finepdfs_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Da
             tokenizer=tokenizer,
             raw=raw,
             glob="data/eng_Latn/train/*.parquet",
+            version="2026.06.28",
         )
     }
 
 
-def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized FinePDFs validation data per language."""
     raw = _finepdfs_raw()
     return {
@@ -72,11 +75,12 @@ def finepdfs_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[s
             raw=raw,
             glob="data/eng_Latn/test/*.parquet",
             validation=True,
+            version="2026.06.28",
         )
     }
 
 
-def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """Tokenized FinePDFs-edu train data per language."""
     raw = _finepdfs_edu_raw()
     return {
@@ -85,5 +89,6 @@ def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Laz
             tokenizer=tokenizer,
             raw=raw,
             glob="data/eng_Latn/train/*.parquet",
+            version="2026.06.28",
         )
     }

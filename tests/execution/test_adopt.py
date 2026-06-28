@@ -11,14 +11,14 @@ import logging
 
 import pytest
 from marin.execution.artifact import Artifact, read_record
-from marin.execution.lazy import Lazy, Recipe, adopt, materialized_config, run
+from marin.execution.lazy import ArtifactStep, adopt, materialized_config, run
 
 
 def test_adopt_resolves_to_source_not_canonical():
     art = adopt("datasets/external", "2026.06.28", source="gs://elsewhere/data")
     # A consumer resolves to the pre-existing location, not {prefix}/{name}/{version}.
     assert art.path("gs://prefix") == "gs://elsewhere/data"
-    assert art.result_type is Artifact
+    assert art.artifact_type is Artifact
 
 
 def test_adopt_records_pointer_at_canonical_address(tmp_path, monkeypatch):
@@ -68,15 +68,13 @@ def test_adopting_missing_data_fails(tmp_path, monkeypatch):
 def test_adopted_artifact_is_a_usable_dependency(tmp_path):
     (tmp_path / "tokens").mkdir()
     tokens = adopt("datasets/tokens", "2026.06.28", source="tokens")
-    consumer = Lazy(
+    consumer = ArtifactStep(
         name="checkpoints/model",
         version="2026.06.28",
-        result_type=Artifact,
-        recipe=Recipe(
-            fn=lambda config: config,
-            build_config=lambda ctx: {"data": ctx.path(tokens)},
-            deps=(tokens,),
-        ),
+        artifact_type=Artifact,
+        run=lambda config: config,
+        build_config=lambda ctx: {"data": ctx.artifact_path(tokens)},
+        deps=(tokens,),
     )
     config = materialized_config(consumer, str(tmp_path))
     assert config["data"] == f"{tmp_path}/tokens"
@@ -84,11 +82,12 @@ def test_adopted_artifact_is_a_usable_dependency(tmp_path):
 
 def test_adopt_and_pin_are_mutually_exclusive():
     with pytest.raises(ValueError):
-        Lazy(
+        ArtifactStep(
             name="datasets/x",
             version="2026.06.28",
-            result_type=Artifact,
-            recipe=Recipe(fn=lambda config: config, build_config=lambda ctx: None),
+            artifact_type=Artifact,
+            run=lambda config: config,
+            build_config=lambda ctx: None,
             override_path="some/pin",
             adopt_source="some/source",
         )

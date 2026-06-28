@@ -5,7 +5,7 @@
 
 The run is a function that returns a typed :class:`Checkpoint` handle addressed by an
 explicit ``name@version``. The model, optimizer, data mixture, token budget, z-loss,
-and evals are all stated inline; the output path is ``ctx.out`` and the TPU is a
+and evals are all stated inline; the output path is ``ctx.output_path`` and the TPU is a
 run-arg, so neither bears on the artifact's identity.
 
 The grug-moe training mechanism (``GrugMoeLaunchConfig`` + ``run_grug_moe_trial`` ->
@@ -29,11 +29,11 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.artifact import Checkpoint, Dataset
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
-from marin.training.training import temporary_checkpoint_base_path
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
@@ -104,10 +104,10 @@ def env_int(key: str, default: int) -> int:
     return int(raw) if raw else default
 
 
-def slimpajama_6b_dataset() -> Lazy[Dataset]:
+def slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     """SlimPajama-6B, llama3-tokenized — a small corpus for GPU smoke/scale runs.
 
-    Returns the tokenized :class:`Dataset` handle; the launcher assembles it into an
+    Returns the tokenized :class:`TokenizedCache` handle; the launcher assembles it into an
     ``LmDataConfig`` with :func:`~marin.experiment.data.mixture`. Tokenization runs as
     its own Fray job (a production pretraining mixture would instead pin an already
     materialized cache to avoid a cross-region tokenize).
@@ -117,6 +117,7 @@ def slimpajama_6b_dataset() -> Lazy[Dataset]:
         source="DKYoon/SlimPajama-6B",
         tokenizer=llama3_tokenizer,
         resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
+        version="2026.06.28",
     )
 
 
@@ -198,7 +199,7 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-def grug_moe_baseline(*, version: str = "v1") -> Lazy[Checkpoint]:
+def grug_moe_baseline(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
@@ -211,13 +212,13 @@ def grug_moe_baseline(*, version: str = "v1") -> Lazy[Checkpoint]:
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
     validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
 
-    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
             model=_baseline_model,
             data=mixture(ctx, train, validation=validation),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id=RESOLVED_RUN_ID,
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=_baseline_steps,
             batch_size=_baseline_batch,
             seed=0,
@@ -234,18 +235,16 @@ def grug_moe_baseline(*, version: str = "v1") -> Lazy[Checkpoint]:
             ),
         )
 
-    return Lazy(
+    return ArtifactStep(
         name="grug/4_10_baseline_moe",
         version=version,
-        recipe=Recipe(
-            fn=run_grug_moe_trial,
-            build_config=build_config,
-            deps=(*train, *validation),
-            run_args={"train_resources": _TRAIN_RESOURCES},
-        ),
-        result_type=Checkpoint,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(grug_moe_baseline())])
+    StepRunner().run([grug_moe_baseline().lower()])

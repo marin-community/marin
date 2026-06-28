@@ -39,10 +39,10 @@ from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import marin_prefix, marin_temp_bucket
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -149,7 +149,7 @@ def _tpu_types_from_env() -> list[str]:
     return types or list(_DEFAULT_CANARY_TPU_TYPES)
 
 
-def build() -> Lazy[Checkpoint]:
+def build() -> ArtifactStep[LevanterCheckpoint]:
     """The Grug MoE canary as a lazy checkpoint, configured from the env.
 
     The data mixture and the WandB ``replicate_path`` depend on the run context, so
@@ -200,7 +200,7 @@ def build() -> Lazy[Checkpoint]:
         ]
         deps = (*train, *validation)
 
-        def build_data(ctx: RunContext):
+        def build_data(ctx: StepContext):
             return mixture(ctx, train, validation=validation)
 
     else:
@@ -255,7 +255,7 @@ def build() -> Lazy[Checkpoint]:
         slimpajama = slimpajama_6b_dataset()
         deps = (slimpajama,)
 
-        def build_data(ctx: RunContext):
+        def build_data(ctx: StepContext):
             data = mixture(ctx, {slimpajama: 1.0})
             if attention_implementation == _GPU_FA4_THD_ATTENTION:
                 data = dataclasses.replace(
@@ -303,7 +303,7 @@ def build() -> Lazy[Checkpoint]:
         else None
     )
 
-    def build_tracker(ctx: RunContext):
+    def build_tracker(ctx: StepContext):
         if use_json_logger:
             return JsonLoggerConfig(logger_name=json_logger_name)
         return WandbConfig(
@@ -313,16 +313,16 @@ def build() -> Lazy[Checkpoint]:
             group=wandb_group,
             mode=wandb_mode,
             name=None,
-            replicate_path=ctx.out,
+            replicate_path=ctx.output_path,
         )
 
-    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
             model=model,
             data=build_data(ctx),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=num_steps,
             batch_size=batch_size,
             seed=0,
@@ -338,19 +338,17 @@ def build() -> Lazy[Checkpoint]:
             ),
         )
 
-    return Lazy(
+    return ArtifactStep(
         name=step_name,
-        version="v1",
-        recipe=Recipe(
-            fn=run_grug_moe_trial,
-            build_config=build_config,
-            deps=deps,
-            run_args={"train_resources": resources},
-        ),
-        result_type=Checkpoint,
+        version="2026.06.28",
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=deps,
+        runtime_args={"train_resources": resources},
         override_path=override_output_path,
     )
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(build())])
+    StepRunner().run([build().lower()])

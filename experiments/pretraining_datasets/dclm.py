@@ -9,8 +9,8 @@ proportions (policy). An experiment assembles them with ``mixture()``.
 
 from collections.abc import Mapping
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import dclm_baseline_dataset, proofpile_dataset, starcoder_dataset
@@ -24,7 +24,7 @@ DCLM_MIXTURE_WEIGHTS: Mapping[str, float] = {
 }
 
 
-def dclm_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def dclm_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """The DCLM training components as lazy handles, keyed to match ``DCLM_MIXTURE_WEIGHTS``."""
     return {
         "dclm_baseline": dclm_baseline_dataset(tokenizer=tokenizer),

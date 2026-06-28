@@ -9,9 +9,10 @@ prompt/response JSONL for log-prob evaluation or to dolma text format for decont
 
 import dataclasses
 
-from marin.execution.artifact import Artifact, Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 
@@ -21,7 +22,7 @@ class EvalDataset:
 
     org: str
     name: str
-    steps: list[Lazy[Artifact]]
+    steps: list[ArtifactStep[Artifact]]
     tags: list[str] = dataclasses.field(default_factory=list)
 
 
@@ -37,6 +38,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="c30699e",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/cais/mmluhf",
+        version="2026.06.28",
     )
     boolq_raw = hf_download(
         "raw/google/boolq",
@@ -44,6 +46,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="35b264d",
         urls_glob=["**/*.parquet"],
         pin="raw/google/boolqhf",
+        version="2026.06.28",
     )
     hellaswag_raw = hf_download(
         "raw/Rowan/hellaswag",
@@ -51,6 +54,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="50441ce",
         urls_glob=["**/*.parquet"],
         pin="raw/Rowan/hellaswaghf",
+        version="2026.06.28",
     )
     piqa_raw = hf_download(
         "raw/ybisk/piqa",
@@ -58,6 +62,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="142c512",
         urls_glob=["**/*.parquet"],
         pin="raw/ybisk/piqahf",
+        version="2026.06.28",
     )
     winogrande_raw = hf_download(
         "raw/allenai/winogrande",
@@ -65,6 +70,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="ebf71e3",
         urls_glob=["winogrande_xl/**/*.parquet"],
         pin="raw/allenai/winograndehf",
+        version="2026.06.28",
     )
     arc_raw = hf_download(
         "raw/allenai/ai2_arc",
@@ -72,6 +78,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="210d026",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/allenai/ai2_archf",
+        version="2026.06.28",
     )
     openbookqa_raw = hf_download(
         "raw/allenai/openbookqa",
@@ -79,6 +86,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="388097e",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/allenai/openbookqahf",
+        version="2026.06.28",
     )
     humaneval_raw = hf_download(
         "raw/openai/openai_humaneval",
@@ -86,6 +94,7 @@ def eval_datasets() -> list[EvalDataset]:
         revision="7dce605",
         urls_glob=["**/*.parquet", "*.md"],
         pin="gs://marin-us-central2/raw/openai/openai_humanevalhf",
+        version="2026.06.28",
     )
     mbpp_raw = hf_download(
         "raw/google-research-datasets/mbpp",
@@ -93,19 +102,22 @@ def eval_datasets() -> list[EvalDataset]:
         revision="4bb6404",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/google-research-datasets/mbpphf",
+        version="2026.06.28",
     )
 
     # --- derived evaluation steps ---
-    mmlu_aux_eval = derived(
-        "evaluation/mmlu-eval-aux",
-        fn=hf_dataset_to_jsonl,
+    mmlu_aux_eval = ArtifactStep(
+        name="evaluation/mmlu-eval-aux",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="cais/mmlu",
             subsets=["all"],
             splits=["auxiliary_train"],
-            input_path=ctx.path(mmlu_raw),
+            input_path=ctx.artifact_path(mmlu_raw),
             hf_path="cais/mmlu",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question",
             options_key="choices",
@@ -115,16 +127,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(mmlu_raw,),
     )
 
-    mmlu_subject_eval = derived(
-        "evaluation/mmlu-eval-subject",
-        fn=hf_dataset_to_jsonl,
+    mmlu_subject_eval = ArtifactStep(
+        name="evaluation/mmlu-eval-subject",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="cais/mmlu",
             subsets=["*"],
             splits=["dev", "validation"],
-            input_path=ctx.path(mmlu_raw),
+            input_path=ctx.artifact_path(mmlu_raw),
             hf_path="cais/mmlu",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question",
             options_key="choices",
@@ -135,16 +149,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(mmlu_raw,),
     )
 
-    boolq_eval = derived(
-        "evaluation/boolq-eval",
-        fn=hf_dataset_to_jsonl,
+    boolq_eval = ArtifactStep(
+        name="evaluation/boolq-eval",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="google/boolq",
             subsets=["*"],
             splits=["train", "validation"],
-            input_path=ctx.path(boolq_raw),
+            input_path=ctx.artifact_path(boolq_raw),
             hf_path="google/boolq",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question",
             answer_label_key="answer",
@@ -154,16 +170,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(boolq_raw,),
     )
 
-    piqa_eval = derived(
-        "evaluation/piqa",
-        fn=hf_dataset_to_jsonl,
+    piqa_eval = ArtifactStep(
+        name="evaluation/piqa",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="ybisk/piqa",
             subsets=["*"],
             splits=["train", "validation"],
-            input_path=ctx.path(piqa_raw),
+            input_path=ctx.artifact_path(piqa_raw),
             hf_path="ybisk/piqa",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="goal",
             options_keys=["sol1", "sol2"],
@@ -173,16 +191,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(piqa_raw,),
     )
 
-    winogrande_eval = derived(
-        "evaluation/winogrande",
-        fn=hf_dataset_to_jsonl,
+    winogrande_eval = ArtifactStep(
+        name="evaluation/winogrande",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="allenai/winogrande",
             subsets=["default"],
             splits=["train", "validation"],
-            input_path=ctx.path(winogrande_raw),
+            input_path=ctx.artifact_path(winogrande_raw),
             hf_path="allenai/winogrande",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="sentence",
             options_keys=["option1", "option2"],
@@ -192,16 +212,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(winogrande_raw,),
     )
 
-    arc_easy_eval = derived(
-        "evaluation/arc-easy",
-        fn=hf_dataset_to_jsonl,
+    arc_easy_eval = ArtifactStep(
+        name="evaluation/arc-easy",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="allenai/ai2_arc",
             subsets=["ARC-Easy"],
             splits=["train", "validation"],
-            input_path=ctx.path(arc_raw),
+            input_path=ctx.artifact_path(arc_raw),
             hf_path="allenai/ai2_arc",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question",
             options_key="choices.text",
@@ -211,16 +233,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(arc_raw,),
     )
 
-    arc_challenge_eval = derived(
-        "evaluation/arc-challenge",
-        fn=hf_dataset_to_jsonl,
+    arc_challenge_eval = ArtifactStep(
+        name="evaluation/arc-challenge",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="allenai/ai2_arc",
             subsets=["ARC-Challenge"],
             splits=["train", "validation"],
-            input_path=ctx.path(arc_raw),
+            input_path=ctx.artifact_path(arc_raw),
             hf_path="allenai/ai2_arc",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question",
             options_key="choices.text",
@@ -230,16 +254,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(arc_raw,),
     )
 
-    openbookqa_eval = derived(
-        "evaluation/openbookqa-eval",
-        fn=hf_dataset_to_jsonl,
+    openbookqa_eval = ArtifactStep(
+        name="evaluation/openbookqa-eval",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="allenai/openbookqa",
             subsets=["main"],
             splits=["train", "validation"],
-            input_path=ctx.path(openbookqa_raw),
+            input_path=ctx.artifact_path(openbookqa_raw),
             hf_path="allenai/openbookqa",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="question_stem",
             options_key="choices.text",
@@ -249,16 +275,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(openbookqa_raw,),
     )
 
-    hellaswag_eval = derived(
-        "evaluation/hellaswag-eval",
-        fn=hf_dataset_to_jsonl,
+    hellaswag_eval = ArtifactStep(
+        name="evaluation/hellaswag-eval",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="Rowan/hellaswag",
             subsets=["*"],
             splits=["train", "validation"],
-            input_path=ctx.path(hellaswag_raw),
+            input_path=ctx.artifact_path(hellaswag_raw),
             hf_path="Rowan/hellaswag",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="ctx",
             options_key="endings",
@@ -268,16 +296,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(hellaswag_raw,),
     )
 
-    humaneval_eval = derived(
-        "evaluation/humaneval-eval",
-        fn=hf_dataset_to_jsonl,
+    humaneval_eval = ArtifactStep(
+        name="evaluation/humaneval-eval",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="openai/openai_humaneval",
             subsets=["*"],
             splits=["test"],
-            input_path=ctx.path(humaneval_raw),
+            input_path=ctx.artifact_path(humaneval_raw),
             hf_path="openai/openai_humaneval",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="prompt",
             answer_text_key="canonical_solution",
@@ -285,16 +315,18 @@ def eval_datasets() -> list[EvalDataset]:
         deps=(humaneval_raw,),
     )
 
-    mbpp_eval = derived(
-        "evaluation/mbpp-eval",
-        fn=hf_dataset_to_jsonl,
+    mbpp_eval = ArtifactStep(
+        name="evaluation/mbpp-eval",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="google-research-datasets/mbpp",
             subsets=["*"],
             splits=["train", "test", "validation"],
-            input_path=f"{ctx.path(mbpp_raw)}/4bb6404/full",
+            input_path=f"{ctx.artifact_path(mbpp_raw)}/4bb6404/full",
             hf_path="google-research-datasets/mbpp",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("evaluation"),
             prompt_key="text",
             answer_text_key="code",
@@ -317,7 +349,7 @@ def eval_datasets() -> list[EvalDataset]:
     ]
 
 
-def decontamination_datasets() -> list[Lazy[Artifact]]:
+def decontamination_datasets() -> list[ArtifactStep[Artifact]]:
     """Build and return datasets in dolma text format for decontamination pipelines."""
     mmlu_raw = hf_download(
         "raw/cais/mmlu",
@@ -325,18 +357,21 @@ def decontamination_datasets() -> list[Lazy[Artifact]]:
         revision="c30699e",
         urls_glob=["**/*.parquet", "*.md"],
         pin="raw/cais/mmluhf",
+        version="2026.06.28",
     )
 
-    mmlu_convert_dolma = derived(
-        "decontamination/mmlu-dolma",
-        fn=hf_dataset_to_jsonl,
+    mmlu_convert_dolma = ArtifactStep(
+        name="decontamination/mmlu-dolma",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=hf_dataset_to_jsonl,
         build_config=lambda ctx: DatasetConversionConfig(
             dataset_name="cais/mmlu",
             subsets=["all"],
             splits=["dev", "test", "validation"],
-            input_path=ctx.path(mmlu_raw),
+            input_path=ctx.artifact_path(mmlu_raw),
             hf_path="cais/mmlu",
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             output_format=OutputFormatOptions("decontamination"),
             prompt_key="question",
             options_key="choices",
@@ -349,7 +384,7 @@ def decontamination_datasets() -> list[Lazy[Artifact]]:
     return [mmlu_convert_dolma]
 
 
-def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
+def extra_raw_downloads() -> dict[str, ArtifactStep[TokenizedCache]]:
     """Build and return standalone raw download handles for additional evaluation datasets."""
     return {
         "mmlu_pro_raw": hf_download(
@@ -358,11 +393,13 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="3373e0b",
             urls_glob=["**/*.parquet", "*.md"],
             pin="raw/TIGER-Lab/MMLU-Prohf",
+            version="2026.06.28",
         ),
         "lingoly": hf_download(
             "raw/ambean/lingOly",
             hf_id="ambean/lingOly",
             revision="6aff4c2",
+            version="2026.06.28",
         ),
         "gsm8k_raw": hf_download(
             "raw/gsm8k",
@@ -370,6 +407,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="e53f048",
             urls_glob=["**/*.parquet", "*.md"],
             pin="raw/gsm8k/mainhf",
+            version="2026.06.28",
         ),
         "math_raw": hf_download(
             "raw/hendrycks_math",
@@ -377,6 +415,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="21a5633",
             urls_glob=["**/*.parquet", "*.md"],
             pin="raw/hendrycks/mathhf",
+            version="2026.06.28",
         ),
         "truthful_qa_raw": hf_download(
             "raw/truthful_qa",
@@ -384,6 +423,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="741b827",
             urls_glob=["**/*.parquet", "*.md"],
             pin="raw/truthful_qa/multiple_choicehf",
+            version="2026.06.28",
         ),
         "bbh_raw": hf_download(
             "raw/bbh",
@@ -391,6 +431,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="b5306be",
             urls_glob=["**/*.parquet", "*.md"],
             pin="raw/SaylorTwift/bbhhf",
+            version="2026.06.28",
         ),
         "gpqa_raw": hf_download(
             "raw/gpqa",
@@ -398,6 +439,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="90b8e5b",
             urls_glob=["**/*.csv", "*.csv"],
             pin="raw/Idavidrein/gpqa",
+            version="2026.06.28",
         ),
         "instruction_following_raw": hf_download(
             "raw/instruction_following_eval",
@@ -405,6 +447,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="5a5661c",
             urls_glob=["**/*.jsonl", "*.jsonl"],
             pin="raw/wis-k/instruction-following-evalhf",
+            version="2026.06.28",
         ),
         "musr_raw": hf_download(
             "raw/musr",
@@ -412,6 +455,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="39b4f56",
             urls_glob=["**/*.parquet", "*.parquet"],
             pin="raw/WillHeld/MuSRDecontamhf",
+            version="2026.06.28",
         ),
         "winograd_wsc_raw": hf_download(
             "raw/winograd_wsc",
@@ -419,6 +463,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="63befd8",
             urls_glob=["**/*.parquet", "*.parquet"],
             pin="raw/marcov/winograd_wsc_wsc273_promptsourcehf",
+            version="2026.06.28",
         ),
         "commonsense_qa_raw": hf_download(
             "raw/commonsense_qa",
@@ -426,6 +471,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="94630fe",
             urls_glob=["**/*.parquet", "*.parquet"],
             pin="raw/tau/commonsense_qahf",
+            version="2026.06.28",
         ),
         "lambada_openai_raw": hf_download(
             "raw/lambada_openai",
@@ -433,6 +479,7 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="879e19a",
             urls_glob=["**/*.jsonl", "*.jsonl"],
             pin="raw/EleutherAI/lambada_openaihf",
+            version="2026.06.28",
         ),
         "piqa_baber_raw": hf_download(
             "raw/baber/piqa",
@@ -440,5 +487,6 @@ def extra_raw_downloads() -> dict[str, Lazy[Dataset]]:
             revision="142f6d7",
             urls_glob=["**/*.parquet", "*.parquet"],
             pin="raw/baber/piqahf",
+            version="2026.06.28",
         ),
     }

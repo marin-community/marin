@@ -13,9 +13,9 @@ experiment's job (via :func:`marin.experiment.data.mixture`).
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -144,17 +144,23 @@ COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
 }
 
 
-def _download_handle(source: CommonPileSource) -> Lazy[Dataset]:
+def _download_handle(source: CommonPileSource) -> ArtifactStep[TokenizedCache]:
     """A HuggingFace-download handle for ``source``, pinned to its existing raw download."""
-    return hf_download(source.download_name, hf_id=source.hf_id, revision=source.revision, pin=source.raw_path)
+    return hf_download(
+        source.download_name,
+        hf_id=source.hf_id,
+        revision=source.revision,
+        pin=source.raw_path,
+        version="2026.06.28",
+    )
 
 
-def stackv2_edu_filtered_download() -> Lazy[Dataset]:
+def stackv2_edu_filtered_download() -> ArtifactStep[TokenizedCache]:
     """Raw download handle for the Common Pile stackv2_edu filtered split."""
     return _download_handle(COMMON_PILE_SOURCES["stackv2_edu"])
 
 
-def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One tokenized :class:`Dataset` handle per Common Pile split, keyed ``common_pile/<name>``.
 
     Each handle tokenizes from a pinned ``download_hf`` of the filtered HuggingFace split, so
@@ -167,6 +173,7 @@ def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy
             raw=_download_handle(source),
             glob=_TOKENIZE_GLOB,
             resources=_TOKENIZE_RESOURCES,
+            version="2026.06.28",
         )
         for name, source in COMMON_PILE_SOURCES.items()
     }

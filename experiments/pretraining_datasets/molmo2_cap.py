@@ -6,9 +6,9 @@
 from fray.types import ResourceConfig
 from marin.datakit.download.molmo2_cap import HF_DATASET_ID, HF_REVISION, transform
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -24,31 +24,34 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
+def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tokenize the normalized Molmo2-Cap captions."""
     dl = hf_download(
         "raw/molmo2-cap",
         hf_id=HF_DATASET_ID,
         revision=HF_REVISION,
         urls_glob=["data/train-*.parquet"],
+        version="2026.06.28",
     )
-    processed = derived(
-        "processed/molmo2-cap",
-        fn=_run_transform,
+    processed = ArtifactStep(
+        name="processed/molmo2-cap",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_transform,
         build_config=lambda ctx: {
-            "input_path": ctx.path(dl),
-            "output_path": ctx.out,
+            "input_path": ctx.artifact_path(dl),
+            "output_path": ctx.output_path,
             "schema_version": "v1",
         },
         deps=(dl,),
-        kind=Dataset,
     )
-    norm = derived(
-        "normalized/molmo2-cap",
-        fn=_run_normalize,
-        build_config=lambda ctx: {"input_path": ctx.path(processed), "output_path": ctx.out},
+    norm = ArtifactStep(
+        name="normalized/molmo2-cap",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_normalize,
+        build_config=lambda ctx: {"input_path": ctx.artifact_path(processed), "output_path": ctx.output_path},
         deps=(processed,),
-        kind=Dataset,
     )
     return tokenized(
         "molmo2_cap",
@@ -56,4 +59,5 @@ def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
         raw=norm,
         glob="outputs/main/*.parquet",
         resources=ResourceConfig(ram="16g", disk="5g"),
+        version="2026.06.28",
     )

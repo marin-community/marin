@@ -50,10 +50,10 @@ from levanter.data.text import BlockShuffleConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
@@ -124,8 +124,8 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def build_scale_checkpoint(*, version: str = "v1") -> Lazy[Checkpoint]:
-    """Assemble the CoreWeave scale run as a lazy :class:`Checkpoint` from SCALE_* env."""
+def build_scale_checkpoint(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env."""
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
@@ -183,7 +183,7 @@ def build_scale_checkpoint(*, version: str = "v1") -> Lazy[Checkpoint]:
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
     slim = slimpajama_6b_dataset()
 
-    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:
             tracker = WandbConfig(
                 entity=wandb_entity,
@@ -191,16 +191,16 @@ def build_scale_checkpoint(*, version: str = "v1") -> Lazy[Checkpoint]:
                 tags=["grug", "moe", "cw", "h100", "scale"],
                 group="grug-moe-cw-scale",
                 name=None,
-                replicate_path=ctx.out,
+                replicate_path=ctx.output_path,
             )
         else:
             tracker = JsonLoggerConfig(logger_name=json_logger_name)
         return GrugMoeLaunchConfig(
             model=model,
             data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=steps,
             batch_size=batch_size,
             seed=0,
@@ -213,18 +213,16 @@ def build_scale_checkpoint(*, version: str = "v1") -> Lazy[Checkpoint]:
             checkpointer=checkpointer,
         )
 
-    return Lazy(
+    return ArtifactStep(
         name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         version=version,
-        recipe=Recipe(
-            fn=run_grug_moe_trial,
-            build_config=build_config,
-            deps=(slim,),
-            run_args={"train_resources": resources},
-        ),
-        result_type=Checkpoint,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(slim,),
+        runtime_args={"train_resources": resources},
     )
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(build_scale_checkpoint())])
+    StepRunner().run([build_scale_checkpoint().lower()])

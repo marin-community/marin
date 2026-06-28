@@ -47,9 +47,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from marin.execution.artifact import Artifact, Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
@@ -603,8 +604,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> Lazy[Dataset]:
-    """Lazy handle that preprocesses the input dataset into a canonicalized format for SFT training."""
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ArtifactStep[TokenizedCache]:
+    """ArtifactStep handle that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(output_name)
@@ -633,26 +634,27 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> Lazy[Datase
 
     pin = f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}"
 
-    return derived(
-        f"documents/{output_name}",
-        fn=transform_hf_dataset,
+    return ArtifactStep(
+        name=f"documents/{output_name}",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=transform_hf_dataset,
         build_config=lambda ctx, _cfg=dataset_cfg, _adapter=adapter: TransformSFTDatasetConfig(
             source=_cfg.hf_dataset_id,
             revision=_cfg.revision,
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             metadata_columns=_cfg.metadata_columns,
             adapter=_adapter,
             subsets=_cfg.subsets,
             splits=_cfg.splits,
             max_parallelism=_cfg.max_parallelism,
         ),
-        pin=pin,
-        kind=Dataset,
+        override_path=pin,
     )
 
 
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> Lazy[Dataset]:
-    """Lazy handle for an instruction dataset by HF id, optionally overriding splits."""
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ArtifactStep[TokenizedCache]:
+    """ArtifactStep handle for an instruction dataset by HF id, optionally overriding splits."""
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
@@ -665,22 +667,24 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-def tulu_3_in_dolma() -> Lazy[Artifact]:
+def tulu_3_in_dolma() -> ArtifactStep[Artifact]:
     """Tulu-3 SFT mixture converted to Dolma flat-text format."""
     tulu3 = get_instruction_dataset("allenai/tulu-3-sft-mixture")
-    return derived(
-        "dolma/tulu_3_in_dolma",
-        fn=convert_conversation_to_dolma,
+    return ArtifactStep(
+        name="dolma/tulu_3_in_dolma",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=convert_conversation_to_dolma,
         build_config=lambda ctx, _tulu3=tulu3: ConversationToDolmaConfig(
-            input_path=ctx.path(_tulu3),
-            output_path=ctx.out,
+            input_path=ctx.artifact_path(_tulu3),
+            output_path=ctx.output_path,
         ),
         deps=(tulu3,),
     )
 
 
 # levanter treats validation and training as separate so we tokenize twice.
-def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tulu-3 Dolma corpus tokenized as a validation split.
 
     "flat" means all chat messages are interpolated into a single string per doc.
@@ -693,10 +697,11 @@ def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenize
         glob="**/*.jsonl.gz",
         validation=True,
         pin="tokenized/tulu_sft-1bb7d4" if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
     )
 
 
-def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tulu-3 Dolma corpus tokenized as a training split.
 
     "flat" means all chat messages are interpolated into a single string per doc.
@@ -709,4 +714,5 @@ def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) ->
         glob="**/*.jsonl.gz",
         validation=False,
         pin="tokenized/tulu_sft-349fb7/" if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
     )

@@ -16,11 +16,12 @@ import argparse
 
 from fray import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.artifact import Checkpoint, Dataset
-from marin.execution.lazy import Lazy, lower
+from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import pretokenized, tokenized
 from marin.experiment.train import train_lm
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint
 
 from experiments.llama import llama_150m, llama_nano
 from experiments.marin_tokenizer import marin_tokenizer
@@ -40,7 +41,7 @@ RAW_SOURCES = {
 }
 
 
-def dataset(name: str) -> Lazy[Dataset]:
+def dataset(name: str) -> ArtifactStep[TokenizedCache]:
     """The named tutorial dataset as a tokenized handle.
 
     ``fineweb-edu`` is a prebuilt Levanter cache (downloaded, not re-tokenized); the others
@@ -51,11 +52,12 @@ def dataset(name: str) -> Lazy[Dataset]:
             "fineweb-edu-10M",
             repo_id="marin-community/fineweb-edu-pretokenized-10M",
             tokenizer=marin_tokenizer,
+            version="2026.06.28",
         )
-    return tokenized(name, tokenizer=marin_tokenizer, source=RAW_SOURCES[name], sample_count=1000)
+    return tokenized(name, tokenizer=marin_tokenizer, source=RAW_SOURCES[name], sample_count=1000, version="2026.06.28")
 
 
-def build(*, device: str, data: str, version: str = "v1") -> Lazy[Checkpoint]:
+def build(*, device: str, data: str, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     """A tiny Llama trained on ``data`` using ``device``, every decision stated inline.
 
     The 150M model is used for the prebuilt FineWeb-Edu cache; the nano model keeps the

@@ -8,8 +8,8 @@ Steps:
 2. Read the file and compute summary statistics (sum, min, max).
 
 This is the simplest illustration of the Marin lazy-artifact pattern: each step is an
-:class:`~marin.execution.artifact.Artifact` built by :func:`~marin.execution.lazy.derived`.
-Its ``build_config`` receives a :class:`~marin.execution.lazy.RunContext` that resolves
+:class:`~marin.execution.artifact.Artifact` built by :class:`~marin.execution.lazy.ArtifactStep`.
+Its ``build_config`` receives a :class:`~marin.execution.lazy.StepContext` that resolves
 output paths at run time. :func:`~marin.execution.step_runner.StepRunner` executes the
 dependency graph in topological order — the data step runs first, then the stats step.
 """
@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import Lazy, derived, lower
+from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from rigging.filesystem import open_url
 
@@ -70,24 +70,28 @@ def compute_stats(config: ComputeStatsConfig) -> None:
         json.dump(stats, f)
 
 
-# Step 1: generate the data. build_config resolves ctx.out to the artifact's output dir.
-_data = derived(
-    "hello_world/data",
-    fn=generate_data,
-    build_config=lambda ctx: GenerateDataConfig(n=N, output_path=ctx.out),
+# Step 1: generate the data. build_config resolves ctx.output_path to the artifact's output dir.
+_data = ArtifactStep(
+    name="hello_world/data",
+    version="dev",
+    artifact_type=Artifact,
+    run=generate_data,
+    build_config=lambda ctx: GenerateDataConfig(n=N, output_path=ctx.output_path),
 )
 
-# Step 2: compute statistics over the generated data. ctx.path(_data) gives the path
+# Step 2: compute statistics over the generated data. ctx.artifact_path(_data) gives the path
 # of step 1's output; deps=(_data,) ensures it materializes before this step runs.
-_stats = derived(
-    "hello_world/stats",
-    fn=compute_stats,
-    build_config=lambda ctx: ComputeStatsConfig(input_path=ctx.path(_data), output_path=ctx.out),
+_stats = ArtifactStep(
+    name="hello_world/stats",
+    version="dev",
+    artifact_type=Artifact,
+    run=compute_stats,
+    build_config=lambda ctx: ComputeStatsConfig(input_path=ctx.artifact_path(_data), output_path=ctx.output_path),
     deps=(_data,),
 )
 
 
-def build() -> Lazy[Artifact]:
+def build() -> ArtifactStep[Artifact]:
     """The stats computation as a lazy artifact, with its data dependency declared."""
     return _stats
 

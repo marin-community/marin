@@ -19,7 +19,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import Lazy, Recipe, RunContext
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
-ModelArtifact = Lazy[LevanterCheckpoint] | str
+ModelArtifact = ArtifactStep[LevanterCheckpoint] | str
 
 
 @dataclasses.dataclass
@@ -156,11 +156,11 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def _resolve_model_artifact_path(ctx: RunContext, artifact: ModelArtifact) -> str:
-    """Resolve a model artifact to a concrete path: a ``Lazy[LevanterCheckpoint]`` handle to its
-    region-local output path, a string passes through unchanged."""
-    if isinstance(artifact, Lazy):
-        return ctx.path(artifact)
+def _resolve_model_artifact_path(ctx: StepContext, artifact: ModelArtifact) -> str:
+    """Resolve a model artifact to a concrete path: an ``ArtifactStep[LevanterCheckpoint]`` handle
+    to its region-local output path, a string passes through unchanged."""
+    if isinstance(artifact, ArtifactStep):
+        return ctx.artifact_path(artifact)
     return artifact
 
 
@@ -385,19 +385,19 @@ def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
 
 
 def make_rl_step(
-    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str = "v1"
-) -> Lazy[LevanterCheckpoint]:
-    """Assemble an async RL training run as a ``Lazy[LevanterCheckpoint]``.
+    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble an async RL training run as an ``ArtifactStep[LevanterCheckpoint]``.
 
-    The model artifact resolves at run time: a ``Lazy[LevanterCheckpoint]`` handle becomes a
-    dependency and resolves to its region-local path, a string passes through. The
-    launch-region resources are a run-arg, so re-running on a different launch box never
+    The model artifact resolves at run time: an ``ArtifactStep[LevanterCheckpoint]`` handle becomes
+    a dependency and resolves to its region-local path, a string passes through. The
+    launch-region resources are a runtime arg, so re-running on a different launch box never
     re-fingerprints.
     """
     artifact = config.model_config.artifact
-    deps = (artifact,) if isinstance(artifact, Lazy) else ()
+    deps = (artifact,) if isinstance(artifact, ArtifactStep) else ()
 
-    def build_config(ctx: RunContext) -> RLStepConfig:
+    def build_config(ctx: StepContext) -> RLStepConfig:
         model_path = _resolve_model_artifact_path(ctx, artifact)
         runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
         runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
@@ -406,18 +406,16 @@ def make_rl_step(
             experiment_config=runtime_config,
             curriculum=curriculum,
             model_path=model_path,
-            output_path=ctx.out,
-            resources=ctx.run_arg("resources"),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg("resources"),
         )
 
-    return Lazy(
+    return ArtifactStep(
         name=f"rl_testing/{name}",
         version=version,
-        recipe=Recipe(
-            fn=_dispatch_rl_experiment_step,
-            build_config=build_config,
-            deps=deps,
-            run_args={"resources": executor_step_resources_for_rl_experiment(config)},
-        ),
-        result_type=LevanterCheckpoint,
+        artifact_type=LevanterCheckpoint,
+        run=_dispatch_rl_experiment_step,
+        build_config=build_config,
+        deps=deps,
+        runtime_args={"resources": executor_step_resources_for_rl_experiment(config)},
     )

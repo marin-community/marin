@@ -3,7 +3,7 @@
 
 """HuggingFace model download handles for experiments.
 
-Each module-level name is a lazy ``Lazy[Checkpoint]`` handle; building the
+Each module-level name is a lazy ``ArtifactStep[Checkpoint]`` handle; building the
 handle runs nothing. Pass a handle to a training or
 evaluation step that reads ``initialize_from_checkpoint_path`` to materialize
 the download on first use.
@@ -15,8 +15,8 @@ To register a new model, add a ``ModelConfig`` entry and call
 from dataclasses import dataclass
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, RunContext, derived
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.training.training import LevanterCheckpoint
 from marin.utils import get_directory_friendly_name
 
 
@@ -29,7 +29,7 @@ class ModelConfig:
 MODEL_OUTPUT_SUBDIR = "models"
 
 
-def download_model(model_config: ModelConfig) -> Lazy[Checkpoint]:
+def download_model(model_config: ModelConfig) -> ArtifactStep[LevanterCheckpoint]:
     """Return a lazy handle that downloads ``model_config`` from HuggingFace.
 
     The output path is pinned to ``models/{repo}--{revision}`` for a stable,
@@ -40,21 +40,22 @@ def download_model(model_config: ModelConfig) -> Lazy[Checkpoint]:
     model_revision = get_directory_friendly_name(model_config.hf_revision)
     step_name = f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}"
 
-    def build_config(ctx: RunContext) -> DownloadConfig:
+    def build_config(ctx: StepContext) -> DownloadConfig:
         return DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
             revision=model_config.hf_revision,
-            gcs_output_path=ctx.out,
+            gcs_output_path=ctx.output_path,
             wait_for_completion=True,
             hf_repo_type_prefix="",
         )
 
-    return derived(
-        step_name,
-        fn=download_hf,
+    return ArtifactStep(
+        name=step_name,
+        version="2026.06.28",
+        artifact_type=LevanterCheckpoint,
+        run=download_hf,
         build_config=build_config,
-        kind=Checkpoint,
-        pin=step_name,
+        override_path=step_name,
     )
 
 

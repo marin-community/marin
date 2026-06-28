@@ -17,7 +17,7 @@ from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from marin.execution.artifact import ArtifactRecord, write_record
-from marin.execution.lazy import Lazy, materialized_config
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.data import tokenized
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -32,11 +32,11 @@ _RESOURCES = ResourceConfig.with_tpu("v4-8")
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
 
 
-def _seed_caches(train: Lazy, prefix: str) -> None:
+def _seed_caches(train: ArtifactStep, prefix: str) -> None:
     """Write the minimal record a built ``TokenizedCache`` dep would leave, so ``mixture``
     can read each dataset's tokenizer/format offline."""
-    for dep in train.recipe.deps:
-        if dep.result_type is TokenizedCache:
+    for dep in train.deps:
+        if dep.artifact_type is TokenizedCache:
             write_record(
                 ArtifactRecord(
                     name=dep.name,
@@ -48,7 +48,7 @@ def _seed_caches(train: Lazy, prefix: str) -> None:
             )
 
 
-def _assemble(train: Lazy, prefix: str):
+def _assemble(train: ArtifactStep, prefix: str):
     """The pod config a run of ``train`` would receive, with its dataset records seeded."""
     _seed_caches(train, prefix)
     return materialized_config(train, prefix)
@@ -119,7 +119,7 @@ def test_validation_handles_join_at_weight_zero(tmp_path):
     tc = _assemble(train, str(tmp_path)).train_config
     assert tc.data.train_weights == {"corpus": 1.0, "heldout": 0.0}
     # Both datasets are build dependencies so they materialize before training.
-    assert {dep.name for dep in train.recipe.deps} == {"corpus", "heldout"}
+    assert {dep.name for dep in train.deps} == {"corpus", "heldout"}
 
 
 def test_evals_none_means_no_harness(tmp_path):
@@ -143,7 +143,7 @@ def test_init_from_chains_the_parent(tmp_path):
 
     # The parent is both a build dependency (so it materializes first) and the weights
     # this run initializes from.
-    assert parent in child.recipe.deps
+    assert parent in child.deps
     tc = _assemble(child, str(tmp_path)).train_config
     assert tc.initialize_from_checkpoint_path == f"{tmp_path}/checkpoints/unit/{_V}/checkpoints"
 

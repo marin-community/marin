@@ -9,10 +9,10 @@ The DCLM baseline for the 7B/1x competition pool, Chinchilla-optimal for 7B para
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, lower
+from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
@@ -25,7 +25,7 @@ BATCH_SIZE = 2048
 NUM_TRAIN_TOKENS = 140e9  # 140 billion tokens, Chinchilla-optimal for 7B parameters
 NUM_TRAIN_STEPS = int(NUM_TRAIN_TOKENS) // (BATCH_SIZE * SEQ_LEN)
 
-# The TPU pod each training job is dispatched onto. A run-arg, not part of the
+# The TPU pod each training job is dispatched onto. A runtime arg, not part of the
 # checkpoint's identity: re-running on different hardware is the same artifact.
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128", slice_count=4)
 
@@ -42,7 +42,7 @@ llama_7b_dclm = LlamaConfig(
 )
 
 
-def build(*, version: str = "v1") -> Lazy[Checkpoint]:
+def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     """The DCLM 7B/1x training run as a lazy checkpoint, every decision stated inline."""
     train = dclm_datasets(tokenizer=llama3_tokenizer)
     validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]

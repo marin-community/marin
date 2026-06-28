@@ -14,7 +14,7 @@ import json
 
 import fsspec
 import pytest
-from marin.execution.lazy import Lazy, Recipe
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.sweep import grid, sweep
 from marin.training.training import LevanterCheckpoint
 
@@ -28,16 +28,14 @@ def _write_metrics(config: dict) -> None:
         f.write(json.dumps(record) + "\n")
 
 
-def _trial(learning_rate: float, weight_decay: float) -> Lazy[LevanterCheckpoint]:
+def _trial(learning_rate: float, weight_decay: float) -> ArtifactStep[LevanterCheckpoint]:
     """A toy trial that records ``loss = lr + wd`` to its output, like a real run."""
-    return Lazy(
+    return ArtifactStep(
         name=f"trials/lr{learning_rate}-wd{weight_decay}",
         version="2026.06.28",
-        result_type=LevanterCheckpoint,
-        recipe=Recipe(
-            fn=_write_metrics,
-            build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {"out": ctx.out, "loss": lr + wd},
-        ),
+        artifact_type=LevanterCheckpoint,
+        run=_write_metrics,
+        build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {"out": ctx.output_path, "loss": lr + wd},
     )
 
 

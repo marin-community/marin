@@ -20,10 +20,10 @@ with ChatLmDatasetFormat via a custom Dataset handle.
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
@@ -54,7 +54,7 @@ _MODEL = GrugModelConfig(
 )
 
 
-def build(*, version: str = "v1") -> Lazy[Checkpoint]:
+def build(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
     """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
     dolmino_math = tokenize_dolmino(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
@@ -64,13 +64,13 @@ def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     # pretrain (40k steps) at dclm=1.0; midtrain (10k steps) at dclm=0.7, dolmino=0.3.
     train = {dclm: 1.0, dolmino_math: 0.06}
 
-    def build_config(ctx: RunContext) -> GrugBaseLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=_MODEL,
             data=mixture(ctx, train, validation=validation),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id="reference-pipeline",
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=TOTAL_STEPS,
             batch_size=256,
             seed=0,
@@ -90,18 +90,16 @@ def build(*, version: str = "v1") -> Lazy[Checkpoint]:
             steps_per_eval=500,
         )
 
-    return Lazy(
+    return ArtifactStep(
         name="references/reference-pipeline",
         version=version,
-        recipe=Recipe(
-            fn=run_grug_base_trial,
-            build_config=build_config,
-            deps=(*train, *validation),
-            run_args={"train_resources": _TRAIN_RESOURCES},
-        ),
-        result_type=Checkpoint,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_base_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(build())])
+    StepRunner().run([build().lower()])

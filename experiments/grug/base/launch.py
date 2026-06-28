@@ -5,7 +5,7 @@
 
 The run is a function that returns a typed :class:`Checkpoint` handle addressed by an
 explicit ``name@version``. The model, optimizer, data mixture, token budget, and evals
-are stated inline; the output path is ``ctx.out`` and the TPU is a run-arg, so neither
+are stated inline; the output path is ``ctx.output_path`` and the TPU is a run-arg, so neither
 bears on the artifact's identity.
 
 The grug training mechanism (``GrugBaseLaunchConfig`` + ``build_grug_run_config`` ->
@@ -28,11 +28,10 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.artifact import Checkpoint
-from marin.execution.lazy import Lazy, Recipe, RunContext, lower
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.base.model import GrugModelConfig
@@ -193,7 +192,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_grug(build_grug_run_config(config))
 
 
-def grug_base_trial(*, version: str = "v1") -> Lazy[Checkpoint]:
+def grug_base_trial(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
     """The base grug trial on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
@@ -208,13 +207,13 @@ def grug_base_trial(*, version: str = "v1") -> Lazy[Checkpoint]:
 
     run_id = _resolve_run_id("grug-base-trial")
 
-    def build_config(ctx: RunContext) -> GrugBaseLaunchConfig:
+    def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=GRUG_130M_MODEL,
             data=mixture(ctx, train, validation=validation),
-            output_path=ctx.out,
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=ctx.run_arg("train_resources"),
+            resources=ctx.runtime_arg("train_resources"),
             steps=2_000,
             batch_size=512,
             seed=0,
@@ -224,7 +223,7 @@ def grug_base_trial(*, version: str = "v1") -> Lazy[Checkpoint]:
                 tags=["grug", "template"],
                 group="grug-base-trial",
                 name=None,  # filled from run_id in _resolve_tracker
-                replicate_path=ctx.out,
+                replicate_path=ctx.output_path,
             ),
             optimizer=AdamConfig(
                 learning_rate=3e-3,
@@ -244,18 +243,16 @@ def grug_base_trial(*, version: str = "v1") -> Lazy[Checkpoint]:
             eval_ema=False,
         )
 
-    return Lazy(
+    return ArtifactStep(
         name="grug/base-trial",
         version=version,
-        recipe=Recipe(
-            fn=run_grug_base_trial,
-            build_config=build_config,
-            deps=(*train, *validation),
-            run_args={"train_resources": _TRAIN_RESOURCES},
-        ),
-        result_type=Checkpoint,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_base_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
 
 
 if __name__ == "__main__":
-    StepRunner().run([lower(grug_base_trial())])
+    StepRunner().run([grug_base_trial().lower()])

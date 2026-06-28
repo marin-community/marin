@@ -19,7 +19,7 @@ from marin.execution.artifact import (
     read_record,
     write_artifact,
 )
-from marin.execution.lazy import Lazy, Recipe, run
+from marin.execution.lazy import ArtifactStep, run
 from pydantic import BaseModel
 
 # A frozen calendar version for the toy artifacts these tests build.
@@ -30,16 +30,14 @@ class Toy(Artifact):
     payload: str
 
 
-def _toy(version: str, payload: str) -> Lazy[Toy]:
+def _toy(version: str, payload: str) -> ArtifactStep[Toy]:
     """A toy value artifact whose recipe (and thus fingerprint) is keyed by ``payload``."""
-    return Lazy(
+    return ArtifactStep(
         name="datasets/toy",
         version=version,
-        result_type=Toy,
-        recipe=Recipe(
-            fn=lambda config: Toy(payload=config["payload"]),
-            build_config=lambda ctx: {"out": ctx.out, "payload": payload},
-        ),
+        artifact_type=Toy,
+        run=lambda config: Toy(payload=config["payload"]),
+        build_config=lambda ctx: {"out": ctx.output_path, "payload": payload},
     )
 
 
@@ -122,15 +120,13 @@ def test_expected_fingerprint_pin_hard_fails_drift(tmp_path, monkeypatch):
 def test_fixed_version_rejects_dev_dependency(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     dep = _toy("dev", "a")
-    parent = Lazy(
+    parent = ArtifactStep(
         name="checkpoints/p",
         version=V,
-        result_type=Toy,
-        recipe=Recipe(
-            fn=lambda config: Toy(payload="p"),
-            build_config=lambda ctx: {"out": ctx.out, "data": ctx.path(dep)},
-            deps=(dep,),
-        ),
+        artifact_type=Toy,
+        run=lambda config: Toy(payload="p"),
+        build_config=lambda ctx: {"out": ctx.output_path, "data": ctx.artifact_path(dep)},
+        deps=(dep,),
     )
     with pytest.raises(ValueError, match="mutable"):
         parent.lower()

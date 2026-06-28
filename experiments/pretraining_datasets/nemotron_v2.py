@@ -10,9 +10,9 @@ marin.datakit.download.nemotron_v2; subsets and their globs are defined there.
 
 from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -28,43 +28,53 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def nemotron_v2_family_datasets(family: str, *, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def nemotron_v2_family_datasets(
+    family: str, *, tokenizer: str = llama3_tokenizer
+) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One Dataset handle per subset of a Nemotron v2 family, keyed by ``{family}/{subset}``."""
     info = NEMOTRON_V2_DATASETS[family]
-    dl = hf_download(f"raw/{family}", hf_id=info.hf_dataset_id, revision=info.revision, pin=info.override_output_path)
+    dl = hf_download(
+        f"raw/{family}",
+        hf_id=info.hf_dataset_id,
+        revision=info.revision,
+        pin=info.override_output_path,
+        version="2026.06.28",
+    )
 
-    result: dict[str, Lazy[Dataset]] = {}
+    result: dict[str, ArtifactStep[TokenizedCache]] = {}
     for subset, glob_pattern in info.subsets.items():
         subset_dir = glob_pattern.split("/**")[0]
         text_field = info.subset_text_fields.get(subset, "text")
         worker_resources = info.subset_normalize_worker_resources.get(subset)
 
-        norm = derived(
-            f"normalized/{family}/{subset}",
-            fn=_run_normalize,
+        norm = ArtifactStep(
+            name=f"normalized/{family}/{subset}",
+            version="2026.06.28",
+            artifact_type=TokenizedCache,
+            run=_run_normalize,
             build_config=lambda ctx, _dl=dl, _sd=subset_dir, _tf=text_field, _wr=worker_resources: {
-                "input_path": f"{ctx.path(_dl)}/{_sd}",
-                "output_path": ctx.out,
+                "input_path": f"{ctx.artifact_path(_dl)}/{_sd}",
+                "output_path": ctx.output_path,
                 "text_field": _tf,
                 "id_field": "id",
                 "file_extensions": [".parquet"],
                 "worker_resources": _wr,
             },
             deps=(dl,),
-            kind=Dataset,
         )
         result[f"{family}/{subset}"] = tokenized(
             f"{family}/{subset}",
             tokenizer=tokenizer,
             raw=norm,
             glob="outputs/main/*.parquet",
+            version="2026.06.28",
         )
     return result
 
 
-def nemotron_v2_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def nemotron_v2_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One Dataset handle per (family, subset) for all Nemotron v2 families."""
-    all_datasets: dict[str, Lazy[Dataset]] = {}
+    all_datasets: dict[str, ArtifactStep[TokenizedCache]] = {}
     for family in NEMOTRON_V2_DATASETS:
         all_datasets.update(nemotron_v2_family_datasets(family, tokenizer=tokenizer))
     return all_datasets

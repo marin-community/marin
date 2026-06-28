@@ -22,13 +22,14 @@ from collections.abc import Sequence
 
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Dataset, read_artifact
-from marin.execution.lazy import Lazy
+from marin.execution.artifact import read_artifact
+from marin.execution.lazy import ArtifactStep
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
+from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
@@ -124,7 +125,7 @@ def dedup(
     *,
     name: str,
     tokenizer: str,
-    validation: Sequence[Lazy[Dataset]],
+    validation: Sequence[ArtifactStep[TokenizedCache]],
     fuzzy_dedup_num_perms: int = 286,
     fuzzy_dedup_num_bands: int = 26,
     fuzzy_dedup_ngram_size: int = 5,

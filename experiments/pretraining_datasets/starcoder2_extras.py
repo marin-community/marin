@@ -11,9 +11,9 @@ normalized (reading from the ``content`` column), and tokenized.
 from fray.types import ResourceConfig
 from marin.datakit.download.starcoder2_extras import HF_DATASET_ID, HF_REVISION, SUBSETS
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -32,7 +32,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[Lazy[Dataset]]:
+def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
     """One tokenized Dataset handle per starcoder2data-extras subset."""
     datasets = []
     for subset in SUBSETS:
@@ -42,19 +42,21 @@ def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[Lazy
             revision=HF_REVISION,
             urls_glob=[f"{subset}/*.parquet"],
             pin=f"raw/starcoder2_extras-{HF_REVISION}/{subset}",
+            version="2026.06.28",
         )
-        norm = derived(
-            f"normalized/starcoder2_extras/{subset}",
-            fn=_run_normalize,
+        norm = ArtifactStep(
+            name=f"normalized/starcoder2_extras/{subset}",
+            version="2026.06.28",
+            artifact_type=TokenizedCache,
+            run=_run_normalize,
             build_config=lambda ctx, _dl=dl: {
-                "input_path": ctx.path(_dl),
-                "output_path": ctx.out,
+                "input_path": ctx.artifact_path(_dl),
+                "output_path": ctx.output_path,
                 "text_field": "content",
                 "id_field": "id",
                 "file_extensions": [".parquet"],
             },
             deps=(dl,),
-            kind=Dataset,
         )
         doc_resources = _DOC_TOKENIZE_RESOURCES if subset == "documentation" else None
         datasets.append(
@@ -64,6 +66,7 @@ def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[Lazy
                 raw=norm,
                 glob="outputs/main/*.parquet",
                 resources=doc_resources,
+                version="2026.06.28",
             )
         )
     return datasets

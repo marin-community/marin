@@ -5,9 +5,9 @@
 
 from marin.datakit.download.nsf_awards import MAX_YEAR, MIN_YEAR, download_nsf_awards
 from marin.datakit.normalize import normalize_to_parquet
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, derived
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import raw_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -26,7 +26,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
+def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """NSF awards corpus as a tokenized Dataset handle."""
     dl = raw_download(
         "raw/nsf-awards",
@@ -34,20 +34,22 @@ def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> Lazy[Dataset]:
         build_config=lambda ctx: {
             "min_year": MIN_YEAR,
             "max_year": MAX_YEAR,
-            "output_path": ctx.out,
+            "output_path": ctx.output_path,
         },
+        version="2026.06.28",
     )
-    norm = derived(
-        "normalized/nsf-awards",
-        fn=_run_normalize,
+    norm = ArtifactStep(
+        name="normalized/nsf-awards",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_normalize,
         build_config=lambda ctx: {
-            "input_path": ctx.path(dl),
-            "output_path": ctx.out,
+            "input_path": ctx.artifact_path(dl),
+            "output_path": ctx.output_path,
             "text_field": "text",
             "id_field": "awd_id",
             "file_extensions": [".parquet"],
         },
         deps=(dl,),
-        kind=Dataset,
     )
-    return tokenized("nsf_awards", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet")
+    return tokenized("nsf_awards", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28")

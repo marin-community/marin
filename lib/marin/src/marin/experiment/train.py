@@ -35,7 +35,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.evaluation.evaluation_config import convert_to_levanter_task_config
-from marin.execution.lazy import Lazy, Recipe, RunContext
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
 from marin.experiment.evals import EvalSuite
@@ -79,7 +79,7 @@ def train_lm(
     name: str,
     model: LmConfig,
     optimizer: OptimizerConfig,
-    datasets: Mapping[Lazy[TokenizedCache], float],
+    datasets: Mapping[ArtifactStep[TokenizedCache], float],
     batch_size: int,
     seq_len: int,
     num_train_steps: int,
@@ -87,8 +87,8 @@ def train_lm(
     evals: EvalSuite | None,
     resources: ResourceConfig,
     version: str,
-    validation: Sequence[Lazy[TokenizedCache]] = (),
-    init_from: Lazy[LevanterCheckpoint] | None = None,
+    validation: Sequence[ArtifactStep[TokenizedCache]] = (),
+    init_from: ArtifactStep[LevanterCheckpoint] | None = None,
     mp: str = MARIN_PRECISION,
     tensor_parallel_size: int = 1,
     steps_per_eval: int = 1000,
@@ -97,13 +97,13 @@ def train_lm(
     run_id: str | None = None,
     tags: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
-) -> Lazy[LevanterCheckpoint]:
-    """Assemble a language-model training run as a ``Lazy[LevanterCheckpoint]``.
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble a language-model training run as an ``ArtifactStep[LevanterCheckpoint]``.
 
     The required arguments are the run's identity-bearing decisions; the helper defaults
     none of them. ``datasets`` maps each tokenized-dataset handle to its mixture weight,
     and ``validation`` lists handles to add at weight 0; ``train_lm`` assembles the
-    :func:`~marin.experiment.data.mixture` internally and derives the recipe's deps from
+    :func:`~marin.experiment.data.mixture` internally and derives the step's deps from
     those handles, so they materialize first and the data config cannot desync from the
     dependencies. ``evals=None`` opts out of harness evals explicitly — there is no
     implicit default suite.
@@ -111,7 +111,7 @@ def train_lm(
     The remaining parameters are execution choices that do not define the experiment:
     ``mp`` (the standard marin precision, identity-bearing but universal),
     ``tensor_parallel_size`` (model sharding width), eval/checkpoint cadence, tracker
-    metadata, and ``resources`` (the TPU the job is dispatched onto — a run-arg, so it
+    metadata, and ``resources`` (the TPU the job is dispatched onto — a runtime arg, so it
     never enters the checkpoint's fingerprint). ``init_from`` chains this run onto another
     checkpoint (it becomes a dep and seeds ``initialize_from_checkpoint_path``).
     """
@@ -120,8 +120,10 @@ def train_lm(
     )
     all_deps = (*datasets, *validation, *((init_from,) if init_from is not None else ()))
 
-    def build_config(ctx: RunContext) -> TrainLmOnPodConfig:
-        init_path = LevanterCheckpoint(path=ctx.path(init_from)).checkpoint_dir if init_from is not None else None
+    def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
+        init_path = (
+            LevanterCheckpoint(path=ctx.artifact_path(init_from)).checkpoint_dir if init_from is not None else None
+        )
         inner = TrainLmConfig(
             data=mixture(ctx, datasets, validation=validation),
             trainer=TrainerConfig(
@@ -132,7 +134,7 @@ def train_lm(
                     tags=[*tags],
                     group=wandb_group,
                     # Mirror metrics next to the run's output so they outlive the job.
-                    replicate_path=ctx.out,
+                    replicate_path=ctx.output_path,
                 ),
                 mp=jmp.get_policy(mp),
                 train_batch_size=batch_size,
@@ -155,19 +157,17 @@ def train_lm(
         )
         return TrainLmOnPodConfig(
             train_config=inner,
-            resources=ctx.run_arg("train_resources"),
-            output_path=ctx.out,
+            resources=ctx.runtime_arg("train_resources"),
+            output_path=ctx.output_path,
             env_vars=env_vars,
         )
 
-    return Lazy(
+    return ArtifactStep(
         name=name,
         version=version,
-        recipe=Recipe(
-            fn=_train_job,
-            build_config=build_config,
-            deps=all_deps,
-            run_args={"train_resources": resources},
-        ),
-        result_type=LevanterCheckpoint,
+        artifact_type=LevanterCheckpoint,
+        run=_train_job,
+        build_config=build_config,
+        deps=all_deps,
+        runtime_args={"train_resources": resources},
     )

@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from levanter.models.llama import LlamaConfig
-from marin.execution.artifact import Artifact, Checkpoint
-from marin.execution.lazy import Lazy, Recipe, materialized_config
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
@@ -23,6 +23,7 @@ from marin.rl.rl_experiment_utils import (
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
+from marin.training.training import LevanterCheckpoint
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
@@ -125,11 +126,12 @@ def test_launcher_region_raises_when_root_region_conflicts_with_requested_comput
 
 def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central1")
-    model_checkpoint = Lazy(
+    model_checkpoint = ArtifactStep(
         name="models/test-llama",
-        version="v1",
-        result_type=Checkpoint,
-        recipe=Recipe(fn=_noop, build_config=lambda _ctx: _EmptyConfig()),
+        version="2026.06.28",
+        artifact_type=LevanterCheckpoint,
+        run=_noop,
+        build_config=lambda _ctx: _EmptyConfig(),
     )
     config = dataclasses.replace(
         _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
@@ -141,10 +143,10 @@ def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
         ),
     )
 
-    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum())
+    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum(), version="2026.06.28")
 
     # The model checkpoint is a dependency, and the step's config resolves to its path.
-    assert step.recipe.deps == (model_checkpoint,)
+    assert step.deps == (model_checkpoint,)
     expected_path = model_checkpoint.path("gs://marin-us-central1")
     step_config = materialized_config(step, "gs://marin-us-central1")
     assert step_config.model_path == expected_path

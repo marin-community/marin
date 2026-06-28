@@ -7,9 +7,9 @@ The llama3-tokenized caches are pinned to their existing locations so referencin
 them never re-tokenizes the corpora (~250B and ~55B tokens).
 """
 
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -25,35 +25,35 @@ _STARCODER_LLAMA3_PIN = "tokenized/starcoderdata-12f018/"
 _PROOFPILE_LLAMA3_PIN = "tokenized/proofpile_2-4a35c7/"
 
 
-def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def dclm_baseline_dataset(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """DCLM-baseline as a tokenized ``Dataset`` handle."""
     return tokenized(
-        "dclm_baseline",
+        "dclm_baseline-llama3",
         tokenizer=tokenizer,
-        version="llama3",
+        version="2026.06.28",
         paths=[_DCLM_BASELINE_RAW],
         pin=_DCLM_BASELINE_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
     )
 
 
-def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def starcoder_dataset(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """StarCoder as a tokenized ``Dataset`` handle (text lives under the ``content`` key)."""
     return tokenized(
-        "starcoderdata",
+        "starcoderdata-llama3",
         tokenizer=tokenizer,
-        version="llama3",
+        version="2026.06.28",
         paths=[_STARCODER_RAW],
         text_key="content",
         pin=_STARCODER_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
     )
 
 
-def proofpile_dataset(*, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def proofpile_dataset(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Proof-Pile 2 as a tokenized ``Dataset`` handle."""
     return tokenized(
-        "proofpile_2",
+        "proofpile_2-llama3",
         tokenizer=tokenizer,
-        version="llama3",
+        version="2026.06.28",
         paths=[_PROOFPILE_RAW],
         pin=_PROOFPILE_LLAMA3_PIN if tokenizer == llama3_tokenizer else None,
     )

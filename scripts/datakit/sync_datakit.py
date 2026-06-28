@@ -78,9 +78,9 @@ from enum import StrEnum
 import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from rigging.filesystem import atomic_rename, marin_prefix
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters

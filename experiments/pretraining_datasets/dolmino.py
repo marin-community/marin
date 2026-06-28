@@ -11,9 +11,9 @@ them.
 """
 
 from marin.datakit.download.dolmino import DOLMINO_DATASETS
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
@@ -38,7 +38,7 @@ DOLMINO_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dataset]]:
+def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One :class:`Dataset` handle per Dolmino split, keyed by ``dolmino/<split>``."""
     return {
         f"dolmino/{split}": tokenized(
@@ -46,18 +46,19 @@ def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Lazy[Dat
             tokenizer=tokenizer,
             paths=[f"{_DOLMINO_BASE}/{split}/{pattern}" for pattern in files],
             pin=DOLMINO_LLAMA3_OVERRIDES.get(split) if tokenizer == llama3_tokenizer else None,
+            version="2026.06.28",
         )
         for split, files in DOLMINO_DATASETS.items()
     }
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """The :class:`Dataset` handle for a single named Dolmino split."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
 
 
-def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
+def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Combined math-only :class:`Dataset` handle (all ``math/*`` splits merged)."""
     math_paths = [
         f"{_DOLMINO_BASE}/{split}/{pattern}"
@@ -70,4 +71,5 @@ def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> Lazy[Dataset]:
         tokenizer=tokenizer,
         paths=math_paths,
         pin="tokenized/dolmino/all_math-9d507c" if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
     )
