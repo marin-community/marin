@@ -131,6 +131,10 @@ WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir
 # new submission indefinitely.
 _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 
+# Cap on the merged autoscaler action log returned by GetAutoscalerStatus; matches
+# the per-autoscaler action_log deque cap so a single-backend view is unchanged.
+_MERGED_AUTOSCALER_ACTIONS = 100
+
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -939,6 +943,9 @@ class ControllerProtocol(Protocol):
 
     @property
     def provider(self) -> Any: ...
+
+    @property
+    def backends(self) -> dict[str, TaskBackend]: ...
 
     @property
     def capabilities(self) -> frozenset[BackendCapability]: ...
@@ -2003,6 +2010,11 @@ class ControllerServiceImpl:
         """The live execution backend (read-only handle for dashboard descriptors)."""
         return self._controller.provider
 
+    @property
+    def backends(self) -> dict[str, TaskBackend]:
+        """The controller's full backend collection (for the union capabilities descriptor)."""
+        return self._controller.backends
+
     def resolve_endpoint(self, name: str) -> str | None:
         """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
         row = self._endpoints.resolve(name)
@@ -2039,14 +2051,11 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetAutoscalerStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
-        """Get current autoscaler status with worker info populated."""
+        """Get autoscaler status, merged across every backend's autoscaler."""
         if BackendCapability.IRIS_AUTOSCALER not in self._controller.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
-        autoscaler = self._controller.autoscaler
-        if not autoscaler:
-            return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
-        status = autoscaler.get_status()
+        status = self._merge_autoscaler_status()
 
         workers = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
@@ -2072,6 +2081,35 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
+    def _merge_autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+        """Merge every backend's autoscaler status into one, tagging groups with backend_id.
+
+        Each backend owns a disjoint set of scale groups (the single
+        scale-group->backend key space), so group-keyed fields (``current_demand``,
+        ``recent_actions``) need no further disambiguation. ``recent_actions`` are
+        re-sorted newest-first and capped; ``last_routing_decision`` (one snapshot per
+        autoscaler) is left unset in the merged view.
+        """
+        merged = vm_pb2.AutoscalerStatus()
+        last_evaluation = 0
+        for backend_id, backend in self._controller.backends.items():
+            autoscaler = backend.autoscaler
+            if autoscaler is None:
+                continue
+            sub = autoscaler.get_status()
+            for group in sub.groups:
+                group.backend_id = backend_id
+            merged.groups.extend(sub.groups)
+            for key, value in sub.current_demand.items():
+                merged.current_demand[key] = value
+            merged.recent_actions.extend(sub.recent_actions)
+            last_evaluation = max(last_evaluation, sub.last_evaluation.epoch_ms)
+        merged.recent_actions.sort(key=lambda action: action.timestamp.epoch_ms, reverse=True)
+        del merged.recent_actions[_MERGED_AUTOSCALER_ACTIONS:]
+        if last_evaluation:
+            merged.last_evaluation.epoch_ms = last_evaluation
+        return merged
+
     # --- Kubernetes Cluster Status ---
 
     def get_kubernetes_cluster_status(
@@ -2079,14 +2117,16 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetKubernetesClusterStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
-        """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses."""
-        if BackendCapability.CLUSTER_VIEW not in self._controller.capabilities:
-            return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
+        """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses.
 
-        # KubernetesProvider exposes get_cluster_status().
-        # Access via the provider after the guard.
-        provider = self._controller.provider
-        return provider.get_cluster_status()  # type: ignore[union-attr]
+        Locates the backend that owns the cluster view by capability rather than
+        assuming the representative backend is the k8s one. Returns the first
+        ``CLUSTER_VIEW`` backend by sorted id (there is at most one today).
+        """
+        for _backend_id, backend in sorted(self._controller.backends.items()):
+            if BackendCapability.CLUSTER_VIEW in backend.capabilities:
+                return backend.get_cluster_status()  # type: ignore[union-attr]
+        return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
     # --- VM Logs ---
 

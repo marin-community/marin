@@ -34,6 +34,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
 from rigging.server_auth import (
     AuthRequest,
@@ -82,6 +83,7 @@ def service(state, tmp_path, log_client):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.capabilities = worker_caps
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),

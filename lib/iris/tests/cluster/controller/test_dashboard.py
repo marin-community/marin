@@ -41,7 +41,7 @@ from iris.cluster.controller.schema import jobs_table, task_attempts_table, task
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.server_auth import RequestAuthPolicy, StaticTokenVerifier
@@ -198,7 +198,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
+    controller_mock.provider.autoscaler = autoscaler
     controller_mock.capabilities = worker_caps
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return controller_mock
 
 
@@ -1425,6 +1427,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
     controller_mock.capabilities = cluster_caps
     controller_mock.provider = Mock(capabilities=cluster_caps)
     controller_mock.provider.name = "kubernetes"
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1460,6 +1463,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
+    controller_mock.backends = {DEFAULT_BACKEND_ID: provider}
     svc = ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
@@ -1634,3 +1638,102 @@ def test_k8s_cluster_status_without_direct_provider(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data.get("totalNodes", 0) == 0
+
+
+# =============================================================================
+# Multi-backend RPC surface
+# =============================================================================
+
+
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None):
+    backend = Mock(capabilities=capabilities)
+    backend.name = name
+    backend.autoscaler = autoscaler
+    if cluster_status is not None:
+        backend.get_cluster_status.return_value = cluster_status
+    return backend
+
+
+def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
+    """A dashboard client whose controller fronts several backends (representative = first)."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.backends = dict(backends)
+    controller_mock.provider = next(iter(backends.values()))
+    controller_mock.capabilities = frozenset(cap for backend in backends.values() for cap in backend.capabilities)
+    svc = ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+    return TestClient(ControllerDashboard(svc).app)
+
+
+def _status_autoscaler(group_name):
+    autoscaler = Mock()
+    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        groups=[vm_pb2.ScaleGroupStatus(name=group_name)],
+        current_demand={group_name: 1},
+        last_evaluation=timestamp_to_proto(Timestamp.from_ms(5)),
+    )
+    return autoscaler
+
+
+def test_auth_config_unions_capabilities_across_backends(state, scheduler, tmp_path, log_client):
+    """/auth/config advertises the union of every backend's capabilities, not just the representative's."""
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            "gcp": _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})),
+            "eu-k8s": _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW})),
+        },
+    )
+    config = client.get("/auth/config").json()
+    assert set(config["capabilities"]) == {"workers", "autoscaler", "cluster"}
+    assert {b["id"] for b in config["backends"]} == {"gcp", "eu-k8s"}
+
+
+def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, log_client):
+    """GetAutoscalerStatus merges every backend's autoscaler and tags each group with its backend_id."""
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            "gcp": _backend_mock(
+                "gcp", frozenset({BackendCapability.IRIS_AUTOSCALER}), autoscaler=_status_autoscaler("gcp-v5e")
+            ),
+            "cw": _backend_mock(
+                "cw", frozenset({BackendCapability.IRIS_AUTOSCALER}), autoscaler=_status_autoscaler("cw-h100")
+            ),
+        },
+    )
+    status = rpc_post(client, "GetAutoscalerStatus")["status"]
+    assert {g["name"]: g.get("backendId", "") for g in status["groups"]} == {"gcp-v5e": "gcp", "cw-h100": "cw"}
+
+
+def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
+    """GetKubernetesClusterStatus locates the CLUSTER_VIEW backend even when it is not the representative one."""
+    cluster_status = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            "gcp": _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON})),
+            "eu-k8s": _backend_mock(
+                "eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_status
+            ),
+        },
+    )
+    data = rpc_post(client, "GetKubernetesClusterStatus")
+    assert data["namespace"] == "eu"
+    assert data["totalNodes"] == 2
