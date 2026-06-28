@@ -25,10 +25,15 @@ all-E4M3 — which loses the E5M2 dynamic range on the gradient.
 ## The fork
 
 [`mcwitt/jax@mixed-fp8-wgmma-0.10.0`](https://github.com/mcwitt/jax/tree/mixed-fp8-wgmma-0.10.0)
-relaxes all four layers (verifier + emitter + two python guards) to accept the e4m3/e5m2 pair,
+relaxes the verifier + emitter + the pallas wgmma primitive gate to accept the e4m3/e5m2 pair,
 keeping the same-dtype contract for every other type. The changes are upstreamable — they
 match the hardware's actual capability and are covered by added tests in
 `tests/mosaic/gpu_test.py`, `tests/mosaic/gpu_dialect_test.py`, `tests/pallas/mosaic_gpu_test.py`.
+
+The fourth relaxation — the `ragged_dot_mgpu` dlhs same-dtype guard, needed for the mixed
+`e5m2-grad × e4m3-rhs` dgrad — is committed to the fork locally but not yet on the published
+branch, so `mixed_fp8_fork_setup.sh` applies it as a verified build-time patch (step 3b). It
+belongs in the fork; push it there to make the install a pure wheel+overlay with no patching.
 
 This branch carries **only** the haliax-side FP8 ragged subsystem (which already allows the
 mixed pair in `transposed_ragged_dot_mgpu`). All jax/jaxlib changes live in the fork; there is

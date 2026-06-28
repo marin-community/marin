@@ -46,19 +46,50 @@ cd /app
 uv pip install --no-deps --force-reinstall "$WHL" 2>&1 | tail -1
 SP=$(uv run --no-sync python -c "import jaxlib,os;print(os.path.dirname(os.path.dirname(jaxlib.__file__)))")
 # A from-source jaxlib reports 0.10.0.dev0+selfbuilt (< 0.10.0 under PEP440), which jax's
-# version gate would reject. The ABI is identical to the 0.10.0 tag, so pin the string.
+# version gate would reject. The ABI is identical to the 0.10.0 tag, so pin the string. Verify
+# the substitution took effect — a silent no-op (renamed/reformatted var, different jax revision)
+# would leave the wheel reporting the dev version and brick `import jax` for the whole container.
 sed -i "s|^_release_version: str = .*|_release_version: str = '0.10.0'|" "$SP/jaxlib/version.py"
+if ! grep -qE "^_release_version: str = '0\.10\.0'" "$SP/jaxlib/version.py"; then
+  echo "FATAL: jaxlib version pin did not apply to $SP/jaxlib/version.py — aborting before it bricks the container" >&2
+  grep -nE "_release_version" "$SP/jaxlib/version.py" >&2 || true
+  exit 1
+fi
 
-# 3. Forked jax python package: the wgmma PTX emitter + the two relaxed dtype guards.
+# 3. Forked jax python package: the wgmma PTX emitter + the relaxed pallas wgmma gate.
 cp "$SRC/jax/experimental/mosaic/gpu/wgmma.py"               "$SP/jax/experimental/mosaic/gpu/wgmma.py"
 cp "$SRC/jax/_src/pallas/mosaic_gpu/primitives.py"           "$SP/jax/_src/pallas/mosaic_gpu/primitives.py"
 cp "$SRC/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py" "$SP/jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py"
 
+# 3b. Relax the ragged_dot_mgpu dlhs same-dtype guard (the mixed e5m2-grad x e4m3-rhs dgrad).
+#     This is the one jax-python relaxation not yet in the published fork branch; it is committed
+#     to the fork locally (mcwitt/jax "[Mosaic GPU] Allow mixed E4M3/E5M2 FP8 operands in
+#     ragged_dot_mgpu dlhs") and belongs there — applied here as a build-time patch until pushed.
+python3 - "$SP" <<'PYEOF'
+import sys, os
+ragged = os.path.join(sys.argv[1], "jax/experimental/pallas/ops/gpu/ragged_dot_mgpu.py")
+src = open(ragged).read()
+old = "  if lhs.dtype != rhs.dtype:\n"
+new = "  if lhs.dtype != rhs.dtype and not (lhs.dtype.itemsize == 1 and rhs.dtype.itemsize == 1):\n"
+if new in src:
+    print("ragged_dot_mgpu dlhs guard already relaxed")
+elif src.count(old) == 1:
+    open(ragged, "w").write(src.replace(old, new))
+    print("relaxed ragged_dot_mgpu dlhs guard")
+else:
+    raise SystemExit(f"FATAL: ragged_dot_mgpu dlhs guard not found exactly once (count={src.count(old)})")
+PYEOF
+
 # 4. Mosaic-GPU toolchain: ptxas/nvlink/libdevice (the cuda13 plugin loads from the uv cache,
 #    so its relative ../nvidia/cu13/bin/ptxas does not resolve) + cuDNN 9.12 (jaxlib 0.10.0 is
-#    built against 9.12; the synced env ships 9.10, which leaves the dnn handle null).
+#    built against 9.12; the synced env ships 9.10, which leaves the dnn handle null). Fail loudly
+#    if the toolchain layout is not where we expect rather than dangling-symlinking past it.
 N="$SP/nvidia/cu13"
-for t in ptxas nvlink nvdisasm fatbinary; do ln -sf "$N/bin/$t" /app/.venv/bin/$t; done
+for t in ptxas nvlink nvdisasm fatbinary; do
+  [[ -x "$N/bin/$t" ]] || { echo "FATAL: missing CUDA toolchain binary $N/bin/$t" >&2; exit 1; }
+  ln -sf "$N/bin/$t" /app/.venv/bin/$t
+done
+[[ -f "$N/nvvm/libdevice/libdevice.10.bc" ]] || { echo "FATAL: missing $N/nvvm/libdevice/libdevice.10.bc" >&2; exit 1; }
 ln -sf "$N/nvvm/libdevice/libdevice.10.bc" /app/libdevice.10.bc
 uv pip install --python "$(uv run --no-sync python -c 'import sys;print(sys.executable)')" \
   'nvidia-cudnn-cu13==9.12.0.46' 2>&1 | tail -1
