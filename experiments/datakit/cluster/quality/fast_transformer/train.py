@@ -41,11 +41,12 @@ class TrainHParams:
     lr: float = 5e-4
     weight_decay: float = 0.05
     grad_clip: float = 1.0
-    epochs: int = 60
+    epochs: int = 40  # hard cap; early stopping usually ends well before this
     batch_size: int = 512
     warmup_frac: float = 0.15
     val_frac: float = 0.1
-    eval_every: int = 2
+    eval_every: int = 1
+    patience: int = 2  # eval rounds without val-Spearman improvement before stopping
     seed: int = 0
 
 
@@ -151,6 +152,85 @@ class FitResult:
     flops_per_token: float
 
 
+def train_regressor(
+    model,
+    tr_ids: np.ndarray,
+    tr_scores: np.ndarray,
+    val_ids: np.ndarray,
+    val_scores: np.ndarray,
+    hp: TrainHParams,
+):
+    """Train any ``(ids, key, inference) -> logits`` model on the MSE-on-sigmoid
+    regression objective.
+
+    Selects the checkpoint with the best internal-val Spearman and stops early
+    after ``hp.patience`` eval rounds without improvement (best epoch is typically
+    < 15, so running the full epoch cap wastes most of the trial). Works for both
+    :class:`FastTransformer` and the pretrained encoder classifier. Returns
+    ``(best_model, best_epoch, train_seconds)``.
+    """
+    key = jax.random.PRNGKey(hp.seed)
+    steps_per_epoch = max(1, len(tr_ids) // hp.batch_size)
+    total_steps = steps_per_epoch * hp.epochs
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=hp.lr * 0.05,
+        peak_value=hp.lr,
+        warmup_steps=max(1, int(total_steps * hp.warmup_frac)),
+        decay_steps=total_steps,
+        end_value=hp.lr * 0.05,
+    )
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(hp.grad_clip),
+        optax.adamw(schedule, weight_decay=hp.weight_decay),
+    )
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+
+    @eqx.filter_jit
+    def step(model, opt_state, ids, targets, step_key):
+        def loss_fn(m):
+            preds = jax.nn.sigmoid(m(ids, key=step_key, inference=False))
+            return jnp.mean((preds - targets) ** 2)
+
+        loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
+        updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
+        return eqx.apply_updates(model, updates), opt_state, loss
+
+    rng = np.random.default_rng(hp.seed)
+    best_val_rho, best_model, best_epoch, no_improve = -2.0, model, 0, 0
+    t0 = time.time()
+    for epoch in range(hp.epochs):
+        ep_perm = rng.permutation(len(tr_ids))
+        for s in range(steps_per_epoch):
+            batch = ep_perm[s * hp.batch_size : (s + 1) * hp.batch_size]
+            key, step_key = jax.random.split(key)
+            model, opt_state, loss = step(
+                model, opt_state, jnp.asarray(tr_ids[batch]), jnp.asarray(tr_scores[batch]), step_key
+            )
+        if epoch % hp.eval_every != 0 and epoch != hp.epochs - 1:
+            continue
+        # Reuse the (memory-sized) training batch for eval -- token-level encoders
+        # at long context can't fit the default inference batch's O(T^2) attention.
+        val_rho = spearman_rho(_predict(model, val_ids, batch_size=hp.batch_size).tolist(), val_scores.tolist())
+        improved = bool(np.isfinite(val_rho) and val_rho > best_val_rho)
+        if improved:
+            best_val_rho, best_model, best_epoch, no_improve = val_rho, model, epoch, 0
+        else:
+            no_improve += 1
+        logger.info(
+            "epoch %d: train_loss=%.4f val_rho=%.4f (best=%.4f @ %d, stale=%d)",
+            epoch,
+            float(loss),
+            val_rho,
+            best_val_rho,
+            best_epoch,
+            no_improve,
+        )
+        if no_improve >= hp.patience:
+            logger.info("early stop at epoch %d (val Spearman stale for %d evals)", epoch, no_improve)
+            break
+    return best_model, best_epoch, time.time() - t0
+
+
 def fit(
     config: FastTransformerConfig,
     data: PackedData,
@@ -163,8 +243,7 @@ def fit(
     ``init_model`` continues training from existing weights (e.g. fine-tuning a
     pretrained model) instead of fresh init.
     """
-    key = jax.random.PRNGKey(hp.seed)
-    model_key, key = jax.random.split(key)
+    model_key = jax.random.PRNGKey(hp.seed)
     model = init_model if init_model is not None else FastTransformer(config, key=model_key)
     n_params = count_params(model)
     flops = config.flops_per_token()
@@ -184,69 +263,11 @@ def fit(
     perm = rng.permutation(tr.n)
     n_val = max(1, int(tr.n * hp.val_frac))
     val_idx, train_idx = perm[:n_val], perm[n_val:]
-    tr_ids, tr_scores = tr.ids[train_idx], tr.scores[train_idx]
     val_ids, val_scores = tr.ids[val_idx], tr.scores[val_idx]
 
-    steps_per_epoch = max(1, len(train_idx) // hp.batch_size)
-    total_steps = steps_per_epoch * hp.epochs
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=hp.lr * 0.05,
-        peak_value=hp.lr,
-        warmup_steps=max(1, int(total_steps * hp.warmup_frac)),
-        decay_steps=total_steps,
-        end_value=hp.lr * 0.05,
+    best_model, best_epoch, train_seconds = train_regressor(
+        model, tr.ids[train_idx], tr.scores[train_idx], val_ids, val_scores, hp
     )
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(hp.grad_clip),
-        optax.adamw(schedule, weight_decay=hp.weight_decay),
-    )
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-
-    @eqx.filter_jit
-    def step(model, opt_state, ids, targets, step_key):
-        def loss_fn(m):
-            logits = m(ids, key=step_key, inference=False)
-            preds = jax.nn.sigmoid(logits)
-            return jnp.mean((preds - targets) ** 2)
-
-        loss, grads = eqx.filter_value_and_grad(loss_fn)(model)
-        updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
-        model = eqx.apply_updates(model, updates)
-        return model, opt_state, loss
-
-    best_val_rho = -2.0
-    best_model = model
-    best_epoch = 0
-    t0 = time.time()
-    for epoch in range(hp.epochs):
-        ep_perm = rng.permutation(len(train_idx))
-        for s in range(steps_per_epoch):
-            batch = ep_perm[s * hp.batch_size : (s + 1) * hp.batch_size]
-            key, step_key = jax.random.split(key)
-            model, opt_state, loss = step(
-                model,
-                opt_state,
-                jnp.asarray(tr_ids[batch]),
-                jnp.asarray(tr_scores[batch]),
-                step_key,
-            )
-        if epoch % hp.eval_every != 0 and epoch != hp.epochs - 1:
-            continue
-        val_pred = _predict(model, val_ids)
-        val_rho = spearman_rho(val_pred.tolist(), val_scores.tolist())
-        if np.isfinite(val_rho) and val_rho > best_val_rho:
-            best_val_rho = val_rho
-            best_model = model
-            best_epoch = epoch
-        logger.info(
-            "epoch %d: train_loss=%.4f val_rho=%.4f (best=%.4f @ %d)",
-            epoch,
-            float(loss),
-            val_rho,
-            best_val_rho,
-            best_epoch,
-        )
-    train_seconds = time.time() - t0
     return FitResult(
         model=best_model,
         val_ids=val_ids,

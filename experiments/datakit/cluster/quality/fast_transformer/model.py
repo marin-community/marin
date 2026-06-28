@@ -132,8 +132,11 @@ class TransformerLayer(eqx.Module):
     w2: Array  # [D_ff, D]
     num_heads: int = eqx.field(static=True)
     dropout: float = eqx.field(static=True)
+    causal: bool = eqx.field(static=True)
 
-    def __init__(self, dim: int, num_heads: int, mlp_ratio: int, dropout: float, *, key: PRNGKeyArray):
+    def __init__(
+        self, dim: int, num_heads: int, mlp_ratio: int, dropout: float, *, causal: bool = False, key: PRNGKeyArray
+    ):
         kqkv, ko, k1, k2 = jax.random.split(key, 4)
         self.ln1_g = jnp.ones(dim)
         self.ln1_b = jnp.zeros(dim)
@@ -145,10 +148,14 @@ class TransformerLayer(eqx.Module):
         self.w2 = _glorot(k2, (dim * mlp_ratio, dim))
         self.num_heads = num_heads
         self.dropout = dropout
+        self.causal = causal
 
-    def __call__(self, x: Array, valid: Array, *, key: PRNGKeyArray | None, inference: bool) -> Array:
+    def __call__(
+        self, x: Array, valid: Array, *, key: PRNGKeyArray | None, inference: bool, dropout: float | None = None
+    ) -> Array:
         b, s, d = x.shape
         h, hd = self.num_heads, d // self.num_heads
+        p = self.dropout if dropout is None else dropout
         ka, km = (None, None) if key is None else jax.random.split(key)
 
         normed = _layer_norm(x, self.ln1_g, self.ln1_b)
@@ -156,13 +163,16 @@ class TransformerLayer(eqx.Module):
         q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]  # [b, s, h, hd]
         scores = jnp.einsum("bqhd,bkhd->bhqk", q, k) / math.sqrt(hd)
         scores = jnp.where(valid[:, None, None, :].astype(bool), scores, NEG_INF)
+        if self.causal:
+            causal_mask = jnp.tril(jnp.ones((s, s), dtype=bool))
+            scores = jnp.where(causal_mask[None, None], scores, NEG_INF)
         attn = jax.nn.softmax(scores, axis=-1)
         ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v).reshape(b, s, d)
-        x = x + _dropout(_matmul(ctx, self.wo), self.dropout, ka, inference)
+        x = x + _dropout(_matmul(ctx, self.wo), p, ka, inference)
 
         normed = _layer_norm(x, self.ln2_g, self.ln2_b)
         mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1)), self.w2)
-        x = x + _dropout(mlp, self.dropout, km, inference)
+        x = x + _dropout(mlp, p, km, inference)
         return x
 
 
