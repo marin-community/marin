@@ -28,80 +28,56 @@ Do all the work in this one worktree (so the full migration surface is known), t
 
 ## Status
 
-🔄 **PR1 infra complete & verified. PR2 underway — catalog layer + tutorials done.**
+🔄 **Experiment tree fully migrated + god modules deleted. Remaining: lib layer + executor deletion.**
 
-Done so far on PR2 (all committed, tree imports green, lint+pyrefly clean):
-- Added the last two generic builders to `marin.experiment.data`: `hf_download` (the
-  HuggingFace-Hub download case) and `derived` (generic single-step transform/convert/filter
-  with deps). Added `sample_count` to `tokenized()`.
-- Folded the verified `_lazy` catalog prototypes into canonical filenames
-  (nemotron/simple/dclm/paloma/uncheatable/common_pile); `pretraining_datasets/__init__`
-  reduced to a docstring (catalogs imported by submodule).
-- Migrated **all dataset catalogs** to lazy step-functions (climblab_ja, common_corpus, hplt,
-  massive_function_calling, molmo2_cap, svg, dolma, dolmino, diagnostic_logs, nemotron_v2,
-  swe_zero_12m, nsf_awards, starcoder2_extras, eval_datasets, midtraining_datasets, models).
-  Pins/revisions/paths preserved verbatim; published reference weights kept as constants;
-  mixture assembly moved to the experiment.
-- Migrated the training **tutorials** onto `train_lm` (exp1078 7B, tiny cpu/gpu/tpu, 125M
-  fineweb-edu, hello_world); deleted exp1077 (redundant with `dclm_1b_1x_inline`).
+Done (all committed, lint+pyrefly clean, touched test suites green):
+- **Generic builders** in `marin.experiment.data`: `hf_download`, `derived`, `sample_count`.
+  Sweep redesigned: `AnnotatedCheckpoint` + `annotate` + `select() -> Checkpoint` reads each
+  trial's recorded eval metric from its output (no trial-return-payload bridge).
+- **All dataset catalogs** → lazy step-functions; pins/revisions/paths preserved verbatim;
+  mixture assembly moved into experiments.
+- **All training experiments** → `train_lm`: tutorials (dclm_1b_1x_inline, exp1078 7B, tiny
+  cpu/gpu/tpu, 125M, hello_world, both sweep tutorials), references/reference_training_pipeline,
+  daily ferry.
+- **grug launchers** (moe launch/launch_cw_scale/base, deleted launch_datakit_moe_mix one-off);
+  **datakit testbed** (StepSpec-based, runtime token-proportional weights); **evals/\*** (7
+  eval-running experiments); **posttrain** dataset-prep catalogs; **canary + multislice CI
+  ferries** (build()→Checkpoint, validate_canary_metrics resolves via `build().path('mirror://')`).
+- **No more `default_*`**: deleted `experiments/defaults.py` + `experiments/tokenization.py`
+  (`default_train`/`default_validation_sets`/`default_tokenize`/`default_download`/`default_sft`/
+  `default_dpo` — all had their consumers migrated to inline `train_lm` + `tokenized`/`hf_download`
+  + inline `[*paloma_validation(), *uncheatable_validation()]`). `recipes.default_validation`
+  was removed too (inlined at call sites per "don't reach for a default_*").
+- Deleted dead weight: golden migration harness, grug lazy prototypes, `completed_adamh`
+  (historical), the Vizier `reference_hyperparameter_sweep` + its stale `add_scaling_heuristic.md`
+  recipe (last remnant of the already-deleted isoflop/scaling-ladder subsystem).
 
-Also done: migrated long_context_datasets (finepdfs, longmino) + prebuilt_caches; added the
-`default_validation` recipe (lazy Paloma+Uncheatable); added `sample_count` to `tokenized()`;
-deleted the golden migration harness (it had served its purpose — `train_lm` proven equal to
-`default_train`).
+**The experiment tree no longer references any executor symbol** (only docs: `experiments/AGENTS.md`
++ two grug READMEs still mention them).
 
-### Current tree state (expected mid-migration breakage)
+### Remaining tail
 
-The catalog migration removed the old executor catalog symbols, which cascades through the
-god module `defaults.py` (slated for deletion): `defaults.py` imports
-`paloma.paloma_tokenized` / `exp1600.uncheatable_eval_tokenized` (both removed), and
-`exp1600_uncheatable_evals.py` imports `models.download_model_step` (renamed to
-`download_model`). So `defaults.py` and everything importing it currently fail to import.
-This is the expected WIP state of the PR2 bulk branch — the fix is the dismantle below, not a
-patch. The migrated catalog/tutorial modules all import and build handles in isolation.
-
-The grug-moe lazy *prototype* examples (`launch_lazy`/`phases_lazy`) and their tests were
-deleted (per the user — they were design-validation scaffolding superseded by the real
-migration). The `tests/experiment/` suite is green (12 passed). The canonical lazy example is
-now `tutorials/dclm_1b_1x_inline.py` + the catalogs themselves.
-
-### Remaining PR2 tail (the careful second phase)
-
-1. **Dismantle `defaults.py`** (lynchpin; unblocks green). `default_train`/`train`/
-   `prepare_lm_train`/`simulated_epoching_train` → `train_lm`. `default_sft`/`default_dpo`
-   need light `sft_lm`/`dpo_lm` assemblers (same identity-vs-execution discipline as
-   `train_lm`) or consumer rewrites. `default_validation_sets` → `recipes.default_validation`.
-   Then delete `defaults.py` + `tokenization.py` (`default_download`/`default_tokenize`).
-2. **Test-coupled bespoke launchers** (run their tests after each):
-   - `grug/*` (4 old executor launchers: `launch`, `launch_cw_scale`,
-     `launch_datakit_moe_mix`, `base/launch`) — `tests/test_grug_launch_checkpoint_paths`,
-     `tests/test_grug_variant_contracts`. Migrate or delete (judge if superseded). The lazy
-     prototypes were already deleted.
-   - `datakit/testbed/*` (4) — `tests/datakit/testbed/test_*`.
-   - `ferries/*` (3) — CI smoke/daily jobs; high-stakes, migrate carefully.
-   - `references/*` (2), `scaling_law_sweeps/completed_adamh` (likely delete — historical).
-3. **Eval-running experiments**: `evals/*` (7: evals, run_base_model_evals, run_key_evals,
-   exp1600_uncheatable_evals, exp_evalchemy_eval, hf_log_probs, evalchemy_results_compiler).
-   These run evaluations (not `train_lm`); may need light eval-running helpers.
-4. **Post-training**: `posttrain/{instruction,preference}_datasets` — gated on the
-   `sft_lm`/`dpo_lm` assembler decision.
-5. **Sweep tutorials** (`train_tiny_sweep_tpu`, `train_tiny_sweep_dclm_tpu`) — blocked on the
-   sweep↔train metrics bridge (below).
-6. **Library layer (~25 lib/marin files)** — do AFTER experiments stop passing
-   `InputName`/`versioned`: remove `THIS_OUTPUT_PATH`/`InputName`/`versioned` from config
-   dataclasses + download/transform fns; drop the two `materialize` calls in `training.py`
-   (lazy `build_config` already resolves configs fully, so they are no-ops); move
-   `infer_tpu_variant_regions_from_iris` into `rl/placement.py`; fix `rl/rl_experiment_utils.py`
-   (`ExecutorMainConfig`).
-7. **Capstone**: delete executor content-addressing + `types.py`; flip
-   `MARIN_EXECUTOR_STRICT` default-on; rewrite/remove `materialize`; delete executor-only
-   tests; rewrite `docs/tutorials/train-an-lm.md`; codex review of sample experiments; split
-   into two stacked PRs.
-
-Open design question (blocks the two sweep tutorials): `select()` reduces over trials that
-return a **metrics mapping**, but `train_lm` trials return a `Checkpoint` (no metrics payload).
-Needs a sweep↔train metrics bridge (read W&B/levanter eval metrics) before sweeps over training
-runs work end-to-end.
+1. **Library layer (~17 lib/marin files)** — strip executor coupling so `types.py` can go:
+   - Foundational (owned in main loop): `processing/tokenize/tokenize.py` (drop `InputName`/
+     `VersionedValue` from path unions), `processing/tokenize/data_configs.py` (collapse
+     `TokenizerStep | TokenizeConfig` → `TokenizeConfig`, drop `output_path_of`/ExecutorStep
+     branches; delete unused `lm_varying_mixture_data_config`/`interpolate_mixture_weights`/
+     `add_validation_sets_to_mixture`/`mixture_for_evaluation`), `utilities/executor_utils.py`
+     (`ckpt_path_to_step_name` → str-only; rename file off `_utils`), `training/training.py`
+     (drop the two no-op `materialize(config)` calls), `rl/placement.py` (move
+     `infer_tpu_variant_regions_from_iris` here from executor.py).
+   - Mechanical config-default strips (delegate): `datakit/download/*` (5 — `this_output_path`
+     default_factory → plain str; delete dead npm ExecutorStep builder), `evaluation/*`
+     (log_probs, save_logprobs, perplexity_gap, visualize, trace_labeled_eval — strip configs,
+     delete dead ExecutorStep builders), `export/levanter_checkpoint.py`,
+     `transform/conversation/conversation_to_dolma.py`, `rl/rl_experiment_utils.py`
+     (`ExecutorMainConfig`).
+   - Check `tests/integration_test.py` (uses `lm_data_config`) + `tests/execution/*`.
+2. **Capstone**: delete executor content-addressing from `executor.py` + delete `types.py` +
+   `context.py` strict machinery (`MARIN_EXECUTOR_STRICT` does not exist in the lazy world —
+   delete entirely, do not flip); trim `execution/__init__`; delete executor-only tests;
+   rewrite `docs/tutorials/train-an-lm.md` to teach `train_lm`; update `experiments/AGENTS.md` +
+   grug READMEs; codex review of sample experiments; split into two stacked PRs.
 
 ### PR1 — DONE (commits 63a60c2c95, a11760fcdf on top of d284eb3555)
 
@@ -183,14 +159,15 @@ mixture, no baked eval set — those were `default_train`'s sins.
 - [x] ALL dataset catalogs → lazy (eval_datasets, midtraining, models, long_context, prebuilt_caches,
       and the ~12 small pretraining_datasets/*) — pins/revisions preserved, each imports + builds
 - [x] Training tutorials → `train_lm` (exp1078 7B, tiny cpu/gpu/tpu, 125M, hello_world); exp1077 deleted
-- [x] Added `hf_download`/`derived`/`sample_count`/`default_validation`; golden harness deleted
-- [ ] Dismantle `defaults.py`/`tokenization.py` consumers; delete `default_train` & co. (lynchpin for green)
-- [ ] Migrate test-coupled bespoke launchers (grug, datakit/testbed, ferries, references, scaling_law)
-- [ ] Migrate eval-running experiments (evals/*) + posttrain (needs sft_lm/dpo_lm assemblers)
-- [ ] Fix grug-test catalog-symbol fallout; sweep tutorials (needs sweep↔train metrics bridge)
-- [ ] Library layer (~25 lib/marin): THIS_OUTPUT_PATH/InputName/versioned removal; drop materialize calls
-- [ ] Executor deleted, strict guard flipped, all call sites updated
-- [ ] Docs rewritten (train-an-lm.md teaches `train_lm`, not `default_train`)
+- [x] Added `hf_download`/`derived`/`sample_count`; golden harness deleted
+- [x] Sweep redesigned: `AnnotatedCheckpoint`/`annotate`/`select() -> Checkpoint` (no metrics bridge); both sweep tutorials migrated
+- [x] Dismantled + DELETED `defaults.py`/`tokenization.py` (no more `default_*`); `default_validation` inlined
+- [x] Migrated bespoke launchers (grug, datakit/testbed, ferries incl. canary+multislice CI, references); deleted completed_adamh + Vizier sweep + stale recipe
+- [x] Migrated eval-running experiments (evals/*) + posttrain dataset catalogs
+- [x] **Experiment tree references zero executor symbols** (docs aside)
+- [ ] Library layer (~17 lib/marin): InputName/versioned/this_output_path removal; drop materialize calls; move infer_tpu_variant_regions_from_iris
+- [ ] Executor content-addressing + types.py + strict machinery deleted, all call sites updated
+- [ ] Docs rewritten (train-an-lm.md teaches `train_lm`); experiments/AGENTS.md + grug READMEs updated
 - [ ] Codex review of sample experiment files (self-describing criteria)
 - [ ] Split into two stacked PRs
 
