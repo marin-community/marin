@@ -12,9 +12,9 @@ Two fineweb-edu subcaches are available:
 Example usage::
 
     from experiments.prebuilt_caches import fineweb_edu_10B_dataset
+    from marin.experiment.data import mixture
 
-    my_model = default_train(..., tokenized=fineweb_edu_10B_dataset(), ...)
-
+    data = lambda ctx: mixture(ctx, {fineweb_edu_10B_dataset(): 1.0})
 """
 
 from marin.execution.lazy import Dataset

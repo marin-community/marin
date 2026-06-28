@@ -10,10 +10,6 @@ lazy :class:`~marin.execution.lazy.Checkpoint` — no executor, no import-time s
 no content-addressing — handling only the mechanical marin-on-TPU plumbing (the mesh,
 the resumption checkpointer, the eval-harness wiring, the Fray dispatch). It bakes in no
 optimizer, mixture, or eval suite of its own.
-
-A golden test (``tests/experiment/test_train_lm_golden.py``) pins this to the
-``default_train`` recipe's resolved decisions so the readable inline code and the
-executed config cannot drift.
 """
 
 from fray.cluster import ResourceConfig
