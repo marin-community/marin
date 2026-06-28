@@ -22,7 +22,6 @@ from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
-from marin.execution.executor import materialize
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
@@ -489,8 +488,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     - WANDB_API_KEY is set.
     - It checks that configured GCS paths are in the same region as the VM (except train/validation source URLs).
     """
-    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
-    config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
 
     model_config = train_config.model
@@ -509,8 +506,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
     """Run the Levanter DPO training main function in the current process."""
-    # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
-    config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
     _apply_env_to_process(env)
     importlib.import_module("levanter.main.train_dpo").main(train_config)

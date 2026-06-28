@@ -1,12 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import logging
 import os
 from functools import lru_cache
 
-import numpy as np
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
@@ -16,7 +14,6 @@ from levanter.data.text import (
 )
 from levanter.tokenizers import load_tokenizer
 
-from marin.execution import unwrap_versioned_value
 from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
 
@@ -170,174 +167,6 @@ def lm_mixture_data_config(
     )
 
 
-def interpolate_mixture_weights(mixture_weights: list[dict[str, float]], weights: list[float]) -> dict[str, float]:
-    """
-    Interpolates the weights of multiple mixtures into a single set of weights.
-
-    This method normalizes the weights of each mixture to sum to 1.0 before combining them.
-
-    Args:
-        mixture_weights: List of dictionaries, each mapping dataset names to their weights in the mixture.
-        weights: List of weights corresponding to each mixture. Must sum to 1.0.
-    Returns:
-        A single dictionary mapping dataset names to their interpolated weights.
-    """
-    if len(mixture_weights) != len(weights):
-        raise ValueError("mixture_train_weights and weights must have the same length")
-
-    # check weights are numeric and sum to 1.0
-    if not all(isinstance(w, int | float) for w in weights):
-        raise TypeError("All items in weights must be numeric")
-
-    if not np.isclose(sum(weights), 1.0):
-        raise ValueError("Weights must sum to 1.0")
-
-    combined_weights = {}
-    for train_weights, weight in zip(mixture_weights, weights, strict=False):
-        total_weight_in_mixture = sum(train_weights.values())
-        if total_weight_in_mixture == 0:
-            raise ValueError("Total weight in mixture cannot be zero")
-        normalized_mixture_weights = {name: w / total_weight_in_mixture for name, w in train_weights.items()}
-        for name in normalized_mixture_weights:
-            if name not in combined_weights:
-                combined_weights[name] = 0.0
-            else:
-                logger.info(f"Datasource {name} is in both mixtures, adding weights together.")
-            combined_weights[name] += weight * normalized_mixture_weights.get(name, 0.0)
-    return combined_weights
-
-
-def lm_varying_mixture_data_config(
-    components: dict[str, TokenizerStep],
-    weights_list: list[tuple[int, dict[str, float]]],
-    *,
-    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
-    missing_weights_are_validation: bool = True,
-    include_raw_paths: bool = True,
-    mixture_block_size: int | None = None,
-    max_train_batches: dict[str, int] | None = None,
-    num_validation_sequences: dict[str, int] | None = None,
-    block_cross_document_attention: bool = True,
-) -> LmDataConfig:
-    """
-    Creates a training config from a mixture of datasources with varying weights.
-
-    Args:
-        components: dict from names of datasets to the steps that produced them.
-        weights_list: list of tuples of (start_seq_index, weights_dict)
-            weights_dict maps dataset names to their weights.
-            The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
-            Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
-        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
-            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
-        missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
-        include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
-        mixture_block_size: The block size to use for the mixture.
-        max_train_batches: Maximum number of batches to use for the training set per dataset.
-        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
-        block_cross_document_attention: Whether to mask attention across document boundaries.
-    Returns:
-        LmDataConfig configured with the varying weights
-    """
-    component_configs = {
-        name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
-        for name, step in components.items()
-    }
-
-    # Validate and normalize weights
-    if not weights_list:
-        raise ValueError("weights_list cannot be empty")
-
-    if weights_list[0][0] != 0:
-        raise ValueError("First weight stage must start at index 0")
-
-    # If missing_weights_are_validation, pad out weights with zeros
-    if missing_weights_are_validation:
-        padded_weights_list = []
-        for step_idx, weights in weights_list:
-            missing_keys = {k: 0.0 for k in components if k not in weights}
-            padded_weights_list.append((step_idx, {**weights, **missing_keys}))
-        weights_list = padded_weights_list
-
-    tokenizer = _verify_tokenizers_same(components)
-
-    return LmDataConfig(
-        components=component_configs,
-        train_weights=weights_list,
-        tokenizer=tokenizer,
-        cache_dir=None,
-        shuffle=shuffle,
-        mixture_block_size=mixture_block_size or 2048,
-        permutation_type="feistel",
-        max_train_batches=max_train_batches,
-        num_validation_sequences=num_validation_sequences,
-        block_cross_document_attention=block_cross_document_attention,
-    )
-
-
-def add_validation_sets_to_mixture(config: LmDataConfig, validation_sets: dict[str, TokenizerStep]) -> LmDataConfig:
-    """
-    Adds validation sets to a mixture config. Works with both fixed and varying mixture weights.
-    """
-    valid_components = {
-        name: step_to_lm_mixture_component(step, include_raw_paths=True) for name, step in validation_sets.items()
-    }
-    new_components = {
-        **config.components,
-        **{name: comp for name, comp in valid_components.items() if name not in config.components},
-    }
-
-    if isinstance(config.train_weights, dict):
-        # Handle fixed weights case
-        if any(name in config.train_weights for name in validation_sets):
-            overlap = set(config.train_weights) & set(validation_sets)
-            logger.warning(f"Validation sets {overlap} already present in mixture. Skipping.")
-
-        new_weights = {
-            **config.train_weights,
-            **{name: 0.0 for name in validation_sets if name not in config.train_weights},
-        }
-    elif isinstance(config.train_weights, list):
-        for step_idx, weights_dict in config.train_weights:
-            assert isinstance(step_idx, int)
-            assert isinstance(weights_dict, dict)
-
-        # Handle varying weights case
-        overlap_sets = set()
-        for _, weights_dict in config.train_weights:
-            overlap_sets.update(set(weights_dict) & set(validation_sets))
-
-        if overlap_sets:
-            logger.warning(f"Validation sets {overlap_sets} already present in mixture. Skipping.")
-
-        new_weights = []
-        for step_idx, weights_dict in config.train_weights:
-            new_weights_dict = {**weights_dict, **{name: 0.0 for name in validation_sets if name not in weights_dict}}
-            new_weights.append((step_idx, new_weights_dict))
-    else:
-        raise ValueError(f"Invalid train_weights type: {type(config.train_weights)}")
-
-    return dataclasses.replace(config, components=new_components, train_weights=new_weights)
-
-
-def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
-    """
-    Creates a mixture of datasets purely for evaluation purposes. Used mostly for visualizing log probabilities.
-
-    Args:
-        inputs (dict[str, ExecutorStep]): The inputs to the mixture.
-
-    Returns:
-        LmDataConfig: The mixture of datasets.
-    """
-    return lm_mixture_data_config(
-        {name: step for name, step in inputs.items()},
-        {name: 0.0 for name in inputs},
-        shuffle=False,
-        missing_weights_are_validation=True,
-    )
-
-
 @lru_cache(maxsize=128)
 def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     """Return the vocabulary size for a tokenizer name.
@@ -348,24 +177,20 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     Returns:
         Vocabulary size for the tokenizer.
     """
-    resolved_name = unwrap_versioned_value(tokenizer_name)
-    if resolved_name in _KNOWN_VOCAB_SIZES:
-        return _KNOWN_VOCAB_SIZES[resolved_name]
+    if tokenizer_name in _KNOWN_VOCAB_SIZES:
+        return _KNOWN_VOCAB_SIZES[tokenizer_name]
 
     logger.warning(
         "Tokenizer %r not found in _KNOWN_VOCAB_SIZES; loading from HuggingFace. "
         "Consider adding it to _KNOWN_VOCAB_SIZES in data_configs.py to avoid network calls during dry-runs.",
-        resolved_name,
+        tokenizer_name,
     )
-    tokenizer = load_tokenizer(resolved_name)
+    tokenizer = load_tokenizer(tokenizer_name)
     return tokenizer.vocab_size
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
-    tokenizer1 = unwrap_versioned_value(tokenizer1)
-    tokenizer2 = unwrap_versioned_value(tokenizer2)
-
     # The marin tokenizer is a re-upload of the llama3 tokenizer with a custom chat template,
     # so they share the same vocabulary and token IDs.
     if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:

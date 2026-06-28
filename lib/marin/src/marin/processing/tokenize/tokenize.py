@@ -35,7 +35,6 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
-from marin.execution.types import InputName, VersionedValue
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,
@@ -96,7 +95,7 @@ class TokenizeConfigBase(abc.ABC):
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         Create a Levanter dataset source config from this config and the actual output path.
@@ -127,14 +126,13 @@ class TokenizeConfig(TokenizeConfigBase):
     """
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         """
         For use in Levanter training runs with mixtures of datasets.
 
         Args:
-            actual_output_path: The actual output path to use for the cache. Since we often pass in an InputName,
-                we need to resolve it to a string.
+            actual_output_path: The output path to use for the cache.
 
             include_raw_paths: if false, don't include paths to raw data in Levanter's config. This means we'll be able
                 to run training without the original training data, but hte provenance won't be recorded in wandb.
@@ -152,8 +150,8 @@ class TokenizeConfig(TokenizeConfigBase):
         if not self.train_paths and not self.validation_paths:
             raise ValueError("At least one of train_paths or validation_paths must be specified")
 
-        assert not isinstance(self.train_paths, str | InputName)
-        assert not isinstance(self.validation_paths, str | InputName)
+        assert not isinstance(self.train_paths, str)
+        assert not isinstance(self.validation_paths, str)
 
         if isinstance(self.train_paths, Sequence):
             assert "/" not in self.train_paths, "don't use the entire fs for train paths!"
@@ -182,7 +180,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     """Number of samples to tokenize. If None, tokenize all samples."""
 
     def as_lm_dataset_source_config(
-        self, actual_output_path: str | InputName | None, *, include_raw_paths=True
+        self, actual_output_path: str | None, *, include_raw_paths=True
     ) -> LmDatasetSourceConfigBase:
         return HfDatasetSourceConfig(
             id=self.id,
@@ -193,37 +191,22 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _validate_train_urls(train_paths: list[str | InputName], warn):
+def _validate_train_urls(train_paths: list[str], warn):
     """
-    Validates the training data URLs or InputName attributes to ensure they do not contain forbidden patterns.
+    Validates the training data URLs to ensure they do not contain forbidden patterns.
     Raises a ValueError if a forbidden pattern is found.
     """
-    for item in train_paths:
-        url_or_name_to_check: str = ""
-        if isinstance(item, str):
-            url_or_name_to_check = item
-        elif isinstance(item, InputName):
-            url_or_name_to_check = item.name or ""
-
+    for url_to_check in train_paths:
         # \b doesn't work because of underscores
-        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
+        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_to_check) or re.search(r"validation", url_to_check):
             if warn:
-                logger.warning(
-                    f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
-                )
+                logger.warning(f"Warning: Training data URL '{url_to_check}' contains a forbidden pattern ")
             else:
                 raise ValueError(
-                    f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    f"Error: Training data URL '{url_to_check}' contains a forbidden pattern "
                     "('test' or 'validation'). "
                     "Please ensure training data does not include test or validation sets."
                 )
-
-
-def _resolve_input_paths(input_paths: list[str] | VersionedValue) -> list[str]:
-    """Unwrap a ``VersionedValue`` if needed and return the concrete path list."""
-    if isinstance(input_paths, VersionedValue):
-        return list(input_paths.value)
-    return list(input_paths)
 
 
 def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) -> list[list[str]]:
@@ -307,10 +290,8 @@ def tokenize(config: TokenizeConfigBase) -> None:
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
     if isinstance(config, TokenizeConfig):
-        train_patterns = expand_tokenize_paths(_resolve_input_paths(config.train_paths)) if config.train_paths else []
-        validation_patterns = (
-            expand_tokenize_paths(_resolve_input_paths(config.validation_paths)) if config.validation_paths else []
-        )
+        train_patterns = expand_tokenize_paths(list(config.train_paths)) if config.train_paths else []
+        validation_patterns = expand_tokenize_paths(list(config.validation_paths)) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
