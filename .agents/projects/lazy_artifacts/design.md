@@ -7,141 +7,193 @@ definitions, `versioned()` fields, `this_output_path()`, and `InputName`/`.cd()`
 cross-references. The `Executor` then content-addresses every step as `{name}-{md5}`, so any
 code change silently forks a new output path, the build environment's region/prefix is baked
 into the graph, and the resulting paths are unreadable. This design replaces that with **lazy
-typed artifacts** addressed by an explicit `name@version`, computed on demand, with a
-build-once registry instead of content-addressing. Authoring an experiment stops being coupled
-to a heavyweight engine, paths become human-readable and stable, and a change to an artifact's
-*fingerprinted config* becomes *loud* (a guarded conflict) rather than a silent new path. (The
-fingerprint covers the config a recipe builds, not the recipe function's source — see Costs.)
+typed artifacts** addressed by an explicit `name@version`, computed on demand. Authoring an
+experiment stops being coupled to a heavyweight engine; paths become human-readable and stable;
+and the choice of when an artifact is "new" moves from an automatic hash to the author's hand,
+with a drift *warning* as the guardrail rather than a content hash as the law.
 
 ## Challenges
 
 The hard part is **separating identity from execution** without a content hash. The Executor
 fused them: the md5 of the whole config tree *was* the identity, which is why region, prefix,
 and the specific TPU all leaked into the address. We need a model where "what an artifact is"
-(model, hyperparameters, dependency identities) bears identity, while "where/how it runs"
-(output path, prefix, region, accelerator) does not — and where that line is drawn by
-construction, not by convention. Second, the fingerprint that guards immutability must be
-**identical across processes**, or the guard misfires (spurious conflicts, or a cache that
-never hits). Third, ~113 import-time `ExecutorStep` sites across 33 files make this a
-big-bang-prone migration.
-
-## Costs / Risks
-
-- **Migration burden.** 113 `ExecutorStep(...)` constructions across 33 files
-  ([grep](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/experiments))
-  are still import-time; the heaviest are `experiments/common_pile/tokenize_common_pile.py`
-  (32) and `experiments/eval_datasets.py` (27).
-- **Two systems coexist** during migration. The import-time guard is a *warning*, not yet an
-  error ([context.py:80](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/context.py#L80)).
-- **Semantic dedup is dropped** (intentionally): two steps with identical configs under
-  different names build twice. The Executor used to merge them by hash.
-- **The author picks the version string by hand.** No content hash means no automatic
-  distinct address per config — the build-once guard catches accidental reuse instead.
-- **Function/code changes are not content-addressed.** The fingerprint is the *config*
-  `build_config(ctx)` produces, not the source of `recipe.fn` (e.g. `_train`, a tokenize fn, a
-  `remote` wrapper). Editing logic *inside* a step fn without touching its config serves the
-  cached output — same staleness the Executor's config-hash had. Bump the version (or use `dev`)
-  when you change behavior the config doesn't capture.
-- **Pins are an unguarded escape hatch.** `override_path` resolves to existing data and writes no
-  record (no provenance, no guard); `adopt()` guarantees *pointer* immutability, not *content*
-  immutability — it fingerprints the source location, so external data mutating in place, or a
-  relative source under a moved prefix, is invisible to the guard.
+(model, hyperparameters, dependency identities) is distinguished from "where/how it runs"
+(output path, prefix, region, accelerator), and where that line is drawn by construction. Second,
+two modules both spelled their central type `Artifact` — the lazy *handle* and the output
+*serializer* — which is genuinely confusing to read. Third, the authoring surface leaked: the
+generic "build any artifact" helper lived in the *data* module, every config change tripped a
+hard error, and a sweep needed an `AnnotatedCheckpoint` wrapper. The redesign below addresses all
+three: one name for the handle (`Lazy[T]`), one name for the output (`Artifact`), a small generic
+helper set in the core, and a drift warning in place of the hard guard.
 
 ## Design
 
-A **lazy artifact** is an inert handle `Artifact(name, version, recipe)`; building one runs
-nothing ([lazy.py](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/lazy.py#L159)).
-A `Recipe(fn, build_config, deps, run_args)` says how to build it. `lower(artifact)` turns the
-handle graph into the existing `StepSpec` graph, which the existing `StepRunner` runs
-(cache → lock → run). The lower engine — `StepSpec`, `StepRunner`, `step_lock`, status files —
-is kept verbatim; only the fat `Executor` layer (content-addressing, `versioned`, `InputName`,
-`this_output_path`) is bypassed and will be deleted last.
+### The handle and the artifact — one name each
 
-**Identity vs. execution.** `build_config(ctx)` is a pure function of a `RunContext`, and that
-context is where the line is drawn
-([lazy.py:60](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/lazy.py#L60)).
+A **lazy handle** is an inert `Lazy[T](name, version, recipe)`; constructing one runs nothing.
+`T` is the *type the recipe produces*, and it is bounded: every `T` is an `Artifact`. An
+**`Artifact`** is the produced, persisted thing — it carries its `path` and its `record`
+(provenance), and it knows how to reload itself:
+
+```python
+class Artifact:
+    path: str
+    record: ArtifactRecord          # config + fingerprint + git + argv + deps, set on load
+    @classmethod
+    def load(cls, source: str) -> Self: ...
+```
+
+This is the whole resolution of the two-`Artifact` confusion: `Lazy` is the **recipe/promise**,
+`Artifact` is the **realized output**. There is no longer a handle class and a serializer class
+sharing a name. `T.load` pairs with the recipe's producing function — the function writes bytes to
+`ctx.out` in its format, and `load` reads that location back — so each artifact type owns both
+halves of its own format. Two base flavors keep `load` from being boilerplate:
+
+- **Data refs** — `Dataset`, `Checkpoint`. `load(source)` returns a lightweight handle into the
+  cache/checkpoint directory (`cls(path=source)`), never pulling weights into the launcher.
+- **Computed values** — a `JsonArtifact` base (pydantic). `load(source)` reads the artifact's JSON
+  payload and `model_validate`s it. A sweep's selection is a typed `Selection(JsonArtifact)`.
+
+Authors almost never write `load`; they pick a base. The realized `Artifact` (with `.path` and
+`.record`) is what makes outputs **complete and inspectable** — `resolve(x).record` is the entry
+point to "what config, which commit, which command line produced this."
+
+### Identity vs. execution
+
+`build_config(ctx)` is a pure function of a `RunContext`, and that context draws the line.
 Values written as **literals** (model, hyperparameters, dependency *versions*) bear identity and
 enter the fingerprint. Values **pulled from `ctx`** never do: `ctx.out`, `ctx.path(dep)`,
 `ctx.prefix`, `ctx.region`, and `ctx.run_arg(key)` (e.g. the TPU a dispatched job runs on). The
 fingerprint is computed by re-running `build_config` under `RunContext.for_fingerprint()`, which
 substitutes placeholders for everything pulled — so a prefix move, a region move, or a different
-accelerator never re-fingerprints. Compute likewise rides on the fn via
-`remote(fn, resources=…)`, never on the graph node.
+accelerator never re-fingerprints. Compute likewise rides on the fn via `remote(fn, resources=…)`,
+never on the graph node.
 
-**Expressing non-versioned configuration.** Some configuration must reach the step but must *not*
-bear identity — execution choices like the accelerator. These are declared as recipe `run_args` and
-pulled via `ctx.run_arg(key)`: `ResourceConfig.with_tpu(...)` reaches the training job through
-`ctx.run_arg("train_resources")`, so the same artifact runs on a `v4-8` or a `v5p-128` without
-re-fingerprinting. What actually determines the computation — the logical mesh
-(`MeshConfig` axes, partitioning) — is a literal in `build_config`, so it bears identity already.
-`run_args` are simply how an author marks a value as where/how rather than what.
+### Authoring: two tiers, and the `apply` story
 
-**Build-once registry.** Identity is the explicit `{prefix}/{name}/{version}`. On success, a
-step writes a `.artifact_record.json` recording its fingerprint + provenance
-([registry.py](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/registry.py)).
-Rebuilding `name@version` from a *changed* recipe raises `ImmutableArtifactError` — bump the
-version. `dev`/`-dev` versions are mutable and always rebuild. The guard runs *before* a cached
-SUCCESS is served ([step_runner.py:273](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/step_runner.py#L273)).
-Pre-existing data is brought in with `adopt(name, version, source)`: consumers resolve to the
-source (no move, no recompute) while the alias is still registered and guarded.
+The core distinguishes **library authors** from **researchers**:
 
-The guard is **single-process-tight but not yet concurrency-tight**: it runs before the
-distributed `step_lock` is acquired, and a worker that finds the step already done exits without
-re-checking the record
-([step_runner.py:333,341,360](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/step_runner.py#L333)).
-So two workers that *first-build* the same `name@version` with different fingerprints can both pass
-the guard — one wins the lock and records; the other's divergent recipe silently adopts that
-output. Closing this means moving the guard inside the lock (or re-checking on the
-already-done path); see Open Questions.
+- **Library** primitives — `Recipe(fn, build_config, deps, run_args)` and the typed builders
+  (`tokenized`, `train_lm`, `mixture`). Full `RunContext` control; this is where the marin-on-TPU
+  plumbing lives.
+- **Researcher** sugar — `apply`, the generic single-step builder, **in the lazy core** (it is not
+  about data, so it no longer lives in the data module). Its headline is a *direct-call* form that
+  removes the `build_config` lambda and the dict-wrapper functions experiments were writing:
 
-**Fingerprint integrity.** The guard is only as trustworthy as the fingerprint's determinism, so
-the fingerprint is computed by a strict encoder
-([fingerprint.py](https://github.com/marin-community/marin/blob/4221dde1789d3d7a5b6892896c376787f9388891/lib/marin/src/marin/execution/fingerprint.py))
-that canonicalizes every value it understands (dataclasses, enums, paths, timedeltas, dtypes,
-sets by sorted members, arrays by content) and **raises** on values with no reproducible
-serialization (callables, default-`repr` objects) instead of the old silent `str(o)` fallback,
-which could fork a fingerprint from one process to the next. The canonical payload is recorded
-next to the fingerprint (on a dedicated `StepSpec` field, out of `hash_id` and out of logs), so a
-build-once conflict reports a **field-level diff** (`learning_rate: 3e-3 -> 4e-3`) rather than two
-opaque hashes. `Artifact.expected_fingerprint` optionally pins the fingerprint, checked at
-`lower()` time — making the config↔identity contract explicit in review and catching a recipe
-change *before* the first build.
+  ```python
+  # before: a _run_stage(cfg: dict) wrapper + a build_config lambda
+  staged = apply("raw/massive", stage_massive_raw, output_path=OUT)
+  parts  = apply("data/massive", transform_staged_massive, input_path=staged, output_path=OUT)
+  ```
 
-**Migration path.** `lower()` is a pure transform with no Iris/Fray awareness, so catalogs
-migrate independently: a module that today exposes module-level `ExecutorStep`s becomes a
-*function* returning lazy `Dataset`/`Checkpoint` handles (mechanism stays in the library, policy
-moves to the experiment). The guard at `context.py` flips from warn → error under
-`MARIN_EXECUTOR_STRICT`, then default-on, then the content-addressing layer is deleted once
-unused. `experiments/defaults.py` and the dataset catalogs are the high-leverage unlocks. See
-`spec.md` for the canonical authoring patterns (single run, sweep+select, multi-phase chains,
-data mixtures) and `research.md` for the full migration surface.
+  A bare `Lazy` argument becomes a dependency and resolves to its path at run time; the `OUT`
+  sentinel resolves to `ctx.out`; every other value is a literal that bears identity. `apply`
+  calls the underlying function directly — no wrapper, no config object — which is the simplest
+  story for a non-Python-expert: *name an output, say which function makes it, pass its inputs.*
+
+The set is completed by `run(*handles)` (execute for side effects — the everyday entry point) and
+`resolve(handle) -> T` (run, then return the realized, typed `Artifact` via `T.load`). For a value
+artifact, `resolve(select(...)) -> Selection` hands back the winner in-process; for a data
+artifact it hands back a path-bearing ref.
+
+### The complete artifact record
+
+A successful step writes **one** record next to its output — an `ArtifactRecord` (pydantic),
+subsuming the old payload sidecar and the registry record into a single, complete descriptor:
+
+```
+name, version, fingerprint, output_path, deps[name@version], source?,
+config (materialized, real values), command_line (argv), git_commit, user, created_at, result?
+```
+
+`config` is the human-readable materialized config (what actually ran); `fingerprint` is the
+identity hash (placeholders for pulled values); `result` holds the returned value for a value
+artifact. This is what "tagged with the artifact for someone to look at later" means concretely.
+
+**One serialization scheme, two entry points.** This is deliberately *not* a second system bolted
+beside datakit's existing `Artifact.from_path`/`save`. There is one `ArtifactRecord` and one pair of
+record IO functions; the difference is only who fills the record:
+
+- **Manual** (datakit StepSpec pipelines) — a step calls `write_artifact(value, path)` and a consumer
+  `read_artifact(path, T)`. The record is minimal (just the `result`); the author manages paths.
+- **Automatic** (the lazy runner) — on success the runner writes the *full* record (config, git,
+  argv, deps, fingerprint, result_type, result) and `resolve`/`Artifact.load` read it.
+
+The automatic path is literally the manual one plus provenance, so every new field is optional and an
+old or minimal record still loads (missing fields read as `None`). The old payload-IO `Artifact`
+class is renamed to this `ArtifactRecord` scheme; its ~60+ datakit call sites migrate in this PR
+(`Artifact.from_path` → `read_artifact`, `Artifact.save` → `write_artifact`).
+
+### Versioning is by convention; drift is advisory
+
+Identity is the explicit `{prefix}/{name}/{version}`, and the address is **first-build-wins**. The
+fingerprint is recorded, but it is a **guardrail, not a gate**. If a fixed `name@version` already
+has a record and the current recipe fingerprints differently, the runner **logs a warning with a
+field-level diff** (`learning_rate: 3e-3 -> 4e-3`) and serves the existing output — it never
+raises. The contract is the one you asked for: *trust the author to bump the version (or use
+`dev`) when they mean to produce something new; reuse a version and you get what's already there,
+loudly noted.* `ImmutableArtifactError` leaves the default path entirely. Two escape hatches
+remain: `dev`/`-dev` versions always rebuild (iteration), and `expected_fingerprint` is an
+**opt-in** hard pin that raises `FingerprintMismatchError` at `lower()` for the few artifacts that
+genuinely want a mandate.
+
+### Fingerprint: best-effort and extensible
+
+Because the fingerprint is now advisory, the encoder no longer needs to be perfectly total to be
+*correct* — a misfire is a noisy warning, not a blocked build. So an unknown type degrades to a
+**defined** stable fallback — `{"__repr__": f"{type.__module__}.{type.__qualname__}", "vars":
+sorted(vars(o))}` when it has a `__dict__`, else its `repr()` — with a one-time log, instead of
+raising. `register_fingerprint(type, fn)` lets a project teach the encoder a precise canonical form
+for an identity-bearing custom type, and an opt-in **strict mode** (env/flag, default off) restores
+the old raise-on-unknown for CI that wants drift to be exact. This retires workarounds like grug's —
+reconstituting `PartitionSpec`-bearing configs at run time purely so the strict encoder wouldn't
+reject them.
+
+Drift is advisory, but **type identity is not**: the produced `result_type` is recorded, and
+`resolve` hard-errors (`ArtifactTypeMismatchError`) if a served artifact's recorded type differs
+from what the handle now declares. So a value artifact whose schema changed under a reused version
+fails loudly at load instead of silently mis-validating — the one place where "serve the old output"
+would be unsafe is closed without re-introducing the hard config guard.
+
+### Migration path
+
+`lower()` is a pure transform with no Iris/Fray awareness, so catalogs migrate independently: a
+module that exposed module-level `ExecutorStep`s becomes a *function* returning `Lazy` handles
+(mechanism stays in the library, policy moves to the experiment). `apply`'s direct-call form
+collapses the dict-wrapper boilerplate; the tutorial tree collapses to fewer, parameterized scripts
+(`--device`, `--dataset`). The `Executor` content-addressing layer is already deleted on this
+branch; this redesign is the cleanup of the surface that replaced it.
 
 ## Testing
 
-The anti-drift gate is **materialized-config equality**: `tests/experiment/test_train_lm_golden.py`
-asserts the lazy `build()` produces the same path-independent training decisions as the
-`Executor`'s `default_train`, so the readable inline code and the executed config cannot drift
-while both systems coexist. The registry, fingerprint, adopt, sweep, and phase-chain tests all
-drive the **real** `StepRunner` against a `tmp_path` prefix (no mocks): build-once conflict,
-`dev` mutability, field-level diff, `expected_fingerprint` pin, deterministic encoding,
-order-independent sets, adopt resolution/guard, grid product, metric selection, and phase
-lineage.
+The anti-drift gate is **materialized-config equality** (`materialized_config(handle, prefix)`):
+golden tests assert the readable inline code produces the intended training decisions. The
+registry, fingerprint, adopt, sweep, and phase-chain tests drive the **real** `StepRunner` against
+a `tmp_path` prefix (no mocks). The behavior changes here add: drift **warns** (assert the log and
+that the cached output is served, *not* a raise); `expected_fingerprint` still raises;
+`resolve` round-trips a value artifact through `T.load`; and a `register_fingerprint` converter
+makes a custom type fingerprint stably.
+
+## Costs / Risks
+
+- **A reused version silently serves stale output.** This is the deliberate cost of advisory drift:
+  change a recipe but keep the version and you get the old artifact, mitigated only by a warning. The
+  trade is intentional — trust plus a guardrail, not a mandate. `expected_fingerprint` is there for
+  anyone who wants the old strictness on a specific artifact.
+- **`recipe.fn` source is not fingerprinted.** Editing logic inside a step fn without touching its
+  config serves cached output. Bump the version (or use `dev`) when behavior the config doesn't
+  capture changes. (Advisory drift makes this lower-stakes than under the hard guard.)
+- **Every `T` needs a `load`.** Mitigated by the `Dataset`/`Checkpoint`/`JsonArtifact` bases; a
+  genuinely novel format is the only place an author writes one.
+- **Pins are an unguarded escape hatch.** `override_path` resolves to existing data and writes no
+  record; `adopt()` guarantees *pointer* immutability, not *content* immutability.
 
 ## Open Questions
 
-- **Concurrency-tighten the build-once guard.** It currently runs before `step_lock` and isn't
-  re-checked when a worker finds the step already built, so concurrent first-builds with different
-  fingerprints can both pass (above). Move the check inside the lock, re-check on the already-done
-  path, or accept the gap as out-of-scope for now? (This is a real bug, narrow in trigger.)
-- **When does the import-time guard become a hard error?** Flip `MARIN_EXECUTOR_STRICT`
-  default-on *before* the catalog migration completes (forcing the work) or *after* (avoiding a
-  flag-day break)?
-- **Should non-`dev` versions require an `expected_fingerprint` pin?** Opt-in per artifact today;
-  a "production versions must pin" rule would make every identity-bearing change reviewable, at
-  the cost of a re-pin on every intended edit.
-- **Auto-versioning ergonomics.** Is hand-choosing version strings acceptable, or do we want a
-  fingerprint-suffixed convention (`name/v1-<fp>`) for sweep-like cases so distinct configs
-  coexist without manual bumps — re-introducing a hash in the path?
-- **Do we want fingerprint *attribution* (tracing)?** The field-level diff says *what* changed;
-  tracing would say *why* (e.g. "an upstream dep version moved, not your code"). Worth the
-  subsystem, or is the diff enough?
+- **Should drift be surfaced beyond a log?** A warning is easy to miss in a long run. Worth
+  recording "served despite drift" in the record, or emitting a run-summary of drifted artifacts?
+- **`resolve` for very large data artifacts.** Settled as a lightweight path-bearing ref (no
+  in-process load); confirm, and whether `Checkpoint` should grow a lazy `.load_model(...)` later.
+- **The `Dataset = Lazy[ConcreteDataset]` alias — now or later?** Signatures read `Lazy[Dataset]`
+  today; the alias would let them read `Dataset` again while meaning the handle. Pure convenience,
+  deferrable.
