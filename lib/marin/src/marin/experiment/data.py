@@ -13,7 +13,11 @@ weights live in the experiment that chose them, not buried in a catalog constant
   (a download -> tokenize dependency). ``pin`` references already-tokenized data at an
   existing location instead of recomputing it.
 - :func:`raw_download` wraps a download function as a raw-data handle that
-  :func:`tokenized` can depend on.
+  :func:`tokenized` can depend on; :func:`hf_download` is the HuggingFace-Hub case.
+- :func:`derived` is the generic single-step builder: ``fn(build_config(ctx))`` writing
+  to ``ctx.out``, with declared ``deps``. Use it for transforms/conversions/filters
+  (e.g. HF-dataset-to-eval-JSONL, Dolma conversions) that are neither a tokenize nor a
+  plain download.
 - :func:`pretokenized` handles an already-tokenized Levanter cache hosted on
   HuggingFace (e.g. the fineweb-edu prebuilt subcaches): it downloads rather than
   re-tokenizes, and is consumed like any other tokenized :class:`Dataset`.
@@ -34,7 +38,8 @@ from levanter.data.text import (
     TextLmDatasetFormat,
 )
 
-from marin.execution.lazy import Dataset, Recipe, RunContext
+from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.execution.lazy import Artifact, Dataset, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.data_configs import dataset_component
@@ -81,6 +86,67 @@ def raw_download(
         name=name,
         version=version,
         recipe=Recipe(fn=_on(fn, resources), build_config=build_config),
+        override_path=pin,
+    )
+
+
+def hf_download(
+    name: str,
+    *,
+    hf_id: str,
+    revision: str,
+    urls_glob: Sequence[str] = (),
+    version: str = DEFAULT_VERSION,
+    pin: str | None = None,
+    resources: ResourceConfig | None = None,
+) -> Dataset:
+    """A HuggingFace-Hub dataset download as a raw-data handle.
+
+    Wraps :func:`marin.datakit.download.huggingface.download_hf` into a handle that
+    :func:`tokenized` (via ``raw=``) or :func:`derived` can depend on. ``urls_glob``
+    restricts which files in the repo are fetched (empty = all). ``pin`` references an
+    existing download at a fixed location instead of re-fetching it.
+    """
+
+    def build_config(ctx: RunContext) -> DownloadConfig:
+        return DownloadConfig(
+            hf_dataset_id=hf_id,
+            revision=revision,
+            hf_urls_glob=[*urls_glob],
+            gcs_output_path=ctx.out,
+            wait_for_completion=True,
+        )
+
+    return raw_download(name, fn=download_hf, build_config=build_config, version=version, pin=pin, resources=resources)
+
+
+def derived(
+    name: str,
+    *,
+    fn: Callable[[Any], Any],
+    build_config: Callable[[RunContext], Any],
+    deps: Sequence[Artifact] = (),
+    version: str = DEFAULT_VERSION,
+    pin: str | None = None,
+    resources: ResourceConfig | None = None,
+    kind: type[Artifact] = Artifact,
+) -> Artifact:
+    """A single derived artifact: ``fn(build_config(ctx))`` writes its result to ``ctx.out``.
+
+    The generic builder behind transforms, conversions, and filters — anything that is
+    neither a tokenize nor a plain download (e.g. HF-dataset-to-eval-JSONL, Dolma
+    conversions, extension filters). ``deps`` are the upstream handles the build consumes;
+    resolve each with ``ctx.path(dep)`` inside ``build_config`` and pass the same handles
+    here so they materialize first. ``kind`` selects the handle type for consumer routing
+    (:class:`~marin.execution.lazy.Dataset` for a tokenizable corpus,
+    :class:`~marin.execution.lazy.Checkpoint` for a model; the base
+    :class:`~marin.execution.lazy.Artifact` otherwise). ``pin`` references existing data
+    instead of recomputing it.
+    """
+    return kind(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=_on(fn, resources), build_config=build_config, deps=tuple(deps)),
         override_path=pin,
     )
 

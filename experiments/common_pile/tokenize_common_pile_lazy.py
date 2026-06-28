@@ -13,9 +13,8 @@ experiment's job (via :func:`marin.experiment.data.mixture`).
 from dataclasses import dataclass
 
 from fray.types import ResourceConfig
-from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.lazy import Dataset
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import hf_download, tokenized
 
 from experiments.llama import llama3_tokenizer
 
@@ -145,18 +144,8 @@ COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
 
 
 def _download_handle(source: CommonPileSource) -> Dataset:
-    """A ``download_hf`` handle for ``source``, pinned to its existing raw download."""
-    return raw_download(
-        source.download_name,
-        fn=download_hf,
-        build_config=lambda ctx: DownloadConfig(
-            hf_dataset_id=source.hf_id,
-            revision=source.revision,
-            gcs_output_path=ctx.out,
-            wait_for_completion=True,
-        ),
-        pin=source.raw_path,
-    )
+    """A HuggingFace-download handle for ``source``, pinned to its existing raw download."""
+    return hf_download(source.download_name, hf_id=source.hf_id, revision=source.revision, pin=source.raw_path)
 
 
 def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
