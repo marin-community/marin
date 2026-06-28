@@ -73,11 +73,31 @@ Done (all committed, lint+pyrefly clean, touched test suites green):
      `transform/conversation/conversation_to_dolma.py`, `rl/rl_experiment_utils.py`
      (`ExecutorMainConfig`).
    - Check `tests/integration_test.py` (uses `lm_data_config`) + `tests/execution/*`.
-2. **Capstone**: delete executor content-addressing from `executor.py` + delete `types.py` +
-   `context.py` strict machinery (`MARIN_EXECUTOR_STRICT` does not exist in the lazy world —
-   delete entirely, do not flip); trim `execution/__init__`; delete executor-only tests;
-   rewrite `docs/tutorials/train-an-lm.md` to teach `train_lm`; update `experiments/AGENTS.md` +
-   grug READMEs; codex review of sample experiments; split into two stacked PRs.
+2. **Capstone — the atomic executor deletion** (fully scoped). Key finding: the lazy runtime
+   (`lazy.py`/`step_runner.py`/`remote.py`/`registry.py`) is already executor-free; the ONLY
+   coupling is `step_spec.py::as_executor_step()` (a transition shim — dead, delete it) and the
+   region-inference chain. `step_runner.py` does NO region inference and never calls
+   `resolve_executor_step` — so all of `executor.py` (Executor/executor_main/materialize/
+   ExecutorMainConfig/resolve_executor_step/_step_dag_tpu_regions/_infer_gcs_regions/...) is
+   executor-only and gets deleted, EXCEPT `infer_tpu_variant_regions_from_iris` +
+   `_regions_for_tpu_variants_from_iris` + `_regions_for_tpu_variant_from_iris`, which MOVE to
+   `rl/placement.py` (its only consumer). Steps:
+   - Move the 3 TPU-region-from-iris fns into `rl/placement.py`; update its import.
+   - Delete `step_spec.py::as_executor_step()` + its `types` import.
+   - Lib holdouts: `data_configs.py` (delete `lm_data_config`, collapse `step_to_lm_mixture_component`/
+     `_verify_tokenizers_same` to `TokenizeConfig`-only, drop `TokenizerStep`/executor imports +
+     `__init__` exports); `perplexity_gap.py` (delete `model_perplexity_scores`); `rl_experiment_utils.py`
+     (migrate `make_rl_step`→lazy `Checkpoint` + drop `ExecutorMainConfig`, or delete — only its test uses it).
+   - Tests: delete `tests/execution/test_executor.py`; trim `test_step_runner.py` (drop the
+     `resolve_executor_step`/`_step_dag_tpu_regions` tests, keep the lazy StepRunner tests);
+     migrate-or-delete `tests/integration_test.py` (executor_main end-to-end) and
+     `tests/rl/test_rl_experiment_utils.py`; fix `tests/processing/tokenize/test_tokenize.py` (`InputName`).
+   - Delete `executor.py`, `types.py`, `context.py` (the `executor_context` strict machinery —
+     `MARIN_EXECUTOR_STRICT` never existed in the lazy world, just delete). Trim `execution/__init__.py`
+     + `__init__.pyi` to lazy-only exports.
+   - Docs: rewrite `docs/tutorials/train-an-lm.md` to teach `train_lm`; update `experiments/AGENTS.md`
+     + the two grug READMEs (drop `executor_main` references). Codex review of sample experiments;
+     split into two stacked PRs.
 
 ### PR1 — DONE (commits 63a60c2c95, a11760fcdf on top of d284eb3555)
 
