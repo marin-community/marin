@@ -90,18 +90,28 @@ def _metrics(scores: np.ndarray, targets: np.ndarray, threshold: float = DEFAULT
     )
 
 
+@eqx.filter_jit
+def _predict_batch(model: FastTransformer, ids):
+    """Sigmoid quality score for a fixed-shape batch (jitted, inference mode)."""
+    return jax.nn.sigmoid(jax.vmap(lambda row: model(row, key=None, inference=True))(ids))
+
+
 def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int = 256) -> np.ndarray:
-    """Sigmoid quality score for every row in ``ids`` (inference mode)."""
-    inference_model = eqx.nn.inference_mode(model)
+    """Sigmoid quality score for every row in ``ids``.
 
-    @eqx.filter_jit
-    def _batch(m, x):
-        return jax.nn.sigmoid(jax.vmap(lambda row: m(row, key=None, inference=True))(x))
-
+    Chunks are padded to a constant ``batch_size`` so ``_predict_batch`` compiles
+    once per model structure and is reused across all epochs and configs (the
+    per-epoch val eval would otherwise dominate the sweep with recompiles).
+    """
     out: list[np.ndarray] = []
-    for start in range(0, ids.shape[0], batch_size):
-        chunk = jnp.asarray(ids[start : start + batch_size])
-        out.append(np.asarray(_batch(inference_model, chunk)))
+    n = ids.shape[0]
+    for start in range(0, n, batch_size):
+        chunk = ids[start : start + batch_size]
+        pad = batch_size - chunk.shape[0]
+        if pad:
+            chunk = np.concatenate([chunk, np.zeros((pad, ids.shape[1]), dtype=ids.dtype)], axis=0)
+        preds = np.asarray(_predict_batch(model, jnp.asarray(chunk)))
+        out.append(preds[: batch_size - pad] if pad else preds)
     return np.concatenate(out)
 
 
