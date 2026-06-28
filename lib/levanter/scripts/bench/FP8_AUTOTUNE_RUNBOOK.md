@@ -77,7 +77,43 @@ uv pip install 'marin-iris[controller]'
 #    export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
 ```
 
-### Submit — one 8-GPU job per shape (shapes are barrier-free → embarrassingly parallel)
+### Cached wheel (fast path — skip the ~11 min build)
+
+The forked jaxlib build dominates job wall-clock (~11 min build vs ~1.5 min 8-GPU sweep). A prebuilt
+wheel is stashed in the cluster R2 bucket; jobs `get` it and pass `JAXLIB_WHEEL=` so setup skips the
+build, turning a run into ~3 min. Managed by `fp8_wheel_cache.py` (put/get/exists via s3fs + injected
+R2 creds).
+
+- **URI:** `s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.0-cp312-cw.whl`
+- **sha256:** `3b4f8a71efc0e4052262f291591428cf8cbef81fc25a23580962e75f71cb48a9` (85026111 bytes)
+- Built from `mcwitt/jax@mixed-fp8-wgmma-0.10.0` for jaxlib 0.10.0 / cp312 / manylinux_2_27 x86_64.
+
+Rebuild + re-stash when the fork or jaxlib version changes (one H100x1 job, `--disk 150GB`):
+
+```bash
+... -- bash -lc 'set -euo pipefail; nvidia-smi -L; \
+  bash lib/levanter/scripts/bench/mixed_fp8_fork_setup.sh; \
+  uv run --no-sync python lib/levanter/scripts/bench/fp8_wheel_cache.py put "$(ls /root/jaxsrc/dist/jaxlib-*.whl | head -1)"'
+# the FP8_WHEEL_PUT log line prints the new uri + sha256 — update this section.
+```
+
+### Submit — one 8-GPU job per shape (cached-wheel fast path)
+
+```bash
+export KUBECONFIG=~/.kube/coreweave-iris-gpu
+for SHAPE in target small scale; do
+  uv run --no-sync iris --cluster=cw-us-east-02a job run \
+    --gpu H100x8 --enable-extra-resources --extra gpu \
+    --cpu 32 --memory 128GB --disk 64GB --no-wait \
+    -- bash -lc "set -euo pipefail; nvidia-smi -L; \
+       uv run --no-sync python lib/levanter/scripts/bench/fp8_wheel_cache.py get /tmp/jaxlib.whl; \
+       JAXLIB_WHEEL=/tmp/jaxlib.whl bash lib/levanter/scripts/bench/mixed_fp8_fork_setup.sh; \
+       uv run --no-sync python lib/levanter/scripts/bench/orchestrate_fp8_autotune.py \
+         --shapes $SHAPE --num-gpus 8 --out-dir /app/scratch/fp8_sweep_$SHAPE --worker-timeout 900"
+done
+```
+
+### Submit — from-scratch build per job (no cached wheel; needs `--disk 150GB`)
 
 ```bash
 export KUBECONFIG=~/.kube/coreweave-iris-gpu
@@ -120,9 +156,8 @@ per-config rows are in `--out-dir/rows.jsonl` (skill-required machine-readable f
   extra and bricks the CLI with `ImportError: Install iris[controller]`.
 - **One iris tunnel at a time.** Concurrent `iris` calls fight over the controller port-forward; run a
   single poller, don't call `iris` in the foreground while a background monitor is polling.
-- **Prebuild the wheel for the research loop.** Rebuilding jaxlib per job is ~11 min of dead time. After
-  one successful build, stash the wheel and pass `JAXLIB_WHEEL=/path/to/jaxlib-*.whl` to
-  `mixed_fp8_fork_setup.sh` (it then skips the build) — this is what makes a per-change A/B ~1 min.
+- **Use the cached wheel** (see "Cached wheel" above) — rebuilding jaxlib per job is ~11 min of dead
+  time; `fp8_wheel_cache.py get` + `JAXLIB_WHEEL=` skips it. This is what makes a per-change run ~3 min.
 - The forked-jax setup is the `grug-fp8-fork` approach; `grug-fp8-shim` runs the same path on stock
   jaxlib via an import-time overlay (no build). Port wins between branches as needed.
 
