@@ -7,9 +7,7 @@ from .cache_stats import (
     tokenized_cache_stats_path,
 )
 from .data_configs import (
-    TokenizerStep,
     get_vocab_size_for_tokenizer,
-    lm_data_config,
     lm_mixture_data_config,
     step_to_lm_mixture_component,
 )

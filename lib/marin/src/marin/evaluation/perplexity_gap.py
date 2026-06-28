@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Executor steps for scoring model perplexity and comparing score outputs."""
+"""Scoring model perplexity and comparing score outputs across two models."""
 
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import wandb
@@ -33,9 +33,7 @@ from levanter.tokenizers import TokenizerBackend
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.types import ExecutorStep, VersionedValue, versioned
 from marin.processing.tokenize import HfDatasetSpec
-from marin.utilities.checkpoint_paths import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb
 
 WANDB_PROJECT = "marin-eval"
@@ -76,7 +74,6 @@ class ModelPerplexityScoreConfig:
     max_docs_per_dataset: int | None = 256
     max_doc_bytes: int | None = 32_768
     wandb_tags: list[str] | None = None
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -88,8 +85,6 @@ class ModelPerplexityGapConfig:
     model_b_scores_path: str
     output_path: str = ""
     wandb_tags: list[str] | None = None
-    retry_key: str | None = None
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 def raw_text_dataset(
@@ -139,51 +134,6 @@ def supervised_text_dataset(
         target_key=target_key,
         split=split,
         tags=tags,
-    )
-
-
-def model_perplexity_scores(
-    *,
-    model: GapFinderModelConfig,
-    datasets: dict[str, RawTextEvaluationDataset],
-    resource_config: ResourceConfig,
-    per_device_batch_size: int = 4,
-    max_eval_length: int = 4096,
-    max_docs_per_dataset: int | None = 256,
-    max_doc_bytes: int | None = 32_768,
-    name: str | None = None,
-    wandb_tags: list[str] | None = None,
-) -> ExecutorStep:
-    if name is None:
-        name = ckpt_path_to_step_name(model.checkpoint_path)
-
-    return ExecutorStep(
-        name=f"analysis/model_perplexity_scores/{name}",
-        fn=find_model_perplexity_scores,
-        config=ModelPerplexityScoreConfig(
-            name=name,
-            model=model,
-            datasets=datasets,
-            resource_config=resource_config,
-            per_device_batch_size=per_device_batch_size,
-            max_eval_length=max_eval_length,
-            max_docs_per_dataset=max_docs_per_dataset,
-            max_doc_bytes=max_doc_bytes,
-            wandb_tags=wandb_tags,
-            cache_key=versioned(
-                {
-                    "name": name,
-                    "model": _cache_key_for_model(model),
-                    "datasets": {dataset_name: _cache_key_for_dataset(ds) for dataset_name, ds in datasets.items()},
-                    "resource_config": resource_config,
-                    "per_device_batch_size": per_device_batch_size,
-                    "max_eval_length": max_eval_length,
-                    "max_docs_per_dataset": max_docs_per_dataset,
-                    "max_doc_bytes": max_doc_bytes,
-                    "wandb_tags": wandb_tags,
-                }
-            ),
-        ),
     )
 
 
@@ -333,28 +283,3 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
             continue
         scalars[f"gap/patterns/{row['name']}/bpb_gap"] = float(row["gap_bpb"])
     return scalars
-
-
-def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:
-    return {
-        "checkpoint_path": config.checkpoint_path,
-        "checkpoint_is_hf": config.checkpoint_is_hf,
-        "model": config.model,
-        "tokenizer": config.tokenizer,
-        "tokenizer_backend": config.tokenizer_backend.value,
-        "trust_remote_code": config.trust_remote_code,
-    }
-
-
-def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
-    return {
-        "input_path": dataset.input_path,
-        "hf_dataset_id": dataset.hf_dataset_id,
-        "hf_dataset_name": dataset.hf_dataset_name,
-        "hf_dataset_revision": dataset.hf_dataset_revision,
-        "text_key": dataset.text_key,
-        "input_key": dataset.input_key,
-        "target_key": dataset.target_key,
-        "split": dataset.split,
-        "tags": dataset.tags,
-    }

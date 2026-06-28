@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import os
 from functools import lru_cache
 
 from levanter.data.text import (
@@ -14,10 +13,7 @@ from levanter.data.text import (
 )
 from levanter.tokenizers import load_tokenizer
 
-from marin.execution.types import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
-
-TokenizerStep = ExecutorStep[TokenizeConfig]
 
 logger = logging.getLogger(__name__)
 
@@ -49,68 +45,14 @@ def dataset_component(source: LmDatasetSourceConfigBase) -> DatasetComponent:
     return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
 
 
-def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
-    """
-    Converts a tokenizer step to a Levanter dataset component. This is useful for creating
-    data mixture configs.
-    """
-
-    if isinstance(step, TokenizeConfig):
-        source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
-    else:
-        source = step.config.as_lm_dataset_source_config(output_path_of(step), include_raw_paths=include_raw_paths)
-
+def step_to_lm_mixture_component(step: TokenizeConfig, include_raw_paths: bool) -> DatasetComponent:
+    """Convert a tokenize config to a Levanter dataset component, for building data mixtures."""
+    source = step.as_lm_dataset_source_config(step.cache_path, include_raw_paths=include_raw_paths)
     return dataset_component(source)
 
 
-def lm_data_config(
-    training_set: TokenizerStep | InputName,
-    *,
-    validation_sets: dict[str, TokenizerStep] | None = None,
-    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
-    max_train_batches: dict[str, int] | None = None,
-    num_validation_sequences: dict[str, int] | None = None,
-    block_cross_document_attention: bool = True,
-) -> LmDataConfig:
-    """
-    Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
-
-    Notes:
-
-    Args:
-        training_set: The training set to use
-        validation_sets: A sequence of validation sets to use
-        shuffle: Shuffle policy. Defaults to hierarchical block shuffle.
-            `True` = full shuffle, `BlockShuffleConfig` = hierarchical block shuffle.
-        max_train_batches: Maximum number of batches to use for the training set per dataset.
-        num_validation_sequences: Number of validation sequences to take from the training set per dataset.
-        block_cross_document_attention: Whether to mask attention across document boundaries.
-    """
-    tokenizer = training_set.config.tokenizer
-
-    if validation_sets is not None:
-        for name, step in validation_sets.items():
-            if step.config.tokenizer != tokenizer:
-                raise ValueError(
-                    f"Validation set {name} ({step.name}) must have same tokenizer as training set's,"
-                    f" but got: {step.config.tokenizer} vs {tokenizer}"
-                )
-
-    train_set_name = os.path.basename(training_set.name)
-
-    return lm_mixture_data_config(
-        {train_set_name: training_set, **(validation_sets or {})},
-        {train_set_name: 1.0},
-        shuffle=shuffle,
-        missing_weights_are_validation=True,
-        max_train_batches=max_train_batches,
-        num_validation_sequences=num_validation_sequences,
-        block_cross_document_attention=block_cross_document_attention,
-    )
-
-
 def lm_mixture_data_config(
-    components: dict[str, TokenizerStep | TokenizeConfig],
+    components: dict[str, TokenizeConfig],
     weights: dict[str, float],
     *,
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
@@ -221,11 +163,11 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     return True
 
 
-def _verify_tokenizers_same(components: dict[str, TokenizerStep | TokenizeConfig]):
+def _verify_tokenizers_same(components: dict[str, TokenizeConfig]):
     first_name, first_step = next(iter(components.items()))
-    tokenizer = first_step.config.tokenizer if isinstance(first_step, ExecutorStep) else first_step.tokenizer
+    tokenizer = first_step.tokenizer
     for name, step in components.items():
-        step_tokenizer = step.config.tokenizer if isinstance(step, ExecutorStep) else step.tokenizer
+        step_tokenizer = step.tokenizer
         if step_tokenizer != tokenizer:
             if not _are_tokenizers_equivalent(step_tokenizer, tokenizer):
                 raise ValueError(

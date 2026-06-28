@@ -15,26 +15,12 @@ from urllib.parse import urlparse
 from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
-from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
-
 
 def _is_relative_path(url_or_path: str) -> bool:
     """Return True if the path is relative (not a URL and doesn't start with /)."""
     if urlparse(url_or_path).scheme:
         return False
     return not url_or_path.startswith("/")
-
-
-@dataclass(frozen=True)
-class _StepSpecMigrationConfig:
-    """Carries StepSpec version + dependency state into the dataclass shape
-    that ``Executor.compute_version`` traverses, so a StepSpec-authored step
-    can be embedded in an ``Executor.run()`` pipeline.
-    """
-
-    output_path: Any
-    attrs: Any
-    deps: list = dataclasses.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -48,7 +34,7 @@ class StepSpec:
     A StepSpec freezes nothing at construction: ``output_path`` resolves
     ``marin_prefix()`` lazily and ``fn`` pulls the live environment (prefix,
     region) from a ``RunContext`` at run time. So it is safe to build anywhere —
-    it needs no executor build phase, unlike the eager ``ExecutorStep``.
+    it carries no separate build phase.
     """
 
     # Identity
@@ -127,37 +113,3 @@ class StepSpec:
                 return f"{prefix}/{self.override_output_path}"
             return self.override_output_path
         return f"{prefix}/{self.name_with_hash}"
-
-    def as_executor_step(self) -> ExecutorStep:
-        """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
-
-        Round-tripping through ``resolve_executor_step`` returns the original
-        ``StepSpec``.
-        """
-        dep_steps = [dep.as_executor_step() for dep in self.deps]
-
-        config = _StepSpecMigrationConfig(
-            output_path=THIS_OUTPUT_PATH,
-            attrs=VersionedValue(self.hash_attrs),
-            deps=dep_steps,
-        )
-
-        # ExecutorStep carries only override_output_path. An explicit prefix (or an
-        # absolute override) is a deliberate pin, kept as an absolute path; otherwise
-        # stay relative so the executor anchors under the run prefix, not the build region.
-        if self.output_path_prefix is not None:
-            override_output_path = self.output_path
-        else:
-            override_output_path = self.override_output_path or self.name_with_hash
-
-        result = ExecutorStep(
-            name=self.name,
-            fn=self.fn,
-            config=config,
-            override_output_path=override_output_path,
-            resources=self.resources,
-        )
-        # ExecutorStep is frozen; object.__setattr__ stashes the original
-        # StepSpec for round-trip recovery in resolve_executor_step.
-        object.__setattr__(result, "_original_step_spec", self)
-        return result
