@@ -105,120 +105,35 @@ from haliax.nn.ragged_dot import (  # noqa: E402
 )
 from haliax.quantization import Fp8RaggedDotOp  # noqa: E402
 
+# Sibling pure modules (shared with the orchestrator); sys.path makes them importable as script/worker/import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fp8_autotune_configs import (  # noqa: E402
+    SHAPE_GRID,
+    Shape,
+    bf16_candidate_dicts,
+    mosaic_candidate_dicts,
+    wgrad_candidate_dicts,
+)
+from fp8_autotune_stats import ratio_median_ci, summarize_times  # noqa: E402,F401
+
 # H100 SXM dense matmul peaks; FP8 (E4M3) is 2x the BF16 rate.
 _H100_SXM_BF16_TFLOPS_PER_S = 989.5e12
 _H100_SXM_FP8_TFLOPS_PER_S = 1978.9e12
 
 _GRAD_DTYPES = {"e4m3": jnp.float8_e4m3fn, "e5m2": jnp.float8_e5m2}
 
-# H100 usable shared memory per SM (bytes); used to prune block configs that cannot fit the pipeline.
-_H100_SMEM_BYTES = 227 * 1024
-
-
-@dataclasses.dataclass(frozen=True)
-class Shape:
-    """A Grug MoE expert-MLP problem size. T = dispatched tokens (seq x top_k), summed over experts."""
-
-    name: str
-    tokens: int
-    hidden: int  # D
-    intermediate: int  # F (per-expert MLP width; the gated up-proj is 2F wide)
-    experts: int  # E
-
-    def __str__(self) -> str:
-        return f"{self.name}[T{self.tokens}/D{self.hidden}/F{self.intermediate}/E{self.experts}]"
-
-
-# Experts axis drives raggedness (tokens/expert): target ~1024, scale ~128.
-_SHAPE_GRID = {
-    "small": Shape("small", tokens=4096, hidden=512, intermediate=256, experts=8),
-    "target": Shape("target", tokens=8192, hidden=2048, intermediate=5632, experts=8),
-    "scale": Shape("scale", tokens=16384, hidden=3072, intermediate=1536, experts=128),
-}
-
-
-def _smem_per_stage_f8(block_m: int, block_n: int, block_k: int) -> int:
-    """Approx bytes/pipeline-stage for an f8 grouped GEMM: one (m,k) + one (k,n) tile, 1 byte/elt."""
-    return (block_m * block_k) + (block_k * block_n)
+_SHAPE_GRID = SHAPE_GRID
 
 
 def _mosaic_candidates() -> list[MosaicBlockConfig]:
-    """Bounded, reviewable config space for the shared forward/dlhs Mosaic GEMM.
-
-    Curated around the GFP8-029 winner (128/128/128 steps=6 grid_block_n=4): the baseline, one-axis
-    sweeps, and a few interactions. Pruned to configs whose pipeline fits H100 shared memory.
-    """
-    base = (128, 128, 128, 6, 4)
-    raw = [
-        base,
-        (64, 128, 128, 6, 4),
-        (256, 128, 128, 6, 4),
-        (128, 64, 128, 6, 4),
-        (128, 256, 128, 6, 4),
-        (128, 128, 64, 6, 4),
-        (128, 128, 256, 2, 4),
-        (128, 128, 128, 2, 4),
-        (128, 128, 128, 4, 4),
-        (128, 128, 128, 8, 4),
-        (128, 128, 128, 6, 1),
-        (128, 128, 128, 6, 2),
-        (128, 128, 128, 6, 8),
-        (128, 256, 128, 6, 2),
-        (256, 128, 128, 4, 4),
-        (64, 128, 128, 8, 4),
-        (128, 128, 64, 8, 4),
-        (256, 256, 128, 2, 4),
-        (64, 64, 128, 8, 8),
-    ]
-    return _dedup_block_configs(MosaicBlockConfig, raw)
+    """Shared forward/dlhs Mosaic block configs as dataclasses (design lives in fp8_autotune_configs)."""
+    return [MosaicBlockConfig(**d) for d in mosaic_candidate_dicts()]
 
 
 def _wgrad_candidates() -> list[WgradBlockConfig]:
-    """Bounded config space for the independent f8 weight-gradient kernel (default grid_block_n=2)."""
-    raw = [
-        (128, 128, 128, 6, 2),
-        (128, 128, 128, 6, 4),
-        (128, 128, 128, 4, 2),
-        (128, 128, 64, 6, 2),
-        (128, 128, 256, 2, 2),
-        (64, 128, 128, 6, 2),
-        (128, 64, 128, 6, 2),
-        (256, 128, 128, 4, 2),
-        (128, 256, 128, 4, 2),
-        (128, 128, 128, 8, 2),
-        (128, 128, 128, 6, 1),
-    ]
-    return _dedup_block_configs(WgradBlockConfig, raw)
+    """Independent f8 weight-gradient block configs as dataclasses."""
+    return [WgradBlockConfig(**d) for d in wgrad_candidate_dicts()]
 
-
-def _dedup_block_configs(cls, raw):
-    """Build configs from (bm, bn, bk, steps, gbn) tuples, drop smem-infeasible ones, dedup."""
-    out, seen = [], set()
-    for bm, bn, bk, steps, gbn in raw:
-        if _smem_per_stage_f8(bm, bn, bk) * steps > _H100_SMEM_BYTES:
-            continue
-        key = (bm, bn, bk, steps, gbn)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(cls(block_m=bm, block_n=bn, block_k=bk, max_concurrent_steps=steps, grid_block_n=gbn))
-    return out
-
-
-# bf16 Triton baseline candidates: (BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_STAGES). Default 128/128/32/4/4.
-_BF16_CANDIDATES = [
-    (128, 128, 32, 4, 4),
-    (128, 128, 64, 4, 4),
-    (128, 256, 32, 4, 8),
-    (64, 128, 32, 4, 4),
-    (256, 128, 32, 8, 4),
-    (128, 128, 32, 8, 4),
-    (128, 128, 32, 4, 8),
-    (128, 128, 32, 4, 2),
-    (128, 256, 64, 8, 4),
-    (256, 256, 32, 8, 8),
-    (128, 128, 128, 4, 4),
-]
 
 _BF16_ENV_VARS = (
     "RAGGED_DOT_BLOCK_M",
@@ -349,52 +264,6 @@ def time_steady_state(fn, args, *, samples: int, inner_steps: int, warmup: int):
         _batch()
         times[i] = (time.perf_counter() - t0) / inner_steps
     return compile_time, times
-
-
-def _bootstrap_median_ci(times, *, n_boot=2000, alpha=0.05, seed=0):
-    """Percentile bootstrap CI for the median of ``times``. Returns (median, ci_low, ci_high)."""
-    times = np.asarray(times, dtype=np.float64)
-    median = float(np.median(times))
-    if times.size < 2:
-        return median, median, median
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(0, times.size, size=(n_boot, times.size))
-    boot_medians = np.median(times[idx], axis=1)
-    lo = float(np.quantile(boot_medians, alpha / 2))
-    hi = float(np.quantile(boot_medians, 1 - alpha / 2))
-    return median, lo, hi
-
-
-def summarize_times(times):
-    """Summary stats for a per-step time sample: median + bootstrap 95% CI, min, mean, std, n."""
-    times = np.asarray(times, dtype=np.float64)
-    median, lo, hi = _bootstrap_median_ci(times)
-    return {
-        "median_s": median,
-        "ci95_low_s": lo,
-        "ci95_high_s": hi,
-        "ci95_rel_width": (hi - lo) / median if median > 0 else float("nan"),
-        "min_s": float(np.min(times)),
-        "mean_s": float(np.mean(times)),
-        "std_s": float(np.std(times, ddof=1)) if times.size > 1 else 0.0,
-        "n": int(times.size),
-    }
-
-
-def ratio_median_ci(num_times, den_times, *, n_boot=2000, alpha=0.05, seed=0):
-    """Bootstrap CI for ``median(den)/median(num)`` — the speedup of num over den (den is slower=>>1).
-
-    num/den are independent samples (e.g. fp8 vs bf16 per-step times), resampled independently.
-    Returns (speedup, ci_low, ci_high) where speedup = median(den)/median(num).
-    """
-    num = np.asarray(num_times, dtype=np.float64)
-    den = np.asarray(den_times, dtype=np.float64)
-    speedup = float(np.median(den) / np.median(num))
-    rng = np.random.default_rng(seed)
-    ni = rng.integers(0, num.size, size=(n_boot, num.size))
-    di = rng.integers(0, den.size, size=(n_boot, den.size))
-    boot = np.median(den[di], axis=1) / np.median(num[ni], axis=1)
-    return speedup, float(np.quantile(boot, alpha / 2)), float(np.quantile(boot, 1 - alpha / 2))
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -625,12 +494,11 @@ def tune_bf16(shape, dtype, grad_dtype, *, samples, inner_steps, warmup, rows, l
     x, w13, w2, group_sizes = _make_inputs(shape, dtype)
 
     results = []
-    for bm, bn, bk, warps, stages in _BF16_CANDIDATES:
-        with _bf16_env_override(bm, bn, bk, warps, stages):
+    for cfg in bf16_candidate_dicts():
+        with _bf16_env_override(**cfg):
             dot13, dot2 = _build_dots("bf16", dtype, grad_dtype, MosaicWgradMode.BF16)
             timed = _grad_fn(dot13, dot2, group_sizes)
             res = _eval_candidate(timed, (x, w13, w2), samples=samples, inner_steps=inner_steps, warmup=warmup)
-            cfg = {"block_m": bm, "block_n": bn, "block_k": bk, "num_warps": warps, "num_stages": stages}
             rows.append(
                 _make_row(
                     kernel="bf16_fwdbwd",
@@ -667,6 +535,109 @@ def _fmt(res):
     return f"{s['median_s'] * 1e3:.3f} ms [CI {s['ci95_rel_width'] * 100:.1f}%]{tag}"
 
 
+# ---------------------------------------------------------------------------------------------------
+# Worker mode: evaluate an explicit list of config requests on this process's single visible GPU.
+# The multi-GPU orchestrator (orchestrate_fp8_autotune.py) pins one GPU per worker via
+# CUDA_VISIBLE_DEVICES and owns the coordinate-descent across workers; the worker is stateless beyond
+# one shape's inputs. Each request -> one row; ``want_times`` rows carry the raw per-step distribution
+# so the orchestrator can form a ratio-of-medians CI for the headline.
+# ---------------------------------------------------------------------------------------------------
+
+
+def _run_worker(work_file, rows_out):
+    with open(work_file) as f:
+        spec = json.load(f)
+    shape = Shape(**spec["shape"])
+    dtype = jnp.dtype(spec["dtype"])
+    grad_dtype = _GRAD_DTYPES[spec["grad_dtype"]]
+    mosaic_wgrad = MosaicWgradMode(spec["mosaic_wgrad"])
+    sb = {"samples": spec["samples"], "inner_steps": spec["inner_steps"], "warmup": spec["warmup"]}
+
+    x, w13, w2, group_sizes = _make_inputs(shape, dtype)
+    args = (x, w13, w2)
+    timed_fp8 = None  # built lazily on the first fp8 request
+    g_ref = None  # bf16 reference grads, built lazily for the first numerics check
+
+    rows = []
+    for req in spec["requests"]:
+        if req["kind"] == "fp8":
+            if timed_fp8 is None:
+                d13, d2 = _build_dots("mosaic", dtype, grad_dtype, mosaic_wgrad)
+                timed_fp8 = _grad_fn(d13, d2, group_sizes)
+            mosaic_cfg = MosaicBlockConfig(**req["mosaic"])
+            wgrad_cfg = WgradBlockConfig(**req["wgrad"])
+            rel = None
+            if req.get("want_numerics"):
+                if g_ref is None:
+                    b13, b2 = _build_dots("bf16", dtype, grad_dtype, mosaic_wgrad)
+                    jax.clear_caches()
+                    g_ref = jax.block_until_ready(jax.jit(_grad_fn(b13, b2, group_sizes))(*args))
+                with _mosaic_config_override(mosaic_cfg, wgrad_cfg):
+                    jax.clear_caches()
+                    g_path = jax.block_until_ready(jax.jit(timed_fp8)(*args))
+                rel = max(_rel_frob(gp, gr) for gp, gr in zip(g_path, g_ref))
+            try:
+                with _mosaic_config_override(mosaic_cfg, wgrad_cfg):
+                    compile_time, times = time_steady_state(timed_fp8, args, **sb)
+                summary, error = summarize_times(times), None
+            except Exception as exc:
+                compile_time, times, summary, error = None, None, None, f"{type(exc).__name__}: {exc}"
+            rows.append(
+                _make_row(
+                    kernel="fp8_hybrid_fwdbwd",
+                    implementation="mosaic",
+                    shape=shape,
+                    dtype=dtype,
+                    block_sizes={"mosaic": req["mosaic"], "wgrad": req["wgrad"]},
+                    compile_time=compile_time,
+                    summary=summary,
+                    error=error,
+                    extra={
+                        "request_id": req["id"],
+                        "kind": "fp8",
+                        "rel_frob_vs_bf16": rel,
+                        "times": (times.tolist() if (times is not None and req.get("want_times")) else None),
+                        "grad_dtype": str(grad_dtype),
+                        "mosaic_wgrad": str(mosaic_wgrad),
+                    },
+                )
+            )
+        else:
+            cfg = req["bf16cfg"]
+            with _bf16_env_override(**cfg):
+                d13, d2 = _build_dots("bf16", dtype, grad_dtype, MosaicWgradMode.BF16)
+                timed = _grad_fn(d13, d2, group_sizes)
+                try:
+                    compile_time, times = time_steady_state(timed, args, **sb)
+                    summary, error = summarize_times(times), None
+                except Exception as exc:
+                    compile_time, times, summary, error = None, None, None, f"{type(exc).__name__}: {exc}"
+            rows.append(
+                _make_row(
+                    kernel="bf16_fwdbwd",
+                    implementation="triton",
+                    shape=shape,
+                    dtype=dtype,
+                    block_sizes=cfg,
+                    compile_time=compile_time,
+                    summary=summary,
+                    error=error,
+                    extra={
+                        "request_id": req["id"],
+                        "kind": "bf16",
+                        "times": (times.tolist() if (times is not None and req.get("want_times")) else None),
+                    },
+                )
+            )
+        status = error if error else f"{summary['median_s'] * 1e3:.3f} ms"
+        print(f"worker: {req['id']} -> {status}", flush=True)
+
+    with open(rows_out, "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    print(f"worker: wrote {len(rows)} rows -> {rows_out}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--shapes", default="small,target,scale", help="comma list of {small,target,scale} or 'all'")
@@ -679,7 +650,16 @@ def main():
     ap.add_argument("--numerics-tol", type=float, default=0.25, help="max grad rel_frob vs bf16 to accept a config")
     ap.add_argument("--out-dir", default=None, help="defaults to scratch/fp8_bench/<timestamp>")
     ap.add_argument("--smoke", action="store_true", help="CPU mechanics check: bf16/xla only, tiny budget, no mosaic")
+    ap.add_argument(
+        "--worker", action="store_true", help="evaluate an orchestrator-supplied request list (single GPU)"
+    )
+    ap.add_argument("--work-file", default=None, help="worker: JSON spec of requests to evaluate")
+    ap.add_argument("--rows-out", default=None, help="worker: JSONL path to write result rows")
     args = ap.parse_args()
+
+    if args.worker:
+        _run_worker(args.work_file, args.rows_out)
+        return
 
     dtype = jnp.dtype(args.dtype)
     grad_dtype = _GRAD_DTYPES[args.grad_dtype]
