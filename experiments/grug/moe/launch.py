@@ -1,10 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Template: grug-moe trial run.
+"""grug-moe trial run, authored as a lazy artifact.
 
-This keeps model, train loop, and launch wiring in `experiments/grug/moe` so
-the MoE variant can be iterated independently from the dense base template.
+The run is a function that returns a typed :class:`Checkpoint` handle addressed by an
+explicit ``name@version``. The model, optimizer, data mixture, token budget, z-loss,
+and evals are all stated inline; the output path is ``ctx.out`` and the TPU is a
+run-arg, so neither bears on the artifact's identity.
+
+The grug-moe training mechanism (``GrugMoeLaunchConfig`` + ``run_grug_moe_trial`` ->
+``run_grug``) is grug-specific compute and is kept as-is: the recipe's ``fn`` is
+``run_grug_moe_trial``, which builds the Levanter trainer and dispatches the training
+job to Fray. Only the data/validation wiring around it is assembled lazily from
+dataset handles.
 """
 
 import dataclasses
@@ -16,24 +24,46 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
-from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
+from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.processing.tokenize.data_configs import lm_data_config
+from marin.execution.lazy import Checkpoint, Dataset, Recipe, RunContext, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture, tokenized
 from marin.training.training import temporary_checkpoint_base_path
 
-from experiments.defaults import default_validation_sets
+from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import nemotron_mix
-from experiments.tokenization import default_tokenize
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.nemotron import nemotron_datasets
+from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
+
+# SlimPajama-6B tokenization OOMs at the default 10g worker resources.
+_SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
+
+# The TPU the training job is dispatched onto. A run-arg, not part of the config's
+# identity: re-running on a different TPU is the same checkpoint. The launcher step
+# runs inline (run_grug dispatches its own Fray job).
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8")
+
+# Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
+# proof-pile at their published weights. Policy lives here, in the experiment.
+_NEMOTRON_WEIGHTS = {
+    "hq_actual": 0.91351,
+    "hq_synth": 2.72,
+    "medium_high": 0.82471,
+    "medium": 3.38,
+    "medium_low": 1.54,
+    "low_actual": 0.70123,
+    "low_synth": 0.62771,
+}
+_STARCODER_WEIGHT = 0.25
+_PROOFPILE_WEIGHT = 0.055
 
 
 @dataclass(frozen=True)
@@ -67,42 +97,25 @@ class GrugMoeLaunchConfig:
     a midtrain/SFT/RL run points this at the prior phase's ``checkpoints`` directory."""
 
 
-NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix,
-    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
-)
-
-
 def env_int(key: str, default: int) -> int:
     """Read an int from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
     raw = os.environ.get(key, "")
     return int(raw) if raw else default
 
 
-def slimpajama_6b_data() -> LmDataConfig:
-    """SlimPajama-6B, llama3-tokenized with block-shuffle, re-tokenized on first run.
+def slimpajama_6b_dataset() -> Dataset:
+    """SlimPajama-6B, llama3-tokenized — a small corpus for GPU smoke/scale runs.
 
-    A small, R2-local corpus for GPU smoke/scale runs; returns a ready-to-train
-    ``LmDataConfig``. A production pretraining mixture would instead need its
-    tokenized cache already materialized to avoid a cross-region tokenize.
+    Returns the tokenized :class:`Dataset` handle; the launcher assembles it into an
+    ``LmDataConfig`` with :func:`~marin.experiment.data.mixture`. Tokenization runs as
+    its own Fray job (a production pretraining mixture would instead pin an already
+    materialized cache to avoid a cross-region tokenize).
     """
-    tokenize_step = default_tokenize(
-        name="slimpajama-6b-cw",
-        dataset="DKYoon/SlimPajama-6B",
+    return tokenized(
+        "slimpajama-6b",
+        source="DKYoon/SlimPajama-6B",
         tokenizer=llama3_tokenizer,
-        format=TextLmDatasetFormat(),
-    )
-    tokenize_step = dataclasses.replace(
-        tokenize_step,
-        config=dataclasses.replace(
-            tokenize_step.config,
-            # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
-            worker_resources=ResourceConfig(ram="64g", disk="64g"),
-        ),
-    )
-    return lm_data_config(
-        training_set=tokenize_step,
-        shuffle=BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel"),
+        resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
     )
 
 
@@ -122,7 +135,11 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
-    # Map template launch knobs onto full Levanter TrainerConfig.
+    """Map template launch knobs onto a full Levanter trainer and dispatch the run.
+
+    Runs inline on the launcher; ``run_grug`` submits the training job to Fray and
+    blocks until it completes.
+    """
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
@@ -180,50 +197,53 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-baseline_moe = ExecutorStep(
-    name="grug/4_10_baseline_moe",
-    fn=run_grug_moe_trial,
-    config=GrugMoeLaunchConfig(
-        model=versioned(_baseline_model),
-        data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
-        # this_output_path() resolves to this step's output root (e.g. gs://.../grug/moe-trial-<version>).
-        output_path=this_output_path(),
-        # Keep run id out of versioning so changing job metadata doesn't create a new output path.
-        run_id=RESOLVED_RUN_ID,
-        resources=versioned(ResourceConfig.with_tpu("v5p-8")),
-        steps=versioned(_baseline_steps),
-        batch_size=versioned(_baseline_batch),
-        seed=versioned(0),
-        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-        tracker=WandbConfig(
-            project="marin_moe",
-            tags=["moe"],
-            group="moe-iter04",
-            name=None,
-        ),
-        optimizer=versioned(_baseline_optimizer),
-        grug_trainer=versioned(
-            GrugTrainerConfig(
-                z_loss_weight=1e-4,
-                ema_beta=None,
-                log_every=1,
-            )
-        ),
-        eval=versioned(
-            GrugEvalConfig(
+def grug_moe_baseline(*, version: str = "v1") -> Checkpoint:
+    """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
+
+    Every component is a :class:`Dataset` handle, so the whole graph lowers via
+    :func:`~marin.execution.lazy.lower`. Pinned components never re-tokenize; the
+    paloma/uncheatable suites are validation (weight 0).
+    """
+    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+
+    def build_config(ctx: RunContext) -> GrugMoeLaunchConfig:
+        return GrugMoeLaunchConfig(
+            model=_baseline_model,
+            data=mixture(ctx, train, validation=validation),
+            output_path=ctx.out,
+            run_id=RESOLVED_RUN_ID,
+            resources=ctx.run_arg("train_resources"),
+            steps=_baseline_steps,
+            batch_size=_baseline_batch,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(project="marin_moe", tags=["moe"], group="moe-iter04", name=None),
+            optimizer=_baseline_optimizer,
+            grug_trainer=GrugTrainerConfig(z_loss_weight=1e-4, ema_beta=None, log_every=1),
+            eval=GrugEvalConfig(
                 eval_batch_size=512,
                 steps_per_eval=1000,
                 max_eval_batches=8,
                 eval_current=True,
                 eval_ema=False,
-            )
+            ),
+        )
+
+    return Checkpoint(
+        name="grug/4_10_baseline_moe",
+        version=version,
+        recipe=Recipe(
+            fn=run_grug_moe_trial,
+            build_config=build_config,
+            deps=(*train, *validation),
+            run_args={"train_resources": _TRAIN_RESOURCES},
         ),
-    ),
-)
+    )
 
 
 if __name__ == "__main__":
-    executor_main(
-        steps=[baseline_moe],
-        description="Baseline grug MoE (QB+GN+XSA+zloss) on Nemotron mix.",
-    )
+    StepRunner().run([lower(grug_moe_baseline())])

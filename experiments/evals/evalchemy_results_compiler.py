@@ -5,8 +5,8 @@
 Compile and aggregate results from multiple Evalchemy evaluation runs.
 
 This module provides the compile step function for aggregating results across
-seeds and logging averaged metrics to wandb. It is used as the `fn` argument
-to an `ExecutorStep` created by `compile_evalchemy_results` in `evals.py`.
+seeds and logging averaged metrics to wandb. It is used as the step function
+for `compile_evalchemy_results` in `evals.py`.
 """
 
 import json
@@ -241,7 +241,7 @@ def _log_averaged_results_to_wandb(
 
 
 def compile_evalchemy_results_fn(config: dict) -> None:
-    """Top-level function executed by the ExecutorStep to compile evalchemy results.
+    """Top-level step function to compile evalchemy results.
 
     Reads individual per-seed evaluation results, aggregates them into compiled
     and averaged DataFrames, saves outputs to GCS, and logs to wandb.
