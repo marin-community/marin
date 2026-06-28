@@ -66,19 +66,60 @@ async def defaults(request: Request) -> JSONResponse:
     return JSONResponse({"entity": cfg.default_entity})
 
 
+async def list_entities(request: Request) -> JSONResponse:
+    """The viewer's own entity plus any team entities, for the entity picker."""
+
+    def _fetch() -> list[str]:
+        viewer = wandb.Api().viewer
+        entities: list[str] = []
+        own = getattr(viewer, "entity", None)
+        if own:
+            entities.append(own)
+        for team in getattr(viewer, "teams", None) or []:
+            name = team if isinstance(team, str) else getattr(team, "name", None)
+            if name and name not in entities:
+                entities.append(name)
+        return entities
+
+    return JSONResponse({"entities": await asyncio.to_thread(_fetch)})
+
+
+async def list_projects(request: Request) -> JSONResponse:
+    entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
+
+    def _fetch() -> list[str]:
+        projects = list(wandb.Api().projects(entity))
+        # Most-recently-updated first when wandb exposes a timestamp; else API order.
+        projects.sort(key=lambda p: str(getattr(p, "updated_at", "") or getattr(p, "lastUpdated", "")), reverse=True)
+        return [p.name for p in projects]
+
+    return JSONResponse({"projects": await asyncio.to_thread(_fetch)})
+
+
 async def list_runs(request: Request) -> JSONResponse:
     entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
     project = request.query_params.get("project", "")
-    limit = int(request.query_params.get("limit", "50"))
+    limit = int(request.query_params.get("limit", "100"))
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
 
     def _fetch() -> list[dict]:
         api = wandb.Api()
-        runs = api.runs(f"{entity}/{project}", per_page=limit)
+        # Most-recently-created first; the picker also surfaces the run author so
+        # the SPA can offer a user filter.
+        runs = api.runs(f"{entity}/{project}", per_page=min(limit, 200), order="-created_at")
         out = []
         for run in runs:
-            out.append({"id": run.id, "name": run.name, "state": run.state, "created_at": str(run.created_at)})
+            user = getattr(run, "user", None)
+            out.append(
+                {
+                    "id": run.id,
+                    "name": run.name,
+                    "user": getattr(user, "username", None) or getattr(user, "name", None),
+                    "state": run.state,
+                    "created_at": str(run.created_at),
+                }
+            )
             if len(out) >= limit:
                 break
         return out
@@ -244,6 +285,8 @@ def build_app(cfg: BuoyConfig) -> Starlette:
         routes=[
             Route("/", index),
             Route("/api/defaults", defaults),
+            Route("/api/entities", list_entities),
+            Route("/api/projects", list_projects),
             Route("/api/runs", list_runs),
             Route("/api/mirror", start_mirror, methods=["POST"]),
             Route("/api/mirror_status", mirror_status),

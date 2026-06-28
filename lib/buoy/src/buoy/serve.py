@@ -38,7 +38,7 @@ def install_xprof() -> str:
     return f"{venv}/bin/xprof"
 
 
-def serve_in_job(endpoint_name: str = "/serve/buoy") -> None:
+def serve_in_job(endpoint_name: str = "/buoy") -> None:
     logging.basicConfig(level=logging.INFO, format="[buoy] %(asctime)s %(message)s")
     if not os.environ.get("WANDB_API_KEY"):
         raise RuntimeError("WANDB_API_KEY was not injected into the buoy job")
