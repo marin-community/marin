@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+# Default PriorityClass names Iris creates at controller startup and uses when
+# the cluster config does not override priority_class_names. Override via
+# kubernetes_provider.priority_classes.
+IRIS_PRIORITY_CLASS_PRODUCTION = "iris-production"
+IRIS_PRIORITY_CLASS_INTERACTIVE = "iris-interactive"
+IRIS_PRIORITY_CLASS_BATCH = "iris-batch"
+
 
 class KubectlError(RuntimeError):
     """Error raised for kubectl command failures."""

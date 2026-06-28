@@ -18,8 +18,17 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.gcp.local import LocalSliceHandle
-from iris.cluster.backends.gcp.service import (
+from iris.cluster.backends.types import (
+    InfraError,
+    Labels,
+    QuotaExhaustedError,
+    find_free_port,
+)
+from iris.cluster.bundle import BundleStore
+from iris.cluster.config import SliceConfig
+from iris.cluster.config import WorkerConfig as WireWorkerConfig
+from iris.cluster.platforms.gcp.local import LocalSliceHandle
+from iris.cluster.platforms.gcp.service import (
     KNOWN_GCP_ZONES,
     KNOWN_TPU_TYPES,
     OperationStatus,
@@ -33,15 +42,6 @@ from iris.cluster.backends.gcp.service import (
     validate_tpu_create,
     validate_vm_create,
 )
-from iris.cluster.backends.types import (
-    InfraError,
-    Labels,
-    QuotaExhaustedError,
-    find_free_port,
-)
-from iris.cluster.bundle import BundleStore
-from iris.cluster.config import SliceConfig
-from iris.cluster.config import WorkerConfig as WireWorkerConfig
 from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology

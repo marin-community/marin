@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from iris.cluster.backends.k8s.types import (
+from iris.cluster.platforms.k8s.types import (
     ExecResult,
     K8sResource,
     KubectlError,

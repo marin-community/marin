@@ -51,8 +51,10 @@ from pathlib import Path
 
 import click
 from iris.client import IrisClient
-from iris.cluster.backends.k8s.controller import K8sControllerProvider, _build_controller_deployment
-from iris.cluster.backends.k8s.coreweave_topology import (
+from iris.cluster.backends.types import Labels, find_free_port
+from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.controller import K8sControllerProvider, _build_controller_deployment
+from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_FLAVOR_INFINIBAND,
     CW_LABEL_FABRIC,
     CW_LABEL_FLAVOR,
@@ -60,9 +62,7 @@ from iris.cluster.backends.k8s.coreweave_topology import (
     CW_LABEL_NVLINK_DOMAIN,
     CW_LABEL_SUPERPOD,
 )
-from iris.cluster.backends.k8s.service import CloudK8sService
-from iris.cluster.backends.types import Labels, find_free_port
-from iris.cluster.config import CoreweavePlatformConfig, IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.types import AcceleratorType, CoschedulingConfig, Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
 

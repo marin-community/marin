@@ -6,7 +6,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from iris.cluster.backends.k8s.types import parse_k8s_cpu, parse_k8s_quantity, parse_k8s_timestamp
+from iris.cluster.platforms.k8s.types import parse_k8s_cpu, parse_k8s_quantity, parse_k8s_timestamp
 
 
 @pytest.mark.parametrize(

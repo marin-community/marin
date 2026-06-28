@@ -21,17 +21,18 @@ import fsspec.config
 import s3fs
 from rigging.timing import Deadline
 
-from iris.cluster.backends.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.backends.k8s.service import CloudK8sService, K8sService
-from iris.cluster.backends.k8s.tasks import (
-    IRIS_PRIORITY_CLASS_BATCH,
-    IRIS_PRIORITY_CLASS_INTERACTIVE,
-    IRIS_PRIORITY_CLASS_PRODUCTION,
-)
-from iris.cluster.backends.k8s.types import K8sResource, parse_k8s_timestamp
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
 from iris.cluster.config import ControllerVmConfig, CoreweavePlatformConfig, IrisClusterConfig, config_to_dict
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
+from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
+from iris.cluster.platforms.k8s.types import (
+    IRIS_PRIORITY_CLASS_BATCH,
+    IRIS_PRIORITY_CLASS_INTERACTIVE,
+    IRIS_PRIORITY_CLASS_PRODUCTION,
+    K8sResource,
+    parse_k8s_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
