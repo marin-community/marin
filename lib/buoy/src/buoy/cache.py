@@ -53,12 +53,6 @@ def exists(path: str) -> bool:
     return _fs(path).exists(path)
 
 
-def delete(path: str) -> None:
-    fs = _fs(path)
-    if fs.exists(path):
-        fs.rm(path)
-
-
 def read_json(path: str) -> dict | None:
     fs = _fs(path)
     if not fs.exists(path):

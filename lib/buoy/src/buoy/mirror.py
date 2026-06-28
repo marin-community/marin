@@ -134,12 +134,11 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False) -> dict:
     if existing and not refresh and existing.get("state") != "running":
         return existing
 
-    # Re-mirroring overwrites shards in place, so drop the old commit marker first:
-    # mid-refresh (or after a crash) readers then see "not cached" and re-fetch,
-    # never a manifest pointing at half-updated shards.
-    if existing is not None:
-        cache.delete(mpath)
-
+    # Refresh overwrites shards in place and rewrites the manifest LAST, so the old
+    # manifest stays the valid commit marker until the new one lands — reads of a
+    # running run never see "not cached" mid-refresh. (A crash mid-refresh can leave
+    # a brief shard/manifest skew for that one running run; a generation swap would
+    # remove even that, tracked as a follow-up.)
     api = wandb.Api()
     run = api.run(ref.key)
     columns = history_columns(run)
