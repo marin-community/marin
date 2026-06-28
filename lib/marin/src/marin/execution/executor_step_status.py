@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Each `ExecutorStep` produces an `output_path`.
+Each step produces an `output_path`.
 We associate each `output_path` with:
 - A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILED, DEP_FAILED, or RUNNING
 - A LOCK file (`output_path/.executor_status.lock`) for distributed locking
