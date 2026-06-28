@@ -4,7 +4,7 @@
 """``buoy`` CLI: submit the viewer as a self-registering service job on a cluster.
 
 Resolves the named cluster's controller (auto-tunnel), submits an Iris job whose
-entrypoint serves the app and registers ``/serve/buoy``, then waits for the
+entrypoint serves the app and registers ``/buoy``, then waits for the
 endpoint and prints the proxy URL. Depends only on iris + rigging (no marin).
 
 buoy is shipped to the worker by **cloudpickle value** (every ``buoy.*`` module is
@@ -53,7 +53,7 @@ def _ship_buoy_by_value() -> None:
 
 @click.command(context_settings={"show_default": True})
 @click.option("--cluster", default="marin", help="Named Iris cluster to submit to.")
-@click.option("--endpoint-name", default="/serve/buoy", help="Endpoint to register (absolute, no '.').")
+@click.option("--endpoint-name", default="/buoy", help="Endpoint to register (absolute, no '.').")
 @click.option("--name", default="buoy", help="Iris job name.")
 @click.option(
     "--cache-root",
