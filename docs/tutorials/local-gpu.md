@@ -52,35 +52,34 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
 ## Running an Experiment
 
 Now you can run an experiment.
-Let's start by running the tiny model training script (GPU version) [`experiments/tutorials/train_tiny_model_gpu.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py):
+The unified tutorial script [`experiments/tutorials/train_tiny_model.py`](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model.py)
+accepts a `--device` flag that selects the accelerator:
 
 ```bash
 export MARIN_PREFIX=local_store
 export WANDB_ENTITY=...
-uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
+uv run python experiments/tutorials/train_tiny_model.py --device h100x8 --dataset wikitext
 ```
 
-The `prefix` is the directory where the output will be saved. It can be a local directory or anything fsspec supports,
-such as `s3://` or `gs://`.
+`MARIN_PREFIX` sets the root directory for all outputs; it can be a local path or anything
+fsspec supports, such as `s3://` or `gs://`.
 
-Let's take a look at the script.
-Whereas the [CPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py)
-requests `resources=ResourceConfig.with_cpu()`,
-the [GPU version](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_gpu.py)
-requests `resources=ResourceConfig.with_gpu(...)`:
+The same script runs on CPU, GPU, and TPU — only `--device` and `--dataset` change. The GPU
+device entry in `train_tiny_model.py` configures resources and batch size:
 
 ```python
 from fray.cluster import ResourceConfig
+from levanter.optim import AdamConfig
+from marin.experiment.train import train_lm
 
-nano_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G"),
-    train_batch_size=256,
-    num_train_steps=100,
-    learning_rate=6e-4,
-    weight_decay=0.1,
-)
+# "h100x8" entry in DEVICES (resources, batch_size)
+resources = ResourceConfig.with_gpu("H100", count=8, cpu=32, disk="128G", ram="128G")
+batch_size = 256
 ```
+
+Whereas `--device cpu` uses `ResourceConfig.with_cpu()` and a batch size of 4, `--device h100x8`
+uses eight H100s with a larger batch. Adding a new device is one entry in the `DEVICES` dict —
+no separate file needed.
 
 To scale up, submit to Marin's shared [Iris](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) cluster
 via `uv run iris --cluster=marin job run ...` (see `lib/iris/OPS.md` for the CLI reference).

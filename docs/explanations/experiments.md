@@ -13,7 +13,7 @@ Regardless, an experiment consists of a DAG of steps.
 To promote the reproducibility of experiments, we record all experiments in the
 [experiments](https://github.com/marin-community/marin/tree/main/experiments) directory.
 Each file in that directory (e.g.,
-[tutorials/dclm_1b_1x_inline.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/dclm_1b_1x_inline.py))
+[tutorials/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py))
 corresponds to one experiment, where the naming convention contains the GitHub issue number.
 
 Running each experiment produces provenance records for every artifact it builds. From

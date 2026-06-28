@@ -14,11 +14,12 @@ A Marin training script builds a lazy `Checkpoint` handle, lowers it to a runnab
 graph, and passes it to `StepRunner`. Nothing executes at import time.
 
 ```python
-from marin.execution.lazy import lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
 
-def build() -> Checkpoint:
+def build() -> Lazy[Checkpoint]:
     ...  # assemble the checkpoint handle
 
 if __name__ == "__main__":
@@ -56,12 +57,10 @@ Pre-defined configurations for common sizes live in `experiments/llama.py`.
 
 ## Building the data mixture
 
-Training data is expressed as a dict of `Dataset` handles to weights. Each handle is a
-lazy reference to a tokenized cache on GCS; `mixture` assembles a Levanter `LmDataConfig`
-from them at run time:
+Training data is expressed as a dict of `Lazy[Dataset]` handles to weights. Pass this dict
+as `datasets=` to `train_lm`; it assembles the Levanter data mixture internally:
 
 ```python
-from marin.experiment.data import mixture
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 from experiments.llama import llama3_tokenizer
 
@@ -69,8 +68,8 @@ train = dclm_datasets(tokenizer=llama3_tokenizer)
 weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
 ```
 
-`dclm_datasets` returns a dict of pre-tokenized `Dataset` handles, one per DCLM component.
-To tokenize a custom dataset instead, use `tokenized` from `marin.experiment.data`:
+`dclm_datasets` returns a dict of pre-tokenized `Lazy[Dataset]` handles, one per DCLM
+component. To tokenize a custom dataset instead, use `tokenized` from `marin.experiment.data`:
 
 ```python
 from marin.experiment.data import tokenized
@@ -91,9 +90,9 @@ of them. The complete `build()` function for DCLM 1B/1x:
 ```python
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import Checkpoint, lower
+from marin.execution.artifact import Checkpoint
+from marin.execution.lazy import Lazy, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.data import mixture
 from marin.experiment.train import train_lm
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
@@ -103,7 +102,7 @@ from experiments.recipes import core_tasks
 
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
 
-def build(*, version: str = "v1") -> Checkpoint:
+def build(*, version: str = "v1") -> Lazy[Checkpoint]:
     train = dclm_datasets(tokenizer=llama3_tokenizer)
     validation = [
         *paloma_validation(tokenizer=llama3_tokenizer),
@@ -121,8 +120,8 @@ def build(*, version: str = "v1") -> Checkpoint:
             warmup=5000,
             min_lr_ratio=0.1,
         ),
-        data=lambda ctx: mixture(ctx, weighted, validation=validation),
-        deps=(*weighted, *validation),
+        datasets=weighted,
+        validation=validation,
         batch_size=BATCH_SIZE,
         seq_len=SEQ_LEN,
         num_train_steps=NUM_TRAIN_STEPS,
@@ -144,8 +143,8 @@ if __name__ == "__main__":
 | `version` | Artifact version; bump this to produce a new run without overwriting the old one |
 | `model` | Levanter `LmConfig` (architecture and hyperparameters) |
 | `optimizer` | Levanter `OptimizerConfig` (learning rate, schedule, weight decay) |
-| `data` | A builder `(ctx) -> LmDataConfig`; typically a `mixture(...)` call |
-| `deps` | Dataset handles the `data` builder depends on — must list all of them |
+| `datasets` | Dict of `Lazy[Dataset]` handles to weights; `train_lm` assembles the data mixture |
+| `validation` | Sequence of `Lazy[Dataset]` handles for held-out loss tracking (optional) |
 | `batch_size` | Training batch size in sequences |
 | `seq_len` | Sequence length |
 | `num_train_steps` | Total number of optimizer steps |
@@ -171,7 +170,7 @@ TPU or GPU training sub-job via Fray:
 uv run iris --cluster=marin job run \
   --cpu=1 --memory=2G --extra=cpu \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.tutorials.dclm_1b_1x_inline
+  -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
 ```
 
 See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
@@ -192,6 +191,7 @@ tensor parallelism.
 
 ## Reference implementation
 
-`experiments/tutorials/dclm_1b_1x_inline.py` is the canonical training script: every
+`experiments/tutorials/exp1078_reproduce_dclm_7b1x.py` is the canonical training script: every
 decision — model, data mixture, optimizer, token budget, z-loss, evals — is stated inline
-and visible without opening another file.
+and visible without opening another file. It reproduces the DCLM 7B/1x baseline; the same
+structure scales down to smaller models by changing the `LlamaConfig` and token budget.
