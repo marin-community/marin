@@ -28,9 +28,10 @@ from marin.datakit.download.diagnostic_logs import (
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
+from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
-from experiments.pretraining_datasets.diagnostic_logs import ghalogs_normalized, tokenize_ghalogs
+from experiments.pretraining_datasets.diagnostic_logs import _ghalogs_normalized, tokenize_ghalogs
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -143,10 +144,12 @@ def test_all_sources_includes_normalized_ghalogs_public():
 
 def test_tokenize_ghalogs_reads_datakit_normalized_output():
     step = tokenize_ghalogs(tokenizer="test-tokenizer")
+    normalized = _ghalogs_normalized()
 
-    assert ghalogs_normalized.name == "normalized/ghalogs/public"
-    assert step.config.train_paths == [ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"]
-    assert step.config.validation_paths.value == []
+    assert normalized.name == "normalized/ghalogs/public"
+    cfg = materialized_config(step, "gs://prefix")
+    assert cfg.train_paths == [f"{normalized.path('gs://prefix')}/outputs/main/*.parquet"]
+    assert cfg.validation_paths == []
 
 
 def test_extract_diagnostic_logs_is_sample_capped(tmp_path):

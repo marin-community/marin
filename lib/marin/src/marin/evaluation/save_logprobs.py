@@ -32,17 +32,13 @@ from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import DatasetComponent, LmDataConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.models.loss import next_token_loss
-from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-
-from marin.execution.types import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)
 
@@ -224,39 +220,3 @@ def run_save_logprobs_on_pod(config: SaveLogprobsOnPodConfig) -> None:
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
-
-
-def default_save_logprobs(
-    checkpoint: str | InputName,
-    model: LmConfig,
-    data: LMMixtureDatasetConfig,
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 4,
-    top_k: int | None = None,
-    name: str | None = None,
-) -> ExecutorStep:
-    """Creates an ExecutorStep that saves per-token logprobs to disk."""
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-
-    return ExecutorStep(
-        name=f"analysis/logprobs/{name}",
-        fn=run_save_logprobs_on_pod,
-        config=SaveLogprobsOnPodConfig(
-            save_logprobs_config=SaveLogprobsConfig(
-                checkpoint_path=checkpoint,  # type: ignore
-                checkpoint_is_hf=checkpoint_is_hf,
-                model=model,
-                data=data,
-                trainer=TrainerConfig(
-                    tracker=NoopConfig(),
-                    per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
-                ),
-                output_path=this_output_path(),
-                top_k=top_k,
-            ),
-            resources=resource_config,
-        ),
-    )

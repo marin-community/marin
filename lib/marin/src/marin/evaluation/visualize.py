@@ -17,8 +17,6 @@ from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.types import this_output_path
-
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +32,7 @@ class VizLmConfig:
     checkpoint_is_hf: bool = False
     num_docs_per_dataset: int = 32
     per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+    output_path: str = ""
 
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False

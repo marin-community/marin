@@ -39,7 +39,6 @@ from marin.datakit.ingestion_manifest import (
     UsagePolicy,
     write_ingestion_metadata_json,
 )
-from marin.execution.types import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, versioned
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -160,13 +159,13 @@ class NpmRegistryMetadataSource:
 
 @dataclass
 class DownloadNpmRegistryMetadataConfig:
-    """Executor config for :func:`download_npm_registry_metadata`."""
+    """Config for :func:`download_npm_registry_metadata`."""
 
     source: NpmRegistryMetadataSource
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
+    output_path: str = ""
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS
-    cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
+    cache_key: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 def _package_url(source: NpmRegistryMetadataSource, package_name: str) -> str:
@@ -291,33 +290,3 @@ def download_npm_registry_metadata(config: DownloadNpmRegistryMetadataConfig) ->
         "record_count": records_written,
         "packages": package_summaries,
     }
-
-
-def npm_registry_metadata_step(
-    source: NpmRegistryMetadataSource,
-    *,
-    name: str | None = None,
-    http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
-) -> ExecutorStep[DownloadNpmRegistryMetadataConfig]:
-    """Create the executor step that materializes the bounded npm metadata slice."""
-
-    source.validate()
-    manifest = source.manifest()
-    step_name = name or f"raw/{source.slice_key}"
-    return ExecutorStep(
-        name=step_name,
-        fn=download_npm_registry_metadata,
-        config=DownloadNpmRegistryMetadataConfig(
-            source=source,
-            http_timeout_seconds=http_timeout_seconds,
-            cache_key=versioned(
-                {
-                    "slice_key": source.slice_key,
-                    "registry_base_url": source.registry_base_url,
-                    "package_names": list(source.package_names),
-                    "max_versions_per_package": source.max_versions_per_package,
-                    "content_fingerprint": manifest.fingerprint(),
-                }
-            ),
-        ),
-    )

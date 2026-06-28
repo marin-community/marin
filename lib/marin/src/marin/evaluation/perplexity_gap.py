@@ -33,9 +33,9 @@ from levanter.tokenizers import TokenizerBackend
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.types import ExecutorStep, InputName, VersionedValue, this_output_path, versioned
+from marin.execution.types import ExecutorStep, VersionedValue, versioned
 from marin.processing.tokenize import HfDatasetSpec
-from marin.utilities.executor_utils import ckpt_path_to_step_name
+from marin.utilities.checkpoint_paths import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb
 
 WANDB_PROJECT = "marin-eval"
@@ -43,7 +43,7 @@ WANDB_PROJECT = "marin-eval"
 
 @dataclass(frozen=True)
 class GapFinderModelConfig:
-    checkpoint_path: str | InputName
+    checkpoint_path: str
     model: LmConfig | None = None
     checkpoint_is_hf: bool = False
     tokenizer: str | None = None
@@ -53,7 +53,7 @@ class GapFinderModelConfig:
 
 @dataclass(frozen=True)
 class RawTextEvaluationDataset:
-    input_path: str | InputName | ExecutorStep | None = None
+    input_path: str | None = None
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
     hf_dataset_revision: str | None = None
@@ -71,7 +71,7 @@ class ModelPerplexityScoreConfig:
     datasets: dict[str, RawTextEvaluationDataset]
     resource_config: ResourceConfig
     per_device_batch_size: int = 4
-    output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
+    output_path: str = ""
     max_eval_length: int = 4096
     max_docs_per_dataset: int | None = 256
     max_doc_bytes: int | None = 32_768
@@ -84,16 +84,16 @@ class ModelPerplexityGapConfig:
     name: str
     model_a_name: str
     model_b_name: str
-    model_a_scores_path: str | InputName | ExecutorStep
-    model_b_scores_path: str | InputName | ExecutorStep
-    output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
+    model_a_scores_path: str
+    model_b_scores_path: str
+    output_path: str = ""
     wandb_tags: list[str] | None = None
     retry_key: str | None = None
     cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
 def raw_text_dataset(
-    source: str | InputName | ExecutorStep | HfDatasetSpec,
+    source: str | HfDatasetSpec,
     *,
     text_key: str = "text",
     split: str = "validation",
@@ -114,7 +114,7 @@ def raw_text_dataset(
 
 
 def supervised_text_dataset(
-    source: str | InputName | ExecutorStep | HfDatasetSpec,
+    source: str | HfDatasetSpec,
     *,
     input_key: str = "input",
     target_key: str = "target",
@@ -187,42 +187,6 @@ def model_perplexity_scores(
     )
 
 
-def model_perplexity_gap_from_scores(
-    *,
-    model_a_name: str,
-    model_b_name: str,
-    model_a_scores_path: str | InputName | ExecutorStep,
-    model_b_scores_path: str | InputName | ExecutorStep,
-    name: str,
-    resource_config: ResourceConfig | None = None,
-    wandb_tags: list[str] | None = None,
-    retry_key: str | None = None,
-) -> ExecutorStep:
-    return ExecutorStep(
-        name=f"analysis/perplexity_gap/{name}",
-        fn=find_model_perplexity_gap,
-        config=ModelPerplexityGapConfig(
-            name=name,
-            model_a_name=model_a_name,
-            model_b_name=model_b_name,
-            model_a_scores_path=model_a_scores_path,
-            model_b_scores_path=model_b_scores_path,
-            wandb_tags=wandb_tags,
-            retry_key=retry_key,
-            cache_key=versioned(
-                {
-                    "name": name,
-                    "model_a_name": model_a_name,
-                    "model_b_name": model_b_name,
-                    "wandb_tags": wandb_tags,
-                    "retry_key": retry_key,
-                }
-            ),
-        ),
-        resources=resource_config,
-    )
-
-
 def find_model_perplexity_scores(config: ModelPerplexityScoreConfig) -> None:
     datasets = {name: _to_dataset_component(dataset) for name, dataset in config.datasets.items()}
 
@@ -259,8 +223,8 @@ def find_model_perplexity_gap(config: ModelPerplexityGapConfig) -> None:
     summary = compare_scored_outputs(
         model_a_name=config.model_a_name,
         model_b_name=config.model_b_name,
-        model_a_output_path=_resolve_path(config.model_a_scores_path),
-        model_b_output_path=_resolve_path(config.model_b_scores_path),
+        model_a_output_path=config.model_a_scores_path,
+        model_b_output_path=config.model_b_scores_path,
         output_path=config.output_path,
     )
     _log_gap_report_to_wandb(config=config, summary=summary)
@@ -320,12 +284,9 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
             raise ValueError("RawTextEvaluationDataset requires either input_path or hf_dataset_id.")
         if config.split != "validation":
             raise ValueError("RawTextEvaluationDataset split is only supported for Hugging Face dataset sources.")
-        input_path = config.input_path
-        if isinstance(input_path, ExecutorStep):
-            input_path = input_path.as_input_name()
         source = UrlDatasetSourceConfig(
             train_urls=[],
-            validation_urls=[input_path],  # type: ignore[list-item]
+            validation_urls=[config.input_path],
             format=dataset_format,
         )
     return DatasetComponent(source=source, format=dataset_format, tags=list(config.tags), split=config.split)
@@ -375,14 +336,8 @@ def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:
 
 
 def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:
-    checkpoint_path: str | None
-    if isinstance(config.checkpoint_path, InputName):
-        checkpoint_path = None
-    else:
-        checkpoint_path = config.checkpoint_path
-
     return {
-        "checkpoint_path": checkpoint_path,
+        "checkpoint_path": config.checkpoint_path,
         "checkpoint_is_hf": config.checkpoint_is_hf,
         "model": config.model,
         "tokenizer": config.tokenizer,
@@ -392,14 +347,8 @@ def _cache_key_for_model(config: GapFinderModelConfig) -> dict[str, Any]:
 
 
 def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
-    input_path: str | None
-    if isinstance(dataset.input_path, (InputName, ExecutorStep)) or dataset.input_path is None:
-        input_path = None
-    else:
-        input_path = dataset.input_path
-
     return {
-        "input_path": input_path,
+        "input_path": dataset.input_path,
         "hf_dataset_id": dataset.hf_dataset_id,
         "hf_dataset_name": dataset.hf_dataset_name,
         "hf_dataset_revision": dataset.hf_dataset_revision,
@@ -409,11 +358,3 @@ def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
         "split": dataset.split,
         "tags": dataset.tags,
     }
-
-
-def _resolve_path(path: str | InputName | ExecutorStep) -> str:
-    if isinstance(path, ExecutorStep):
-        raise TypeError("ExecutorStep dependencies should be resolved to InputName before execution.")
-    if isinstance(path, InputName):
-        raise TypeError("InputName should be resolved to a concrete path before execution.")
-    return path
