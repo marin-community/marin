@@ -148,6 +148,7 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False) -> dict:
     cache.write_json(posixpath.join(prefix, "summary.json"), dict(summary_raw) if summary_raw is not None else {})
     profile = _mirror_profile(run, prefix)
 
+    author = getattr(run, "user", None)
     manifest = {
         "entity": ref.entity,
         "project": ref.project,
@@ -155,6 +156,10 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False) -> dict:
         "display_name": run.name,
         "state": run.state,
         "url": run.url,
+        "user": getattr(author, "username", None) or getattr(author, "name", None),
+        "created_at": str(getattr(run, "created_at", "") or ""),
+        "notes": getattr(run, "notes", None),
+        "tags": list(getattr(run, "tags", None) or []),
         "mirrored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "history": history,
         "profile": profile,
