@@ -7,19 +7,34 @@
   <title>buoy — wandb run viewer</title>
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <style>
-    :root { font-family: system-ui, sans-serif; }
-    body { margin: 0; color: #1a1a1a; }
-    header { padding: .6em 1em; background: #0d3b66; color: #fff; display: flex; gap: .6em; align-items: center; flex-wrap: wrap; }
-    header h1 { font-size: 1.1em; margin: 0 1em 0 0; }
-    header input { padding: .3em; border: 0; border-radius: 3px; }
-    header button { padding: .35em .8em; border: 0; border-radius: 3px; background: #f4d35e; cursor: pointer; }
-    #status { padding: .5em 1em; color: #555; }
-    #meta { padding: .2em 1em; color: #333; }
-    .tabs { display: flex; gap: .5em; padding: 0 1em; border-bottom: 1px solid #ddd; }
-    .tab { padding: .5em 1em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; }
-    .tab.active { border-color: #ddd; border-radius: 4px 4px 0 0; background: #fafafa; font-weight: 600; }
-    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: .5em; padding: 1em; }
-    .chart { border: 1px solid #eee; border-radius: 4px; }
+    :root { font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; color: #1a1a1a; background: #f7f9fc; }
+    header {
+      padding: 1em 1.5em; background: #0d3b66; color: #fff; display: flex; gap: 1.25em;
+      align-items: flex-end; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+    }
+    header h1 { font-size: 1.2em; margin: 0 .6em 0 0; align-self: center; font-weight: 650; letter-spacing: .4px; }
+    .field { display: flex; flex-direction: column; gap: .35em; }
+    .field > span { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: #aecbe8; }
+    .field input {
+      font-size: 13px; padding: .55em .7em; border: 1px solid #2c5d8a; border-radius: 7px;
+      background: #fff; color: #1a1a1a; transition: box-shadow .12s, border-color .12s;
+    }
+    .field input::placeholder { color: #9aa7b4; }
+    .field input:focus { outline: none; border-color: #f4d35e; box-shadow: 0 0 0 3px rgba(244, 211, 94, .35); }
+    #entity { width: 150px; } #project { width: 140px; } #user { width: 120px; } #run { width: 440px; max-width: 60vw; }
+    header button {
+      padding: .6em 1.3em; border: 0; border-radius: 7px; background: #f4d35e; color: #0d3b66;
+      font-weight: 650; font-size: 13px; cursor: pointer; transition: background .12s;
+    }
+    header button:hover { background: #f8e08a; }
+    #status { padding: .7em 1.5em; color: #555; }
+    #meta { padding: .3em 1.5em .6em; color: #333; }
+    .tabs { display: flex; gap: .5em; padding: .4em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
+    .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
+    .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; padding: 1.25em; }
+    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
     #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
     .hidden { display: none; }
     a { color: #0d3b66; }
@@ -28,13 +43,13 @@
 <body>
   <header>
     <h1>buoy</h1>
-    entity <input id="entity" list="entity-list" size="15" autocomplete="off">
+    <label class="field"><span>entity</span><input id="entity" list="entity-list" autocomplete="off"></label>
     <datalist id="entity-list"></datalist>
-    project <input id="project" list="project-list" size="13" autocomplete="off">
+    <label class="field"><span>project</span><input id="project" list="project-list" autocomplete="off"></label>
     <datalist id="project-list"></datalist>
-    user <input id="user" list="user-list" size="11" placeholder="(any)" autocomplete="off">
+    <label class="field"><span>user</span><input id="user" list="user-list" placeholder="(any)" autocomplete="off"></label>
     <datalist id="user-list"></datalist>
-    run <input id="run" list="run-list" size="48" placeholder="type to filter…" autocomplete="off">
+    <label class="field"><span>run</span><input id="run" list="run-list" placeholder="type to filter…" autocomplete="off"></label>
     <datalist id="run-list"></datalist>
     <button id="load">load</button>
   </header>
