@@ -25,7 +25,9 @@ import haliax.nn as hnn
 from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
-from ._src.fp8 import dot_general_with_precision, in_qdq, out_qdq
+from ._src.fp8 import dot_general_with_precision, fp8_scaled_dot_general, in_qdq, out_qdq
+from ._src.fp8_ragged import fp8_scaled_ragged_dot, MosaicWgradMode
+from .nn.ragged_dot import Implementation
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
@@ -159,9 +161,19 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     output_grad_amax_history: jnp.ndarray
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
+    # Forward-dot precision. None keeps the original DEFAULT forward (which, on the
+    # transient operand-QDQ round-trip, XLA strips to a bf16 GEMM); HIGHEST makes the
+    # forward re-fuse to a $f8 cuBLASLt matmul. Backward grad dots are always HIGHEST.
+    # See logbook GFP8-010/012.
+    forward_precision: PrecisionLike = eqx.field(static=True, default=None)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        forward_precision: PrecisionLike = None,
+    ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -170,6 +182,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
+            forward_precision=forward_precision,
         )
 
     # copied from flax
@@ -192,12 +205,140 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
 
         x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
         k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
+        # The op controls its own forward precision (self.forward_precision); the
+        # caller's `precision` is ignored on the fp8 path, as it always has been.
         y_qdq = dot_general_with_precision(
-            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
+            x_qdq, k_qdq, dimension_numbers, self.forward_precision, preferred_element_type, **kwargs
         )
         y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
 
         return y
+
+
+class Fp8DirectDotGeneralOp(OverwriteWithGradient):
+    """Direct-quantization FP8 dot — Flax's ``Fp8DirectDotGeneralOp`` (logbook GFP8-014).
+
+    Genuine E4M3 operands flow straight into the forward dot and only the output is
+    dequantized (``dq(dot(q(x), q(w)))``); the backward quantizes the output grad to E5M2.
+    Unlike :class:`Fp8DotGeneralOp` this does not rely on XLA reconstructing f8 from a
+    fake-quant round-trip, so the forward fires ``$f8`` at DEFAULT precision with no
+    ``forward_precision`` flip — the path Flax adopted after deprecating the QDQ trick.
+    Same per-tensor delayed-scaling state as :class:`Fp8DotGeneralOp`.
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+
+    @classmethod
+    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+        )
+
+    def __call__(
+        self,
+        lhs,
+        rhs,
+        dimension_numbers,
+        precision: PrecisionLike = None,
+        preferred_element_type: DTypeLike | None = None,
+        **kwargs,
+    ):
+        # Use the kernel dtype as the compute dtype (aligns with the layer dtype), as flax does;
+        # the caller's precision/preferred_element_type are ignored on the fp8 path.
+        comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+        return fp8_scaled_dot_general(
+            lhs,
+            rhs,
+            dimension_numbers,
+            preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+        )
+
+
+class Fp8RaggedDotOp(OverwriteWithGradient):
+    """Direct-quantization FP8 for the grouped (ragged) matmul — the ragged analog of
+    :class:`Fp8DirectDotGeneralOp`.
+
+    Carries the same per-tensor delayed-scaling state (input/kernel/output-grad scales and
+    amax windows) and dispatches to :func:`haliax._src.fp8_ragged.fp8_scaled_ragged_dot`.
+    Unlike the dense ops this is called as ``op(lhs, rhs, group_sizes)`` rather than through
+    a ``Linear``'s ``dot_general``, because the MoE expert path invokes ``ragged_dot``
+    directly.
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    implementation: Implementation = eqx.field(static=True, default="auto")
+    # Backward output-grad format: E5M2 (Transformer-Engine hybrid, default) or E4M3 (all-E4M3).
+    grad_dtype: DTypeLike = eqx.field(static=True, default=jnp.float8_e5m2)
+    # Weight-gradient strategy on the mosaic backend: bf16 (default) or the f8 cast-transpose wgrad.
+    mosaic_wgrad: MosaicWgradMode = eqx.field(static=True, default=MosaicWgradMode.BF16)
+
+    @classmethod
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        implementation: Implementation = "auto",
+        grad_dtype: DTypeLike = jnp.float8_e5m2,
+        mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.BF16,
+    ):
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+            implementation=implementation,
+            grad_dtype=grad_dtype,
+            mosaic_wgrad=mosaic_wgrad,
+        )
+
+    def __call__(self, lhs, rhs, group_sizes):
+        comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+        return fp8_scaled_ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            grad_dtype=self.grad_dtype,
+            implementation=self.implementation,
+            mosaic_wgrad=self.mosaic_wgrad,
+        )
 
 
 class Int8DotGeneralOp(OverwriteWithGradient):
@@ -239,6 +380,10 @@ class QuantizationConfig:
     fp8: bool = False
     int8: bool = False
 
+    fp8_forward_precision: PrecisionLike = None
+    """Forward-dot precision for FP8. None keeps the legacy DEFAULT forward (bf16 GEMM on H100);
+    ``"highest"`` makes the forward re-fuse to a $f8 cuBLASLt matmul. Accepts jax precision aliases."""
+
     def __post_init__(self):
         assert not (self.fp8 and self.int8), "Cannot use FP8 and INT8 quantization at the same time."
 
@@ -248,7 +393,14 @@ def quantize_linear_layers(tree: T, config: QuantizationConfig) -> T:
     Converts a module tree to use FP8/INT8 quantization.
     """
     if config.fp8:
-        return _quantize_linear_layers(tree, config, Fp8DotGeneralOp, config.amax_history_length, config.compute_dtype)
+        return _quantize_linear_layers(
+            tree,
+            config,
+            Fp8DotGeneralOp,
+            config.amax_history_length,
+            config.compute_dtype,
+            config.fp8_forward_precision,
+        )
     elif config.int8:
         return _quantize_linear_layers(tree, config, Int8DotGeneralOp)
     else:

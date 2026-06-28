@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 import logging
 import os
@@ -32,16 +33,116 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
+# Guard the Mosaic-GPU ragged-dot kernel; H100-only (Hopper wgmma) and absent on TPU/CPU.
+# This is the genuine f8 wgmma grouped GEMM that beats bf16 on the forward and dgrad
+# (logbook GFP8-022/024). The weight-gradient (drhs) contracts the ragged token axis; the stock
+# transposed kernel does an in-kernel operand transpose that Hopper f8 wgmma forbids (GFP8-024/025),
+# so it is served by our cast-transpose adaptation `_transposed_ragged_dot` (token-contiguous f8
+# operands, no in-kernel transpose). Until that passes H100 parity the fp8 path keeps a bf16 drhs
+# fallback (GFP8-028).
+_has_pallas_mosaic = False
+try:
+    from jax.experimental.pallas.ops.gpu import ragged_dot_mgpu as _ragged_dot_mgpu  # type: ignore[assignment]
+    from haliax._src.transposed_ragged_dot_mgpu import (  # type: ignore[assignment]
+        transposed_ragged_dot as _transposed_ragged_dot,
+    )
+
+    _has_pallas_mosaic = True
+except (ImportError, ModuleNotFoundError):
+    pass
+
 # Adapted from openxla/tokamax@ad75b704:
 # tokamax/_src/ops/ragged_dot/pallas_triton.py. In particular:
 # _ragged_dot_kernel/_ragged_dot for the default layout,
 # _ragged_contracting_dim_dot_kernel/_ragged_contracting_dim_dot for drhs, and
 # PallasTritonRaggedDot._fwd for the VJP layout dispatch.
-Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
+Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla", "mosaic"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
+_TRITON_DEFAULT_BLOCK_M = 128
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
+_TRITON_DEFAULT_BLOCK_K = 32
+_TRITON_DEFAULT_NUM_WARPS = 4
+_TRITON_DEFAULT_NUM_STAGES = 4
+
+
+@dataclasses.dataclass(frozen=True)
+class MosaicBlockConfig:
+    """Block/scheduling config for the Mosaic-GPU ragged-dot kernel.
+
+    The kernel exposes no defaults, so every call supplies one of these. ``block_k`` must
+    divide the contraction dim K; ``block_m``/``block_n`` tile the token and output axes.
+    Pass an explicit config to autotune in-process.
+
+    The default ``128/128/128 steps=6 grid_block_n=4`` won the GFP8-029 sweep at the real Grug
+    regime (T=8192/D=2048/F=5632/E=8): lowest total time across all four mosaic-served GEMMs
+    (fwd13/fwd2/dlhs13/dlhs2), beating bf16-Triton per-GEMM by ~1.47x/1.49x on the forward and
+    2.83x/2.30x on the dgrad (29-47% of f8 roofline). It supersedes the GFP8-027 winner
+    ``128/128/256 steps=2``: at f8 (1B) a ``block_k=256`` tile is ~64KB smem/stage, capping the
+    pipeline at ~3 stages, whereas ``block_k=128`` (~32KB/stage) frees smem for a deep ``steps=6``
+    pipeline (~224KB) — hiding operand-load latency is the dominant MFU lever here. ``grid_block_n=4``
+    adds L2 reuse via the planar-snake tile order. A single global config is within ~1% of a
+    per-role tuned table here, so no per-shape table is kept.
+    """
+
+    block_m: int = 128
+    block_n: int = 128
+    block_k: int = 128
+    max_concurrent_steps: int = 6
+    grid_block_n: int = 4
+
+
+_DEFAULT_MOSAIC_CONFIG = MosaicBlockConfig()
+
+
+def _env_int(name: str, default: int) -> int:
+    """Experiment knob: integer env override for Triton tile/scheduling params.
+
+    Same A/B-benchmarking mechanism as ``RAGGED_DOT_IMPL`` below; lets a single built
+    image sweep block sizes / warps / stages across separate processes without a rebuild.
+    """
+    value = os.environ.get(name)
+    return int(value) if value is not None else default
+
+
+# f8 compute mode for the mixed-dtype grad-dots (E5M2 output grad x E4M3 operand):
+#   "passthrough" → feed f8 operands straight to pl.dot (mixed-f8 MMA on Hopper)
+#   "e4m3"        → cast both to E4M3 (single-type f8 MMA)
+#   "bf16"        → upcast both to bf16 (no f8 MMA; A/B control)
+_F8_COMPUTE_MODE = os.environ.get("RAGGED_DOT_F8_COMPUTE", "passthrough")
+
+
+def _ragged_cast(a: jax.Array, b: jax.Array) -> tuple[jax.Array, jax.Array]:
+    """Cast a dot's operands to a common compute dtype before the matmul.
+
+    For two 8-bit-float operands we skip ``jnp.result_type`` — which has no promotion
+    path for (E5M2, E4M3) and raises — and (by default) keep them as-is so the f8 MMA
+    engages. Non-f8 operands keep the original promotion behavior.
+    """
+    if a.dtype.itemsize == 1 and b.dtype.itemsize == 1:
+        if _F8_COMPUTE_MODE == "bf16":
+            return a.astype(jnp.bfloat16), b.astype(jnp.bfloat16)
+        if _F8_COMPUTE_MODE == "e4m3":
+            return a.astype(jnp.float8_e4m3fn), b.astype(jnp.float8_e4m3fn)
+        return a, b
+    dtype = jnp.result_type(a, b)
+    return a.astype(dtype), b.astype(dtype)
+
+
+def _ragged_dot(a: jax.Array, b: jax.Array, *, trans_a: bool = False) -> jax.Array:
+    """f8-tolerant block matmul with an f32 accumulator.
+
+    ``pl.dot`` infers its output dtype via ``jnp.promote_types``, which raises on
+    (E5M2, E4M3) — the backward grad-dot — before it ever reaches the tensor-core op.
+    We cast the operands and call ``lax.dot_general`` directly with an explicit f32
+    accumulator (exactly what ``pl.dot`` does internally, minus the promotion guard),
+    so mixed-f8 operands lower to an f8 tensor-core dot. ``trans_a`` contracts ``a``'s
+    leading axis (the drhs layout's ``a.T @ b``); ``b`` always contracts axis 0.
+    """
+    a, b = _ragged_cast(a, b)
+    a_contract = 0 if trans_a else 1
+    return jax.lax.dot_general(a, b, (((a_contract,), (0,)), ((), ())), preferred_element_type=jnp.float32)
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -105,25 +206,44 @@ def _triton_ragged_dot_kernel(
             span_k = pl.ds(start_k, block_k)
             a = plgpu.load(a_ref.at[span_m, span_k])
             b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
-            dtype = jnp.result_type(a, b)
-            return acc + pl.dot(a.astype(dtype), b.astype(dtype))
+            return acc + _ragged_dot(a, b)
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         mask = (start_m + jnp.arange(block_m)) < hi
-        plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
+        plgpu.store(
+            out_ref.at[span_m, pl.ds(0, out_ref.shape[1])],
+            acc.astype(out_ref.dtype),
+            mask=mask[:, None],
+        )
 
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
-    block_m = min(128, int(pl.next_power_of_2(m)))
-    max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
-    block_n = min(max_block_n, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_m = min(
+        _env_int("RAGGED_DOT_BLOCK_M", _TRITON_DEFAULT_BLOCK_M),
+        int(pl.next_power_of_2(m)),
+    )
+    default_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
+    block_n = min(_env_int("RAGGED_DOT_BLOCK_N", default_block_n), int(pl.next_power_of_2(n)))
+    block_k = min(
+        _env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K),
+        int(pl.next_power_of_2(k)),
+    )
     return block_m, block_n, block_k
 
 
-def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
-    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
+def _triton_default_pallas_call(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    out_dtype: jnp.dtype | None = None,
+) -> jax.Array:
+    """Raw Pallas-Triton grouped matmul for the default ragged-dot layout.
+
+    ``out_dtype`` overrides the output (and store-cast) dtype; defaults to ``lhs.dtype``.
+    The f8 path passes a wider ``out_dtype`` so the f32 accumulator is not truncated back
+    to the f8 operand dtype on store.
+    """
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
 
@@ -133,7 +253,7 @@ def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax
 
     return pl.pallas_call(
         lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(a, b, lo, hi, out, block_m=block_m, block_k=block_k),
-        out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+        out_shape=jax.ShapeDtypeStruct((m, n), out_dtype or lhs.dtype),
         in_specs=[
             pl.no_block_spec,
             pl.BlockSpec((None, k, block_n), lambda _, j, e: (e, 0, j)),
@@ -142,7 +262,10 @@ def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax
         ],
         out_specs=pl.BlockSpec((m, block_n), lambda _, j, __: (0, j)),
         grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n), num_groups),
-        compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+        compiler_params=plgpu.CompilerParams(
+            num_warps=_env_int("RAGGED_DOT_NUM_WARPS", _TRITON_DEFAULT_NUM_WARPS),
+            num_stages=_env_int("RAGGED_DOT_NUM_STAGES", _TRITON_DEFAULT_NUM_STAGES),
+        ),
     )(lhs, rhs, cum_rows[:-1], cum_rows[1:])
 
 
@@ -170,8 +293,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
             other = 0.0
         a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
-        dtype = jnp.result_type(a, b)
-        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
+        return acc + _ragged_dot(a, b, trans_a=True)
 
     num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
@@ -184,14 +306,24 @@ def _triton_ragged_contracting_dim_pallas_call(
     lhs: jax.Array,
     rhs: jax.Array,
     group_sizes: jax.Array,
+    out_dtype: jnp.dtype | None = None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for drhs-style ragged contraction."""
     k, m = lhs.shape
     _, n = rhs.shape
 
-    block_m = min(128, int(pl.next_power_of_2(m)))
-    block_n = min(128, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_m = min(
+        _env_int("RAGGED_DOT_BLOCK_M", _TRITON_DEFAULT_BLOCK_M),
+        int(pl.next_power_of_2(m)),
+    )
+    block_n = min(
+        _env_int("RAGGED_DOT_BLOCK_N", _TRITON_DEFAULT_BLOCK_N),
+        int(pl.next_power_of_2(n)),
+    )
+    block_k = min(
+        _env_int("RAGGED_DOT_BLOCK_K", _TRITON_DEFAULT_BLOCK_K),
+        int(pl.next_power_of_2(k)),
+    )
 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 
@@ -206,7 +338,7 @@ def _triton_ragged_contracting_dim_pallas_call(
                 block_m=block_m,
                 block_k=block_k,
             ),
-            out_shape=jax.ShapeDtypeStruct((m, n), lhs.dtype),
+            out_shape=jax.ShapeDtypeStruct((m, n), out_dtype or lhs.dtype),
             in_specs=[
                 pl.BlockSpec((k, block_m), lambda i, j: (0, i)),
                 pl.BlockSpec((k, block_n), lambda i, j: (0, j)),
@@ -215,7 +347,10 @@ def _triton_ragged_contracting_dim_pallas_call(
             ],
             out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
             grid=(pl.cdiv(m, block_m), pl.cdiv(n, block_n)),
-            compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
+            compiler_params=plgpu.CompilerParams(
+                num_warps=_env_int("RAGGED_DOT_NUM_WARPS", _TRITON_DEFAULT_NUM_WARPS),
+                num_stages=_env_int("RAGGED_DOT_NUM_STAGES", _TRITON_DEFAULT_NUM_STAGES),
+            ),
         )(lhs, rhs, lo, hi)
 
     return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])
@@ -249,15 +384,96 @@ def _triton_pallas_call(
     rhs: jax.Array,
     group_sizes: jax.Array,
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
+    out_dtype: jnp.dtype | None = None,
 ) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for supported ragged-dot layouts."""
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
-        return _triton_default_pallas_call(lhs, rhs, group_sizes)
+        return _triton_default_pallas_call(lhs, rhs, group_sizes, out_dtype)
     if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
-        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes)
+        return _triton_default_pallas_call(lhs, rhs.mT, group_sizes, out_dtype)
     if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
-        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes)
+        return _triton_ragged_contracting_dim_pallas_call(lhs, rhs, group_sizes, out_dtype)
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
+
+
+def _mosaic_ragged_dot(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    config: MosaicBlockConfig = _DEFAULT_MOSAIC_CONFIG,
+) -> jax.Array:
+    """Raw Mosaic-GPU ragged dot in the K-contiguous (``transpose_rhs``) layout the f8 wgmma
+    requires, with the given block config."""
+    return _ragged_dot_mgpu.ragged_dot(
+        lhs,
+        rhs,
+        group_sizes=group_sizes,
+        block_m=config.block_m,
+        block_n=config.block_n,
+        block_k=config.block_k,
+        max_concurrent_steps=config.max_concurrent_steps,
+        grid_block_n=config.grid_block_n,
+        transpose_rhs=True,
+    )
+
+
+def _mosaic_pallas_call(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
+    out_dtype: jnp.dtype | None = None,
+    config: MosaicBlockConfig = _DEFAULT_MOSAIC_CONFIG,
+) -> jax.Array:
+    """Genuine f8 Mosaic-GPU grouped GEMM for the forward and dlhs layouts (H100 only).
+
+    The Hopper f8 tensor core only consumes a K-contiguous operand, so the contraction axis is
+    presented contiguous via ``transpose_rhs=True`` with the right rhs layout:
+      - forward (contract K): rhs ``W[G,K,N]`` fed as ``[G,N,K]`` → out ``[M,N]``
+      - dlhs    (contract N): rhs ``W[G,K,N]`` fed natural        → out ``[M,K]``
+    The drhs (weight-gradient) layout contracts the ragged token axis. Hopper f8 wgmma forbids the
+    in-kernel operand transpose the stock transposed kernel uses (GFP8-024/025), so it is served by
+    `_transposed_ragged_dot`, which consumes cast-transposed token-contiguous f8 operands
+    (``lhs[M,K] -> [K,M]``, ``dout[M,N] -> [N,M]``) so the wgmma needs no real transpose. Output is
+    the dense ``[G,K,N]`` weight gradient in ``out_dtype``.
+    """
+    if not _has_pallas_mosaic:
+        raise NotImplementedError("Mosaic-GPU ragged-dot backend is not available (H100-only)")
+    if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
+        out = _mosaic_ragged_dot(lhs, jnp.swapaxes(rhs, 1, 2), group_sizes, config)
+    elif ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
+        out = _mosaic_ragged_dot(lhs, rhs, group_sizes, config)
+    elif ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
+        # Cast-transpose both operands so the contraction (token) axis is contiguous (last axis),
+        # then the f8-legal no-in-kernel-transpose wgrad kernel. Output is already in out_dtype.
+        lhs_t = jnp.swapaxes(lhs, 0, 1)  # [M=tok, K] -> [K, M=tok]
+        g_t = jnp.swapaxes(rhs, 0, 1)  # [M=tok, N] -> [N, M=tok]
+        return _transposed_ragged_dot(
+            lhs_t, g_t, group_sizes, out_dtype=out_dtype if out_dtype is not None else jnp.float32
+        )
+    else:
+        raise NotImplementedError(
+            f"Unsupported ragged dot dimension numbers for Mosaic: {ragged_dot_dimension_numbers}"
+        )
+    return out if out_dtype is None else out.astype(out_dtype)
+
+
+def _mosaic_wgrad_transposed(
+    lhs_t: jax.Array,  # [K=hidden, tokens], token-contiguous f8 (already cast-transposed)
+    g_t: jax.Array,  # [N=out, tokens],   token-contiguous f8 (already cast-transposed)
+    group_sizes: jax.Array,
+    out_dtype: jnp.dtype,
+) -> jax.Array:  # [G, K=hidden, N=out]
+    """f8 weight-gradient on already-cast-transposed operands — no ``swapaxes``.
+
+    The ``_DRHS`` branch of :func:`_mosaic_pallas_call` transposes its f8 operands with XLA
+    ``swapaxes`` (an uncoalesced 1-byte transpose). When the operands are produced by the fused
+    cast-transpose (``haliax.quantization``'s f8 ragged path), they already arrive token-contiguous,
+    so the wgrad kernel is called directly. Both operands must share one f8 dtype (Hopper wgmma).
+    """
+    if not _has_pallas_mosaic:
+        raise NotImplementedError("Mosaic-GPU wgrad kernel is not available (H100-only)")
+    return _transposed_ragged_dot(lhs_t, g_t, group_sizes, out_dtype=out_dtype)
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
@@ -306,7 +522,9 @@ def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array)
     )
 
 
-def _preferred_implementations(implementation: Implementation) -> tuple[Implementation, ...]:
+def _preferred_implementations(
+    implementation: Implementation,
+) -> tuple[Implementation, ...]:
     # Allow override via env var for A/B benchmarking:
     #   RAGGED_DOT_IMPL=xla     → force XLA
     #   RAGGED_DOT_IMPL=triton  → force Triton
@@ -333,6 +551,14 @@ def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes:
         return _ragged_dot_triton_impl(lhs, rhs, group_sizes)
     if name == "xla":
         return _ragged_dot_xla_impl(lhs, rhs, group_sizes)
+    if name == "mosaic":
+        # Mosaic is an f8-only backend wired into the FP8 grouped-dot path
+        # (haliax._src.fp8_ragged), where the fwd/bwd contractions are dispatched explicitly.
+        # It has no differentiable bf16 wrapper here, so reject it on the dense public API.
+        raise NotImplementedError(
+            "implementation='mosaic' is only available via the FP8 ragged-dot path "
+            "(Fp8RaggedDotOp), not the bf16 ragged_dot."
+        )
     raise ValueError(f"Unknown ragged_dot implementation: {name}")
 
 
@@ -392,4 +618,4 @@ def ragged_dot(
     return out
 
 
-__all__ = ["Implementation", "ragged_dot"]
+__all__ = ["Implementation", "MosaicBlockConfig", "ragged_dot"]
