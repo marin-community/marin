@@ -85,9 +85,11 @@ PYEOF
 #    built against 9.12; the synced env ships 9.10, which leaves the dnn handle null). Fail loudly
 #    if the toolchain layout is not where we expect rather than dangling-symlinking past it.
 N="$SP/nvidia/cu13"
+# ptxas (PTX->SASS) is required to JIT mosaic kernels; nvlink/nvdisasm/fatbinary are best-effort —
+# not every nvidia-cu13 wheel ships the disassembler/packager, and mosaic execution does not need them.
+[[ -x "$N/bin/ptxas" ]] || { echo "FATAL: missing CUDA toolchain binary $N/bin/ptxas" >&2; exit 1; }
 for t in ptxas nvlink nvdisasm fatbinary; do
-  [[ -x "$N/bin/$t" ]] || { echo "FATAL: missing CUDA toolchain binary $N/bin/$t" >&2; exit 1; }
-  ln -sf "$N/bin/$t" /app/.venv/bin/$t
+  if [[ -x "$N/bin/$t" ]]; then ln -sf "$N/bin/$t" /app/.venv/bin/$t; else echo "warn: optional toolchain binary $N/bin/$t absent; skipping"; fi
 done
 [[ -f "$N/nvvm/libdevice/libdevice.10.bc" ]] || { echo "FATAL: missing $N/nvvm/libdevice/libdevice.10.bc" >&2; exit 1; }
 ln -sf "$N/nvvm/libdevice/libdevice.10.bc" /app/libdevice.10.bc
