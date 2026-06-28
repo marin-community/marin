@@ -22,8 +22,8 @@ The model:
   everything pulled from ``ctx``) is recorded for an advisory drift check, never in the path.
 
 Pre-existing data is brought in with :func:`adopt`. :meth:`Lazy.run`/:meth:`Lazy.resolve` are
-the entry points; :func:`run` runs several handles together; :func:`apply` is the generic
-single-step builder.
+the entry points; :func:`run` runs several handles together; :func:`apply` (keyword-input form)
+and :func:`derived` (config-object form) are the generic single-step builders.
 """
 
 import inspect
@@ -56,8 +56,8 @@ from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
 
-# A calendar version: YYYYMMDD, optionally .N for two immutable revisions on the same day.
-_CALVER_RE = re.compile(r"^\d{8}(\.\d+)?$")
+# A calendar version: YYYY.MM.DD, optionally .N for two immutable revisions on the same day.
+_CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
 
 
 def _artifact_path(name: str, version: str, prefix: str) -> str:
@@ -84,7 +84,7 @@ def _validate_segment(label: str, value: str) -> None:
 
 
 def _validate_version(version: str) -> None:
-    """A version is a calendar version ``YYYYMMDD[.N]`` or a mutable ``dev``/``<label>-dev``.
+    """A version is a calendar version ``YYYY.MM.DD[.N]`` or a mutable ``dev``/``<label>-dev``.
 
     ``v1``-style and other ad-hoc strings are rejected: an artifact's version is the author's
     explicit statement of "when this recipe was frozen", not an opaque tag.
@@ -94,7 +94,7 @@ def _validate_version(version: str) -> None:
         return
     if not _CALVER_RE.match(version):
         raise ValueError(
-            f"version {version!r} must be a calendar version YYYYMMDD (optionally YYYYMMDD.N) "
+            f"version {version!r} must be a calendar version YYYY.MM.DD (optionally YYYY.MM.DD.N) "
             "or a mutable 'dev'/'<label>-dev'"
         )
 
@@ -477,6 +477,35 @@ def _resolve_input(value: Any, ctx: RunContext) -> Any:
     if isinstance(value, dict):
         return {key: _resolve_input(item, ctx) for key, item in value.items()}
     return value
+
+
+def derived(
+    name: str,
+    *,
+    fn: Callable[[Any], "Artifact | None"],
+    build_config: Callable[[RunContext], Any],
+    version: str,
+    deps: Iterable["Lazy"] = (),
+    pin: str | None = None,
+    kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
+) -> "Lazy[T]":
+    """The generic single-step builder, config-object form: ``fn(build_config(ctx))``.
+
+    The tier beneath :func:`apply` for a step whose function takes a typed config object (a
+    dataclass/pydantic config) rather than keyword inputs, or whose inputs derive from a dep path
+    (``f"{ctx.path(dep)}/sub"``) — neither of which ``apply`` expresses. ``build_config`` pulls dep
+    paths and ``ctx.out`` itself; pass the same handles in ``deps`` so they materialize first.
+    ``kind`` selects the produced :class:`~marin.execution.artifact.Artifact` type. To dispatch
+    ``fn`` on Fray, wrap it with :func:`~marin.execution.remote.remote` yourself — the lazy layer
+    adds no remote behavior. ``pin`` references existing data instead of recomputing.
+    """
+    return Lazy(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=fn, build_config=build_config, deps=tuple(deps)),
+        result_type=kind,
+        override_path=pin,
+    )
 
 
 def apply(
