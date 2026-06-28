@@ -5,12 +5,12 @@
 
 Architecture (the pooling step is the point):
 
-    token ids ──embed──▶ [T, E]
-              ──pool over windows of ``pool_window``──▶ [S, E_pool]   (S = T / w)
-              ──input proj + learned position──▶ [S, D]
-              ──N pre-norm transformer layers──▶ [S, D]
-              ──final pool over S──▶ [D]
-              ──head──▶ scalar quality (sigmoid)
+    token ids ──embed──▶ [B, T, E]
+              ──pool over windows of ``pool_window``──▶ [B, S, E_pool]   (S = T / w)
+              ──input proj + learned position──▶ [B, S, D]
+              ──N pre-norm transformer layers──▶ [B, S, D]
+              ──final pool over S──▶ [B, D]
+              ──head──▶ scalar quality logit (sigmoid at the loss/eval)
 
 Pooling at ``w``-token boundaries amortizes the transformer's per-token cost by
 ``w`` (~64x), which is what keeps the model under ~1M FLOPs/token while still
@@ -19,10 +19,10 @@ embeddings collapses to one super-token: plain ``mean`` / ``max``, the
 multi-statistic ``meanmaxmin`` concat (captures spread, not just centroid, which
 a bag-of-words mean cannot), or a learned ``attn`` pool.
 
-The model is written per-example (no batch axis) and ``jax.vmap``-ed over the
-batch by the trainer. ``PAD_ID`` (0) positions are masked everywhere: pooling
-ignores them, empty windows become inactive super-tokens, and attention never
-attends to inactive super-tokens.
+The model is written batched (leading ``B`` axis) with explicit einsums and a
+bf16 matmul cast so XLA emits dense MXU matmuls on TPU. ``PAD_ID`` (0) positions
+are masked everywhere: pooling ignores them, empty windows become inactive
+super-tokens, and attention never attends to inactive super-tokens.
 """
 
 import math
@@ -38,6 +38,7 @@ from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID
 POOL_KINDS = ("mean", "max", "meanmaxmin", "attn")
 FINAL_POOLS = ("mean", "attn")
 NEG_INF = -1e30
+COMPUTE_DTYPE = jnp.bfloat16
 
 
 @dataclass(frozen=True)
@@ -84,8 +85,7 @@ class FastTransformerConfig:
         s = self.num_super_tokens
         t = self.max_tokens
         d_ff = d * self.mlp_ratio
-        # input projection of pooled vectors -> hidden
-        proj = 2 * self.pool_out_dim * d * s
+        proj = 2 * self.pool_out_dim * d * s  # input projection of pooled vectors
         attn_proj = 2 * (4 * d * d) * s  # qkv (3) + output (1) projections
         attn_scores = 2 * (2 * s * s * d)  # QK^T and AV
         mlp = 2 * (2 * d * d_ff) * s
@@ -95,164 +95,161 @@ class FastTransformerConfig:
         return total / t
 
 
-def _vmap_linear(layer: eqx.nn.Linear, x: Array) -> Array:
-    return jax.vmap(layer)(x)
+def _glorot(key: PRNGKeyArray, shape: tuple[int, ...]) -> Array:
+    fan_in, fan_out = shape[0], shape[-1]
+    return jax.random.normal(key, shape) * math.sqrt(2.0 / (fan_in + fan_out))
 
 
-class MultiHeadAttention(eqx.Module):
-    """Masked multi-head self-attention over super-tokens."""
-
-    qkv: eqx.nn.Linear
-    out: eqx.nn.Linear
-    num_heads: int = eqx.field(static=True)
-
-    def __init__(self, dim: int, num_heads: int, *, key: PRNGKeyArray):
-        k1, k2 = jax.random.split(key)
-        self.qkv = eqx.nn.Linear(dim, 3 * dim, use_bias=True, key=k1)
-        self.out = eqx.nn.Linear(dim, dim, use_bias=True, key=k2)
-        self.num_heads = num_heads
-
-    def __call__(self, x: Array, valid: Array) -> Array:
-        s, d = x.shape
-        h = self.num_heads
-        hd = d // h
-        qkv = _vmap_linear(self.qkv, x)  # [s, 3d]
-        q, k, v = jnp.split(qkv, 3, axis=-1)
-        q = q.reshape(s, h, hd).transpose(1, 0, 2)  # [h, s, hd]
-        k = k.reshape(s, h, hd).transpose(1, 0, 2)
-        v = v.reshape(s, h, hd).transpose(1, 0, 2)
-        scores = jnp.einsum("hqd,hkd->hqk", q, k) / math.sqrt(hd)
-        key_mask = valid.astype(bool)[None, None, :]  # [1, 1, s]
-        scores = jnp.where(key_mask, scores, NEG_INF)
-        attn = jax.nn.softmax(scores, axis=-1)
-        ctx = jnp.einsum("hqk,hkd->hqd", attn, v)  # [h, s, hd]
-        ctx = ctx.transpose(1, 0, 2).reshape(s, d)
-        return _vmap_linear(self.out, ctx)
+def _matmul(x: Array, w: Array) -> Array:
+    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation/output."""
+    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
+    return out.astype(jnp.float32)
 
 
-class MLP(eqx.Module):
-    fc1: eqx.nn.Linear
-    fc2: eqx.nn.Linear
+def _layer_norm(x: Array, gamma: Array, beta: Array) -> Array:
+    mu = x.mean(axis=-1, keepdims=True)
+    var = x.var(axis=-1, keepdims=True)
+    return (x - mu) * jax.lax.rsqrt(var + 1e-5) * gamma + beta
 
-    def __init__(self, dim: int, hidden: int, *, key: PRNGKeyArray):
-        k1, k2 = jax.random.split(key)
-        self.fc1 = eqx.nn.Linear(dim, hidden, key=k1)
-        self.fc2 = eqx.nn.Linear(hidden, dim, key=k2)
 
-    def __call__(self, x: Array) -> Array:
-        return _vmap_linear(self.fc2, jax.nn.gelu(_vmap_linear(self.fc1, x)))
+def _dropout(x: Array, p: float, key: PRNGKeyArray | None, inference: bool) -> Array:
+    if inference or p == 0.0 or key is None:
+        return x
+    keep = jax.random.bernoulli(key, 1.0 - p, x.shape)
+    return jnp.where(keep, x / (1.0 - p), 0.0)
 
 
 class TransformerLayer(eqx.Module):
-    norm1: eqx.nn.LayerNorm
-    attn: MultiHeadAttention
-    norm2: eqx.nn.LayerNorm
-    mlp: MLP
-    dropout: eqx.nn.Dropout
+    """Batched masked pre-norm transformer block over super-tokens."""
+
+    ln1_g: Array
+    ln1_b: Array
+    ln2_g: Array
+    ln2_b: Array
+    wqkv: Array  # [D, 3D]
+    wo: Array  # [D, D]
+    w1: Array  # [D, D_ff]
+    w2: Array  # [D_ff, D]
+    num_heads: int = eqx.field(static=True)
+    dropout: float = eqx.field(static=True)
 
     def __init__(self, dim: int, num_heads: int, mlp_ratio: int, dropout: float, *, key: PRNGKeyArray):
-        ka, km = jax.random.split(key)
-        self.norm1 = eqx.nn.LayerNorm(dim)
-        self.attn = MultiHeadAttention(dim, num_heads, key=ka)
-        self.norm2 = eqx.nn.LayerNorm(dim)
-        self.mlp = MLP(dim, dim * mlp_ratio, key=km)
-        self.dropout = eqx.nn.Dropout(dropout)
+        kqkv, ko, k1, k2 = jax.random.split(key, 4)
+        self.ln1_g = jnp.ones(dim)
+        self.ln1_b = jnp.zeros(dim)
+        self.ln2_g = jnp.ones(dim)
+        self.ln2_b = jnp.zeros(dim)
+        self.wqkv = _glorot(kqkv, (dim, 3 * dim))
+        self.wo = _glorot(ko, (dim, dim))
+        self.w1 = _glorot(k1, (dim, dim * mlp_ratio))
+        self.w2 = _glorot(k2, (dim * mlp_ratio, dim))
+        self.num_heads = num_heads
+        self.dropout = dropout
 
-    def __call__(self, x, valid, *, key, inference):
+    def __call__(self, x: Array, valid: Array, *, key: PRNGKeyArray | None, inference: bool) -> Array:
+        b, s, d = x.shape
+        h, hd = self.num_heads, d // self.num_heads
         ka, km = (None, None) if key is None else jax.random.split(key)
-        normed = jax.vmap(self.norm1)(x)
-        x = x + self.dropout(self.attn(normed, valid), key=ka, inference=inference)
-        normed = jax.vmap(self.norm2)(x)
-        x = x + self.dropout(self.mlp(normed), key=km, inference=inference)
+
+        normed = _layer_norm(x, self.ln1_g, self.ln1_b)
+        qkv = _matmul(normed, self.wqkv).reshape(b, s, 3, h, hd)
+        q, k, v = qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2]  # [b, s, h, hd]
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q, k) / math.sqrt(hd)
+        scores = jnp.where(valid[:, None, None, :].astype(bool), scores, NEG_INF)
+        attn = jax.nn.softmax(scores, axis=-1)
+        ctx = jnp.einsum("bhqk,bkhd->bqhd", attn, v).reshape(b, s, d)
+        x = x + _dropout(_matmul(ctx, self.wo), self.dropout, ka, inference)
+
+        normed = _layer_norm(x, self.ln2_g, self.ln2_b)
+        mlp = _matmul(jax.nn.gelu(_matmul(normed, self.w1)), self.w2)
+        x = x + _dropout(mlp, self.dropout, km, inference)
         return x
 
 
 class FastTransformer(eqx.Module):
     config: FastTransformerConfig = eqx.field(static=True)
-    embed: eqx.nn.Embedding
-    pool_query: Array  # [embed_dim], learned query for attn window pooling
-    input_proj: eqx.nn.Linear
-    pos_embed: Array  # [S, hidden]
+    embed: Array  # [vocab, E]
+    pool_query: Array  # [E]
+    proj_w: Array  # [pool_out_dim, D]
+    proj_b: Array  # [D]
+    pos_embed: Array  # [S, D]
     layers: list[TransformerLayer]
-    final_query: Array  # [hidden], learned query for attn final pooling
-    head_norm: eqx.nn.LayerNorm
-    head: eqx.nn.Linear
-    embed_dropout: eqx.nn.Dropout
+    final_query: Array  # [D]
+    head_g: Array
+    head_b: Array
+    head_w: Array  # [D, 1]
 
     def __init__(self, config: FastTransformerConfig, *, key: PRNGKeyArray):
-        keys = jax.random.split(key, 6)
+        ke, kpq, kpr, kpos, klayers, kfq, khead = jax.random.split(key, 7)
         self.config = config
-        self.embed = eqx.nn.Embedding(config.vocab_size, config.embed_dim, key=keys[0])
-        self.pool_query = jax.random.normal(keys[1], (config.embed_dim,)) * 0.02
-        self.input_proj = eqx.nn.Linear(config.pool_out_dim, config.hidden_dim, key=keys[2])
-        self.pos_embed = jax.random.normal(keys[3], (config.num_super_tokens, config.hidden_dim)) * 0.02
-        layer_keys = jax.random.split(keys[4], config.num_layers)
+        self.embed = jax.random.normal(ke, (config.vocab_size, config.embed_dim)) * 0.02
+        self.pool_query = jax.random.normal(kpq, (config.embed_dim,)) * 0.02
+        self.proj_w = _glorot(kpr, (config.pool_out_dim, config.hidden_dim))
+        self.proj_b = jnp.zeros(config.hidden_dim)
+        self.pos_embed = jax.random.normal(kpos, (config.num_super_tokens, config.hidden_dim)) * 0.02
+        layer_keys = jax.random.split(klayers, max(1, config.num_layers))
         self.layers = [
             TransformerLayer(config.hidden_dim, config.num_heads, config.mlp_ratio, config.dropout, key=lk)
-            for lk in layer_keys
+            for lk in layer_keys[: config.num_layers]
         ]
-        self.final_query = jax.random.normal(keys[5], (config.hidden_dim,)) * 0.02
-        self.head_norm = eqx.nn.LayerNorm(config.hidden_dim)
-        self.head = eqx.nn.Linear(config.hidden_dim, 1, key=keys[0])
-        self.embed_dropout = eqx.nn.Dropout(config.dropout)
+        self.final_query = jax.random.normal(kfq, (config.hidden_dim,)) * 0.02
+        self.head_g = jnp.ones(config.hidden_dim)
+        self.head_b = jnp.zeros(config.hidden_dim)
+        self.head_w = _glorot(khead, (config.hidden_dim, 1))
 
-    def _pool_windows(self, emb: Array, mask: Array):
-        """Collapse windows of ``pool_window`` tokens to super-tokens.
-
-        Returns (pooled [S, pool_out_dim], valid [S]).
-        """
+    def _pool_windows(self, emb: Array, mask: Array) -> tuple[Array, Array]:
+        """Collapse windows of ``pool_window`` tokens. Returns (pooled, valid)."""
         cfg = self.config
+        b = emb.shape[0]
         s, w, e = cfg.num_super_tokens, cfg.pool_window, cfg.embed_dim
-        wemb = emb.reshape(s, w, e)
-        wmask = mask.reshape(s, w)
-        counts = wmask.sum(axis=1, keepdims=True)  # [s, 1]
-        valid = (counts[:, 0] > 0).astype(jnp.float32)  # [s]
+        wemb = emb.reshape(b, s, w, e)
+        wmask = mask.reshape(b, s, w)
+        counts = wmask.sum(axis=2, keepdims=True)  # [b, s, 1]
+        valid = (counts[..., 0] > 0).astype(jnp.float32)  # [b, s]
         denom = jnp.maximum(counts, 1.0)
+        m3 = wmask[..., None]
 
         if cfg.pool_kind == "mean":
-            pooled = (wemb * wmask[..., None]).sum(axis=1) / denom
+            pooled = (wemb * m3).sum(axis=2) / denom
         elif cfg.pool_kind == "max":
-            pooled = jnp.where(wmask[..., None] > 0, wemb, NEG_INF).max(axis=1)
-            pooled = jnp.where(valid[:, None] > 0, pooled, 0.0)
+            pooled = jnp.where(m3 > 0, wemb, NEG_INF).max(axis=2)
+            pooled = jnp.where(valid[..., None] > 0, pooled, 0.0)
         elif cfg.pool_kind == "meanmaxmin":
-            mean = (wemb * wmask[..., None]).sum(axis=1) / denom
-            mx = jnp.where(wmask[..., None] > 0, wemb, NEG_INF).max(axis=1)
-            mn = jnp.where(wmask[..., None] > 0, wemb, -NEG_INF).min(axis=1)
-            mx = jnp.where(valid[:, None] > 0, mx, 0.0)
-            mn = jnp.where(valid[:, None] > 0, mn, 0.0)
+            mean = (wemb * m3).sum(axis=2) / denom
+            mx = jnp.where(valid[..., None] > 0, jnp.where(m3 > 0, wemb, NEG_INF).max(axis=2), 0.0)
+            mn = jnp.where(valid[..., None] > 0, jnp.where(m3 > 0, wemb, -NEG_INF).min(axis=2), 0.0)
             pooled = jnp.concatenate([mean, mx, mn], axis=-1)
         else:  # attn: learned query, softmax over the window
-            scores = (wemb @ self.pool_query) / math.sqrt(e)  # [s, w]
+            scores = (wemb @ self.pool_query) / math.sqrt(e)  # [b, s, w]
             scores = jnp.where(wmask > 0, scores, NEG_INF)
-            attn = jax.nn.softmax(scores, axis=1)  # [s, w]
-            pooled = jnp.einsum("sw,swe->se", attn, wemb)
-            pooled = jnp.where(valid[:, None] > 0, pooled, 0.0)
+            attn = jax.nn.softmax(scores, axis=2)
+            pooled = jnp.einsum("bsw,bswe->bse", attn, wemb)
+            pooled = jnp.where(valid[..., None] > 0, pooled, 0.0)
         return pooled, valid
 
-    def __call__(self, ids: Array, *, key=None, inference: bool = True) -> Array:
+    def __call__(self, ids: Array, *, key: PRNGKeyArray | None = None, inference: bool = True) -> Array:
         cfg = self.config
-        mask = (ids != PAD_ID).astype(jnp.float32)
-        emb = jax.vmap(self.embed)(ids)  # [t, e]
-        ek, lk_all = (None, None) if key is None else jax.random.split(key)
-        emb = self.embed_dropout(emb, key=ek, inference=inference)
+        mask = (ids != PAD_ID).astype(jnp.float32)  # [b, t]
+        emb = jnp.take(self.embed, ids, axis=0)  # [b, t, e]
 
-        pooled, valid = self._pool_windows(emb, mask)  # [s, pool_out], [s]
-        h = _vmap_linear(self.input_proj, pooled) + self.pos_embed  # [s, d]
+        pooled, valid = self._pool_windows(emb, mask)  # [b, s, pool_out], [b, s]
+        h = _matmul(pooled, self.proj_w) + self.proj_b + self.pos_embed  # [b, s, d]
 
-        layer_keys = [None] * cfg.num_layers if lk_all is None else list(jax.random.split(lk_all, cfg.num_layers))
+        n = cfg.num_layers
+        layer_keys = [None] * n if key is None else list(jax.random.split(key, n)) if n else []
         for layer, lk in zip(self.layers, layer_keys, strict=True):
             h = layer(h, valid, key=lk, inference=inference)
 
         if cfg.final_pool == "mean":
-            pooled_doc = (h * valid[:, None]).sum(axis=0) / jnp.maximum(valid.sum(), 1.0)
+            pooled_doc = (h * valid[..., None]).sum(axis=1) / jnp.maximum(valid.sum(axis=1, keepdims=True), 1.0)
         else:  # attn pool over super-tokens
-            scores = (h @ self.final_query) / math.sqrt(cfg.hidden_dim)
+            scores = (h @ self.final_query) / math.sqrt(cfg.hidden_dim)  # [b, s]
             scores = jnp.where(valid > 0, scores, NEG_INF)
-            attn = jax.nn.softmax(scores, axis=0)
-            pooled_doc = jnp.einsum("s,sd->d", attn, h)
+            attn = jax.nn.softmax(scores, axis=1)
+            pooled_doc = jnp.einsum("bs,bsd->bd", attn, h)
 
-        logit = self.head(self.head_norm(pooled_doc))[0]
-        return logit
+        normed = _layer_norm(pooled_doc, self.head_g, self.head_b)
+        return _matmul(normed, self.head_w)[:, 0]  # [b]
 
 
 def count_params(model: FastTransformer) -> int:

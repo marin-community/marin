@@ -96,7 +96,7 @@ def _metrics(scores: np.ndarray, targets: np.ndarray, threshold: float = DEFAULT
 @eqx.filter_jit
 def _predict_batch(model: FastTransformer, ids):
     """Sigmoid quality score for a fixed-shape batch (jitted, inference mode)."""
-    return jax.nn.sigmoid(jax.vmap(lambda row: model(row, key=None, inference=True))(ids))
+    return jax.nn.sigmoid(model(ids, key=None, inference=True))
 
 
 def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int = 256) -> np.ndarray:
@@ -170,8 +170,7 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
     @eqx.filter_jit
     def step(model, opt_state, ids, targets, step_key):
         def loss_fn(m):
-            keys = jax.random.split(step_key, ids.shape[0])
-            logits = jax.vmap(lambda row, k: m(row, key=k, inference=False))(ids, keys)
+            logits = m(ids, key=step_key, inference=False)
             preds = jax.nn.sigmoid(logits)
             return jnp.mean((preds - targets) ** 2)
 
