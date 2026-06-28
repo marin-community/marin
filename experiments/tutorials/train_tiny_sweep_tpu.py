@@ -7,12 +7,15 @@ An LR/WD grid search authored as lazy artifacts, end to end:
 
 - the corpus is a :class:`~marin.execution.lazy.Dataset` handle, tokenized once and
   shared by every trial;
-- :func:`~marin.experiment.sweep.sweep` fans out one
-  :class:`~marin.execution.lazy.Checkpoint` trial per grid point — the swept
-  hyperparameters are literals, so each trial gets a distinct ``name@version``;
-- each trial dispatches its own TPU training job (the launcher step runs inline),
-  then reads the run's final loss back and returns it as the trial's metrics;
-- :func:`~marin.experiment.sweep.select` reduces the trials to the lowest-loss one.
+- :func:`~marin.experiment.sweep.sweep` fans out one trial per grid point — each is a
+  :func:`~marin.experiment.train.train_lm` :class:`~marin.execution.lazy.Checkpoint`,
+  wrapped with :func:`~marin.experiment.sweep.annotate` so the sweep knows where to
+  read its score. The swept hyperparameters are literals, so each trial gets a distinct
+  ``name@version``;
+- each trial dispatches its own TPU training job, which records its metrics next to its
+  checkpoints (no metrics payload to thread back through the graph);
+- :func:`~marin.experiment.sweep.select` reads each trial's recorded loss from its
+  output and reduces the trials to the lowest-loss one.
 
 There is no executor, no import-time step graph, and no lock coordination: the
 ``StepRunner`` schedules the trials and the selection from the lowered graph.
@@ -23,21 +26,16 @@ with ``TRAIN_RESOURCES``)::
     python -m experiments.tutorials.train_tiny_sweep_tpu
 """
 
-from dataclasses import dataclass
-
 from fray.cluster import ResourceConfig
-from levanter.data.text import LmDataConfig
+from levanter.optim import AdamConfig
 from marin.execution.artifact import Artifact as ArtifactIO
-from marin.execution.lazy import Artifact, Checkpoint, Recipe, RunContext, lower
-from marin.execution.remote import remote
+from marin.execution.lazy import Checkpoint, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
-from marin.experiment.sweep import select, sweep
-from marin.scaling_laws.eval_metrics_reader import read_eval_records
+from marin.experiment.sweep import AnnotatedCheckpoint, annotate, select, sweep
+from marin.experiment.train import train_lm
 
-from experiments.defaults import _run_training_on_worker, prepare_lm_train
 from experiments.llama import llama3_tokenizer, llama_30m
-from experiments.simple_train_config import SimpleTrainConfig
 
 # A single-host TPU slice; each trial trains on its own slice. This is a run-arg, not
 # part of a trial's identity — re-running on a different TPU is the same checkpoint.
@@ -59,86 +57,34 @@ slimpajama = tokenized(
 )
 
 
-@dataclass(frozen=True)
-class TrialConfig:
-    """The concrete inputs one sweep trial trains on."""
+def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> AnnotatedCheckpoint:
+    """One sweep trial: a tiny llama trained on the shared corpus, ready to select over.
 
-    label: str
-    out: str
-    data: LmDataConfig
-    learning_rate: float
-    weight_decay: float
-    resources: ResourceConfig
-
-
-def _train_and_eval(config: TrialConfig) -> dict:
-    """Train one trial on a TPU and return its metrics.
-
-    Builds the trainer config from the resolved data and hyperparameters, dispatches
-    training as its own Fray job on ``config.resources`` (this launcher step runs
-    inline), then reads the run's final loss from the metrics the training wrote
-    alongside its checkpoints. The returned mapping is the trial's artifact payload,
-    which :func:`~marin.experiment.sweep.select` reduces over.
-    """
-    train_config = SimpleTrainConfig(
-        resources=config.resources,
-        train_batch_size=128,
-        num_train_steps=10000,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-    )
-    job_name, raw_config = prepare_lm_train(
-        name=config.label,
-        tokenized=config.data,
-        model_config=llama_30m,
-        train_config=train_config,
-        tags=["llama", "30m", "slimpajama-6b", "tutorial", "sweep"],
-        use_default_validation=False,
-    )
-    remote(_run_training_on_worker, resources=config.resources, name=job_name)(
-        job_name, raw_config, config.out, config.resources
-    )
-
-    summary = read_eval_records([config.out])[-1]["summary"]
-    return {
-        "learning_rate": config.learning_rate,
-        "weight_decay": config.weight_decay,
-        SELECTION_METRIC: summary[SELECTION_METRIC],
-    }
-
-
-def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> Checkpoint:
-    """One sweep trial as a :class:`~marin.execution.lazy.Checkpoint` handle.
-
-    The swept hyperparameters are literals in the config, so each grid point gets a
+    The swept hyperparameters are literals in the optimizer, so each grid point gets a
     distinct ``name@version`` and fingerprint; the TPU is a run-arg, excluded from
     identity, so re-running on different hardware does not fork the trial.
+    :func:`~marin.experiment.sweep.annotate` pairs the checkpoint with the default
+    reader for ``train_lm`` metrics, so :func:`select` can rank it by ``SELECTION_METRIC``.
     """
-    name = f"checkpoints/tiny-sweep/lr{learning_rate}-wd{weight_decay}"
-
-    def build_config(ctx: RunContext) -> TrialConfig:
-        return TrialConfig(
-            label=f"tiny-sweep-lr{learning_rate}-wd{weight_decay}",
-            out=ctx.out,
-            data=mixture(ctx, {slimpajama: 1.0}),
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            resources=ctx.run_arg("train_resources"),
-        )
-
-    return Checkpoint(
-        name=name,
+    checkpoint = train_lm(
+        name=f"checkpoints/tiny-sweep/lr{learning_rate}-wd{weight_decay}",
         version=version,
-        recipe=Recipe(
-            fn=_train_and_eval,
-            build_config=build_config,
-            deps=(slimpajama,),
-            run_args={"train_resources": TRAIN_RESOURCES},
-        ),
+        model=llama_30m,
+        optimizer=AdamConfig(learning_rate=learning_rate, weight_decay=weight_decay),
+        data=lambda ctx: mixture(ctx, {slimpajama: 1.0}),
+        deps=(slimpajama,),
+        batch_size=128,
+        seq_len=llama_30m.max_seq_len,
+        num_train_steps=10000,
+        z_loss_weight=None,
+        evals=None,
+        resources=TRAIN_RESOURCES,
+        tags=["llama", "30m", "slimpajama-6b", "tutorial", "sweep"],
     )
+    return annotate(checkpoint)
 
 
-def best_trial(*, version: str = "v1") -> Artifact:
+def best_trial(*, version: str = "v1") -> Checkpoint:
     """The full LR/WD sweep, reduced to its lowest-loss trial."""
     trials = sweep(
         trial,

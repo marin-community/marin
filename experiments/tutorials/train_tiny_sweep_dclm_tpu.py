@@ -1,63 +1,100 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tutorial: an LR/WD sweep over a 30M DCLM model on TPU, in the lazy-artifact style.
+
+Like ``train_tiny_sweep_tpu``, but on the DCLM mixture with held-out validation and the
+CORE eval harness wired in, and selecting on a held-out loss instead of the train loss:
+
+- the DCLM training components and the Paloma + Uncheatable validation sets are
+  :class:`~marin.execution.lazy.Dataset` handles, tokenized once and shared by every
+  trial;
+- :func:`~marin.experiment.sweep.sweep` fans out one
+  :func:`~marin.experiment.train.train_lm` trial per grid point, wrapped with
+  :func:`~marin.experiment.sweep.annotate` so the sweep can read each trial's score;
+- each trial dispatches its own TPU training job, which records its validation loss next
+  to its checkpoints;
+- :func:`~marin.experiment.sweep.select` reads each trial's recorded ``eval/loss`` (the
+  validation micro-average) and reduces the trials to the lowest-loss one.
+
+Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional with
+``RESOURCES``)::
+
+    python -m experiments.tutorials.train_tiny_sweep_dclm_tpu
 """
-This is a tutorial script demonstrating how to perform a hyperparameter sweep
-on a 30M parameter DCLM model using TPU hardware.
-"""
-import dataclasses
 
 from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import versioned
+from levanter.optim import AdamConfig
+from marin.execution.artifact import Artifact as ArtifactIO
+from marin.execution.lazy import Checkpoint, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
+from marin.experiment.sweep import AnnotatedCheckpoint, annotate, select, sweep
+from marin.experiment.train import train_lm
 
-from experiments.defaults import default_train
-from experiments.evals.task_configs import CORE_TASKS
-from experiments.llama import llama_30m
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
-from experiments.simple_train_config import SimpleTrainConfig
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.llama import llama3_tokenizer, llama_30m
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.recipes import core_tasks
 
+# A single-host TPU slice; each trial trains on its own slice. This is a run-arg, not
+# part of a trial's identity — re-running on a different TPU is the same checkpoint.
 RESOURCES = ResourceConfig.with_tpu("v4-8")
-EVALS = CORE_TASKS
 
-small_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=RESOURCES,
-    train_batch_size=128,
-    num_train_steps=10000,
-    # set hyperparameters
-    learning_rate=6e-4,
-    weight_decay=0.1,
-)
+# The selection metric: levanter logs the validation micro-average loss under this key,
+# so the run's final value ranks the trials on held-out data.
+SELECTION_METRIC = "eval/loss"
 
-# 4. Define an lr sweep
-sweep_configs = [
-    dataclasses.replace(
-        small_train_config,
-        learning_rate=lr,
-        weight_decay=wd,
-    )
-    for lr in [3e-4, 6e-4, 1e-3]
-    for wd in [0.0, 0.1, 0.2]
-]
+# The corpus and held-out validation: tokenized once into shared caches, reused by every
+# trial by name@version. The first trial to run tokenizes them (their own Fray jobs).
+_train = dclm_datasets(tokenizer=llama3_tokenizer)
+_validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+_weighted = {_train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in _train}
 
-runs = []
 
-for config in sweep_configs:
-    # 5. Train the model
-    lr, wd = config.learning_rate, config.weight_decay
-    run = default_train(
-        # Marin will automatically create unique ids for runs b/c the model_config is versioned
-        # however, we can give each run a unique name for easier identification
-        name=f"tutorial-dclm-30m-sweep-lr{lr}-wd{wd}",
-        tokenized=dclm_mixture_config_llama3,
-        model_config=versioned(llama_30m),
-        train_config=config,
-        # wandb tags
+def trial(*, learning_rate: float, weight_decay: float, version: str = "v1") -> AnnotatedCheckpoint:
+    """One sweep trial: a 30M llama trained on the DCLM mixture, ready to select over.
+
+    The swept hyperparameters are literals in the optimizer, so each grid point gets a
+    distinct ``name@version`` and fingerprint; the TPU is a run-arg, excluded from
+    identity. :func:`~marin.experiment.sweep.annotate` pairs the checkpoint with the
+    default reader for ``train_lm`` metrics, so :func:`select` can rank it by
+    ``SELECTION_METRIC``.
+    """
+    checkpoint = train_lm(
+        name=f"checkpoints/tutorial-dclm-30m-sweep/lr{learning_rate}-wd{weight_decay}",
+        version=version,
+        model=llama_30m,
+        optimizer=AdamConfig(learning_rate=learning_rate, weight_decay=weight_decay),
+        data=lambda ctx: mixture(ctx, _weighted, validation=_validation),
+        deps=(*_weighted, *_validation),
+        batch_size=128,
+        seq_len=llama_30m.max_seq_len,
+        num_train_steps=10000,
+        z_loss_weight=None,
+        evals=core_tasks(every=10000),
+        resources=RESOURCES,
         tags=["llama", "30m", "dclm", "tutorial", "sweep", "test20251117"],
-        eval_harness_tasks=CORE_TASKS,
     )
-    runs.append(run)
+    return annotate(checkpoint)
+
+
+def best_trial(*, version: str = "v1") -> Checkpoint:
+    """The full LR/WD sweep, reduced to its lowest validation-loss trial."""
+    trials = sweep(
+        trial,
+        learning_rate=[3e-4, 6e-4, 1e-3],
+        weight_decay=[0.0, 0.1, 0.2],
+    )
+    return select("sweeps/tutorial-dclm-30m-sweep", version, trials, metric=SELECTION_METRIC, mode="min")
+
 
 if __name__ == "__main__":
-    executor_main(steps=runs)
+    # Lower the sweep to a StepSpec graph and run it: the shared caches tokenize, each
+    # trial trains (its own TPU job), then `select` records the winner.
+    best = best_trial()
+    StepRunner().run([lower(best)])
+
+    selection = ArtifactIO.from_path(best.path())
+    print(f"best trial: {selection['winner']} ({SELECTION_METRIC}={selection['score']:.4f})")

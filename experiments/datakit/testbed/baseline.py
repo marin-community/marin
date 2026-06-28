@@ -12,29 +12,28 @@ where the pipeline's middle stages are deliberate no-ops:
   (one shard set per source), so bucketing is an identity op
 
 With all three as no-ops, the sampled parquet that :func:`build_testbed_steps`
-produces is also the bucket. ``main`` wires one tokenize ExecutorStep per
-sample output, computes mixture weights at runtime via
-:func:`tokenized_bucket_weights_step`, and hands the result to
-:func:`run_testbed_config` which assembles the full Grug-MoE training step.
-
-The whole pipeline (ferry → tokenize → weights → train) lives in one
-executor DAG so ``--dry_run`` validates structure without touching GCS.
+produces is also the bucket. ``main`` wires one tokenize step per sample output,
+computes mixture weights at runtime via :func:`tokenized_bucket_weights_step`, and
+hands the result to :func:`run_testbed_config` which assembles the full Grug-MoE
+training step. The whole pipeline (ferry → tokenize → weights → train) lives in one
+``StepSpec`` graph that :class:`StepRunner` walks, scheduling each step once its
+dependencies are satisfied.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
 
-import draccus
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.step_runner import StepRunner
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.paloma import paloma_validation
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +45,12 @@ _SAMPLE_STEP_PREFIX = "data/datakit/normalized/"
 
 
 def main() -> None:
-    """Build the baseline DAG and hand it to ``executor_main``."""
-    config = draccus.parse(ExecutorMainConfig)
-    if config.prefix is None:
-        config = dataclasses.replace(config, prefix=STAGING_PREFIX)
-    os.environ.setdefault("MARIN_PREFIX", config.prefix)
+    """Build the baseline DAG and run it."""
+    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "baseline"
+    validation = [*paloma_validation(tokenizer=tokenizer), *uncheatable_validation(tokenizer=tokenizer)]
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     sampled_by_source = {
@@ -68,11 +65,12 @@ def main() -> None:
         name=run_id,
         tokenized_buckets=tokenized_buckets,
         weights_step=weights_step,
+        validation=validation,
         tokenizer=tokenizer,
     )
 
     logger.info("Baseline DAG: %d sources → tokenize → weights → train", len(sampled_by_source))
-    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
+    StepRunner().run([training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

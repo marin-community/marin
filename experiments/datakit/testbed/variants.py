@@ -10,23 +10,22 @@ parquet serves every hyperparam sweep. Each variant then MinHash→fuzzy-dups
 tokenizes the deduped output, and trains.
 
 The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokenize
-→ weights → train) lives in one executor DAG so ``--dry_run`` validates
-structure without touching GCS.
+→ weights → train) lives in one ``StepSpec`` graph that :class:`StepRunner`
+walks, scheduling each step once its dependencies are satisfied.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
+from collections.abc import Sequence
 
-import draccus
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.lazy import Dataset
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import ExecutorStep
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
@@ -36,6 +35,8 @@ from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.paloma import paloma_validation
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +124,13 @@ def dedup(
     *,
     name: str,
     tokenizer: str,
+    validation: Sequence[Dataset],
     fuzzy_dedup_num_perms: int = 286,
     fuzzy_dedup_num_bands: int = 26,
     fuzzy_dedup_ngram_size: int = 5,
     fuzzy_dedup_seed: int = 42,
     fuzzy_dedup_cc_max_iterations: int = 10,
-) -> ExecutorStep:
+) -> StepSpec:
     """Assemble the fuzzy-dedup training step off a testbed DAG.
 
     Defaults for ``fuzzy_dedup_*`` match
@@ -171,23 +173,22 @@ def dedup(
         name=name,
         tokenized_buckets=tokenized_buckets,
         weights_step=weights_step,
+        validation=validation,
         tokenizer=tokenizer,
     )
 
 
 def main() -> None:
-    """Build the fuzzy-dedup DAG and hand it to ``executor_main``."""
-    config = draccus.parse(ExecutorMainConfig)
-    if config.prefix is None:
-        config = dataclasses.replace(config, prefix=STAGING_PREFIX)
-    os.environ.setdefault("MARIN_PREFIX", config.prefix)
+    """Build the fuzzy-dedup DAG and run it."""
+    os.environ.setdefault("MARIN_PREFIX", STAGING_PREFIX)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
+    validation = [*paloma_validation(tokenizer=tokenizer), *uncheatable_validation(tokenizer=tokenizer)]
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
+    training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer, validation=validation)
+    StepRunner().run([training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

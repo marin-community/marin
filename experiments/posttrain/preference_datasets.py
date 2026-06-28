@@ -22,9 +22,8 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.lazy import Artifact, Dataset
+from marin.experiment.data import derived, hf_download
 from marin.transform.conversation.transform_preference_data import (
     TransformPreferenceDatasetConfig,
     transform_hf_preference_dataset,
@@ -84,26 +83,19 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> ExecutorStep:
-    """ExecutorStep for downloading preference data from external source to GCP"""
+def download_preference_dataset_step(dataset: PreferenceDatasetConfig) -> Dataset:
+    """Lazy download handle for a preference dataset from HuggingFace."""
     dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_step = ExecutorStep(
-        name=f"raw/{dataset_name}",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=dataset.hf_dataset_id,
-            revision=versioned(dataset.revision),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
-        override_output_path=f"raw/{dataset_name}-{dataset.revision}",
+    return hf_download(
+        f"raw/{dataset_name}",
+        hf_id=dataset.hf_dataset_id,
+        revision=dataset.revision,
+        pin=f"raw/{dataset_name}-{dataset.revision}",
     )
 
-    return download_step
 
-
-def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """ExecutorStep that preprocesses and shards the preference dataset.
+def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, download_step: Dataset) -> Artifact:
+    """Lazy handle that preprocesses and shards the preference dataset.
 
     ===========================================================================
     dataset_cfg: {
@@ -113,7 +105,7 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         "splits": ['train'],
         ...
     }
-    output_path_of(download_step) --> gs://.../raw/HuggingFaceH4--ultrafeedback_binarized-[revision_number]
+    download_step path --> gs://.../raw/HuggingFaceH4--ultrafeedback_binarized-[revision_number]
 
     Expected files written: [
         gs://.../HuggingFaceH4--ultrafeedback_binarized__[revision_number]_[hash]/train/shard_00001.jsonl.gz,
@@ -124,7 +116,6 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
     """
     adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
@@ -132,32 +123,34 @@ def transform_preference_dataset_step(dataset_cfg: PreferenceDatasetConfig, down
         -{sorted(dataset_cfg.splits)}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    transform_step = ExecutorStep(
-        name=f"preference/{dataset_name}",
+    pin = f"preference/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}"
+
+    def _build_config(ctx, _cfg=dataset_cfg, _dl=download_step, _name=adapter_name):
+        return TransformPreferenceDatasetConfig(
+            input_path=ctx.path(_dl),
+            output_path=ctx.out,
+            shard_size=5000,
+            metadata_columns=_cfg.metadata_columns,
+            filetype=_cfg.filetype,
+            source=_cfg.hf_dataset_id,
+            subsets=_cfg.subsets,
+            splits=_cfg.splits,
+            adapter_name=_name,
+        )
+
+    return derived(
+        f"preference/{dataset_name}",
         fn=transform_hf_preference_dataset,
-        config=TransformPreferenceDatasetConfig(
-            input_path=download_data_path,
-            output_path=this_output_path(),
-            shard_size=versioned(5000),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
-            subsets=dataset_cfg.subsets,
-            splits=dataset_cfg.splits,
-            adapter_name=adapter_name,
-        ),
-        override_output_path=f"preference/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
+        build_config=_build_config,
+        deps=(download_step,),
+        pin=pin,
     )
 
-    return transform_step
 
-
-def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
-    """Get a preference dataset by creating download and transform steps."""
-    # Check that config exists
+def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> Artifact:
+    """Lazy handle for a preference dataset by HF id, optionally overriding splits."""
     assert hf_dataset_id in PREFERENCE_DATASET_NAME_TO_CONFIG, f"Unknown preference dataset: {hf_dataset_id}"
 
-    # Create a new configuration instance with the desired split.
     original_config = PREFERENCE_DATASET_NAME_TO_CONFIG[hf_dataset_id]
     config = PreferenceDatasetConfig(
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
@@ -166,14 +159,3 @@ def get_preference_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",
     download_step = download_preference_dataset_step(config)
     transform_step = transform_preference_dataset_step(config, download_step)
     return transform_step
-
-
-if __name__ == "__main__":
-    all_steps = []
-    for config in PREFERENCE_DATASET_NAME_TO_CONFIG.values():
-        downloaded_dataset = download_preference_dataset_step(config)
-        all_steps.append(downloaded_dataset)
-        transformed_dataset = transform_preference_dataset_step(config, downloaded_dataset)
-        all_steps.append(transformed_dataset)
-
-    executor_main(steps=all_steps)

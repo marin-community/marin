@@ -207,15 +207,21 @@ def fingerprint_hash(payload: str) -> str: ...                   # md5(payload.e
 ## Authoring: sweep / select (`marin.experiment.sweep`)
 
 ```python
+def read_replicated_metrics(output_path: str) -> Mapping[str, Any]: ...
+class AnnotatedCheckpoint(Checkpoint):  # adds: metrics_reader = read_replicated_metrics
+def annotate(checkpoint: Checkpoint, *, metrics_reader=read_replicated_metrics) -> AnnotatedCheckpoint: ...
 def grid(**axes: Sequence[Any]) -> list[dict[str, Any]]: ...
-def sweep(trial: Callable[..., Artifact], **axes: Sequence[Any]) -> list[Artifact]: ...
-def select(name: str, version: str, trials: Sequence[Artifact], *,
-           metric: str, mode: str = "min") -> Artifact: ...
+def sweep(trial: Callable[..., AnnotatedCheckpoint], **axes: Sequence[Any]) -> list[AnnotatedCheckpoint]: ...
+def select(name: str, version: str, trials: Sequence[AnnotatedCheckpoint], *,
+           metric: str, mode: str = "min") -> Checkpoint: ...
 ```
 
+- A trial is just a `Checkpoint`-producing function (e.g. `lambda **p: train_lm(...)`); there is no metrics payload to return. Selection reads each trial's metric from where the trial *wrote* it — its output path.
+- `AnnotatedCheckpoint` — a `Checkpoint` paired with `metrics_reader(output_path) -> Mapping`, "how to read my own recorded metrics". The reader is read at run time, not built into the fingerprint. `annotate(checkpoint)` wraps a plain `Checkpoint` (e.g. from `train_lm`) without changing its identity.
+- `read_replicated_metrics(output_path)` — the default reader: reads `<output>/tracker_metrics.jsonl` (the WandB `replicate_path` that `train_lm` mirrors next to its checkpoints) and returns its `summary` mapping. Selecting on `train/loss` or any logged `eval/.../loss` needs no per-trial wiring.
 - `grid(**axes)` — Cartesian product of the named axes as `{axis: value}` dicts, row-major (last axis fastest).
 - `sweep(trial, **axes)` — `[trial(**params) for params in grid(**axes)]`. The `trial` builder must fold each grid point's values into both its config (distinct fingerprint) and its `name` (distinct address).
-- `select(name, version, trials, *, metric, mode="min")` — a reducer `Artifact` depending on every trial. At run time it reads each trial's metrics payload (a `Mapping`) and writes `{"winner", "score", "winner_path", "metrics", "scores"}`. `metric`/`mode` bear identity; trial *values* are read at run time. Trials are keyed by full `name@version`. Raises `ValueError` if `mode not in {"min","max"}`, if `trials` is empty, or if two trials share a `name@version`. Each trial's `fn` must return a `Mapping` containing `metric` (else `TypeError`/`KeyError` at run time).
+- `select(name, version, trials, *, metric, mode="min")` — a reducer depending on every trial; returns the winner as a `Checkpoint` addressed at `name@version`. At run time it reads each trial's metrics through that trial's own reader, ranks by `metric`, and writes `{"winner", "score", "winner_path", "metrics", "scores"}`. `metric`/`mode` bear identity; trial *values* are read at run time. Trials are keyed by full `name@version`. Raises `ValueError` if `mode not in {"min","max"}`, if `trials` is empty, or if two trials share a `name@version`; `KeyError` if a trial's recorded metrics lack `metric` (at run time).
 
 ## Authoring: data builders (`marin.experiment.data`)
 
@@ -316,9 +322,10 @@ appears in `ArtifactRecord.fingerprint_payload` and `StepSpec.fingerprint_payloa
 | `FileNotFoundError` | an adopted step runs and no data exists at its source; `Artifact.from_path` finds no payload sidecar and either the typed caller wanted a non-`PathMetadata` type or `.executor_status` is not `SUCCESS` |
 | `TypeError` (encoder) | a config value has no reproducible serialization (callable, `partial`, default-`repr` object) |
 | `TypeError` (payload IO) | `Artifact.from_path` is given an `artifact_type` that isn't a pydantic `BaseModel` subclass |
-| `TypeError` (mixture / select) | a `mixture` component config isn't a tokenize config; a `select` trial payload isn't a `Mapping` |
+| `TypeError` (mixture) | a `mixture` component config isn't a tokenize config |
 | `ValueError` | `Artifact` with both `adopt_source` and `override_path`; `tokenized` not given exactly one source mode, or `raw`/`glob` not paired; `mixture` is empty or its components span >1 tokenizer; `select` bad `mode`, empty sweep, or colliding trial `name@version` |
-| `KeyError` | `ctx.run_arg(key)` for a key not declared in `recipe.run_args`; a `select` trial payload missing `metric` |
+| `KeyError` | `ctx.run_arg(key)` for a key not declared in `recipe.run_args`; a `select` trial's recorded metrics missing `metric` |
+| `FileNotFoundError` (select) | `read_replicated_metrics` finds no `tracker_metrics.jsonl` for a trial |
 | *(Fray failure)* | a `remote` step's Fray job fails to submit or fails at run time — the underlying error propagates from `StepRunner.run` (the runner blocks on the job and re-raises) |
 
 ## Invariants & preconditions

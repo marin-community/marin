@@ -3,31 +3,51 @@
 
 """Sweep helpers: grid fan-out and metric-based selection.
 
-The trials here are toy artifacts whose payload *is* their metrics dict, so the
-tests exercise the real fan-out/fan-in mechanics (lower + run + reduce) without
-training anything.
+The toy trials here *write* their metrics to their own output, the way a real
+training run does (``train_lm`` mirrors them to ``tracker_metrics.jsonl``), so the
+tests exercise the real fan-out/fan-in mechanics — lower, run, then read each
+trial's recorded metrics back through its :class:`AnnotatedCheckpoint` reader and
+reduce — without training anything.
 """
 
+import json
+
+import fsspec
 import pytest
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import Dataset, Recipe, lower
+from marin.execution.lazy import Checkpoint, Recipe, lower
 from marin.execution.step_runner import StepRunner
-from marin.experiment.sweep import grid, select, sweep
+from marin.experiment.sweep import AnnotatedCheckpoint, annotate, grid, select, sweep
 
 
-def _trial(learning_rate: float, weight_decay: float) -> Dataset:
-    """A toy trial whose artifact payload is its own metrics: loss = lr + wd."""
-    return Dataset(
-        name=f"trials/lr{learning_rate}-wd{weight_decay}",
-        version="v1",
-        recipe=Recipe(
-            fn=lambda config: config,
-            build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {
-                "learning_rate": lr,
-                "weight_decay": wd,
-                "loss": lr + wd,
-            },
-        ),
+def _write_metrics(config: dict) -> None:
+    """Write a ``train_lm``-shaped metrics record to the trial's output."""
+    fs, _, _ = fsspec.get_fs_token_paths(config["out"])
+    fs.makedirs(config["out"], exist_ok=True)
+    record = {
+        "config": {},
+        "summary": {"loss": config["loss"], "learning_rate": config["lr"], "weight_decay": config["wd"]},
+    }
+    with fs.open(f"{config['out']}/tracker_metrics.jsonl", "w") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _trial(learning_rate: float, weight_decay: float) -> AnnotatedCheckpoint:
+    """A toy trial that records ``loss = lr + wd`` to its output, like a real run."""
+    return annotate(
+        Checkpoint(
+            name=f"trials/lr{learning_rate}-wd{weight_decay}",
+            version="v1",
+            recipe=Recipe(
+                fn=_write_metrics,
+                build_config=lambda ctx, lr=learning_rate, wd=weight_decay: {
+                    "out": ctx.out,
+                    "loss": lr + wd,
+                    "lr": lr,
+                    "wd": wd,
+                },
+            ),
+        )
     )
 
 
@@ -69,6 +89,12 @@ def test_select_max_inverts_the_choice(tmp_path, monkeypatch):
     StepRunner().run([lower(best)])
 
     assert Artifact.from_path(f"{tmp_path}/sweeps/top/v1")["score"] == pytest.approx(0.3)
+
+
+def test_select_returns_a_checkpoint_handle():
+    # The reduced sweep is a Checkpoint addressed at name@version, not a bespoke node.
+    best = select("sweeps/x", "v1", [_trial(0.1, 0.0)], metric="loss")
+    assert isinstance(best, Checkpoint)
 
 
 def test_select_rejects_an_unknown_mode():
