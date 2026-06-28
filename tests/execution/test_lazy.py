@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SPIKE test for the lazy-artifact prototype (``marin.execution.lazy``).
+"""Behaviour tests for the lazy-artifact runtime (``marin.execution.lazy``).
 
-Exercises the hardest path the redesign must support — a config that references
-its own output path AND a dependency's output path — and runs the chain
-end-to-end through the existing ``StepRunner`` to confirm the lower → cache →
-lock → run pipeline works with explicit ``name@version`` identity.
+Exercises the hardest path: a config that references its own output path AND a
+dependency's output path, run end-to-end through the ``StepRunner`` to confirm the
+lower → cache → lock → run pipeline works with explicit ``name@version`` identity.
 """
 
 import dataclasses
@@ -23,7 +22,7 @@ from marin.execution.step_runner import StepRunner
 
 @dataclass(frozen=True)
 class TokenizeCfg:
-    out: str  # self-reference: the producer writes here (was THIS_OUTPUT_PATH)
+    out: str  # self-reference: the producer writes here
     source: str
     tokenizer: str
 
@@ -31,7 +30,7 @@ class TokenizeCfg:
 @dataclass(frozen=True)
 class TrainCfg:
     out: str  # self-reference
-    data: str  # cross-step reference: the dep's output path (was InputName/.cd())
+    data: str  # cross-step reference: the dep's output path
     lr: float
     steps: int
 

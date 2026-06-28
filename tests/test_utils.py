@@ -1,33 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import glob
 import os
-from collections.abc import Callable
 
 import draccus
 import pytest
 from marin.utils import rebase_file_path
-
-
-def parameterize_with_configs(pattern: str, config_path: str | None = None) -> Callable:
-    """
-    A decorator to parameterize a test function with configuration files.
-
-    Args:
-        pattern (str): A glob pattern to match configuration files.
-        config_path (Optional[str]): The base path to look for config files.
-                                    If None, uses "../config" relative to the test file.
-
-    Returns:
-        Callable: A pytest.mark.parametrize decorator that provides config files to the test function.
-
-    """
-    test_path = os.path.dirname(os.path.abspath(__file__))
-    if config_path is None:
-        config_path = os.path.join(test_path, "..", "config")
-    configs = glob.glob(os.path.join(config_path, "**", pattern), recursive=True)
-    return pytest.mark.parametrize("config_file", configs, ids=lambda x: f"{os.path.basename(x)}")
 
 
 def check_load_config(config_class: type, config_file: str) -> None:

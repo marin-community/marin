@@ -92,9 +92,9 @@ def test_select_max_inverts_the_choice(tmp_path, monkeypatch):
 
 
 def test_select_returns_a_checkpoint_handle():
-    # The reduced sweep is a Checkpoint addressed at name@version, not a bespoke node.
+    # The reduced sweep is a Checkpoint addressed at the given name@version, not a bespoke node.
     best = select("sweeps/x", "v1", [_trial(0.1, 0.0)], metric="loss")
-    assert isinstance(best, Checkpoint)
+    assert (best.name, best.version) == ("sweeps/x", "v1")
 
 
 def test_select_rejects_an_unknown_mode():

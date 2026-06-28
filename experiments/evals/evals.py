@@ -41,6 +41,16 @@ EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 logger = logging.getLogger(__name__)
 
 
+def _model_deps(model: Checkpoint | str) -> tuple[Artifact, ...]:
+    """A Checkpoint handle becomes a dependency; a path string carries no dep."""
+    return (model,) if isinstance(model, Checkpoint) else ()
+
+
+def _model_path(ctx: RunContext, model: Checkpoint | str) -> str:
+    """Resolve a Checkpoint handle to its output path; pass a path string through."""
+    return ctx.path(model) if isinstance(model, Checkpoint) else model
+
+
 def evaluate_lm_evaluation_harness(
     model_name: str,
     model: Checkpoint | str,
@@ -66,10 +76,10 @@ def evaluate_lm_evaluation_harness(
             The coordinator's own ``os.environ`` does NOT propagate to iris-spawned
             children — these vars must be threaded through ``remote()``.
     """
-    deps: tuple[Artifact, ...] = (model,) if isinstance(model, Checkpoint) else ()
+    deps = _model_deps(model)
 
     def build_config(ctx: RunContext) -> EvaluationConfig:
-        model_path = ctx.path(model) if isinstance(model, Checkpoint) else model
+        model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
@@ -133,10 +143,10 @@ def evaluate_levanter_lm_evaluation_harness(
     Create an eval artifact for the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
-    deps: tuple[Artifact, ...] = (model,) if isinstance(model, Checkpoint) else ()
+    deps = _model_deps(model)
 
     def build_config(ctx: RunContext) -> EvaluationConfig:
-        model_path = ctx.path(model) if isinstance(model, Checkpoint) else model
+        model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -495,10 +505,10 @@ def evaluate_evalchemy(
     seed = generation_params.get("seed") if generation_params else None
     seed_suffix = f"_seed{seed}" if seed is not None else ""
     step_name = f"evaluation/evalchemy/{model_name}/{task_names}{seed_suffix}"
-    deps: tuple[Artifact, ...] = (model,) if isinstance(model, Checkpoint) else ()
+    deps = _model_deps(model)
 
     def build_config(ctx: RunContext) -> EvaluationConfig:
-        model_path = ctx.path(model) if isinstance(model, Checkpoint) else model
+        model_path = _model_path(ctx, model)
         return EvaluationConfig(
             evaluator="evalchemy",
             model_name=model_name,
