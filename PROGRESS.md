@@ -28,7 +28,41 @@ Do all the work in this one worktree (so the full migration surface is known), t
 
 ## Status
 
-🔄 **PR1 infra complete & verified.** Now executing PR2: the bulk migration.
+🔄 **PR1 infra complete & verified. PR2 underway — catalog layer + tutorials done.**
+
+Done so far on PR2 (all committed, tree imports green, lint+pyrefly clean):
+- Added the last two generic builders to `marin.experiment.data`: `hf_download` (the
+  HuggingFace-Hub download case) and `derived` (generic single-step transform/convert/filter
+  with deps). Added `sample_count` to `tokenized()`.
+- Folded the verified `_lazy` catalog prototypes into canonical filenames
+  (nemotron/simple/dclm/paloma/uncheatable/common_pile); `pretraining_datasets/__init__`
+  reduced to a docstring (catalogs imported by submodule).
+- Migrated **all dataset catalogs** to lazy step-functions (climblab_ja, common_corpus, hplt,
+  massive_function_calling, molmo2_cap, svg, dolma, dolmino, diagnostic_logs, nemotron_v2,
+  swe_zero_12m, nsf_awards, starcoder2_extras, eval_datasets, midtraining_datasets, models).
+  Pins/revisions/paths preserved verbatim; published reference weights kept as constants;
+  mixture assembly moved to the experiment.
+- Migrated the training **tutorials** onto `train_lm` (exp1078 7B, tiny cpu/gpu/tpu, 125M
+  fineweb-edu, hello_world); deleted exp1077 (redundant with `dclm_1b_1x_inline`).
+
+Remaining PR2 tail (NOT yet done):
+- Experiment/launcher consumers: `evals/*` (7), `grug/*` (5), `ferries/*` (3),
+  `datakit/testbed/*` (4), `references/*` (2), `posttrain/*` (2), `long_context_datasets/*` (2),
+  `scaling_law_sweeps/completed_adamh`, `prebuilt_caches`, the two sweep tutorials.
+- Dismantle `defaults.py` (`default_train`/`train`/`prepare_lm_train`/`simulated_epoching_train`
+  → `train_lm`; `default_sft`/`default_dpo` need light `sft_lm`/`dpo_lm` assemblers or consumer
+  rewrites) and `tokenization.py` (`default_download`/`default_tokenize` → helpers). Delete both.
+- Library layer (~25 lib/marin files): remove `THIS_OUTPUT_PATH`/`InputName`/`versioned` from
+  config dataclasses + download/transform fns; drop `materialize` calls in `training.py`; move
+  `infer_tpu_variant_regions_from_iris` into `rl/placement.py`; fix `rl/rl_experiment_utils.py`.
+- Capstone: delete executor content-addressing + `types.py`; flip `MARIN_EXECUTOR_STRICT`
+  default-on; rewrite/remove `materialize`; delete golden harness + executor-only tests;
+  rewrite docs; codex review; split into two stacked PRs.
+
+Open design question (blocks the two sweep tutorials): `select()` reduces over trials that
+return a **metrics mapping**, but `train_lm` trials return a `Checkpoint` (no metrics payload).
+Needs a sweep↔train metrics bridge (read W&B/levanter eval metrics) before sweeps over training
+runs work end-to-end.
 
 ### PR1 — DONE (commits 63a60c2c95, a11760fcdf on top of d284eb3555)
 
