@@ -11,6 +11,7 @@ import concurrent.futures
 import logging
 import time
 from datetime import date, timedelta
+from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
@@ -40,7 +41,7 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-from iris.cluster.types import JobName, WorkerId, tpu_device
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
@@ -155,6 +156,76 @@ def test_launch_job_returns_job_id(service):
     )
     assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
+
+
+class _FeasibilityAutoscaler:
+    """Autoscaler stub whose job_feasibility returns a fixed verdict."""
+
+    def __init__(self, error: str | None):
+        self._error = error
+
+    def job_feasibility(self, constraints, replicas=None, resources=None) -> str | None:
+        return self._error
+
+
+def test_launch_job_feasible_on_non_first_backend(service):
+    """A job the first backend's autoscaler rejects still launches when a later
+    backend can host it — feasibility is the OR across every backend."""
+    rejecting = Mock()
+    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    admitting = Mock()
+    admitting.autoscaler = _FeasibilityAutoscaler(None)
+    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+
+    response = service.launch_job(make_job_request("multi-backend-ok"), None)
+
+    assert response.job_id == JobName.root("test-user", "multi-backend-ok").to_wire()
+
+
+def test_launch_job_rejected_when_all_backends_infeasible(service):
+    """Submit fails fast only when every backend's autoscaler rejects the shape."""
+    gcp = Mock()
+    gcp.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    cw = Mock()
+    cw.autoscaler = _FeasibilityAutoscaler("region us-east5 has no h100 pool")
+    service._controller.backends = {"gcp": gcp, "cw": cw}
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("multi-backend-bad"), None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_profile_worker_routes_to_worker_backend(service, state):
+    """ProfileTask on /system/worker/<id> dispatches to the worker's backend
+    (resolved from its scale group), not the representative backend."""
+    with state._db.transaction() as cur:
+        ops.worker.register(
+            cur,
+            worker_id=WorkerId("w-cw"),
+            address="w-cw:8080",
+            metadata=make_worker_metadata(),
+            ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
+            scale_group="cw-h100",
+        )
+    cw = Mock()
+    cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
+    service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
+    service._controller.scale_group_to_backend = {"cw-h100": "cw"}
+
+    resp = service.profile_task(
+        job_pb2.ProfileTaskRequest(
+            target="/system/worker/w-cw",
+            duration_seconds=1,
+            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+        ),
+        None,
+    )
+
+    # The profile bytes could only have come from the cw backend's provider.
+    assert resp.profile_data == b"cw-profile"
+    service._controller.provider.profile_task.assert_not_called()
 
 
 def test_get_job_status_reports_parent_job_id(service):

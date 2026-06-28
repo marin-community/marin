@@ -219,8 +219,10 @@ class MockController:
         self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
-        self.autoscaler = None
         self.provider = Mock()
+        # A bare Mock would auto-create a truthy .autoscaler; the per-backend
+        # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
+        self.provider.autoscaler = None
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
         self.scale_group_to_backend: dict[str, str] = {}

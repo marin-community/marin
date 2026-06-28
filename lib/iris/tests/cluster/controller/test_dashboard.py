@@ -194,7 +194,6 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
     controller_mock.last_scheduling_context = None
-    controller_mock.autoscaler = autoscaler
     worker_caps = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"

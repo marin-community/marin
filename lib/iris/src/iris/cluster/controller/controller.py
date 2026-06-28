@@ -28,7 +28,6 @@ from iris.cluster.config import BackendConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
-from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -1611,19 +1610,3 @@ class Controller:
     @property
     def url(self) -> str:
         return f"http://{self.external_host}:{self.port}"
-
-    @property
-    def autoscaler(self) -> Autoscaler | None:
-        """The first backend's Iris autoscaler, if any.
-
-        Read-only handle for the status RPCs that still read a single autoscaler
-        (feasibility, pending hints). Capacity is driven through
-        ``backend.autoscale``, and dashboard autoscaler status merges every
-        backend's autoscaler. Returns the first backend (in processing order)
-        that owns an autoscaler so a single-autoscaler cluster keeps those RPCs.
-        """
-        for backend_id in self._backend_ids:
-            autoscaler = self._backends[backend_id].autoscaler
-            if autoscaler is not None:
-                return autoscaler
-        return None

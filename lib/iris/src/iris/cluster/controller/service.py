@@ -425,10 +425,14 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId):
-    """Return a slim (worker_id, address) row for ``worker_id``, or None."""
+    """Return a slim (worker_id, address, scale_group) row for ``worker_id``, or None."""
     with db.read_snapshot() as tx:
         return tx.execute(
-            select(workers_table.c.worker_id, workers_table.c.address).where(workers_table.c.worker_id == worker_id)
+            select(
+                workers_table.c.worker_id,
+                workers_table.c.address,
+                workers_table.c.scale_group,
+            ).where(workers_table.c.worker_id == worker_id)
         ).first()
 
 
@@ -884,36 +888,6 @@ def _attempts_for_worker(
     return out
 
 
-class AutoscalerProtocol(Protocol):
-    """Protocol for autoscaler operations used by ControllerServiceImpl."""
-
-    def get_status(self) -> vm_pb2.AutoscalerStatus:
-        """Get autoscaler status."""
-        ...
-
-    def get_pending_hints(self) -> dict[str, PendingHint]:
-        """Get cached pending-hint dict keyed by job id."""
-        ...
-
-    def get_vm(self, vm_id: str) -> vm_pb2.VmInfo | None:
-        """Get info for a specific VM."""
-        ...
-
-    def job_feasibility(
-        self,
-        constraints: list[Constraint],
-        *,
-        replicas: int | None = None,
-        resources: job_pb2.ResourceSpecProto | None = None,
-    ) -> str | None:
-        """Check if a job can ever be scheduled. Returns error message or None."""
-        ...
-
-    def get_init_log(self, vm_id: str, tail: int | None = None) -> str:
-        """Get initialization log for a VM."""
-        ...
-
-
 @dataclass(frozen=True, slots=True)
 class PendingKick:
     """A queued administrative task kick.
@@ -943,9 +917,6 @@ class ControllerProtocol(Protocol):
 
     @property
     def last_scheduling_context(self) -> SchedulingContext | None: ...
-
-    @property
-    def autoscaler(self) -> AutoscalerProtocol | None: ...
 
     @property
     def provider(self) -> Any: ...
@@ -1049,14 +1020,20 @@ class ControllerServiceImpl:
         return self._bundle_store.get(blob_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
-        """Build autoscaler-based pending hints keyed by job id."""
-        autoscaler = self._controller.autoscaler
-        if autoscaler is None:
-            return {}
-        # Autoscaler caches the hint dict per evaluate() cycle; this avoids
-        # rebuilding the full AutoscalerStatus proto on every GetJobStatus
-        # RPC (#4844).
-        return autoscaler.get_pending_hints()
+        """Build autoscaler-based pending hints keyed by job id, merged across
+        every backend's autoscaler.
+
+        Each backend owns a disjoint set of scale groups (and thus jobs), so the
+        per-backend hint dicts never collide on a job id. Each autoscaler caches
+        its hint dict per evaluate() cycle, so this stays a cheap merge rather
+        than a full AutoscalerStatus rebuild on every GetJobStatus RPC.
+        """
+        hints: dict[str, PendingHint] = {}
+        for backend in self._controller.backends.values():
+            autoscaler = backend.autoscaler
+            if autoscaler is not None:
+                hints.update(autoscaler.get_pending_hints())
+        return hints
 
     def _authorize_job_owner(self, job_id: JobName) -> None:
         """Raise PERMISSION_DENIED if the authenticated user doesn't own this job.
@@ -1368,23 +1345,35 @@ class ControllerServiceImpl:
         if tpu_error:
             raise ConnectError(Code.INVALID_ARGUMENT, tpu_error)
 
-        # Reject jobs that can never be scheduled so they fail fast instead
-        # of sitting in the pending queue. For coscheduled jobs this also
-        # verifies the replica count is compatible with some group's num_vms.
-        autoscaler = self._controller.autoscaler
-        if autoscaler is not None:
-            replicas = request.replicas if request.HasField("coscheduling") else None
-            constraints = [Constraint.from_proto(c) for c in request.constraints]
+        # Reject jobs that no backend could ever schedule so they fail fast
+        # instead of sitting in the pending queue. The job is feasible if any
+        # backend can host its shape; a backend without an autoscaler (e.g. a
+        # cluster-view backend) can't prove infeasibility here, so its presence
+        # means we don't fast-fail. For coscheduled jobs this also verifies the
+        # replica count is compatible with some group's num_vms.
+        replicas = request.replicas if request.HasField("coscheduling") else None
+        constraints = [Constraint.from_proto(c) for c in request.constraints]
+        feasibility_errors: list[str] = []
+        feasible = False
+        for backend in self._controller.backends.values():
+            autoscaler = backend.autoscaler
+            if autoscaler is None:
+                feasible = True
+                break
             error = autoscaler.job_feasibility(
                 constraints=constraints,
                 replicas=replicas,
                 resources=request.resources,
             )
-            if error:
-                raise ConnectError(
-                    Code.FAILED_PRECONDITION,
-                    f"Job {job_id} is unschedulable: {error} (constraints: {constraints})",
-                )
+            if error is None:
+                feasible = True
+                break
+            feasibility_errors.append(error)
+        if not feasible and feasibility_errors:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Job {job_id} is unschedulable: {feasibility_errors[0]} (constraints: {constraints})",
+            )
 
         with self._db.transaction() as cur:
             # Re-check inside the same tx as the INSERT. Two LaunchJob
@@ -2040,6 +2029,12 @@ class ControllerServiceImpl:
         """The controller's full backend collection (for the union capabilities descriptor)."""
         return self._controller.backends
 
+    def _backend_for_id(self, backend_id: str) -> TaskBackend:
+        """Resolve a backend by id for per-task/-worker dispatch (profile, exec,
+        process status), falling back to the representative backend when the id is
+        empty or unknown — the single-backend case and any pre-routing rows."""
+        return self._controller.backends.get(backend_id) or self._controller.provider
+
     def resolve_endpoint(self, name: str) -> str | None:
         """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
         row = self._endpoints.resolve(name)
@@ -2259,7 +2254,10 @@ class ControllerServiceImpl:
                 worker_id=worker.worker_id,
                 address=worker.address,
             )
-            resp = self._controller.provider.profile_task(worker_target, forwarded, timeout_ms)
+            worker_backend = self._backend_for_id(
+                self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
+            )
+            resp = worker_backend.profile_task(worker_target, forwarded, timeout_ms)
             return job_pb2.ProfileTaskResponse(
                 profile_data=resp.profile_data,
                 error=resp.error,
@@ -2299,7 +2297,7 @@ class ControllerServiceImpl:
             )
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
-        resp = self._controller.provider.profile_task(task_target, request, timeout_ms)
+        resp = self._backend_for_id(str(task.backend_id or "")).profile_task(task_target, request, timeout_ms)
         return job_pb2.ProfileTaskResponse(
             profile_data=resp.profile_data,
             error=resp.error,
@@ -2430,7 +2428,10 @@ class ControllerServiceImpl:
             address=worker.address,
         )
         try:
-            return self._controller.provider.get_process_status(process_target, request)
+            worker_backend = self._backend_for_id(
+                self._controller.backend_id_for_scale_group(str(worker.scale_group or ""))
+            )
+            return worker_backend.get_process_status(process_target, request)
         except ProviderError as exc:
             raise ConnectError(Code.UNAVAILABLE, str(exc)) from exc
 
@@ -2636,7 +2637,7 @@ class ControllerServiceImpl:
             )
             timeout = request.timeout_seconds
 
-        resp = self._controller.provider.exec_in_container(exec_target, worker_request, timeout)
+        resp = self._backend_for_id(str(task.backend_id or "")).exec_in_container(exec_target, worker_request, timeout)
         return controller_pb2.Controller.ExecInContainerResponse(
             exit_code=resp.exit_code,
             stdout=resp.stdout,
