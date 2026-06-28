@@ -59,6 +59,20 @@
 
     let runsCache = [];
 
+    // wandb run state -> status glyph, shown as a prefix in the run datalist.
+    const STATE_ICON = {
+      running: "🟢", finished: "✅", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡",
+    };
+    const ICONS = Object.values(STATE_ICON).concat("⚪");
+    const stateIcon = (s) => STATE_ICON[s] || "⚪";
+    // Strip a leading status glyph so the bare run id reaches the API (run ids have
+    // no spaces, so this only removes the icon we prepended).
+    function cleanRunId(v) {
+      v = (v || "").trim();
+      for (const ic of ICONS) if (v.startsWith(ic + " ")) return v.slice(ic.length + 1).trim();
+      return v;
+    }
+
     const jget = (url) => fetch(url).then((r) => r.json()).catch(() => ({}));
     function fillList(id, values) {
       const dl = $(id);
@@ -94,7 +108,7 @@
     function renderRunList() {
       const u = $("user").value.trim().toLowerCase();
       const runs = u ? runsCache.filter((r) => (r.user || "").toLowerCase() === u) : runsCache;
-      fillList("run-list", runs.map((r) => r.id));
+      fillList("run-list", runs.map((r) => `${stateIcon(r.state)} ${r.id}`));
     }
 
     async function init() {
@@ -110,7 +124,7 @@
     }
 
     function refs() {
-      return { entity: $("entity").value.trim(), project: $("project").value.trim(), run: $("run").value.trim() };
+      return { entity: $("entity").value.trim(), project: $("project").value.trim(), run: cleanRunId($("run").value) };
     }
 
     function setTab(pane) {
@@ -226,7 +240,10 @@
     $("entity").addEventListener("change", loadProjects);
     $("project").addEventListener("change", loadRuns);
     $("user").addEventListener("change", renderRunList);
-    $("run").addEventListener("change", () => { if ($("run").value) load(); });
+    $("run").addEventListener("change", () => {
+      const id = cleanRunId($("run").value);  // drop the status glyph once a run is picked
+      if (id) { $("run").value = id; load(); }
+    });
     $("load").addEventListener("click", load);
     $("run").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
     init();
