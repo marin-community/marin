@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
+import { useBackends } from '@/composables/useBackends'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
@@ -31,6 +32,8 @@ const isMobile = useMediaQuery('(max-width: 639px)')
 const props = defineProps<{
   jobId: string
 }>()
+
+const { multiBackend } = useBackends()
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
@@ -953,6 +956,9 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
               {{ bandDisplayName(jobRequest.priorityBand) }}
             </span>
+          </InfoRow>
+          <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
+            <span class="font-mono">{{ job!.backendId }}</span>
           </InfoRow>
         </InfoCard>
 

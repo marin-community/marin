@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { useControllerRpc, useLogServerStatsRpc, logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
+import { useBackends } from '@/composables/useBackends'
 import type {
   GetWorkerStatusResponse,
   WorkerTaskAttempt,
@@ -25,6 +26,8 @@ import CopyButton from '@/components/shared/CopyButton.vue'
 const props = defineProps<{
   workerId: string
 }>()
+
+const { multiBackend } = useBackends()
 
 const {
   data,
@@ -407,6 +410,9 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           </InfoRow>
           <InfoRow v-if="data.scaleGroup" label="Scale Group">
             <span class="font-mono">{{ data.scaleGroup }}</span>
+          </InfoRow>
+          <InfoRow v-if="multiBackend && worker?.backendId" label="Backend">
+            <span class="font-mono">{{ worker!.backendId }}</span>
           </InfoRow>
           <InfoRow v-if="worker?.metadata?.gitHash" label="Git Hash">
             <span class="font-mono text-xs">{{ worker.metadata.gitHash }}</span>
