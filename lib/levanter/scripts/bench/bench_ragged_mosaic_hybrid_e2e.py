@@ -157,10 +157,9 @@ def main():
     ap.add_argument("--forward-only", action="store_true")
     args = ap.parse_args()
 
-    # With a jaxlib whose Mosaic wgmma verifier allows mixed E4M3/E5M2 operands
-    # (mcwitt/jax mixed-fp8-wgmma), grad_dtype=e5m2 lowers: both backward GEMMs become
-    # mixed (dlhs = e5m2-grad x e4m3-rhs, wgrad = e4m3-act x e5m2-grad). On a stock jaxlib
-    # this raises in the Mosaic kernels — run e5m2+mosaic only on the patched build.
+    # grad_dtype=e5m2 makes both backward GEMMs mixed (dlhs = e5m2-grad x e4m3-rhs,
+    # wgrad = e4m3-act x e5m2-grad). On stock jax/jaxlib the mixed wgmma is enabled by
+    # haliax._src.mixed_fp8_wgmma_shim, auto-activated from the FP8 ragged path — no forked wheel.
 
     dtype = jnp.dtype(args.dtype)
     grad_dtype = _GRAD_DTYPES[args.grad_dtype]

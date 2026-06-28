@@ -20,6 +20,7 @@ import jax
 import jax.numpy as jnp
 from jax import custom_vjp
 
+from haliax._src import mixed_fp8_wgmma_shim
 from haliax._src.fp8 import _new_scale_and_history, dequantize, in_q, out_dq, quantize
 from haliax._src.fp8_cast_transpose import cast_transpose, in_q_transpose
 from haliax.nn.ragged_dot import (
@@ -279,6 +280,9 @@ def fp8_scaled_ragged_dot(
         ``[tokens, out]`` activations. Scale/amax state is returned as gradients of the
         corresponding arguments (overwrite-with-gradient).
     """
+    # Enable mixed E4M3/E5M2 Hopper wgmma on stock jax/jaxlib before any mosaic kernel traces.
+    # Idempotent; a no-op on the bf16-wgrad / triton / xla backward, which never mixes f8 types.
+    mixed_fp8_wgmma_shim.activate_if_supported()
     tokens = lhs.shape[0]
     pad = (-tokens) % _RAGGED_PAD_MULTIPLE
     if pad:

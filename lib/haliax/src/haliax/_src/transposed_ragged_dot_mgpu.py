@@ -71,7 +71,8 @@ def transposed_ragged_dot(
     """
     # Hopper f8 wgmma takes independent .atype/.btype operands, so the E4M3/E5M2 pair may be mixed
     # (the hybrid recipe: E4M3 activations, E5M2 output-grad). Any other dtype mismatch is rejected.
-    # Requires a jaxlib whose Mosaic-GPU wgmma verifier allows the mix (mcwitt/jax mixed-fp8-wgmma).
+    # On stock jax/jaxlib the mix is enabled by haliax._src.mixed_fp8_wgmma_shim (activated from the
+    # FP8 ragged path); see that module for the overlay it installs.
     if lhs.dtype != rhs.dtype and not (lhs.dtype in _F8_DTYPES and rhs.dtype in _F8_DTYPES):
         raise NotImplementedError(f"lhs and rhs must have the same dtype, got {lhs.dtype} and {rhs.dtype}")
     block_m, block_n, block_k = config.block_m, config.block_n, config.block_k
