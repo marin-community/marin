@@ -38,9 +38,10 @@ DEFAULT_THRESHOLD = 0.5
 class TrainHParams:
     # Large batches keep the step count (and thus per-step XLA dispatch overhead)
     # low -- the model is tiny, so dispatch latency, not compute, dominates.
-    lr: float = 1e-3
+    lr: float = 5e-4
     weight_decay: float = 0.05
-    epochs: int = 50
+    grad_clip: float = 1.0
+    epochs: int = 60
     batch_size: int = 512
     warmup_frac: float = 0.15
     val_frac: float = 0.1
@@ -164,7 +165,10 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
         decay_steps=total_steps,
         end_value=hp.lr * 0.05,
     )
-    optimizer = optax.adamw(schedule, weight_decay=hp.weight_decay)
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(hp.grad_clip),
+        optax.adamw(schedule, weight_decay=hp.weight_decay),
+    )
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     @eqx.filter_jit
