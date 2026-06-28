@@ -100,13 +100,22 @@ def _predict_batch(model: FastTransformer, ids):
     return jax.nn.sigmoid(model(ids, key=None, inference=True))
 
 
-def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int = 256) -> np.ndarray:
+# Tokens per inference batch; bounds the [B, T, E] embedding activation so long
+# context (T up to 16k) auto-shrinks the batch instead of OOMing one v6e chip.
+_PREDICT_TOKEN_BUDGET = 262_144
+
+
+def _predict(model: FastTransformer, ids: np.ndarray, batch_size: int | None = None) -> np.ndarray:
     """Sigmoid quality score for every row in ``ids``.
 
     Chunks are padded to a constant ``batch_size`` so ``_predict_batch`` compiles
-    once per model structure and is reused across all epochs and configs (the
-    per-epoch val eval would otherwise dominate the sweep with recompiles).
+    once per sequence length and is reused across all epochs and configs (the
+    per-epoch val eval would otherwise dominate the sweep with recompiles). When
+    ``batch_size`` is not given it is sized from the sequence length to keep the
+    activation footprint bounded.
     """
+    if batch_size is None:
+        batch_size = max(8, _PREDICT_TOKEN_BUDGET // ids.shape[1])
     out: list[np.ndarray] = []
     n = ids.shape[0]
     for start in range(0, n, batch_size):

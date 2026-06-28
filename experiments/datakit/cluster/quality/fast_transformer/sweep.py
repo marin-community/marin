@@ -8,12 +8,15 @@ split and reports held-out oracle metrics for each, so we can read off the
 effect of each design choice (pooling kind, pool window, depth, width,
 regularization) against the fasttext baseline (AUC 0.846 / Spearman 0.641).
 
-Two grids:
+Three grids:
 
 * ``phase1`` -- one axis at a time off a fixed anchor (meanmaxmin / w=64 /
   d=512 / L=4); isolates each architectural knob.
 * ``refine`` -- regularization and vocabulary-pruning variants on the anchor,
   to push generalization on the small (5.6k-doc) oracle set.
+* ``context`` -- a context-length ladder (1k -> 16k tokens) at the anchor, since
+  the model and the baseline only read ~the first 1k of each doc while the oracle
+  scored up to ~8k tokens; pooling makes the extra context cheap.
 
 Each grid entry declares the tokenization it needs (``max_tokens``,
 ``min_count``); the runner packs once per distinct requirement and reuses it.
@@ -50,7 +53,7 @@ logger = logging.getLogger(__name__)
 # Fasttext baseline on the same holdout (model/sonnet46-thr05), for reference.
 BASELINE = {"auc": 0.846, "spearman_rho": 0.641, "accuracy": 0.784, "f1": 0.718}
 
-FLOPS_BUDGET = 1_000_000
+DEFAULT_FLOPS_BUDGET = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -130,9 +133,47 @@ def build_refine_grid() -> list[GridEntry]:
     return entries
 
 
+def build_context_grid() -> list[GridEntry]:
+    """Long-context sweep: see the whole document, not just its head.
+
+    The oracle scored each doc on up to 32k chars (~8k tokens), but the model AND
+    the fasttext baseline only read ~the first 1k tokens -- 28% of all tokens
+    (median doc 646 tokens, mean 2319, 90th pct ~7.9k). Pooling makes long context
+    cheap (per-token cost is roughly flat at fixed window), so feed 4k-16k tokens
+    and measure whether the rest of the document carries quality signal. This also
+    finally gives attention a real job: 64-256 super-tokens spanning the full doc.
+
+    Batch size scales down with context so the [B, T, E] embedding activation stays
+    bounded on a single v6e chip (the model is not sharded); epochs scale down too
+    since the smaller batch means more steps per epoch.
+    """
+
+    def hp(batch_size: int, epochs: int) -> TrainHParams:
+        return replace(TrainHParams(), batch_size=batch_size, epochs=epochs)
+
+    return [
+        # Context ladder at the anchor architecture (meanmaxmin / w=64 / d=512 / L=4).
+        GridEntry("ctx1024-w64", 1024, 2, lambda v: _anchor(v), hp(512, 60)),
+        GridEntry("ctx4096-w64", 4096, 2, lambda v: replace(_anchor(v), max_tokens=4096), hp(128, 40)),
+        GridEntry("ctx8192-w64", 8192, 2, lambda v: replace(_anchor(v), max_tokens=8192), hp(64, 30)),
+        GridEntry("ctx16384-w64", 16384, 2, lambda v: replace(_anchor(v), max_tokens=16384), hp(32, 25)),
+        # Does depth/finer attention pay off now that attention spans the full doc?
+        GridEntry("ctx8192-w64-L8", 8192, 2, lambda v: replace(_anchor(v), max_tokens=8192, num_layers=8), hp(64, 30)),
+        GridEntry("ctx8192-w32", 8192, 2, lambda v: replace(_anchor(v), max_tokens=8192, pool_window=32), hp(64, 30)),
+        GridEntry(
+            "ctx16384-w128-L6",
+            16384,
+            2,
+            lambda v: replace(_anchor(v), max_tokens=16384, pool_window=128, num_layers=6),
+            hp(32, 25),
+        ),
+    ]
+
+
 GRIDS: dict[str, Callable[[], list[GridEntry]]] = {
     "phase1": build_phase1_grid,
     "refine": build_refine_grid,
+    "context": build_context_grid,
 }
 
 
@@ -172,7 +213,14 @@ def _load_done(out_dir: str) -> list[dict]:
 
 
 def run_sweep(
-    *, grid: list[GridEntry], train_path: str, eval_path: str, out_dir: str, tokenizer: str, cache_dir: str
+    *,
+    grid: list[GridEntry],
+    train_path: str,
+    eval_path: str,
+    out_dir: str,
+    tokenizer: str,
+    cache_dir: str,
+    flops_budget: int,
 ) -> None:
     logger.info("jax backend=%s devices=%s", jax.default_backend(), jax.devices())
     logger.info(
@@ -204,8 +252,8 @@ def run_sweep(
         for entry in pending:
             cfg = entry.build(data.vocab_size)
             flops = cfg.flops_per_token()
-            if flops > FLOPS_BUDGET:
-                logger.warning("SKIP %s: %.0f FLOPs/token over budget", entry.label, flops)
+            if flops > flops_budget:
+                logger.warning("SKIP %s: %.0f FLOPs/token over budget %d", entry.label, flops, flops_budget)
                 continue
             logger.info("=== %s (FLOPs/tok=%.0f) ===", entry.label, flops)
             result: RunResult = train_one(cfg, data, entry.hp)
@@ -230,6 +278,9 @@ def main() -> None:
     parser.add_argument("--grid", choices=sorted(GRIDS), default="phase1")
     parser.add_argument("--tokenizer", default="marin-community/marin-tokenizer")
     parser.add_argument("--cache-dir", default="/tmp/ft-quality-cache")
+    parser.add_argument(
+        "--flops-budget", type=int, default=DEFAULT_FLOPS_BUDGET, help="Skip configs above this FLOPs/token"
+    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
@@ -240,6 +291,7 @@ def main() -> None:
         out_dir=args.out,
         tokenizer=args.tokenizer,
         cache_dir=args.cache_dir,
+        flops_budget=args.flops_budget,
     )
 
 
