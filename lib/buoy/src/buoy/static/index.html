@@ -33,11 +33,37 @@
     .tabs { display: flex; gap: .5em; padding: .4em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
     .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
     .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
-    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; padding: 1.25em; }
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
     .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
     #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
     .hidden { display: none; }
     a { color: #0d3b66; }
+    .pane { padding: 1.25em 1.5em; }
+    .search {
+      width: min(560px, 92vw); padding: .55em .8em; font-size: 13px; border: 1px solid #cbd5e0;
+      border-radius: 7px; margin-bottom: 1em; display: block;
+    }
+    .search:focus { outline: none; border-color: #0d3b66; box-shadow: 0 0 0 3px rgba(13, 59, 102, .15); }
+    #info { display: flex; flex-wrap: wrap; gap: .5em 1.4em; align-items: baseline; margin-bottom: 1.1em; }
+    #info .name { font-size: 1.15em; font-weight: 650; color: #0d3b66; word-break: break-all; }
+    #info .pill {
+      font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; padding: .2em .65em;
+      border-radius: 999px; background: #edf2f7; color: #2d3748; font-weight: 600;
+    }
+    #info .kv { color: #4a5568; font-size: .9em; }
+    #info .kv b { color: #1a1a1a; font-weight: 600; }
+    .kv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5em; align-items: start; }
+    .kv-col h3 { margin: 0 0 .5em; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: #718096; }
+    .kv-col table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .kv-col td { padding: .32em .5em; border-bottom: 1px solid #eef2f6; vertical-align: top; word-break: break-word; }
+    .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
+    .kv-col td.v { font-family: ui-monospace, monospace; }
+    #metric-list {
+      display: flex; flex-wrap: wrap; gap: .25em 1.1em; max-height: 190px; overflow: auto;
+      padding: .6em .8em; border: 1px solid #e2e8f0; border-radius: 7px; background: #fff; margin-bottom: 1.1em;
+    }
+    #metric-list label { font-size: 12px; font-family: ui-monospace, monospace; white-space: nowrap; cursor: pointer; }
+    @media (max-width: 760px) { .kv-cols { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -54,13 +80,28 @@
     <button id="load">load</button>
   </header>
   <div id="status"></div>
-  <div id="meta"></div>
   <div class="tabs hidden" id="tabs">
-    <div class="tab active" data-pane="metrics-pane">metrics</div>
-    <div class="tab" data-pane="profile-pane">xprof profile</div>
+    <div class="tab active" data-pane="summary-pane">summary</div>
+    <div class="tab" data-pane="charts-pane">charts</div>
+    <div class="tab" data-pane="profile-pane">profile</div>
   </div>
-  <div id="metrics-pane"><div id="charts"></div></div>
-  <div id="profile-pane" class="hidden"></div>
+
+  <div id="summary-pane" class="pane">
+    <div id="info"></div>
+    <input id="summary-search" class="search" placeholder="filter summary metrics &amp; config…">
+    <div class="kv-cols">
+      <div class="kv-col"><h3>summary metrics</h3><table id="summary-table"></table></div>
+      <div class="kv-col"><h3>config</h3><table id="config-table"></table></div>
+    </div>
+  </div>
+
+  <div id="charts-pane" class="pane hidden">
+    <input id="metric-search" class="search" placeholder="search metrics to plot…">
+    <div id="metric-list"></div>
+    <div id="charts"></div>
+  </div>
+
+  <div id="profile-pane" class="pane hidden"></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -71,6 +112,7 @@
     const qs = (o) => new URLSearchParams(o).toString();
     let current = null;          // { r, m } for the loaded run
     let profileStarted = false;  // prepare the profile lazily, on first tab open
+    let selectedMetrics = [];    // metrics chosen in the charts tab
 
     // wandb run state -> status glyph, shown as a prefix in the run datalist.
     const STATE_ICON = {
@@ -141,8 +183,7 @@
 
     function setTab(pane) {
       document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.pane === pane));
-      $("metrics-pane").classList.toggle("hidden", pane !== "metrics-pane");
-      $("profile-pane").classList.toggle("hidden", pane !== "profile-pane");
+      document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("hidden", p.id !== pane));
       if (pane === "profile-pane" && current && current.m.profile && !profileStarted) {
         profileStarted = true;
         prepareProfile(current.r, $("profile-pane"));
@@ -157,7 +198,7 @@
       const u = $("user").value.trim();
       history.replaceState(null, "", "?" + qs(u ? { ...r, user: u } : r));
       $("charts").innerHTML = "";
-      $("meta").textContent = "";
+      $("info").textContent = "";
       $("tabs").classList.add("hidden");
       profileStarted = false;
       current = null;
@@ -178,41 +219,100 @@
       render(r);
     }
 
-    // Build the run header with textContent — display_name/url are user-controlled.
-    function renderMeta(m) {
-      const meta = $("meta");
-      meta.textContent = "";
-      const name = document.createElement("b");
-      name.textContent = m.display_name;
-      meta.appendChild(name);
-      meta.appendChild(document.createTextNode(
-        ` · state=${m.state} · ${m.history.rows} steps · ${m.history.columns.length} metrics · `));
-      const a = document.createElement("a");
-      a.textContent = "wandb ↗";
-      a.target = "_blank";
-      a.rel = "noopener";
+    // ---- helpers (all user-controlled text via textContent — no innerHTML) ----
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const fmtVal = (v) =>
+      v == null ? "" : typeof v === "object" ? JSON.stringify(v)
+        : typeof v === "number" ? (Number.isInteger(v) ? String(v) : String(+v.toFixed(6))) : String(v);
+    function flatten(obj, prefix = "", out = {}) {
+      for (const [k, v] of Object.entries(obj || {})) {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === "object" && !Array.isArray(v)) flatten(v, key, out);
+        else out[key] = v;
+      }
+      return out;
+    }
+
+    function renderInfo(m) {
+      const info = $("info");
+      info.textContent = "";
+      info.appendChild(el("span", "name", m.display_name));
+      info.appendChild(el("span", "pill", m.state));
+      const add = (label, val) => {
+        if (val == null || val === "") return;
+        const s = el("span", "kv");
+        s.append(label + " ", el("b", null, String(val)));
+        info.appendChild(s);
+      };
+      add("user", m.user);
+      add("created", (m.created_at || "").replace("T", " ").replace("Z", ""));
+      add("steps", m.history.rows);
+      add("metrics", m.history.columns.length);
+      if (m.tags && m.tags.length) add("tags", m.tags.join(", "));
+      const a = el("a", null, "open in wandb ↗");
+      a.target = "_blank"; a.rel = "noopener";
       if (/^https?:\/\//.test(m.url || "")) a.href = m.url;
-      meta.appendChild(a);
+      info.appendChild(a);
+      if (m.notes) { const n = el("div", "kv", "notes: " + m.notes); n.style.flexBasis = "100%"; info.appendChild(n); }
+    }
+
+    function fillKV(tableId, obj, q) {
+      const t = $(tableId);
+      t.textContent = "";
+      for (const k of Object.keys(obj || {}).filter((k) => !q || k.toLowerCase().includes(q)).sort()) {
+        const tr = document.createElement("tr");
+        tr.append(el("td", "k", k), el("td", "v", fmtVal(obj[k])));
+        t.appendChild(tr);
+      }
+    }
+    function renderKV() {
+      const q = $("summary-search").value.trim().toLowerCase();
+      fillKV("summary-table", current.summary, q);
+      fillKV("config-table", current.config, q);
+    }
+
+    function buildMetricList(cols) {
+      const box = $("metric-list");
+      box.textContent = "";
+      for (const c of cols) {
+        const lab = el("label");
+        lab.dataset.key = c.toLowerCase();
+        const cb = el("input"); cb.type = "checkbox"; cb.value = c;
+        lab.append(cb, " " + c);
+        box.appendChild(lab);
+      }
+    }
+    function syncMetricChecks() {
+      document.querySelectorAll("#metric-list input").forEach((cb) => { cb.checked = selectedMetrics.includes(cb.value); });
+    }
+    async function plotSelected() {
+      const charts = $("charts");
+      charts.textContent = "";
+      if (!selectedMetrics.length) { charts.textContent = "select metrics above to plot"; return; }
+      const data = (await jget("api/metrics?" + qs({ ...current.r, keys: selectedMetrics.join(",") }))).metrics || {};
+      for (const key of selectedMetrics) drawChart(key, data[key] || []);
     }
 
     async function render(r) {
-      const m = await fetch("api/manifest?" + qs(r)).then((x) => x.json());
+      const m = await jget("api/manifest?" + qs(r));
       current = { r, m };
       $("status").textContent = "";
-      renderMeta(m);
+      renderInfo(m);
       $("tabs").classList.remove("hidden");
-      setTab("metrics-pane");
+      setTab("summary-pane");
 
-      const cols = new Set(m.history.columns);
-      const keys = DEFAULT_METRICS.filter((k) => cols.has(k));
-      const plotKeys = keys.length ? keys : m.history.columns.slice(0, 8);
-      const data = await fetch("api/metrics?" + qs({ ...r, keys: plotKeys.join(",") })).then((x) => x.json());
-      const metrics = data.metrics || {};
-      for (const key of plotKeys) drawChart(key, metrics[key] || []);
+      const [cfg, summ] = await Promise.all([jget("api/config?" + qs(r)), jget("api/summary?" + qs(r))]);
+      current.config = flatten(cfg.error ? {} : cfg);
+      current.summary = flatten(summ.error ? {} : summ);
+      renderKV();
 
-      const pane = $("profile-pane");
-      pane.textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
-      pane.style.padding = "1em";
+      buildMetricList(m.history.columns);
+      selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
+      if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
+      syncMetricChecks();
+      plotSelected();
+
+      $("profile-pane").textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
     }
 
     async function prepareProfile(r, pane) {
@@ -265,6 +365,22 @@
     });
     $("load").addEventListener("click", load);
     $("run").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+
+    // summary tab: filter both tables; charts tab: filter the metric list + toggle plots
+    $("summary-search").addEventListener("input", () => { if (current) renderKV(); });
+    $("metric-search").addEventListener("input", () => {
+      const q = $("metric-search").value.trim().toLowerCase();
+      document.querySelectorAll("#metric-list label").forEach((l) => {
+        l.style.display = (!q || l.dataset.key.includes(q)) ? "" : "none";
+      });
+    });
+    $("metric-list").addEventListener("change", (e) => {
+      if (!e.target.matches('input[type="checkbox"]')) return;
+      const v = e.target.value;
+      if (e.target.checked) { if (!selectedMetrics.includes(v)) selectedMetrics.push(v); }
+      else selectedMetrics = selectedMetrics.filter((k) => k !== v);
+      plotSelected();
+    });
     init();
   </script>
 </body>

@@ -188,6 +188,15 @@ async def get_config(request: Request) -> JSONResponse:
     return JSONResponse(config)
 
 
+async def get_summary(request: Request) -> JSONResponse:
+    """The run's summary metrics (final logged values), for the summary tab."""
+    cfg: BuoyConfig = request.app.state.cfg
+    summary = cache.read_json(posixpath.join(_prefix(cfg, _ref(request)), "summary.json"))
+    if summary is None:
+        return JSONResponse({"error": "not mirrored"}, status_code=404)
+    return JSONResponse(summary)
+
+
 # ------------------------------------------------------------------- xprof embed
 
 
@@ -303,6 +312,7 @@ def build_app(cfg: BuoyConfig) -> Starlette:
             Route("/api/manifest", get_manifest),
             Route("/api/metrics", get_metrics),
             Route("/api/config", get_config),
+            Route("/api/summary", get_summary),
             Route("/api/profile_prepare", prepare_profile, methods=["POST"]),
             Route("/api/profile_status", profile_status),
             Route("/wrap/{entity}/{project}/{run_id}", xprof_wrap),
