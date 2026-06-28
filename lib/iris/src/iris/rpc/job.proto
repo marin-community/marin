@@ -254,6 +254,11 @@ message TaskStatus {
   // The list view attaches only the latest failed attempt, so this carries the
   // true count for the dashboard's failure badge.
   int32 failure_count = 23;
+
+  // Literal owning backend id: DEFAULT_BACKEND_ID ("default") on single-backend
+  // clusters, the routed id once pinned, empty ONLY while a job is genuinely
+  // unrouted. Never an overloaded sentinel; the UI hides the column via multiBackend.
+  string backend_id = 24;
 }
 
 // Record of a single task execution attempt
@@ -355,6 +360,9 @@ message JobStatus {
   // Parent job id, if this job was launched as a child of another job.
   // Empty for root jobs.
   string parent_job_id = 33;
+
+  // Literal owning backend id. See TaskStatus.backend_id.
+  string backend_id = 34;
 }
 
 // ============================================================================

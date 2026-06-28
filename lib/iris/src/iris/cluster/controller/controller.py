@@ -341,6 +341,7 @@ class Controller:
         self._scale_group_to_backend: dict[str, str] = {
             scale_group: bid for bid, cfg in backend_configs.items() for scale_group in cfg.scale_groups
         }
+        self._last_unroutable_jobs: dict[str, str] = {}
 
         self._promotion_bucket = TokenBucket(
             capacity=DISPATCH_PROMOTION_RATE,
@@ -883,7 +884,7 @@ class Controller:
         """
 
         def owns_scale_group(scale_group: str) -> bool:
-            return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID) == backend_id
+            return self.backend_id_for_scale_group(scale_group) == backend_id
 
         return DbWorkerSource(
             db=self._db,
@@ -974,11 +975,13 @@ class Controller:
                     constraints=constraints_from_json(task.constraints_json),
                 )
         if not unpinned:
+            self._last_unroutable_jobs = {}
             return {}, []
         result = route_jobs_to_backends(list(unpinned.values()), self._backend_routing, self._backend_index)
         routing_unschedulable = [
             (task, reason) for job_id, reason in result.unschedulable.items() for task in rows_by_job.get(job_id, [])
         ]
+        self._last_unroutable_jobs = {job_id.to_wire(): reason for job_id, reason in result.unschedulable.items()}
         return result.pins, routing_unschedulable
 
     def _make_backend_of_job(
@@ -1559,6 +1562,20 @@ class Controller:
     def backends(self) -> dict[str, TaskBackend]:
         """The controller's ``{backend_id: TaskBackend}`` collection."""
         return self._backends
+
+    def backend_id_for_scale_group(self, scale_group: str) -> str:
+        """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""
+        return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    @property
+    def scale_group_to_backend(self) -> dict[str, str]:
+        """The ``{scale_group: backend_id}`` routing map."""
+        return self._scale_group_to_backend
+
+    @property
+    def last_unroutable_jobs(self) -> dict[str, str]:
+        """Job wire ids -> reason from the last scheduling tick's routing pass."""
+        return self._last_unroutable_jobs
 
     @property
     def provider(self) -> TaskBackend:

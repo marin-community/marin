@@ -223,6 +223,12 @@ class MockController:
         self.provider = Mock()
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
+        self.scale_group_to_backend: dict[str, str] = {}
+        self.last_unroutable_jobs: dict[str, str] = {}
+        self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
+
+    def backend_id_for_scale_group(self, scale_group: str) -> str:
+        return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
 
 
 @pytest.fixture

@@ -494,6 +494,11 @@ class TaskBackend(Protocol):
     controller exposes for dashboard/status RPCs; capacity is driven through
     :meth:`autoscale`, never this attribute."""
 
+    allowed_users: frozenset[str]
+    """The allow policy: user ids permitted to route here (``"*"`` matches any).
+    Set by the composer via :meth:`configure_routing`; read for the dashboard's
+    restricted / allowed-user-count summary."""
+
     def advertised_attributes(self) -> dict[str, set[str]]:
         """Backend-global attributes the meta-scheduler routes against.
 

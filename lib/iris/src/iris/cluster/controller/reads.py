@@ -267,6 +267,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_memory_bytes,
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
+    jobs_table.c.backend_id,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -281,6 +282,7 @@ def _apply_job_filters(
     state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
+    backend_id_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -297,6 +299,8 @@ def _apply_job_filters(
     if job_id_prefix:
         escaped = job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
+    if backend_id_filter:
+        stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
     return stmt
 
 
@@ -354,6 +358,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     if needs_task_agg:
@@ -368,6 +373,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     offset = max(query.offset, 0)
@@ -1012,6 +1018,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.backend_id,
 )
 
 
@@ -1233,6 +1240,7 @@ WORKER_DETAIL_COLS = (
     workers_table.c.md_gce_zone,
     workers_table.c.md_git_hash,
     workers_table.c.md_device_json,
+    workers_table.c.scale_group,
 )
 
 

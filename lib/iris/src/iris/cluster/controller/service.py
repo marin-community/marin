@@ -135,6 +135,9 @@ _JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
 # the per-autoscaler action_log deque cap so a single-backend view is unchanged.
 _MERGED_AUTOSCALER_ACTIONS = 100
 
+# Max unroutable job sample entries returned by ListBackends.
+_UNROUTABLE_SAMPLE_SIZE = 10
+
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -235,6 +238,7 @@ class TaskWithAttempts:
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
+    backend_id: str
     attempts: tuple[Any, ...]
 
     @classmethod
@@ -258,6 +262,7 @@ class TaskWithAttempts:
             current_worker_id=row.current_worker_id,
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
+            backend_id=str(row.backend_id or ""),
             attempts=attempts,
         )
 
@@ -322,6 +327,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
         failure_count=task.failure_count,
+        backend_id=task.backend_id,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -953,6 +959,14 @@ class ControllerProtocol(Protocol):
     @property
     def run_template_cache(self) -> RunTemplateCache: ...
 
+    def backend_id_for_scale_group(self, scale_group: str) -> str: ...
+
+    @property
+    def last_unroutable_jobs(self) -> dict[str, str]: ...
+
+    @property
+    def scale_group_to_backend(self) -> dict[str, str]: ...
+
 
 def _profile_is_elevated(profile: int) -> bool:
     """Whether a container profile is host-root-equivalent and so requires admin."""
@@ -1552,6 +1566,7 @@ class ControllerServiceImpl:
             name=j.name,
             pending_reason=pending_reason,
             has_children=has_children,
+            backend_id=j.backend_id or "",
             **_job_status_counts(task_summary, j.job_id),
         )
         if j.started_at_ms:
@@ -1865,6 +1880,13 @@ class ControllerServiceImpl:
 
         workers_all = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers_all)
+        if query.backend_id:
+            backend_filter = query.backend_id
+            workers_all = [
+                (w, attrs)
+                for w, attrs in workers_all
+                if self._controller.backend_id_for_scale_group(str(w.scale_group or "")) == backend_filter
+            ]
         filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
@@ -1897,6 +1919,8 @@ class ControllerServiceImpl:
                     address=worker.address,
                     metadata=worker_metadata_to_proto(worker, attrs),
                     status_message=worker_status_message(liveness),
+                    backend_id=self._controller.backend_id_for_scale_group(str(worker.scale_group or "")),
+                    scale_group=str(worker.scale_group or ""),
                 )
             )
         return controller_pb2.Controller.ListWorkersResponse(
@@ -2051,11 +2075,15 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetAutoscalerStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
-        """Get autoscaler status, merged across every backend's autoscaler."""
+        """Get autoscaler status, merged across every backend's autoscaler.
+
+        When ``request.backend_id`` is set, restricts the view to that one
+        backend's autoscaler; empty merges all.
+        """
         if BackendCapability.IRIS_AUTOSCALER not in self._controller.capabilities:
             return controller_pb2.Controller.GetAutoscalerStatusResponse(status=vm_pb2.AutoscalerStatus())
 
-        status = self._merge_autoscaler_status()
+        status = self._merge_autoscaler_status(only_backend_id=request.backend_id)
 
         workers = _worker_roster(self._db)
         liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
@@ -2081,18 +2109,21 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
-    def _merge_autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """Merge every backend's autoscaler status into one, tagging groups with backend_id.
+    def _merge_autoscaler_status(self, only_backend_id: str = "") -> vm_pb2.AutoscalerStatus:
+        """Merge backends' autoscaler status into one, tagging groups with backend_id.
 
-        Each backend owns a disjoint set of scale groups (the single
-        scale-group->backend key space), so group-keyed fields (``current_demand``,
-        ``recent_actions``) need no further disambiguation. ``recent_actions`` are
-        re-sorted newest-first and capped; ``last_routing_decision`` (one snapshot per
-        autoscaler) is left unset in the merged view.
+        Merges every backend by default; ``only_backend_id`` restricts the view to
+        a single backend's autoscaler. Each backend owns a disjoint set of scale
+        groups (the single scale-group->backend key space), so group-keyed fields
+        (``current_demand``, ``recent_actions``) need no further disambiguation.
+        ``recent_actions`` are re-sorted newest-first and capped; ``last_routing_decision``
+        (one snapshot per autoscaler) is left unset in the merged view.
         """
         merged = vm_pb2.AutoscalerStatus()
         last_evaluation = 0
         for backend_id, backend in self._controller.backends.items():
+            if only_backend_id and backend_id != only_backend_id:
+                continue
             autoscaler = backend.autoscaler
             if autoscaler is None:
                 continue
@@ -2119,13 +2150,37 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses.
 
-        Locates the backend that owns the cluster view by capability rather than
-        assuming the representative backend is the k8s one. Returns the first
-        ``CLUSTER_VIEW`` backend by sorted id (there is at most one today).
+        Locates the backend that owns the cluster view by capability. When
+        ``request.backend_id`` is set, uses that specific backend; otherwise,
+        if exactly one ``CLUSTER_VIEW`` backend exists it is used automatically.
+        With multiple ``CLUSTER_VIEW`` backends and no ``backend_id`` specified,
+        raises ``INVALID_ARGUMENT`` so the caller can disambiguate.
         """
-        for _backend_id, backend in sorted(self._controller.backends.items()):
-            if BackendCapability.CLUSTER_VIEW in backend.capabilities:
-                return backend.get_cluster_status()  # type: ignore[union-attr]
+        cluster_view_backends = [
+            (bid, backend)
+            for bid, backend in sorted(self._controller.backends.items())
+            if BackendCapability.CLUSTER_VIEW in backend.capabilities
+        ]
+
+        if request.backend_id:
+            for bid, backend in cluster_view_backends:
+                if bid == request.backend_id:
+                    return backend.get_cluster_status()  # type: ignore[union-attr]
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Backend {request.backend_id!r} does not exist or has no cluster view",
+            )
+
+        if len(cluster_view_backends) > 1:
+            ids = ", ".join(bid for bid, _ in cluster_view_backends)
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Multiple cluster-view backends ({ids}); specify backend_id in the request",
+            )
+
+        if cluster_view_backends:
+            return cluster_view_backends[0][1].get_cluster_status()  # type: ignore[union-attr]
+
         return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
     # --- VM Logs ---
@@ -2704,13 +2759,14 @@ class ControllerServiceImpl:
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
-            # Running tasks: only task_id, priority_band, and worker — no
+            # Running tasks: only task_id, priority_band, worker, and backend_id — no
             # job_config join is needed for the rolled-up counts below.
             running_raw = snap.execute(
                 select(
                     tasks_table.c.task_id,
                     tasks_table.c.priority_band,
                     tasks_table.c.current_worker_id.label("worker_id"),
+                    tasks_table.c.backend_id,
                 ).where(
                     tasks_table.c.state == job_pb2.TASK_STATE_RUNNING,
                     tasks_table.c.current_worker_id.is_not(None),
@@ -2719,8 +2775,8 @@ class ControllerServiceImpl:
 
             running_rows = running_raw
 
-        # Aggregate pending into (band, user, job) → count buckets.
-        pending_counts: dict[tuple[int, str, str], int] = {}
+        # Aggregate pending into (band, user, job, backend_id) → count buckets.
+        pending_counts: dict[tuple[int, str, str, str], int] = {}
         total_pending = 0
         for row in pending_rows:
             if not task_row_can_be_scheduled(row):
@@ -2734,20 +2790,22 @@ class ControllerServiceImpl:
                 self._user_budget_defaults,
             )
             job_id = (row.task_id.parent or row.task_id).to_wire()
-            key = (eff_band, user_id, job_id)
+            backend_id = str(row.backend_id or "")
+            key = (eff_band, user_id, job_id, backend_id)
             pending_counts[key] = pending_counts.get(key, 0) + 1
             total_pending += 1
 
-        # Aggregate running into (band, user, worker, job) → count buckets.
+        # Aggregate running into (band, user, worker, job, backend_id) → count buckets.
         # Use the stamped ``tasks.priority_band`` directly: the scheduler stamps the
         # effective band at assign time (see ``_commit_assignments``), so re-running
         # ``compute_effective_band`` here against current spend would double-demote.
-        running_counts: dict[tuple[int, str, str, str], int] = {}
+        running_counts: dict[tuple[int, str, str, str, str], int] = {}
         total_running = 0
         for row in running_rows:
             user_id = row.task_id.user
             job_id = (row.task_id.parent or row.task_id).to_wire()
-            key = (row.priority_band, user_id, str(row.worker_id), job_id)
+            backend_id = str(row.backend_id or "")
+            key = (row.priority_band, user_id, str(row.worker_id), job_id, backend_id)
             running_counts[key] = running_counts.get(key, 0) + 1
             total_running += 1
 
@@ -2789,9 +2847,10 @@ class ControllerServiceImpl:
                 band=band,
                 user_id=user_id,
                 job_id=job_id,
+                backend_id=backend_id,
                 count=count,
             )
-            for (band, user_id, job_id), count in pending_counts.items()
+            for (band, user_id, job_id, backend_id), count in pending_counts.items()
         ]
         running_buckets = [
             controller_pb2.Controller.RunningTaskBucket(
@@ -2799,9 +2858,10 @@ class ControllerServiceImpl:
                 user_id=user_id,
                 worker_id=worker_id,
                 job_id=job_id,
+                backend_id=backend_id,
                 count=count,
             )
-            for (band, user_id, worker_id, job_id), count in running_counts.items()
+            for (band, user_id, worker_id, job_id, backend_id), count in running_counts.items()
         ]
 
         return controller_pb2.Controller.GetSchedulerStateResponse(
@@ -2810,4 +2870,104 @@ class ControllerServiceImpl:
             total_running=total_running,
             pending_buckets=pending_buckets,
             running_buckets=running_buckets,
+        )
+
+    def list_backends(
+        self,
+        request: controller_pb2.Controller.ListBackendsRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.ListBackendsResponse:
+        """List all backends with aggregate task/worker statistics.
+
+        Performs three grouped SQL queries (pending counts, running counts, worker
+        counts by scale_group) rather than per-backend queries, then joins the
+        results in Python. Autoscaler capacity health is read from the in-memory
+        autoscaler snapshot rather than the DB.
+        """
+        require_identity()
+
+        backends = self._controller.backends
+        sg_to_backend = self._controller.scale_group_to_backend
+
+        # Invert sg_to_backend: backend_id → list[scale_group]
+        backend_to_sgs: dict[str, list[str]] = {bid: [] for bid in backends}
+        for sg, bid in sg_to_backend.items():
+            if bid in backend_to_sgs:
+                backend_to_sgs[bid].append(sg)
+
+        with self._db.read_snapshot() as snap:
+            pending_by_backend: dict[str, int] = {}
+            for row in snap.execute(
+                select(tasks_table.c.backend_id, func.count().label("cnt"))
+                .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                .group_by(tasks_table.c.backend_id)
+            ).all():
+                pending_by_backend[str(row.backend_id or "")] = int(row.cnt)
+
+            running_by_backend: dict[str, int] = {}
+            for row in snap.execute(
+                select(tasks_table.c.backend_id, func.count().label("cnt"))
+                .where(tasks_table.c.state == job_pb2.TASK_STATE_RUNNING)
+                .group_by(tasks_table.c.backend_id)
+            ).all():
+                running_by_backend[str(row.backend_id or "")] = int(row.cnt)
+
+            worker_sg_rows = snap.execute(
+                select(workers_table.c.scale_group, func.count().label("cnt")).group_by(workers_table.c.scale_group)
+            ).all()
+
+        worker_count_by_backend: dict[str, int] = {bid: 0 for bid in backends}
+        for row in worker_sg_rows:
+            bid = self._controller.backend_id_for_scale_group(str(row.scale_group or ""))
+            worker_count_by_backend[bid] = worker_count_by_backend.get(bid, 0) + int(row.cnt)
+
+        summaries: list[controller_pb2.Controller.BackendSummary] = []
+        for backend_id, backend in sorted(backends.items()):
+            allowed_users = backend.allowed_users
+            restricted = "*" not in allowed_users
+
+            caps = backend.capabilities
+            if BackendCapability.CLUSTER_VIEW in caps:
+                kind = "kubernetes"
+            elif BackendCapability.WORKER_DAEMON in caps:
+                kind = "worker-daemon"
+            else:
+                kind = "unknown"
+
+            adv: dict[str, set[str]] = backend.advertised_attributes()
+            adv_proto = {k: controller_pb2.StringList(values=sorted(v)) for k, v in adv.items()}
+
+            cap_health: dict[str, int] = {}
+            if backend.autoscaler is not None:
+                for group in backend.autoscaler.get_status().groups:
+                    st = group.availability_status or "unknown"
+                    cap_health[st] = cap_health.get(st, 0) + 1
+
+            summary = controller_pb2.Controller.BackendSummary(
+                backend_id=backend_id,
+                name=backend.name,
+                kind=kind,
+                capabilities=sorted(c.value for c in caps),
+                restricted=restricted,
+                allowed_user_count=len(allowed_users),
+                scale_groups=sorted(backend_to_sgs.get(backend_id, [])),
+                worker_count=worker_count_by_backend.get(backend_id, 0),
+                pending_task_count=pending_by_backend.get(backend_id, 0),
+                running_task_count=running_by_backend.get(backend_id, 0),
+                has_autoscaler=backend.autoscaler is not None,
+                capacity_health=cap_health,
+            )
+            summary.advertised_attributes.update(adv_proto)
+            summaries.append(summary)
+
+        unroutable = self._controller.last_unroutable_jobs
+        sample = [
+            controller_pb2.Controller.UnroutableJob(job_id=jid, reason=reason)
+            for jid, reason in list(unroutable.items())[:_UNROUTABLE_SAMPLE_SIZE]
+        ]
+
+        return controller_pb2.Controller.ListBackendsResponse(
+            backends=summaries,
+            unroutable_job_count=len(unroutable),
+            unroutable_sample=sample,
         )

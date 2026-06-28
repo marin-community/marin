@@ -200,6 +200,8 @@ message Controller {
     // "/alice/exp-"). The caller does not need to provide a parseable JobName;
     // any string is accepted and is matched as ``job_id LIKE '<prefix>%'``.
     string job_id_prefix = 9;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 10;
   }
 
   message ListJobsRequest {
@@ -295,6 +297,8 @@ message Controller {
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
     string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
+    string backend_id = 9;     // resolved from scale_group via the controller map
+    string scale_group = 10;   // scale group this worker belongs to
   }
 
   // Sort fields for worker listing
@@ -315,6 +319,8 @@ message Controller {
     // Max workers to return. 0 means unbounded (preserves CLI behavior);
     // dashboard callers should always set an explicit page size.
     int32 limit = 5;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 6;
   }
 
   message ListWorkersRequest {
@@ -384,7 +390,10 @@ message Controller {
   }
 
   // --- Autoscaler ---
-  message GetAutoscalerStatusRequest {}
+  message GetAutoscalerStatusRequest {
+    // Filter to one backend. Empty = merge all.
+    string backend_id = 1;
+  }
 
   message GetAutoscalerStatusResponse {
     iris.vm.AutoscalerStatus status = 1;
@@ -455,7 +464,10 @@ message Controller {
     iris.job.ResourceSpecProto resources = 3;
   }
 
-  message GetKubernetesClusterStatusRequest {}
+  message GetKubernetesClusterStatusRequest {
+    // Filter to one backend. Empty = single CLUSTER_VIEW backend, or error if >1.
+    string backend_id = 1;
+  }
 
   message KubernetesPodStatus {
     string pod_name = 1;
@@ -527,6 +539,7 @@ message Controller {
     string user_id = 2;
     string job_id = 3;
     int32 count = 4;
+    string backend_id = 5;
   }
 
   // Aggregated running-task count keyed by (band, user, worker, job). The
@@ -538,6 +551,7 @@ message Controller {
     string worker_id = 3;
     string job_id = 4;
     int32 count = 5;
+    string backend_id = 6;
   }
 
   message SchedulerUserBudget {
@@ -560,11 +574,42 @@ message Controller {
     repeated PendingTaskBucket pending_buckets = 6;
     repeated RunningTaskBucket running_buckets = 7;
   }
+
+  message ListBackendsRequest {}
+
+  message BackendSummary {
+    string backend_id = 1;
+    string name = 2;
+    string kind = 3;
+    repeated string capabilities = 4;
+    map<string, StringList> advertised_attributes = 5;
+    bool restricted = 6;
+    int32 allowed_user_count = 7;
+    repeated string scale_groups = 8;
+    int32 worker_count = 9;
+    int32 pending_task_count = 10;
+    int32 running_task_count = 11;
+    bool has_autoscaler = 12;
+    map<string, int32> capacity_health = 13;
+  }
+
+  message UnroutableJob {
+    string job_id = 1;
+    string reason = 2;
+  }
+
+  message ListBackendsResponse {
+    repeated BackendSummary backends = 1;
+    int32 unroutable_job_count = 2;
+    repeated UnroutableJob unroutable_sample = 3;
+  }
 }
 
 // ============================================================================
 // SERVICES
 // ============================================================================
+
+message StringList { repeated string values = 1; }
 
 service ControllerService {
   // Job lifecycle
@@ -630,4 +675,5 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
+  rpc ListBackends(Controller.ListBackendsRequest) returns (Controller.ListBackendsResponse);
 }

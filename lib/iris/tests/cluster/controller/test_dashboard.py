@@ -201,6 +201,9 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.provider.autoscaler = autoscaler
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
+    controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
+    controller_mock.last_unroutable_jobs = {}
+    controller_mock.scale_group_to_backend = {}
     return controller_mock
 
 
@@ -1645,10 +1648,12 @@ def test_k8s_cluster_status_without_direct_provider(client):
 # =============================================================================
 
 
-def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None):
+def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allowed_users=None):
     backend = Mock(capabilities=capabilities)
     backend.name = name
     backend.autoscaler = autoscaler
+    backend.advertised_attributes.return_value = {}
+    backend.allowed_users = allowed_users if allowed_users is not None else frozenset({"*"})
     if cluster_status is not None:
         backend.get_cluster_status.return_value = cluster_status
     return backend
@@ -1718,6 +1723,10 @@ def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, l
     status = rpc_post(client, "GetAutoscalerStatus")["status"]
     assert {g["name"]: g.get("backendId", "") for g in status["groups"]} == {"gcp-v5e": "gcp", "cw-h100": "cw"}
 
+    # backend_id drill-down restricts the merged view to one backend.
+    scoped = rpc_post(client, "GetAutoscalerStatus", {"backendId": "gcp"})["status"]
+    assert [g["name"] for g in scoped["groups"]] == ["gcp-v5e"]
+
 
 def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
     """GetKubernetesClusterStatus locates the CLUSTER_VIEW backend even when it is not the representative one."""
@@ -1737,3 +1746,158 @@ def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, s
     data = rpc_post(client, "GetKubernetesClusterStatus")
     assert data["namespace"] == "eu"
     assert data["totalNodes"] == 2
+
+
+def test_task_backend_id_propagated_to_proto(client, state, job_request):
+    """GetTaskStatus surfaces backend_id stamped on the tasks row."""
+    job_id = submit_job(state, "backend-task-job", job_request)
+    tasks = _query_tasks_with_attempts(state, job_id)
+    task_id = tasks[0].task_id
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(backend_id="gcp"))
+
+    resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
+    assert resp["task"]["backendId"] == "gcp"
+
+
+def test_job_backend_id_propagated_to_list_jobs(client, state, job_request):
+    """ListJobs surfaces backend_id stamped on the jobs row."""
+    job_id = submit_job(state, "backend-job", job_request)
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id="gcp"))
+
+    resp = rpc_post(client, "ListJobs")
+    matching = [j for j in resp["jobs"] if j["jobId"] == job_id.to_wire()]
+    assert len(matching) == 1
+    assert matching[0]["backendId"] == "gcp"
+
+
+def test_list_jobs_filters_by_backend_id(client, state, job_request):
+    """ListJobs.query.backendId restricts results to jobs on that backend."""
+    gcp_job_id = submit_job(state, "gcp-job", job_request)
+    cw_job_id = submit_job(state, "cw-job", job_request)
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == gcp_job_id).values(backend_id="gcp"))
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == cw_job_id).values(backend_id="cw"))
+
+    resp_gcp = rpc_post(client, "ListJobs", {"query": {"backendId": "gcp"}})
+    assert len(resp_gcp["jobs"]) == 1
+    assert resp_gcp["jobs"][0]["backendId"] == "gcp"
+
+    resp_cw = rpc_post(client, "ListJobs", {"query": {"backendId": "cw"}})
+    assert len(resp_cw["jobs"]) == 1
+    assert resp_cw["jobs"][0]["backendId"] == "cw"
+
+
+def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_path, log_client, job_request):
+    """ListWorkers stamps backend_id (resolved via backend_id_for_scale_group) and scale_group."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.backend_id_for_scale_group = lambda sg: "gcp" if sg == "tpu-v5e" else DEFAULT_BACKEND_ID
+    svc = ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+    client = TestClient(ControllerDashboard(svc).app)
+
+    register_worker(state, "w-tpu", "10.0.0.1", make_worker_metadata(), scale_group="tpu-v5e")
+
+    resp = rpc_post(client, "ListWorkers")
+    workers = resp["workers"]
+    tpu_worker = next(w for w in workers if w["workerId"] == "w-tpu")
+    assert tpu_worker["backendId"] == "gcp"
+    assert tpu_worker["scaleGroup"] == "tpu-v5e"
+
+
+def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_client):
+    """ListWorkers.query.backendId returns only workers whose scale_group maps to that backend."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    controller_mock.backend_id_for_scale_group = lambda sg: {"tpu-v5e": "gcp", "h100": "cw"}.get(sg, DEFAULT_BACKEND_ID)
+    svc = ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+    client = TestClient(ControllerDashboard(svc).app)
+
+    register_worker(state, "w-gcp", "10.0.0.1", make_worker_metadata(), scale_group="tpu-v5e")
+    register_worker(state, "w-cw", "10.0.0.2", make_worker_metadata(), scale_group="h100")
+
+    resp_gcp = rpc_post(client, "ListWorkers", {"query": {"backendId": "gcp"}})
+    assert [w["workerId"] for w in resp_gcp["workers"]] == ["w-gcp"]
+
+    resp_cw = rpc_post(client, "ListWorkers", {"query": {"backendId": "cw"}})
+    assert [w["workerId"] for w in resp_cw["workers"]] == ["w-cw"]
+
+
+def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, log_client):
+    """ListBackends returns one BackendSummary per backend with correct kind and capabilities."""
+    controller_mock = _make_controller_mock(state, scheduler)
+    gcp_backend = _backend_mock("gcp", frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}))
+    k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))
+    controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
+    controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
+    controller_mock.backend_id_for_scale_group = lambda sg: controller_mock.scale_group_to_backend.get(
+        sg, DEFAULT_BACKEND_ID
+    )
+    controller_mock.last_unroutable_jobs = {"/alice/exp": "no backend matches the job's constraints"}
+    svc = ControllerServiceImpl(
+        controller=controller_mock,
+        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
+        log_client=log_client,
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+    client = TestClient(ControllerDashboard(svc).app)
+
+    resp = rpc_post(client, "ListBackends")
+    summaries = {b["backendId"]: b for b in resp["backends"]}
+
+    assert set(summaries) == {"gcp", "eu-k8s"}
+    assert summaries["gcp"]["kind"] == "worker-daemon"
+    assert summaries["eu-k8s"]["kind"] == "kubernetes"
+    assert "workers" in summaries["gcp"]["capabilities"]
+    assert "cluster" in summaries["eu-k8s"]["capabilities"]
+    assert summaries["gcp"]["scaleGroups"] == ["tpu-v5e"]
+    assert summaries["eu-k8s"].get("scaleGroups", []) == []
+    # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
+    assert resp["unroutableJobCount"] == 1
+    assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"
+
+
+def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_path, log_client):
+    """GetKubernetesClusterStatus raises INVALID_ARGUMENT when >1 CLUSTER_VIEW backends and no backend_id."""
+    cluster_a = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="eu", total_nodes=2)
+    cluster_b = controller_pb2.Controller.GetKubernetesClusterStatusResponse(namespace="us", total_nodes=4)
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            "eu-k8s": _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_a),
+            "us-k8s": _backend_mock("us-k8s", frozenset({BackendCapability.CLUSTER_VIEW}), cluster_status=cluster_b),
+        },
+    )
+    resp = client.post(
+        "/iris.cluster.ControllerService/GetKubernetesClusterStatus",
+        json={},
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+
+    # With explicit backend_id, resolves correctly
+    data_eu = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "eu-k8s"})
+    assert data_eu["namespace"] == "eu"
+    data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
+    assert data_us["namespace"] == "us"
