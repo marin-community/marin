@@ -7,22 +7,23 @@ The library provides *mechanism* — concise builders — while an experiment st
 the *policy*: which datasets, at what weights. The split is deliberate, so mixture
 weights live in the experiment that chose them, not buried in a catalog constant.
 
-- :func:`tokenized` returns a ``Lazy[Dataset]`` handle. Its raw input is one of:
+- :func:`tokenized` returns a ``Lazy[TokenizedCache]`` handle. Its raw input is one of:
   ``source`` (a HuggingFace id or single path), ``paths`` (raw globs resolved against
   the run prefix), or ``raw=`` a download handle + ``glob`` within it (a download ->
   tokenize dependency). ``pin`` references already-tokenized data at an existing location
   instead of recomputing it.
-- :func:`hf_download` is a HuggingFace-Hub download as a raw-data ``Lazy[Dataset]`` that
+- :func:`hf_download` is a HuggingFace-Hub download as a raw-data ``Lazy[Artifact]`` that
   :func:`tokenized` (via ``raw=``) can depend on; :func:`raw_download` is the same for a
-  non-Hub source. A generic single-step build (a transform, conversion, or filter) is
-  :func:`marin.execution.lazy.apply` (keyword inputs) or :func:`marin.execution.lazy.derived`
-  (a typed config object).
+  non-Hub source.
 - :func:`pretokenized` handles an already-tokenized Levanter cache hosted on
   HuggingFace (e.g. the fineweb-edu prebuilt subcaches): it downloads rather than
-  re-tokenizes, and is consumed like any other tokenized ``Dataset``.
+  re-tokenizes, and is consumed like any other ``TokenizedCache``.
+- :func:`adopt_tokenized_cache` registers a pre-existing tokenized cache as a managed
+  ``name@version`` with the tokenizer/format a mixture needs.
 - :func:`mixture` assembles a Levanter ``LmDataConfig`` from ``{handle: weight}``
-  training components plus weight-0 ``validation`` handles, resolving each cache path
-  with ``ctx.path(handle)``.
+  training components plus weight-0 ``validation`` handles, reading each cache's
+  tokenizer/format from its :class:`~marin.processing.tokenize.tokenize.TokenizedCache`
+  record at run time.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -31,22 +32,25 @@ from fray.types import ResourceConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
     BlockShuffleConfig,
-    DatasetComponent,
     LmDataConfig,
     TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
 )
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.artifact import Dataset
-from marin.execution.lazy import Lazy, Recipe, RunContext, derived
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import Lazy, Recipe, RunContext, adopt
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.data_configs import dataset_component
 from marin.processing.tokenize.download_pretokenized import PretokenizedCacheDownloadConfig, fetch_pretokenized_cache
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, TokenizeConfig, TokenizeConfigBase
+from marin.processing.tokenize.tokenize import (
+    HfTokenizeConfig,
+    TokenizeConfig,
+    TokenizeConfigBase,
+    TokenizedCache,
+)
 from marin.processing.tokenize.tokenize import tokenize as _tokenize_fn
-
-DEFAULT_VERSION = "v1"
 
 
 def _on(fn: Callable[..., object], resources: ResourceConfig | None) -> Callable[..., object]:
@@ -72,11 +76,11 @@ def hf_download(
     *,
     hf_id: str,
     revision: str,
+    version: str,
     urls_glob: Sequence[str] = (),
-    version: str = DEFAULT_VERSION,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
-) -> Lazy[Dataset]:
+) -> Lazy[Artifact]:
     """A HuggingFace-Hub dataset download as a raw-data handle.
 
     Wraps :func:`marin.datakit.download.huggingface.download_hf` into a handle that
@@ -98,7 +102,7 @@ def hf_download(
         name=name,
         version=version,
         recipe=Recipe(fn=_on(download_hf, resources), build_config=build_config),
-        result_type=Dataset,
+        result_type=Artifact,
         override_path=pin,
     )
 
@@ -108,36 +112,42 @@ def raw_download(
     *,
     fn: Callable[[object], object],
     build_config: Callable[[RunContext], object],
-    version: str = DEFAULT_VERSION,
+    version: str,
     pin: str | None = None,
     resources: ResourceConfig | None = None,
-) -> Lazy[Dataset]:
-    """A raw-data download as a ``Lazy[Dataset]`` that :func:`tokenized` can depend on.
+) -> Lazy[Artifact]:
+    """A raw-data download as a ``Lazy[Artifact]`` that :func:`tokenized` can depend on.
 
     The generic download builder for a source that is not a HuggingFace-Hub dataset (use
     :func:`hf_download` for that): ``fn(build_config(ctx))`` writes the download to ``ctx.out``.
-    Returned as a :class:`~marin.execution.artifact.Dataset` handle (it is raw, not a tokenized
-    cache). ``pin`` references an existing download instead of re-fetching it.
+    Returned as a raw :class:`~marin.execution.artifact.Artifact` (not a tokenized cache).
+    ``pin`` references an existing download instead of re-fetching it.
     """
-    return derived(name, fn=fn, build_config=build_config, version=version, pin=pin, resources=resources, kind=Dataset)
+    return Lazy(
+        name=name,
+        version=version,
+        recipe=Recipe(fn=_on(fn, resources), build_config=build_config),
+        result_type=Artifact,
+        override_path=pin,
+    )
 
 
 def tokenized(
     name: str,
     *,
     tokenizer: str,
+    version: str,
     source: str | None = None,
     paths: Sequence[str] | None = None,
-    raw: Lazy[Dataset] | None = None,
+    raw: Lazy[Artifact] | None = None,
     glob: str | None = None,
     validation: bool = False,
     pin: str | None = None,
     text_key: str = "text",
     sample_count: int | None = None,
-    version: str = DEFAULT_VERSION,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
-) -> Lazy[Dataset]:
+) -> Lazy[TokenizedCache]:
     """A tokenized-dataset handle.
 
     Provide exactly one raw input: ``source`` (a HuggingFace id ``org/name`` or a single
@@ -181,7 +191,7 @@ def tokenized(
         recipe=Recipe(
             fn=_on(_tokenize_fn, resources), build_config=build_config, deps=(raw,) if raw is not None else ()
         ),
-        result_type=Dataset,
+        result_type=TokenizedCache,
         override_path=pin,
     )
 
@@ -191,16 +201,16 @@ def pretokenized(
     *,
     repo_id: str,
     tokenizer: str,
+    version: str,
     revision: str | None = None,
-    version: str = DEFAULT_VERSION,
     pin: str | None = None,
     tags: Sequence[str] = (),
     resources: ResourceConfig | None = None,
-) -> Lazy[Dataset]:
+) -> Lazy[TokenizedCache]:
     """A handle to an already-tokenized Levanter cache hosted on HuggingFace.
 
     ``build_config(ctx)`` downloads the HF dataset repo ``repo_id`` into ``ctx.out`` as
-    a Levanter cache; the handle then reads as a tokenized ``Dataset`` with no
+    a Levanter cache; the handle then reads as a ``TokenizedCache`` with no
     re-tokenization. Use it where a tokenizing :func:`tokenized` handle would be too
     slow — e.g. the fineweb-edu prebuilt subcaches. ``pin`` references an
     already-downloaded cache at an existing location instead of fetching it again.
@@ -219,40 +229,62 @@ def pretokenized(
         name=name,
         version=version,
         recipe=Recipe(fn=_on(fetch_pretokenized_cache, resources), build_config=build_config),
-        result_type=Dataset,
+        result_type=TokenizedCache,
         override_path=pin,
     )
 
 
-def _component_for(dataset: Lazy, ctx: RunContext) -> DatasetComponent:
-    """Build a Levanter mixture component for ``dataset``, rooted at its resolved path."""
-    cache_path = ctx.path(dataset)
-    config = dataset.recipe.build_config(
-        RunContext.for_run(out=cache_path, prefix=ctx.prefix, run_args=dataset.recipe.run_args)
+def adopt_tokenized_cache(
+    name: str,
+    version: str,
+    source: str,
+    *,
+    tokenizer: str,
+    text_key: str = "text",
+) -> Lazy[TokenizedCache]:
+    """Register a pre-existing tokenized cache at ``source`` as a managed ``name@version``.
+
+    Records the ``tokenizer`` and text format so :func:`mixture` reads the adopted cache the
+    same way as a produced one (it is not re-tokenized, and its data stays at ``source``).
+    """
+    return adopt(
+        name,
+        version,
+        source,
+        kind=TokenizedCache,
+        config={"tokenizer": tokenizer, "format": {"text_key": text_key}},
     )
-    if not isinstance(config, TokenizeConfigBase):
-        raise TypeError(f"{dataset.name}: mixture component must be a tokenize dataset, got {type(config).__name__}")
-    return dataset_component(config.as_lm_dataset_source_config(cache_path))
 
 
-def _tokenizer_of(dataset: Lazy) -> str:
-    return dataset.recipe.build_config(RunContext.for_fingerprint(dataset.recipe.run_args.keys())).tokenizer
+def _placeholder_component(cache_dir: str):
+    """A fingerprint-time mixture component: just a cache-dir placeholder + constant format.
+
+    At fingerprint time no record exists; the cache dir renders to ``name@version``, so the
+    component carries the dataset's identity and nothing read from disk.
+    """
+    source = UrlDatasetSourceConfig(
+        tags=[], train_urls=[], validation_urls=[], cache_dir=cache_dir, format=TextLmDatasetFormat()
+    )
+    return dataset_component(source)
 
 
 def mixture(
     ctx: RunContext,
-    train: Mapping[Lazy[Dataset], float],
+    train: Mapping[Lazy[TokenizedCache], float],
     *,
-    validation: Sequence[Lazy[Dataset]] = (),
+    validation: Sequence[Lazy[TokenizedCache]] = (),
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
 ) -> LmDataConfig:
     """Assemble an ``LmDataConfig`` from dataset handles.
 
     ``train`` maps each handle to its mixture weight; ``validation`` handles are added at
-    weight 0. Each component's cache path is resolved with ``ctx.path(handle)``; the
-    component key is the handle's ``name``, so two handles that share a name are rejected
-    (rather than silently collapsing). Call this inside a consumer's ``build_config`` and
-    pass the same handles as the recipe's ``deps`` so they materialize first.
+    weight 0. The component key is the handle's ``name`` (two handles sharing a name are
+    rejected). At run time each component is built from its ``TokenizedCache`` record
+    (tokenizer/format/path), never from the producing recipe — so adopted and pinned caches
+    work the same as freshly tokenized ones. At fingerprint time (no records yet) the data
+    contribution is the sorted ``{name@version: weight}`` map; the tokenizer is determined by
+    the chosen datasets and verified at run time. Call this inside a consumer's ``build_config``
+    and pass the same handles as the recipe's ``deps`` so they materialize first.
     """
     handles = [*train, *validation]
     if not handles:
@@ -262,19 +294,32 @@ def mixture(
         duplicates = sorted({n for n in names if names.count(n) > 1})
         raise ValueError(f"mixture components are keyed by name, but these collide: {duplicates}")
 
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
+    if ctx.is_fingerprint:
+        components = {dataset.name: _placeholder_component(ctx.path(dataset)) for dataset in handles}
+        weights = {dataset.name: weight for dataset, weight in train.items()}
+        weights.update({dataset.name: 0.0 for dataset in validation})
+        return LmDataConfig(
+            components=components,
+            train_weights=weights,
+            tokenizer="<tokenizer>",
+            cache_dir=None,
+            shuffle=shuffle,
+            permutation_type="feistel",
+        )
+
+    components = {}
+    weights = {}
     tokenizers: set[str] = set()
-
     for dataset, weight in train.items():
-        components[dataset.name] = _component_for(dataset, ctx)
+        cache = TokenizedCache.load(ctx.path(dataset))
+        components[dataset.name] = cache.as_component()
         weights[dataset.name] = weight
-        tokenizers.add(_tokenizer_of(dataset))
-
+        tokenizers.add(cache.tokenizer)
     for dataset in validation:
-        components[dataset.name] = _component_for(dataset, ctx)
+        cache = TokenizedCache.load(ctx.path(dataset))
+        components[dataset.name] = cache.as_component()
         weights[dataset.name] = 0.0
-        tokenizers.add(_tokenizer_of(dataset))
+        tokenizers.add(cache.tokenizer)
 
     if len(tokenizers) != 1:
         raise ValueError(f"mixture components must share one tokenizer, got {sorted(tokenizers)}")

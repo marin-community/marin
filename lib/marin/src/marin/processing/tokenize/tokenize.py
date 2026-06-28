@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from datasets import load_dataset_builder
 from fray import ResourceConfig
 from levanter.data.text import (
+    DatasetComponent,
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
@@ -35,6 +36,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
+from marin.execution.artifact import Artifact
 from marin.processing.tokenize._core import (
     MIN_GROUP_BYTES,
     bundle_files_by_size,
@@ -58,10 +60,64 @@ __all__ = [
     "HfTokenizeConfig",
     "TokenizeConfig",
     "TokenizeConfigBase",
+    "TokenizedCache",
     "bundle_files_by_size",
     "compute_target_group_bytes",
     "tokenize",
 ]
+
+
+class TokenizedCache(Artifact):
+    """A tokenized Levanter cache produced by :func:`tokenize`.
+
+    The realized artifact for every tokenized-dataset handle. ``load`` is a path ref (no tokens
+    pulled into the launcher); the cache's tokenizer/format/tags are read from its recorded
+    config, so a consumer (a training :func:`~marin.experiment.data.mixture`) builds a Levanter
+    component from the artifact alone, never from the producing recipe. Adopted caches resolve
+    through ``record.source``; their tokenizer/format come from the synthetic config recorded by
+    ``adopt_tokenized_cache``.
+    """
+
+    @property
+    def _config(self) -> dict:
+        return (self.record.config if self.record is not None else None) or {}
+
+    @property
+    def cache_dir(self) -> str:
+        """The Levanter cache directory: an adopted cache's source, else this artifact's path."""
+        rec = self.record
+        return (rec.source if rec is not None and rec.source else None) or self.path
+
+    @property
+    def tokenizer(self) -> str:
+        """The tokenizer this cache was built with (a mixture must be single-tokenizer)."""
+        tokenizer = self._config.get("tokenizer")
+        if not tokenizer:
+            raise ValueError(f"{self.path}: tokenized cache record has no tokenizer")
+        return tokenizer
+
+    @property
+    def format(self) -> LmDatasetFormatBase:
+        """The dataset format; marin's tokenized caches are text format (``text_key``)."""
+        fmt = self._config.get("format")
+        if isinstance(fmt, dict) and "text_key" in fmt:
+            return TextLmDatasetFormat(text_key=fmt["text_key"])
+        return TextLmDatasetFormat()
+
+    @property
+    def tags(self) -> list[str]:
+        tags = self._config.get("tags")
+        return list(tags) if isinstance(tags, list) else []
+
+    def as_component(self) -> DatasetComponent:
+        """A Levanter mixture component pointing at this built cache.
+
+        A built cache needs no raw urls; the component carries the cache dir, format, and tags.
+        """
+        source = UrlDatasetSourceConfig(
+            tags=self.tags, train_urls=[], validation_urls=[], cache_dir=self.cache_dir, format=self.format
+        )
+        return DatasetComponent(source=source, cache_dir=source.cache_dir, format=source.format, tags=source.tags)
 
 
 @dataclasses.dataclass(frozen=True)

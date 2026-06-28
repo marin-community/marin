@@ -18,7 +18,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import Artifact, Checkpoint
+from marin.execution.artifact import Artifact
 from marin.execution.lazy import Lazy, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
@@ -35,13 +35,14 @@ from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.training.training import LevanterCheckpoint
 
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
-ModelArtifact = Lazy[Checkpoint] | str
+ModelArtifact = Lazy[LevanterCheckpoint] | str
 
 
 @dataclasses.dataclass
@@ -156,7 +157,7 @@ def get_stop_tokens(model_type: str) -> list[str]:
 
 
 def _resolve_model_artifact_path(ctx: RunContext, artifact: ModelArtifact) -> str:
-    """Resolve a model artifact to a concrete path: a ``Lazy[Checkpoint]`` handle to its
+    """Resolve a model artifact to a concrete path: a ``Lazy[LevanterCheckpoint]`` handle to its
     region-local output path, a string passes through unchanged."""
     if isinstance(artifact, Lazy):
         return ctx.path(artifact)
@@ -385,10 +386,10 @@ def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
 
 def make_rl_step(
     name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str = "v1"
-) -> Lazy[Checkpoint]:
-    """Assemble an async RL training run as a ``Lazy[Checkpoint]``.
+) -> Lazy[LevanterCheckpoint]:
+    """Assemble an async RL training run as a ``Lazy[LevanterCheckpoint]``.
 
-    The model artifact resolves at run time: a ``Lazy[Checkpoint]`` handle becomes a
+    The model artifact resolves at run time: a ``Lazy[LevanterCheckpoint]`` handle becomes a
     dependency and resolves to its region-local path, a string passes through. The
     launch-region resources are a run-arg, so re-running on a different launch box never
     re-fingerprints.
@@ -418,5 +419,5 @@ def make_rl_step(
             deps=deps,
             run_args={"resources": executor_step_resources_for_rl_experiment(config)},
         ),
-        result_type=Checkpoint,
+        result_type=LevanterCheckpoint,
     )

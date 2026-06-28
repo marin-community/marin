@@ -35,14 +35,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.evaluation.evaluation_config import convert_to_levanter_task_config
-from marin.execution.artifact import Checkpoint, Dataset
 from marin.execution.lazy import Lazy, Recipe, RunContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
 from marin.experiment.evals import EvalSuite
-from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-
-DEFAULT_VERSION = "v1"
+from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 
 # Compute in bf16, keep master params and optimizer state in f32. The universal marin
 # precision policy; it bears identity (it changes numerics), so overriding it is a
@@ -53,9 +51,6 @@ MARIN_PRECISION = "p=f32,c=bfloat16"
 # an experiment choice: it says nothing about what is computed, only how the sequence
 # axis is laid out across the pod.
 _TOKEN_AXES = (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA)
-
-# The checkpoint Levanter writes under a run's output, relative to ``ctx.out``.
-_CHECKPOINTS_SUBDIR = "checkpoints"
 
 # Rolling resumption checkpoint cadence. Operational (it governs recovery, not the
 # trained model), so it is not an experiment knob.
@@ -84,16 +79,16 @@ def train_lm(
     name: str,
     model: LmConfig,
     optimizer: OptimizerConfig,
-    datasets: Mapping[Lazy[Dataset], float],
+    datasets: Mapping[Lazy[TokenizedCache], float],
     batch_size: int,
     seq_len: int,
     num_train_steps: int,
     z_loss_weight: float | None,
     evals: EvalSuite | None,
     resources: ResourceConfig,
-    validation: Sequence[Lazy[Dataset]] = (),
-    init_from: Lazy[Checkpoint] | None = None,
-    version: str = DEFAULT_VERSION,
+    version: str,
+    validation: Sequence[Lazy[TokenizedCache]] = (),
+    init_from: Lazy[LevanterCheckpoint] | None = None,
     mp: str = MARIN_PRECISION,
     tensor_parallel_size: int = 1,
     steps_per_eval: int = 1000,
@@ -102,8 +97,8 @@ def train_lm(
     run_id: str | None = None,
     tags: Sequence[str] = (),
     env_vars: dict[str, str] | None = None,
-) -> Lazy[Checkpoint]:
-    """Assemble a language-model training run as a ``Lazy[Checkpoint]``.
+) -> Lazy[LevanterCheckpoint]:
+    """Assemble a language-model training run as a ``Lazy[LevanterCheckpoint]``.
 
     The required arguments are the run's identity-bearing decisions; the helper defaults
     none of them. ``datasets`` maps each tokenized-dataset handle to its mixture weight,
@@ -126,7 +121,7 @@ def train_lm(
     all_deps = (*datasets, *validation, *((init_from,) if init_from is not None else ()))
 
     def build_config(ctx: RunContext) -> TrainLmOnPodConfig:
-        init_path = f"{ctx.path(init_from)}/{_CHECKPOINTS_SUBDIR}" if init_from is not None else None
+        init_path = LevanterCheckpoint(path=ctx.path(init_from)).checkpoint_dir if init_from is not None else None
         inner = TrainLmConfig(
             data=mixture(ctx, datasets, validation=validation),
             trainer=TrainerConfig(
@@ -174,5 +169,5 @@ def train_lm(
             deps=all_deps,
             run_args={"train_resources": resources},
         ),
-        result_type=Checkpoint,
+        result_type=LevanterCheckpoint,
     )

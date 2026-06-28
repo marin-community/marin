@@ -3,33 +3,62 @@
 
 """Run provenance: who/when/which-commit/which-argv produced an artifact.
 
-Small, dependency-free helpers so an artifact record can capture provenance without
-pulling in the executor.
+A single :class:`Provenance` value captured once in the launching process and recorded on every
+artifact built by that invocation, so an artifact answers "what produced me" without the executor.
 """
 
+import getpass
 import os
 import subprocess
 import sys
 from datetime import datetime
 
-
-def get_command_line() -> list[str]:
-    """The launching process's command line (``sys.argv``), recorded as provenance."""
-    return list(sys.argv)
+from pydantic import BaseModel
 
 
-def get_git_commit() -> str | None:
-    """The current ``HEAD`` commit, or ``None`` outside a git checkout."""
-    if os.path.exists(".git"):
-        return os.popen("git rev-parse HEAD").read().strip()
-    return None
+def _git(*args: str) -> str | None:
+    """Run a read-only ``git`` command at the cwd, or ``None`` outside a checkout/on failure."""
+    if not os.path.exists(".git"):
+        return None
+    try:
+        out = subprocess.run(["git", *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
 
 
-def get_user() -> str | None:
-    """The OS user running the build."""
-    return subprocess.check_output("whoami", shell=True).strip().decode("utf-8")
+class Provenance(BaseModel):
+    """Who/when/where an artifact was built, captured in the launching process.
+
+    Nests inside :class:`~marin.execution.artifact.ArtifactRecord`. Every field is best-effort:
+    outside a git checkout the git fields are ``None``.
+    """
+
+    git_remote: str | None = None
+    git_commit: str | None = None
+    git_branch: str | None = None
+    user: str | None = None
+    created_at: str = ""
+    """ISO-8601 timestamp of the launching invocation (shared by every step it builds)."""
+    command_line: list[str] = []
+
+    @classmethod
+    def capture(cls) -> "Provenance":
+        """Snapshot the current launch: git remote/commit/branch, OS user, time, and argv."""
+        return cls(
+            git_remote=_git("remote", "get-url", "origin"),
+            git_commit=_git("rev-parse", "HEAD"),
+            git_branch=_git("rev-parse", "--abbrev-ref", "HEAD"),
+            user=_current_user(),
+            created_at=datetime.now().isoformat(),
+            command_line=list(sys.argv),
+        )
 
 
-def created_now() -> str:
-    """An ISO-8601 timestamp for the current moment."""
-    return datetime.now().isoformat()
+def _current_user() -> str | None:
+    try:
+        return getpass.getuser()
+    except Exception:
+        return None

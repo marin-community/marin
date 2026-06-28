@@ -3,6 +3,7 @@
 
 import dataclasses
 import importlib
+import json
 import logging
 import math
 import os
@@ -10,7 +11,7 @@ import urllib.parse
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import draccus
 from draccus.utils import DataclassInstance
@@ -20,12 +21,69 @@ from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
 from mergedeep import mergedeep
-from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
+from pydantic import BaseModel
+from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket, open_url, url_to_fs
 
+from marin.execution.artifact import Artifact
 from marin.processing.tokenize import read_tokenized_cache_stats
 from marin.training.run_environment import add_run_env_variables
 
 logger = logging.getLogger(__name__)
+
+# The subdirectory Levanter writes rolling checkpoints into, relative to a run's output dir.
+_CHECKPOINTS_SUBDIR = "checkpoints"
+# The final-metrics file a run mirrors next to its output via the WandB ``replicate_path``.
+_TRACKER_METRICS_FILE = "tracker_metrics.jsonl"
+
+
+class TrainMetrics(BaseModel):
+    """A finished run's final metrics, read on demand from its output.
+
+    ``summary`` is the full mirrored WandB summary (keys like ``train/loss``, ``eval/loss``,
+    ``eval/<name>/loss``); ``train_loss``/``eval_loss`` are the common scalars pulled out, each
+    ``None`` when the run did not log it.
+    """
+
+    summary: dict[str, Any]
+    train_loss: float | None = None
+    eval_loss: float | None = None
+
+
+def _as_float(value: object) -> float | None:
+    return float(value) if isinstance(value, int | float) else None
+
+
+class LevanterCheckpoint(Artifact):
+    """A Levanter training run's output: rolling checkpoints, config, and mirrored metrics.
+
+    The realized artifact for every :func:`~marin.experiment.train.train_lm` handle. ``load`` is
+    a path ref; the checkpoint structure and metrics are exposed as accessors so callers never
+    hard-code the layout.
+    """
+
+    @property
+    def checkpoint_dir(self) -> str:
+        """The directory holding this run's rolling checkpoints."""
+        return f"{self.path}/{_CHECKPOINTS_SUBDIR}"
+
+    def training_metrics(self) -> TrainMetrics:
+        """This run's final metrics, parsed from ``tracker_metrics.jsonl`` under its output.
+
+        Raises :class:`FileNotFoundError` if the run wrote no metrics file.
+        """
+        path = f"{self.path}/{_TRACKER_METRICS_FILE}"
+        if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
+            raise FileNotFoundError(f"no {_TRACKER_METRICS_FILE} for checkpoint at {self.path}")
+        with open_url(path, "r") as f:
+            lines = [line for line in f.read().splitlines() if line.strip()]
+        if not lines:
+            raise FileNotFoundError(f"empty {_TRACKER_METRICS_FILE} at {path}")
+        summary = json.loads(lines[-1]).get("summary", {})
+        return TrainMetrics(
+            summary=summary,
+            train_loss=_as_float(summary.get("train/loss")),
+            eval_loss=_as_float(summary.get("eval/loss")),
+        )
 
 
 @dataclass(frozen=True)

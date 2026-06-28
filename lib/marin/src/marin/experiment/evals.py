@@ -8,7 +8,6 @@
 experiment-level decision and lives in ``experiments/`` (see ``experiments.recipes``).
 """
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -20,7 +19,3 @@ class EvalSuite:
 
     tasks: tuple[EvalTaskConfig, ...]
     every: int
-
-    def __init__(self, tasks: Sequence[EvalTaskConfig], every: int):
-        object.__setattr__(self, "tasks", tuple(tasks))
-        object.__setattr__(self, "every", every)

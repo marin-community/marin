@@ -6,35 +6,34 @@
 The model:
 
 - A :class:`Lazy` is a content-free handle: ``(name, version, recipe, result_type)``.
-  Building one runs nothing.
+  Building one runs nothing; :meth:`Lazy.run` / :meth:`Lazy.resolve` execute it.
 - A :class:`Recipe` is ``(fn, build_config, deps, run_args)``. ``build_config`` is a pure
   function of a :class:`RunContext`, which draws the line between identity and execution:
   values written as literals (model, hyperparameters) bear identity, while values *pulled*
   from the context — ``ctx.out``, ``ctx.path(dep)``, ``ctx.prefix``, ``ctx.region``,
   ``ctx.run_arg(key)`` — are where/how the step runs and never do.
-- ``fn(config)`` is the step function. A plain callable runs inline; a
-  :class:`~marin.execution.remote.RemoteCallable` (``remote(fn, resources=…)``) dispatches a
-  Fray job and returns ``None``. A data step writes its bytes to ``ctx.out``; a value step
-  returns a :class:`~marin.execution.artifact.JsonArtifact` the runner serializes into the
-  record's ``result`` (and must run inline).
+- ``fn(config)`` is the step function: a plain callable. It returns the produced
+  :class:`~marin.execution.artifact.Artifact` (a data ref or a value), or ``None`` for a data
+  step that writes its bytes to ``ctx.out``. To run a step on Fray, wrap your own function with
+  :func:`~marin.execution.remote.remote` and pass that as ``fn`` — the lazy layer does no remote
+  dispatch and knows nothing about resources.
 - Identity is the explicit ``{prefix}/{name}/{version}`` path — no content hash. The recipe
   *fingerprint* (config built with dep versions in place of paths and placeholders for
   everything pulled from ``ctx``) is recorded for an advisory drift check, never in the path.
 
-Pre-existing data is brought in with :func:`adopt` (register a ``name@version`` pointing at
-data already on disk). :func:`lower` turns a handle graph into the existing
-:class:`StepSpec` graph the ``StepRunner`` runs; :func:`run`/:func:`resolve` are the entry
-points, and :func:`apply` is the generic single-step builder.
+Pre-existing data is brought in with :func:`adopt`. :meth:`Lazy.run`/:meth:`Lazy.resolve` are
+the entry points; :func:`run` runs several handles together; :func:`apply` is the generic
+single-step builder.
 """
 
 import inspect
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar
 from urllib.parse import urlparse
 
-from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix, marin_region, url_to_fs
 
 from marin.execution.artifact import (
@@ -45,20 +44,20 @@ from marin.execution.artifact import (
     Artifact,
     ArtifactRecord,
     ArtifactTypeMismatchError,
-    Dataset,
     FingerprintMismatchError,
-    JsonArtifact,
     is_mutable_version,
     read_record,
     write_record,
 )
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
-from marin.execution.provenance import created_now, get_command_line, get_git_commit, get_user
-from marin.execution.remote import RemoteCallable, remote
+from marin.execution.provenance import Provenance
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T", bound=Artifact)
+
+# A calendar version: YYYYMMDD, optionally .N for two immutable revisions on the same day.
+_CALVER_RE = re.compile(r"^\d{8}(\.\d+)?$")
 
 
 def _artifact_path(name: str, version: str, prefix: str) -> str:
@@ -84,6 +83,22 @@ def _validate_segment(label: str, value: str) -> None:
         raise ValueError(f"{label} {value!r} must not start or end with '/'")
 
 
+def _validate_version(version: str) -> None:
+    """A version is a calendar version ``YYYYMMDD[.N]`` or a mutable ``dev``/``<label>-dev``.
+
+    ``v1``-style and other ad-hoc strings are rejected: an artifact's version is the author's
+    explicit statement of "when this recipe was frozen", not an opaque tag.
+    """
+    _validate_segment("version", version)
+    if is_mutable_version(version):
+        return
+    if not _CALVER_RE.match(version):
+        raise ValueError(
+            f"version {version!r} must be a calendar version YYYYMMDD (optionally YYYYMMDD.N) "
+            "or a mutable 'dev'/'<label>-dev'"
+        )
+
+
 @dataclass(frozen=True)
 class RunContext:
     """What a recipe resolves its config against — and the dividing line for identity.
@@ -96,11 +111,14 @@ class RunContext:
     Pull points: ``ctx.out`` (this output path), ``ctx.path(dep)`` (a dep's resolved path),
     ``ctx.prefix`` (the live storage prefix), ``ctx.region`` (the live region), and
     ``ctx.run_arg(key)`` (a recipe-declared run-arg, e.g. the TPU a dispatched job runs on).
+    ``is_fingerprint`` is ``True`` only under :meth:`for_fingerprint`, for a ``build_config`` that
+    must emit an identity summary (rather than read records that do not exist yet).
     """
 
     out: str
     prefix: str
     region: str | None
+    is_fingerprint: bool
     _dep_ref: Callable[["Lazy"], str]
     _run_args: Mapping[str, Any]
 
@@ -123,7 +141,12 @@ class RunContext:
         out: str, prefix: str, *, region: str | None = None, run_args: Mapping[str, Any] | None = None
     ) -> "RunContext":
         return RunContext(
-            out=out, prefix=prefix, region=region, _dep_ref=lambda d: d.path(prefix), _run_args=run_args or {}
+            out=out,
+            prefix=prefix,
+            region=region,
+            is_fingerprint=False,
+            _dep_ref=lambda d: d.path(prefix),
+            _run_args=run_args or {},
         )
 
     @staticmethod
@@ -132,6 +155,7 @@ class RunContext:
             out="<out>",
             prefix="<prefix>",
             region="<region>",
+            is_fingerprint=True,
             _dep_ref=lambda d: f"{d.name}@{d.version}",
             _run_args={key: f"<{key}>" for key in run_arg_keys},
         )
@@ -141,10 +165,10 @@ class RunContext:
 class Recipe:
     """How to build an artifact: the step fn, a config builder, deps, run-args."""
 
-    fn: Callable[[Any], Any]
-    """``fn(config)``, or a :class:`~marin.execution.remote.RemoteCallable`
-    (``remote(fn, resources=…)``) to run the step on Fray with those resources. Compute
-    rides with the function, never on the step node, so it does not enter the fingerprint."""
+    fn: Callable[[Any], "Artifact | None"]
+    """``fn(config)`` — a plain callable returning the produced ``Artifact`` (or ``None`` for a
+    data step that writes to ``ctx.out``). Wrap it with
+    :func:`~marin.execution.remote.remote` to dispatch on Fray; the lazy layer just calls it."""
     build_config: Callable[[RunContext], Any]
     """``build_config(ctx) -> config``. Pulls paths and live attributes from the RunContext."""
     deps: tuple["Lazy", ...] = ()
@@ -153,9 +177,8 @@ class Recipe:
     fingerprint, so changing one never forks identity."""
 
 
-# eq=False gives handles object identity (hashable despite the unhashable ResourceConfig in
-# their recipe), so a handle can key a mixture dict. Value-equality lives in name@version and
-# the fingerprint.
+# eq=False gives handles object identity (hashable despite unhashable values in their recipe),
+# so a handle can key a mixture dict. Value-equality lives in name@version and the fingerprint.
 @dataclass(frozen=True, eq=False)
 class Lazy(Generic[T]):
     """A lazy, content-free handle to a versioned artifact producing a ``result_type``."""
@@ -172,23 +195,26 @@ class Lazy(Generic[T]):
     """Adopt pre-existing data at this location as a managed ``name@version`` (set via
     :func:`adopt`). Consumers resolve to ``adopt_source``; lowering writes a provenance
     record at the canonical address. Mutually exclusive with ``override_path``."""
+    adopt_config: dict | None = None
+    """For an adopted artifact, the synthetic ``config`` to record (e.g. a tokenized cache's
+    tokenizer/format), so consumers read metadata the same way as for a produced artifact."""
     expected_fingerprint: str | None = None
-    """Opt-in hard pin: when set, :func:`lower` raises :class:`FingerprintMismatchError` if
+    """Opt-in hard pin: when set, :meth:`lower` raises :class:`FingerprintMismatchError` if
     the config now fingerprints to something else, and the drift check raises rather than
     warns. Leave ``None`` to opt out."""
 
     def __post_init__(self) -> None:
         _validate_segment("name", self.name)
-        _validate_segment("version", self.version)
+        _validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
 
     def fingerprint_payload(self) -> str:
         """The canonical config bytes this handle's fingerprint hashes. For a computed
         artifact, the config built with dep versions for paths and placeholders for pulled
-        values; for an adopted one, its source location."""
+        values; for an adopted one, its source location and recorded config."""
         if self.adopt_source is not None:
-            return json.dumps({"adopt_source": self.adopt_source}, sort_keys=True)
+            return json.dumps({"adopt_source": self.adopt_source, "config": self.adopt_config}, sort_keys=True)
         config = self.recipe.build_config(RunContext.for_fingerprint(self.recipe.run_args.keys()))
         return canonical_json(config)
 
@@ -208,6 +234,36 @@ class Lazy(Generic[T]):
             return location
         return _artifact_path(self.name, self.version, resolved_prefix)
 
+    def lower(self) -> StepSpec:
+        """Lower this handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.
+
+        Captures provenance once and threads it through the graph. See :func:`_lower`.
+        """
+        return _lower(self, Provenance.capture())
+
+    def run(self, *, max_concurrent: int = 8, dry_run: bool = False, force_run_failed: bool = True) -> None:
+        """Lower and run this handle for side effects."""
+        run(self, max_concurrent=max_concurrent, dry_run=dry_run, force_run_failed=force_run_failed)
+
+    def resolve(self: "Lazy[T]", *, max_concurrent: int = 8) -> T:
+        """Run this handle then load its realized, typed :class:`Artifact` via ``result_type.load``.
+
+        Checks the served record's ``result_type`` matches and raises
+        :class:`ArtifactTypeMismatchError` on a mismatch (a value artifact whose schema changed
+        under a reused version) before loading. No build on a cache hit.
+        """
+        self.run(max_concurrent=max_concurrent)
+        path = self.path()
+        record = read_record(path)
+        expected = _result_type_name(self.result_type)
+        if record is not None and record.result_type and record.result_type != expected:
+            raise ArtifactTypeMismatchError(
+                f"{self.name}@{self.version}: recorded result_type is {record.result_type}, "
+                f"but the handle requests {expected}. The value type changed under a reused version — "
+                "bump the version."
+            )
+        return self.result_type.load(path)
+
 
 def _result_type_name(result_type: type[Artifact]) -> str:
     return f"{result_type.__module__}.{result_type.__qualname__}"
@@ -225,16 +281,21 @@ def adopt(
     version: str,
     source: str,
     *,
-    kind: type[T] = Dataset,  # pyrefly: ignore[bad-function-definition]
+    kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
+    config: dict | None = None,
 ) -> "Lazy[T]":
     """Register pre-existing data at ``source`` as a managed ``name@version``.
 
     The data is neither moved nor recomputed: a consumer that depends on the returned handle
     resolves to ``source``. Lowering writes a provenance record at the canonical
     ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
-    ``result_type`` for consumer routing (:class:`Dataset` by default).
+    ``result_type`` for consumer routing (:class:`Artifact` by default). ``config`` records
+    synthetic metadata (e.g. a tokenized cache's tokenizer/format) so consumers read it the same
+    way as for a produced artifact.
     """
-    return Lazy(name=name, version=version, recipe=_ADOPT_RECIPE, result_type=kind, adopt_source=source)
+    return Lazy(
+        name=name, version=version, recipe=_ADOPT_RECIPE, result_type=kind, adopt_source=source, adopt_config=config
+    )
 
 
 def materialized_config(handle: "Lazy", prefix: str) -> Any:
@@ -255,20 +316,19 @@ def _output_path_spec(handle: "Lazy") -> str:
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
-def lower(handle: "Lazy") -> StepSpec:
-    """Lower a handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.
+def _lower(handle: "Lazy", provenance: Provenance) -> StepSpec:
+    """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
-    Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin);
-    the fingerprint, version, result_type, and dep identities travel in ``hash_attrs`` so the
-    runner applies the drift check before serving a cached output, and the step fn writes a
-    full :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* —
-    it never inspects ``recipe.fn`` beyond the remote/value-shape guard.
+    Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
+    fingerprint, version, result_type, and dep identities travel in ``hash_attrs`` so the runner
+    applies the drift check before serving a cached output, and the step fn writes a full
+    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
+    inspects ``recipe.fn``.
 
     Raises :class:`FingerprintMismatchError` if ``expected_fingerprint`` is set and differs;
-    :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep, or if a
-    :class:`JsonArtifact` ``result_type`` is paired with a remote fn.
+    :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep.
     """
-    dep_specs = [lower(dep) for dep in handle.recipe.deps]
+    dep_specs = [_lower(dep, provenance) for dep in handle.recipe.deps]
     payload = handle.fingerprint_payload()
     fingerprint = fingerprint_hash(payload)
     if handle.expected_fingerprint is not None and fingerprint != handle.expected_fingerprint:
@@ -278,12 +338,6 @@ def lower(handle: "Lazy") -> StepSpec:
             f"the pin, and bump the version if this is meant to be a different artifact."
         )
 
-    produces_value = issubclass(handle.result_type, JsonArtifact)
-    if produces_value and isinstance(handle.recipe.fn, RemoteCallable):
-        raise ValueError(
-            f"{handle.name}@{handle.version}: a JsonArtifact result_type ({handle.result_type.__qualname__}) "
-            "cannot be produced by a remote fn — a Fray job returns nothing to the caller. Run it inline."
-        )
     if not is_mutable_version(handle.version):
         for dep in handle.recipe.deps:
             if is_mutable_version(dep.version):
@@ -295,13 +349,8 @@ def lower(handle: "Lazy") -> StepSpec:
 
     dep_refs = [f"{d.name}@{d.version}" for d in handle.recipe.deps]
     result_type_name = _result_type_name(handle.result_type)
-
-    # Provenance is captured in the launching process (which holds the git checkout) and
-    # closed over, so a step that runs remotely still records the launch commit and argv.
+    # A pin references existing data; it writes no record. Everything else records provenance.
     record_provenance = handle.override_path is None
-    git_commit = get_git_commit() if record_provenance else None
-    user = get_user() if record_provenance else None
-    command_line = get_command_line() if record_provenance else None
 
     def fn(output_path: str, _handle: "Lazy" = handle) -> Any:
         if _handle.adopt_source is not None:
@@ -311,7 +360,7 @@ def lower(handle: "Lazy") -> StepSpec:
             if not fs.exists(source):
                 raise FileNotFoundError(f"cannot adopt {_handle.name}@{_handle.version}: no data at {source}")
             result = None
-            config_json: dict[str, Any] | None = None
+            config_json: dict[str, Any] | None = _handle.adopt_config
             result_json: dict[str, Any] | None = None
         else:
             ctx = RunContext.for_run(
@@ -321,12 +370,7 @@ def lower(handle: "Lazy") -> StepSpec:
             result = _handle.recipe.fn(config)
             source = None
             config_json = json.loads(canonical_json(config))
-            if produces_value and not isinstance(result, Artifact):
-                raise ValueError(
-                    f"{_handle.name}@{_handle.version}: result_type {result_type_name} is a JsonArtifact, "
-                    f"but the recipe fn returned {type(result).__qualname__}"
-                )
-            result_json = result.model_dump(mode="json") if isinstance(result, Artifact) else None
+            result_json = result.result_payload() if isinstance(result, Artifact) else None
         if record_provenance:
             write_record(
                 ArtifactRecord(
@@ -337,13 +381,10 @@ def lower(handle: "Lazy") -> StepSpec:
                     output_path=output_path,
                     deps=dep_refs,
                     config=config_json,
-                    command_line=command_line,
-                    git_commit=git_commit,
-                    user=user,
-                    created_at=created_now(),
                     source=source,
                     result=result_json,
                     fingerprint_payload=payload,
+                    provenance=provenance,
                 )
             )
         return result
@@ -374,38 +415,19 @@ def run(
     dry_run: bool = False,
     force_run_failed: bool = True,
 ) -> None:
-    """Lower and run ``handles`` for side effects — the everyday entry point.
+    """Lower and run ``handles`` for side effects — the entry point for several handles at once.
 
-    ``dry_run`` logs without touching remote status; ``force_run_failed`` reruns a
+    Provenance is captured once for the whole invocation, so every artifact built records the
+    same launch. ``dry_run`` logs without touching remote status; ``force_run_failed`` reruns a
     previously-FAILED step instead of raising.
     """
+    provenance = Provenance.capture()
     StepRunner().run(
-        [lower(h) for h in handles],
+        [_lower(h, provenance) for h in handles],
         dry_run=dry_run,
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
-
-
-def resolve(handle: "Lazy[T]", *, max_concurrent: int = 8) -> T:
-    """Run ``handle`` then load its realized, typed :class:`Artifact` via ``result_type.load``.
-
-    Checks the served record's ``result_type`` matches the handle's and raises
-    :class:`ArtifactTypeMismatchError` on a mismatch (a value artifact whose schema changed
-    under a reused version) before loading. A value artifact returns the typed value; a data
-    artifact a path-bearing ref. No build on a cache hit.
-    """
-    run(handle, max_concurrent=max_concurrent)
-    path = handle.path()
-    record = read_record(path)
-    expected = _result_type_name(handle.result_type)
-    if record is not None and record.result_type and record.result_type != expected:
-        raise ArtifactTypeMismatchError(
-            f"{handle.name}@{handle.version}: recorded result_type is {record.result_type}, "
-            f"but the handle requests {expected}. The value type changed under a reused version — "
-            "bump the version."
-        )
-    return handle.result_type.load(path)
 
 
 class _OutSentinel:
@@ -457,56 +479,24 @@ def _resolve_input(value: Any, ctx: RunContext) -> Any:
     return value
 
 
-def derived(
-    name: str,
-    *,
-    fn: Callable[[Any], Any],
-    build_config: Callable[[RunContext], Any],
-    deps: Iterable["Lazy"] = (),
-    version: str = "v1",
-    pin: str | None = None,
-    resources: ResourceConfig | None = None,
-    kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
-) -> "Lazy[T]":
-    """The generic single-step builder, **config-object form**: ``fn(build_config(ctx))``.
-
-    The tier beneath :func:`apply` for a step whose function takes a typed config object (a
-    dataclass/pydantic config) rather than keyword inputs, or whose inputs are derived from a
-    dep path (``f"{ctx.path(dep)}/sub"``) — neither of which ``apply`` expresses. ``build_config``
-    pulls dep paths and ``ctx.out`` itself; pass the same handles in ``deps`` so they materialize
-    first. ``kind`` selects the produced :class:`~marin.execution.artifact.Artifact` type for
-    consumer routing; ``resources`` dispatches via :func:`~marin.execution.remote.remote`; ``pin``
-    references existing data instead of recomputing.
-    """
-    call_fn = remote(fn, resources=resources) if resources is not None else fn
-    return Lazy(
-        name=name,
-        version=version,
-        recipe=Recipe(fn=call_fn, build_config=build_config, deps=tuple(deps)),
-        result_type=kind,
-        override_path=pin,
-    )
-
-
 def apply(
     name: str,
     fn: Callable[..., Any],
     *,
-    version: str = "v1",
+    version: str,
     result_type: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
-    resources: ResourceConfig | None = None,
     pin: str | None = None,
     **inputs: Any,
 ) -> "Lazy[T]":
-    """The generic single-step builder, direct-call form: *name an output, say which function
-    makes it, pass its inputs.*
+    """The generic single-step builder: *name an output, say which function makes it, pass its
+    inputs.*
 
     Each value in ``inputs`` is classified, recursing into ``list``/``tuple``/``dict``: a
     :class:`Lazy` handle becomes a dep and resolves to ``ctx.path(handle)`` at run time (its
     ``name@version`` enters identity); the :data:`OUT` sentinel resolves to ``ctx.out``;
     anything else is a literal that bears identity. The recipe calls ``fn(**resolved_inputs)``
-    directly. ``result_type`` selects the produced :class:`Artifact` type; ``resources``
-    dispatches via :func:`~marin.execution.remote.remote`; ``pin`` references existing data.
+    directly. To dispatch on Fray, pass an already-wrapped ``remote(fn, resources=…)`` as ``fn``.
+    ``result_type`` selects the produced :class:`Artifact` type; ``pin`` references existing data.
 
     Raises :class:`TypeError` if ``fn``'s signature cannot bind the inputs.
     """
@@ -517,12 +507,11 @@ def apply(
         raise TypeError(f"apply({name!r}): {fn_name} cannot bind the given inputs: {e}") from e
 
     deps = _collect_deps(inputs)
-    call_fn = remote(fn, resources=resources) if resources is not None else fn
 
     def build_config(ctx: RunContext) -> dict[str, Any]:
         return {key: _resolve_input(value, ctx) for key, value in inputs.items()}
 
-    def step_fn(config: dict[str, Any], _fn: Callable[..., Any] = call_fn) -> Any:
+    def step_fn(config: dict[str, Any], _fn: Callable[..., Any] = fn) -> Any:
         return _fn(**config)
 
     recipe = Recipe(fn=step_fn, build_config=build_config, deps=tuple(deps))

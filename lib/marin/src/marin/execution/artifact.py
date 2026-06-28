@@ -4,22 +4,23 @@
 """The realized artifact, its on-disk record, and the drift check.
 
 An :class:`Artifact` is the produced, persisted output of a step; a
-:class:`marin.execution.lazy.Lazy` is the inert handle that builds one. This module owns:
+:class:`marin.execution.lazy.Lazy` is the inert handle that builds one. This module owns the
+framework — one base type and the record around it — while concrete artifact types live with
+their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``TokenizedCache`` in
+``marin.processing.tokenize.tokenize``):
 
-- :class:`Artifact` (and :class:`Dataset`/:class:`Checkpoint`/:class:`JsonArtifact`) —
-  the produced, persisted value. ``load(path)`` reconstructs it; data refs return a
-  path-bearing handle (no weights pulled), a :class:`JsonArtifact` reads its value out of
-  the record.
-- :class:`ArtifactRecord` — the single descriptor written next to a step's output: its
-  config, fingerprint, provenance, and (for a value artifact) its ``result``.
+- :class:`Artifact` — a directory with a record (provenance + an optional JSON payload) and a
+  ``load`` that reads it back. The default ``load`` returns a handle into the path; a subclass
+  that declares value fields round-trips them through the record's ``result`` automatically.
+- :class:`ArtifactRecord` — the single descriptor written next to a step's output: its config,
+  fingerprint, provenance, and (for a value artifact) its ``result``.
 - ``read_record``/``write_record`` (the full record) and ``read_artifact``/``write_artifact``
   (the manual typed-payload API), two entry points over one serialization scheme.
-- :func:`check_drift` — the advisory recipe-drift guard the runner applies before serving
-  a cached output.
+- :func:`check_drift` — the advisory recipe-drift guard the runner applies before serving a
+  cached output.
 """
 
 import functools
-import json
 import logging
 from dataclasses import asdict, is_dataclass
 from typing import Self, TypeVar, cast
@@ -27,6 +28,8 @@ from typing import Self, TypeVar, cast
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import marin_prefix, open_url, url_to_fs
 
+from marin.execution.fingerprint import describe_drift
+from marin.execution.provenance import Provenance
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 logger = logging.getLogger(__name__)
@@ -49,10 +52,6 @@ VERSION_KEY = "version"
 RESULT_TYPE_KEY = "result_type"
 EXPECTED_FINGERPRINT_KEY = "expected_fingerprint"
 
-# Cap on how many changed config values a drift message spells out before summarizing the
-# remainder, so a wholesale recipe change stays readable.
-_MAX_DIFF_LINES = 20
-
 
 class FingerprintMismatchError(Exception):
     """The opt-in hard identity gate: an ``expected_fingerprint`` pin differs from the
@@ -65,10 +64,12 @@ class ArtifactTypeMismatchError(Exception):
 
 
 class Artifact(BaseModel):
-    """A produced, persisted artifact: its ``path`` plus a lazily-read provenance ``record``.
+    """A produced, persisted artifact: a directory with a record and a ``load``.
 
-    ``load`` is concrete (a data ref) so the default ``result_type=Artifact`` is resolvable
-    and weights/caches never enter the launcher. Not frozen: ``load`` sets ``path``.
+    The default ``load`` is a data ref — it returns a handle into ``path`` whose ``.record``
+    carries provenance and the run's config, pulling no weights/caches into the launcher. A
+    subclass that declares value fields persists and reloads them through ``record.result`` with
+    no override (see :meth:`result_payload`). Not frozen: ``load`` sets ``path``.
     """
 
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
@@ -80,42 +81,33 @@ class Artifact(BaseModel):
         """The record sidecar at ``path`` (read once), or ``None`` if absent."""
         return read_record(self.path)
 
-    @classmethod
-    def load(cls, source: str) -> Self:
-        """A data ref: return a handle into ``source`` without reading anything."""
-        return cls(path=source)
+    def result_payload(self) -> dict | None:
+        """What the record stores as ``result``: this artifact's *declared* value fields
+        (every field but ``path``), or ``None`` for a pure data ref that declares none.
 
-
-class Dataset(Artifact):
-    """A tokenized Levanter cache at ``path`` (inherits the path-ref ``load``)."""
-
-
-class Checkpoint(Artifact):
-    """A Levanter checkpoint dir at ``path`` (inherits the path-ref ``load``)."""
-
-
-class JsonArtifact(Artifact):
-    """A computed value persisted in the record's ``result``.
-
-    Authors subclass this (declaring the value's fields) instead of writing ``load``.
-    """
+        Uses ``type(self).model_fields`` rather than ``model_dump()`` so ``extra="allow"`` extras
+        (e.g. the cached ``record``) never leak into the payload. Override to persist something
+        else.
+        """
+        keys = {name for name in type(self).model_fields if name != "path"}
+        if not keys:
+            return None
+        return self.model_dump(mode="json", include=keys) or None
 
     @classmethod
     def load(cls, source: str) -> Self:
+        """A handle into ``source``; a subclass with value fields repopulates them from
+        ``record.result``."""
         rec = read_record(source)
-        if rec is None:
-            raise FileNotFoundError(f"no artifact record at {source}")
-        obj = cls.model_validate(rec.result)
-        obj.path = source
-        return obj
+        data = (rec.result if rec is not None else None) or {}
+        return cls(path=source, **data)
 
 
 class ArtifactRecord(BaseModel):
     """The single descriptor written next to a step's output.
 
-    All fields except by-default-empty identity fields carry a default, so a minimal manual
-    record (:func:`write_artifact`) and a pre-existing legacy file both load without error;
-    the lazy runner fills them all.
+    All fields carry a default, so a minimal manual record (:func:`write_artifact`) and a
+    pre-existing legacy file both load without error; the lazy runner fills them all.
     """
 
     name: str = ""
@@ -126,17 +118,15 @@ class ArtifactRecord(BaseModel):
     deps: list[str] = Field(default_factory=list)
     """Dependency identities as ``name@version`` strings."""
     config: dict[str, JSONValue] | None = None
-    """The materialized config that ran (canonical-encoded), for humans."""
-    command_line: list[str] | None = None
-    git_commit: str | None = None
-    user: str | None = None
-    created_at: str = ""
+    """The materialized config that ran (canonical-encoded), for humans and consumer metadata."""
     source: str | None = None
     """For an adopted artifact, the pre-existing data location this ``name@version`` aliases."""
     result: dict[str, JSONValue] | None = None
-    """``JsonArtifact.model_dump()`` for a value artifact; ``None`` for a data artifact."""
+    """A value artifact's declared fields; ``None`` for a data artifact."""
     fingerprint_payload: str | None = None
     """The canonical config JSON the ``fingerprint`` hashes, kept for the drift diff."""
+    provenance: Provenance | None = None
+    """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
 
 
 def is_mutable_version(version: str) -> bool:
@@ -217,46 +207,6 @@ def write_artifact(value: object, output_path: str) -> None:
     write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
 
 
-def _diff_json(old: object, new: object, prefix: str = "") -> list[str]:
-    """Dotted-path descriptions of where ``old`` and ``new`` (parsed JSON) differ."""
-    if isinstance(old, dict) and isinstance(new, dict):
-        changes: list[str] = []
-        for key in sorted(set(old) | set(new)):
-            sub = f"{prefix}.{key}" if prefix else key
-            if key not in old:
-                changes.append(f"{sub}: (added) {new[key]!r}")
-            elif key not in new:
-                changes.append(f"{sub}: {old[key]!r} (removed)")
-            else:
-                changes.extend(_diff_json(old[key], new[key], sub))
-        return changes
-    if isinstance(old, list) and isinstance(new, list):
-        if len(old) != len(new):
-            return [f"{prefix}: list of {len(old)} -> list of {len(new)}"]
-        changes = []
-        for i, (a, b) in enumerate(zip(old, new, strict=True)):
-            changes.extend(_diff_json(a, b, f"{prefix}[{i}]"))
-        return changes
-    if old != new:
-        return [f"{prefix or '(root)'}: {old!r} -> {new!r}"]
-    return []
-
-
-def _describe_change(existing: ArtifactRecord, payload: str | None) -> str:
-    """A field-level summary of how the current recipe differs from the recorded one,
-    or an empty string when neither side carries a payload to diff."""
-    if payload is None or existing.fingerprint_payload is None:
-        return ""
-    changes = _diff_json(json.loads(existing.fingerprint_payload), json.loads(payload))
-    if not changes:
-        return ""
-    shown = changes[:_MAX_DIFF_LINES]
-    body = "\n".join(f"  {c}" for c in shown)
-    if len(changes) > len(shown):
-        body += f"\n  …and {len(changes) - len(shown)} more"
-    return f"\nChanged config values:\n{body}"
-
-
 def check_drift(step: StepSpec) -> bool:
     """Advisory recipe-drift guard, run before serving a cached SUCCESS.
 
@@ -276,7 +226,7 @@ def check_drift(step: StepSpec) -> bool:
     if record is None or record.fingerprint == fingerprint:
         return False
 
-    change = _describe_change(record, step.fingerprint_payload)
+    change = describe_drift(record.fingerprint_payload, step.fingerprint_payload)
     if step.hash_attrs.get(EXPECTED_FINGERPRINT_KEY) is not None:
         raise FingerprintMismatchError(
             f"{step.name}@{version} is pinned to expected_fingerprint, but its recorded build has "

@@ -29,9 +29,11 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from rigging.filesystem import open_url, url_to_fs
 
 from marin.execution.artifact import check_drift, write_artifact
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.step_spec import StepSpec
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import (
+from marin.execution.step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -41,8 +43,6 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
-from marin.execution.remote import RemoteCallable, _sanitize_job_name
-from marin.execution.step_spec import StepSpec
 from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
 from marin.utilities.json_encoder import CustomJsonEncoder
 

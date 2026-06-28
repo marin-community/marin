@@ -168,3 +168,52 @@ def canonical_json(config: object) -> str:
 def fingerprint_hash(payload: str) -> str:
     """The short recipe fingerprint: an md5 prefix of a canonical payload."""
     return hashlib.md5(payload.encode()).hexdigest()[:8]
+
+
+# Cap on how many changed config values a drift message spells out before summarizing the
+# remainder, so a wholesale recipe change stays readable.
+_MAX_DIFF_LINES = 20
+
+
+def _diff_json(old: object, new: object, prefix: str = "") -> list[str]:
+    """Dotted-path descriptions of where ``old`` and ``new`` (parsed JSON) differ."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        changes: list[str] = []
+        for key in sorted(set(old) | set(new)):
+            sub = f"{prefix}.{key}" if prefix else key
+            if key not in old:
+                changes.append(f"{sub}: (added) {new[key]!r}")
+            elif key not in new:
+                changes.append(f"{sub}: {old[key]!r} (removed)")
+            else:
+                changes.extend(_diff_json(old[key], new[key], sub))
+        return changes
+    if isinstance(old, list) and isinstance(new, list):
+        if len(old) != len(new):
+            return [f"{prefix}: list of {len(old)} -> list of {len(new)}"]
+        changes = []
+        for i, (a, b) in enumerate(zip(old, new, strict=True)):
+            changes.extend(_diff_json(a, b, f"{prefix}[{i}]"))
+        return changes
+    if old != new:
+        return [f"{prefix or '(root)'}: {old!r} -> {new!r}"]
+    return []
+
+
+def describe_drift(old_payload: str | None, new_payload: str | None) -> str:
+    """A field-level summary of how a recipe's config changed from the recorded one.
+
+    Both arguments are canonical-JSON fingerprint payloads. Returns an empty string when either
+    side is absent or the configs are identical; otherwise a capped, newline-prefixed listing of
+    the changed dotted paths for a drift warning.
+    """
+    if old_payload is None or new_payload is None:
+        return ""
+    changes = _diff_json(json.loads(old_payload), json.loads(new_payload))
+    if not changes:
+        return ""
+    shown = changes[:_MAX_DIFF_LINES]
+    body = "\n".join(f"  {c}" for c in shown)
+    if len(changes) > len(shown):
+        body += f"\n  …and {len(changes) - len(shown)} more"
+    return f"\nChanged config values:\n{body}"
