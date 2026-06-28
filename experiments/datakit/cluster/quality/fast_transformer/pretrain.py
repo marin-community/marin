@@ -67,39 +67,43 @@ logger = logging.getLogger(__name__)
 
 BASELINE = {"auc": 0.846, "spearman_rho": 0.641}  # fasttext, for reference
 
-# The NTP softmax logits are [tokens, vocab]; computing the loss in token-tiles of
-# this size keeps that tensor bounded regardless of batch or vocab, so the full
-# tokenizer vocabulary stays affordable (no lossy top-K cap) and the per-chip
-# batch is limited only by the O(T^2) attention (which remat already handles).
-_LM_CHUNK_TOKENS = 4096
+# Sequence positions per LM-head tile. The NTP logits are [B, T, vocab]; computing
+# the loss in tiles of this many positions keeps the live logits tensor to
+# [B, this, vocab] regardless of T or vocab, so the full tokenizer vocabulary
+# stays affordable (no lossy top-K cap).
+_LM_CHUNK_TOKENS = 512
 
 
 def ntp_loss(enc: TokenEncoder, ids: Array, *, inference: bool) -> Array:
-    """Mean next-token cross-entropy with the LM head/softmax chunked over tokens.
+    """Mean next-token cross-entropy with the LM head/softmax tiled over the sequence.
 
     Predicts ``ids[:, 1:]`` from ``ids[:, :-1]``. The logits are produced in
-    tiles of :data:`_LM_CHUNK_TOKENS` via :func:`jax.lax.scan`, so the
-    ``[tokens, vocab]`` tensor never fully materializes -- vocab size costs FLOPs,
-    not memory. PAD targets are masked out of the mean.
+    sequence-tiles of :data:`_LM_CHUNK_TOKENS` via :func:`jax.lax.scan`, and the
+    scan body is gradient-checkpointed so each tile's ``[B, tile, vocab]`` logits
+    are recomputed in backward rather than stacked across tiles. The batch axis is
+    kept leading throughout so data-parallel sharding survives. PAD targets are
+    masked out of the mean.
     """
     hidden = enc.encode(ids, key=None, inference=inference)  # [B, T, d]
-    h = hidden[:, :-1].reshape(-1, hidden.shape[-1])  # [N, d]
-    tgt = ids[:, 1:].reshape(-1)  # [N]
+    h = hidden[:, :-1]  # [B, S, d]
+    tgt = ids[:, 1:]  # [B, S]
+    b, s, d = h.shape
     chunk = _LM_CHUNK_TOKENS
-    pad = (-h.shape[0]) % chunk
+    pad = (-s) % chunk
     if pad:
-        h = jnp.concatenate([h, jnp.zeros((pad, h.shape[1]), h.dtype)], axis=0)
-        tgt = jnp.concatenate([tgt, jnp.full((pad,), PAD_ID, tgt.dtype)], axis=0)
-    h = h.reshape(-1, chunk, h.shape[-1])  # [nC, chunk, d]
-    tgt = tgt.reshape(-1, chunk)  # [nC, chunk]
+        h = jnp.pad(h, ((0, 0), (0, pad), (0, 0)))
+        tgt = jnp.pad(tgt, ((0, 0), (0, pad)), constant_values=PAD_ID)
+    n_tiles = (s + pad) // chunk
+    h = h.reshape(b, n_tiles, chunk, d).swapaxes(0, 1)  # [nTiles, B, chunk, d]
+    tgt = tgt.reshape(b, n_tiles, chunk).swapaxes(0, 1)  # [nTiles, B, chunk]
 
     def tile(_, xs):
-        hc, tc = xs
-        tok = optax.softmax_cross_entropy_with_integer_labels(enc.lm_logits(hc), tc)  # [chunk]
+        hc, tc = xs  # [B, chunk, d], [B, chunk]
+        tok = optax.softmax_cross_entropy_with_integer_labels(enc.lm_logits(hc), tc)  # [B, chunk]
         mask = (tc != PAD_ID).astype(tok.dtype)
         return None, (jnp.sum(tok * mask), jnp.sum(mask))
 
-    _, (sums, counts) = jax.lax.scan(tile, None, (h, tgt))
+    _, (sums, counts) = jax.lax.scan(jax.checkpoint(tile), None, (h, tgt))
     return sums.sum() / jnp.maximum(counts.sum(), 1.0)
 
 
