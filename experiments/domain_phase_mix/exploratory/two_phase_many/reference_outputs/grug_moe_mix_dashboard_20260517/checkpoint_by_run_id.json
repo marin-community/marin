@@ -1,0 +1,22 @@
+{
+  "grug_moe_mix_d1024-9.00e+18": "gs://marin-us-east5/grug/grug_moe_mix_d1024-9.00e+18-104afa/checkpoints",
+  "grug_moe_mix_d1280-2.83e+19": "gs://marin-us-east5/grug/grug_moe_mix_d1280-2.83e+19-933b4f/checkpoints",
+  "grug_moe_mix_d1536-9.00e+19": "gs://marin-us-east5/grug/grug_moe_mix_d1536-9.00e+19-54df08/checkpoints",
+  "grug_moe_mix_d512-2.19e+17": "gs://marin-us-east5/grug/grug_moe_mix_d512-2.19e+17-e6a48f/checkpoints",
+  "grug_moe_mix_d768-1.70e+18": "gs://marin-us-east5/grug/grug_moe_mix_d768-1.70e+18-2ea19d/checkpoints",
+  "grug_moe_mix_v2_d1024-9.00e+18": "gs://marin-us-east5/grug/grug_moe_mix_v2_d1024-9.00e+18-3218e2/checkpoints",
+  "grug_moe_mix_v2_d1280-2.83e+19": "gs://marin-us-east5/grug/grug_moe_mix_v2_d1280-2.83e+19-5f2fbf/checkpoints",
+  "grug_moe_mix_v2_d1536-9.00e+19": "gs://marin-us-east5/grug/grug_moe_mix_v2_d1536-9.00e+19-178146/checkpoints",
+  "grug_moe_mix_v2_d512-2.19e+17": "gs://marin-us-east5/grug/grug_moe_mix_v2_d512-2.19e+17-5063eb/checkpoints",
+  "grug_moe_mix_v2_d768-1.70e+18": "gs://marin-us-east5/grug/grug_moe_mix_v2_d768-1.70e+18-3812e3/checkpoints",
+  "grug_moe_mix_v3_d1024-9.00e+18": "gs://marin-us-east5/grug/grug_moe_mix_v3_d1024-9.00e+18-b030c4/checkpoints",
+  "grug_moe_mix_v3_d1280-2.83e+19": "gs://marin-us-east5/grug/grug_moe_mix_v3_d1280-2.83e+19-4b6eab/checkpoints",
+  "grug_moe_mix_v3_d1536-9.00e+19": "gs://marin-us-east5/grug/grug_moe_mix_v3_d1536-9.00e+19-46d56e/checkpoints",
+  "grug_moe_mix_v3_d512-2.19e+17": "gs://marin-us-east5/grug/grug_moe_mix_v3_d512-2.19e+17-4c5ca9/checkpoints",
+  "grug_moe_mix_v3_d768-1.70e+18": "gs://marin-us-east5/grug/grug_moe_mix_v3_d768-1.70e+18-a27216/checkpoints",
+  "grug_moe_mix_v4_d1024-9.00e+18": "gs://marin-us-east5/grug/grug_moe_mix_v4_d1024-9.00e+18-7938f2/checkpoints",
+  "grug_moe_mix_v4_d1280-2.83e+19": "gs://marin-us-east5/grug/grug_moe_mix_v4_d1280-2.83e+19-fd54fd/checkpoints",
+  "grug_moe_mix_v4_d1536-9.00e+19": "gs://marin-us-east5/grug/grug_moe_mix_v4_d1536-9.00e+19-5ae83d/checkpoints",
+  "grug_moe_mix_v4_d512-2.19e+17": "gs://marin-us-east5/grug/grug_moe_mix_v4_d512-2.19e+17-6aa7c8/checkpoints",
+  "grug_moe_mix_v4_d768-1.70e+18": "gs://marin-us-east5/grug/grug_moe_mix_v4_d768-1.70e+18-556077/checkpoints"
+}

@@ -1,0 +1,48 @@
+{
+  "rhos": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    1.0
+  ],
+  "formula": "N_eff = non_embedding_params + rho * input_embedding_params",
+  "base_packet_view": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/joint_model_refreshed_20260426/packet_view",
+  "scale_metadata": [
+    {
+      "scale": "130m_2p6b",
+      "scale_display_label": "20M/2.6B",
+      "non_embedding_params": 22813184,
+      "input_embedding_params": 65667072,
+      "tied_total_params": 88480256
+    },
+    {
+      "scale": "60m_1p2b",
+      "scale_display_label": "60M/1.2B",
+      "non_embedding_params": 58998528,
+      "input_embedding_params": 98500608,
+      "tied_total_params": 157499136
+    },
+    {
+      "scale": "300m_6b",
+      "scale_display_label": "100M/6B",
+      "non_embedding_params": 102648576,
+      "input_embedding_params": 98500608,
+      "tied_total_params": 201149184
+    },
+    {
+      "scale": "520m_10p4b",
+      "scale_display_label": "340M/10.4B",
+      "non_embedding_params": 339788800,
+      "input_embedding_params": 131334144,
+      "tied_total_params": 471122944
+    },
+    {
+      "scale": "1_2b_24b",
+      "scale_display_label": "900M/24B",
+      "non_embedding_params": 906037248,
+      "input_embedding_params": 262668288,
+      "tied_total_params": 1168705536
+    }
+  ]
+}

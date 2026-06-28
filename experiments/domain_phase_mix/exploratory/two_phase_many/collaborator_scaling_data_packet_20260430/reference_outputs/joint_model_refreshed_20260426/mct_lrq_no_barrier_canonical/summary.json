@@ -1,0 +1,14 @@
+{
+  "all900_rmse": 0.0101770470357166,
+  "all900_spearman": 1.0,
+  "canonical_name": "MCT-LRQ69-drop-noP",
+  "fitted_param_count": 60,
+  "fixed340_rmse": 0.0061428227877597,
+  "fixed340_slope": 0.9524539665269957,
+  "fixed340_std_ratio": 1.0131991367418678,
+  "model": "mct_lrq69_drop_no_barrier",
+  "param_count_total": 69,
+  "random_supplement_rmse": 0.0123340943115814,
+  "seed7_holdout_rmse": 0.0100745103962773,
+  "seed7_holdout_spearman": 0.9707033315705974
+}

@@ -16,7 +16,12 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
 from levanter import callbacks
-from levanter.compat.hf_checkpoints import HFCompatConfig, ModelWithHfSerializationMixin, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import (
+    HFCompatConfig,
+    ModelWithHfSerializationMixin,
+    converter_from_hf_compat_config,
+    save_hf_checkpoint_callback,
+)
 from levanter.data.audio import AudioIODatasetConfig, AudioMixtureDatasetConfig, AudioTextDataset
 from levanter.models.asr_model import ASRConfig, AudioTextExample
 from levanter.models.whisper import WhisperConfig
@@ -61,26 +66,25 @@ def main(config: TrainASRConfig):
             raise ValueError("Cannot specify both initialize_from_hf and initialize_from")
 
         assert isinstance(config.model, HFCompatConfig)
-        converter = config.model.hf_checkpoint_converter()
+        converter = converter_from_hf_compat_config(
+            config.model,
+            tokenizer=tokenizer,
+            reference_checkpoint=config.initialize_from_hf if isinstance(config.initialize_from_hf, str) else None,
+            feature_extractor=config.data.the_feature_extractor,
+        )
         if hasattr(tokenizer, "vocab") and tokenizer.vocab != converter.tokenizer.vocab:
             logger.warning("The tokenizers appear to be different. You may want to check this.")
-
-        if isinstance(config.initialize_from_hf, str):
-            converter = converter.replaced(
-                reference_checkpoint=config.initialize_from_hf,
-                tokenizer=tokenizer,
-                feature_extractor=config.data.the_feature_extractor,
-            )
-        else:
-            converter = converter.replaced(tokenizer=tokenizer, feature_extractor=config.data.the_feature_extractor)
 
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
             # NB: gross mutability
             config.model = converter.config_from_hf_config(converter.default_hf_config)
     elif isinstance(config.model, HFCompatConfig):
-        converter = config.model.hf_checkpoint_converter()
-        converter = converter.replaced(tokenizer=tokenizer, feature_extractor=config.data.the_feature_extractor)
+        converter = converter_from_hf_compat_config(
+            config.model,
+            tokenizer=tokenizer,
+            feature_extractor=config.data.the_feature_extractor,
+        )
     else:
         converter = None
 

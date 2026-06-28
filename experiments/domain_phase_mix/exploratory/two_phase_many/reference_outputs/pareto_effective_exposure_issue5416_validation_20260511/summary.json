@@ -1,0 +1,18 @@
+{
+  "base_name_prefix": "pinlin_calvin_xu/data_mixture/ngd3dm2_pareto_effective_exposure_issue5416_validation",
+  "base_run_name": "baseline_proportional",
+  "base_source_experiment": "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240",
+  "candidate_count": 6,
+  "candidate_summary_uri": "gs://marin-us-east5/experiments/domain_phase_mix/pareto_effective_exposure_issue5416_validation_20260511/candidate_summary.csv",
+  "candidate_weights_uri": "gs://marin-us-east5/experiments/domain_phase_mix/pareto_effective_exposure_issue5416_validation_20260511/candidate_weights_long.csv",
+  "cohort": "pareto_effective_exposure_issue5416_validation",
+  "name_prefix": "pinlin_calvin_xu/data_mixture/ngd3dm2_pareto_effective_exposure_issue5416_validation",
+  "outputs": {
+    "candidate_source_summary_csv": "candidate_source_summary.csv",
+    "run_specs_json": "run_specs.json",
+    "training_manifest_csv": "training_manifest.csv"
+  },
+  "scale": "300m_6b",
+  "scale_display_label": "100M/6B",
+  "training_run_count": 6
+}

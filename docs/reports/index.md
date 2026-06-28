@@ -105,6 +105,12 @@ This page includes only experiments that have at least one run or report.
 
 ## Data Experiments
 
+### Data Mixing
+
+- Data Mixing NeurIPS Working Notes
+    - [Paper-note index](./data-mixing-neurips/index.md)
+    - [Olmix implementation review](./data-mixing-neurips/olmix.md)
+
 ### High Quality Data Ablations
 
 - Ablations on Cooldown for Markdownified Wikipedia [![#845](https://img.shields.io/github/issues/detail/state/marin-community/marin/845)](https://github.com/marin-community/marin/issues/845)

@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
+import re
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import braceexpand
 import datasets
@@ -12,6 +15,9 @@ import requests
 from huggingface_hub.utils import HfHubHTTPError
 from rigging.filesystem import url_to_fs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
+
+logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 def fsspec_exists(file_path: str) -> bool:
@@ -106,6 +112,24 @@ def _hf_should_retry(exc: Exception) -> bool:
     return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
 
 
+def call_with_hf_backoff(
+    fn: Callable[[], _T],
+    *,
+    context: str,
+    max_attempts: int = 6,
+    initial_delay: float = 2.0,
+    max_delay: float = 120.0,
+) -> _T:
+    """Call a Hugging Face operation with exponential backoff for transient errors."""
+    return retry_with_backoff(
+        fn,
+        retryable=_hf_should_retry,
+        max_attempts=max_attempts,
+        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
+        operation=context,
+    )
+
+
 def load_dataset_with_backoff(
     *,
     context: str,
@@ -115,12 +139,12 @@ def load_dataset_with_backoff(
     **dataset_kwargs: Any,
 ):
     """Call ``datasets.load_dataset`` with exponential backoff tuned for HF rate limits."""
-    return retry_with_backoff(
+    return call_with_hf_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
-        retryable=_hf_should_retry,
+        context=context,
         max_attempts=max_attempts,
-        backoff=ExponentialBackoff(initial=initial_delay, maximum=max_delay, factor=2.0, jitter=0.25),
-        operation=context,
+        initial_delay=initial_delay,
+        max_delay=max_delay,
     )
 
 
@@ -152,6 +176,18 @@ def fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
     if path.startswith(f"{protocol}://"):
         return path
     return f"{protocol}://{path}"
+
+
+_SCHEME_PATH_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)(.*)$")
+
+
+def normalize_fsspec_url_path(path: str) -> str:
+    """Collapse duplicate slashes after a URL scheme before fsspec lookup."""
+    match = _SCHEME_PATH_RE.match(path)
+    if match is None:
+        return path
+    scheme, rest = match.groups()
+    return scheme + re.sub(r"/{2,}", "/", rest)
 
 
 def is_path_like(path: str) -> bool:

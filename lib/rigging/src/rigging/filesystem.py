@@ -224,6 +224,23 @@ def reset_data_config_cache() -> None:
     _load_cluster_config_cached.cache_clear()
 
 
+def _canonical_region(region: str) -> str:
+    """Normalize legacy region aliases to canonical GCP region names."""
+    if region == "eu-west4":
+        return "europe-west4"
+    return region
+
+
+def _known_bucket_region(bucket_name: str) -> str | None:
+    """Return the canonical region for known Marin buckets without a GCP call."""
+    for region, bucket in data_config().region_buckets.items():
+        if bucket == bucket_name:
+            return _canonical_region(region)
+    if bucket_name.startswith("marin-tmp-"):
+        return _canonical_region(bucket_name.removeprefix("marin-tmp-"))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Region + prefix resolution
 # ---------------------------------------------------------------------------
@@ -453,9 +470,12 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
             return
         else:
             raise ValueError(f"{key} must be a GCS path, not {path}")
+    bucket_name = split_gcs_path(path)[0]
     try:
-        bucket_region = get_bucket_location(path)
-        if region.lower() != bucket_region.lower():
+        bucket_region = _known_bucket_region(bucket_name)
+        if bucket_region is None:
+            bucket_region = get_bucket_location(path)
+        if not _regions_match(region, bucket_region):
             raise ValueError(
                 f"{key} is not in the same region ({bucket_region}) as the VM ({region}). "
                 f"This can cause performance issues and billing surprises."
@@ -988,6 +1008,14 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 
+def resolve_mirror_url(url: str) -> str:
+    """Resolve a ``mirror://`` URL to a concrete local URL, copying on demand."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if not isinstance(fs, MirrorFileSystem):
+        return url
+    return fs.resolve_url(path)
+
+
 def filesystem(protocol: str, **kwargs: Any) -> Any:
     """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard.
 
@@ -1240,6 +1268,10 @@ class MirrorFileSystem(fsspec.AbstractFileSystem):
 
         self._copy_to_local(source_prefix, path)
         return local_url
+
+    def resolve_url(self, path: str) -> str:
+        """Resolve a mirror path or URL to a concrete local URL."""
+        return self._resolve_path(self._strip_protocol(path))
 
     # -- fsspec interface: info/ls/exists -------------------------------------
 

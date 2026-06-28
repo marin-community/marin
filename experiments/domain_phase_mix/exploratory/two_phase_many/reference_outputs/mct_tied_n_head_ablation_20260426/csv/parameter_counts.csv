@@ -1,0 +1,12 @@
+model,fitted_param_count_counting_exponents,total_constant_count,anchor_feature_count_including_intercept_or_identity_count,scale_param_count,donor_constant_count,barrier_constant_count,identity_anchor_count,alpha,beta
+mct_lrq69_drop_Dfam,60,69,47,9,9,0,0,0.154791,0.146425
+mct_lrq69_balanced_Dfam,60,69,47,9,9,0,0,0.148968,0.209383
+mct_lrq70_drop_Ntied_rho0p025,61,70,47,9,9,0,0,0.154791,0.146425
+mct_lrq70_drop_Ntied_rho0p05,61,70,47,9,9,0,0,0.154791,0.146425
+mct_lrq70_drop_Ntied_rho0p1,61,70,47,9,9,0,0,0.154791,0.146425
+mct_lrq70_drop_Ntied_rho0p25,61,70,47,9,9,0,0,0.154791,0.146425
+mct_lrq70_drop_Ntied_rho0p5,61,70,47,9,9,0,0,0.154791,0.146425
+mct_lrq76_drop_Nshrink_lam0p1,67,76,47,15,9,0,0,0.154791,0.146425
+mct_lrq76_drop_Nshrink_lam1,67,76,47,15,9,0,0,0.154791,0.146425
+mct_lrq76_drop_Nshrink_lam10,67,76,47,15,9,0,0,0.154791,0.146425
+mct_lrq76_drop_Nshrink_lam100,67,76,47,15,9,0,0,0.154791,0.146425

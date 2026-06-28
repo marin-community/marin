@@ -73,6 +73,17 @@ from experiments.simple_train_config import SimpleTrainConfig
 logger = logging.getLogger(__name__)
 
 
+def _truncate_wandb_tags(tags: Sequence[str]) -> list[str]:
+    """Truncate W&B tags to fit the 64-character limit while preserving order."""
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        truncated = truncate_wandb_run_name(tag)
+        if truncated in seen:
+            continue
+        seen.add(truncated)
+        deduped.append(truncated)
+    return deduped
 def _resolve_hf_export_steps(steps_per_hf_export: int | None, steps_per_export: int | None) -> int | None:
     """Resolve the HF export step interval: None means same as checkpoint, -1 means disabled."""
     if steps_per_hf_export is None:
@@ -122,9 +133,13 @@ def simulated_epoching_train(
     model_config: LmConfig,
     train_config: SimpleTrainConfig,
     target_budget: int,
+    simulated_epoch_subset_seed: int | None = None,
+    experiment_budget_override: int | None = None,
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    wandb_name: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> ExecutorStep:
     """
     Simulates the number of epochs seen in a full training run by sub-sampling individual datasets.
@@ -136,28 +151,50 @@ def simulated_epoching_train(
         model_config: Levanter LmConfig for the model to train.
         train_config: SimpleTrainConfig for the training run.
         target_budget: Target token budget to simulate.
+        simulated_epoch_subset_seed: Optional seed used to freeze simulated-epoch
+            subset membership before applying any run-specific shuffle.
+        experiment_budget_override: Optional explicit experiment token budget for
+            simulated epoching. Use this when the trainer should stop at an
+            intermediate step count but the dataset slicing must match a larger
+            native experiment.
         tags: Any additional tags to add to the Wandb tracker.
         use_default_validation: Whether to use the default validation sets (currently Paloma).
         eval_harness_tasks: List of evaluation harness tasks. Defaults to the CORE set of tasks. Use () or [] to disable
+        wandb_name: Optional W&B display name for this run. Defaults to W&B's auto-generated name.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets. If provided, datasets will be
+            synced from GCS to local cache before evaluation to avoid HuggingFace API rate limiting.
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     train_length = _validate_train_length(train_config.train_seq_len, model_config)
 
     # Calculate the experiment token budget
-    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
+    experiment_budget = experiment_budget_override
+    if experiment_budget is None:
+        experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
-        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+        pretraining_data,
+        target_budget=target_budget,
+        experiment_budget=experiment_budget,
+        simulated_epoch_subset_seed=simulated_epoch_subset_seed,
     )
 
     logger.info(
         f"Simulating Epoching Behavior, Experiment Tokens {experiment_budget}, "
-        + "Simulated Target Tokens {target_budget}"
+        f"Simulated Target Tokens {target_budget}"
     )
 
     return default_train(
-        name, simulated_pretraining_data, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+        name,
+        simulated_pretraining_data,
+        model_config,
+        train_config,
+        tags,
+        use_default_validation,
+        eval_harness_tasks,
+        wandb_name=wandb_name,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
 
 
@@ -172,6 +209,7 @@ def _build_train_lm_config(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    eval_datasets_cache_path: str | None = None,
     adapter: AdaptorConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
@@ -187,10 +225,16 @@ def _build_train_lm_config(
     if wandb_group is None:
         wandb_group = os.environ.get("WANDB_GROUP")
 
-    name = truncate_wandb_run_name(name)
+    truncated_name = truncate_wandb_run_name(name)
+    wandb_display_name = truncate_wandb_run_name(wandb_name or name)
+
+    wandb_tags = _truncate_wandb_tags(tags)
 
     if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+        harness_config = LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(eval_harness_tasks),
+            eval_datasets_cache_path=eval_datasets_cache_path,
+        )
     else:
         harness_config = None
 
@@ -219,11 +263,12 @@ def _build_train_lm_config(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
-                name=wandb_name,
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
                 group=wandb_group,
                 replicate_path=this_output_path(),
             ),
+            seed=train_config.trainer_seed if train_config.trainer_seed is not None else 0,
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=train_config.train_batch_size,
             per_device_parallelism=train_config.per_device_parallelism,
@@ -296,7 +341,7 @@ def _build_train_lm_config(
         adapter=adapter if adapter is not None else NoAdaptorConfig(),
     )
 
-    return name, inner_config
+    return truncated_name, inner_config
 
 
 def default_train(
@@ -310,6 +355,7 @@ def default_train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
+    eval_datasets_cache_path: str | None = None,
     adapter: AdaptorConfig | None = None,
 ) -> ExecutorStep:
     """
@@ -336,6 +382,7 @@ def default_train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        eval_datasets_cache_path=eval_datasets_cache_path,
         adapter=adapter,
     )
 
@@ -465,6 +512,7 @@ def prepare_lm_train(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the placeholder-bearing trainer config without resolving paths.
 
@@ -487,6 +535,7 @@ def prepare_lm_train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
     return os.path.join("checkpoints", truncated_name), inner_config
 
@@ -503,6 +552,7 @@ def train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
+    eval_datasets_cache_path: str | None = None,
 ) -> None:
     """Build and immediately submit a Levanter LM training job to Iris.
 
@@ -524,6 +574,7 @@ def train(
         wandb_name: Optional W&B display name. Defaults to W&B's auto-generated name.
         wandb_group: Optional W&B group. Defaults to ``$WANDB_GROUP`` if unset.
         override_output_path: Optional explicit output path, bypassing the hash-based one.
+        eval_datasets_cache_path: Optional GCS path to pre-cached evaluation datasets.
     """
     job_name, inner_config = prepare_lm_train(
         name,
@@ -535,6 +586,7 @@ def train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        eval_datasets_cache_path=eval_datasets_cache_path,
     )
 
     _submit_train_job(
@@ -664,7 +716,8 @@ def default_dpo(
         include_raw_paths=False,
     )
 
-    name = truncate_wandb_run_name(name)
+    wandb_display_name = truncate_wandb_run_name(name)
+    wandb_tags = _truncate_wandb_tags(tags)
 
     steps_per_export = dpo_config.steps_per_checkpoint
     steps_per_export_hf = _resolve_hf_export_steps(dpo_config.steps_per_hf_export, steps_per_export)
@@ -720,7 +773,8 @@ def default_dpo(
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=dpo_config.wandb_project or "marin",
-                tags=[*tags],
+                name=wandb_display_name,
+                tags=wandb_tags,
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=dpo_config.train_batch_size,

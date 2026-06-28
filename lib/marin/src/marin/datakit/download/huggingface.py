@@ -91,6 +91,9 @@ class DownloadConfig:
     zephyr_max_parallelism: int = 8
     """Maximum parallelism of the Zephyr download job"""
 
+    worker_resources: ResourceConfig | None = None
+    """Optional Zephyr worker resource pinning for the download workers."""
+
     read_timeout_seconds: float = 120.0
     """Socket read timeout while streaming each HF file. Timeout failures trigger retries."""
 

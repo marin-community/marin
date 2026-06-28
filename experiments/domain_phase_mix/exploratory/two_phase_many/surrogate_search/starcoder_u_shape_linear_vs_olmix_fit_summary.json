@@ -1,0 +1,81 @@
+{
+  "all_data_fit": {
+    "linear_formula": "Linear: 0.361x - 0.361(1-x) + 1.113",
+    "linear_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "90005",
+      "chosen_value": 1.533640742301941,
+      "r2": -0.08296651291844381,
+      "regret_at_1": 0.6250340342521667,
+      "rmse": 0.1656043685969001,
+      "spearman": 0.13333333333333333
+    },
+    "linear_subset_rmse": 0.1656043685969001,
+    "olmix_formula": "Olmix: $e^{-0.166} + e^{\\beta \\cdot w}$\n$\\beta = (-1.242, -0.396, -2.334, 1.049)$",
+    "olmix_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "90005",
+      "chosen_value": 1.533640742301941,
+      "r2": 0.5071211096546924,
+      "regret_at_1": 0.6250340342521667,
+      "rmse": 0.11172088937086613,
+      "spearman": 0.13333333333333333
+    },
+    "olmix_subset_rmse": 0.11172088937086613
+  },
+  "all_data_linear_slice_min": {
+    "bpb": 0.7522999140520068,
+    "epochs": 0.0,
+    "phase_1_starcoder": 0.0
+  },
+  "all_data_olmix_slice_min": {
+    "bpb": 0.8750101730026597,
+    "epochs": 0.0,
+    "phase_1_starcoder": 0.0
+  },
+  "n_subset_runs": 45,
+  "n_total_runs": 116,
+  "observed_subset_min": {
+    "bpb": 0.9086067080497742,
+    "phase_1_starcoder": 0.2814080848021789
+  },
+  "subset_fit": {
+    "linear_formula": "Linear: 0.163x - 0.163(1-x) + 1.036",
+    "linear_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "90005",
+      "chosen_value": 1.533640742301941,
+      "r2": 0.16237924122102543,
+      "regret_at_1": 0.6250340342521667,
+      "rmse": 0.14564245510760643,
+      "spearman": 0.13333333333333333
+    },
+    "linear_subset_rmse": 0.14564245510760643,
+    "olmix_formula": "Olmix: $e^{-0.096} + e^{\\beta \\cdot w}$\n$\\beta = (-2.124, -0.219, -3.650, 1.872)$",
+    "olmix_metrics_on_subset": {
+      "best_candidate": "10",
+      "best_value": 0.9086067080497742,
+      "chosen_candidate": "90005",
+      "chosen_value": 1.533640742301941,
+      "r2": 0.5867062121797959,
+      "regret_at_1": 0.6250340342521667,
+      "rmse": 0.10230425899069501,
+      "spearman": 0.13333333333333333
+    },
+    "olmix_subset_rmse": 0.10230425899069501
+  },
+  "subset_linear_slice_min": {
+    "bpb": 0.8725218909256603,
+    "epochs": 0.0,
+    "phase_1_starcoder": 0.0
+  },
+  "subset_olmix_slice_min": {
+    "bpb": 0.9111492100004276,
+    "epochs": 0.0,
+    "phase_1_starcoder": 0.0
+  },
+  "target": "eval/paloma/dolma_100_programing_languages/bpb"
+}

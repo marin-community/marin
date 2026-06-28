@@ -1,0 +1,45 @@
+{
+  "artifacts": {
+    "oof_diagnostics_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_oof_diagnostics.csv",
+    "parameter_heatmaps_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_parameter_heatmaps.png",
+    "parameter_table_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_parameter_table.csv",
+    "residual_panels_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_residual_panels.png",
+    "restart_stability_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_restart_stability.csv",
+    "restart_stability_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_restart_stability.png",
+    "scatter_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_oof_actual_vs_predicted.png",
+    "topk_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/dsre_ceq_debug/dsre_ceq_topk_best_actual.png"
+  },
+  "durations": {
+    "diagnostics_seconds": 581.7598073340487,
+    "total_seconds": 581.7820843750378
+  },
+  "frontier_retrieval": {
+    "global_best_actual": 2.103181960787059,
+    "top10_best_actual": 2.16427828392407,
+    "top1_best_actual": 2.2490722052958274,
+    "top20_best_actual": 2.1468300118842256,
+    "top5_best_actual": 2.16427828392407
+  },
+  "full_fit": {
+    "gate_phase1": 0.8781124946370028,
+    "rho": -0.8050356659638279,
+    "tau": 106.63881805248447
+  },
+  "n_runs": 241,
+  "objective_metric": "lm_eval/mmlu_5shot/bpb",
+  "oof_metrics": {
+    "n_params": 162,
+    "r2": 0.07667400629655818,
+    "regret_at_1": 0.09914057766519155,
+    "rmse": 0.08783301489476547,
+    "spearman": 0.25904461438222287
+  },
+  "restart_stability": {
+    "observed_regret_at_1_mean": 0.09563198785703703,
+    "observed_regret_at_1_std": 0.037052091728019404,
+    "pairwise_tv_max": 0.4990634595875415,
+    "pairwise_tv_mean": 0.4306456112594747,
+    "predicted_optimum_bpb_mean": 2.1551994628487,
+    "predicted_optimum_bpb_std": 0.014177931092848732
+  }
+}

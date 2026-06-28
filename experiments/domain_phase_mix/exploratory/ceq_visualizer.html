@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CEQ-SUM Interactive Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; color: #333; }
+        .container { display: flex; gap: 20px; max-width: 1200px; margin: auto; }
+        .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .controls { flex: 1; min-width: 300px; }
+        .visualizations { flex: 2; display: flex; flex-direction: column; gap: 20px; }
+        .slider-group { margin-bottom: 15px; }
+        .slider-group label { display: flex; justify-content: space-between; font-weight: bold; font-size: 0.9em; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .badge { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: normal; }
+        h2, h3 { margin-top: 0; }
+        .chart-container { position: relative; height: 300px; width: 100%; }
+        hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="panel controls">
+        <h2>Hyperparameters</h2>
+        
+        <h3>Phase Weighting</h3>
+        <div class="slider-group">
+            <label>N (Number of Phases) <span id="val_N" class="badge">3</span></label>
+            <input type="range" id="N" min="1" max="10" step="1" value="3">
+        </div>
+        <div class="slider-group">
+            <label>Gamma (γ) <span id="val_gamma" class="badge">0.0</span></label>
+            <input type="range" id="gamma" min="-5" max="5" step="0.1" value="0">
+            <small style="color: #666;">Controls if early (<0) or late (>0) phases matter more.</small>
+        </div>
+
+        <hr>
+
+        <h3>CES Utility (Learning)</h3>
+        <div class="slider-group">
+            <label>A (Learning Multiplier) <span id="val_A" class="badge">2.0</span></label>
+            <input type="range" id="A" min="0" max="5" step="0.1" value="2.0">
+        </div>
+        <div class="slider-group">
+            <label>Rho (ρ) Substitution <span id="val_rho" class="badge">0.5</span></label>
+            <input type="range" id="rho" min="-2" max="0.99" step="0.05" value="0.5">
+        </div>
+
+        <hr>
+
+        <h3>Overfit Penalty (Forgetting)</h3>
+        <div class="slider-group">
+            <label>B (Penalty Multiplier) <span id="val_B" class="badge">0.5</span></label>
+            <input type="range" id="B" min="0" max="3" step="0.1" value="0.5">
+        </div>
+        <div class="slider-group">
+            <label>Tau (τ) Threshold <span id="val_tau" class="badge">4.0</span></label>
+            <input type="range" id="tau" min="0" max="10" step="0.1" value="4.0">
+            <small style="color: #666;">Epochs before model starts forgetting.</small>
+        </div>
+        <div class="slider-group">
+            <label>k (Sharpness) <span id="val_k" class="badge">1.0</span></label>
+            <input type="range" id="k" min="0.1" max="10" step="0.1" value="1.0">
+            <small style="color: #666;">Low = Soft (CEQ-Soft), High = Hinge (CEQ-Hinge).</small>
+        </div>
+    </div>
+
+    <div class="panel visualizations">
+        <div>
+            <h3>Phase Importance (π_k)</h3>
+            <p style="font-size: 0.85em; color: #666; margin-top:-10px;">How much each phase contributes to the final model (softmax of γ·t).</p>
+            <div class="chart-container" style="height: 200px;">
+                <canvas id="phaseChart"></canvas>
+            </div>
+        </div>
+        <hr>
+        <div>
+            <h3>Loss Dynamics (U-Shape)</h3>
+            <p style="font-size: 0.85em; color: #666; margin-top:-10px;">Adding Epochs of a "Small Domain" vs Model Loss.</p>
+            <div class="chart-container">
+                <canvas id="lossChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Math Functions ---
+    function softplus_scaled(x, k) {
+        const kk = Math.max(k, 1e-8);
+        if (kk * x > 20) return x; // Handle overflow
+        return Math.log1p(Math.exp(kk * x)) / kk;
+    }
+
+    function get_phase_weights(gamma, N) {
+        if (N <= 1) return [1.0];
+        let z = [];
+        for(let i=0; i<N; i++) {
+            z.push(gamma * (i / (N-1)));
+        }
+        let max_z = Math.max(...z);
+        let exps = z.map(x => Math.exp(x - max_z));
+        let sum_exps = exps.reduce((a,b)=>a+b, 0);
+        return exps.map(x => x / sum_exps);
+    }
+
+    function ces_mean(sat1, sat2, rho) {
+        // Assume 50/50 domain weight split for visualization
+        const a = 0.5;
+        if (Math.abs(rho) < 1e-4) {
+            return Math.exp(a * Math.log(sat1) + a * Math.log(sat2)); // Cobb-Douglas limit
+        }
+        let inner = a * Math.pow(sat1, rho) + a * Math.pow(sat2, rho);
+        return Math.pow(Math.max(inner, 1e-12), 1.0 / rho);
+    }
+
+    // --- Chart Setup ---
+    const ctxPhase = document.getElementById('phaseChart').getContext('2d');
+    const phaseChart = new Chart(ctxPhase, {
+        type: 'bar',
+        data: { labels: [], datasets: [{ label: 'Phase Weight (π)', data: [], backgroundColor: '#4f46e5' }] },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, max: 1 } } }
+    });
+
+    const ctxLoss = document.getElementById('lossChart').getContext('2d');
+    const lossChart = new Chart(ctxLoss, {
+        type: 'line',
+        data: {
+            labels: [], // X-axis: Epochs
+            datasets: [
+                { label: 'Total Loss', data: [], borderColor: '#ef4444', backgroundColor: '#ef4444', borderWidth: 3, tension: 0.2 },
+                { label: 'Learning Term (-A * U)', data: [], borderColor: '#10b981', borderDash: [5, 5], tension: 0.2 },
+                { label: 'Penalty Term (+B * P)', data: [], borderColor: '#f59e0b', borderDash: [5, 5], tension: 0.2 }
+            ]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: {
+                x: { title: { display: true, text: 'Total Epochs of Small Domain' } },
+                y: { title: { display: true, text: 'Loss' } }
+            },
+            elements: { point: { radius: 0 } }
+        }
+    });
+
+    // --- Update Logic ---
+    function updateVisualizations() {
+        // Get values
+        const N = parseInt(document.getElementById('N').value);
+        const gamma = parseFloat(document.getElementById('gamma').value);
+        const A = parseFloat(document.getElementById('A').value);
+        const B = parseFloat(document.getElementById('B').value);
+        const tau = parseFloat(document.getElementById('tau').value);
+        const k = parseFloat(document.getElementById('k').value);
+        const rho = parseFloat(document.getElementById('rho').value);
+        const c0 = 5.0; // Fixed base loss
+
+        // Update badges
+        ['N', 'gamma', 'A', 'B', 'tau', 'k', 'rho'].forEach(id => {
+            document.getElementById(`val_${id}`).innerText = document.getElementById(id).value;
+        });
+
+        // 1. Update Phase Weights Chart
+        const pi = get_phase_weights(gamma, N);
+        phaseChart.data.labels = Array.from({length: N}, (_, i) => `Phase ${i}`);
+        phaseChart.data.datasets[0].data = pi;
+        phaseChart.update();
+
+        // 2. Update Loss Chart
+        let labels = [];
+        let totalLossData = [];
+        let learnData = [];
+        let penaltyData = [];
+
+        // Simulate x-axis: Epochs of a small domain from 0 to 10
+        const fixedLargeDomainEpochs = 1.0; 
+
+        for (let e = 0; e <= 10; e += 0.2) {
+            labels.push(e.toFixed(1));
+
+            // Calculate Learning Term (Total Utility)
+            let U_total = 0;
+            // Assume epochs are distributed evenly across phases
+            let e_per_phase = Math.max(e / N, 1e-12);
+            let large_e_per_phase = Math.max(fixedLargeDomainEpochs / N, 1e-12);
+
+            let sat_small = Math.log1p(e_per_phase);
+            let sat_large = Math.log1p(large_e_per_phase);
+
+            for(let phase=0; phase<N; phase++) {
+                let U_phase = ces_mean(sat_small, sat_large, rho);
+                U_total += pi[phase] * U_phase;
+            }
+
+            // Calculate Penalty Term
+            let h = softplus_scaled(e - tau, k);
+            let P = h * h;
+
+            // Combine
+            let learnVal = c0 - (A * U_total);
+            let penVal = B * P;
+            let totalLoss = learnVal + penVal;
+
+            learnData.push(learnVal);
+            penaltyData.push(penVal);
+            totalLossData.push(totalLoss);
+        }
+
+        lossChart.data.labels = labels;
+        lossChart.data.datasets[0].data = totalLossData;
+        lossChart.data.datasets[1].data = learnData;
+        lossChart.data.datasets[2].data = penaltyData;
+        lossChart.update();
+    }
+
+    // Attach listeners
+    document.querySelectorAll('input[type="range"]').forEach(input => {
+        input.addEventListener('input', updateVisualizations);
+    });
+
+    // Initial draw
+    updateVisualizations();
+</script>
+
+</body>
+</html>

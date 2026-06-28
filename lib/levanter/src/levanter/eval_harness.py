@@ -20,6 +20,7 @@ References:
 
 """
 
+import copy
 import dataclasses
 import json
 import logging
@@ -30,7 +31,7 @@ import time
 import typing
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
+from typing import Callable, Iterator, List, Optional, Sequence, Tuple, TypeVar, Union
 
 import equinox as eqx
 import haliax
@@ -422,16 +423,13 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
 
 
 def _eval_pad_token_id(tokenizer: MarinTokenizer) -> int:
-    pad_token_id = tokenizer.pad_token_id
-    if pad_token_id is not None:
-        return pad_token_id
-
-    eos_token_id = tokenizer.eos_token_id
-    if eos_token_id is None:
-        raise ValueError("LM eval harness requires either a pad token or an eos token for packed batches.")
-
-    logger.warning("No pad token set. Using eos token for evaluation padding.")
-    return eos_token_id
+    """Return a padding token id without mutating read-only tokenizer wrappers."""
+    if tokenizer.pad_token_id is not None:
+        return tokenizer.pad_token_id
+    if tokenizer.eos_token_id is None:
+        raise ValueError("Tokenizer must define pad_token_id or eos_token_id for lm-eval packing.")
+    logger.warning("No pad token set. Using eos token as the lm-eval packing pad token.")
+    return tokenizer.eos_token_id
 
 
 # pyrefly: ignore[invalid-inheritance]  # TemplateLM falls back to `object` when the optional lm_eval dep is absent
@@ -520,6 +518,14 @@ class LevanterHarnessLM(TemplateLM):
     def eot_token_id(self) -> int:
         """Return the end-of-text token ID."""
         return self.tokenizer.eos_token_id
+
+    def tok_decode(self, tokens, *, skip_special_tokens: bool = False) -> str:
+        """Decode token IDs, normalizing scalar IDs for Marin tokenizers."""
+        if isinstance(tokens, (int, np.integer)):
+            tokens = [int(tokens)]
+        elif isinstance(tokens, np.ndarray) and tokens.ndim == 0:
+            tokens = [int(tokens.item())]
+        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
 
     def set_current_task(self, task_name: str):
         self._current_task = task_name
@@ -614,19 +620,33 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(
+        packed_result = _pack_requests(
             requests,
             self.tokenizer,
             self.EvalPos,
             self.leader.max_packed_segments,
             pad_token_id=pad_token_id,
+            return_metadata=True,
         )
+        if isinstance(packed_result, tuple):
+            packed, tokenized_metadata = packed_result
+            skipped_request_ids = tokenized_metadata.skipped_request_ids
+            segment_to_request_id = tokenized_metadata.segment_to_request_id
+        else:
+            packed = packed_result
+            skipped_request_ids = set()
+            segment_to_request_id = {i: i for i in range(len(requests))}
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
-        result_probs = np.zeros(len(requests))
+        result_probs = np.full(len(requests), -np.inf)
         result_greedy = np.zeros(len(requests))
         covered_points = np.zeros(len(requests), dtype=bool)
+        if skipped_request_ids:
+            skipped_indices = np.array(sorted(skipped_request_ids), dtype=np.int64)
+            result_probs[skipped_indices] = 0.0
+            result_greedy[skipped_indices] = True
+            covered_points[skipped_indices] = True
 
         total_tokens_expected = len(packed) * self.EvalPos.size
 
@@ -661,9 +681,15 @@ class LevanterHarnessLM(TemplateLM):
             assert len(missing_ids) == 0, f"Missing segments: {missing_ids}"
             assert len(extra_ids) == 0, f"Extra segments: {extra_ids}"
 
-            result_probs[out_ids[valid_indices]] = out_lls[valid_indices]
-            result_greedy[out_ids[valid_indices]] = out_correct[valid_indices]
-            covered_points[out_ids[valid_indices]] = True
+            _record_loglikelihood_segments(
+                result_probs,
+                result_greedy,
+                covered_points,
+                segment_to_request_id,
+                out_ids[valid_indices],
+                out_lls[valid_indices],
+                out_correct[valid_indices],
+            )
 
             total_padding += padding_count
             total_tokens_seen += batch_tokens
@@ -706,12 +732,21 @@ class LevanterHarnessLM(TemplateLM):
         """
         if not add_special_tokens:
             add_special_tokens = False
-        encoding: Union[List[List[int]], List[int]] = self.tokenizer(
-            string,
-            add_special_tokens=add_special_tokens,
-            truncation=truncation,
-            return_attention_mask=False,
-        ).input_ids
+        if callable(self.tokenizer):
+            hf_encoding = self.tokenizer(
+                string,
+                add_special_tokens=add_special_tokens,
+                truncation=truncation,
+                return_attention_mask=False,
+            )
+            encoding: Union[List[List[int]], List[int]] = hf_encoding.input_ids
+        else:
+            if truncation:
+                raise ValueError("MarinTokenizer tok_encode path does not support tokenizer-side truncation.")
+            is_single = isinstance(string, str)
+            texts = [string] if is_single else list(string)
+            batch_encoding = self.tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
+            encoding = batch_encoding[0] if is_single else batch_encoding
 
         # left-truncate the encoded context to be at most `left_truncate_len` tokens long
         if left_truncate_len:
@@ -830,7 +865,7 @@ class LevanterHarnessLM(TemplateLM):
 
         # Process stop sequences for each request individually
         # Get EOS token for stop sequence handling
-        eos = self.tokenizer.decode(self.eot_token_id)
+        eos = self.tok_decode(self.eot_token_id)
 
         # Process stop sequences and tokenize them for each request
         for gen_kwargs in processed_kwargs_list:
@@ -864,7 +899,7 @@ class LevanterHarnessLM(TemplateLM):
             model=self.leader.model,
             tokenizer=self.tokenizer,
             config=engine_cfg,
-            axis_resources=self.compute_axis_resources,
+            axis_resources=self.axis_resources,
         )
 
         # Build generation requests
@@ -922,7 +957,7 @@ class LevanterHarnessLM(TemplateLM):
             if output_idx < len(result.tokens):
                 full_tokens = result.tokens[output_idx]
                 # Engine tokens are generated tokens only (prompt not included)
-                text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
+                text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
                 # pyrefly: ignore[not-callable]  # postprocess_generated_text is None only when the optional lm_eval dep is absent
@@ -939,7 +974,7 @@ class LevanterHarnessLM(TemplateLM):
             current_task = getattr(self, "_current_task", "generation_task")
             bucket = self._prepare_bucket(current_task)
             if bucket is not None:
-                prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
+                prompt_text = self.tok_decode(toks, skip_special_tokens=False)
                 bucket.append(
                     {
                         "prompt": prompt_text,
@@ -1048,11 +1083,13 @@ class TaskConfig:
     # registered-task override semantics (which can silently drop fields like dataset_path).
     dataset_path: str | None = None
     dataset_name: str | None = None
+    dataset_kwargs: dict | None = None
     output_type: str | None = None
     test_split: str | None = None
     training_split: str | None = None
     validation_split: str | None = None
     fewshot_split: str | None = None
+    process_docs: Callable | None = None
     metric_list: list[dict] | None = None
     tag: list[str] | None = None
     metadata: dict | None = None
@@ -1103,6 +1140,15 @@ class LmEvalHarnessConfig:
     - seed: Random seed for generation, None for random (default: None)
 
     These can be overridden on a per-request basis by the evaluation harness.
+    """
+
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets.
+
+    When set, datasets will be synced from this GCS path to the local HuggingFace
+    datasets cache before loading tasks. This avoids HuggingFace API rate limiting
+    when multiple concurrent jobs all try to download the same evaluation datasets.
     """
 
     @property
@@ -1169,7 +1215,7 @@ class LmEvalHarnessConfig:
 
         task_name = task if isinstance(task, str) else task["task"]
 
-        task_dict = _call_with_retry(lambda: tasks.get_task_dict([task], manager))
+        task_dict = _call_with_retry(lambda: tasks.get_task_dict([copy.deepcopy(task)], manager))
         assert len(task_dict) == 1, f"Expected 1 task, got {len(task_dict)}"
         try:
             this_task = self._rename_tasks_for_eval_harness(task_dict, task_name, our_name)
@@ -1216,6 +1262,8 @@ class LmEvalHarnessConfig:
             raise ValueError(f"Unknown task type: {this_task}")
 
     def _replace_name_with_our_name(self, lm_eval_name, lm_eval_prefix, our_name_prefix):
+        if lm_eval_name is None:
+            return our_name_prefix
         if our_name_prefix.startswith(lm_eval_prefix):
             suffix = our_name_prefix[len(lm_eval_prefix) :]
             prefix = lm_eval_prefix
@@ -1692,7 +1740,7 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
-def _encode_batch(tokenizer, texts: list[str]) -> list[list[int]]:
+def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
     # MarinTokenizer returns list[list[int]]; bare tokenizers.Tokenizer returns list[Encoding];
     # HF PreTrainedTokenizerFast has no encode_batch but supports __call__.
     if hasattr(tokenizer, "encode_batch"):
@@ -1700,33 +1748,127 @@ def _encode_batch(tokenizer, texts: list[str]) -> list[list[int]]:
         if encoded and hasattr(encoded[0], "ids"):
             return [enc.ids for enc in encoded]
         return encoded
-    return tokenizer(texts, add_special_tokens=False)["input_ids"]
+    return tokenizer(texts, add_special_tokens=False, truncation=False, padding=False)["input_ids"]
 
 
-def _iterate_tokenized_requests(
+@dataclass(frozen=True)
+class _TokenizedLoglikelihoodRequests:
+    prompt_completions: list[PromptCompletion]
+    skipped_request_ids: set[int]
+    segment_to_request_id: dict[int, int]
+
+
+def _record_loglikelihood_segments(
+    result_probs: np.ndarray,
+    result_greedy: np.ndarray,
+    covered_points: np.ndarray,
+    segment_to_request_id: dict[int, int],
+    segment_ids: np.ndarray,
+    loglikelihoods: np.ndarray,
+    greedy_flags: np.ndarray,
+) -> None:
+    for segment_id, loglikelihood, is_greedy in zip(segment_ids, loglikelihoods, greedy_flags, strict=True):
+        request_id = segment_to_request_id[int(segment_id)]
+        previous_loglikelihood = result_probs[request_id]
+        loglikelihood = float(loglikelihood)
+        if loglikelihood > previous_loglikelihood:
+            result_probs[request_id] = loglikelihood
+            result_greedy[request_id] = bool(is_greedy)
+        elif loglikelihood == previous_loglikelihood:
+            result_greedy[request_id] = bool(result_greedy[request_id]) or bool(is_greedy)
+        covered_points[request_id] = True
+
+
+def _normalize_loglikelihood_context(value: str | Sequence[str], *, request_index: int) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1 and isinstance(value[0], str):
+            return value[0]
+        raise ValueError(
+            f"Loglikelihood request {request_index} context must be a string or singleton string list/tuple; "
+            f"got {type(value).__name__} with {len(value)} entries."
+        )
+    raise TypeError(
+        f"Loglikelihood request {request_index} context must be a string or singleton string list/tuple; "
+        f"got {type(value).__name__}."
+    )
+
+
+def _normalize_loglikelihood_completions(value: str | Sequence[str], *, request_index: int) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        completions = list(value)
+        non_string_indices = [i for i, completion in enumerate(completions) if not isinstance(completion, str)]
+        if non_string_indices:
+            raise TypeError(
+                f"Loglikelihood request {request_index} completion references must be strings; "
+                f"non-string entries at positions {non_string_indices}."
+            )
+        return completions
+    raise TypeError(
+        f"Loglikelihood request {request_index} completion must be a string or string list/tuple; "
+        f"got {type(value).__name__}."
+    )
+
+
+def _tokenize_loglikelihood_requests(
     requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
-) -> Iterator[PromptCompletion]:
+) -> _TokenizedLoglikelihoodRequests:
     """
-    Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
-    """
-    contexts = [request.args[0] for request in requests]
+    Tokenize loglikelihood requests for packing.
 
-    completions = [request.args[1] for request in requests]
+    Some lm-eval generation tasks expose a list of valid targets. Expand those
+    references into separate packed segments while retaining a map back to the
+    original request; the caller reduces them to one score per request.
+
+    Tokenization can also produce no continuation tokens, either because the
+    continuation is empty or because left truncation removes it. Those requests
+    have loglikelihood 0 and greedy=True by convention, so return their original
+    request ids for the caller to mark as already covered rather than failing
+    the whole eval.
+    """
+    expanded_contexts: list[str] = []
+    expanded_completions: list[str] = []
+    expanded_request_ids: list[int] = []
+    expanded_segment_ids: list[int] = []
+    segment_to_request_id: dict[int, int] = {}
+    request_candidate_counts = np.zeros(len(requests), dtype=np.int64)
+
+    for i, request in enumerate(requests):
+        context = _normalize_loglikelihood_context(request.args[0], request_index=i)
+        completions = _normalize_loglikelihood_completions(request.args[1], request_index=i)
+        request_candidate_counts[i] = len(completions)
+        for completion in completions:
+            segment_id = len(segment_to_request_id)
+            segment_to_request_id[segment_id] = i
+            expanded_contexts.append(context)
+            expanded_completions.append(completion)
+            expanded_request_ids.append(i)
+            expanded_segment_ids.append(segment_id)
 
     # Combine contexts and completions for full tokenization
-    combined_texts = [context + completion for context, completion in zip(contexts, completions)]
+    combined_texts = [
+        context + completion for context, completion in zip(expanded_contexts, expanded_completions, strict=True)
+    ]
+    prompt_completions: list[PromptCompletion] = []
+    skipped_request_ids: set[int] = set()
+    valid_candidate_counts = np.zeros(len(requests), dtype=np.int64)
 
     # Batch tokenization for combined and context separately
-    for batch_indices in batched(range(len(requests)), batch_size):
+    for batch_indices in batched(range(len(expanded_contexts)), batch_size):
         # Extract batch data
         combined_batch = [combined_texts[i] for i in batch_indices]
-        context_batch = [contexts[i] for i in batch_indices]
+        context_batch = [expanded_contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": _encode_batch(tokenizer, combined_batch)}
-        context_encodings = {"input_ids": _encode_batch(tokenizer, context_batch)}
+        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
+        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
+            request_id = expanded_request_ids[i]
+            segment_id = expanded_segment_ids[i]
             context_enc = context_encodings["input_ids"][off]
             all_enc = combined_encodings["input_ids"][off]
 
@@ -1740,7 +1882,33 @@ def _iterate_tokenized_requests(
                 if context_enc_len < 0:
                     context_enc_len = 0
                     logger.warning("Prompt length is negative after truncation. Setting to 0.")
-            yield PromptCompletion(ids=all_enc, prompt_length=context_enc_len, segment_id=i)
+            if len(all_enc) <= context_enc_len:
+                logger.warning(
+                    "Request %d has no continuation tokens after tokenization/truncation; assigning zero "
+                    "loglikelihood without packing.",
+                    request_id,
+                )
+                continue
+            valid_candidate_counts[request_id] += 1
+            prompt_completions.append(
+                PromptCompletion(ids=all_enc, prompt_length=context_enc_len, segment_id=segment_id)
+            )
+
+    for request_id, candidate_count in enumerate(request_candidate_counts):
+        if candidate_count == 0 or valid_candidate_counts[request_id] == 0:
+            skipped_request_ids.add(request_id)
+
+    return _TokenizedLoglikelihoodRequests(prompt_completions, skipped_request_ids, segment_to_request_id)
+
+
+def _iterate_tokenized_requests(
+    requests: list[Instance], tokenizer: MarinTokenizer, max_length: int, batch_size: int
+) -> Iterator[PromptCompletion]:
+    """
+    Tokenize the requests and yield them as PromptCompletions, for packing into LmExamples.
+    """
+    tokenized = _tokenize_loglikelihood_requests(requests, tokenizer, max_length, batch_size)
+    yield from tokenized.prompt_completions
 
 
 def _pack_requests(
@@ -1748,16 +1916,23 @@ def _pack_requests(
     tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
-    pad_token_id: int,
-) -> list[LmExample]:
-    packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
+    *,
+    pad_token_id: int | None = None,
+    return_metadata: bool = False,
+) -> list[LmExample] | tuple[list[LmExample], _TokenizedLoglikelihoodRequests]:
+    tokenized = _tokenize_loglikelihood_requests(requests, tokenizer, Pos.size, batch_size=128)
+    if pad_token_id is None:
+        pad_token_id = _eval_pad_token_id(tokenizer)
     # TODO: use a better packing algorithm?
-    return greedy_pack_prompt_completions(
+    packed = greedy_pack_prompt_completions(
         Pos,
-        packed_iterator,
+        tokenized.prompt_completions,
         max_segments_per_example=max_pack_size,
         pad_token=pad_token_id,
     )
+    if return_metadata:
+        return packed, tokenized
+    return packed
 
 
 def _make_dummy_batch(EvalBatch, EvalPos):

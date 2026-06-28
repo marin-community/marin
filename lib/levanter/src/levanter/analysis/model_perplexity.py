@@ -354,6 +354,7 @@ def add_prefixed_runtime_metric_scalars(
 
 def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Table:
     rows = {
+        "request_id": [_scored_document_request_id(doc) for doc in scored_documents],
         "dataset_name": [doc.document.dataset_name for doc in scored_documents],
         "tags": [list(doc.document.tags) for doc in scored_documents],
         "shard_name": [doc.document.shard_name for doc in scored_documents],
@@ -369,6 +370,7 @@ def _scored_documents_table(scored_documents: Sequence[ScoredDocument]) -> pa.Ta
     }
     schema = pa.schema(
         [
+            ("request_id", pa.string()),
             ("dataset_name", pa.string()),
             ("tags", pa.list_(pa.string())),
             ("shard_name", pa.string()),
@@ -420,6 +422,11 @@ def _scored_document_from_row(row: dict[str, Any]) -> ScoredDocument:
 def _scored_document_key(scored_document: ScoredDocument) -> tuple[str, str, int]:
     document = scored_document.document
     return (document.dataset_name, document.shard_name, int(document.row_index))
+
+
+def _scored_document_request_id(scored_document: ScoredDocument) -> str:
+    dataset_name, shard_name, row_index = _scored_document_key(scored_document)
+    return f"{dataset_name}:{shard_name}:{row_index}"
 
 
 def _char_to_byte_offsets(text: str) -> np.ndarray:

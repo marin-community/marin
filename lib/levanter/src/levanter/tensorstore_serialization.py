@@ -25,6 +25,7 @@ from haliax.util import is_named_array
 from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
+from rigging.filesystem import resolve_mirror_url
 
 from rigging.filesystem import record_transfer
 
@@ -61,6 +62,9 @@ def build_kvstore_spec(path: str) -> dict:
     path-style with ``PathStyleRequestNotAllowed``). Without a custom endpoint we leave
     addressing to tensorstore's native AWS handling.
     """
+    if path.startswith("mirror://"):
+        path = resolve_mirror_url(path)
+
     parsed = urllib.parse.urlparse(path)
     if parsed.scheme == "s3":
         bucket = parsed.netloc

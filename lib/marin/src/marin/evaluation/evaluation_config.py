@@ -8,8 +8,18 @@ from dataclasses import dataclass, field
 from fray.cluster import ResourceConfig
 from levanter.eval_harness import TaskConfig
 
+from marin.execution.executor import InputName
+
 # Wandb project name for evaluations. Controlled via WANDB_PROJECT env var.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "marin")
+_LEVANTER_TASK_KWARG_ALIASES = {
+    "doct_to_target": "doc_to_target",
+}
+_SUPPORTED_LEVANTER_TASK_KWARGS = frozenset(TaskConfig.__dataclass_fields__) - {
+    "task",
+    "task_alias",
+    "num_fewshot",
+}
 
 
 @dataclass(frozen=True)
@@ -96,24 +106,91 @@ class EvaluationConfig:
     Tags to add to the wandb run.
     """
 
+    use_wandb_tracker: bool = True
+    """
+    Whether Levanter-backed evaluators should create a W&B tracker.
+    """
+
     base_eval_run_name: str | None = None
     """Custom base name for wandb runs. If set, wandb runs will be named
     evalchemy-{base_eval_run_name}[-step{N}]-{task}-seed{S}."""
 
+    eval_datasets_cache_path: str | None = None
+    """
+    Optional GCS path to pre-cached evaluation datasets for Levanter lm-eval.
+    """
+
+    eval_datasets_cache_dependency: InputName | str | None = None
+    """
+    Optional executor-only dependency marker for the eval dataset cache step.
+
+    This field is not read at runtime. It exists so Executor can see an
+    `InputName` and block the evaluation step on a cache-population step.
+    """
+
+    log_samples: bool = False
+    """
+    Whether evaluator backends should persist lm-eval sample payloads when
+    supported.
+    """
+
+    sample_log_all: bool = False
+    """
+    Whether Levanter's lm-eval harness should keep every sample in its
+    additional sample logging payload.
+    """
+
+    max_logged_samples_per_task: int | None = None
+    """
+    Optional per-task cap for Levanter's additional sample logging payload.
+    """
+
+    sample_smooth_metrics: bool = False
+    """
+    Whether to derive aggregate smooth metrics from lm-eval sample payloads
+    before writing evaluator results.
+    """
+
+    drop_samples_after_metrics: bool = False
+    """
+    Whether to remove raw sample payloads after deriving aggregate smooth
+    metrics. Use for large sweeps where only aggregate columns are needed.
+    """
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
-    """Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
+    """Convert Marin eval task configs into Levanter task configs.
 
-    ``task_kwargs`` is spread into the TaskConfig so callers can pass inline task-spec fields
-    (``dataset_path``, ``output_type``, ``metric_list``, …) for tasks whose registered YAML has
-    bugs or when defining a fully-inline task under a fresh name.
+    Supported ``task_kwargs`` are mapped into ``TaskConfig`` so callers can pass
+    inline task-spec fields for tasks whose registered YAML needs patching.
     """
     return [
         TaskConfig(
             task=task.name,
             num_fewshot=task.num_fewshot,
             task_alias=task.task_alias,
-            **(task.task_kwargs or {}),
+            **_convert_task_kwargs_for_levanter(task),
         )
         for task in tasks
     ]
+
+
+def _convert_task_kwargs_for_levanter(task: EvalTaskConfig) -> dict[str, object]:
+    if not task.task_kwargs:
+        return {}
+
+    converted_kwargs: dict[str, object] = {}
+    unsupported_keys: list[str] = []
+    for key, value in task.task_kwargs.items():
+        mapped_key = _LEVANTER_TASK_KWARG_ALIASES.get(key, key)
+        if mapped_key not in _SUPPORTED_LEVANTER_TASK_KWARGS:
+            unsupported_keys.append(key)
+            continue
+        converted_kwargs[mapped_key] = value
+
+    if unsupported_keys:
+        raise ValueError(
+            f"Unsupported Levanter task kwargs for {task.task_alias or task.name}: {sorted(unsupported_keys)}"
+        )
+
+    return converted_kwargs

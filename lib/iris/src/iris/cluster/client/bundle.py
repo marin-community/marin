@@ -35,7 +35,16 @@ DEFAULT_EXCLUDE = re.compile(
     | (^|/)docs/images(/|$)
     | (^|/)docs/reports(/|$)
     | (^|/)docs/static(/|$)
+    | (^|/)pr_reviews\.db$
     | (^|/)tests/snapshots(/|$)
+    | \.png$                         # plot images
+    | \.jpg$
+    | \.jpeg$
+    | \.pkl$                         # data artifacts
+    | \.html$
+    | \.zip$                         # archive files
+    | \.csv\.gz$                     # compressed data
+    | \.joblib$                      # serialized models
     """,
     re.VERBOSE,
 )

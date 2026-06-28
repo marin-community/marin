@@ -1,0 +1,138 @@
+{
+  "objective_metric": "eval/uncheatable_eval/bpb",
+  "detail_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_grp_deployment_variant_curve_points.csv",
+  "variants": {
+    "top1_observed": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.25573928861006573,
+      "mean_predicted_value_after80": 1.0791927922365354,
+      "mean_pred_minus_best_observed_after80": 0.021994029342858684,
+      "mean_pred_minus_chosen_actual_after80": 0.021994029342858684,
+      "mean_nearest_observed_tv_after80": 0.0,
+      "mean_support_after80": 1.0
+    },
+    "top4_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.14724771917117546,
+      "mean_predicted_value_after80": 1.0739453131067709,
+      "mean_pred_minus_best_observed_after80": 0.01674655021309429,
+      "mean_pred_minus_chosen_actual_after80": 0.01674655021309429,
+      "mean_nearest_observed_tv_after80": 0.22388562662154776,
+      "mean_support_after80": 4.0
+    },
+    "top8_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.1954367579155425,
+      "mean_predicted_value_after80": 1.0701978773484209,
+      "mean_pred_minus_best_observed_after80": 0.012999114454743943,
+      "mean_pred_minus_chosen_actual_after80": 0.012999114454743943,
+      "mean_nearest_observed_tv_after80": 0.24181321230971586,
+      "mean_support_after80": 6.625
+    },
+    "top16_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.1271327586878691,
+      "mean_predicted_value_after80": 1.0666458835426589,
+      "mean_pred_minus_best_observed_after80": 0.009447120648982177,
+      "mean_pred_minus_chosen_actual_after80": 0.009447120648982177,
+      "mean_nearest_observed_tv_after80": 0.2464378746961272,
+      "mean_support_after80": 7.625
+    },
+    "all_observed_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.12002197769794193,
+      "mean_predicted_value_after80": 1.0653426833471475,
+      "mean_pred_minus_best_observed_after80": 0.008143920453470704,
+      "mean_pred_minus_chosen_actual_after80": 0.008143920453470704,
+      "mean_nearest_observed_tv_after80": 0.2562043769408575,
+      "mean_support_after80": 8.75
+    },
+    "top4_actual_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.11555748395317966,
+      "mean_predicted_value_after80": 1.06797755035963,
+      "mean_pred_minus_best_observed_after80": 0.010778787465953316,
+      "mean_pred_minus_chosen_actual_after80": 0.010778787465953316,
+      "mean_nearest_observed_tv_after80": 0.23330586317898058,
+      "mean_support_after80": 4.0
+    },
+    "top8_actual_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.1099806164112386,
+      "mean_predicted_value_after80": 1.066077077015974,
+      "mean_pred_minus_best_observed_after80": 0.00887831412229717,
+      "mean_pred_minus_chosen_actual_after80": 0.00887831412229717,
+      "mean_nearest_observed_tv_after80": 0.2529176651302736,
+      "mean_support_after80": 6.75
+    },
+    "top16_actual_hull": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.10958534988064828,
+      "mean_predicted_value_after80": 1.0659615729267937,
+      "mean_pred_minus_best_observed_after80": 0.008762810033116963,
+      "mean_pred_minus_chosen_actual_after80": 0.008762810033116963,
+      "mean_nearest_observed_tv_after80": 0.25782968684273205,
+      "mean_support_after80": 9.125
+    },
+    "all_hull_disp0.01": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.11457318558199472,
+      "mean_predicted_value_after80": 1.0658418430328163,
+      "mean_pred_minus_best_observed_after80": 0.008643080139139697,
+      "mean_pred_minus_chosen_actual_after80": 0.008643080139139697,
+      "mean_nearest_observed_tv_after80": 0.2262432788125755,
+      "mean_support_after80": 14.375
+    },
+    "all_hull_disp0.02": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.11928763119744953,
+      "mean_predicted_value_after80": 1.0663089781268753,
+      "mean_pred_minus_best_observed_after80": 0.009110215233198493,
+      "mean_pred_minus_chosen_actual_after80": 0.009110215233198493,
+      "mean_nearest_observed_tv_after80": 0.20084593720419114,
+      "mean_support_after80": 17.5
+    },
+    "all_hull_to_bestactual0.02": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.11410779508636554,
+      "mean_predicted_value_after80": 1.066234293731845,
+      "mean_pred_minus_best_observed_after80": 0.00903553083816827,
+      "mean_pred_minus_chosen_actual_after80": 0.00903553083816827,
+      "mean_nearest_observed_tv_after80": 0.22927972767202065,
+      "mean_support_after80": 12.0
+    },
+    "all_hull_to_bestactual0.05": {
+      "mean_regret_all": 0.00621751221743497,
+      "mean_regret_after80": 0.0,
+      "num_zero_regret_after80": 8,
+      "mean_move_after80": 0.09985569983553087,
+      "mean_predicted_value_after80": 1.069579657548462,
+      "mean_pred_minus_best_observed_after80": 0.012380894654785257,
+      "mean_pred_minus_chosen_actual_after80": 0.012380894654785257,
+      "mean_nearest_observed_tv_after80": 0.14440470804668948,
+      "mean_support_after80": 10.625
+    }
+  }
+}

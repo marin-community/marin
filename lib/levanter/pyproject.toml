@@ -169,11 +169,10 @@ dev = [
   "prompt_toolkit>=3.0.0",
   "matplotlib>=3.7.0",
 ]
-
-
-
-
 [tool.uv]
+find-links = [
+  "../../third_party/wheels",
+]
 conflicts = [
   [
     { extra = "gpu" },

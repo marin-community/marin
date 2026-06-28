@@ -1,0 +1,91 @@
+% Fitted GRP forms for the 2-phase StarCoder packet.
+
+% Domains: N = Nemotron (broad-text), S = StarCoder (tech-code).
+
+% Epoch multipliers: c_{0,\mathrm{N}}=0.5000, c_{0,\mathrm{S}}=13.2289, c_{1,\mathrm{N}}=0.5000, c_{1,\mathrm{S}}=13.2289.
+
+\paragraph{Fit on U-shaped subset only}
+\[
+x_{\mathrm{N}}
+= e^{-6.134\times 10^{-6}(1-p_{1,\mathrm{N}})} \cdot 0.5000\,p_{0,\mathrm{N}}
+\;+ 5.7331\,p_{1,\mathrm{N}}
+\]
+\[
+x_{\mathrm{S}}
+= e^{-6.134\times 10^{-6}(1-p_{1,\mathrm{S}})} \cdot 13.2289\,p_{0,\mathrm{S}}
+\;+ 151.6856\,p_{1,\mathrm{S}}
+\]
+\[
+\hat y
+= 3.1707
+- 0.5351\,\log\!\bigl(1 + 3.2242\,x_{\mathrm{N}}\bigr)
+- 0.1588\,\log\!\bigl(1 + 3.2242\,x_{\mathrm{S}}\bigr)
++ 7.652\times 10^{-10}\,P(x_{\mathrm{N}}, x_{\mathrm{S}})
+\]
+\[
+P(x_{\mathrm{N}}, x_{\mathrm{S}})
+= \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{N}})-15.0000\bigr)^2
++ \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{S}})-15.0000\bigr)^2
+\]
+\[
+\text{with }\alpha=3.2242,\;\eta=11.4662,\;\lambda=6.134\times 10^{-6},\;\tau=15.0000,\;\mathrm{reg}=1.105\times 10^{-2}.
+\]
+\[
+\text{On the U-shaped slice }(p_{0,\mathrm{N}}=1,\;p_{0,\mathrm{S}}=0,\;p_{1,\mathrm{S}}=z,\;p_{1,\mathrm{N}}=1-z):
+\]
+\[
+x_{\mathrm{N}}(z)
+= 0.5000\,e^{-6.134\times 10^{-6} z} + 5.7331(1-z),
+\qquad
+x_{\mathrm{S}}(z) = 151.6856\,z
+\]
+\[
+\hat y(z)
+= 3.1707
+- 0.5351\,\log\!\bigl(1 + 3.2242\,x_{\mathrm{N}}(z)\bigr)
+- 0.1588\,\log\!\bigl(1 + 3.2242\,x_{\mathrm{S}}(z)\bigr)
++ 7.652\times 10^{-10}\,P(x_{\mathrm{N}}(z), x_{\mathrm{S}}(z))
+\]
+
+\paragraph{Fit on all 2-phase StarCoder data}
+\[
+x_{\mathrm{N}}
+= e^{-2.512691(1-p_{1,\mathrm{N}})} \cdot 0.5000\,p_{0,\mathrm{N}}
+\;+ 0.4871\,p_{1,\mathrm{N}}
+\]
+\[
+x_{\mathrm{S}}
+= e^{-2.512691(1-p_{1,\mathrm{S}})} \cdot 13.2289\,p_{0,\mathrm{S}}
+\;+ 12.8875\,p_{1,\mathrm{S}}
+\]
+\[
+\hat y
+= 2.4212
+- 0.4171\,\log\!\bigl(1 + 8.3142\,x_{\mathrm{N}}\bigr)
+- 0.2565\,\log\!\bigl(1 + 8.3142\,x_{\mathrm{S}}\bigr)
++ 2.7996\,P(x_{\mathrm{N}}, x_{\mathrm{S}})
+\]
+\[
+P(x_{\mathrm{N}}, x_{\mathrm{S}})
+= \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{N}})-3.2201\bigr)^2
++ \operatorname{softplus}\!\bigl(\log(1+x_{\mathrm{S}})-3.2201\bigr)^2
+\]
+\[
+\text{with }\alpha=8.3142,\;\eta=0.9742,\;\lambda=2.512691,\;\tau=3.2201,\;\mathrm{reg}=1.523\times 10^{-8}.
+\]
+\[
+\text{On the U-shaped slice }(p_{0,\mathrm{N}}=1,\;p_{0,\mathrm{S}}=0,\;p_{1,\mathrm{S}}=z,\;p_{1,\mathrm{N}}=1-z):
+\]
+\[
+x_{\mathrm{N}}(z)
+= 0.5000\,e^{-2.512691 z} + 0.4871(1-z),
+\qquad
+x_{\mathrm{S}}(z) = 12.8875\,z
+\]
+\[
+\hat y(z)
+= 2.4212
+- 0.4171\,\log\!\bigl(1 + 8.3142\,x_{\mathrm{N}}(z)\bigr)
+- 0.2565\,\log\!\bigl(1 + 8.3142\,x_{\mathrm{S}}(z)\bigr)
++ 2.7996\,P(x_{\mathrm{N}}(z), x_{\mathrm{S}}(z))
+\]

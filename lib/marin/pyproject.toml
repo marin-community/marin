@@ -158,8 +158,13 @@ rl = [
     # Provides the Prime Intellect CLI invoked via subprocess in
     # prime_intellect_env.py (`prime env install ...`); not a Python import.
     "prime",
+    "d3rlpy==2.8.1",
     "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
+]
+
+offline_rl = [
+    "d3rlpy==2.8.1",
 ]
 
 eval = [

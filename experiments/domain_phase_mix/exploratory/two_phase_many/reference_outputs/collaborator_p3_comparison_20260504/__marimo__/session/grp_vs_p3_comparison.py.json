@@ -1,0 +1,276 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.21.0",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "58d8abd9c3044c3507fedd3e388e8eeb",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "ae01b88b2a9124b6162aacdeb8d66d15",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "23ec6fe0b6cff2edd81992cedc82ec71",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"grp-vs-p3-head-to-head-optimal-mixture-comparison\">GRP vs P3 \u2014 head-to-head optimal mixture comparison</h1>\n<span class=\"paragraph\">Both models are fit on the <strong>same 241-run swarm</strong> and the <strong>same IRT aggregate</strong> as their target. Then each model's optimizer is run on the simplex to produce its recommended mixture. Side-by-side bars show what each one ends up with, in weight space and epoch space.</span>\n<span class=\"paragraph\"><strong>GRP</strong> \u2014 Calvin's full power-family-penalty form from <code>grp_no_l2_exact.py</code>: 9 nonlinear params (\u03b7, \u03bb, \u03b2, per-family <code>a_f</code>, per-family <code>\u03c4_f</code>, ridge \u03b1=0), NNLS linear head with 32 columns (singletons + CC pairs + family totals + per-family penalty groups). Refit here with the IRT aggregate as target; nonlinear params kept at the included <code>power_family_penalty_no_l2_retune_best</code> checkpoint, only the linear head is re-NNLS'd. Optimum found via L-BFGS on logits.</span>\n<span class=\"paragraph\"><strong>P3</strong> \u2014 our simplified form from <code>grp_pipeline_300m.py</code>: 3 nonlinear params (\u03b7, a, p), 39 ridge signal coefs + 2 per-phase penalty coefs (\u03b3_0, \u03b3_1). Optimum is the <strong>mean over 200 bootstrap simplex argmaxes via Frank-Wolfe</strong> (Thompson sampling).</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "8850a6b7fa36e8327236756e15a6502a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "c4b97ee877ddf669554deb8c473fd99b",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "60e1965d48af891fc0017f232387fbdb",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "fd21fd9cb7a82618f6c9ef16e37f97b5",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "383f6ccff4c5b6150c000aca1ff91139",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"step-a-run-grp-refit-on-irt-aggregate\">Step A \u2014 Run GRP, refit on IRT aggregate</h2>\n<span class=\"paragraph\">GRP's <code>optimize_model</code> minimizes the predicted target. Our IRT aggregate is \"higher is better,\" so we feed <code>\u2212agg</code> as the target \u2014 the resulting optimum maximizes IRT.</span>\n<span class=\"paragraph\">Nonlinear params come from Calvin's <code>power_family_penalty_no_l2_retune_best</code> checkpoint (the one fit on <code>eval/uncheatable_eval/bpb</code>); the NNLS linear head is refit fresh on our IRT-aggregate target. Full Powell retune of nonlinear params would be more principled but takes longer and the swarm + structure are the same so the linear refit alone gives an apples-ish comparison.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "BYtC",
+      "code_hash": "d528dfcd10df1db0d9f2553caf5c6b87",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "RGSE",
+      "code_hash": "e2d02f1a8c3fcb51e106e3fac1a73239",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>GRP refit on IRT aggregate: in-sample R\u00b2 = <code>0.7677</code></strong> (NNLS linear head, included nonlinear params).</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Kclp",
+      "code_hash": "751c953f55994d4ae10bed823130b7df",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"step-b-p3-with-thompson-sampling-on-the-simplex\">Step B \u2014 P3 with Thompson sampling on the simplex</h2>\n<span class=\"paragraph\">Same fit as the main <code>grp_pipeline_300m.py</code> notebook, replicated here so the comparison is self-contained: 3 nonlinear params (\u03b7, a, p) tuned via nested 5\u00d75 CV from <code>(\u03b7 \u2208 {0.5, 1, 2, 5, 10, 15, 20})</code>, <code>(a \u2208 linspace(0.5, 2.0, 8))</code>, <code>(p \u2208 {0.5, 1, 1.5, 2, 2.5, 3, 4})</code>; ridge \u03b1 from <code>(1, 3.16, 10, 31.6, ..., 10000)</code>; 39 signal coefs + 2 per-phase penalty coefs.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "emfo",
+      "code_hash": "fe6d95e1011416f9e322192a4448cbba",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Hstk",
+      "code_hash": "50bb708f0db92d70cca5350e30762ee9",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "nWHF",
+      "code_hash": "c3f0c77be9ad031fb511acc3fe924ad7",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "iLit",
+      "code_hash": "1f298fd59f05cde6c0b2a7bb0f65fe2c",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>P3 fit:</strong> \u03b7 = 10, a = 0.500, p = 1.5, ridge \u03b1 = 10, in-sample R\u00b2 = <code>0.8613</code>.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "ZHCJ",
+      "code_hash": "6b1c9413a6e326e4a6b971cba056ce64",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"step-c-side-by-side-optimal-mixtures\">Step C \u2014 Side-by-side: optimal mixtures</h2>\n<span class=\"paragraph\">Left panel: phase-0 weight per domain, <strong>GRP</strong> (gray) vs <strong>P3 Thompson mean</strong> (blue). Right panel: same in epoch space (<code>w \u00b7 c</code> per phase). Dotted vertical line at <code>8 epochs</code> for reference (the \"one-pass-is-fine, multi-pass-might-hurt\" rule of thumb).</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "ROlb",
+      "code_hash": "3882f0c423af0076e1238db4cdbce557",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-plotly data-figure='{&quot;data&quot;:[{&quot;marker&quot;:{&quot;color&quot;:&quot;rgba(140,140,140,0.65)&quot;,&quot;line&quot;:{&quot;width&quot;:0}},&quot;name&quot;:&quot;GRP (NNLS, refit on IRT)&quot;,&quot;orientation&quot;:&quot;h&quot;,&quot;x&quot;:{&quot;dtype&quot;:&quot;f8&quot;,&quot;bdata&quot;:&quot;WOjLXLoy0D+iq8v8a5/DPyjKQawXIrk/SyV0cAtPxT9mhyRKScTHPyGj9Kt7x8k/MpG42cIFuD/Fw1qIgs66PwkR2tmKy7g/6juhalxHxD+wsHY4jFS9P+c1+2EtbLE/d9iP17wBvD/ZnRtVbkaTP0pdB4Cd9K8/DLb4TJcUsTxqGAx0W+uaP4y8XoG/928/mwSATtL/nD8F03eGrVvEPH1eEbcNsV4/ckVFnnovnD8mfQqPVUG6PFivtfiZO5M/FNWLf7npfj94bT8P8HZBP3BBZpurvco8RO1QOOph7jzITQbBR93VPBUYjx86qb08PqYiq8kB0TzA0ATCCKnNPKcM1Q2Pwec8ePQqM7NWIT2L9T22opYmPZqCOl4X8gc9RHSfcXweIj13Tvt8wAHQPBfilgnPSyY9&quot;},&quot;y&quot;:[&quot;dolma3_cc/literature_high&quot;,&quot;dolmino_synth_qa&quot;,&quot;dolmino_common_crawl_hq&quot;,&quot;dolmino_stack_edu_fim&quot;,&quot;dolmino_olmocr_pdfs_hq&quot;,&quot;dolma3_cc/science_math_and_technology_high&quot;,&quot;dolmino_synth_code&quot;,&quot;dolma3_stack_edu&quot;,&quot;dolma3_cc/entertainment_high&quot;,&quot;dolma3_cc/history_and_geography_high&quot;,&quot;dolma3_cc/crime_and_law_high&quot;,&quot;dolma3_arxiv&quot;,&quot;dolma3_cc/art_and_design_high&quot;,&quot;dolma3_cc/finance_and_business_high&quot;,&quot;dolmino_synth_instruction&quot;,&quot;dolma3_cc/science_math_and_technology_low&quot;,&quot;dolmino_synth_math&quot;,&quot;dolma3_cc/health_high&quot;,&quot;dolma3_cc/industrial_high&quot;,&quot;dolma3_cc/crime_and_law_low&quot;,&quot;dolma3_cc/games_high&quot;,&quot;dolmino_stem_heavy_crawl&quot;,&quot;dolma3_cc/literature_low&quot;,&quot;dolma3_wikipedia&quot;,&quot;dolma3_cc/education_and_jobs_high&quot;,&quot;dolma3_cc/food_and_dining_high&quot;,&quot;dolma3_cc/art_and_design_low&quot;,&quot;dolma3_cc/entertainment_low&quot;,&quot;dolma3_finemath_3plus&quot;,&quot;dolma3_cc/history_and_geography_low&quot;,&quot;dolma3_cc/electronics_and_hardware_low&quot;,&quot;dolma3_cc/electronics_and_hardware_high&quot;,&quot;dolma3_cc/industrial_low&quot;,&quot;dolma3_cc/health_low&quot;,&quot;dolma3_cc/food_and_dining_low&quot;,&quot;dolma3_cc/finance_and_business_low&quot;,&quot;dolma3_cc/education_and_jobs_low&quot;,&quot;dolmino_synth_thinking&quot;,&quot;dolma3_cc/games_low&quot;],&quot;type&quot;:&quot;bar&quot;,&quot;xaxis&quot;:&quot;x&quot;,&quot;yaxis&quot;:&quot;y&quot;},{&quot;marker&quot;:{&quot;color&quot;:&quot;#1877F2&quot;,&quot;line&quot;:{&quot;width&quot;:0}},&quot;name&quot;:&quot;P3 (ridge + Thompson mean)&quot;,&quot;orientation&quot;:&quot;h&quot;,&quot;x&quot;:{&quot;dtype&quot;:&quot;f8&quot;,&quot;bdata&quot;:&quot;2RlltqpHzD+kEI6zfYDOP7ye2RtmNNI/6cU2MBSjwj+wxRJBxPS6P+bio+Y78a4/V9ynEBd5wj+ui4FjWnbAP2hOdRT+3r8/E4IKzvwbrT90QvnTe66hP6L1/CjqC7M/FQ6azF9Olz8LFUerdTS0P6GmcJW+Z5o/AC7SAEJ2tj99U4bWs22RP8oy8At3iZ4/nxX+WGAfdD9238sweFOgP+QGJVW1dJ4/AAAAAAAAAADVVHR3lKyUPwAAAAAAAAAAIK2USqTbfD/NibaG4xKKP0GDfeC1pGc/9QkrK8AdZD+Z9FtEMEFiP0PXaKMDDVs/aAEF4z37VT+6TX0bg95UPwZ1H/ZIgkE/l3UhhC5NOj9C23oA0rg1PzHvaEG6EQo/TCfS1jhD/T6/IK9dr2L4PgAAAAAAAAAA&quot;},&quot;y&quot;:[&quot;dolma3_cc/literature_high&quot;,&quot;dolmino_synth_qa&quot;,&quot;dolmino_common_crawl_hq&quot;,&quot;dolmino_stack_edu_fim&quot;,&quot;dolmino_olmocr_pdfs_hq&quot;,&quot;dolma3_cc/science_math_and_technology_high&quot;,&quot;dolmino_synth_code&quot;,&quot;dolma3_stack_edu&quot;,&quot;dolma3_cc/entertainment_high&quot;,&quot;dolma3_cc/history_and_geography_high&quot;,&quot;dolma3_cc/crime_and_law_high&quot;,&quot;dolma3_arxiv&quot;,&quot;dolma3_cc/art_and_design_high&quot;,&quot;dolma3_cc/finance_and_business_high&quot;,&quot;dolmino_synth_instruction&quot;,&quot;dolma3_cc/science_math_and_technology_low&quot;,&quot;dolmino_synth_math&quot;,&quot;dolma3_cc/health_high&quot;,&quot;dolma3_cc/industrial_high&quot;,&quot;dolma3_cc/crime_and_law_low&quot;,&quot;dolma3_cc/games_high&quot;,&quot;dolmino_stem_heavy_crawl&quot;,&quot;dolma3_cc/literature_low&quot;,&quot;dolma3_wikipedia&quot;,&quot;dolma3_cc/education_and_jobs_high&quot;,&quot;dolma3_cc/food_and_dining_high&quot;,&quot;dolma3_cc/art_and_design_low&quot;,&quot;dolma3_cc/entertainment_low&quot;,&quot;dolma3_finemath_3plus&quot;,&quot;dolma3_cc/history_and_geography_low&quot;,&quot;dolma3_cc/electronics_and_hardware_low&quot;,&quot;dolma3_cc/electronics_and_hardware_high&quot;,&quot;dolma3_cc/industrial_low&quot;,&quot;dolma3_cc/health_low&quot;,&quot;dolma3_cc/food_and_dining_low&quot;,&quot;dolma3_cc/finance_and_business_low&quot;,&quot;dolma3_cc/education_and_jobs_low&quot;,&quot;dolmino_synth_thinking&quot;,&quot;dolma3_cc/games_low&quot;],&quot;type&quot;:&quot;bar&quot;,&quot;xaxis&quot;:&quot;x&quot;,&quot;yaxis&quot;:&quot;y&quot;},{&quot;marker&quot;:{&quot;color&quot;:&quot;rgba(140,140,140,0.65)&quot;,&quot;line&quot;:{&quot;width&quot;:0}},&quot;name&quot;:&quot;GRP epochs&quot;,&quot;orientation&quot;:&quot;h&quot;,&quot;showlegend&quot;:false,&quot;x&quot;:{&quot;dtype&quot;:&quot;f8&quot;,&quot;bdata&quot;:&quot;vb1qZHInB0CZCB1PvX3ZPwl8U/FURrg/TqwaM/AqGUAvkjikATsSQLZ1Yp3WJ/E/cUDrxJW1HEAryXz/pSAGQDW4alMjhfI/zMrdF/HZ9z9gBvdmoC7wP1KzDVpYdyVAFmtTpHFkE0CaVNwatWnGPw3VA5ptizFAq5rZ1vG5AD2VnJxcFGIYQG2YqDxzN6c/yd+cIYoS/D9l/z1NxJYiPRDSdHTjeqU/N6iqk8S2OkCt2cLs1XcYPVXayp8C5zlAJfBv4ld0wz/LM7IsUCqQP+qxHYzDzzQ9EaxkV3w6Nz1pGvQDTdhFPUF5YORe4yw9ns2++ZeiMT3bSrzNsvgaPcOAYWgtllU9DPPRyakOaz3A+QJNJM2EPZE5Ik6BN0M9GVjm4SLkcj1w2eJzznM1PZQziehzdoQ9&quot;},&quot;y&quot;:[&quot;dolma3_cc/literature_high&quot;,&quot;dolmino_synth_qa&quot;,&quot;dolmino_common_crawl_hq&quot;,&quot;dolmino_stack_edu_fim&quot;,&quot;dolmino_olmocr_pdfs_hq&quot;,&quot;dolma3_cc/science_math_and_technology_high&quot;,&quot;dolmino_synth_code&quot;,&quot;dolma3_stack_edu&quot;,&quot;dolma3_cc/entertainment_high&quot;,&quot;dolma3_cc/history_and_geography_high&quot;,&quot;dolma3_cc/crime_and_law_high&quot;,&quot;dolma3_arxiv&quot;,&quot;dolma3_cc/art_and_design_high&quot;,&quot;dolma3_cc/finance_and_business_high&quot;,&quot;dolmino_synth_instruction&quot;,&quot;dolma3_cc/science_math_and_technology_low&quot;,&quot;dolmino_synth_math&quot;,&quot;dolma3_cc/health_high&quot;,&quot;dolma3_cc/industrial_high&quot;,&quot;dolma3_cc/crime_and_law_low&quot;,&quot;dolma3_cc/games_high&quot;,&quot;dolmino_stem_heavy_crawl&quot;,&quot;dolma3_cc/literature_low&quot;,&quot;dolma3_wikipedia&quot;,&quot;dolma3_cc/education_and_jobs_high&quot;,&quot;dolma3_cc/food_and_dining_high&quot;,&quot;dolma3_cc/art_and_design_low&quot;,&quot;dolma3_cc/entertainment_low&quot;,&quot;dolma3_finemath_3plus&quot;,&quot;dolma3_cc/history_and_geography_low&quot;,&quot;dolma3_cc/electronics_and_hardware_low&quot;,&quot;dolma3_cc/electronics_and_hardware_high&quot;,&quot;dolma3_cc/industrial_low&quot;,&quot;dolma3_cc/health_low&quot;,&quot;dolma3_cc/food_and_dining_low&quot;,&quot;dolma3_cc/finance_and_business_low&quot;,&quot;dolma3_cc/education_and_jobs_low&quot;,&quot;dolmino_synth_thinking&quot;,&quot;dolma3_cc/games_low&quot;],&quot;type&quot;:&quot;bar&quot;,&quot;xaxis&quot;:&quot;x2&quot;,&quot;yaxis&quot;:&quot;y2&quot;},{&quot;marker&quot;:{&quot;color&quot;:&quot;#1877F2&quot;,&quot;line&quot;:{&quot;width&quot;:0}},&quot;name&quot;:&quot;P3 epochs&quot;,&quot;orientation&quot;:&quot;h&quot;,&quot;showlegend&quot;:false,&quot;x&quot;:{&quot;dtype&quot;:&quot;f8&quot;,&quot;bdata&quot;:&quot;Wu2dzMXlAUDe207CLi8AQKM3P1hjVfE/ENU1N3CU/z9q7KvIUdv1P3aUFyxggOw/ODw3dlQ5JUA6AoLc50L8P+wJIjeL5/Q/2yS1hABN7j/TCgOL+p7kP1EyxfgOhw9Acmvl0tkg4D+d4ieYUabmP/wgkObzqgNAnrDkg+sV9z/TGfjN4oj1P0Nhd5YVHdU/rJNMaBMwxT9+mAKd7yPrPwVKNaTPleA/AAAAAAAAAACIRpShNdniPwAAAAAAAAAAGuocbk65vz/xusGRyuvRP86BL2HSlL8/ibxZWI/prj+9576mOgW/P5B8uYRuabU/8tJKxgvQrT+C+kyRk0+gP9Iw+JRvNps/XiSSJ+yfgj9mqQL9DBmKP0XetWxuSEo/nIgGtaJ/Rz8apn0x3jNePwAAAAAAAAAA&quot;},&quot;y&quot;:[&quot;dolma3_cc/literature_high&quot;,&quot;dolmino_synth_qa&quot;,&quot;dolmino_common_crawl_hq&quot;,&quot;dolmino_stack_edu_fim&quot;,&quot;dolmino_olmocr_pdfs_hq&quot;,&quot;dolma3_cc/science_math_and_technology_high&quot;,&quot;dolmino_synth_code&quot;,&quot;dolma3_stack_edu&quot;,&quot;dolma3_cc/entertainment_high&quot;,&quot;dolma3_cc/history_and_geography_high&quot;,&quot;dolma3_cc/crime_and_law_high&quot;,&quot;dolma3_arxiv&quot;,&quot;dolma3_cc/art_and_design_high&quot;,&quot;dolma3_cc/finance_and_business_high&quot;,&quot;dolmino_synth_instruction&quot;,&quot;dolma3_cc/science_math_and_technology_low&quot;,&quot;dolmino_synth_math&quot;,&quot;dolma3_cc/health_high&quot;,&quot;dolma3_cc/industrial_high&quot;,&quot;dolma3_cc/crime_and_law_low&quot;,&quot;dolma3_cc/games_high&quot;,&quot;dolmino_stem_heavy_crawl&quot;,&quot;dolma3_cc/literature_low&quot;,&quot;dolma3_wikipedia&quot;,&quot;dolma3_cc/education_and_jobs_high&quot;,&quot;dolma3_cc/food_and_dining_high&quot;,&quot;dolma3_cc/art_and_design_low&quot;,&quot;dolma3_cc/entertainment_low&quot;,&quot;dolma3_finemath_3plus&quot;,&quot;dolma3_cc/history_and_geography_low&quot;,&quot;dolma3_cc/electronics_and_hardware_low&quot;,&quot;dolma3_cc/electronics_and_hardware_high&quot;,&quot;dolma3_cc/industrial_low&quot;,&quot;dolma3_cc/health_low&quot;,&quot;dolma3_cc/food_and_dining_low&quot;,&quot;dolma3_cc/finance_and_business_low&quot;,&quot;dolma3_cc/education_and_jobs_low&quot;,&quot;dolmino_synth_thinking&quot;,&quot;dolma3_cc/games_low&quot;],&quot;type&quot;:&quot;bar&quot;,&quot;xaxis&quot;:&quot;x2&quot;,&quot;yaxis&quot;:&quot;y2&quot;}],&quot;layout&quot;:{&quot;template&quot;:{&quot;data&quot;:{&quot;barpolar&quot;:[{&quot;marker&quot;:{&quot;line&quot;:{&quot;color&quot;:&quot;white&quot;,&quot;width&quot;:0.5},&quot;pattern&quot;:{&quot;fillmode&quot;:&quot;overlay&quot;,&quot;size&quot;:10,&quot;solidity&quot;:0.2}},&quot;type&quot;:&quot;barpolar&quot;}],&quot;bar&quot;:[{&quot;error_x&quot;:{&quot;color&quot;:&quot;#2a3f5f&quot;},&quot;error_y&quot;:{&quot;color&quot;:&quot;#2a3f5f&quot;},&quot;marker&quot;:{&quot;line&quot;:{&quot;color&quot;:&quot;white&quot;,&quot;width&quot;:0.5},&quot;pattern&quot;:{&quot;fillmode&quot;:&quot;overlay&quot;,&quot;size&quot;:10,&quot;solidity&quot;:0.2}},&quot;type&quot;:&quot;bar&quot;}],&quot;carpet&quot;:[{&quot;aaxis&quot;:{&quot;endlinecolor&quot;:&quot;#2a3f5f&quot;,&quot;gridcolor&quot;:&quot;#C8D4E3&quot;,&quot;linecolor&quot;:&quot;#C8D4E3&quot;,&quot;minorgridcolor&quot;:&quot;#C8D4E3&quot;,&quot;startlinecolor&quot;:&quot;#2a3f5f&quot;},&quot;baxis&quot;:{&quot;endlinecolor&quot;:&quot;#2a3f5f&quot;,&quot;gridcolor&quot;:&quot;#C8D4E3&quot;,&quot;linecolor&quot;:&quot;#C8D4E3&quot;,&quot;minorgridcolor&quot;:&quot;#C8D4E3&quot;,&quot;startlinecolor&quot;:&quot;#2a3f5f&quot;},&quot;type&quot;:&quot;carpet&quot;}],&quot;choropleth&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;type&quot;:&quot;choropleth&quot;}],&quot;contourcarpet&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;type&quot;:&quot;contourcarpet&quot;}],&quot;contour&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;colorscale&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;type&quot;:&quot;contour&quot;}],&quot;heatmap&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;colorscale&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;type&quot;:&quot;heatmap&quot;}],&quot;histogram2dcontour&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;colorscale&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;type&quot;:&quot;histogram2dcontour&quot;}],&quot;histogram2d&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;colorscale&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;type&quot;:&quot;histogram2d&quot;}],&quot;histogram&quot;:[{&quot;marker&quot;:{&quot;pattern&quot;:{&quot;fillmode&quot;:&quot;overlay&quot;,&quot;size&quot;:10,&quot;solidity&quot;:0.2}},&quot;type&quot;:&quot;histogram&quot;}],&quot;mesh3d&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;type&quot;:&quot;mesh3d&quot;}],&quot;parcoords&quot;:[{&quot;line&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;parcoords&quot;}],&quot;pie&quot;:[{&quot;automargin&quot;:true,&quot;type&quot;:&quot;pie&quot;}],&quot;scatter3d&quot;:[{&quot;line&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scatter3d&quot;}],&quot;scattercarpet&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scattercarpet&quot;}],&quot;scattergeo&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scattergeo&quot;}],&quot;scattergl&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scattergl&quot;}],&quot;scattermapbox&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scattermapbox&quot;}],&quot;scattermap&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scattermap&quot;}],&quot;scatterpolargl&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scatterpolargl&quot;}],&quot;scatterpolar&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scatterpolar&quot;}],&quot;scatter&quot;:[{&quot;fillpattern&quot;:{&quot;fillmode&quot;:&quot;overlay&quot;,&quot;size&quot;:10,&quot;solidity&quot;:0.2},&quot;type&quot;:&quot;scatter&quot;}],&quot;scatterternary&quot;:[{&quot;marker&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;type&quot;:&quot;scatterternary&quot;}],&quot;surface&quot;:[{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;},&quot;colorscale&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;type&quot;:&quot;surface&quot;}],&quot;table&quot;:[{&quot;cells&quot;:{&quot;fill&quot;:{&quot;color&quot;:&quot;#EBF0F8&quot;},&quot;line&quot;:{&quot;color&quot;:&quot;white&quot;}},&quot;header&quot;:{&quot;fill&quot;:{&quot;color&quot;:&quot;#C8D4E3&quot;},&quot;line&quot;:{&quot;color&quot;:&quot;white&quot;}},&quot;type&quot;:&quot;table&quot;}]},&quot;layout&quot;:{&quot;annotationdefaults&quot;:{&quot;arrowcolor&quot;:&quot;#2a3f5f&quot;,&quot;arrowhead&quot;:0,&quot;arrowwidth&quot;:1},&quot;autotypenumbers&quot;:&quot;strict&quot;,&quot;coloraxis&quot;:{&quot;colorbar&quot;:{&quot;outlinewidth&quot;:0,&quot;ticks&quot;:&quot;&quot;}},&quot;colorscale&quot;:{&quot;diverging&quot;:[[0,&quot;#8e0152&quot;],[0.1,&quot;#c51b7d&quot;],[0.2,&quot;#de77ae&quot;],[0.3,&quot;#f1b6da&quot;],[0.4,&quot;#fde0ef&quot;],[0.5,&quot;#f7f7f7&quot;],[0.6,&quot;#e6f5d0&quot;],[0.7,&quot;#b8e186&quot;],[0.8,&quot;#7fbc41&quot;],[0.9,&quot;#4d9221&quot;],[1,&quot;#276419&quot;]],&quot;sequential&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]],&quot;sequentialminus&quot;:[[0.0,&quot;#0d0887&quot;],[0.1111111111111111,&quot;#46039f&quot;],[0.2222222222222222,&quot;#7201a8&quot;],[0.3333333333333333,&quot;#9c179e&quot;],[0.4444444444444444,&quot;#bd3786&quot;],[0.5555555555555556,&quot;#d8576b&quot;],[0.6666666666666666,&quot;#ed7953&quot;],[0.7777777777777778,&quot;#fb9f3a&quot;],[0.8888888888888888,&quot;#fdca26&quot;],[1.0,&quot;#f0f921&quot;]]},&quot;colorway&quot;:[&quot;#636efa&quot;,&quot;#EF553B&quot;,&quot;#00cc96&quot;,&quot;#ab63fa&quot;,&quot;#FFA15A&quot;,&quot;#19d3f3&quot;,&quot;#FF6692&quot;,&quot;#B6E880&quot;,&quot;#FF97FF&quot;,&quot;#FECB52&quot;],&quot;font&quot;:{&quot;color&quot;:&quot;#2a3f5f&quot;},&quot;geo&quot;:{&quot;bgcolor&quot;:&quot;white&quot;,&quot;lakecolor&quot;:&quot;white&quot;,&quot;landcolor&quot;:&quot;white&quot;,&quot;showlakes&quot;:true,&quot;showland&quot;:true,&quot;subunitcolor&quot;:&quot;#C8D4E3&quot;},&quot;hoverlabel&quot;:{&quot;align&quot;:&quot;left&quot;},&quot;hovermode&quot;:&quot;closest&quot;,&quot;mapbox&quot;:{&quot;style&quot;:&quot;light&quot;},&quot;paper_bgcolor&quot;:&quot;white&quot;,&quot;plot_bgcolor&quot;:&quot;white&quot;,&quot;polar&quot;:{&quot;angularaxis&quot;:{&quot;gridcolor&quot;:&quot;#EBF0F8&quot;,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;ticks&quot;:&quot;&quot;},&quot;bgcolor&quot;:&quot;white&quot;,&quot;radialaxis&quot;:{&quot;gridcolor&quot;:&quot;#EBF0F8&quot;,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;ticks&quot;:&quot;&quot;}},&quot;scene&quot;:{&quot;xaxis&quot;:{&quot;backgroundcolor&quot;:&quot;white&quot;,&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;gridwidth&quot;:2,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;showbackground&quot;:true,&quot;ticks&quot;:&quot;&quot;,&quot;zerolinecolor&quot;:&quot;#EBF0F8&quot;},&quot;yaxis&quot;:{&quot;backgroundcolor&quot;:&quot;white&quot;,&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;gridwidth&quot;:2,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;showbackground&quot;:true,&quot;ticks&quot;:&quot;&quot;,&quot;zerolinecolor&quot;:&quot;#EBF0F8&quot;},&quot;zaxis&quot;:{&quot;backgroundcolor&quot;:&quot;white&quot;,&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;gridwidth&quot;:2,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;showbackground&quot;:true,&quot;ticks&quot;:&quot;&quot;,&quot;zerolinecolor&quot;:&quot;#EBF0F8&quot;}},&quot;shapedefaults&quot;:{&quot;line&quot;:{&quot;color&quot;:&quot;#2a3f5f&quot;}},&quot;ternary&quot;:{&quot;aaxis&quot;:{&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;linecolor&quot;:&quot;#A2B1C6&quot;,&quot;ticks&quot;:&quot;&quot;},&quot;baxis&quot;:{&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;linecolor&quot;:&quot;#A2B1C6&quot;,&quot;ticks&quot;:&quot;&quot;},&quot;bgcolor&quot;:&quot;white&quot;,&quot;caxis&quot;:{&quot;gridcolor&quot;:&quot;#DFE8F3&quot;,&quot;linecolor&quot;:&quot;#A2B1C6&quot;,&quot;ticks&quot;:&quot;&quot;}},&quot;title&quot;:{&quot;x&quot;:0.05},&quot;xaxis&quot;:{&quot;automargin&quot;:true,&quot;gridcolor&quot;:&quot;#EBF0F8&quot;,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;ticks&quot;:&quot;&quot;,&quot;title&quot;:{&quot;standoff&quot;:15},&quot;zerolinecolor&quot;:&quot;#EBF0F8&quot;,&quot;zerolinewidth&quot;:2},&quot;yaxis&quot;:{&quot;automargin&quot;:true,&quot;gridcolor&quot;:&quot;#EBF0F8&quot;,&quot;linecolor&quot;:&quot;#EBF0F8&quot;,&quot;ticks&quot;:&quot;&quot;,&quot;title&quot;:{&quot;standoff&quot;:15},&quot;zerolinecolor&quot;:&quot;#EBF0F8&quot;,&quot;zerolinewidth&quot;:2}}},&quot;xaxis&quot;:{&quot;anchor&quot;:&quot;y&quot;,&quot;domain&quot;:[0.0,0.41000000000000003],&quot;title&quot;:{&quot;text&quot;:&quot;total weight (sum of phases)&quot;},&quot;showgrid&quot;:true,&quot;gridcolor&quot;:&quot;rgba(220,220,220,0.5)&quot;},&quot;yaxis&quot;:{&quot;anchor&quot;:&quot;x&quot;,&quot;domain&quot;:[0.0,1.0],&quot;tickfont&quot;:{&quot;size&quot;:10},&quot;gridcolor&quot;:&quot;rgba(220,220,220,0.5)&quot;,&quot;showgrid&quot;:true},&quot;xaxis2&quot;:{&quot;anchor&quot;:&quot;y2&quot;,&quot;domain&quot;:[0.5900000000000001,1.0],&quot;title&quot;:{&quot;text&quot;:&quot;total epochs over full source&quot;},&quot;showgrid&quot;:true,&quot;gridcolor&quot;:&quot;rgba(220,220,220,0.5)&quot;},&quot;yaxis2&quot;:{&quot;anchor&quot;:&quot;x2&quot;,&quot;domain&quot;:[0.0,1.0],&quot;tickfont&quot;:{&quot;size&quot;:10},&quot;gridcolor&quot;:&quot;rgba(220,220,220,0.5)&quot;,&quot;showgrid&quot;:true},&quot;annotations&quot;:[{&quot;font&quot;:{&quot;size&quot;:16},&quot;showarrow&quot;:false,&quot;text&quot;:&quot;weight space \u2014 total weight (phase 0 + phase 1)&quot;,&quot;x&quot;:0.20500000000000002,&quot;xanchor&quot;:&quot;center&quot;,&quot;xref&quot;:&quot;paper&quot;,&quot;y&quot;:1.0,&quot;yanchor&quot;:&quot;bottom&quot;,&quot;yref&quot;:&quot;paper&quot;},{&quot;font&quot;:{&quot;size&quot;:16},&quot;showarrow&quot;:false,&quot;text&quot;:&quot;epoch space \u2014 total epochs over full source&quot;,&quot;x&quot;:0.795,&quot;xanchor&quot;:&quot;center&quot;,&quot;xref&quot;:&quot;paper&quot;,&quot;y&quot;:1.0,&quot;yanchor&quot;:&quot;bottom&quot;,&quot;yref&quot;:&quot;paper&quot;}],&quot;shapes&quot;:[{&quot;line&quot;:{&quot;color&quot;:&quot;black&quot;,&quot;dash&quot;:&quot;dot&quot;,&quot;width&quot;:1},&quot;type&quot;:&quot;line&quot;,&quot;x0&quot;:8.0,&quot;x1&quot;:8.0,&quot;xref&quot;:&quot;x2&quot;,&quot;y0&quot;:0,&quot;y1&quot;:1,&quot;yref&quot;:&quot;y2 domain&quot;}],&quot;height&quot;:1014,&quot;width&quot;:1500,&quot;barmode&quot;:&quot;group&quot;,&quot;bargap&quot;:0.15,&quot;margin&quot;:{&quot;l&quot;:60,&quot;r&quot;:30,&quot;t&quot;:80,&quot;b&quot;:80},&quot;legend&quot;:{&quot;font&quot;:{&quot;size&quot;:11},&quot;orientation&quot;:&quot;h&quot;,&quot;yanchor&quot;:&quot;top&quot;,&quot;y&quot;:-0.1,&quot;xanchor&quot;:&quot;center&quot;,&quot;x&quot;:0.5,&quot;bgcolor&quot;:&quot;rgba(255,255,255,0.85)&quot;,&quot;bordercolor&quot;:&quot;rgba(200,200,200,0.5)&quot;,&quot;borderwidth&quot;:1},&quot;title&quot;:{&quot;font&quot;:{&quot;size&quot;:17},&quot;text&quot;:&quot;Optimal data mixture: GRP vs P3 (both fit and optimized on the same IRT aggregate target)&lt;br&gt;&lt;sub&gt;sorted by combined attention from both methods \u00b7 dotted line at 8 epochs&lt;/sub&gt;&quot;,&quot;x&quot;:0.5,&quot;xanchor&quot;:&quot;center&quot;},&quot;dragmode&quot;:&quot;zoom&quot;}}' data-config='{}'></marimo-plotly>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "qnkX",
+      "code_hash": "5999a6bf57c03f0ee860988074b0696e",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"step-d-agreement-table-top-15-by-combined-weight\">Step D \u2014 agreement table (top-15 by combined weight)</h2>\n<span class=\"paragraph\">Pearson correlation between the two recommendations (across 39 domains, total weight per phase) reported below. High correlation \u2192 both methods agree on the shape of the optimum; low correlation \u2192 they diverge meaningfully.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "TqIu",
+      "code_hash": "5119150526ea41434d25826f2a46c6d9",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h3 id=\"agreement-metrics\">Agreement metrics</h3>\n<ul>\n<li>Pearson(total weight): <strong>+0.705</strong></li>\n<li>Pearson(phase-0 weight): <strong>+0.091</strong></li>\n<li>Pearson(phase-1 weight): <strong>+0.374</strong></li>\n<li>Pearson(total epochs): <strong>+0.192</strong></li>\n</ul>\n<span class=\"paragraph\"><strong>Top-15 domains by combined weight (P3 mean + GRP):</strong></span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Vxnm",
+      "code_hash": "94fd21ca5001d7f24a603ddc28076fac",
+      "outputs": [
+        {
+          "type": "error",
+          "ename": "exception",
+          "evalue": "name '_table' is not defined",
+          "traceback": []
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stderr",
+          "text": "<span class=\"codehilite\"><div class=\"highlight\"><pre><span></span><span class=\"gt\">Traceback (most recent call last):</span>\n  File <span class=\"nb\">&quot;/var/folders/jk/47ylq_6500v3wth9kvq_7hfm0000gn/T/marimo_79094/__marimo__cell_Vxnm_.py&quot;</span>, line <span class=\"m\">1</span>, in <span class=\"n\">&lt;module&gt;</span>\n<span class=\"w\">    </span><span class=\"n\">_table</span>\n<span class=\"gr\">NameError</span>: <span class=\"n\">name &#39;_table&#39; is not defined</span>\n</pre></div>\n</span>",
+          "mimetype": "application/vnd.marimo+traceback"
+        }
+      ]
+    }
+  ]
+}

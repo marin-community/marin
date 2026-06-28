@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import asyncio
 import dataclasses
 import functools
 import logging
 import os
+import zlib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -59,10 +61,10 @@ from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tok
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
 
+
 silence_transformer_nag()  # noqa
 
 T_co = TypeVar("T_co", covariant=True)
-T = TypeVar("T")
 
 logger = logging.getLogger("levanter.data.text")
 
@@ -213,7 +215,6 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
                 return example
 
             def _map(example: dict) -> GrugLmExample:
-                # pyrefly: ignore[bad-return]  # eqx.filter_jit wrapper types the call as returning Unknown
                 return _create_lm_example(example[input_ids_key])
 
         else:
@@ -232,7 +233,6 @@ class PrebuiltLmDataset(MappedAsyncDataset[dict, GrugLmExample]):
             def _map(example: dict) -> GrugLmExample:
                 loss_weight = example[loss_weights_key]
                 loss_weight = self.loss_weight_transform(loss_weight)
-                # pyrefly: ignore[bad-return, bad-argument-count]  # eqx.filter_jit wrapper hides the real signature
                 return _create_lm_example(example[input_ids_key], loss_weight)
 
         super().__init__(self.dataset, _map)
@@ -356,6 +356,34 @@ class ConcatDatasetComponent(DatasetComponentBase):
     tags: list[str] | None = None
 
 
+@DatasetComponentBase.register_subclass("hierarchical_cached")
+@dataclass(frozen=True)
+class HierarchicalMixtureDatasetComponent(DatasetComponentBase):
+    """A top-level component backed by a weighted mixture of child cache-backed components."""
+
+    components: dict[str, DatasetComponent]
+    train_weights: dict[str, float]
+    token_counts: dict[str, int] | None = None
+    tags: list[str] | None = None
+
+    def __post_init__(self):
+        if not self.components:
+            raise ValueError("HierarchicalMixtureDatasetComponent requires at least one child component.")
+
+        unknown_weights = set(self.train_weights) - set(self.components)
+        if unknown_weights:
+            raise ValueError(
+                f"Train weight keys must be a subset of child component keys, got unknown keys {sorted(unknown_weights)}"
+            )
+
+        if self.token_counts is not None:
+            missing_token_counts = set(self.components) - set(self.token_counts)
+            if missing_token_counts:
+                raise ValueError(
+                    "Token counts must cover every child component, " f"missing {sorted(missing_token_counts)}"
+                )
+
+
 def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
     if component.pack is not None:
         return component.pack
@@ -365,6 +393,53 @@ def _effective_pack(component: DatasetComponent) -> bool | int | Literal["pad"]:
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
     return False
+
+
+class LazyAsyncDataset(AsyncDataset[T_co]):
+    """Create an AsyncDataset lazily on first access."""
+
+    def __init__(
+        self,
+        factory: Callable[[], AsyncDataset[T_co]],
+        *,
+        finite_length: int | None = None,
+        assume_finite: bool = False,
+    ):
+        if finite_length is not None and not assume_finite:
+            assume_finite = True
+        self._factory = factory
+        self._dataset: AsyncDataset[T_co] | None = None
+        self._finite_length = finite_length
+        self._assume_finite = assume_finite
+        self._init_lock = asyncio.Lock()
+
+    async def _dataset_async(self) -> AsyncDataset[T_co]:
+        if self._dataset is None:
+            async with self._init_lock:
+                if self._dataset is None:
+                    self._dataset = await asyncio.to_thread(self._factory)
+        return self._dataset
+
+    async def async_len(self) -> int:
+        if self._finite_length is not None:
+            return self._finite_length
+        dataset = await self._dataset_async()
+        return await dataset.async_len()
+
+    def is_finite(self) -> bool:
+        if self._finite_length is not None or self._assume_finite:
+            return True
+        if self._dataset is not None:
+            return self._dataset.is_finite()
+        return False
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+        dataset = await self._dataset_async()
+        return await dataset.get_batch(indices)
+
+    async def getitem_async(self, index: int) -> T_co:
+        dataset = await self._dataset_async()
+        return await dataset.getitem_async(index)
 
 
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
@@ -403,7 +478,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -421,7 +495,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     tokens=tokens,
                     loss_weight=loss_weight,
                     segment_ids=seg_ids_raw,
-                    max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
@@ -474,7 +547,6 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 tokens=tokens,
                 loss_weight=loss_weight,
                 segment_ids=seg_ids_raw,
-                max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
@@ -558,6 +630,51 @@ def dataset_for_component(
         raise ValueError(f"Unknown format {fmt}")
 
 
+def _stable_dataset_key(name: str, split: str) -> PRNGKeyArray:
+    seed = zlib.crc32(f"{name}:{split}".encode("utf-8")) & 0xFFFFFFFF
+    return jax.random.PRNGKey(seed)
+
+
+def _stable_simulated_epoch_subset_key(name: str, split: str, subset_seed: int) -> PRNGKeyArray:
+    base_key = jax.random.PRNGKey(subset_seed)
+    fold_value = zlib.crc32(f"simulated_epoch_subset:{name}:{split}".encode("utf-8")) & 0xFFFFFFFF
+    return jax.random.fold_in(base_key, fold_value)
+
+
+def _stable_child_order(name: str, split: str, child_names: Sequence[str]) -> list[str]:
+    return sorted(
+        child_names,
+        key=lambda child_name: zlib.crc32(f"{name}:{split}:{child_name}".encode("utf-8")) & 0xFFFFFFFF,
+    )
+
+
+def _sequence_count_from_token_count(component: DatasetComponent, token_count: int, seq_len: int) -> int | None:
+    if not isinstance(component.format, TextLmDatasetFormat):
+        return None
+    if _effective_pack(component):
+        return None
+    return token_count // seq_len
+
+
+def _finite_length_for_hierarchical_component(
+    component: HierarchicalMixtureDatasetComponent,
+    *,
+    seq_len: int,
+) -> int | None:
+    if component.token_counts is None:
+        return None
+
+    total_length = 0
+    for child_name, child_component in component.components.items():
+        child_length = _sequence_count_from_token_count(child_component, component.token_counts[child_name], seq_len)
+        if child_length is None:
+            return None
+        if component.train_weights.get(child_name, 0.0) > 0:
+            total_length += child_length
+
+    return total_length
+
+
 def _component_cache_dir(name: str, component: DatasetComponent, default_root: str | None) -> str:
     base = component.cache_dir if component.cache_dir is not None else default_root
     if base is None:
@@ -568,8 +685,8 @@ def _component_cache_dir(name: str, component: DatasetComponent, default_root: s
 
 
 def _split_into_trainval_sets(
-    dataset: "AsyncDataset[T]", num_validation_sequences: int, *, shuffle: bool = True
-) -> tuple["AsyncDataset[T]", "AsyncDataset[T]"]:
+    dataset: "AsyncDataset[LmExample]", num_validation_sequences: int, *, shuffle: bool = True
+) -> tuple["AsyncDataset[LmExample]", "AsyncDataset[LmExample]"]:
     """Split a dataset into train/val portions, optionally shuffling first.
 
     When shuffle is True, a deterministic shuffle is applied before
@@ -652,6 +769,7 @@ class LmDataConfig:
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
     target_budget: int | None = None
     experiment_budget: int | None = None
+    simulated_epoch_subset_seed: int | None = None
     mixture_block_size: int = 2048
     max_train_batches: dict[str, int] | None = None
     num_validation_sequences: dict[str, int] | None = None
@@ -701,58 +819,237 @@ class LmDataConfig:
             return weights.get(name, 0) > 0
         return any(w.get(name, 0) > 0 for _, w in weights)
 
-    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis, *, split: str):
-        datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
-        for name, component in self.components.items():
-            if split == "train" and not self._has_nonzero_weight(name):
-                continue
+    def _cache_for_component(self, name: str, component: DatasetComponent, split: str) -> TreeCache[dict] | None:
+        cache_root = _component_cache_dir(name, component, self.cache_dir)
+        if component.flat_cache:
+            if split != "train":
+                return None
+            cache_path = cache_root
+        else:
+            cache_path = os.path.join(cache_root, split)
+        source = component.source
 
-            if isinstance(component, DirectDatasetComponent):
-                direct = component.datasets.get(split)
-                if direct is None:
+        if source is None:
+            try:
+                return load_lm_dataset_cache(
+                    cache_path,
+                    component.format,
+                    self.the_tokenizer,
+                    self.enforce_eos,
+                )
+            except FileNotFoundError as exc:
+                raise ValueError(f"No source and no cache found for component {name} split {split}") from exc
+
+        shard_source = source.get_shard_source(split)
+        if shard_source is None:
+            if not fsspec_utils.exists(cache_path):
+                logger.warning("No source for %s in %s split and no cache at %s, skipping", name, split, cache_path)
+                return None
+            return load_lm_dataset_cache(
+                cache_path,
+                component.format,
+                self.the_tokenizer,
+                self.enforce_eos,
+            )
+
+        if not self.auto_build_caches:
+            if not fsspec_utils.exists(cache_path):
+                raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+            return load_lm_dataset_cache(
+                cache_path,
+                component.format,
+                self.the_tokenizer,
+                self.enforce_eos,
+            )
+
+        return build_lm_dataset_cache(
+            cache_path,
+            shard_source,
+            component.format,
+            self.the_tokenizer,
+            self.cache_options,
+            self.enforce_eos,
+        )
+
+    def _build_token_dataset_for_component(
+        self,
+        name: str,
+        component: DatasetComponentBase,
+        Pos: Axis,
+        *,
+        split: str,
+        caches: Mapping[str, TreeCache[dict]] | None,
+    ) -> AsyncDataset[GrugLmExample] | None:
+        if isinstance(component, DirectDatasetComponent):
+            direct = component.datasets.get(split)
+            if direct is None:
+                if split == "train":
+                    raise ValueError(f"Direct dataset format missing {split} split for component {name}")
+                logger.warning("Direct dataset format missing %s split for component %s", split, name)
+                return None
+            return direct
+
+        if isinstance(component, ConcatDatasetComponent):
+            child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+            for child_name, child in component.children.items():
+                child_key = f"{name}/{child_name}"
+                cache = caches.get(child_key) if caches is not None else self._cache_for_component(child_key, child, split)
+                if cache is None:
                     if split == "train":
-                        raise ValueError(f"Direct dataset format missing {split} split for component {name}")
-                    logger.warning("Direct dataset format missing %s split for component %s", split, name)
+                        raise ValueError(f"No cache available for concat child {child_key} in {split} split")
                     continue
-                datasets[name] = direct
-                continue
+                child_datasets[child_name] = dataset_for_component(
+                    child,
+                    Pos,
+                    cache,
+                    eos_id=self.the_tokenizer.eos_token_id,
+                    block_cross_document_attention=self.block_cross_document_attention,
+                )
+            if child_datasets:
+                return ConcatDataset(child_datasets)
+            return None
 
-            if isinstance(component, ConcatDatasetComponent):
-                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
-                for child_name, child in component.children.items():
-                    child_key = f"{name}/{child_name}"
-                    cache = caches.get(child_key)
-                    if cache is None:
-                        if split == "train":
-                            raise ValueError(f"No cache available for concat child {child_key} in {split} split")
-                        continue
-                    child_datasets[child_name] = dataset_for_component(
-                        child,
-                        Pos,
-                        cache,
-                        eos_id=self.the_tokenizer.eos_token_id,
-                        block_cross_document_attention=self.block_cross_document_attention,
-                    )
-                if child_datasets:
-                    datasets[name] = ConcatDataset(child_datasets)
-                continue
-
-            if not isinstance(component, DatasetComponent):
-                raise ValueError(f"Unsupported component type for {name}: {type(component)}")
-
-            cache = caches.get(name)
+        if isinstance(component, DatasetComponent):
+            cache = caches.get(name) if caches is not None else self._cache_for_component(name, component, split)
             if cache is None:
                 if split == "train":
                     raise ValueError(f"No cache available for component {name} in {split} split")
-                continue
+                return None
 
-            datasets[name] = dataset_for_component(
+            return dataset_for_component(
                 component,
                 Pos,
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
             )
+
+        if isinstance(component, HierarchicalMixtureDatasetComponent):
+            ordered_child_names = _stable_child_order(name, split, list(component.components))
+
+            def build_child_datasets() -> dict[str, AsyncDataset[GrugLmExample]]:
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name in ordered_child_names:
+                    child_component = component.components[child_name]
+                    dataset = self._build_token_dataset_for_component(
+                        f"{name}/{child_name}",
+                        child_component,
+                        Pos,
+                        split=split,
+                        caches=None,
+                    )
+                    if dataset is None:
+                        continue
+                    child_datasets[child_name] = dataset
+                return child_datasets
+
+            def build_lazy_train_child_datasets() -> dict[str, AsyncDataset[GrugLmExample]]:
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name in ordered_child_names:
+                    child_component = component.components[child_name]
+                    if component.train_weights.get(child_name, 0.0) <= 0:
+                        continue
+
+                    child_finite_length = None
+                    if component.token_counts is not None:
+                        child_finite_length = _sequence_count_from_token_count(
+                            child_component,
+                            component.token_counts[child_name],
+                            Pos.size,
+                        )
+
+                    def build_child_dataset(
+                        child_name: str = child_name,
+                        child_component: DatasetComponentBase = child_component,
+                    ) -> AsyncDataset[GrugLmExample]:
+                        dataset = self._build_token_dataset_for_component(
+                            f"{name}/{child_name}",
+                            child_component,
+                            Pos,
+                            split=split,
+                            caches=None,
+                        )
+                        if dataset is None:
+                            raise ValueError(f"No dataset available for hierarchical child {name}/{child_name}")
+                        return dataset
+
+                    child_datasets[child_name] = LazyAsyncDataset(
+                        build_child_dataset,
+                        finite_length=child_finite_length,
+                        assume_finite=True,
+                    )
+
+                return child_datasets
+
+            def build_hierarchical_mixture(
+                child_datasets: Mapping[str, AsyncDataset[GrugLmExample]],
+            ) -> AsyncDataset[GrugLmExample]:
+                if split == "train" and not child_datasets:
+                    raise ValueError(f"No child datasets available for hierarchical component {name}")
+                if not child_datasets:
+                    raise ValueError(f"No datasets available for hierarchical component {name}")
+
+                child_weights = {
+                    child_name: weight
+                    for child_name in ordered_child_names
+                    for weight in [component.train_weights.get(child_name, 0.0)]
+                    if child_name in child_datasets and weight > 0
+                }
+                # Hierarchical domains use metadata-derived finite lengths, so the
+                # runtime child sampler can restart individual children without
+                # forcing startup-time length inference over tiny-weight shards.
+                return MixtureDataset(
+                    datasets=child_datasets,
+                    weights=child_weights,
+                    stop_strategy=StopStrategy.RESTART_STRATEGY,
+                    key=_stable_dataset_key(name, split),
+                    block_size=self.mixture_block_size,
+                    randomize_blocks=False,
+                )
+
+            def build_nested_dataset() -> AsyncDataset[GrugLmExample]:
+                return build_hierarchical_mixture(build_lazy_train_child_datasets())
+
+            finite_length = _finite_length_for_hierarchical_component(
+                component,
+                seq_len=Pos.size,
+            )
+            if split != "train":
+                child_datasets = build_child_datasets()
+                if not child_datasets:
+                    logger.warning(
+                        "No datasets available for hierarchical component %s in %s split, skipping", name, split
+                    )
+                    return None
+                finite_length = sum(len(dataset.as_sync_dataset()) for dataset in child_datasets.values())
+                return LazyAsyncDataset(
+                    lambda: build_hierarchical_mixture(child_datasets),
+                    finite_length=finite_length,
+                )
+            return LazyAsyncDataset(build_nested_dataset, finite_length=finite_length)
+
+        raise ValueError(f"Unsupported component type for {name}: {type(component)}")
+
+    def _has_hierarchical_components(self) -> bool:
+        return any(
+            isinstance(component, HierarchicalMixtureDatasetComponent) for component in self.components.values()
+        )
+
+    def build_token_datasets(
+        self,
+        caches: Mapping[str, TreeCache[dict]] | None,
+        Pos: Axis,
+        *,
+        split: str,
+    ):
+        datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+        for name, component in self.components.items():
+            if split == "train" and not self._has_nonzero_weight(name):
+                continue
+            dataset = self._build_token_dataset_for_component(name, component, Pos, split=split, caches=caches)
+            if dataset is None:
+                continue
+            datasets[name] = dataset
 
         return datasets
 
@@ -791,7 +1088,7 @@ class LmDataConfig:
         initial_batch_size: int | None = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[GrugLmExample]]:
-        doc_caches = self.build_caches("train")
+        doc_caches = None if self._has_hierarchical_components() else self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos, split="train")
 
         if self.num_validation_sequences is not None:
@@ -820,24 +1117,54 @@ class LmDataConfig:
                 ds = ds.shuffle(k, perm_type=perm_type)
             return ds
 
-        if shuffle_cfg:
-            key_iter = key_iterator(key)
-            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
-
         if (
             self.experiment_budget is not None and self.target_budget is not None
         ) and self.experiment_budget > self.target_budget:
             raise ValueError(
                 f"Experiment budget should be smaller than target budget, got {self.experiment_budget} > {self.target_budget}"
             )
-        if self.experiment_budget is not None and self.target_budget is not None:
+
+        def slice_for_simulated_epoching(
+            ds_by_name: Mapping[str, AsyncDataset[GrugLmExample]],
+            *,
+            subset_seed: int | None,
+        ) -> dict[str, AsyncDataset[GrugLmExample]]:
+            assert self.experiment_budget is not None
+            assert self.target_budget is not None
+
             simulated_data_ratio = self.experiment_budget / self.target_budget
             sliced_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
-            for name, ds in datasets.items():
+            for name, ds in ds_by_name.items():
+                subset_dataset = ds
+                if subset_seed is not None and shuffle_cfg:
+                    subset_dataset = shuffle_ds(
+                        ds,
+                        _stable_simulated_epoch_subset_key(name, "train", subset_seed),
+                    )
+
                 true_length_of_dataset = len(ds.as_sync_dataset())
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
-                sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
-            datasets = sliced_datasets
+                sliced_datasets[name] = subset_dataset.slice_dataset(end_index=simulated_length_of_dataset)
+
+            return sliced_datasets
+
+        if self.experiment_budget is not None and self.target_budget is not None:
+            if self.simulated_epoch_subset_seed is None:
+                if shuffle_cfg:
+                    key_iter = key_iterator(key)
+                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
+                datasets = slice_for_simulated_epoching(datasets, subset_seed=None)
+            else:
+                datasets = slice_for_simulated_epoching(
+                    datasets,
+                    subset_seed=self.simulated_epoch_subset_seed,
+                )
+                if shuffle_cfg:
+                    key_iter = key_iterator(key)
+                    datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
+        elif shuffle_cfg:
+            key_iter = key_iterator(key)
+            datasets = {name: shuffle_ds(ds, next(key_iter)) for name, ds in datasets.items()}
 
         if self.max_train_batches is not None:
             assert (
@@ -869,11 +1196,11 @@ class LmDataConfig:
         )
 
     def _validation_datasets_unwrapped(self, Pos: Axis) -> dict[str, AsyncDataset[GrugLmExample]]:
-        doc_caches = self.build_caches("validation")
+        doc_caches = None if self._has_hierarchical_components() else self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos, split="validation")
 
         if self.num_validation_sequences is not None:
-            train_doc_caches = self.build_caches("train")
+            train_doc_caches = None if self._has_hierarchical_components() else self.build_caches("train")
             train_datasets = self.build_token_datasets(train_doc_caches, Pos, split="train")
 
             for name, num_sequences in self.num_validation_sequences.items():
@@ -900,10 +1227,18 @@ class LmDataConfig:
                 continue
             if isinstance(component, DirectDatasetComponent):
                 continue
+
             if isinstance(component, ConcatDatasetComponent):
                 for child_name, child in component.children.items():
                     items.append((f"{name}/{child_name}", child))
                 continue
+
+            if isinstance(component, HierarchicalMixtureDatasetComponent):
+                raise ValueError(
+                    "HierarchicalMixtureDatasetComponent does not correspond to a single cache. "
+                    "Build datasets directly instead of calling build_caches()."
+                )
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
             items.append((name, component))
@@ -954,15 +1289,8 @@ class LmDataConfig:
                 return name, cache, None
 
             if cache_exists:
-                try:
-                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
-                    return name, cache, None
-                except FileNotFoundError:
-                    logger.warning(
-                        f"Cache dir at {cache_path} exists but is unloadable (likely a "
-                        "partial build from a killed prior cache-build job); auto_build_caches "
-                        "is on, so falling through to rebuild."
-                    )
+                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                return name, cache, None
             return name, None, (cache_path, shard_source, component.format)
 
         caches: dict[str, TreeCache[dict]] = {}
@@ -1106,4 +1434,4 @@ if __name__ == "__main__":
                 metric = key.split("/")[4]
                 print(f"{name} {metric}: {value}")
 
-    main()  # pyrefly: ignore[missing-argument]
+    main()

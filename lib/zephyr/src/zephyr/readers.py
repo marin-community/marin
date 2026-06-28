@@ -255,18 +255,41 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
     columns = spec.columns
 
-    with open_file(spec.path, "rt") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            record = decoder.decode(line)
-            if filter_fn is not None and not filter_fn(record):
-                continue
-            if columns is not None:
-                record = {k: record[k] for k in columns if k in record}
-            counters.increment("zephyr/records_in")
-            yield record
+    try:
+        with open_file(spec.path, "rt") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = decoder.decode(line)
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "truncated" in error_msg or "corrupt" in error_msg:
+                        logger.warning(
+                            "Skipping rest of %s: truncated/corrupt data at line %d (%s)",
+                            spec.path,
+                            line_num,
+                            e,
+                        )
+                        return
+                    logger.error(f"Error decoding line {line_num} in {spec.path}: {e}")
+                    raise RuntimeError(f"Error decoding line {line_num} in {spec.path}: {e}") from e
+                if filter_fn is not None and not filter_fn(record):
+                    continue
+                if columns is not None:
+                    record = {k: record[k] for k in columns if k in record}
+                counters.increment("zephyr/records_in")
+                yield record
+    except RuntimeError:
+        raise  # Re-raise wrapped error
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "truncated" in error_msg or "corrupt" in error_msg:
+            logger.warning("Skipping corrupted file %s: %s", spec.path, e)
+            return
+        logger.error(f"Error reading JSONL file {spec.path}: {e}")
+        raise RuntimeError(f"Error reading JSONL file {spec.path}: {e}") from e
 
 
 def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:

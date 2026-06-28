@@ -35,9 +35,42 @@ from experiments.evals.task_configs import (
 )
 
 EVAL_DEPENDENCY_GROUPS = ["eval", "vllm", "tpu"]
+LEVANTER_EVAL_DEPENDENCY_GROUPS = ["eval", "tpu"]
 EVALCHEMY_DEPENDENCY_GROUPS = ["evalchemy", "vllm", "tpu"]
 
 logger = logging.getLogger(__name__)
+
+LM_EVAL_CODE_ENV_VARS: dict[str, str] = {
+    "HF_ALLOW_CODE_EVAL": "1",
+}
+TPU_VLLM_ENV_VARS: dict[str, str] = {
+    "MARIN_VLLM_MODE": "native",
+    "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
+    "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
+    "VLLM_TPU_SKIP_PRECOMPILE": "1",
+}
+
+
+def _is_tpu_resource(resource_config: ResourceConfig | None) -> bool:
+    if resource_config is None:
+        return False
+    return getattr(getattr(resource_config, "device", None), "kind", None) == "tpu"
+
+
+def _needs_code_eval(evals: Sequence[EvalTaskConfig]) -> bool:
+    return any(task.name == "humaneval" for task in evals)
+
+
+def _lm_eval_env_vars(
+    resource_config: ResourceConfig | None, evals: Sequence[EvalTaskConfig], env_vars: dict[str, str] | None
+) -> dict[str, str]:
+    merged = dict(LM_EVAL_CODE_ENV_VARS) if _needs_code_eval(evals) else {}
+    if _is_tpu_resource(resource_config):
+        merged.update(TPU_VLLM_ENV_VARS)
+    if env_vars:
+        merged.update(env_vars)
+    return merged
 
 
 def evaluate_lm_evaluation_harness(
@@ -46,6 +79,7 @@ def evaluate_lm_evaluation_harness(
     evals: list[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
+    generation_params: dict | None = None,
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
@@ -70,8 +104,8 @@ def evaluate_lm_evaluation_harness(
         fn=remote(
             evaluate,
             resources=resource_config,
+            env_vars=_lm_eval_env_vars(resource_config, evals, env_vars),
             pip_dependency_groups=EVAL_DEPENDENCY_GROUPS,
-            env_vars=env_vars,
         ),
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
@@ -82,6 +116,7 @@ def evaluate_lm_evaluation_harness(
             max_eval_instances=max_eval_instances,
             discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
+            generation_params=generation_params,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
@@ -140,6 +175,14 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
+    eval_datasets_cache_path: str | None = None,
+    eval_datasets_cache_dependency: InputName | str | None = None,
+    log_samples: bool = False,
+    sample_log_all: bool = False,
+    max_logged_samples_per_task: int | None = None,
+    sample_smooth_metrics: bool = False,
+    drop_samples_after_metrics: bool = False,
+    use_wandb_tracker: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -147,7 +190,7 @@ def evaluate_levanter_lm_evaluation_harness(
     logger.info(f"Running evals on the following tasks: {evals}")
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
-        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
+        fn=remote(evaluate, resources=resource_config, pip_dependency_groups=LEVANTER_EVAL_DEPENDENCY_GROUPS),
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -158,6 +201,14 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            eval_datasets_cache_path=versioned(eval_datasets_cache_path),
+            eval_datasets_cache_dependency=eval_datasets_cache_dependency,
+            log_samples=log_samples,
+            sample_log_all=sample_log_all,
+            max_logged_samples_per_task=versioned(max_logged_samples_per_task),
+            sample_smooth_metrics=sample_smooth_metrics,
+            drop_samples_after_metrics=drop_samples_after_metrics,
+            use_wandb_tracker=use_wandb_tracker,
         ),
     )
 

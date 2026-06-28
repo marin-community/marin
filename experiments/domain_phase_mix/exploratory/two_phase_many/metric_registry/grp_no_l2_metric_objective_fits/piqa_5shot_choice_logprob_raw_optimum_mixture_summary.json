@@ -1,0 +1,72 @@
+{
+  "plot_png": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/grp_no_l2_metric_objective_fits/piqa_5shot_choice_logprob_raw_optimum_mixture.png",
+  "weights_csv": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/grp_no_l2_metric_objective_fits/piqa_5shot_choice_logprob_raw_optimum_weights.csv",
+  "top_phase0_domains": [
+    {
+      "domain_name": "dolma3_cc/food_and_dining_low",
+      "weight": 0.5184080356855709
+    },
+    {
+      "domain_name": "dolmino_synth_qa",
+      "weight": 0.26303854535595184
+    },
+    {
+      "domain_name": "dolma3_finemath_3plus",
+      "weight": 0.054066932856348955
+    },
+    {
+      "domain_name": "dolma3_cc/electronics_and_hardware_low",
+      "weight": 0.040452673709651533
+    },
+    {
+      "domain_name": "dolma3_cc/industrial_low",
+      "weight": 0.028704265121999462
+    },
+    {
+      "domain_name": "dolma3_cc/health_low",
+      "weight": 0.0238194631704377
+    },
+    {
+      "domain_name": "dolma3_cc/history_and_geography_low",
+      "weight": 0.01642654713009195
+    },
+    {
+      "domain_name": "dolmino_common_crawl_hq",
+      "weight": 0.01471017242857161
+    }
+  ],
+  "top_phase1_domains": [
+    {
+      "domain_name": "dolma3_cc/food_and_dining_low",
+      "weight": 0.9999999936241688
+    },
+    {
+      "domain_name": "dolmino_synth_qa",
+      "weight": 6.367310234742645e-09
+    },
+    {
+      "domain_name": "dolma3_finemath_3plus",
+      "weight": 3.697334822122299e-12
+    },
+    {
+      "domain_name": "dolmino_common_crawl_hq",
+      "weight": 1.8572404357072004e-12
+    },
+    {
+      "domain_name": "dolmino_synth_thinking",
+      "weight": 7.597418522548201e-13
+    },
+    {
+      "domain_name": "dolma3_cc/health_low",
+      "weight": 7.284599909512062e-13
+    },
+    {
+      "domain_name": "dolma3_cc/electronics_and_hardware_low",
+      "weight": 5.339821093932628e-13
+    },
+    {
+      "domain_name": "dolma3_cc/industrial_high",
+      "weight": 2.2697536799412445e-13
+    }
+  ]
+}

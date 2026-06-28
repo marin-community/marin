@@ -1,0 +1,71 @@
+{
+  "dataset": "two_phase_starcoder",
+  "rows": [
+    {
+      "cv_foldmean_regret_at_1": 0.004457640647888184,
+      "cv_r2": 0.9861057246235578,
+      "cv_regret_at_1": 0.005128920078277588,
+      "cv_rmse": 0.03856366872062431,
+      "cv_spearman": 0.9488563410602392,
+      "dataset": "two_phase_starcoder",
+      "model": "GRP",
+      "n_params": 9,
+      "n_runs": 116,
+      "notes": "Tuned full-packet GRP parameters; 5-fold CV refits only the linear head.",
+      "old_cv_r2_meanfold": NaN,
+      "old_cv_regret_meanfold": NaN,
+      "old_cv_rmse_meanfold": NaN,
+      "old_cv_spearman_meanfold": NaN,
+      "params": {
+        "alpha": 8.31415564086338,
+        "eta": 0.9741879840630027,
+        "lam": 2.5126908591663857,
+        "reg": 1.522997974471263e-08,
+        "tau": 3.2201247392305
+      },
+      "source": "in_repo_starcoder_grp",
+      "status": "ok",
+      "train_r2": 0.987462513937733,
+      "train_regret_at_1": 0.005128920078277588,
+      "train_rmse": 0.03663242119317026,
+      "train_spearman": 0.9513243378310846
+    },
+    {
+      "cv_foldmean_regret_at_1": 0.004349017143249467,
+      "cv_r2": 0.9892011221310213,
+      "cv_regret_at_1": 0.01576787233352661,
+      "cv_rmse": 0.033997713294145374,
+      "cv_spearman": 0.9666781993618576,
+      "dataset": "two_phase_starcoder",
+      "model": "DS-RE-CEQ",
+      "n_params": 13,
+      "n_runs": 116,
+      "notes": "Live DS-RE-CEQ fit on the completed 2-phase StarCoder packet. March 2 slide used mean-per-fold CV; old reference was R^2=0.986, RMSE=0.0279, Spearman=0.963, Mean Regret@1=0.0042.",
+      "old_cv_r2_meanfold": 0.9857043898908362,
+      "old_cv_regret_meanfold": 0.004220509529113814,
+      "old_cv_rmse_meanfold": 0.02788453820603115,
+      "old_cv_spearman_meanfold": 0.963304347826087,
+      "params": [
+        1.5343125722365085,
+        0.30714067087017805,
+        -4.514962138280635,
+        -0.3718109949402319,
+        -0.08266292320958742,
+        1.4521490873285272,
+        0.7679412987290306,
+        1.4781173044131874,
+        -8.123591779050216,
+        -31.055774544167225,
+        1.7072392695622984,
+        -1.3906930558729784,
+        1.3094939209353624
+      ],
+      "source": "in_repo_scaling_models.fit_dsre_ceq",
+      "status": "ok",
+      "train_r2": 0.994817905665837,
+      "train_regret_at_1": 0.0036844611167906605,
+      "train_rmse": 0.023551200493462116,
+      "train_spearman": 0.9648637219851615
+    }
+  ]
+}

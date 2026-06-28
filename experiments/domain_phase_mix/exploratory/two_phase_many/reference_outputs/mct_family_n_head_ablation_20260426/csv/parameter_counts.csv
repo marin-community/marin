@@ -1,0 +1,5 @@
+model,fitted_param_count_counting_exponents,total_constant_count,anchor_feature_count_including_intercept_or_identity_count,scale_param_count,donor_constant_count,barrier_constant_count,identity_anchor_count,alpha,beta
+mct_lrq69_drop_Dfam,60,69,47,9,9,0,0,0.154791,0.146425
+mct_lrq75_drop_Nfam_Dfam,66,75,47,15,9,0,0,0.154791,0.146425
+mct_lrq69_balanced_Dfam,60,69,47,9,9,0,0,0.148968,0.209383
+mct_lrq75_balanced_Nfam_Dfam,66,75,47,15,9,0,0,0.148968,0.209383

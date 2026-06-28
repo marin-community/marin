@@ -5,6 +5,8 @@ from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+MMLU_SL_VERB_DOC_TO_CHOICE = "{{['A. ' + choices[0], 'B. ' + choices[1], " "'C. ' + choices[2], 'D. ' + choices[3]]}}"
+
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 # TODO: add more once supported in lm-eval-harness and/or tested on our end
@@ -28,7 +30,13 @@ CORE_TASKS = (
 
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
 MMLU_5_SHOT = EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")
-MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_5shot")
+MMLU_SL_VERB_5_SHOT = EvalTaskConfig(
+    "mmlu",
+    5,
+    task_alias="mmlu_sl_verb_5shot",
+    task_kwargs={"doc_to_choice": MMLU_SL_VERB_DOC_TO_CHOICE},
+)
+MMLU_PRO_5_SHOT = EvalTaskConfig("leaderboard_mmlu_pro", 5, task_alias="mmlu_pro_5shot")
 
 OPEN_LM_LEADERBOARD_MCQ = (
     EvalTaskConfig("leaderboard_bbh", 3, task_alias="lb_bbh_3shot"),
@@ -46,6 +54,19 @@ OPEN_LM_LEADERBOARD_GEN = (
 MMLU_TASKS = (
     MMLU_0_SHOT,
     MMLU_5_SHOT,
+)
+
+BBH_COT_3_SHOT = EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3)
+GSM8K_5_SHOT = EvalTaskConfig(name="gsm8k", num_fewshot=5, task_alias="gsm8k_5shot")
+GSM8K_COT_8_SHOT = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
+HUMANEVAL_10_SHOT = EvalTaskConfig(name="humaneval", num_fewshot=10, task_alias="humaneval_10shot")
+NQ_OPEN_0_SHOT = EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open")
+TRIVIAQA_0_SHOT = EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa")
+
+# Hard-metric generation tasks run through the vLLM-backed lm-eval harness.
+HUMANEVAL_GSM8K_TASKS = (
+    GSM8K_5_SHOT,
+    HUMANEVAL_10_SHOT,
 )
 
 PUBMED_QA = EvalTaskConfig("pubmedqa", 0, task_alias="pubmedqa_0shot")
@@ -75,16 +96,17 @@ CORE_TASKS_PLUS_LEADERBOARD = (
 CORE_TASKS_PLUS_MMLU = CORE_TASKS + MMLU_TASKS
 
 BASE_GENERATION_TASKS = (
-    EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
-    EvalTaskConfig(name="nq_open", num_fewshot=0, task_alias="nq_open"),
-    EvalTaskConfig(name="triviaqa", num_fewshot=0, task_alias="triviaqa"),
+    BBH_COT_3_SHOT,
+    GSM8K_COT_8_SHOT,
+    *HUMANEVAL_GSM8K_TASKS,
+    NQ_OPEN_0_SHOT,
+    TRIVIAQA_0_SHOT,
 )
 
 # Settings are chosen to compare to Olmo2
 KEY_GENERATION_TASKS = (
     EvalTaskConfig(name="ifeval", num_fewshot=0),
-    EvalTaskConfig(name="gsm8k_cot", num_fewshot=8),
+    GSM8K_COT_8_SHOT,
     EvalTaskConfig(name="drop", num_fewshot=0),
     EvalTaskConfig(name="humaneval", num_fewshot=10),
     EvalTaskConfig(name="bbh_cot_fewshot", num_fewshot=3, task_alias="bbh"),
@@ -131,7 +153,7 @@ REASONING_TASKS = (
 
 # Mathematical and Arithmetic Tasks
 MATH_TASKS = (
-    EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot"),  # included in core tasks
+    GSM8K_5_SHOT,  # included in core tasks
     EvalTaskConfig(name="gsm8k_cot", num_fewshot=8, task_alias="gsm8k_cot_8shot"),
     EvalTaskConfig("arithmetic_1dc", 0, task_alias="arithmetic_1dc_0shot"),
     EvalTaskConfig("arithmetic_2da", 0, task_alias="arithmetic_2da_0shot"),
