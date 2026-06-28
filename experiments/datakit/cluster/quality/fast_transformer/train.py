@@ -36,12 +36,15 @@ DEFAULT_THRESHOLD = 0.5
 
 @dataclass(frozen=True)
 class TrainHParams:
-    lr: float = 3e-4
+    # Large batches keep the step count (and thus per-step XLA dispatch overhead)
+    # low -- the model is tiny, so dispatch latency, not compute, dominates.
+    lr: float = 1e-3
     weight_decay: float = 0.05
-    epochs: int = 40
-    batch_size: int = 64
-    warmup_frac: float = 0.1
+    epochs: int = 50
+    batch_size: int = 512
+    warmup_frac: float = 0.15
     val_frac: float = 0.1
+    eval_every: int = 2
     seed: int = 0
 
 
@@ -193,21 +196,22 @@ def train_one(config: FastTransformerConfig, data: PackedData, hp: TrainHParams)
                 jnp.asarray(tr_scores[batch]),
                 step_key,
             )
+        if epoch % hp.eval_every != 0 and epoch != hp.epochs - 1:
+            continue
         val_pred = _predict(model, val_ids)
         val_rho = spearman_rho(val_pred.tolist(), val_scores.tolist())
         if np.isfinite(val_rho) and val_rho > best_val_rho:
             best_val_rho = val_rho
             best_model = model
             best_epoch = epoch
-        if epoch % 5 == 0 or epoch == hp.epochs - 1:
-            logger.info(
-                "epoch %d: train_loss=%.4f val_rho=%.4f (best=%.4f @ %d)",
-                epoch,
-                float(loss),
-                val_rho,
-                best_val_rho,
-                best_epoch,
-            )
+        logger.info(
+            "epoch %d: train_loss=%.4f val_rho=%.4f (best=%.4f @ %d)",
+            epoch,
+            float(loss),
+            val_rho,
+            best_val_rho,
+            best_epoch,
+        )
     train_seconds = time.time() - t0
 
     val_pred = _predict(best_model, val_ids)
