@@ -3,26 +3,49 @@
 
 """SVG (nyuuzyou/svgfind) dataset download, normalization, and tokenization."""
 
-from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.datakit.download.svgfind import CC_GLOBS, HF_DATASET_ID, HF_REVISION, transform_svgfind_creativecommons
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import Dataset
+from marin.experiment.data import derived, hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
-svg_normalized = svgfind_creativecommons_normalize_steps()[-1].as_executor_step()
 
-svg_tokenized = ExecutorStep(
-    name="tokenized/svg",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(svg_normalized, "outputs/main/*.parquet")],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(marin_tokenizer),
-    ),
-)
+def _run_transform(cfg: dict) -> None:
+    transform_svgfind_creativecommons(input_path=cfg["input_path"], output_path=cfg["output_path"])
 
 
-if __name__ == "__main__":
-    executor_main(steps=[svg_tokenized])
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+    )
+
+
+def svg_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+    """SVG Creative Commons corpus as a tokenized Dataset handle."""
+    dl = hf_download(
+        "raw/svgfind-creativecommons",
+        hf_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        urls_glob=list(CC_GLOBS),
+    )
+    processed = derived(
+        "processed/svgfind-creativecommons",
+        fn=_run_transform,
+        build_config=lambda ctx: {
+            "input_path": ctx.path(dl),
+            "output_path": ctx.out,
+            "schema_version": "v1",
+        },
+        deps=(dl,),
+        kind=Dataset,
+    )
+    norm = derived(
+        "normalized/svgfind-creativecommons",
+        fn=_run_normalize,
+        build_config=lambda ctx: {"input_path": ctx.path(processed), "output_path": ctx.out},
+        deps=(processed,),
+        kind=Dataset,
+    )
+    return tokenized("svg", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet")

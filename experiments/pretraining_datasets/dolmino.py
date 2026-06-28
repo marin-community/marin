@@ -1,24 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""DOLMINO dataset definitions and tokenization."""
+"""DOLMINO dataset as lazy ``Dataset`` handles (the flat dataset catalog).
 
-import os.path
+One handle per split, tokenizing each split's glob from the fixed raw path. The
+llama3-tokenized splits are pinned to their existing caches so referencing them
+never re-tokenizes the multi-TiB corpus. This is the catalog only — handles, no
+weights; the mixture weights are policy and live in the experiment that chooses
+them.
+"""
 
-from marin.datakit.download.dolmino import DOLMINO_DATASETS, download_dolmino_step
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.datakit.download.dolmino import DOLMINO_DATASETS
+from marin.execution.lazy import Dataset
+from marin.experiment.data import tokenized
 
 from experiments.llama import llama3_tokenizer
 
-_dolmino_download = download_dolmino_step().as_executor_step()
-_dolmino_base_dir = _dolmino_download.cd("bb54cab").cd("data")
+# Dolmino revision bb54cab downloaded to this fixed path (allenai/dolmino-mix-1124).
+_DOLMINO_BASE = "raw/dolmino-mix-1124-157960/bb54cab/data"
 
-# Backward compat — some consumers import this
-downloads = {"dolmino": _dolmino_download.cd("bb54cab")}
-
-# NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
+# NB: hashes predate a hashing change; never recompute these caches.
 DOLMINO_LLAMA3_OVERRIDES = {
     "dclm": "tokenized/dolmino/dclm-6c18eb",
     "flan": "tokenized/dolmino/flan-d71ec1",
@@ -36,65 +37,36 @@ DOLMINO_LLAMA3_OVERRIDES = {
 }
 
 
-def _get_dolmino_split_paths(split: str):
-    """Helper to get file paths for a dolmino split."""
-    patterns = DOLMINO_DATASETS[split]
-    dolmino_split_input_base_path = _dolmino_base_dir / split
-    return [dolmino_split_input_base_path / pattern for pattern in patterns]
-
-
-def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
-    """Generate tokenization steps for all Dolmino dataset splits."""
-    if tokenizer is None:
-        tokenizer = llama3_tokenizer
-
-    dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for split in DOLMINO_DATASETS:
-        dolmino_split_output_path = os.path.join("tokenized", "dolmino", split)
-        dolmino_split_paths = _get_dolmino_split_paths(split)
-        step = ExecutorStep(
-            name=dolmino_split_output_path,
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=dolmino_split_paths,
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
-            ),
+def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
+    """One :class:`Dataset` handle per Dolmino split, keyed by ``dolmino/<split>``."""
+    return {
+        f"dolmino/{split}": tokenized(
+            f"dolmino/{split}",
+            tokenizer=tokenizer,
+            paths=[f"{_DOLMINO_BASE}/{split}/{pattern}" for pattern in files],
+            pin=DOLMINO_LLAMA3_OVERRIDES.get(split) if tokenizer == llama3_tokenizer else None,
         )
-
-        # Check if we need to use override path for llama3
-        if tokenizer == llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
-            step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
-        dolmino_steps[os.path.join("dolmino", split)] = step
-
-    return dolmino_steps
+        for split, files in DOLMINO_DATASETS.items()
+    }
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
-    """Get a specific dolmino split tokenization step."""
+def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> Dataset:
+    """The :class:`Dataset` handle for a single named Dolmino split."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
 
 
-# Special combined math split that includes all math/* datasets
-_all_dolmino_math_files = [
-    path for split in DOLMINO_DATASETS if "math" in split for path in _get_dolmino_split_paths(split)
-]
-
-
-def tokenize_dolmino_math(tokenizer: str | None = None):
-    """Create the combined math dataset tokenization step."""
-    if tokenizer is None:
-        tokenizer = llama3_tokenizer
-
-    return ExecutorStep(
-        name="tokenized/dolmino/all_math",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=_all_dolmino_math_files,
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
-    ).with_output_path("tokenized/dolmino/all_math-9d507c")
+def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> Dataset:
+    """Combined math-only :class:`Dataset` handle (all ``math/*`` splits merged)."""
+    math_paths = [
+        f"{_DOLMINO_BASE}/{split}/{pattern}"
+        for split, files in DOLMINO_DATASETS.items()
+        if "math" in split
+        for pattern in files
+    ]
+    return tokenized(
+        "dolmino/all_math",
+        tokenizer=tokenizer,
+        paths=math_paths,
+        pin="tokenized/dolmino/all_math-9d507c" if tokenizer == llama3_tokenizer else None,
+    )

@@ -3,35 +3,56 @@
 
 """Molmo2-Cap dataset tokenization."""
 
-from fray import ResourceConfig
-from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from fray.types import ResourceConfig
+from marin.datakit.download.molmo2_cap import HF_DATASET_ID, HF_REVISION, transform
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import Dataset
+from marin.experiment.data import derived, hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
-molmo2_cap_normalized = molmo2_cap_normalize_steps()[-1].as_executor_step()
+
+def _run_transform(cfg: dict) -> None:
+    transform(input_path=cfg["input_path"], output_path=cfg["output_path"])
 
 
-def tokenize_molmo2_cap(*, tokenizer: str | None = None) -> TokenizerStep:
-    """Tokenize the normalized Molmo2-Cap captions."""
-    if tokenizer is None:
-        tokenizer = marin_tokenizer
-
-    return ExecutorStep(
-        name="tokenized/molmo2_cap",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[molmo2_cap_normalized.as_input_name() / "outputs/main/*.parquet"],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-            worker_resources=ResourceConfig(ram="16g", disk="5g", preemptible=True),
-        ),
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
     )
 
 
-if __name__ == "__main__":
-    executor_main(steps=[tokenize_molmo2_cap()])
+def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+    """Tokenize the normalized Molmo2-Cap captions."""
+    dl = hf_download(
+        "raw/molmo2-cap",
+        hf_id=HF_DATASET_ID,
+        revision=HF_REVISION,
+        urls_glob=["data/train-*.parquet"],
+    )
+    processed = derived(
+        "processed/molmo2-cap",
+        fn=_run_transform,
+        build_config=lambda ctx: {
+            "input_path": ctx.path(dl),
+            "output_path": ctx.out,
+            "schema_version": "v1",
+        },
+        deps=(dl,),
+        kind=Dataset,
+    )
+    norm = derived(
+        "normalized/molmo2-cap",
+        fn=_run_normalize,
+        build_config=lambda ctx: {"input_path": ctx.path(processed), "output_path": ctx.out},
+        deps=(processed,),
+        kind=Dataset,
+    )
+    return tokenized(
+        "molmo2_cap",
+        tokenizer=tokenizer,
+        raw=norm,
+        glob="outputs/main/*.parquet",
+        resources=ResourceConfig(ram="16g", disk="5g"),
+    )

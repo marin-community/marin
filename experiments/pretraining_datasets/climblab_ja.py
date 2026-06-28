@@ -1,41 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ClimbLab-Ja pre-training dataset tokenization.
+"""ClimbLab-Ja pre-training dataset as a lazy Dataset handle.
 
-Download/normalize definitions live in marin.datakit.download.climblab_ja.
-This file wires the normalized output into a tokenize step for experiment
-pipelines.
+~300B Japanese tokens from KantaHayashiAI/ClimbLab-Ja (ODC-BY licensed),
+normalized through the standard Marin pipeline and tokenized via the
+default Marin tokenizer.
 """
 
-import os.path
-
-from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.datakit.download.climblab_ja import HF_DATASET_ID, HF_REVISION
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import Dataset
+from marin.experiment.data import derived, hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
-_download_spec, _normalize_spec = climblab_ja_normalize_steps()
 
-download: ExecutorStep = _download_spec.as_executor_step()
-normalized: ExecutorStep = _normalize_spec.as_executor_step()
-
-
-def tokenize_climblab_ja(*, tokenizer: str = marin_tokenizer) -> TokenizerStep:
-    return ExecutorStep(
-        name=os.path.join("tokenized", "climblab-ja"),
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[normalized / "outputs/main/*.parquet"],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+        file_extensions=tuple(cfg["file_extensions"]),
     )
 
 
-if __name__ == "__main__":
-    executor_main(steps=[tokenize_climblab_ja()])
+def climblab_ja_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
+    """ClimbLab-Ja as a tokenized Dataset handle."""
+    dl = hf_download("raw/climblab-ja", hf_id=HF_DATASET_ID, revision=HF_REVISION)
+    norm = derived(
+        "normalized/climblab-ja",
+        fn=_run_normalize,
+        build_config=lambda ctx: {
+            "input_path": ctx.path(dl),
+            "output_path": ctx.out,
+            "file_extensions": [".parquet"],
+        },
+        deps=(dl,),
+        kind=Dataset,
+    )
+    return tokenized("climblab-ja", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet")

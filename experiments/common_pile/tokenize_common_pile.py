@@ -148,6 +148,11 @@ def _download_handle(source: CommonPileSource) -> Dataset:
     return hf_download(source.download_name, hf_id=source.hf_id, revision=source.revision, pin=source.raw_path)
 
 
+def stackv2_edu_filtered_download() -> Dataset:
+    """Raw download handle for the Common Pile stackv2_edu filtered split."""
+    return _download_handle(COMMON_PILE_SOURCES["stackv2_edu"])
+
+
 def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Dataset]:
     """One tokenized :class:`Dataset` handle per Common Pile split, keyed ``common_pile/<name>``.
 

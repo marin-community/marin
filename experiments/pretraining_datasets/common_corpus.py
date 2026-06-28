@@ -3,36 +3,56 @@
 
 """Common Corpus dataset definitions and tokenization."""
 
-from fray import ResourceConfig
-from marin.datakit.download.common_corpus import (
-    download_common_corpus_raw_step,
-    filter_common_corpus_step,
-    normalize_common_corpus_step,
-)
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from fray.types import ResourceConfig
+from marin.datakit.download.common_corpus import HF_DATASET_ID, filter_common_corpus
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import Dataset
+from marin.experiment.data import derived, hf_download, tokenized
 
 from experiments.marin_tokenizer import marin_tokenizer
 
-common_corpus_download = normalize_common_corpus_step(
-    filter_common_corpus_step(download_common_corpus_raw_step())
-).as_executor_step()
+# Pinned HF revision and URL glob for the raw download.
+_HF_REVISION = "b78a5c1"
+_URLS_GLOB = ["common_corpus_*/*.parquet"]
 
 
-def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
+def _run_filter(cfg: dict) -> None:
+    filter_common_corpus(input_path=cfg["input_path"], output_path=cfg["output_path"])
+
+
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+        id_field=cfg["id_field"],
+    )
+
+
+def common_corpus_datasets(*, tokenizer: str = marin_tokenizer) -> Dataset:
     """Tokenize the filtered Common Corpus (English, open types)."""
-    if tokenizer is None:
-        tokenizer = marin_tokenizer
-
-    return ExecutorStep(
-        name="tokenized/common_corpus_english",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[common_corpus_download.as_input_name() / "outputs/main/*.parquet"],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-            worker_resources=ResourceConfig(ram="40g", disk="5g"),
-        ),
+    dl = hf_download("raw/common_corpus", hf_id=HF_DATASET_ID, revision=_HF_REVISION, urls_glob=_URLS_GLOB)
+    filtered = derived(
+        "raw/common_corpus_english_filtered",
+        fn=_run_filter,
+        build_config=lambda ctx: {"input_path": ctx.path(dl), "output_path": ctx.out},
+        deps=(dl,),
+        kind=Dataset,
+    )
+    norm = derived(
+        "normalized/common_corpus_english_filtered",
+        fn=_run_normalize,
+        build_config=lambda ctx: {
+            "input_path": ctx.path(filtered),
+            "output_path": ctx.out,
+            "id_field": "identifier",
+        },
+        deps=(filtered,),
+        kind=Dataset,
+    )
+    return tokenized(
+        "common_corpus_english",
+        tokenizer=tokenizer,
+        raw=norm,
+        glob="outputs/main/*.parquet",
+        resources=ResourceConfig(ram="40g", disk="5g"),
     )

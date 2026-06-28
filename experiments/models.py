@@ -1,25 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
+"""HuggingFace model download handles for experiments.
 
-Usage:
-1. If you have a model you want to download from huggingface, add the repo name and config in MODEL_NAME_TO_CONFIG.
-2. Run download_model_step(MODEL_NAME_TO_CONFIG[model_name]) to download the model.
+Each module-level name is a lazy :class:`~marin.execution.lazy.Checkpoint`
+handle; building the handle runs nothing. Pass a handle to a training or
+evaluation step that reads ``initialize_from_checkpoint_path`` to materialize
+the download on first use.
 
-Example:
-```
-model_name = "meta-llama/Llama-3.1-8B-Instruct"
-model_config = MODEL_NAME_TO_CONFIG[model_name]
-download_step = download_model_step(model_config)
-executor_main([download_step])
-```
+To register a new model, add a ``ModelConfig`` entry and call
+:func:`download_model`.
 """
 
 from dataclasses import dataclass
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
-from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.execution.lazy import Checkpoint, RunContext
+from marin.experiment.data import derived
 from marin.utils import get_directory_friendly_name
 
 
@@ -32,28 +29,36 @@ class ModelConfig:
 MODEL_OUTPUT_SUBDIR = "models"
 
 
-def download_model_step(model_config: ModelConfig) -> ExecutorStep:
+def download_model(model_config: ModelConfig) -> Checkpoint:
+    """Return a :class:`Checkpoint` handle that downloads ``model_config`` from HuggingFace.
+
+    The output path is pinned to ``models/{repo}--{revision}`` for a stable,
+    human-readable address that matches the layout expected by downstream
+    evaluation and training steps.
+    """
     model_name = get_directory_friendly_name(model_config.hf_repo_id)
     model_revision = get_directory_friendly_name(model_config.hf_revision)
-    download_step = ExecutorStep(
-        name=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
-        fn=download_hf,
-        config=DownloadConfig(
+    step_name = f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}"
+
+    def build_config(ctx: RunContext) -> DownloadConfig:
+        return DownloadConfig(
             hf_dataset_id=model_config.hf_repo_id,
-            revision=versioned(model_config.hf_revision),
-            gcs_output_path=this_output_path(),
+            revision=model_config.hf_revision,
+            gcs_output_path=ctx.out,
             wait_for_completion=True,
             hf_repo_type_prefix="",
-        ),
-        # must override because it because if we don't then it will end in a hash
-        # if it ends in a hash, then we cannot determine the local path
-        override_output_path=f"{MODEL_OUTPUT_SUBDIR}/{model_name}--{model_revision}",
+        )
+
+    return derived(
+        step_name,
+        fn=download_hf,
+        build_config=build_config,
+        kind=Checkpoint,
+        pin=step_name,
     )
 
-    return download_step
 
-
-smollm2_1_7b_instruct = download_model_step(
+smollm2_1_7b_instruct = download_model(
     ModelConfig(
         hf_repo_id="HuggingFaceTB/SmolLM2-1.7B-Instruct",
         hf_revision="450ff1f",
@@ -61,246 +66,238 @@ smollm2_1_7b_instruct = download_model_step(
 )
 
 # Note(Will): I don't think we actually support Qwen models in Levanter?
-qwen2_5_7b = download_model_step(
+qwen2_5_7b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B",
         hf_revision="d149729398750b98c0af14eb82c78cfe92750796",
     )
 )
 
-qwen2_5_7b_instruct = download_model_step(
+qwen2_5_7b_instruct = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
         hf_revision="a09a354",
     )
 )
 
-qwen2_5_32b = download_model_step(
+qwen2_5_32b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-32B",
         hf_revision="1818d35",
     )
 )
 
-qwen2_5_72b_instruct = download_model_step(
+qwen2_5_72b_instruct = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
         hf_revision="495f393",
     )
 )
 
-llama_3_3_70b_instruct = download_model_step(
+llama_3_3_70b_instruct = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.3-70B-Instruct",
         hf_revision="6f6073b",
     )
 )
 
-llama_3_1_8b_instruct = download_model_step(
+llama_3_1_8b_instruct = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.1-8B-Instruct",
         hf_revision="0e9e39f",
     )
 )
 
-llama_3_1_8b = download_model_step(
+llama_3_1_8b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.1-8B",
         hf_revision="d04e592",
     )
 )
 
-llama_3_1_70b = download_model_step(
+llama_3_1_70b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.1-70B",
         hf_revision="349b2ddb53ce8f2849a6c168a81980ab25258dac",
     )
 )
 
-tulu_3_1_8b_sft = download_model_step(
+tulu_3_1_8b_sft = download_model(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
         hf_revision="f2a0b46",
     )
 )
 
-tulu_3_1_8b_instruct = download_model_step(
+tulu_3_1_8b_instruct = download_model(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3.1-8B",
         hf_revision="46239c2",
     )
 )
 
-olmo_2_sft_8b = download_model_step(
+olmo_2_sft_8b = download_model(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-7B-SFT",
         hf_revision="1de02c0",
     )
 )
 
-olmo_2_base_8b = download_model_step(
+olmo_2_base_8b = download_model(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-7B",
         hf_revision="7df9a82",
     )
 )
 
-olmo_2_base_32b = download_model_step(
+olmo_2_base_32b = download_model(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-0325-32B",
         hf_revision="stage2-ingredient2-step9000-tokens76B",
     )
 )
 
-olmo_3_1025_7b = download_model_step(
+olmo_3_1025_7b = download_model(
     ModelConfig(
         hf_repo_id="allenai/Olmo-3-1025-7B",
         hf_revision="18b40a1e895f829c68a132befa20109c41488e62",
     )
 )
 
-amber_base_7b = download_model_step(
+amber_base_7b = download_model(
     ModelConfig(
         hf_repo_id="LLM360/Amber",
         hf_revision="83c188f",
     )
 )
 
-map_neo_7b = download_model_step(
+map_neo_7b = download_model(
     ModelConfig(
         hf_repo_id="m-a-p/neo_7b",
         hf_revision="81bad32",
     )
 )
 
-
-marin_8b_base = download_model_step(
+marin_8b_base = download_model(
     ModelConfig(
         hf_repo_id="marin-community/marin-8b-base",
         hf_revision="0f1f658",
     )
 )
 
-marin_8b_instruct = download_model_step(
+marin_8b_instruct = download_model(
     ModelConfig(
         hf_repo_id="marin-community/marin-8b-instruct",
         hf_revision="0378f9c",
     )
 )
 
-llama_3_2_1b = download_model_step(
+llama_3_2_1b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.2-1B",
         hf_revision="4e20de3",
     )
 )
 
-llama_3_2_3b = download_model_step(
+llama_3_2_3b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.2-3B",
         hf_revision="13afe5124825b4f3751f836b40dafda64c1ed062",
     )
 )
 
-llama_2_7b = download_model_step(
+llama_2_7b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-2-7b-hf",
         hf_revision="01c7f73d771dfac7d292323805ebc428287df4f9",
     )
 )
 
-llama_2_13b = download_model_step(
+llama_2_13b = download_model(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-2-13b-hf",
         hf_revision="5c31dfb671ce7cfe2d7bb7c04375e44c55e815b1",
     )
 )
 
-olmo_2_base_13b = download_model_step(
+olmo_2_base_13b = download_model(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-13B",
         hf_revision="3fefddc1bf18a30e1d9b91000271630718f2aa8b",
     )
 )
 
-qwen3_0_6b = download_model_step(
+qwen3_0_6b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B",
         hf_revision="c1899de",
     )
 )
 
-qwen3_1_7b = download_model_step(
+qwen3_1_7b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-1.7B",
         hf_revision="70d244c",
     )
 )
 
-qwen3_4b = download_model_step(
+qwen3_4b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-4B",
         hf_revision="1cfa9a7",
     )
 )
 
-qwen3_8b = download_model_step(
+qwen3_8b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B",
         hf_revision="b968826",
     )
 )
 
-qwen3_32b = download_model_step(
-    ModelConfig(
-        hf_repo_id="Qwen/Qwen3-32B",
-        hf_revision="9216db5",
-    )
-)
-
-qwen3_0_6b_base = download_model_step(
+qwen3_0_6b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B-Base",
         hf_revision="da87bfb",
     )
 )
 
-qwen3_1_7b_base = download_model_step(
+qwen3_1_7b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-1.7B-Base",
         hf_revision="ea980cb",
     )
 )
 
-qwen3_4b_base = download_model_step(
+qwen3_4b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-4B-Base",
         hf_revision="906bfd4",
     )
 )
 
-qwen3_8b_base = download_model_step(
+qwen3_8b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B-Base",
         hf_revision="49e3418",
     )
 )
 
-qwen3_14b_base = download_model_step(
+qwen3_14b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-14B-Base",
         hf_revision="0b0bd3732e2c374d483664439ea334928b65f304",
     )
 )
 
-qwen3_32b = download_model_step(
+qwen3_32b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",
         hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
     )
 )
 
-apertus_8b = download_model_step(
+apertus_8b = download_model(
     ModelConfig(
         hf_repo_id="swiss-ai/Apertus-8B-2509",
         hf_revision="9325d4a",
