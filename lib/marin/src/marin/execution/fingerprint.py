@@ -15,7 +15,7 @@ it understands (dataclasses, enums, paths, timedeltas, dtypes, sets by sorted me
 arrays by content) and, for a type it has no canonical form for, degrades to a *defined*
 stable fallback with a one-time warning instead of raising. :func:`register_fingerprint`
 teaches it a precise canonical form for an identity-bearing custom type, and
-:func:`set_strict` (or ``MARIN_FINGERPRINT_STRICT``) restores the old raise-on-unknown
+:func:`set_strict` (or ``MARIN_FINGERPRINT_STRICT``) makes an unknown type raise instead,
 for callers that want drift to be exact.
 """
 

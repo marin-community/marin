@@ -1,25 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tutorial: an LR/WD sweep over a 30M DCLM model on TPU, in the lazy-artifact style.
+"""Tutorial: an LR/WD sweep over a 30M DCLM model, in the lazy-artifact style.
 
-Like ``train_tiny_sweep_tpu``, but on the DCLM mixture with held-out validation and the
-CORE eval harness wired in, and selecting on a held-out loss instead of the train loss:
+A sweep on the DCLM mixture with held-out validation and the CORE eval harness wired in,
+selecting on the held-out loss:
 
 - the DCLM training components and the Paloma + Uncheatable validation sets are
   :class:`~marin.execution.artifact.Dataset` handles, tokenized once and shared by every
   trial;
 - :func:`~marin.experiment.sweep.sweep` fans out one
   :func:`~marin.experiment.train.train_lm` trial per grid point;
-- each trial dispatches its own TPU training job, which records its validation loss next
-  to its checkpoints;
+- each trial dispatches its own training job, which records its validation loss next to its
+  checkpoints;
 - :func:`~marin.experiment.sweep.select` reads each trial's recorded ``eval/loss`` (the
   validation micro-average) and reduces the trials to the lowest-loss one.
 
 Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional with
 ``RESOURCES``)::
 
-    python -m experiments.tutorials.train_tiny_sweep_dclm_tpu
+    python -m experiments.tutorials.train_tiny_sweep
 """
 
 from fray.cluster import ResourceConfig

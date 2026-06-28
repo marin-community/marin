@@ -1,19 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""How To: Replicating DCLM 7B/1x in Marin (lazy-artifact style).
+"""How To: Replicate the DCLM 7B/1x baseline in Marin (https://arxiv.org/pdf/2406.11794).
 
-Link: https://arxiv.org/pdf/2406.11794
-
-Every training decision is stated inline: the model, the data mixture, the optimizer,
-the token budget, the z-loss, and the eval cadence. The library's
-:func:`~marin.experiment.train.train_lm` assembles them into a lazy
-:class:`~marin.execution.artifact.Checkpoint`, handling only the mechanical marin-on-TPU
-plumbing (the mesh, the resumption checkpointer, the eval-harness wiring, the Fray
-dispatch). It bakes in no optimizer, mixture, or eval suite of its own.
-
-Reproduces the DCLM baseline for the 7B/1x competition pool (Chinchilla-optimal for 7B
-parameters).
+The DCLM baseline for the 7B/1x competition pool, Chinchilla-optimal for 7B parameters.
 """
 
 from fray.cluster import ResourceConfig
@@ -77,6 +67,5 @@ def build(*, version: str = "v1") -> Lazy[Checkpoint]:
 
 
 if __name__ == "__main__":
-    # Lower the checkpoint to a StepSpec graph and run it: the data tokenizes (cached),
-    # then one TPU training job runs. No executor, no import-time graph.
+    # The data tokenizes (cached), then one TPU training job runs.
     StepRunner().run([lower(build())])

@@ -3,17 +3,15 @@
 
 """The realized artifact, its on-disk record, and the drift check.
 
-Naming: a lazy **handle** is :class:`marin.execution.lazy.Lazy`; the realized **output**
-is an :class:`Artifact`. There is no longer a class named ``Artifact`` that is a handle.
-
-This module owns:
+An :class:`Artifact` is the produced, persisted output of a step; a
+:class:`marin.execution.lazy.Lazy` is the inert handle that builds one. This module owns:
 
 - :class:`Artifact` (and :class:`Dataset`/:class:`Checkpoint`/:class:`JsonArtifact`) —
   the produced, persisted value. ``load(path)`` reconstructs it; data refs return a
   path-bearing handle (no weights pulled), a :class:`JsonArtifact` reads its value out of
   the record.
-- :class:`ArtifactRecord` — the single output descriptor written next to a step's output,
-  subsuming the old payload sidecar (now ``result``) and the old provenance record.
+- :class:`ArtifactRecord` — the single descriptor written next to a step's output: its
+  config, fingerprint, provenance, and (for a value artifact) its ``result``.
 - ``read_record``/``write_record`` (the full record) and ``read_artifact``/``write_artifact``
   (the manual typed-payload API), two entry points over one serialization scheme.
 - :func:`check_drift` — the advisory recipe-drift guard the runner applies before serving
@@ -38,8 +36,8 @@ M = TypeVar("M", bound=BaseModel)
 # JSON-shaped value, used for the human-readable config and the value payload.
 type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
 
-# The unified record file (no leading dot; replaces the former ``.artifact.json`` payload
-# + ``.artifact_record.json`` provenance). Legacy names are read, never written.
+# The record file written next to every output. Legacy names are read for back-compat
+# with already-materialized outputs, never written.
 RECORD_FILENAME = "artifact.json"
 _LEGACY_RECORD_FILENAMES = (".artifact_record.json", ".artifact")
 _LEGACY_PAYLOAD_FILENAMES = (".artifact.json", ".artifact")
