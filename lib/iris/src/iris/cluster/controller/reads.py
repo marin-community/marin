@@ -55,7 +55,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap, WorkerUsability
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -1592,8 +1592,6 @@ class ControlSnapshot:
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
       rows, so a worker-daemon backend can build its per-worker reconcile plans.
-    * ``worker_status_map`` — per-worker idle/running state for the autoscale
-      phase (built only on the autoscaler tick).
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
@@ -1607,7 +1605,6 @@ class ControlSnapshot:
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
-    worker_status_map: WorkerStatusMap = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 

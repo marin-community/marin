@@ -1597,12 +1597,13 @@ class Controller:
 
     @property
     def autoscaler(self) -> Autoscaler | None:
-        """The representative backend's Iris autoscaler, if any.
+        """The first backend's Iris autoscaler, if any.
 
-        Read-only handle for dashboard/status RPCs (VM info, feasibility,
-        pending hints). Capacity is driven through ``backend.autoscale``, not
-        this handle. Returns the first backend (in processing order) that owns
-        an autoscaler so a single-autoscaler cluster keeps its status RPCs.
+        Read-only handle for the status RPCs that still read a single autoscaler
+        (feasibility, pending hints). Capacity is driven through
+        ``backend.autoscale``, and dashboard autoscaler status merges every
+        backend's autoscaler. Returns the first backend (in processing order)
+        that owns an autoscaler so a single-autoscaler cluster keeps those RPCs.
         """
         for backend_id in self._backend_ids:
             autoscaler = self._backends[backend_id].autoscaler
