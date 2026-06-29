@@ -11,7 +11,6 @@ aggregated from task states.
 import json
 import logging
 import secrets
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -58,12 +57,8 @@ from iris.cluster.controller.codec import (
     worker_metadata_to_proto,
 )
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.endpoints import (
-    AddEndpointOutcome,
-    EndpointQuery,
-    EndpointRow,
-    EndpointsProjection,
-)
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
@@ -1001,21 +996,23 @@ class ControllerServiceImpl:
         db: ControllerDB,
         health: WorkerHealthTracker,
         endpoints: EndpointsProjection,
+        endpoint_service: EndpointServiceImpl,
         worker_attrs: WorkerAttrsProjection,
         auth: ControllerAuth | None = None,
-        system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
         self._health = health
         self._endpoints = endpoints
+        # The leased registry owns endpoint logic; the legacy
+        # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
+        self._endpoint_service = endpoint_service
         self._worker_attrs = worker_attrs
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_client = log_client
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
-        self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
@@ -1936,105 +1933,40 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management ---
+    # --- Endpoint Management (compatibility surface) ---
+    #
+    # These RPCs forward to the leased EndpointService backend so clients that
+    # call the old surface keep working; clients that want to renew call
+    # EndpointService directly to learn their lease.
 
     def register_endpoint(
         self,
         request: controller_pb2.Controller.RegisterEndpointRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
-        """Register a service endpoint.
+        """Register a service endpoint (forwards to EndpointService).
 
-        The ``task_id`` field carries the calling task's wire-format task ID
-        (e.g. ``/user/job/0``).  The endpoint is associated with the owning
-        task so that retry cleanup removes stale endpoints from earlier
-        attempts.
-
-        Endpoints are registered regardless of job state, but only become
-        visible to clients (via lookup/list) when the job is executing (not
-        in a terminal state).
+        The lease is dropped from the response so this surface stays
+        wire-identical to its lease-less callers, which do not renew.
         """
-        endpoint_id = request.endpoint_id or str(uuid.uuid4())
-
-        task_id = JobName.from_wire(request.task_id)
-        task_id.require_task()
-
-        endpoint = EndpointRow(
-            endpoint_id=endpoint_id,
-            name=request.name,
-            address=request.address,
-            task_id=task_id,
-            metadata=dict(request.metadata),
-            registered_at=Timestamp.now(),
-        )
-
-        # Validation runs inside the writer transaction in
-        # :meth:`EndpointsProjection.add`: NOT_FOUND if the task row is missing,
-        # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
-        with self._db.transaction() as cur:
-            outcome = self._endpoints.add(cur, endpoint, expected_attempt_id=request.attempt_id)
-        if outcome is AddEndpointOutcome.NOT_FOUND:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-        if outcome is AddEndpointOutcome.STALE_ATTEMPT:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Stale attempt for task {request.task_id} (attempt {request.attempt_id})",
-            )
-        if outcome is AddEndpointOutcome.TERMINAL:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Task {request.task_id} is already terminal; endpoint not registered",
-            )
-
-        return controller_pb2.Controller.RegisterEndpointResponse(endpoint_id=endpoint_id)
+        response = self._endpoint_service.register_endpoint(request, ctx)
+        return controller_pb2.Controller.RegisterEndpointResponse(endpoint_id=response.endpoint_id)
 
     def unregister_endpoint(
         self,
         request: controller_pb2.Controller.UnregisterEndpointRequest,
         ctx: Any,
     ) -> job_pb2.Empty:
-        """Unregister a service endpoint. Idempotent."""
-        with self._db.transaction() as cur:
-            self._endpoints.remove(cur, request.endpoint_id)
-        return job_pb2.Empty()
+        """Unregister a service endpoint (forwards to EndpointService). Idempotent."""
+        return self._endpoint_service.unregister_endpoint(request, ctx)
 
     def list_endpoints(
         self,
         request: controller_pb2.Controller.ListEndpointsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix (or exact name when request.exact is set).
-
-        When ``request.task_ids`` is set, only endpoints registered by those
-        tasks are returned, ANDed with any prefix/exact match.
-
-        System endpoints (names starting with ``/system/``) are resolved from
-        an in-memory map rather than the DB.  This allows system services like
-        the LogService to be discovered via the same API as job-scoped actors.
-        """
-        prefix = request.prefix
-        if prefix.startswith("/system/"):
-            return self._list_system_endpoints(prefix, exact=request.exact)
-
-        endpoints = self._endpoints.query(
-            EndpointQuery(
-                exact_name=prefix if request.exact else None,
-                name_prefix=None if request.exact else prefix,
-                task_ids=tuple(JobName.from_wire(t) for t in request.task_ids),
-            ),
-        )
-        return controller_pb2.Controller.ListEndpointsResponse(
-            endpoints=[
-                controller_pb2.Controller.Endpoint(
-                    endpoint_id=e.endpoint_id,
-                    name=e.name,
-                    address=e.address,
-                    task_id=e.task_id.to_wire(),
-                    metadata=e.metadata,
-                )
-                for e in endpoints
-            ]
-        )
+        """List endpoints by name prefix (forwards to EndpointService)."""
+        return self._endpoint_service.list_endpoints(request, ctx)
 
     @property
     def provider(self) -> TaskBackend:
@@ -2052,34 +1984,10 @@ class ControllerServiceImpl:
         empty or unknown — the single-backend case and any pre-routing rows."""
         return self._controller.backends.get(backend_id) or self._controller.provider
 
-    def resolve_endpoint(self, name: str) -> str | None:
-        """Resolve an endpoint name to its address, or None. Task endpoints take priority over ``/system/`` endpoints."""
-        row = self._endpoints.resolve(name)
-        if row is not None:
-            return row.address
-        return self._system_endpoints.get(name)
-
-    def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
-        """Resolve system endpoints from the in-memory map."""
-        results: list[controller_pb2.Controller.Endpoint] = []
-        for name, address in self._system_endpoints.items():
-            if exact and name == prefix:
-                results.append(
-                    controller_pb2.Controller.Endpoint(
-                        endpoint_id=name,
-                        name=name,
-                        address=address,
-                    )
-                )
-            elif not exact and name.startswith(prefix):
-                results.append(
-                    controller_pb2.Controller.Endpoint(
-                        endpoint_id=name,
-                        name=name,
-                        address=address,
-                    )
-                )
-        return controller_pb2.Controller.ListEndpointsResponse(endpoints=results)
+    @property
+    def endpoint_service(self) -> EndpointServiceImpl:
+        """The leased endpoint registry these RPCs delegate to (shared with the dashboard)."""
+        return self._endpoint_service
 
     # --- Autoscaler ---
 

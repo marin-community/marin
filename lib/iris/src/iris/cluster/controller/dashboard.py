@@ -46,6 +46,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller import endpoint_proxy
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
     _AUTH_POLICY_ATTR,
@@ -60,7 +61,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceASGIApplication
+from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceASGIApplication
@@ -393,12 +394,17 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
+        *,
+        endpoint_service: EndpointServiceImpl | None = None,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._service = service
+        # Defaults to the service's own backend; the two must share one instance
+        # so a system endpoint registered on one is resolvable through the other.
+        self._endpoint_service = endpoint_service or service.endpoint_service
         self._host = host
         self._port = port
         self._auth_provider = auth_provider
@@ -437,6 +443,16 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
+        # Leased service-discovery registry on its own wire surface. The legacy
+        # ControllerService.{Register,Unregister,List}Endpoint RPCs forward into
+        # the same backend in-process (see ControllerServiceImpl); new clients
+        # call this service directly to learn their lease and renew.
+        endpoint_rpc_app = EndpointServiceASGIApplication(
+            service=AsyncServiceAdapter(self._endpoint_service),
+            interceptors=controller_interceptors,
+            compressions=IRIS_RPC_COMPRESSIONS,
+        )
+
         # StatsService: reuses the auth interceptor (so non-admins can't read
         # sampled request previews) but skips RequestTimingInterceptor so the
         # stats endpoint itself doesn't pollute the numbers it reports.
@@ -446,7 +462,7 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
-        self._endpoint_proxy = EndpointProxy(self._service.resolve_endpoint)
+        self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
@@ -511,6 +527,7 @@ class ControllerDashboard:
                 methods=["POST"],
             ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
+            Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
             Mount(stats_app.path, app=stats_app),
         ]
         routes.append(static_files_mount())

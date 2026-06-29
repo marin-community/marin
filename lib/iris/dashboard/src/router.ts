@@ -31,6 +31,10 @@ const routes = [
     component: () => import('./components/controller/EndpointsTab.vue'),
   },
   {
+    path: '/logs',
+    component: () => import('./components/controller/LogsTab.vue'),
+  },
+  {
     path: '/status',
     component: () => import('./components/controller/StatusTab.vue'),
   },

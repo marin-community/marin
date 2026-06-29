@@ -410,12 +410,10 @@ class ManualWorkerProvider:
                 connect_timeout = self._ssh_config.connect_timeout
 
         if manual_config is not None:
-            ssh_user = getattr(manual_config, "ssh_user", "")
-            ssh_key = getattr(manual_config, "ssh_key_file", "")
-            if ssh_user:
-                user = ssh_user
-            if ssh_key:
-                key_file = ssh_key
+            if manual_config.ssh_user:
+                user = manual_config.ssh_user
+            if manual_config.ssh_key_file:
+                key_file = manual_config.ssh_key_file
 
         return DirectSshRemoteExec(
             host=host,

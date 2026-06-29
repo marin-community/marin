@@ -26,6 +26,7 @@ const ALL_TABS = computed<(Tab & { requires?: string; requiresMultiBackend?: boo
   { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
   { key: 'backends', label: 'Backends', to: '/backends', requiresMultiBackend: true },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
+  { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ])
@@ -45,6 +46,7 @@ const PATH_TO_TAB: Record<string, string> = {
   '/cluster': 'cluster',
   '/backends': 'backends',
   '/endpoints': 'endpoints',
+  '/logs': 'logs',
   '/account': 'account',
   '/status': 'status',
 }

@@ -49,6 +49,7 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -253,8 +254,8 @@ class ControllerConfig:
 
     endpoints: dict[str, str] = field(default_factory=dict)
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
-    cluster_config.endpoints by the daemon entrypoint. Registered into the
-    controller service's _system_endpoints during start()."""
+    cluster_config.endpoints by the daemon entrypoint. Registered as system
+    endpoints on the EndpointService during start()."""
 
 
 class Controller:
@@ -386,6 +387,11 @@ class Controller:
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
+        self._endpoint_service = EndpointServiceImpl(
+            db=self._db,
+            endpoints=self._endpoints,
+            system_endpoints={},
+        )
         self._service = ControllerServiceImpl(
             controller=self,
             bundle_store=self._bundle_store,
@@ -393,13 +399,14 @@ class Controller:
             db=self._db,
             health=self._health,
             endpoints=self._endpoints,
+            endpoint_service=self._endpoint_service,
             worker_attrs=self._worker_attrs,
             auth=config.auth,
-            system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
         )
         self._dashboard = ControllerDashboard(
             self._service,
+            endpoint_service=self._endpoint_service,
             host=config.host,
             port=config.port,
             auth_provider=config.auth_provider,
@@ -574,9 +581,9 @@ class Controller:
         # group enters backoff, and any task constrained to that group hangs until
         # the backoff expires.
         for name, url in self._config.endpoints.items():
-            self._service._system_endpoints[name] = url
+            self._endpoint_service.register_system_endpoint(name, url)
             logger.info("Registered system endpoint %s -> %s", name, url)
-        self._service._system_endpoints["/system/log-server"] = self._log_service_address
+        self._endpoint_service.register_system_endpoint("/system/log-server", self._log_service_address)
 
         # One driver runs schedule -> reconcile -> autoscale as phases of a single
         # tick (one read snapshot + one end-of-tick commit). Spawned after endpoint

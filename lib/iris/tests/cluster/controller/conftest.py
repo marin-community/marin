@@ -61,6 +61,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import SchedulableWorker
@@ -261,6 +262,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 

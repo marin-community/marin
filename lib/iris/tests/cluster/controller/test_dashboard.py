@@ -25,6 +25,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
@@ -217,7 +218,11 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
-        system_endpoints={"/system/log-server": embedded_log_server.address},
+        endpoint_service=EndpointServiceImpl(
+            db=state._db,
+            endpoints=state._endpoints,
+            system_endpoints={"/system/log-server": embedded_log_server.address},
+        ),
     )
 
 
@@ -238,6 +243,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 
@@ -1438,6 +1444,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
     k8s_client = TestClient(dashboard.app)
@@ -1474,6 +1481,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
     return TestClient(dashboard.app), k8s, provider
@@ -1672,6 +1680,7 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     return TestClient(ControllerDashboard(svc).app)
 
@@ -1810,6 +1819,7 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1834,6 +1844,7 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1856,6 +1867,7 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
 
@@ -1892,6 +1904,7 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
 

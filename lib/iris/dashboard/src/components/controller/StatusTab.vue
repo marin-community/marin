@@ -113,7 +113,7 @@ const totalBytes = computed(() => {
     <!-- Process logs -->
     <div>
       <h3 class="text-sm font-semibold text-text mb-3">Controller Logs</h3>
-      <LogViewer source="controller" />
+      <LogViewer />
     </div>
   </div>
 </template>
