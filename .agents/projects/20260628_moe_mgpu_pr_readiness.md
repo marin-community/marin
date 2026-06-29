@@ -34,12 +34,14 @@ before review. It is a coordination artifact for the implementation in
 - Full-run tryout: the Grug MoE scale launcher accepts
   `SCALE_MOE_IMPLEMENTATION` and `SCALE_MOE_CAPACITY_FACTOR`, and
   `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` records the current
-  best one-node and 32-node 20-step H100 launch commands. The one-node
-  target-shape trainer smoke passed 20/20 steps with watch disabled in
-  `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; the first 32-node
-  attempt was externally killed before training. A later larger-shape B-tiled
-  R=N scale sweep reached pre-step initialization but OOMed before any
-  train-step metrics. Neither run is scale correctness or performance evidence.
+  best one-node and experimental multi-node 20-step H100 launch commands. The
+  current-commit one-node target-shape trainer smoke passed 20/20 steps with
+  watch disabled in
+  `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755`; the first
+  32-node attempt was externally killed before training. A later larger-shape
+  B-tiled R=N scale sweep reached pre-step initialization but OOMed before any
+  train-step metrics. Neither larger-scale run is scale correctness or
+  performance evidence.
 
 ## Current Best Evidence
 
@@ -64,6 +66,13 @@ before review. It is a coordination artifact for the implementation in
     `38 passed, 11 warnings in 16.06s` for the public validation/fallback slice,
     and `83 passed, 28 skipped, 11 warnings in 35.88s` for the full local Grug
     MoE test file.
+  - Latest focused local readiness refresh on the clean current tree:
+    benchmark harness
+    `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+    passed `41 passed, 1 warning in 2.50s`; focused Grug MoE Pallas/capacity/EP
+    selector
+    `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel' -o addopts=`
+    passed `62 passed, 11 skipped, 38 deselected, 1 warning in 16.21s`.
   - Focused local tests cover public fallback/validation behavior, readable
     reference shape checks, capacity padding, zero/empty-group behavior, and
     benchmark row schema.
@@ -135,6 +144,16 @@ before review. It is a coordination artifact for the implementation in
     capacity sensitivity study, but does not change the conservative default
     `capacity_factor=1.25` for the first PR.
 - Full trainer tryout:
+  - Current-commit one-node target-shape Grug MoE trainer smoke
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` completed
+    `20/20` steps on one 8xH100 node with `implementation="pallas_mgpu"`,
+    `capacity_factor=1.25`, `SCALE_REMAT=save_moe`, local checkpoints, JSON
+    logging, and `SCALE_WATCH_TARGETS=`. It saved checkpoint `step-20`,
+    reported final `train/loss=7.496264457702637`,
+    `train/cross_entropy_loss=7.468044757843018`, mean MFU
+    `20.108652513850707%`, p50 MFU `20.118615659083623%`, and a final
+    throughput sample of `552901.8144131473` tokens/s. This is recorded in
+    `MOE-MGPU-363` and summarized on #6597.
   - One-node target-shape Grug MoE trainer smoke
     `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed `20/20`
     steps on one 8xH100 node with `implementation="pallas_mgpu"`,
@@ -371,7 +390,7 @@ files remain branch-local unless explicitly requested.
 | Gradient/custom-VJP correctness on H100 | Done for current implementation | Public H100 gradient parity against `ragged_all_to_all` passed; backward performance remains a follow-up optimization area. |
 | Module-boundary training-step integration on H100 | Done | `MoEExpertMlp.init(..., implementation="pallas_mgpu")` passes a tiny H100 differentiable loss/update check in `/dlwh/iris-run-test_grugformer_moe-20260629-module-training-step`. |
 | Target-shape performance evidence | Done | Target forward is faster than `ragged_all_to_all`; current lint-cleanup target fwd+bwd row is recorded above. |
-| One-node full-trainer smoke | Done | `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed 20/20 steps, saved checkpoint `step-20`, and reported mean MFU `20.13%`. |
+| One-node full-trainer smoke | Done | `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` completed 20/20 steps from commit `14fd25a73`, saved checkpoint `step-20`, and reported mean MFU `20.11%`. |
 | 32-node full-scale smoke | Not yet proven | `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609` was externally killed before training; the later B-tiled R=N larger-shape sweep hit pre-step GPU OOM before train metrics. Reduce model or optimizer-state memory before relaunching scale evidence. |
 | Machine-readable benchmark rows | Done | Benchmark rows include identity, timing, status/error, capacity/padding, estimates, tolerances, and environment fields; duplicate keys and row counts are tested. |
 | `cost_estimate=` | Documented API limitation | This backend uses `mgpu.kernel(...)`, not checked-in `pl.pallas_call(...)`; inspected `mgpu.kernel`/`mgpu.Mesh` signatures show no consumed `cost_estimate=` hook in this usage. |
@@ -397,12 +416,16 @@ Summary:
 Validation:
 - Local benchmark harness:
   `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q`
-  passed on the current active diff after the module-boundary H100 test:
-  `41 passed, 11 warnings in 27.96s`.
+  passed on the clean current tree:
+  `41 passed, 1 warning in 2.50s`.
 - Local public validation/fallback slice:
   `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'ordered_implementation or invalid_direct_entrypoint_inputs or tuned_config or pallas_mgpu_rejects'`
   passed after the module-boundary H100 test:
   `38 passed, 11 warnings in 16.06s`.
+- Local focused Pallas/capacity/EP selector:
+  `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel' -o addopts=`
+  passed on the clean current tree:
+  `62 passed, 11 skipped, 38 deselected, 1 warning in 16.21s`.
 - Full local Grug MoE test file:
   `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q`
   passed after the module-boundary H100 test:
@@ -414,6 +437,9 @@ Validation:
   Ruff, Black, license headers, Pyrefly, large files, Python AST, merge
   conflicts, TOML/YAML, trailing whitespace, EOF newline, notebooks, Markdown
   pre-commit, and skill metadata all reported `ok`.
+  The latest clean-tree focused local refresh is `MOE-MGPU-365`: benchmark
+  harness `41 passed`, focused Pallas/capacity/EP selector
+  `62 passed, 11 skipped`.
   The active tracked and untracked file-set precheck is recorded in
   `MOE-MGPU-333`, including all logbooks, readiness notes, backend files, tests,
   and the benchmark harness. The latest local benchmark harness, public
@@ -449,9 +475,11 @@ Validation:
   passed on 8 H100s and emitted ok rows for `permute_metadata` and
   `permute_values`, using the default `capacity_factor=1.25`.
 - H100 one-node full-trainer target-shape smoke:
-  `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed 20/20 steps,
-  saved `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-20step-smoke-2d87348e7/step-20`,
-  and reported mean MFU `20.13%`, p50 MFU `20.15%`, and about `554k` tokens/s.
+  `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` completed
+  20/20 steps from commit `14fd25a73`, saved
+  `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-20step-current-20260629-150755/step-20`,
+  and reported final MFU `20.19%`, mean MFU `20.11%`, and about
+  `553k` tokens/s.
 
 Performance evidence:
 - Best observed default-path target forward row: `pallas_mgpu ~= 0.03853s`

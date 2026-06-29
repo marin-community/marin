@@ -5927,3 +5927,38 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Keep the stash unless the user explicitly asks to validate or discard it.
     Proceed with post-quota lint-review on the clean committed tree.
+
+### 2026-06-29 15:24 - MOE-MGPU-365 clean-tree readiness audit and focused local refresh
+- Hypothesis: before the post-quota lint-review gate, the clean committed tree
+  should still satisfy the main spec/readiness invariants locally, and the PR
+  readiness note should point to the newest one-node H100 trainer smoke.
+- Commit Hash: `85a376ae1`.
+- Commands:
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel' -o addopts=`
+  - `git diff --stat $(git merge-base HEAD main)..HEAD -- lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py lib/levanter/src/levanter/grug/grug_moe.py lib/levanter/tests/grug/test_grugformer_moe.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_scale.py .agents/projects/20260628_moe_mgpu_full_run_tryout.md`
+- Result:
+  - Benchmark harness passed: `41 passed, 1 warning in 2.50s`.
+  - Focused Grug MoE Pallas/capacity/EP selector passed:
+    `62 passed, 11 skipped, 38 deselected, 1 warning in 16.21s`.
+  - Focused production/review surface remains concentrated in the Pallas MGPU
+    backend, public Grug MoE integration, benchmark harness, tests, and scale
+    launcher/runbook:
+    `lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py`,
+    `lib/levanter/src/levanter/grug/grug_moe.py`,
+    `lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py`,
+    `lib/levanter/tests/grug/test_grugformer_moe.py`,
+    `lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`,
+    `experiments/grug/moe/launch.py`,
+    `experiments/grug/moe/launch_cw_scale.py`, and the tryout runbook.
+  - Updated `.agents/projects/20260628_moe_mgpu_pr_readiness.md` to point the
+    status/compliance/PR-body draft at the current-commit trainer smoke
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` and these
+    clean-tree focused local checks.
+- Interpretation:
+  - Local readiness evidence still covers benchmark schema/default behavior and
+    the public Pallas/capacity/expert-parallel test surface.
+  - This is not a new H100 milestone; keep #6597 quiet.
+- Next action:
+  - Run `./infra/pre-commit.py --review` after the 16:30 PDT quota reset and
+    address or explicitly answer every advisory before PR extraction.
