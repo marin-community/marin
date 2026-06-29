@@ -6291,3 +6291,40 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   - Commit and rerun advisory lint review. Remaining expected findings, if any,
     are likely larger design cleanups: explicit `permute_up` mode enum, breaking
     apart the large benchmark stage body, and shared H100 test fixtures.
+
+### 2026-06-29 16:21 - MOE-MGPU-375 fourth lint-review cleanup pass
+- Hypothesis: after the third cleanup, the remaining small drift findings can
+  be fixed, while larger design findings should be left for a separate cleanup
+  rather than destabilizing the validated H100 path.
+- Base Commit Hash: `dd26494b5`.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+  - `uv run python -m py_compile lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py lib/levanter/src/levanter/grug/grug_moe.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'ordered_implementation or pallas_mgpu_rejects_public or pallas_mgpu_fallback' -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel or ordered_implementation' -o addopts=`
+- Result:
+  - Fourth lint-review artifact:
+    `/tmp/marin-linter/20260629T231643`.
+  - Fixed:
+    - `_block_sizes` now serializes `asdict(config)` instead of mirroring every
+      `MoeMgpuConfig` field by hand.
+    - Ordered Pallas fallback now uses an explicit allowlist of
+      validation/unavailability messages instead of treating any
+      `ValueError` mentioning `implementation='pallas_mgpu'` as fallback-safe.
+  - Validation:
+    - `py_compile` -> passed.
+    - changed-file pre-commit -> passed.
+    - benchmark unit tests -> `41 passed, 1 warning`.
+    - ordered/Pallas public validation subset -> `9 passed, 102 deselected,
+      1 warning`.
+    - broader Grug Pallas/capacity/EP/ordered slice -> `65 passed, 11 skipped,
+      35 deselected, 1 warning`.
+- Interpretation:
+  - The fallback behavior now keeps expected fallback for explicit
+    unavailability but is less likely to hide runtime/kernel regressions.
+  - Remaining review items should be treated as future design cleanups unless
+    the next review reveals another small local fix.
+- Next action:
+  - Commit and run one final advisory lint review. Keep #6597 quiet.

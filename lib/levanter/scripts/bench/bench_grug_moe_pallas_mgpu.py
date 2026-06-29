@@ -364,29 +364,7 @@ def _shape_key(shape: BenchShape) -> str:
 
 
 def _block_sizes(config: MoeMgpuConfig) -> str:
-    return json.dumps(
-        {
-            "block_m": config.block_m,
-            "block_n": config.block_n,
-            "block_k": config.block_k,
-            "max_concurrent_steps": config.max_concurrent_steps,
-            "grid_block_n": config.grid_block_n,
-            "capacity_factor": config.capacity_factor,
-            "deterministic": config.deterministic,
-            "dispatch_copy_schedule": config.dispatch_copy_schedule,
-            "dispatch_expert_group_size": config.dispatch_expert_group_size,
-            "dispatch_chunk_copy_tile": config.dispatch_chunk_copy_tile,
-            "dispatch_chunk_copy_rows": config.dispatch_chunk_copy_rows,
-            "dispatch_chunk_vectorized_copy_rows": config.dispatch_chunk_vectorized_copy_rows,
-            "dispatch_fuse_metadata": config.dispatch_fuse_metadata,
-            "dispatch_chunked_permute_up": config.dispatch_chunked_permute_up,
-            "dispatch_split_wg_permute_up": config.dispatch_split_wg_permute_up,
-            "dispatch_split_wg_overlap_permute_up": config.dispatch_split_wg_overlap_permute_up,
-            "combine_bwd_block_n": config.combine_bwd_block_n,
-            "dx_unpermute_block_n": config.dx_unpermute_block_n,
-        },
-        sort_keys=True,
-    )
+    return json.dumps(asdict(config), sort_keys=True)
 
 
 def _measurement_key(

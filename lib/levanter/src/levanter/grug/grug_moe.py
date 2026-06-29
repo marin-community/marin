@@ -76,6 +76,26 @@ _LOCAL_EP_UNSUPPORTED_MESSAGE = (
     "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
     "requires a dispatch/combine schedule inside each expert shard plus cross-shard routing."
 )
+_PALLAS_MGPU_FALLBACK_MESSAGES = (
+    "implementation='pallas_mgpu' requires an expert mesh axis with size > 1",
+    "implementation='pallas_mgpu' currently requires data mesh axis size 1",
+    "implementation='pallas_mgpu' supports expert axis size <=",
+    "implementation='pallas_mgpu' requires a positive token dimension",
+    "implementation='pallas_mgpu' requires a positive top-k route dimension",
+    "implementation='pallas_mgpu' requires a positive expert dimension",
+    "implementation='pallas_mgpu' requires a positive hidden dimension",
+    "implementation='pallas_mgpu' requires a positive intermediate dimension",
+    "implementation='pallas_mgpu' requires selected_experts dtype int32",
+    "implementation='pallas_mgpu' requires combine_weights dtype bfloat16 or float32",
+    "implementation='pallas_mgpu' requires bfloat16 activations and weights",
+    "implementation='pallas_mgpu' requires D to be divisible by",
+    "implementation='pallas_mgpu' requires I to be divisible by",
+    "implementation='pallas_mgpu' requires a GPU backend",
+    "implementation='pallas_mgpu' supports EP <=",
+    "implementation='pallas_mgpu' requires all expert-parallel ranks to be local GPU devices",
+    "implementation='pallas_mgpu' requires all participating local GPU devices to be Hopper/H100",
+    "implementation='pallas_mgpu' requires E_local to be divisible by dispatch_expert_group_size",
+)
 
 
 @dataclass(frozen=True)
@@ -256,7 +276,7 @@ def _record_moe_fallback(
 def _is_backend_unavailable_for_fallback(candidate: MoeImplementation, exc: ValueError) -> bool:
     message = str(exc)
     if candidate == "pallas_mgpu":
-        return "implementation='pallas_mgpu'" in message
+        return any(fallback_message in message for fallback_message in _PALLAS_MGPU_FALLBACK_MESSAGES)
     if candidate in _LOCAL_MOE_IMPLEMENTATIONS:
         return _LOCAL_EP_UNSUPPORTED_MESSAGE in message
     return False
