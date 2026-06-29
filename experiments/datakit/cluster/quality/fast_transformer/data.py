@@ -148,6 +148,12 @@ def encode_corpus(
     return _encode(tokenizer, texts, max_tokens), scores, sources
 
 
+def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
+    """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``."""
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    return _encode(tokenizer, texts, max_tokens)
+
+
 def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
     return _build_vocab(raw_ids, min_count, max_vocab)
 
