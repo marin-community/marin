@@ -81,15 +81,25 @@ lifecycle rule (TTL = `RESULT_TTL_DAYS`, default 7) so spilled results auto-expi
 `QueryResult(columns, preview_rows, total_rows, truncated, result_path)`.
 
 **2. Dashboard** (`server.py`) — a Starlette app mirroring the iris worker dashboard
-(`lib/iris/src/iris/cluster/worker/dashboard.py:37`), reusing
-`dashboard_common.html_shell()` and `@requires_auth`
-(`lib/iris/src/iris/cluster/dashboard_common.py:166`). Routes:
-- `GET /` — HTML page: a `<textarea>` for SQL, a Run button, an empty result area.
-- `POST /query` — body `{sql}`; calls `run_query`, returns JSON
-  `{columns, rows, total_rows, truncated, result_path}`. The page renders `rows`
-  as a table and, when `truncated`, shows "showing N of M rows — full result at
-  `<result_path>` (expires in 7d)".
+(`lib/iris/src/iris/cluster/worker/dashboard.py:37`), reusing `@requires_auth`
+(`lib/iris/src/iris/cluster/dashboard_common.py:39`). Queries run **asynchronously**,
+because the dashboard is reached through the controller endpoint proxy, which caps
+every forwarded request at 30 s (`endpoint_proxy.py:71`,
+`PROXY_TIMEOUT_SECONDS = 30.0`). A synchronous `POST /query` that blocks on a
+minutes-long DuckDB scan — the whole point of running on a big host — would be
+killed by the proxy. So:
+- `GET /` — HTML page: a `<textarea>` for SQL, a Run button, a result area.
+- `POST /query` — body `{sql}`; a `QueryManager` submits the SQL to a single-worker
+  executor (one DuckDB query at a time) and returns `{query_id}` immediately (202).
+  The query runs in the background; the spilled parquet is written as before.
+- `GET /result/{query_id}` — returns `{status: "running"}`, `{status: "error", error}`,
+  or `{status: "done", columns, rows, total_rows, truncated, result_path}`. The page
+  polls this every second; each poll returns well under the 30 s proxy window while
+  the query itself may run for minutes.
 - `GET /health` — liveness for Iris.
+
+Query state lives in memory for the process lifetime; ducky is stateless and
+restartable, so a restart simply drops in-flight/finished state.
 
 **3. Deploy** — ducky runs as a long-running Iris job that blocks on `uvicorn`.
 Because a routable service needs a *named* Iris port and `iris job run` has no
@@ -150,9 +160,18 @@ against views/macros. v1 ships no in-runner cross-region check.
 - **Scratch bucket & TTL.** Which `us-east5` bucket, and is 7 days the right default?
   Should the result path be a signed URL / clickable download, or just a `gs://`
   path the user fetches themselves?
-- **Concurrency UX.** v1 is single-query-at-a-time (one DuckDB connection). Is a
-  blunt "busy, try again" enough, or do we want a tiny FIFO queue with a visible
-  "running" state so a long query doesn't look hung?
+- **Concurrency UX.** v1 is single-query-at-a-time (one DuckDB connection, a
+  single-worker executor). A second `POST /query` queues behind the running one
+  (FIFO). Is that enough, or do we want a visible queue depth / "busy" signal?
+- **Async result retention.** Query state is in-memory and unbounded. For an
+  internal tool that's fine, but should finished states expire (TTL / LRU cap), and
+  should a fresh page be able to re-attach to a `query_id` from a previous session
+  (it can today, until restart)?
 - **Cost parking (deferred).** Always-on is the committed v1. If the v6e host proves
   too contended to idle, a follow-up could add an idle-timeout that releases the
   host with a one-click relaunch — out of scope here, flagged for reviewer pushback.
+
+[^proxy]: The async model is forced by the controller endpoint proxy's 30 s
+    request cap (`endpoint_proxy.py:71`), confirmed live: a synchronous query over a
+    `gs://` parquet that ran past 30 s returned `Upstream timeout after 30s` even
+    though DuckDB kept running and the spill landed. Polling sidesteps it.

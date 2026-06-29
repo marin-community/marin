@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 from ducky.config import DuckyConfig
 from ducky.runner import QueryError, QueryResult
@@ -12,12 +14,6 @@ _CONFIG = DuckyConfig(
     scratch_bucket="gs://marin-ducky-us-east5",
     gcs_hmac_key_id="k",
     gcs_hmac_secret="s",
-    r2_account_id="a",
-    r2_access_key="rk",
-    r2_secret_key="rs",
-    cw_endpoint="cw.example.com",
-    cw_access_key="ck",
-    cw_secret_key="cs",
     result_ttl_days=7,
 )
 
@@ -38,6 +34,17 @@ class _FakeRunner:
         return self._result
 
 
+def _poll(client: TestClient, query_id: str, timeout: float = 3.0) -> dict:
+    """Poll /result until the query leaves the 'running' state."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        payload = client.get(f"/result/{query_id}").json()
+        if payload["status"] != "running":
+            return payload
+        time.sleep(0.01)
+    raise AssertionError(f"query {query_id} still running after {timeout}s")
+
+
 def test_health_is_public():
     client = TestClient(create_app(_FakeRunner(), _CONFIG))
     resp = client.get("/health")
@@ -53,40 +60,52 @@ def test_index_serves_form():
     assert "<textarea" in resp.text
 
 
-def test_query_returns_result_json_with_uuid_query_id():
-    result = QueryResult(
-        columns=["x"],
-        preview_rows=[[1], [2]],
-        total_rows=5,
-        truncated=True,
-        result_path="gs://marin-ducky-us-east5/ducky/abc.parquet",
-    )
+def test_query_accepts_and_returns_uuid_query_id():
+    fake = _FakeRunner(result=QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/a.parquet"))
+    client = TestClient(create_app(fake, _CONFIG))
+
+    resp = client.post("/query", json={"sql": "SELECT 1"})
+
+    assert resp.status_code == 202
+    query_id = resp.json()["query_id"]
+    assert len(query_id) == 32
+    int(query_id, 16)  # valid hex
+
+
+def test_query_result_delivered_via_polling():
+    result = QueryResult(["x"], [[1], [2]], 5, True, "gs://marin-ducky-us-east5/ducky/abc.parquet")
     fake = _FakeRunner(result=result)
     client = TestClient(create_app(fake, _CONFIG))
 
-    resp = client.post("/query", json={"sql": "SELECT * FROM range(5)"})
+    query_id = client.post("/query", json={"sql": "SELECT * FROM range(5)"}).json()["query_id"]
+    payload = _poll(client, query_id)
 
-    assert resp.status_code == 200
-    assert resp.json() == {
+    assert payload == {
+        "status": "done",
         "columns": ["x"],
         "rows": [[1], [2]],
         "total_rows": 5,
         "truncated": True,
         "result_path": "gs://marin-ducky-us-east5/ducky/abc.parquet",
     }
-    assert fake.received_query_id is not None
-    assert len(fake.received_query_id) == 32
-    int(fake.received_query_id, 16)  # valid hex
+    assert fake.received_query_id == query_id
 
 
-def test_query_error_maps_to_400():
+def test_query_error_surfaces_in_result():
     fake = _FakeRunner(error=QueryError("Catalog Error: table not found"))
     client = TestClient(create_app(fake, _CONFIG))
 
-    resp = client.post("/query", json={"sql": "SELECT * FROM nope"})
+    query_id = client.post("/query", json={"sql": "SELECT * FROM nope"}).json()["query_id"]
+    payload = _poll(client, query_id)
 
-    assert resp.status_code == 400
-    assert resp.json() == {"error": "Catalog Error: table not found"}
+    assert payload == {"status": "error", "error": "Catalog Error: table not found"}
+
+
+def test_unknown_query_id_is_404():
+    client = TestClient(create_app(_FakeRunner(), _CONFIG))
+    resp = client.get("/result/deadbeef")
+    assert resp.status_code == 404
+    assert resp.json() == {"error": "unknown query_id"}
 
 
 @pytest.mark.parametrize("body", [{}, {"sql": ""}, {"sql": "   "}])

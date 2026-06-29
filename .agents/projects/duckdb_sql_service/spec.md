@@ -128,31 +128,57 @@ propagates as 500 (unexpected — let it surface).
 ## HTTP routes (`server.py`)
 
 Starlette app built like `lib/iris/src/iris/cluster/worker/dashboard.py:37`, reusing
-`iris.cluster.dashboard_common.html_shell` and `@requires_auth`.
+`iris.cluster.dashboard_common` `@requires_auth`/`@public`.
 
-| Method | Path        | Auth          | Purpose |
-|--------|-------------|---------------|---------|
-| GET    | `/`         | `@requires_auth` | HTML page: SQL `<textarea>`, Run button, empty result area |
-| POST   | `/query`    | `@requires_auth` | Run SQL, return result JSON |
-| GET    | `/health`   | `@public`     | Liveness for Iris |
+Queries are **async**: the dashboard is reached through the controller endpoint
+proxy, which caps every forwarded request at 30 s (`endpoint_proxy.py:71`,
+`PROXY_TIMEOUT_SECONDS`). `POST /query` therefore submits and returns a `query_id`;
+the client polls `GET /result/{query_id}`. Each HTTP call returns in well under 30 s
+while the query runs for as long as it needs.
+
+| Method | Path                  | Auth             | Purpose |
+|--------|-----------------------|------------------|---------|
+| GET    | `/`                   | `@requires_auth` | HTML page: SQL `<textarea>`, Run, result area (polls `/result`) |
+| POST   | `/query`              | `@requires_auth` | Submit SQL, return `query_id` (202) |
+| GET    | `/result/{query_id}`  | `@requires_auth` | Poll query status / result |
+| GET    | `/health`             | `@public`        | Liveness for Iris |
 
 **`POST /query`**
 - Request body (JSON): `{"sql": "<string>"}`
-- 200 response (JSON):
-  ```json
-  {
-    "columns": ["..."],
-    "rows": [[...], ...],
-    "total_rows": 12345,
-    "truncated": true,
-    "result_path": "gs://marin-ducky-us-east5/ducky/<query_id>.parquet"
-  }
-  ```
-  (`rows` is `QueryResult.preview_rows`.)
-- 400 response (JSON): `{"error": "<message>"}` for `QueryError`.
+- 202 response (JSON): `{"query_id": "<uuid4 hex>"}`. The `QueryManager` submits the
+  SQL to a single-worker executor (one DuckDB query at a time) and returns at once.
+- 400 response (JSON): `{"error": "missing 'sql'"}` when `sql` is absent/blank.
 
-The page renders `rows` as a table; when `truncated`, shows
-"showing N of M rows — full result at `result_path` (expires in {result_ttl_days}d)".
+**`GET /result/{query_id}`**
+- 200 `{"status": "running"}` — still executing.
+- 200 `{"status": "error", "error": "<message>"}` — `QueryError` (or an unexpected
+  error) raised while running.
+- 200 `{"status": "done", "columns": [...], "rows": [[...]], "total_rows": N,
+  "truncated": bool, "result_path": "<gs://…>"}` — `rows` is `QueryResult.preview_rows`.
+- 404 `{"error": "unknown query_id"}` — no such (or expired) query.
+
+The page polls `/result/{query_id}` every second; on `done` it renders `rows` and,
+when `truncated`, shows "showing N of M rows — full result at `result_path`
+(expires in {result_ttl_days}d)".
+
+**Query manager (`server.py`)**
+```python
+class QueryStatus(enum.StrEnum):
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+class QueryManager:
+    """Runs queries one at a time in a background single-worker executor and tracks
+    in-memory state. `submit(sql) -> query_id` returns immediately; `get(query_id)`
+    returns the current QueryState (or None). State is process-local and unbounded;
+    a restart drops it (ducky is stateless/restartable). `shutdown()` stops the
+    executor on app shutdown."""
+    def __init__(self, runner: QueryRunner) -> None: ...
+    def submit(self, sql: str) -> str: ...
+    def get(self, query_id: str) -> QueryState | None: ...
+    def shutdown(self) -> None: ...
+```
 
 **Entrypoint:** `python -m ducky.server`. On boot: build
 `DuckyConfig.from_environment()`, construct `QueryRunner`, bind
@@ -160,7 +186,8 @@ The page renders `rows` as a table; when `truncated`, shows
 hardcoded port), start uvicorn on `0.0.0.0:port`, then register
 `endpoint_id = ctx.registry.register("ducky", f"http://{job_info.advertise_host}:{port}",
 {"job_id": ctx.job_id.to_wire()})` (`lib/iris/src/iris/client/worker_pool.py:156-165`).
-On shutdown, `ctx.registry.unregister(endpoint_id)` via Starlette `on_shutdown`.
+On shutdown (Starlette `on_shutdown`), `ctx.registry.unregister(endpoint_id)` and
+`app.state.query_manager.shutdown()`.
 
 ## Persisted shape
 
