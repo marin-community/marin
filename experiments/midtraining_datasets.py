@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.datakit.download.openmathinstruct2 import openmathinstruct2_normalize_steps
 from marin.execution import versioned
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
@@ -51,6 +52,13 @@ stackv2_edu_filtered_python = ExecutorStep(
 stackv2_edu_filtered_python_tokenized = default_tokenize(
     name="common_pile_stackv2_edu_filtered_python",
     dataset=stackv2_edu_filtered_python,
+    tokenizer=llama3_tokenizer,
+)
+
+openmathinstruct2_full = openmathinstruct2_normalize_steps()[-1].as_executor_step()
+openmathinstruct2_full_tokenized = default_tokenize(
+    name="openmathinstruct2_full",
+    dataset=openmathinstruct2_full,
     tokenizer=llama3_tokenizer,
 )
 
