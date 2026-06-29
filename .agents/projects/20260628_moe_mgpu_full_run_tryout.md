@@ -19,11 +19,16 @@ same padded-capacity path validated by the H100 kernel tests.
   `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`
   reported `steady_state_time=0.069388s`, `139.27 TFLOP/s/rank`,
   `14.08%` of nominal H100 bf16 roofline, and zero dropped routes.
-- One-node full-trainer target-shape smoke
+- Current-commit one-node full-trainer target-shape smoke
+  `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` completed
+  `20/20` steps from commit `14fd25a73` on one 8xH100 node with
+  `SCALE_WATCH_TARGETS=`, saved checkpoint `step-20`, and reported final MFU
+  `20.19%`, mean MFU `20.11%`, and about `553k` tokens/s. This is the current
+  best full-trainer tryout recipe.
+- Earlier one-node full-trainer target-shape smoke
   `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed `20/20` steps
   on one 8xH100 node with `SCALE_WATCH_TARGETS=`, saved checkpoint `step-20`,
   and reported mean MFU `20.13%`, p50 MFU `20.15%`, and about `554k` tokens/s.
-  This is the current best full-trainer tryout recipe.
 - Earlier one-node smoke `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4`
   reached `global_step=9/20`, then OOMed during the default step-10
   watch/per-parameter-norm path. Keep `SCALE_WATCH_TARGETS=` empty for
@@ -80,8 +85,9 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
 ```
 
 Use this as the pass/fail gate before trying the full 32-node shape. It passed
-with run id `grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; rerun this recipe if
-the branch changes behavior or if you need a fresh trainer smoke.
+with run id `grug-moe-pallas-mgpu-20step-current-20260629-150755` on commit
+`14fd25a73`; rerun this recipe if the branch changes behavior or if you need a
+fresh trainer smoke.
 
 ## Experimental Multi-Node 20-Step Smoke
 
@@ -92,6 +98,11 @@ across multiple nodes. It is not known-good as of
 `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`: the
 corrected r4 run passed the Pallas MGPU data-axis guard but failed pre-step on a
 missing NVSHMEM load in the multi-node distributed runtime.
+
+An unvalidated `SCALE_GPUS_PER_TASK` launcher experiment is preserved locally as
+`stash@{0}` (`moe-mgpu-launch-cw-scale-gpus-per-task`). Do not use it as a
+known-good recipe: the current validated Pallas MGPU path uses one task with all
+eight local H100s visible, matching the single-NVLink-island target.
 
 Do not relaunch this exact recipe unchanged unless the runtime image or JAX
 distributed setup is known to provide the required NVSHMEM bits. If you do
