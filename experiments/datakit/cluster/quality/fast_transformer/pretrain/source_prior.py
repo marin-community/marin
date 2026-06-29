@@ -31,7 +31,7 @@ measured, not assumed.
 
 Submit on a v6e slice (region-local to the gold/source data)::
 
-    python -m experiments.datakit.cluster.quality.fast_transformer.weak_pretrain \\
+    python -m experiments.datakit.cluster.quality.fast_transformer.pretrain.source_prior \\
       --train ...train-n7000....parquet --eval ...eval-n1000....parquet \\
       --out gs://.../fast_transformer/weak-pretrain-v1 --weak-size 200000
 """
@@ -52,20 +52,15 @@ from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.quality.fast_transformer.data import (
     NUM_RESERVED,
-    PackedData,
     PackedSplit,
     build_remap,
     encode_corpus,
     encode_texts,
     pack,
 )
-from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformerConfig, count_params
-from experiments.datakit.cluster.quality.fast_transformer.train import (
-    TrainHParams,
-    _metrics,
-    _predict,
-    fit,
-)
+from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.pretrain.transfer import pretrain_then_finetune
+from experiments.datakit.cluster.quality.fast_transformer.train import TrainHParams
 from experiments.datakit.cluster.quality.v0.sample import (
     _active_sources,
     _per_source_seed,
@@ -196,12 +191,6 @@ def _load_or_build_data(args) -> tuple[PackedSplit, PackedSplit, PackedSplit, in
     return weak, gold, holdout, vocab_size
 
 
-def _evaluate(model, holdout: PackedSplit, label: str, batch_size: int) -> dict:
-    m = _metrics(_predict(model, holdout.ids, batch_size=batch_size), holdout.scores)
-    logger.info("%-26s AUC=%.4f spearman=%.4f acc=%.4f F1=%.4f", label, m.auc, m.spearman_rho, m.accuracy, m.f1)
-    return asdict(m)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train", required=True, help="Oracle gold train parquet")
@@ -256,39 +245,15 @@ def main() -> None:
         config.flops_per_token() / 1e3,
     )
 
-    results: dict[str, dict] = {}
-
-    # Control: from-scratch on gold (should reproduce the ~0.875 plateau).
-    scratch_hp = TrainHParams(lr=args.finetune_lr, batch_size=args.batch_size)
-    scratch = fit(config, PackedData(gold, holdout, vocab_size, args.tokenizer, args.max_tokens), scratch_hp)
-    results["scratch"] = {
-        **_evaluate(scratch.model, holdout, "scratch", args.batch_size),
-        "best_epoch": scratch.best_epoch,
-    }
-
-    # Weak-supervised pretrain on the source-prior soft targets (gold holdout only
-    # for logging; model selection is on the internal weak-val split inside fit()).
-    pre_hp = TrainHParams(
+    # Model selection happens on each fit()'s internal val split; the gold holdout
+    # is only ever used for the final evaluation inside pretrain_then_finetune.
+    pretrain_hp = TrainHParams(
         lr=args.pretrain_lr, epochs=args.pretrain_epochs, batch_size=args.batch_size, patience=args.pretrain_patience
     )
-    pretrained = fit(config, PackedData(weak, holdout, vocab_size, args.tokenizer, args.max_tokens), pre_hp)
-    results["pretrain_only"] = {
-        **_evaluate(pretrained.model, holdout, "pretrain_only", args.batch_size),
-        "best_epoch": pretrained.best_epoch,
-    }
-
-    # Fine-tune on gold from the pretrained weights (low LR, early-stopped).
-    ft_hp = TrainHParams(lr=args.finetune_lr, batch_size=args.batch_size)
-    ft = fit(
-        config,
-        PackedData(gold, holdout, vocab_size, args.tokenizer, args.max_tokens),
-        ft_hp,
-        init_model=pretrained.model,
+    finetune_hp = TrainHParams(lr=args.finetune_lr, batch_size=args.batch_size)
+    outcome = pretrain_then_finetune(
+        config, weak, gold, holdout, tokenizer=args.tokenizer, pretrain_hp=pretrain_hp, finetune_hp=finetune_hp
     )
-    results["pretrain_ft"] = {
-        **_evaluate(ft.model, holdout, "pretrain_ft", args.batch_size),
-        "best_epoch": ft.best_epoch,
-    }
 
     summary = {
         "baseline_fasttext": BASELINE,
@@ -297,12 +262,12 @@ def main() -> None:
         "max_tokens": args.max_tokens,
         "n_weak": int(weak.ids.shape[0]),
         "n_gold_train": int(gold.ids.shape[0]),
-        "params": count_params(scratch.model),
-        "flops_per_token": config.flops_per_token(),
+        "params": outcome["params"],
+        "flops_per_token": outcome["flops_per_token"],
         "config": {k: v for k, v in asdict(config).items()},
-        "results": results,
+        "results": {k: outcome[k] for k in ("scratch", "pretrain_only", "pretrain_ft")},
     }
-    logger.info("WEAK-PRETRAIN SUMMARY:\n%s", json.dumps(summary, indent=2))
+    logger.info("SOURCE-PRIOR SUMMARY:\n%s", json.dumps(summary, indent=2))
     with open_url(args.out.rstrip("/") + "/summary.json", "wb") as fh:
         fh.write(json.dumps(summary, indent=2).encode())
     logger.info("wrote %s/summary.json", args.out)

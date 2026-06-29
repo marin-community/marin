@@ -15,7 +15,7 @@ each bucket and write a parquet in the **same schema as the oracle scorer**
 
 Submit::
 
-    python -m experiments.datakit.cluster.quality.fast_transformer.nemotron_sample \\
+    python -m experiments.datakit.cluster.quality.fast_transformer.pretrain.nemotron_sample \\
         --out gs://marin-eu-west4/datakit/llm-quality-classifier/fast_transformer/nemotron-60k.parquet \\
         --per-bucket 20000
 """

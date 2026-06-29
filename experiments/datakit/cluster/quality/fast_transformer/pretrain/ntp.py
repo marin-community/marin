@@ -21,7 +21,7 @@ language structure, which is exactly what 5.6k docs cannot teach.
 
 Submit on a v6e slice (long-context flag set in sweep.py)::
 
-    python -m experiments.datakit.cluster.quality.fast_transformer.pretrain \\
+    python -m experiments.datakit.cluster.quality.fast_transformer.pretrain.ntp \\
       --corpus gs://.../fast_transformer/nemotron-60k.parquet \\
       --train ...train-n7000....parquet --eval ...eval-n1000....parquet \\
       --out gs://.../fast_transformer/pretrain-ntp
@@ -53,8 +53,12 @@ from experiments.datakit.cluster.quality.fast_transformer.data import (
     encode_corpus,
     pack,
 )
-from experiments.datakit.cluster.quality.fast_transformer.encoder import EncoderClassifier, EncoderConfig, TokenEncoder
 from experiments.datakit.cluster.quality.fast_transformer.model import count_params
+from experiments.datakit.cluster.quality.fast_transformer.pretrain.encoder import (
+    EncoderClassifier,
+    EncoderConfig,
+    TokenEncoder,
+)
 from experiments.datakit.cluster.quality.fast_transformer.train import (
     TrainHParams,
     _metrics,
