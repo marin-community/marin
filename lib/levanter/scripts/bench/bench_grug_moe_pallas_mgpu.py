@@ -27,7 +27,6 @@ from levanter.grug._moe.pallas_mgpu import (
     _permute_up_tiled_values_with_schedule,
     _moe_mgpu_dispatch_w13_activation,
     _receiver_capacity,
-    _remote_rows_for_sorted_assignments,
     combine_bwd_mgpu,
     combine_slots_mgpu,
     down_unpermute_mgpu,
@@ -37,14 +36,13 @@ from levanter.grug._moe.pallas_mgpu import (
     moe_mlp_pallas_mgpu_staged,
     permute_mgpu,
     permute_up_mgpu,
+    prepare_mgpu_receive_plan,
     pull_combine_mgpu,
     pull_combine_vector_mgpu,
     ragged_w2_mgpu,
     return_combine_mgpu,
     return_slots_mgpu,
-    prepare_mgpu_moe_metadata,
 )
-from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -1035,48 +1033,27 @@ def _benchmark_pallas_stages(
         )
 
     def shard_permute_inputs(selected_experts_local):
-        ep_size = int(jax.lax.axis_size("expert"))
-        rank = jax.lax.axis_index("expert")
-        tokens, topk = selected_experts_local.shape
-        capacity = _receiver_capacity(tokens, topk, shape.experts_per_rank, config.capacity_factor)
-        metadata = prepare_mgpu_moe_metadata(
+        plan = prepare_mgpu_receive_plan(
             selected_experts_local,
             local_experts=shape.experts_per_rank,
-            ep_size=ep_size,
-            expert_axis="expert",
-        )
-        global_counts_flat = metadata.global_counts.reshape(ep_size, ep_size * shape.experts_per_rank)
-        clipped_counts = _clip_receiver_group_sizes(
-            global_counts_flat,
-            local_expert_size=shape.experts_per_rank,
-            receiver_capacity=capacity,
-        ).reshape(ep_size, ep_size, shape.experts_per_rank)
-        rows_per_expert = jnp.sum(clipped_counts[:, rank, :], axis=0, dtype=jnp.int32)
-        dropped = jnp.sum(metadata.global_counts, dtype=jnp.int32) - jnp.sum(clipped_counts, dtype=jnp.int32)
-        remote_rows_sorted, keep_sorted = _remote_rows_for_sorted_assignments(
-            rank=rank,
-            dst_ranks_sorted=metadata.dst_ranks_sorted,
-            local_experts_sorted=metadata.local_experts_sorted,
-            local_pos_sorted=metadata.local_pos_sorted,
-            clipped_counts=clipped_counts,
-        )
-        return ep_size, rank, capacity, metadata, remote_rows_sorted, keep_sorted, rows_per_expert, dropped
-
-    def shard_permute_metadata(selected_experts_local):
-        ep_size, _rank, capacity, metadata, remote_rows_sorted, keep_sorted, _rows_per_expert, dropped = (
-            shard_permute_inputs(selected_experts_local)
-        )
-        recv_src_rank, recv_src_assignment = _permute_up_tiled_metadata_mgpu_kernel(
-            metadata.assignment_ids_sorted,
-            metadata.dst_ranks_sorted,
-            remote_rows_sorted,
-            keep_sorted,
-            capacity=capacity,
-            ep_size=ep_size,
             expert_axis="expert",
             config=config,
         )
-        return recv_src_rank, recv_src_assignment, dropped
+        return plan
+
+    def shard_permute_metadata(selected_experts_local):
+        plan = shard_permute_inputs(selected_experts_local)
+        recv_src_rank, recv_src_assignment = _permute_up_tiled_metadata_mgpu_kernel(
+            plan.metadata.assignment_ids_sorted,
+            plan.metadata.dst_ranks_sorted,
+            plan.remote_rows_sorted,
+            plan.keep_sorted,
+            capacity=plan.capacity,
+            ep_size=plan.ep_size,
+            expert_axis="expert",
+            config=config,
+        )
+        return recv_src_rank, recv_src_assignment, plan.dropped
 
     permute_metadata_fn = shard_map(
         shard_permute_metadata,
@@ -1087,22 +1064,20 @@ def _benchmark_pallas_stages(
     )
 
     def shard_permute_values(x_local, selected_experts_local):
-        ep_size, rank, capacity, metadata, remote_rows_sorted, keep_sorted, _rows_per_expert, dropped = (
-            shard_permute_inputs(selected_experts_local)
-        )
+        plan = shard_permute_inputs(selected_experts_local)
         recv_x = _permute_up_tiled_values_with_schedule(
             x_local,
-            metadata,
-            remote_rows_sorted,
-            keep_sorted,
-            rank=rank,
-            capacity=capacity,
-            ep_size=ep_size,
+            plan.metadata,
+            plan.remote_rows_sorted,
+            plan.keep_sorted,
+            rank=plan.rank,
+            capacity=plan.capacity,
+            ep_size=plan.ep_size,
             local_experts=shape.experts_per_rank,
             expert_axis="expert",
             config=config,
         )
-        return recv_x, dropped
+        return recv_x, plan.dropped
 
     permute_values_fn = shard_map(
         shard_permute_values,

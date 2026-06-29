@@ -229,6 +229,20 @@ class MoeMgpuRoutingMetadata:
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
+class MoeMgpuReceivePlan:
+    ep_size: int
+    rank: Int[Array, ""]
+    capacity: int
+    metadata: MoeMgpuRoutingMetadata
+    remote_rows_sorted: Int[Array, "A"]
+    keep_sorted: Int[Array, "A"]
+    rows_per_expert: Int[Array, "Elocal"]
+    clipped_global_counts: Int[Array, "EP EP Elocal"]
+    dropped: Int[Array, ""]
+
+
+@jax.tree_util.register_dataclass
+@dataclass(frozen=True)
 class _MoeMgpuUpMetadata:
     global_expert_counts: Int[Array, "EP E"]
 
@@ -494,6 +508,52 @@ def _remote_rows_for_sorted_assignments(
     return remote_rows.astype(jnp.int32), keep
 
 
+def prepare_mgpu_receive_plan(
+    selected_experts_local: Int[Array, "Tlocal K"],
+    *,
+    local_experts: int,
+    expert_axis: str,
+    config: MoeMgpuConfig,
+) -> MoeMgpuReceivePlan:
+    """Prepare clipped receiver layout metadata shared by MGPU kernels and benchmarks."""
+    ep_size = int(lax.axis_size(expert_axis))
+    rank = lax.axis_index(expert_axis)
+    tokens, topk = selected_experts_local.shape
+    capacity = _receiver_capacity(tokens, topk, local_experts, config.capacity_factor)
+    metadata = prepare_mgpu_moe_metadata(
+        selected_experts_local,
+        local_experts=local_experts,
+        ep_size=ep_size,
+        expert_axis=expert_axis,
+    )
+    global_counts_flat = metadata.global_counts.reshape(ep_size, ep_size * local_experts)
+    clipped_counts = _clip_receiver_group_sizes(
+        global_counts_flat,
+        local_expert_size=local_experts,
+        receiver_capacity=capacity,
+    ).reshape(ep_size, ep_size, local_experts)
+    rows_per_expert = jnp.sum(clipped_counts[:, rank, :], axis=0, dtype=jnp.int32)
+    dropped = jnp.sum(metadata.global_counts, dtype=jnp.int32) - jnp.sum(clipped_counts, dtype=jnp.int32)
+    remote_rows_sorted, keep_sorted = _remote_rows_for_sorted_assignments(
+        rank=rank,
+        dst_ranks_sorted=metadata.dst_ranks_sorted,
+        local_experts_sorted=metadata.local_experts_sorted,
+        local_pos_sorted=metadata.local_pos_sorted,
+        clipped_counts=clipped_counts,
+    )
+    return MoeMgpuReceivePlan(
+        ep_size=ep_size,
+        rank=rank,
+        capacity=capacity,
+        metadata=metadata,
+        remote_rows_sorted=remote_rows_sorted,
+        keep_sorted=keep_sorted,
+        rows_per_expert=rows_per_expert,
+        clipped_global_counts=clipped_counts,
+        dropped=dropped,
+    )
+
+
 def _permute_up_tiled_values_with_schedule(
     x_local: jax.Array,
     metadata: MoeMgpuRoutingMetadata,
@@ -516,7 +576,6 @@ def _permute_up_tiled_values_with_schedule(
             keep_sorted,
             capacity=capacity,
             ep_size=ep_size,
-            expert_axis=expert_axis,
             config=config,
         )
 
@@ -538,7 +597,6 @@ def _permute_up_tiled_values_with_schedule(
         copy_order,
         capacity=capacity,
         ep_size=ep_size,
-        expert_axis=expert_axis,
         config=config,
     )
 
@@ -690,64 +748,45 @@ def permute_mgpu(
     if selected_experts_local.shape[0] != x_local.shape[0]:
         raise ValueError("selected_experts_local token dimension must match x_local")
 
-    ep_size = int(lax.axis_size(expert_axis))
-    rank = lax.axis_index(expert_axis)
-    tokens, topk = selected_experts_local.shape
-    capacity = _receiver_capacity(tokens, topk, local_experts, config.capacity_factor)
-    metadata = prepare_mgpu_moe_metadata(
+    plan = prepare_mgpu_receive_plan(
         selected_experts_local,
         local_experts=local_experts,
-        ep_size=ep_size,
         expert_axis=expert_axis,
-    )
-    global_counts_flat = metadata.global_counts.reshape(ep_size, ep_size * local_experts)
-    clipped_counts = _clip_receiver_group_sizes(
-        global_counts_flat,
-        local_expert_size=local_experts,
-        receiver_capacity=capacity,
-    ).reshape(ep_size, ep_size, local_experts)
-    rows_per_expert = jnp.sum(clipped_counts[:, rank, :], axis=0, dtype=jnp.int32)
-    dropped = jnp.sum(metadata.global_counts, dtype=jnp.int32) - jnp.sum(clipped_counts, dtype=jnp.int32)
-    remote_rows_sorted, keep_sorted = _remote_rows_for_sorted_assignments(
-        rank=rank,
-        dst_ranks_sorted=metadata.dst_ranks_sorted,
-        local_experts_sorted=metadata.local_experts_sorted,
-        local_pos_sorted=metadata.local_pos_sorted,
-        clipped_counts=clipped_counts,
+        config=config,
     )
 
     if config.dispatch_fuse_metadata:
         recv_x, recv_src_rank, recv_src_assignment = _permute_up_tiled_metadata_values_with_schedule(
             x_local,
-            metadata,
-            remote_rows_sorted,
-            keep_sorted,
-            rank=rank,
-            capacity=capacity,
-            ep_size=ep_size,
+            plan.metadata,
+            plan.remote_rows_sorted,
+            plan.keep_sorted,
+            rank=plan.rank,
+            capacity=plan.capacity,
+            ep_size=plan.ep_size,
             local_experts=local_experts,
             expert_axis=expert_axis,
             config=config,
         )
     else:
         recv_src_rank, recv_src_assignment = _permute_up_tiled_metadata_mgpu_kernel(
-            metadata.assignment_ids_sorted,
-            metadata.dst_ranks_sorted,
-            remote_rows_sorted,
-            keep_sorted,
-            capacity=capacity,
-            ep_size=ep_size,
+            plan.metadata.assignment_ids_sorted,
+            plan.metadata.dst_ranks_sorted,
+            plan.remote_rows_sorted,
+            plan.keep_sorted,
+            capacity=plan.capacity,
+            ep_size=plan.ep_size,
             expert_axis=expert_axis,
             config=config,
         )
         recv_x = _permute_up_tiled_values_with_schedule(
             x_local,
-            metadata,
-            remote_rows_sorted,
-            keep_sorted,
-            rank=rank,
-            capacity=capacity,
-            ep_size=ep_size,
+            plan.metadata,
+            plan.remote_rows_sorted,
+            plan.keep_sorted,
+            rank=plan.rank,
+            capacity=plan.capacity,
+            ep_size=plan.ep_size,
             local_experts=local_experts,
             expert_axis=expert_axis,
             config=config,
@@ -756,9 +795,9 @@ def permute_mgpu(
         recv_x=recv_x,
         recv_src_rank=recv_src_rank,
         recv_src_assignment=recv_src_assignment,
-        rows_per_expert=rows_per_expert,
-        clipped_global_counts=clipped_counts,
-        dropped=dropped,
+        rows_per_expert=plan.rows_per_expert,
+        clipped_global_counts=plan.clipped_global_counts,
+        dropped=plan.dropped,
     )
 
 
@@ -1132,7 +1171,6 @@ def _permute_up_tiled_values_mgpu_kernel(
     *,
     capacity: int,
     ep_size: int,
-    expert_axis: str,
     config: MoeMgpuConfig,
 ) -> jax.Array:
     _tokens, hidden_dim = x_local.shape
@@ -1220,7 +1258,6 @@ def _permute_up_tiled_values_scheduled_mgpu_kernel(
     *,
     capacity: int,
     ep_size: int,
-    expert_axis: str,
     config: MoeMgpuConfig,
 ) -> jax.Array:
     _tokens, hidden_dim = x_local.shape
@@ -4114,10 +4151,17 @@ def _moe_mlp_ep_pallas_mgpu_local(
     num_experts: int,
     capacity_factor: float,
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
+    local_experts = moe_w13_local.shape[0]
+    ep_size = int(lax.axis_size("expert"))
+    expected_num_experts = local_experts * ep_size
+    if num_experts != expected_num_experts:
+        raise ValueError(
+            f"num_experts={num_experts} must match local experts * expert axis size={expected_num_experts}"
+        )
     config = infer_moe_mgpu_config(
         hidden_dim=x_local.shape[1],
         intermediate_dim=moe_w2_local.shape[1],
-        ep_size=int(lax.axis_size("expert")),
+        ep_size=ep_size,
         dtype=x_local.dtype,
         capacity_factor=capacity_factor,
     )

@@ -2013,42 +2013,30 @@ def test_moe_mlp_pallas_mgpu_rejects_invalid_public_route_dtypes_before_backend(
         )
 
 
-def test_moe_mlp_pallas_mgpu_rejects_public_dispatch_copy_tile_mismatch_before_backend():
+@pytest.mark.parametrize(
+    ("key_seed", "hidden_dim", "intermediate_dim", "expected_error"),
+    [
+        (72, 96, 128, "dispatch_chunk_copy_tile=128"),
+        (73, 128, 96, "block_n=128"),
+    ],
+)
+def test_moe_mlp_pallas_mgpu_rejects_public_tile_mismatches_before_backend(
+    key_seed: int,
+    hidden_dim: int,
+    intermediate_dim: int,
+    expected_error: str,
+):
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-        key=jax.random.key(72),
+        key=jax.random.key(key_seed),
         tokens=8,
-        hidden_dim=96,
-        intermediate_dim=128,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
         num_experts=4,
         topk=2,
     )
     mesh = _make_abstract_moe_mesh(data=1, expert=2, model=1)
 
-    with pytest.raises(ValueError, match="dispatch_chunk_copy_tile=128"):
-        moe_mlp(
-            x.astype(jnp.bfloat16),
-            selected_experts,
-            combine_weights.astype(jnp.bfloat16),
-            w_up_gate.astype(jnp.bfloat16),
-            w_down.astype(jnp.bfloat16),
-            activation=ActivationFunctionEnum.silu,
-            implementation="pallas_mgpu",
-            mesh=mesh,
-        )
-
-
-def test_moe_mlp_pallas_mgpu_rejects_public_block_n_mismatch_before_backend():
-    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
-        key=jax.random.key(73),
-        tokens=8,
-        hidden_dim=128,
-        intermediate_dim=96,
-        num_experts=4,
-        topk=2,
-    )
-    mesh = _make_abstract_moe_mesh(data=1, expert=2, model=1)
-
-    with pytest.raises(ValueError, match="block_n=128"):
+    with pytest.raises(ValueError, match=expected_error):
         moe_mlp(
             x.astype(jnp.bfloat16),
             selected_experts,

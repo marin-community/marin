@@ -340,11 +340,15 @@ def test_pallas_mgpu_benchmark_fail_on_error_rejects_non_ok_rows(status):
         bench._raise_for_unsuccessful_results([_benchmark_result_row(bench, status=status)])
 
 
-def test_pallas_mgpu_benchmark_fail_on_error_accepts_ok_rows():
+def test_pallas_mgpu_benchmark_fail_on_error_ignores_ok_rows_before_failure():
     bench = _load_bench_module()
 
-    # The benchmark runner should only turn non-ok result rows into a nonzero exit.
-    bench._raise_for_unsuccessful_results([_benchmark_result_row(bench, status="ok")])
+    rows = [
+        _benchmark_result_row(bench, status="ok"),
+        _benchmark_result_row(bench, status="error"),
+    ]
+    with pytest.raises(ValueError, match=r"benchmark emitted non-ok result row\(s\): .*status=error"):
+        bench._raise_for_unsuccessful_results(rows)
 
 
 def test_pallas_mgpu_benchmark_cli_rejects_chunked_permute_up_without_balanced_routing(monkeypatch):

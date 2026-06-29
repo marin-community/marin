@@ -6169,3 +6169,47 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Keep the tryout runbook's multi-node section conservative. Proceed with the
     post-quota lint-review gate for the single-node/NVLink branch readiness.
+
+### 2026-06-29 16:01 - MOE-MGPU-372 lint-review cleanup pass
+- Hypothesis: the branch should resolve the concrete advisory lint-review
+  findings that can be fixed without changing the validated H100 behavior or
+  active forward-lane tuning API.
+- Base Commit Hash: `df6489b6b`.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+  - `uv run python -m py_compile lib/iris/src/iris/cluster/setup.py lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py lib/levanter/src/levanter/grug/_moe/common.py lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py lib/levanter/tests/grug/test_grugformer_moe.py`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel' -o addopts=`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Result:
+  - Initial lint-review artifact:
+    `/tmp/marin-linter/20260629T225303`.
+  - Fixed low-risk findings:
+    - Centralized Iris NVSHMEM and GPU library-path script constants and
+      shortened the CUDA setup-script docstring.
+    - Narrowed `MoeImplementationSpec` typing so public implementation choices
+      stay in the validated literal space.
+    - Shared the Pallas MGPU receive-plan helper between `permute_mgpu` and the
+      benchmark stage harness, removing duplicated capacity clipping and remote
+      row planning math.
+    - Removed unused `expert_axis` parameters from tiled value-copy kernels.
+    - Made the Pallas EP local wrapper validate the `num_experts` contract it
+      receives from the public dispatcher.
+    - Tightened the benchmark fail-on-error test and parameterized duplicate
+      public validation tests.
+  - Validation:
+    - `py_compile` -> passed.
+    - benchmark unit tests -> `41 passed, 1 warning`.
+    - Grug Pallas/capacity/EP slice -> `62 passed, 11 skipped, 38 deselected,
+      1 warning`.
+    - changed-file pre-commit -> passed after Black reformatted
+      `common.py`.
+- Interpretation:
+  - These are review/readiness cleanups only. They do not change the known-good
+    single-node H100 recipe or warrant a #6597 issue update.
+  - The broader config-mode boolean and benchmark decomposition findings remain
+    candidates for later cleanup, but are not worth destabilizing the active
+    forward-performance knobs in this pass.
+- Next action:
+  - Commit this cleanup and rerun `./infra/pre-commit.py --review --agent-command 'codex exec'`
+    against the new branch head.

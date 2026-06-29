@@ -134,18 +134,13 @@ def wants_gpu_extra(extras: Sequence[str]) -> bool:
 _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
+_NVSHMEM_HOST_LIBRARY = "libnvshmem_host.so.3"
+_NVSHMEM_LIBRARY_ALIAS = "libnvshmem.so"
+_GPU_LIBRARY_PATH_SCRIPT = "_iris_gpu_library_path.sh"
 
 
 def cuda_toolchain_setup_script() -> str:
-    """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
-
-    Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
-    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
-    into the venv's ``bin``, stages ``libdevice.10.bc`` where XLA looks, and
-    records the wheel-provided NVIDIA shared-library directories so the run
-    phase can load runtimes such as NVSHMEM. A no-op when the venv carries no
-    CUDA toolchain.
-    """
+    """Return the GPU setup script required by JAX/Pallas jobs."""
     return rf"""set -e
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
@@ -162,22 +157,22 @@ if [ -f "$_libdevice" ]; then
 fi
 cuda_lib_dirs=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/*/lib; do
-  if [ -f "$_d/libnvshmem_host.so.3" ] && [ ! -e "$_d/libnvshmem.so" ]; then
-    ln -sf libnvshmem_host.so.3 "$_d/libnvshmem.so"
+  if [ -f "$_d/{_NVSHMEM_HOST_LIBRARY}" ] && [ ! -e "$_d/{_NVSHMEM_LIBRARY_ALIAS}" ]; then
+    ln -sf {_NVSHMEM_HOST_LIBRARY} "$_d/{_NVSHMEM_LIBRARY_ALIAS}"
   fi
   if [ -d "$_d" ]; then cuda_lib_dirs="${{cuda_lib_dirs:+${{cuda_lib_dirs}}:}}$_d"; fi
 done
 if [ -n "$cuda_lib_dirs" ]; then
-  cat > "$IRIS_VENV/_iris_gpu_library_path.sh" <<EOF
+  cat > "$IRIS_VENV/{_GPU_LIBRARY_PATH_SCRIPT}" <<EOF
 export LD_LIBRARY_PATH="$cuda_lib_dirs\${{LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}}"
 EOF
-  if ! grep -q "_iris_gpu_library_path.sh" "$IRIS_VENV/bin/activate"; then
+  if ! grep -q "{_GPU_LIBRARY_PATH_SCRIPT}" "$IRIS_VENV/bin/activate"; then
     cat >> "$IRIS_VENV/bin/activate" <<'EOF'
 
 # Iris GPU jobs need wheel-provided NVIDIA shared libraries (for example
 # NVSHMEM) available when the run phase activates this venv.
-if [ -f "$VIRTUAL_ENV/_iris_gpu_library_path.sh" ]; then
-  . "$VIRTUAL_ENV/_iris_gpu_library_path.sh"
+if [ -f "$VIRTUAL_ENV/{_GPU_LIBRARY_PATH_SCRIPT}" ]; then
+  . "$VIRTUAL_ENV/{_GPU_LIBRARY_PATH_SCRIPT}"
 fi
 EOF
   fi
