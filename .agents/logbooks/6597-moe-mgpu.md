@@ -5524,3 +5524,45 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: commit the runbook/logbook update as a stable snapshot, then wait
   for the 16:30 PDT lint-review quota reset before rerunning
   `./infra/pre-commit.py --review`.
+
+### 2026-06-29 14:45 - MOE-MGPU-355 add progressive target-shape scale smoke
+- Hypothesis: the next H100 full-run attempt should scale the known-good
+  target-shape one-node recipe before retrying the larger default 90B-ish scale
+  shape that already hit pre-step memory pressure.
+- Commit Hash: `1bf63d41d` plus uncommitted runbook/logbook edits.
+- Evidence inspected:
+  - `.agents/projects/20260628_moe_mgpu_full_run_tryout.md`
+  - `experiments/grug/moe/launch_cw_scale.py`
+- Change:
+  - Added a `Progressive Multi-Node 20-Step Smoke` section to
+    `.agents/projects/20260628_moe_mgpu_full_run_tryout.md`.
+  - The new command scales `SCALE_GPU_REPLICAS` through `4`, `8`, `16`, then
+    `32` as capacity allows while preserving the passing target local MoE shape
+    by setting global `SCALE_BATCH=$((128 * SCALE_GPU_REPLICAS))`.
+  - The command keeps `SCALE_HIDDEN_DIM=2560`, `SCALE_NUM_LAYERS=2`,
+    `SCALE_NUM_EXPERTS=256`, `SCALE_TOP_K=4`,
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`, `SCALE_MOE_CAPACITY_FACTOR=1.25`,
+    `SCALE_REMAT=save_moe`, local checkpoints, JSON logger, and empty watch
+    targets.
+  - Added recovery knobs for this progressive target-shape run: if it OOMs
+    before training, first try `SCALE_REMAT=recompute_all`; if parameter or
+    optimizer-state memory remains the blocker, try
+    `SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16` and record the
+    precision-policy change from the validated one-node evidence.
+- Commands:
+  - `rg -n "Progressive Multi-Node|SCALE_BATCH=\\$\\(\\(128|batch_shards|data_axis|SCALE_MP=params" .agents/projects/20260628_moe_mgpu_full_run_tryout.md experiments/grug/moe/launch_cw_scale.py`
+  - `./infra/pre-commit.py --files .agents/projects/20260628_moe_mgpu_full_run_tryout.md --fix`
+- Result:
+  - The launcher code confirms `batch_shards = replicas * 8` when
+    `SCALE_EXPERT_AXIS=8` and `SCALE_REPLICA_AXIS=1`, so
+    `SCALE_BATCH=128 * replicas` keeps per-device tokens fixed at the
+    successful one-node shape.
+  - Focused Markdown/precheck passed:
+    `Large files ok`, `Merge conflicts ok`, `Trailing whitespace ok`,
+    `End-of-file newline ok`, `Markdown pre-commit command ok`.
+- Interpretation: this is a safer next full-run instruction than jumping from
+  the one-node smoke directly to the larger default shape. No #6597 issue
+  comment: it is runbook/handoff progress, not new correctness or throughput
+  evidence.
+- Next action: commit the runbook/logbook update, then wait for the 16:30 PDT
+  lint-review quota reset before rerunning `./infra/pre-commit.py --review`.

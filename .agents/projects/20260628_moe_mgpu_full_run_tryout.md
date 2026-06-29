@@ -76,6 +76,49 @@ Use this as the pass/fail gate before trying the full 32-node shape. It passed
 with run id `grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; rerun this recipe if
 the branch changes behavior or if you need a fresh trainer smoke.
 
+## Progressive Multi-Node 20-Step Smoke
+
+This is the next H100 run to try after the one-node smoke. It scales the
+known-good target-shape recipe across multiple 8xH100 nodes while keeping the
+per-device MoE token shape fixed at `32768` tokens/rank. Set
+`SCALE_GPU_REPLICAS` to `4`, `8`, `16`, then `32` as capacity allows; the command
+sets global batch to `128 * SCALE_GPU_REPLICAS` so each device sees the same
+local token count as the passing one-node run.
+
+```bash
+SCALE_GPU_REPLICAS=4
+SCALE_BATCH=$((128 * SCALE_GPU_REPLICAS))
+RUN_ID="grug-moe-pallas-mgpu-target-20step-r${SCALE_GPU_REPLICAS}-$(date +%Y%m%d-%H%M%S)"
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "$RUN_ID" \
+  --cpu=2 --memory=2G --disk=8G --extra=cpu \
+  -- env \
+    RUN_ID="$RUN_ID" \
+    SCALE_GPU_REPLICAS="$SCALE_GPU_REPLICAS" \
+    SCALE_EXPERT_AXIS=8 \
+    SCALE_REPLICA_AXIS=1 \
+    SCALE_BATCH="$SCALE_BATCH" \
+    SCALE_SEQ_LEN=2048 \
+    SCALE_STEPS=20 \
+    SCALE_HIDDEN_DIM=2560 \
+    SCALE_NUM_LAYERS=2 \
+    SCALE_NUM_EXPERTS=256 \
+    SCALE_TOP_K=4 \
+    SCALE_MOE_IMPLEMENTATION=pallas_mgpu \
+    SCALE_MOE_CAPACITY_FACTOR=1.25 \
+    SCALE_REMAT=save_moe \
+    SCALE_CHECKPOINTS=local \
+    SCALE_TRACKER=json_logger \
+    SCALE_WATCH_TARGETS= \
+    uv run python -m experiments.grug.moe.launch_cw_scale
+```
+
+Babysit each submitted run to a terminal state. If this target-shape scaling
+recipe OOMs before training, first try `SCALE_REMAT=recompute_all`; if parameter
+or optimizer-state memory is still the blocker, try
+`SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16` and record that the
+precision policy changed from the validated one-node evidence.
+
 ## Full-Scale 20-Step Run
 
 This keeps the scale launcher's default 90B-total shape but switches the MoE
