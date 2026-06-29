@@ -12,6 +12,9 @@ from experiments.posttrain.instruction_datasets import (
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
+    WEBINSTRUCT_VERIFIED_HF_ID,
+    WEBINSTRUCT_VERIFIED_METADATA_COLUMNS,
+    WEBINSTRUCT_VERIFIED_REVISION,
     get_instruction_dataset,
 )
 
@@ -23,6 +26,18 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
     ],
+}
+
+WEBINSTRUCT_VERIFIED_SAMPLE = {
+    "id": "1177521",
+    "question": (
+        "Write a formula for the fourth degree polynomial p(x) whose graph is symmetric about the y-axis, "
+        "which has a y-intercept of 10, and global maxima at (3,253) and (-3,253)."
+    ),
+    "answer": "y(x) = -3x^4 + 54x^2 + 10",
+    "answer_type": "Expression",
+    "category": "Mathematics",
+    "difficulty": "University",
 }
 
 
@@ -104,4 +119,37 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "problem_id": "prime_rl_code_21747",
         "task_type": "prime_rl_code",
         "reward": 1.0,
+    }
+
+
+def test_webinstruct_verified_step_transforms_question_answer_rows():
+    step = get_instruction_dataset(WEBINSTRUCT_VERIFIED_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    result = transform_row(WEBINSTRUCT_VERIFIED_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert step.name == "documents/TIGER-Lab/WebInstruct-verified"
+    assert step.override_output_path is not None
+    assert step.override_output_path.startswith(
+        f"documents/TIGER-Lab--WebInstruct-verified-{WEBINSTRUCT_VERIFIED_REVISION}-"
+    )
+    assert unwrap_versioned_value(cfg.source) == WEBINSTRUCT_VERIFIED_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == WEBINSTRUCT_VERIFIED_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == WEBINSTRUCT_VERIFIED_METADATA_COLUMNS
+    assert adapter.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE
+    assert adapter.instruction_column == "question"
+    assert adapter.response_column == "answer"
+    assert result.source == WEBINSTRUCT_VERIFIED_HF_ID
+    assert [message.role for message in result.messages] == ["user", "assistant"]
+    assert result.messages[0].content == WEBINSTRUCT_VERIFIED_SAMPLE["question"]
+    assert result.messages[1].content == WEBINSTRUCT_VERIFIED_SAMPLE["answer"]
+    assert result.metadata == {
+        "id": "1177521",
+        "answer_type": "Expression",
+        "category": "Mathematics",
+        "difficulty": "University",
     }
