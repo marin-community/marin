@@ -28,8 +28,6 @@ const AUTO_REFRESH_MAX_LINES = 2000
 const POLL_INTERVAL_MS = 30_000
 // Retain at most this many rendered lines to keep the DOM bounded.
 const MAX_RETAINED_LINES = 20_000
-// Debounce free-text inputs (source key, substring filter) before refetching.
-const INPUT_DEBOUNCE_MS = 250
 
 const route = useRoute()
 
@@ -207,20 +205,8 @@ async function resetAndFetch() {
 
 const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(doPoll, POLL_INTERVAL_MS)
 
-// Manual query edits: debounce the free-text source/substring inputs, fetch
-// immediately on the discrete selectors.
-let sourceDebounce: ReturnType<typeof setTimeout> | undefined
-function onSourceInput() {
-  if (sourceDebounce) clearTimeout(sourceDebounce)
-  sourceDebounce = setTimeout(resetAndFetch, INPUT_DEBOUNCE_MS)
-}
-
-let filterDebounce: ReturnType<typeof setTimeout> | undefined
-watch(filter, () => {
-  if (filterDebounce) clearTimeout(filterDebounce)
-  filterDebounce = setTimeout(resetAndFetch, INPUT_DEBOUNCE_MS)
-})
-
+// Free-text fields (source key, substring filter) apply on Enter, not on every
+// keystroke. The discrete selectors below refetch immediately on change.
 watch(selectedAttemptId, applyDefaults)
 watch(matchScope, resetAndFetch)
 watch(tailLines, resetAndFetch)
@@ -316,11 +302,11 @@ defineExpose({ selectedAttemptId })
         v-model="sourceInput"
         type="text"
         spellcheck="false"
-        placeholder="Source key, e.g. /alice/job/ or /system/worker/…"
+        placeholder="Source key, e.g. /alice/job/ or /system/worker/… (Enter to apply)"
         class="w-full sm:w-96 px-3 py-1.5 bg-surface border border-surface-border rounded
                text-sm font-mono placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
-        @input="onSourceInput"
+        @keyup.enter="resetAndFetch"
       />
       <select
         v-model="matchScope"
@@ -348,10 +334,11 @@ defineExpose({ selectedAttemptId })
       <input
         v-model="filter"
         type="text"
-        placeholder="Filter text…"
+        placeholder="Filter text… (Enter to apply)"
         class="w-full sm:w-56 px-3 py-1.5 bg-surface border border-surface-border rounded
                text-sm font-mono placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
+        @keyup.enter="resetAndFetch"
       />
       <select
         v-model="level"
