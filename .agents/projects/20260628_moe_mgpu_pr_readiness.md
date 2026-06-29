@@ -35,6 +35,9 @@ before review. It is a coordination artifact for the implementation in
   `SCALE_MOE_IMPLEMENTATION` and `SCALE_MOE_CAPACITY_FACTOR`, and
   `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` records the current
   best one-node and experimental multi-node 20-step H100 launch commands. The
+  launcher also exposes `SCALE_GPUS_PER_TASK` for task decomposition experiments
+  but fails fast for `pallas_mgpu` when that would hide expert-parallel ranks
+  from a local process. The
   current-commit one-node target-shape trainer smoke passed 20/20 steps with
   watch disabled in
   `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755`; the first

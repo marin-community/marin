@@ -6056,3 +6056,22 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Commit this guard and continue waiting for the post-quota lint-review gate.
     No #6597 issue update unless this becomes a blocker.
+
+### 2026-06-29 15:50 - MOE-MGPU-369 readiness note mentions launcher topology guard
+- Hypothesis: PR readiness notes should call out the committed
+  `SCALE_GPUS_PER_TASK` topology guard, because it affects the full-run tryout
+  surface even though the known-good one-node recipe remains unchanged.
+- Commit Hash: `544438ad1`.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_pr_readiness.md` to say the
+    scale launcher exposes `SCALE_GPUS_PER_TASK` for task decomposition
+    experiments but fails fast for `pallas_mgpu` when that would hide
+    expert-parallel ranks from a local process.
+- Result:
+  - The PR readiness note is now consistent with the committed launcher guard
+    and the tryout runbook.
+- Interpretation:
+  - Documentation/readiness hygiene only; no #6597 issue comment.
+- Next action:
+  - Run changed-file pre-commit, commit the readiness-note update, then wait for
+    the post-quota lint-review gate.
