@@ -5499,3 +5499,28 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   before touching forward scheduling or shared benchmark defaults.
 - Next action: run narrow Markdown/precheck for the readiness/logbook update,
   then wait for the 16:30 PDT lint-review quota reset heartbeat.
+
+### 2026-06-29 14:35 - MOE-MGPU-354 stabilize 20-step tryout run ids
+- Hypothesis: the full-run tryout instructions should generate one stable
+  `RUN_ID` per launch so the Iris parent job name, trainer run id, local
+  checkpoint path, and follow-up log inspection all refer to the same run.
+- Commit Hash: `bea7a1f5c` plus uncommitted runbook/logbook edits.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` so the
+    recommended one-node 20-step smoke command assigns `RUN_ID` once before
+    `iris job run`, then passes that same shell variable to `--job-name` and to
+    the trainer environment.
+  - Applied the same single-`RUN_ID` pattern to the full-scale 20-step template.
+- Commands:
+  - `rg -n "RUN_ID=|job-name|date \\+%Y%m%d" .agents/projects/20260628_moe_mgpu_full_run_tryout.md .agents/projects/20260628_moe_mgpu_pr_readiness.md experiments/grug/moe/launch_cw_scale.py experiments/grug/moe/model.py`
+  - `./infra/pre-commit.py --files .agents/projects/20260628_moe_mgpu_full_run_tryout.md --fix`
+- Result:
+  - Focused Markdown/precheck passed:
+    `Large files ok`, `Merge conflicts ok`, `Trailing whitespace ok`,
+    `End-of-file newline ok`, `Markdown pre-commit command ok`.
+- Interpretation: this is a handoff/runbook reliability fix for trying the best
+  known configuration. No #6597 issue comment: it is not a correctness,
+  throughput, or blocker milestone.
+- Next action: commit the runbook/logbook update as a stable snapshot, then wait
+  for the 16:30 PDT lint-review quota reset before rerunning
+  `./infra/pre-commit.py --review`.

@@ -47,11 +47,12 @@ target (`batch=128`, `seq=2048`, `8` expert-parallel ranks gives
 `32768` tokens/rank). It uses two layers to keep the run cheap.
 
 ```bash
+RUN_ID="grug-moe-pallas-mgpu-20step-smoke-$(date +%Y%m%d-%H%M%S)"
 uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
-  --job-name "grug-moe-pallas-mgpu-20step-smoke-$(date +%Y%m%d-%H%M%S)" \
+  --job-name "$RUN_ID" \
   --cpu=2 --memory=2G --disk=8G --extra=cpu \
   -- env \
-    RUN_ID="grug-moe-pallas-mgpu-20step-smoke-$(date +%Y%m%d-%H%M%S)" \
+    RUN_ID="$RUN_ID" \
     SCALE_GPU_REPLICAS=1 \
     SCALE_EXPERT_AXIS=8 \
     SCALE_REPLICA_AXIS=1 \
@@ -86,11 +87,12 @@ model or optimizer-state memory before relaunching and babysit it to a terminal
 result.
 
 ```bash
+RUN_ID="grug-moe-pallas-mgpu-20step-scale-$(date +%Y%m%d-%H%M%S)"
 uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
-  --job-name "grug-moe-pallas-mgpu-20step-scale-$(date +%Y%m%d-%H%M%S)" \
+  --job-name "$RUN_ID" \
   --cpu=2 --memory=2G --disk=8G --extra=cpu \
   -- env \
-    RUN_ID="grug-moe-pallas-mgpu-20step-scale-$(date +%Y%m%d-%H%M%S)" \
+    RUN_ID="$RUN_ID" \
     SCALE_GPU_REPLICAS=32 \
     SCALE_EXPERT_AXIS=8 \
     SCALE_REPLICA_AXIS=1 \
