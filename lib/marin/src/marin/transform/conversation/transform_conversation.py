@@ -120,6 +120,9 @@ def _normalize_tool_structures(message: dict) -> dict:
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     source = unwrap_versioned_value(cfg.source)
+    if adapter.row_filter_fn is not None and not adapter.row_filter_fn(row):
+        return None
+
     transformed_row_messages: list[OpenAIChatMessage] | None = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
