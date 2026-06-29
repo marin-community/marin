@@ -101,10 +101,12 @@ across multiple nodes. It is not known-good as of
 corrected r4 run passed the Pallas MGPU data-axis guard but failed pre-step on a
 missing NVSHMEM load in the multi-node distributed runtime.
 
-An unvalidated `SCALE_GPUS_PER_TASK` launcher experiment is preserved locally as
-`stash@{0}` (`moe-mgpu-launch-cw-scale-gpus-per-task`). Do not use it as a
-known-good recipe: the current validated Pallas MGPU path uses one task with all
-eight local H100s visible, matching the single-NVLink-island target.
+The launcher has an experimental `SCALE_GPUS_PER_TASK` knob for decomposing the
+logical GPU allocation into smaller Python processes. The current validated
+Pallas MGPU path leaves it omitted, which defaults to `8` and keeps the whole
+expert-parallel group local to one process. `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`
+now fails fast if `SCALE_GPUS_PER_TASK < SCALE_EXPERT_AXIS`, because the backend
+requires all expert-parallel ranks to be visible local GPUs.
 
 Do not relaunch this exact recipe unchanged unless the runtime image or JAX
 distributed setup is known to provide the required NVSHMEM bits. If you do

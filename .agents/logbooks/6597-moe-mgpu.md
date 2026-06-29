@@ -6010,3 +6010,49 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Run changed-file pre-commit, commit the doc/logbook cleanup, then wait for
     the post-quota lint-review gate.
+
+### 2026-06-29 15:45 - MOE-MGPU-368 committed GPU-per-task launcher guard
+- Hypothesis: after commit `d2304dea9` added `SCALE_GPUS_PER_TASK` to
+  `experiments/grug/moe/launch_cw_scale.py`, the branch needs a Pallas-specific
+  guard and updated handoff docs so the new task-decomposition knob cannot steer
+  the validated Pallas MGPU tryout into a topology the backend rejects.
+- Base Commit Hash: `64642509e`.
+- Context:
+  - `d2304dea9` appeared as a committed branch change from outside this pass,
+    replacing the earlier local-only/stashed launcher experiment with a real
+    branch commit.
+  - The Pallas MGPU backend requires all expert-parallel ranks to be local GPU
+    devices; with the target `SCALE_EXPERT_AXIS=8`, `SCALE_GPUS_PER_TASK=1`
+    would make the launcher submit a known-invalid topology for
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`.
+- Change:
+  - Updated the launcher environment docstring to say `SCALE_GPUS_PER_TASK`
+    must stay at least `SCALE_EXPERT_AXIS` for `pallas_mgpu`.
+  - Added a fail-fast launcher check:
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu` requires
+    `SCALE_GPUS_PER_TASK >= SCALE_EXPERT_AXIS`.
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` to describe
+    the committed knob and remove stale "stash-only" language from the active
+    tryout instructions.
+- Result:
+  - The known-good one-node recipe is unchanged because omitting
+    `SCALE_GPUS_PER_TASK` still defaults to `8`.
+  - Setting `SCALE_GPUS_PER_TASK=1` with `SCALE_EXPERT_AXIS=8` now fails before
+    launch config construction instead of producing a Pallas MGPU runtime
+    topology failure.
+- Validation:
+  - `uv run python -m py_compile experiments/grug/moe/launch_cw_scale.py` ->
+    passed.
+  - Local subprocess import probe with
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`, `SCALE_GPUS_PER_TASK=1`,
+    `SCALE_EXPERT_AXIS=8`, and the target smoke shape raised the intended
+    `ValueError`:
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu requires SCALE_GPUS_PER_TASK to be at least SCALE_EXPERT_AXIS=8; got 1`.
+  - `./infra/pre-commit.py --changed-files --fix` -> passed.
+- Interpretation:
+  - This keeps the branch aligned with the spec's single-process/local-NVLink EP
+    contract while preserving the broader launcher knob for non-Pallas or
+    smaller-expert-axis experiments.
+- Next action:
+  - Commit this guard and continue waiting for the post-quota lint-review gate.
+    No #6597 issue update unless this becomes a blocker.

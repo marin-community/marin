@@ -17,8 +17,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
     SCALE_GPUS_PER_TASK number of GPUs visible to each Python process (default 8).
-                        Use 1 for Pallas MGPU/NVSHMEM, which requires one local
-                        CUDA device per process.
+                        Keep this at least SCALE_EXPERT_AXIS for pallas_mgpu so
+                        the whole expert-parallel group is local to the process.
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
     SCALE_BATCH         global batch in sequences (default 256)
@@ -208,6 +208,11 @@ def build_scale_step() -> ExecutorStep:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
     if gpus_per_task < 1 or gpus_per_task > GPUS_PER_NODE or GPUS_PER_NODE % gpus_per_task != 0:
         raise ValueError(f"SCALE_GPUS_PER_TASK={gpus_per_task} must divide the {GPUS_PER_NODE} GPUs in each H100 node")
+    if model.moe_implementation == "pallas_mgpu" and gpus_per_task < expert_axis:
+        raise ValueError(
+            "SCALE_MOE_IMPLEMENTATION=pallas_mgpu requires SCALE_GPUS_PER_TASK "
+            f"to be at least SCALE_EXPERT_AXIS={expert_axis}; got {gpus_per_task}"
+        )
 
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
     # rest of the 8*logical_replicas devices. SCALE_GPUS_PER_TASK only changes how
