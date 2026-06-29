@@ -6366,3 +6366,30 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Commit, rerun advisory review to confirm only broad design findings remain,
     then push the branch.
+
+### 2026-06-29 16:29 - MOE-MGPU-377 final lint-review state
+- Hypothesis: after the small cleanup commits, the advisory lint review should
+  contain only broad design refactors that are better handled separately from
+  the validated H100-readiness branch.
+- Commit Hash: `0a6af3699`.
+- Command:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+- Result:
+  - Final lint-review artifact:
+    `/tmp/marin-linter/20260629T232658`.
+  - Remaining advisory findings:
+    - Split the large benchmark stage driver and per-stage timing/result-row
+      scaffolding.
+    - Consider one normalized implementation-spec input shape instead of
+      scalar-or-sequence public typing.
+    - Replace mutually dependent `permute_up` dispatch booleans with an explicit
+      mode enum/config shape.
+  - No new small correctness/readability finding remained after the cleanup
+    commits.
+- Interpretation:
+  - These are valid design cleanup candidates, but not prerequisites for the
+    current single-node H100 Pallas MGPU readiness evidence.
+  - No #6597 issue update.
+- Next action:
+  - Push the branch and leave the broad refactors for a separate cleanup or the
+    forward-performance lane.
