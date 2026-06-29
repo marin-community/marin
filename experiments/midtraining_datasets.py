@@ -111,6 +111,39 @@ megamath_real_only = lm_mixture_data_config(
     },
 )
 
+OPEN_WEB_MATH_PRO_REVISION = "b246286d1aabd9d74e8f50bd02f593954245bde6"
+
+# source: https://huggingface.co/datasets/gair-prox/open-web-math-pro
+# in teratokens; dataset-card estimate. Replace after Marin tokenization.
+OPEN_WEB_MATH_PRO_TOKENS = 0.005
+
+open_web_math_pro_source = default_download(
+    name="raw/gair-prox/open-web-math-pro",
+    hf_dataset_id="gair-prox/open-web-math-pro",
+    revision=versioned(OPEN_WEB_MATH_PRO_REVISION),
+    override_output_path="raw/gair-prox/open-web-math-pro",
+    hf_urls_glob=["data/*.parquet", "README.md"],
+)
+
+open_web_math_pro_tokenized = default_tokenize(
+    name="open_web_math_pro",
+    dataset=open_web_math_pro_source / "data/*.parquet",
+    tokenizer=llama3_tokenizer,
+)
+
+open_web_math_pro_components = {
+    "open_web_math_pro": open_web_math_pro_tokenized,
+}
+
+open_web_math_pro_token_counts = {
+    "open_web_math_pro": OPEN_WEB_MATH_PRO_TOKENS,
+}
+
+open_web_math_pro_mixture = lm_mixture_data_config(
+    components=open_web_math_pro_components,
+    weights=open_web_math_pro_token_counts,
+)
+
 
 pile_pubmed_abstracts_validation = default_download(
     name="raw/pile_pubmed_abstracts",
