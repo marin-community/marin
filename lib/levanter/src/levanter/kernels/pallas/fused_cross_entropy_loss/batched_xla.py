@@ -31,7 +31,6 @@ _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
-_H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -382,11 +381,9 @@ def _h100_full_vocab_b_tiled_block_size(
         return None
     if x.dtype != jnp.bfloat16 or w.dtype != jnp.bfloat16:
         return None
-    if x.shape[0] < _H100_FULL_VOCAB_B_TILED_MIN_BATCH:
-        return None
     if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
         return None
-    return _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE
+    return min(x.shape[0], _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE)
 
 
 @partial(

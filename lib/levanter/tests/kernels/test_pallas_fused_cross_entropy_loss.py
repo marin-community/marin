@@ -915,14 +915,14 @@ def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: py
 
     monkeypatch.setattr(batched_xla, "_device_kind", lambda: "nvidia h100")
     assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w) == 8192
-    assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w, return_argmax=True) is None
     assert (
         batched_xla._h100_full_vocab_b_tiled_block_size(
-            jax.ShapeDtypeStruct((8191, 16), jnp.bfloat16),
+            jax.ShapeDtypeStruct((4096, 16), jnp.bfloat16),
             w,
         )
-        is None
+        == 4096
     )
+    assert batched_xla._h100_full_vocab_b_tiled_block_size(x, w, return_argmax=True) is None
     assert (
         batched_xla._h100_full_vocab_b_tiled_block_size(
             x,
