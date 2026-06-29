@@ -5990,3 +5990,23 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Keep waiting for the post-quota `./infra/pre-commit.py --review` gate, then
     address any advisory findings.
+
+### 2026-06-29 15:38 - MOE-MGPU-367 tryout runbook commit provenance cleanup
+- Hypothesis: the full-run tryout handoff should distinguish the H100 trainer
+  run's code-bearing commit from later logbook/runbook/readiness commits, so a
+  reader does not infer that the successful 20-step run was relaunched after
+  documentation-only updates.
+- Commit Hash: `50074c33b`.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` to say that
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` ran from
+    code-bearing commit `14fd25a73`, while later branch commits through
+    `50074c33b` only refreshed logbook/runbook/readiness artifacts.
+- Result:
+  - The recommended 20-step smoke recipe still points at the same known-good
+    H100 run, but the provenance is explicit.
+- Interpretation:
+  - Documentation hygiene only; no #6597 issue update.
+- Next action:
+  - Run changed-file pre-commit, commit the doc/logbook cleanup, then wait for
+    the post-quota lint-review gate.

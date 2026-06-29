@@ -21,10 +21,11 @@ same padded-capacity path validated by the H100 kernel tests.
   `14.08%` of nominal H100 bf16 roofline, and zero dropped routes.
 - Current-commit one-node full-trainer target-shape smoke
   `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755` completed
-  `20/20` steps from commit `14fd25a73` on one 8xH100 node with
+  `20/20` steps from code-bearing commit `14fd25a73` on one 8xH100 node with
   `SCALE_WATCH_TARGETS=`, saved checkpoint `step-20`, and reported final MFU
-  `20.19%`, mean MFU `20.11%`, and about `553k` tokens/s. This is the current
-  best full-trainer tryout recipe.
+  `20.19%`, mean MFU `20.11%`, and about `553k` tokens/s. Later branch commits
+  through `50074c33b` only refreshed logbook/runbook/readiness artifacts, so
+  this remains the current best full-trainer tryout recipe for the branch.
 - Earlier one-node full-trainer target-shape smoke
   `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed `20/20` steps
   on one 8xH100 node with `SCALE_WATCH_TARGETS=`, saved checkpoint `step-20`,
@@ -85,9 +86,10 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
 ```
 
 Use this as the pass/fail gate before trying the full 32-node shape. It passed
-with run id `grug-moe-pallas-mgpu-20step-current-20260629-150755` on commit
-`14fd25a73`; rerun this recipe if the branch changes behavior or if you need a
-fresh trainer smoke.
+with run id `grug-moe-pallas-mgpu-20step-current-20260629-150755` on
+code-bearing commit `14fd25a73`. Later branch commits through `50074c33b` only
+updated project notes/logbooks; rerun this recipe if code changes behavior or
+if you need a fresh trainer smoke.
 
 ## Experimental Multi-Node 20-Step Smoke
 
