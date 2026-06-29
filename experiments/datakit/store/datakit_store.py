@@ -129,7 +129,7 @@ class ClusteredStoreData(BaseModel):
     buckets: list[BucketCacheStats]
     source_names: list[str]
     tokenizer: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +652,7 @@ def build_clustered_store(
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     if aggregate_only:
         # Skip the zephyr pass entirely and pick up from the durable sidecars

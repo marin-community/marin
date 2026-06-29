@@ -48,7 +48,7 @@ class AssignmentAttrData(BaseModel):
     embedding_output_dir: str
     k_train: int
     k_views: list[int]
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
         return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))

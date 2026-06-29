@@ -86,13 +86,7 @@ def test_filter(zephyr_ctx):
 
 
 def test_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside a shard flow back to the coordinator.
-
-    Each task runs in the worker's own process; ``counters.pipeline.update_counter`` writes
-    into the per-task ``_InProcessWorkerContext``. This test verifies the
-    worker forwards the final counter dict to the coordinator via
-    ``report_result``, otherwise the coordinator's ``get_counters`` would
-    silently report 0.
+    """User counters incremented inside a shard are visible in the execution result.
 
     Uses a direct logging handler attachment (rather than ``caplog``) so the
     test works whether or not pytest's logging plugin is enabled.

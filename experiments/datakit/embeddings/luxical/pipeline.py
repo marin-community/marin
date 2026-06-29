@@ -106,7 +106,7 @@ class EmbeddingAttrData(BaseModel):
     quantization_scale: float
     quantization_range: float
     batch_size: int
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
         return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
