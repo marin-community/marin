@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SFT-Competitive-Programming-v2
 """
 
 import dataclasses
@@ -104,6 +105,52 @@ NEMOTRON_V2_SPLITS = [
 
 NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
 
+NEMOTRON_COMPETITIVE_V2_DATASET_ID = "nvidia/Nemotron-SFT-Competitive-Programming-v2"
+NEMOTRON_COMPETITIVE_V2_REVISION = "778afc98a9e027e10b3cd78020c120e93e142ef2"
+NEMOTRON_COMPETITIVE_V2_SOURCE_FILES_BY_SPLIT = {
+    "competitive_coding_python": [
+        "data/competitive_programming_python_00.jsonl",
+        "data/competitive_programming_python_01.jsonl",
+    ],
+    "competitive_coding_cpp": [
+        "data/competitive_programming_cpp_00.jsonl",
+        "data/competitive_programming_cpp_01.jsonl",
+    ],
+    "exercism": ["data/exercism.jsonl"],
+    "text_to_sql": ["data/text_to_sql.jsonl"],
+}
+NEMOTRON_COMPETITIVE_V2_METADATA_COLUMNS = {
+    "competitive_coding_python": [
+        "uuid",
+        "used_in",
+        "license",
+        "dataset",
+        "split",
+        "index",
+        "source",
+        "difficulty",
+        "question_id",
+    ],
+    "competitive_coding_cpp": [
+        "uuid",
+        "used_in",
+        "license",
+        "dataset",
+        "split",
+        "index",
+        "source",
+        "difficulty",
+        "question_id",
+    ],
+    "exercism": ["uuid", "used_in", "license"],
+    "text_to_sql": ["uuid", "used_in", "license", "complexity", "dialect"],
+}
+NEMOTRON_COMPETITIVE_V2_REASONING_SPLITS = {
+    "competitive_coding_python",
+    "competitive_coding_cpp",
+    "text_to_sql",
+}
+
 
 @dataclass(frozen=True)
 class InstructionDatasetConfig:
@@ -118,6 +165,9 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
+        source_files_by_split: Optional raw JSONL files keyed by split. Use this when a Hugging Face dataset
+            builder has unreliable inferred schema for the raw files.
+        raw_shard_size: Number of transformed records per output shard when using `source_files_by_split`.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
 
@@ -128,6 +178,8 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    source_files_by_split: dict[str, list[str]] | None = None
+    raw_shard_size: int = 50_000
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
@@ -138,6 +190,7 @@ def multi_turn_adapter(
     assistant_value: str = "assistant",
     system_value: str = "system",
     content_key: str = "content",
+    message_keys_to_copy: tuple[str, ...] = (),
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
@@ -150,6 +203,7 @@ def multi_turn_adapter(
         assistant_value=assistant_value,
         system_value=system_value,
         content_key=content_key,
+        message_keys_to_copy=message_keys_to_copy,
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
@@ -595,6 +649,20 @@ for split_name in NEMOTRON_V1_SPLITS:
         splits=[split_name],
     )
 
+for split_name, metadata_columns in NEMOTRON_COMPETITIVE_V2_METADATA_COLUMNS.items():
+    dataset_key = f"{NEMOTRON_COMPETITIVE_V2_DATASET_ID}/{split_name}"
+    message_keys_to_copy = ("reasoning_content",) if split_name in NEMOTRON_COMPETITIVE_V2_REASONING_SPLITS else ()
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_COMPETITIVE_V2_DATASET_ID,
+        revision=NEMOTRON_COMPETITIVE_V2_REVISION,
+        adapter=multi_turn_adapter(message_keys_to_copy=message_keys_to_copy),
+        metadata_columns=metadata_columns,
+        subsets=["default"],
+        splits=[split_name],
+        source_files_by_split={split_name: NEMOTRON_COMPETITIVE_V2_SOURCE_FILES_BY_SPLIT[split_name]},
+    )
+
 
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     dataset_name = hf_dataset_id.replace("/", "--")
@@ -611,6 +679,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_dict = dataclasses.asdict(adapter)
     adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+    if not adapter_dict["message_keys_to_copy"]:
+        del adapter_dict["message_keys_to_copy"]
 
     def canonicalize(value):
         if isinstance(value, dict):
@@ -623,11 +693,16 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_signature = canonicalize(adapter_dict)
     adapter_signature_str = json.dumps(adapter_signature, sort_keys=True)
+    source_files_signature = canonicalize(dataset_cfg.source_files_by_split or {})
+    source_files_signature_str = json.dumps(source_files_signature, sort_keys=True)
+    source_files_config_str = (
+        f"-{source_files_signature_str}-{dataset_cfg.raw_shard_size}" if dataset_cfg.source_files_by_split else ""
+    )
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
-        -{sorted(dataset_cfg.splits)}\
+        -{sorted(dataset_cfg.splits)}{source_files_config_str}\
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
@@ -642,6 +717,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            source_files_by_split=versioned(dataset_cfg.source_files_by_split),
+            raw_shard_size=versioned(dataset_cfg.raw_shard_size),
             max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
