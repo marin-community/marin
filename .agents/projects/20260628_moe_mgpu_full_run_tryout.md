@@ -101,6 +101,10 @@ device sees the same local token count as the passing one-node run. Keep
 `SCALE_REPLICA_AXIS=$SCALE_GPU_REPLICAS` so the cross-node data mesh axis stays
 size `1`, which the current Pallas MGPU backend requires.
 
+Use the executor entrypoint shown below. Do not directly import
+`scale_moe_step.config` and call `run_grug_moe_trial` from a Python heredoc: that
+leaves `VersionedValue` fields unresolved and fails before trainer startup.
+
 ```bash
 SCALE_GPU_REPLICAS=4
 SCALE_BATCH=$((128 * SCALE_GPU_REPLICAS))

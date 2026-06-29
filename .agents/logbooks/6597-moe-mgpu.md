@@ -5743,3 +5743,42 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   full trainer evidence for now; if multi-node trainer evidence is still
   desired, decide separately whether to add/fix NVSHMEM in the runtime image or
   constrain the tryout instructions to one-node H100 runs.
+
+### 2026-06-29 15:10 - MOE-MGPU-360 nvshmemfix r4 launch-config failure
+- Hypothesis: the `nvshmemfix` H100 r4 attempt would either get past the
+  previous missing-NVSHMEM runtime failure and reach trainer metrics, or produce
+  a distinct failure signature.
+- Commit Hash: `9398efa5e` plus unrelated local changes.
+- Job:
+  - `/dlwh/grug-moe-pallas-mgpu-target-btiled-r4-n4-L2-nvshmemfix-20260629-215324`
+- Command:
+  - Status/log capture used
+    `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a ...`.
+- Saved local artifacts:
+  - `scratch/20260629-6597-moe-mgpu-nvshmemfix-babysit/`
+  - Files: `job_list.json`, `job_summary.txt`, `job_summary.json`,
+    `recent_logs_5000.txt`, `high_signal_excerpt.txt`, and `summary.md`.
+- Result:
+  - Iris terminal state: `JOB_STATE_FAILED`, exit `0`, failures `1`,
+    preemptions `0`.
+  - Task state counts: `{"failed": 1, "cosched_failed": 3}`.
+  - No training metrics appeared: no train step, loss, MFU, tokens/s, or
+    checkpoint lines were present before failure.
+  - Root cause appeared on all tasks:
+    `TypeError: argument of type 'VersionedValue' is not iterable`.
+  - Traceback points to `/app/experiments/grug/moe/launch.py`, line `130`, in
+    `run_grug_moe_trial`, where `jmp.get_policy(config.mp)` receives a
+    `VersionedValue` instead of a string-like policy name.
+- Interpretation: this terminal failure differs from the earlier
+  missing-NVSHMEM runtime failure. It fails earlier during launch/config
+  construction, before JAX distributed initialization and before any trainer
+  step. The traceback originates from `<stdin>`, and the logs show many
+  `ExecutorStep ... constructed outside an executor_context()` warnings, so the
+  failure is consistent with directly calling `run_grug_moe_trial` on an
+  unresolved `ExecutorStep.config` rather than using the normal
+  `python -m experiments.grug.moe.launch_cw_scale` executor path. No resubmit
+  and no #6597 issue comment because this is routine failure evidence rather
+  than a spec-aligned kernel milestone or fundamental blocker.
+- Next action: do not relaunch the direct-call recipe; use the documented
+  `launch_cw_scale` executor entrypoint for any retry. Keep the single-node
+  target-shape trainer success as the spec-aligned evidence.
