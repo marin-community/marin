@@ -863,11 +863,11 @@ def write_levanter_cache(
             with ThreadedBatchWriter(_drain_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
-                zephyr_counters.increment("zephyr/records_out")
+                zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)
                 for batch in batchify(record_iter, n=batch_size):
                     threaded.submit(batch)
                     count += len(batch)
-                    zephyr_counters.increment("zephyr/records_out", len(batch))
+                    zephyr_counters.pipeline.update_counter("zephyr/records_out", len(batch))
                     logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
 
     logger.info("write_levanter_cache: finished %s — %d records", output_path, count)

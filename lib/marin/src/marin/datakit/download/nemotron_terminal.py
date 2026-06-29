@@ -23,12 +23,12 @@ HF_REVISION = "a1667c4"
 def row_to_doc(row: dict) -> list[dict]:
     conversations = row.get("conversations")
     if not conversations:
-        counters.increment("nemotron_terminal/dropped")
+        counters.pipeline.update_counter("nemotron_terminal/dropped", 1)
         return []
 
     text = "\n\n".join(render_role_message(m) for m in conversations)
 
-    counters.increment("nemotron_terminal/kept")
+    counters.pipeline.update_counter("nemotron_terminal/kept", 1)
     return [text_document(text, "nvidia/Nemotron-Terminal-Corpus")]
 
 
