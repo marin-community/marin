@@ -83,7 +83,10 @@ known-good target-shape recipe across multiple 8xH100 nodes while keeping the
 per-device MoE token shape fixed at `32768` tokens/rank. Set
 `SCALE_GPU_REPLICAS` to `4`, `8`, `16`, then `32` as capacity allows; the command
 sets global batch to `128 * SCALE_GPU_REPLICAS` so each device sees the same
-local token count as the passing one-node run.
+local token count as the passing one-node run. Keep
+`SCALE_REPLICA_AXIS=$SCALE_GPU_REPLICAS` for this target-shape scale smoke so
+the cross-node data mesh axis stays size `1`, which the current Pallas MGPU
+backend requires.
 
 ```bash
 SCALE_GPU_REPLICAS=4
@@ -96,7 +99,7 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
     RUN_ID="$RUN_ID" \
     SCALE_GPU_REPLICAS="$SCALE_GPU_REPLICAS" \
     SCALE_EXPERT_AXIS=8 \
-    SCALE_REPLICA_AXIS=1 \
+    SCALE_REPLICA_AXIS="$SCALE_GPU_REPLICAS" \
     SCALE_BATCH="$SCALE_BATCH" \
     SCALE_SEQ_LEN=2048 \
     SCALE_STEPS=20 \

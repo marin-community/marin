@@ -5618,3 +5618,44 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: babysit to terminal state, save final logs/metrics, append the
   result to this logbook, and only update #6597 if the terminal result is a
   meaningful milestone or fundamental blocker.
+
+### 2026-06-29 14:55 - MOE-MGPU-357 progressive r4 smoke topology mismatch
+- Hypothesis: the progressive 4-node target-shape smoke would preserve the
+  known-good one-node local MoE shape while exercising a multi-node full trainer
+  path.
+- Commit Hash: `25a797d43`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-20260629-143058`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-20260629-143058/grug-train-grug-moe-pallas-mgpu-target-20step-r4-20260629-143058`
+- Saved local artifacts:
+  - Main terminal snapshot:
+    `scratch/moe-mgpu-progressive-r4-grug-moe-pallas-mgpu-target-20step-r4-20260629-143058-terminal-20260629-1435/`
+  - Babysitter snapshot:
+    `scratch/20260629-1431_moe_mgpu_target_r4/`
+  - Monitor state:
+    `scratch/20260629-1431_moe_mgpu_progressive_r4_monitoring_state.json`
+- Result:
+  - Parent terminal state: `JOB_STATE_KILLED`, exit `0`, error
+    `Terminated by user`, failures `0`, preemptions `0`.
+  - Child terminal state: `JOB_STATE_KILLED`, task state counts
+    `{"killed": 4}`, failures `2`, preemptions `0`; task exits included `1`
+    and `139`.
+  - No training steps completed. Logs only reached `Progress on:train -/20`.
+  - All tasks hit the same root cause before step metrics:
+    `ValueError: implementation='pallas_mgpu' currently requires data mesh axis size 1`.
+  - Hparams confirmed `replica_axis_size=1` with `SCALE_GPU_REPLICAS=4`, which
+    makes the launcher's `data_axis=(replicas * 8) / (replica_axis * expert_axis)`
+    equal to `4`, violating the current public Pallas MGPU topology guard.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` so the
+    progressive multi-node target-shape smoke uses
+    `SCALE_REPLICA_AXIS="$SCALE_GPU_REPLICAS"` and explicitly explains that this
+    keeps the cross-node data mesh axis size at `1`.
+- Interpretation: this was a runbook topology mistake, not a kernel correctness
+  or performance result. Keep #6597 quiet. The next corrected r4 attempt should
+  use `SCALE_GPU_REPLICAS=4`, `SCALE_REPLICA_AXIS=4`, and `SCALE_BATCH=512`.
+- Next action: run focused Markdown/precheck, commit the runbook/logbook
+  correction, then launch the corrected r4 smoke and babysit it to terminal
+  state.
