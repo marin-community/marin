@@ -5346,3 +5346,38 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: if scale evidence is still desired, relaunch a 32-node 20-step
   smoke when capacity/user scheduling is suitable, or wait for the lint-review
   quota reset and run `./infra/pre-commit.py --review` for PR readiness.
+
+### 2026-06-29 14:03 - MOE-MGPU-350 tryout/readiness evidence sync
+- Hypothesis: after the one-node trainer success and the interrupted 32-node
+  attempt, the runbook and PR-readiness note should describe the current best
+  full-run evidence without requiring readers to reconstruct it from live
+  thread context.
+- Commit Hash: `ae56cfef3` plus uncommitted documentation changes.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` so the
+    known-good evidence names `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`
+    as the current best one-node 20-step full-trainer recipe and keeps the
+    earlier watch-path OOM as historical context.
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` to state
+    that the first 32-node attempt was killed before training and should be
+    relaunched only when scheduling/capacity is suitable.
+  - Updated `.agents/projects/20260628_moe_mgpu_pr_readiness.md` with the
+    one-node full-trainer evidence, the 32-node pre-training interruption, PR
+    body draft snippets, and spec-compliance rows for one-node and 32-node
+    full-run status.
+- Commands:
+  - `rg -n "42ba9b7d4|2d87348e7|32-node|one-node|20-step|MOE-MGPU-347|MOE-MGPU-349|full-trainer|externally killed|Terminated" .agents/projects/20260628_moe_mgpu_full_run_tryout.md .agents/projects/20260628_moe_mgpu_pr_readiness.md`
+  - `./infra/pre-commit.py --files .agents/projects/20260628_moe_mgpu_full_run_tryout.md .agents/projects/20260628_moe_mgpu_pr_readiness.md --fix`
+  - `git diff --check -- .agents/projects/20260628_moe_mgpu_full_run_tryout.md .agents/projects/20260628_moe_mgpu_pr_readiness.md`
+- Result:
+  - Text search confirmed the successful one-node run, historical watch-path
+    OOM, and 32-node pre-training kill are all represented in the intended
+    docs.
+  - Markdown/precheck passed for both project docs.
+  - `git diff --check` passed for both project docs.
+- Interpretation: the durable handoff docs now match the actual full-run
+  evidence: clean one-node 20-step success, no valid 32-node training evidence
+  yet. No issue comment; this is documentation/readiness synchronization.
+- Next action: commit the docs/logbook sync, then wait for the lint-review quota
+  reset or continue non-forward readiness work that does not conflict with
+  `#6597-forward`.

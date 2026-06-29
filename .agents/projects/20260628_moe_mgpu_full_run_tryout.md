@@ -20,11 +20,19 @@ same padded-capacity path validated by the H100 kernel tests.
   reported `steady_state_time=0.069388s`, `139.27 TFLOP/s/rank`,
   `14.08%` of nominal H100 bf16 roofline, and zero dropped routes.
 - One-node full-trainer target-shape smoke
-  `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4` reached
-  `global_step=9/20` with `tokens_per_second=549668.13`, `MFU ~= 20.1%`, then
-  OOMed during the default step-10 watch/per-parameter-norm path. The scale
-  launcher now disables watch stats by default; opt in explicitly with
-  `SCALE_WATCH_TARGETS`.
+  `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed `20/20` steps
+  on one 8xH100 node with `SCALE_WATCH_TARGETS=`, saved checkpoint `step-20`,
+  and reported mean MFU `20.13%`, p50 MFU `20.15%`, and about `554k` tokens/s.
+  This is the current best full-trainer tryout recipe.
+- Earlier one-node smoke `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4`
+  reached `global_step=9/20`, then OOMed during the default step-10
+  watch/per-parameter-norm path. Keep `SCALE_WATCH_TARGETS=` empty for
+  throughput/full-run smokes unless diagnostics are explicitly needed.
+- A 32-node 20-step attempt
+  `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609` was
+  externally killed while the 32 child tasks were still building, before any
+  training metrics appeared. It is not evidence about Pallas MGPU scale
+  correctness or performance.
 
 ## Recommended 20-Step Integration Smoke
 
@@ -58,12 +66,16 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
     uv run python -m experiments.grug.moe.launch_cw_scale
 ```
 
-Use this as the pass/fail gate before trying the full 32-node shape.
+Use this as the pass/fail gate before trying the full 32-node shape. It passed
+with run id `grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; rerun this recipe if
+the branch changes behavior or if you need a fresh trainer smoke.
 
 ## Full-Scale 20-Step Run
 
 This keeps the scale launcher's default 90B-total shape but switches the MoE
-backend to Pallas MGPU and limits training to 20 steps.
+backend to Pallas MGPU and limits training to 20 steps. A first attempt was
+killed before training while child tasks were building; relaunch only when
+capacity/user scheduling is suitable and babysit it to a terminal result.
 
 ```bash
 uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
