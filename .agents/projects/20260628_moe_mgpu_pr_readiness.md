@@ -100,13 +100,19 @@ before review. It is a coordination artifact for the implementation in
 - Performance:
   - Best observed target forward row: `pallas_mgpu` about `0.03853s`; comparable
     `ragged_all_to_all` baseline about `0.08204s`.
-  - The forward-performance lane's best opt-in chunked `permute_up` stage row is
-    `0.015167s`, `141.59 TFLOP/s/rank`, `14.32%` nominal H100 bf16 roofline per
-    rank on the target shape with row-base + copy-tile 256
-    (`/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002645`). It matched
-    the staged path exactly in
-    `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002937`, but remains
-    opt-in and below the forward roofline goal.
+  - The forward-performance lane's best validated opt-in chunked `permute_up`
+    stage row is currently `0.0092931247s`, `231.08 TFLOP/s/rank`, `23.37%`
+    nominal H100 bf16 roofline per rank on the target balanced shape with
+    serial fused group32, copytile512, copy_rows=1
+    (`/dlwh/bench_grug_moe_pallas_mgpu-20260629-052330-copytile-nearby-sweep`).
+    Split target compare
+    `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052800-copyrows1-copytile512-splitcompare`
+    matched the staged baseline exactly (`max_abs_diff=0`, dropped=0). This is
+    an opt-in benchmark path and remains below the forward roofline goal.
+    Faster timing-only copytile640/1280 rows are invalid because split compares
+    showed hidden mismatches. Static-workqueue experiments in a separate
+    forward worktree were correct but slower at target shape, so they are not
+    integrated here.
   - Current gated target full forward+backward row after the static tuned-config
     lookup and lint-review dispatcher cleanup:
     `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`,
@@ -253,8 +259,11 @@ Do not add fake cost estimates that are not consumed by the actual launch API.
 - `#6597-forward` owns the next `permute_up` forward-performance changes. Main
   should coordinate in that room before touching forward scheduling or shared
   benchmark defaults. Latest coordination poll saw no handoff to main; the
-  best opt-in chunked stage result remains `0.015167s` / `14.32%` roofline,
-  below the forward target and not promoted to the default public path.
+  best validated opt-in chunked stage result is `0.0092931247s` /
+  `23.37%` roofline with group32/copytile512/copy_rows=1. This is below the
+  forward target and not promoted to the default public path. Separate
+  static-workqueue experiments are correct-but-slower and live outside this
+  worktree.
 - If the first PR remains forward-first, it should say that backward performance
   is present but still below the final roofline target, with the current
   saved-residual custom-VJP baseline as evidence.
@@ -445,9 +454,17 @@ Validation:
   and reported mean MFU `20.13%`, p50 MFU `20.15%`, and about `554k` tokens/s.
 
 Performance evidence:
-- Best observed target forward row: `pallas_mgpu ~= 0.03853s` versus comparable
-  `ragged_all_to_all ~= 0.08204s` at EP=8, T/rank=32768, D=2560, I=1280,
-  E_local=32, K=4, bf16.
+- Best observed default-path target forward row: `pallas_mgpu ~= 0.03853s`
+  versus comparable `ragged_all_to_all ~= 0.08204s` at EP=8, T/rank=32768,
+  D=2560, I=1280, E_local=32, K=4, bf16.
+- Best validated opt-in chunked `permute_up` stage row:
+  `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052330-copytile-nearby-sweep`,
+  group32/copytile512/copy_rows=1, `steady_state_time=0.0092931247s`,
+  `231.08 TFLOP/s/rank`, `23.37%` nominal H100 bf16 roofline/rank. Exact split
+  compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052800-copyrows1-copytile512-splitcompare`
+  passed with `matches_baseline=true`, `max_abs_diff=0`, `mean_abs_diff=0`, and
+  no dropped routes. This remains an opt-in benchmark path, not the public
+  default.
 - Current gated target public forward+backward row:
   `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`,
   `steady_state_time=0.06938801701956739s`, `139.27 TFLOP/s/rank`,

@@ -21,7 +21,7 @@ author: dlwh
 - 2026-06-29: Current gated target full-step PR evidence after the static tuned-config lookup and lint-review dispatcher cleanup is `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`: `steady_state_time=0.069388s`, `139.27 TFLOP/s/rank`, `14.08%` nominal bf16 roofline per rank, no dropped routes/error. The earlier tuned-config target row `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-tuned-config` was slightly faster at `0.069180s`; both remain below the final roofline target but reproduce the existing ~0.069s public baseline under `--fail-on-error`.
 - 2026-06-29: Saved-residual backward plus `combine_bwd_block_n=512` and `dx_unpermute_block_n=2560` are the current non-forward default improvements. The old `backward_prereq` recompute/materialization stage is no longer the default public-path bottleneck; remaining optimization is split between forward/return communication structure and backward `combine_bwd`/W13 VJP costs.
 - 2026-06-29: Current PR-readiness evidence after benchmark capacity-default alignment, saved-backward diagnostic coverage, static tuned-config lookup, topology hardening, and readiness-note sync: latest local benchmark harness and full local Grug MoE file (`MOE-MGPU-325`), public validation/fallback slice (`MOE-MGPU-327`), full active tracked/untracked file-set precheck (`MOE-MGPU-333`), and all-files precommit (`MOE-MGPU-329`) pass; H100 smoke `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-default-capacity-smoke` validates default `capacity_factor=1.25`, H100 parity `/dlwh/iris-run-test_grugformer_moe-20260629-topology-hardening-public-refresh` passes after topology hardening, broad H100 Hopper Pallas slice `/dlwh/iris-run-test_grugformer_moe-20260629-lint-cleanup-broad-plus-chunked` passes, H100 module-boundary training-step integration `/dlwh/iris-run-test_grugformer_moe-20260629-module-training-step` passes, target H100 stage job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-saved-bwd-breakdown` records `saved_backward_pipeline=0.035685s`, target public fwd+bwd refresh `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup` records `steady_state_time=0.069388s`, and the `capacity_factor=1.125` H100 checks in `MOE-MGPU-281`/`MOE-MGPU-291` had zero drops across four uniform-routing target-shape seeds plus a balanced target fwd+bwd run (`0.065201s`) without changing the default.
-- 2026-06-29: The forward-performance lane has broad ownership of `permute_up` scheduling/copy/fused/chunked experiments in `#6597-forward`. The best opt-in chunked stage result reported there is row-base + copy-tile 256 on the target shape at `0.015167s`, `141.59 TFLOP/s/rank`, `14.32%` roofline, exact vs staged but still below the forward goal and not promoted to the default. Main-lane work is staying on API/readiness/validation unless forward changes are explicitly coordinated.
+- 2026-06-29: The forward-performance lane has broad ownership of `permute_up` scheduling/copy/fused/chunked experiments in `#6597-forward`. The best validated opt-in chunked stage result reported there is group32/copytile512/copy_rows=1 on the target balanced shape at `0.0092931247s`, `231.08 TFLOP/s/rank`, `23.37%` roofline, exact vs staged in split compare, still below the forward goal and not promoted to the default. Static-workqueue work in a separate forward worktree is correct-but-slower at target. Main-lane work is staying on API/readiness/validation unless forward changes are explicitly coordinated.
 - 2026-06-29: Static audits in `MOE-MGPU-320`, `MOE-MGPU-336`, and the latest current-state re-audit `MOE-MGPU-340` confirm the current production metadata/dataflow still matches the spec's deterministic source-local assignment contract: return metadata is limited to `recv_src_rank` and `recv_src_assignment`, token/route are derived from the assignment id, production combine paths avoid remote atomic add, there are no checked-in `pl.pallas_call(...)` sites or fake `cost_estimate` placeholders, and the expected H100/test hooks remain present. The stale Meitner vector-dx heartbeat was freshly polled and remains a terminal success but is superseded by newer target fwd+bwd evidence.
 - 2026-06-29: Full-run tryout wiring is now present: `experiments/grug/moe/launch_cw_scale.py` accepts `SCALE_MOE_IMPLEMENTATION` and `SCALE_MOE_CAPACITY_FACTOR`, `GrugModelConfig` carries `moe_capacity_factor`, and `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` has one-node and 32-node 20-step H100 launch commands. Local syntax, `git diff --check`, and `./infra/pre-commit.py --changed-files --fix` passed in `MOE-MGPU-343`. Remaining formal local gate for the first stacked PR is `./infra/pre-commit.py --review`; latest concrete lint-review findings were addressed in `MOE-MGPU-316`, but the rerun is agent-quota blocked until 2026-06-29 16:30 America/Los_Angeles.
 - 2026-06-29: The first target-shape real Grug MoE trainer smoke completed 20/20 steps on one 8xH100 node with `implementation="pallas_mgpu"`, `capacity_factor=1.25`, and scale-run watch disabled. Job `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` and child `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7/grug-train-grug-moe-pallas-mgpu-20step-smoke-2d87348e7` both succeeded, saved checkpoint `step-20`, and reported mean MFU `20.13%`, p50 MFU `20.15%`, and `554k` tokens/s in `MOE-MGPU-347`.
@@ -29,6 +29,7 @@ author: dlwh
 ## Decision Log
 - 2026-06-28: Use the existing ragged all-to-all backend as the staged EP reference under the public `pallas_mgpu` boundary until the two Pallas MGPU kernels replace it. This keeps API validation and metadata tests moving without claiming final kernel performance.
 - 2026-06-29: Treat `#6597-forward` as the source of truth for `permute_up` forward-performance scheduling/copy/overlap work. Main-lane changes should stay on public API, correctness, benchmark artifacts, backward/full-step validation, and PR readiness unless forward work is explicitly coordinated.
+- 2026-06-29: Carry the latest `#6597-forward` validated opt-in target best as group32/copytile512/copy_rows=1 (`0.0092931247s`, `23.37%` roofline) for readiness summaries; do not promote faster copytile640/1280 timing-only rows because split compares showed hidden mismatches.
 
 ## Entry Log
 
@@ -5460,3 +5461,41 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   full-trainer memory at the larger shape.
 - Next action: run narrow Markdown/precheck for the docs/logbook sync, then
   commit if clean.
+
+### 2026-06-29 14:32 - MOE-MGPU-353 refresh forward-room readiness pointers
+- Hypothesis: the main PR-readiness note should not carry stale forward-lane
+  numbers while `#6597-forward` owns ongoing `permute_up` optimization.
+- Commit Hash: `e9b563939` plus uncommitted readiness/logbook edits.
+- Evidence inspected:
+  - Codex chat room `#6597-forward`, latest messages through id `237`.
+  - `.agents/logbooks/6597-moe-mgpu-forward.md` entries `FWD-SCHED-016` through
+    `FWD-SCHED-020`.
+  - Current main worktree `pallas_mgpu.py` and benchmark harness to distinguish
+    available opt-in knobs from forward-lane work in the separate `0e5a`
+    worktree.
+- Result:
+  - The older main readiness note still cited `0.015167s` / `14.32%` roofline
+    as the best opt-in chunked `permute_up` target row.
+  - Forward-lane evidence supersedes that: the best validated opt-in target row
+    is group32/copytile512/copy_rows=1 from
+    `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052330-copytile-nearby-sweep`,
+    `steady_state_time=0.0092931247s`, `231.08 TFLOP/s/rank`, `23.37%`
+    nominal H100 bf16 roofline/rank.
+  - Exact split compare
+    `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052800-copyrows1-copytile512-splitcompare`
+    passed with `matches_baseline=true`, `max_abs_diff=0`, `mean_abs_diff=0`,
+    and no dropped routes.
+  - Faster copytile640/1280 timing-only rows are invalid because split compares
+    showed hidden mismatches.
+  - Static-workqueue experiments reported in `#6597-forward` are in a separate
+    worktree and are correct-but-slower at target shape, so they are not
+    integrated into this main PR-readiness surface.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_pr_readiness.md` performance,
+    open-gap, and PR-body draft sections with the latest forward-room
+    coordination state.
+- Interpretation: this is documentation/coordination hygiene, not a new main
+  milestone. Keep #6597 quiet. Main should still coordinate in `#6597-forward`
+  before touching forward scheduling or shared benchmark defaults.
+- Next action: run narrow Markdown/precheck for the readiness/logbook update,
+  then wait for the 16:30 PDT lint-review quota reset heartbeat.
