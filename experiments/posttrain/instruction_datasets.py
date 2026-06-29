@@ -38,6 +38,8 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-SFT-Science-v2
+27. nvidia/OpenScienceReasoning-2
 """
 
 import dataclasses
@@ -141,6 +143,7 @@ def multi_turn_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    message_passthrough_keys: Sequence[str] = (),
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -153,6 +156,7 @@ def multi_turn_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        message_passthrough_keys=tuple(message_passthrough_keys),
     )
 
 
@@ -256,6 +260,29 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+NEMOTRON_SFT_SCIENCE_V2_HF_ID = "nvidia/Nemotron-SFT-Science-v2"
+NEMOTRON_SFT_SCIENCE_V2_REVISION = "6536a5021222a94126968e8c92f29ee47fc8a7df"
+NEMOTRON_SFT_SCIENCE_V2_SUBSETS = ["rqa", "so", "syn_mcq", "vendor"]
+NEMOTRON_SFT_SCIENCE_V2_METADATA_COLUMNS = ["uuid", "license", "used_in", "metadata", "tools"]
+NEMOTRON_SFT_SCIENCE_V2_MESSAGE_PASSTHROUGH_KEYS = (
+    "reasoning_content",
+    "tool_calls",
+    "function_call",
+    "tool_call_id",
+    "name",
+)
+
+OPENSCIENCE_REASONING_2_HF_ID = "nvidia/OpenScienceReasoning-2"
+OPENSCIENCE_REASONING_2_REVISION = "174b02c9cdf231f220765b2a1d5ece4550921894"
+OPENSCIENCE_REASONING_2_METADATA_COLUMNS = ["expected_answer"]
+
+
+def science_v2_extra_columns(row: dict[str, Any]) -> dict[str, Any]:
+    tools = row.get("tools")
+    if isinstance(tools, list) and tools:
+        return {"chat_template_kwargs": {"tools": tools}}
+    return {}
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -559,6 +586,18 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="nvidia/OpenMathReasoning/genselect",
         splits=["genselect"],
     ),
+    OPENSCIENCE_REASONING_2_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=OPENSCIENCE_REASONING_2_HF_ID,
+        revision=OPENSCIENCE_REASONING_2_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="input",
+            response_column="output",
+        ),
+        metadata_columns=OPENSCIENCE_REASONING_2_METADATA_COLUMNS,
+        name=OPENSCIENCE_REASONING_2_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
@@ -595,6 +634,21 @@ for split_name in NEMOTRON_V1_SPLITS:
         splits=[split_name],
     )
 
+for subset_name in NEMOTRON_SFT_SCIENCE_V2_SUBSETS:
+    dataset_key = f"{NEMOTRON_SFT_SCIENCE_V2_HF_ID}/{subset_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_SFT_SCIENCE_V2_HF_ID,
+        revision=NEMOTRON_SFT_SCIENCE_V2_REVISION,
+        adapter=multi_turn_adapter(
+            extra_metadata_fn=science_v2_extra_columns,
+            message_passthrough_keys=NEMOTRON_SFT_SCIENCE_V2_MESSAGE_PASSTHROUGH_KEYS,
+        ),
+        metadata_columns=NEMOTRON_SFT_SCIENCE_V2_METADATA_COLUMNS,
+        subsets=[subset_name],
+        splits=["train"],
+    )
+
 
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     dataset_name = hf_dataset_id.replace("/", "--")
@@ -611,6 +665,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_dict = dataclasses.asdict(adapter)
     adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+    if not adapter_dict.get("message_passthrough_keys"):
+        adapter_dict.pop("message_passthrough_keys", None)
 
     def canonicalize(value):
         if isinstance(value, dict):

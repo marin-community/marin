@@ -87,6 +87,7 @@ class TransformAdapter:
     metadata_remap: dict[str, str] = field(default_factory=dict)
     replacements: dict[str, str] | None = None
     extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    message_passthrough_keys: tuple[str, ...] = ()
 
     def transform_conversation_to_openai_format(
         self,
@@ -128,7 +129,10 @@ class TransformAdapter:
             conversation = row[self.conversation_column]
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                extra_fields = {
+                    key: conv[key] for key in self.message_passthrough_keys if key in conv and conv[key] is not None
+                }
+                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key], **extra_fields))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
