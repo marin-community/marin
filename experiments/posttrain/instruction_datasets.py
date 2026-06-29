@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. nvidia/Nemotron-Math-Proofs-v1
 """
 
 import dataclasses
@@ -156,6 +157,31 @@ def multi_turn_adapter(
     )
 
 
+def non_empty_multi_turn_adapter(
+    conversation_column: str = "messages",
+    role_key: str = "role",
+    user_value: str = "user",
+    assistant_value: str = "assistant",
+    system_value: str = "system",
+    content_key: str = "content",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.NON_EMPTY_SINGLE_COLUMN_MULTI_TURN,
+        conversation_column=conversation_column,
+        role_key=role_key,
+        user_value=user_value,
+        assistant_value=assistant_value,
+        system_value=system_value,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
 def instruction_response_adapter(
     *,
     instruction_column: str,
@@ -255,6 +281,22 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "gemini-3-pro-grade",
     "qwen3-4b-thinking-reward@128",
     "source",
+]
+
+NEMOTRON_MATH_PROOFS_V1_HF_ID = "nvidia/Nemotron-Math-Proofs-v1"
+NEMOTRON_MATH_PROOFS_V1_REVISION = "97229c5"
+NEMOTRON_MATH_PROOFS_V1_METADATA_COLUMNS = [
+    "uuid",
+    "problem",
+    "source",
+    "formal_statement",
+    "lean_header",
+    "url",
+    "user_name",
+    "user_url",
+    "sft_line_number",
+    "used_in",
+    "license",
 ]
 
 
@@ -429,6 +471,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="lm-provers/FineProofs-SFT/proof-only",
         subsets=["default"],
         splits=["train"],
+    ),
+    NEMOTRON_MATH_PROOFS_V1_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=NEMOTRON_MATH_PROOFS_V1_HF_ID,
+        revision=NEMOTRON_MATH_PROOFS_V1_REVISION,
+        adapter=non_empty_multi_turn_adapter(),
+        metadata_columns=NEMOTRON_MATH_PROOFS_V1_METADATA_COLUMNS,
+        name=NEMOTRON_MATH_PROOFS_V1_HF_ID,
+        subsets=["default"],
+        splits=["lean"],
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",
