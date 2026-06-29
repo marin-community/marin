@@ -12,13 +12,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 
 import uvicorn
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.dashboard_common import public, requires_auth
+from iris.cluster.dashboard_common import on_shutdown, public, requires_auth
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -185,15 +183,11 @@ def main() -> None:
     endpoint_id = ctx.registry.register(config.port_name, address, {"job_id": ctx.job_id.to_wire()})
     logger.info("ducky registered as %s at %s", config.port_name, address)
 
-    @asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncGenerator[None, None]:
-        try:
-            yield
-        finally:
-            ctx.registry.unregister(endpoint_id)
-            logger.info("ducky endpoint unregistered")
+    async def _unregister() -> None:
+        ctx.registry.unregister(endpoint_id)
+        logger.info("ducky endpoint unregistered")
 
-    app.router.lifespan_context = lifespan
+    app.router.lifespan_context = on_shutdown(_unregister)
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
