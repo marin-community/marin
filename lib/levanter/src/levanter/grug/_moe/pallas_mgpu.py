@@ -292,8 +292,6 @@ class GroupInfo:
 
     @classmethod
     def create(cls, group_lengths, tile, tid):
-        """Get the group info for the current block."""
-
         tile = jnp.int32(tile)
         group_boundaries = [group_lengths[i] for i in range(len(group_lengths))]
 
@@ -564,7 +562,6 @@ def _permute_up_tiled_values_with_schedule(
     capacity: int,
     ep_size: int,
     local_experts: int,
-    expert_axis: str,
     config: MoeMgpuConfig,
 ) -> jax.Array:
     if config.dispatch_copy_schedule != _DISPATCH_COPY_EXPERT_GROUP_PEER:
@@ -788,7 +785,6 @@ def permute_mgpu(
             capacity=plan.capacity,
             ep_size=plan.ep_size,
             local_experts=local_experts,
-            expert_axis=expert_axis,
             config=config,
         )
     return MoeMgpuReceiveLayout(
@@ -1062,7 +1058,6 @@ def permute_up_mgpu(
             capacity=capacity,
             ep_size=ep_size,
             local_experts=local_experts,
-            expert_axis=expert_axis,
             config=config,
         )
     hidden = _moe_mgpu_dispatch_w13_activation(

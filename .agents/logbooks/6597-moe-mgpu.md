@@ -6213,3 +6213,43 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Commit this cleanup and rerun `./infra/pre-commit.py --review --agent-command 'codex exec'`
     against the new branch head.
+
+### 2026-06-29 16:10 - MOE-MGPU-373 second lint-review cleanup pass
+- Hypothesis: the narrowed second review findings include several more local
+  cleanups that improve readability without changing the known-good H100 run
+  configuration.
+- Base Commit Hash: `8f702dd63`.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+  - `uv run python -m py_compile lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py lib/levanter/src/levanter/grug/_moe/common.py lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel' -o addopts=`
+- Result:
+  - Second lint-review artifact:
+    `/tmp/marin-linter/20260629T230211`.
+  - Fixed additional local findings:
+    - Replaced the benchmark input five-tuple with a `BenchInputs` dataclass and
+      explicit `as_jit_args()` boundary.
+    - Typed `jsonl_handle` as `TextIO`.
+    - Changed `MoeImplementationSpec` back to an explicit
+      `MoeImplementation | list[...] | tuple[...] | None` union to avoid the
+      ambiguous string-as-sequence surface.
+    - Removed a trivial `GroupInfo.create` docstring.
+    - Removed the unused `expert_axis` parameter from
+      `_permute_up_tiled_values_with_schedule` and fixed call sites.
+    - Parameterized duplicated benchmark CLI rejection tests.
+  - Validation:
+    - `py_compile` -> passed.
+    - changed-file pre-commit -> passed after fixing one Pyrefly call-site
+      mismatch.
+    - benchmark unit tests -> `41 passed, 1 warning`.
+    - Grug Pallas/capacity/EP slice -> `62 passed, 11 skipped, 38 deselected,
+      1 warning`.
+- Interpretation:
+  - This is still branch-readiness cleanup; no #6597 issue update.
+  - Remaining review themes, if any, should be evaluated after rerunning the
+    advisory review. In particular, a full `permute_up` mode enum refactor is
+    likely a separate forward-lane API decision rather than a pre-PR cleanup.
+- Next action:
+  - Commit and rerun the advisory lint review one more time.

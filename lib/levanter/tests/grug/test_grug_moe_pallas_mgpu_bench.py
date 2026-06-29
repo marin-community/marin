@@ -174,42 +174,18 @@ def test_pallas_mgpu_benchmark_cli_accepts_comma_separated_stage_subset(monkeypa
     ]
 
 
-def test_pallas_mgpu_benchmark_cli_rejects_duplicate_implementations(monkeypatch):
-    bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "bench_grug_moe_pallas_mgpu.py",
-            "--implementations",
-            "pallas_mgpu",
-            "pallas_mgpu",
-        ],
-    )
-
-    with pytest.raises(SystemExit):
-        bench._parse_args()
-
-
 @pytest.mark.parametrize(
-    "stage_args",
+    "cli_args",
     [
-        ["permute,w13,permute"],
-        ["permute", "w13", "permute"],
+        ["--implementations", "pallas_mgpu", "pallas_mgpu"],
+        ["--implementations", "none", "--include-pallas-stages", "--pallas-stages", "permute,w13,permute"],
+        ["--implementations", "none", "--include-pallas-stages", "--pallas-stages", "permute", "w13", "permute"],
+        ["--implementations", "none", "--include-pallas-stages", "--pallas-stages", "combine_bwd,not_a_stage"],
     ],
 )
-def test_pallas_mgpu_benchmark_cli_rejects_duplicate_stage_subset(monkeypatch, stage_args):
+def test_pallas_mgpu_benchmark_cli_rejects_invalid_choices(monkeypatch, cli_args):
     bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "bench_grug_moe_pallas_mgpu.py",
-            "--implementations",
-            "none",
-            "--include-pallas-stages",
-            "--pallas-stages",
-            *stage_args,
-        ],
-    )
+    monkeypatch.setattr("sys.argv", ["bench_grug_moe_pallas_mgpu.py", *cli_args])
 
     with pytest.raises(SystemExit):
         bench._parse_args()
@@ -280,24 +256,6 @@ def test_pallas_mgpu_benchmark_candidate_timeout_rejects_non_positive_value():
             pytest.fail("non-positive timeout should fail before entering the context")
 
 
-def test_pallas_mgpu_benchmark_cli_rejects_unknown_pallas_stage(monkeypatch):
-    bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "bench_grug_moe_pallas_mgpu.py",
-            "--implementations",
-            "none",
-            "--include-pallas-stages",
-            "--pallas-stages",
-            "combine_bwd,not_a_stage",
-        ],
-    )
-
-    with pytest.raises(SystemExit):
-        bench._parse_args()
-
-
 def test_pallas_mgpu_benchmark_expected_result_count_tracks_implementations_and_stages():
     bench = _load_bench_module()
 
@@ -351,12 +309,10 @@ def test_pallas_mgpu_benchmark_fail_on_error_ignores_ok_rows_before_failure():
         bench._raise_for_unsuccessful_results(rows)
 
 
-def test_pallas_mgpu_benchmark_cli_rejects_chunked_permute_up_without_balanced_routing(monkeypatch):
-    bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
+@pytest.mark.parametrize(
+    "cli_args",
+    [
         [
-            "bench_grug_moe_pallas_mgpu.py",
             "--implementations",
             "none",
             "--include-pallas-stages",
@@ -364,40 +320,13 @@ def test_pallas_mgpu_benchmark_cli_rejects_chunked_permute_up_without_balanced_r
             "permute_up",
             "--dispatch-chunked-permute-up",
         ],
-    )
-
-    with pytest.raises(SystemExit):
-        bench._parse_args()
-
-
-def test_pallas_mgpu_benchmark_cli_rejects_split_wg_without_chunked(monkeypatch):
+        ["--routing", "balanced", "--dispatch-split-wg-permute-up"],
+        ["--routing", "balanced", "--dispatch-chunked-permute-up", "--dispatch-split-wg-overlap-permute-up"],
+    ],
+)
+def test_pallas_mgpu_benchmark_cli_rejects_invalid_chunked_mode(monkeypatch, cli_args):
     bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "bench_grug_moe_pallas_mgpu.py",
-            "--routing",
-            "balanced",
-            "--dispatch-split-wg-permute-up",
-        ],
-    )
-
-    with pytest.raises(SystemExit):
-        bench._parse_args()
-
-
-def test_pallas_mgpu_benchmark_cli_rejects_overlap_without_split_wg(monkeypatch):
-    bench = _load_bench_module()
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "bench_grug_moe_pallas_mgpu.py",
-            "--routing",
-            "balanced",
-            "--dispatch-chunked-permute-up",
-            "--dispatch-split-wg-overlap-permute-up",
-        ],
-    )
+    monkeypatch.setattr("sys.argv", ["bench_grug_moe_pallas_mgpu.py", *cli_args])
 
     with pytest.raises(SystemExit):
         bench._parse_args()

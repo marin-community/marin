@@ -11,7 +11,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, TextIO
 
 import jax
 import jax.numpy as jnp
@@ -301,6 +301,18 @@ class BenchResult:
     matches_baseline: bool | None
 
 
+@dataclass(frozen=True, slots=True)
+class BenchInputs:
+    x: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    w_up_gate: jax.Array
+    w_down: jax.Array
+
+    def as_jit_args(self) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        return (self.x, self.selected_experts, self.combine_weights, self.w_up_gate, self.w_down)
+
+
 def _git_sha(override: str | None) -> str:
     if override is not None:
         return override
@@ -484,7 +496,7 @@ def _make_inputs(
     dtype: jnp.dtype,
     scale: float,
     seed: int,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+) -> BenchInputs:
     k_x, k_sel, k_logits, k_w13, k_w2 = jax.random.split(jax.random.key(seed), 5)
     global_tokens = shape.tokens_per_rank * shape.ep_size
     num_experts = shape.experts_per_rank * shape.ep_size
@@ -501,31 +513,27 @@ def _make_inputs(
         jax.random.normal(k_w2, (num_experts, shape.intermediate_dim, shape.hidden_dim), dtype=jnp.float32) * scale
     )
 
-    return (
-        x.astype(dtype),
-        selected_experts,
-        combine_weights.astype(dtype),
-        w_up_gate.astype(dtype),
-        w_down.astype(dtype),
+    return BenchInputs(
+        x=x.astype(dtype),
+        selected_experts=selected_experts,
+        combine_weights=combine_weights.astype(dtype),
+        w_up_gate=w_up_gate.astype(dtype),
+        w_down=w_down.astype(dtype),
     )
 
 
 def _reshard_inputs(
     mesh: Mesh,
-    x: jax.Array,
-    selected_experts: jax.Array,
-    combine_weights: jax.Array,
-    w_up_gate: jax.Array,
-    w_down: jax.Array,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    inputs: BenchInputs,
+) -> BenchInputs:
     batch_sharding = NamedSharding(mesh, P("expert", None))
     expert_sharding = NamedSharding(mesh, P("expert", None, None))
-    return (
-        jax.sharding.reshard(x, batch_sharding),
-        jax.sharding.reshard(selected_experts, batch_sharding),
-        jax.sharding.reshard(combine_weights, batch_sharding),
-        jax.sharding.reshard(w_up_gate, expert_sharding),
-        jax.sharding.reshard(w_down, expert_sharding),
+    return BenchInputs(
+        x=jax.sharding.reshard(inputs.x, batch_sharding),
+        selected_experts=jax.sharding.reshard(inputs.selected_experts, batch_sharding),
+        combine_weights=jax.sharding.reshard(inputs.combine_weights, batch_sharding),
+        w_up_gate=jax.sharding.reshard(inputs.w_up_gate, expert_sharding),
+        w_down=jax.sharding.reshard(inputs.w_down, expert_sharding),
     )
 
 
@@ -785,7 +793,7 @@ def _result_row(
 
 def _emit_result(
     row: BenchResult,
-    jsonl_handle: Any | None,
+    jsonl_handle: TextIO | None,
     seen_measurement_keys: set[str] | None = None,
 ) -> None:
     if seen_measurement_keys is not None:
@@ -853,7 +861,7 @@ def _benchmark_implementation(
     shape: BenchShape,
     config: MoeMgpuConfig,
     mesh: Mesh,
-    inputs: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    inputs: BenchInputs,
     target: jax.Array | None,
     pass_mode: str,
     baseline_output: Any | None,
@@ -912,7 +920,7 @@ def _benchmark_implementation(
             if pass_mode == "forward":
                 compile_time, steady_state_time, out = _time_jitted(
                     jax.jit(call_moe),
-                    *inputs,
+                    *inputs.as_jit_args(),
                     warmup=warmup,
                     steps=steps,
                 )
@@ -921,7 +929,7 @@ def _benchmark_implementation(
             else:
                 compile_time, steady_state_time, out = _time_jitted(
                     jax.jit(grad_fn),
-                    *inputs,
+                    *inputs.as_jit_args(),
                     target,
                     warmup=warmup,
                     steps=steps,
@@ -1001,7 +1009,7 @@ def _benchmark_pallas_stages(
     shape: BenchShape,
     config: MoeMgpuConfig,
     mesh: Mesh,
-    inputs: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    inputs: BenchInputs,
     target: jax.Array | None,
     routing: str,
     dtype: jnp.dtype,
@@ -1012,7 +1020,11 @@ def _benchmark_pallas_stages(
     allclose_atol: float,
     pallas_stages: frozenset[str] | None,
 ) -> list[BenchResult]:
-    x, selected_experts, combine_weights, w_up_gate, w_down = inputs
+    x = inputs.x
+    selected_experts = inputs.selected_experts
+    combine_weights = inputs.combine_weights
+    w_up_gate = inputs.w_up_gate
+    w_down = inputs.w_down
     target_for_stages = None
     if target is not None:
         target_for_stages = jax.sharding.reshard(target, NamedSharding(mesh, P("expert", None)))
@@ -1036,7 +1048,6 @@ def _benchmark_pallas_stages(
         plan = prepare_mgpu_receive_plan(
             selected_experts_local,
             local_experts=shape.experts_per_rank,
-            expert_axis="expert",
             config=config,
         )
         return plan
@@ -1074,7 +1085,6 @@ def _benchmark_pallas_stages(
             capacity=plan.capacity,
             ep_size=plan.ep_size,
             local_experts=shape.experts_per_rank,
-            expert_axis="expert",
             config=config,
         )
         return recv_x, plan.dropped
@@ -3375,7 +3385,8 @@ def main() -> None:
     dtype = jnp.bfloat16
     mesh = _make_mesh(shape.ep_size)
     inputs = _reshard_inputs(
-        mesh, *_make_inputs(shape=shape, routing=args.routing, dtype=dtype, scale=args.scale, seed=args.seed)
+        mesh,
+        _make_inputs(shape=shape, routing=args.routing, dtype=dtype, scale=args.scale, seed=args.seed),
     )
     pallas_stages = frozenset(args.pallas_stages) if args.pallas_stages is not None else None
     target = None

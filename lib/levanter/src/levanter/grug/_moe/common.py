@@ -3,7 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -28,7 +28,7 @@ MoeImplementation: TypeAlias = Literal[
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
-MoeImplementationSpec: TypeAlias = MoeImplementation | Sequence[MoeImplementation] | None
+MoeImplementationSpec: TypeAlias = MoeImplementation | list[MoeImplementation] | tuple[MoeImplementation, ...] | None
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep", "pallas_mgpu")
 # Local means no collectives over an expert axis. These backends can still run
