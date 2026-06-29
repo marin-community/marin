@@ -27,6 +27,7 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import check_drift, write_artifact
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
@@ -140,6 +141,11 @@ class StepRunner:
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
         """
+        # Make step progress visible by default. Idempotent and non-clobbering:
+        # skipped when the driver (or a wrapping app) already installed handlers.
+        if not logging.getLogger().handlers:
+            configure_logging(level=logging.INFO)
+
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
