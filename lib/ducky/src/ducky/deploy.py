@@ -21,12 +21,13 @@ from pathlib import Path
 
 import click
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
-from iris.cli.main import create_client_token_provider
 from iris.client.client import IrisClient, Job
 from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import region_constraint
+from iris.cluster.token_store import load_any_token, load_token
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
-from iris.rpc.auth import TokenProvider
+from iris.rpc import config_pb2
+from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
 from rigging.config_discovery import resolve_cluster_config
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,27 @@ def _ducky_env_vars() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key.startswith("DUCKY_")}
 
 
+def _token_provider(auth_config: config_pb2.AuthConfig, cluster_name: str) -> TokenProvider | None:
+    """Build a client TokenProvider for a cluster: a stored `iris login` JWT, else the config's auth method.
+
+    Mirrors the CLI's token resolution without importing the CLI module.
+    """
+    credential = load_token(cluster_name) or load_any_token()
+    if credential is not None:
+        return StaticTokenProvider(credential.token)
+    provider = auth_config.WhichOneof("provider")
+    if provider is None:
+        return None
+    if provider == "gcp":
+        return GcpAccessTokenProvider()
+    if provider == "static":
+        tokens = dict(auth_config.static.tokens)
+        if not tokens:
+            raise ValueError("Static auth config requires at least one token")
+        return StaticTokenProvider(next(iter(tokens)))
+    raise ValueError(f"Unknown auth provider: {provider}")
+
+
 @contextmanager
 def _controller_connection(
     cluster: str | None, controller_url: str | None
@@ -70,7 +92,7 @@ def _controller_connection(
     config_file = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
     iris_config = IrisConfig.load(str(config_file))
     proto = iris_config.proto
-    token_provider = create_client_token_provider(proto.auth, cluster_name=cluster) if proto.HasField("auth") else None
+    token_provider = _token_provider(proto.auth, cluster) if proto.HasField("auth") else None
     bundle = iris_config.provider_bundle()
     controller_address = iris_config.controller_address() or bundle.controller.discover_controller(proto.controller)
     logger.info("Tunneling to %s controller at %s", cluster, controller_address)

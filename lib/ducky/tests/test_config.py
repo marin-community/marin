@@ -1,8 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import os
 
+import pytest
 from ducky.config import DuckyConfig
 
 _BASE_ENV = {"DUCKY_REGION": "us-east5", "DUCKY_SCRATCH_BUCKET": "/tmp/ducky"}
@@ -11,7 +12,7 @@ _GCS_ENV = {"DUCKY_GCS_HMAC_KEY_ID": "k", "DUCKY_GCS_HMAC_SECRET": "s"}
 
 @pytest.fixture(autouse=True)
 def _clear_ducky_env(monkeypatch):
-    for key in list(__import__("os").environ):
+    for key in list(os.environ):
         if key.startswith("DUCKY_"):
             monkeypatch.delenv(key, raising=False)
 
