@@ -16,6 +16,9 @@ shards one model across every device instead.
 Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
+    SCALE_GPUS_PER_TASK number of GPUs visible to each Python process (default 8).
+                        Use 1 for Pallas MGPU/NVSHMEM, which requires one local
+                        CUDA device per process.
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
     SCALE_BATCH         global batch in sequences (default 256)
@@ -47,6 +50,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
                         node-local disk with no periodic saves -- for throughput
                         experiments where the checkpoint is disposable and a
                         slow S3 commit must not wedge the end-of-run barrier
+    SCALE_TASK_CPU / SCALE_TASK_RAM / SCALE_TASK_DISK
+                        per-process resources when SCALE_GPUS_PER_TASK != 8
     RUN_ID              unique run identifier
 """
 
@@ -170,7 +175,8 @@ def build_scale_watch_config() -> WatchConfig:
 def build_scale_step() -> ExecutorStep:
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
-    replicas = env_int("SCALE_GPU_REPLICAS", 32)
+    logical_replicas = env_int("SCALE_GPU_REPLICAS", 32)
+    gpus_per_task = env_int("SCALE_GPUS_PER_TASK", GPUS_PER_NODE)
     expert_axis = env_int("SCALE_EXPERT_AXIS", 8)
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
@@ -200,15 +206,36 @@ def build_scale_step() -> ExecutorStep:
     model = build_scale_model()
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
+    if gpus_per_task < 1 or gpus_per_task > GPUS_PER_NODE or GPUS_PER_NODE % gpus_per_task != 0:
+        raise ValueError(f"SCALE_GPUS_PER_TASK={gpus_per_task} must divide the {GPUS_PER_NODE} GPUs in each H100 node")
 
     # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    # rest of the 8*logical_replicas devices. SCALE_GPUS_PER_TASK only changes how
+    # Iris decomposes that logical allocation into Python processes; it must not
+    # change the global mesh size.
+    total_gpus = logical_replicas * GPUS_PER_NODE
+    fixed_axes = replica_axis * expert_axis
+    if total_gpus % fixed_axes != 0:
+        raise ValueError(
+            f"total_gpus={total_gpus} must be divisible by SCALE_REPLICA_AXIS*SCALE_EXPERT_AXIS={fixed_axes}"
+        )
+    data_axis = total_gpus // fixed_axes
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    task_replicas = total_gpus // gpus_per_task
+    task_cpu = env_int("SCALE_TASK_CPU", max(4, 32 * gpus_per_task // GPUS_PER_NODE))
+    task_ram = os.environ.get("SCALE_TASK_RAM", f"{max(32, 256 * gpus_per_task // GPUS_PER_NODE)}g")
+    task_disk = os.environ.get("SCALE_TASK_DISK", f"{max(32, 256 * gpus_per_task // GPUS_PER_NODE)}g")
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=gpus_per_task,
+        cpu=task_cpu,
+        ram=task_ram,
+        disk=task_disk,
+        replicas=task_replicas,
+    )
 
     if os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb":
         tracker = WandbConfig(
@@ -228,7 +255,10 @@ def build_scale_step() -> ExecutorStep:
         **SCALE_TRAINER_DEFAULTS,
     )
 
-    name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
+    name = (
+        f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}"
+        f"-r{logical_replicas}-t{task_replicas}x{gpus_per_task}"
+    )
     return ExecutorStep(
         name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
         fn=run_grug_moe_trial,
