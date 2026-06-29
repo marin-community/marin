@@ -290,6 +290,34 @@ class TestWithTpuFlexible:
         assert rc.replicas == 4
 
 
+class TestWithTpuHostDefaults:
+    # Defaults are 50% of the per-VM host size from lib/iris/config/marin.yaml.
+    @pytest.mark.parametrize(
+        "tpu_type, expected_cpu, expected_ram",
+        [
+            ("v5p-8", 104, "224g"),  # host 208 cpu / 448 GB
+            ("v6e-8", 90, "360g"),  # host 180 cpu / 720 GB
+            ("v4-8", 120, "200g"),  # host 240 cpu / 400 GB
+            ("v5litepod-8", 56, "96g"),  # v5e host 112 cpu / 192 GB
+        ],
+    )
+    def test_defaults_scale_with_host(self, tpu_type, expected_cpu, expected_ram):
+        rc = ResourceConfig.with_tpu(tpu_type)
+        assert rc.cpu == expected_cpu
+        assert rc.ram == expected_ram
+
+    def test_explicit_overrides_win(self):
+        rc = ResourceConfig.with_tpu("v5p-64", ram="400g", cpu=192)
+        assert rc.ram == "400g"
+        assert rc.cpu == 192
+
+    def test_flexible_request_uses_primary_type_host(self):
+        # primary v4-8 (host 400 GB) drives sizing, not the v5p-8 alternative.
+        rc = ResourceConfig.with_tpu(["v4-8", "v5p-8"])
+        assert rc.ram == "200g"
+        assert rc.cpu == 120
+
+
 # resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
 # group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
 # pod-manifest build, so the fray defaults must stay in sync with the provider's map.

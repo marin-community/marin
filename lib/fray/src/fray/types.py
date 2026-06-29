@@ -224,6 +224,49 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
+@dataclass(frozen=True)
+class TpuHostResources:
+    """Per-VM host CPU/RAM for a TPU family.
+
+    Mirrors the ``tpu_pools[*].resources`` blocks in
+    ``lib/iris/config/marin.yaml`` — the scheduler's source of truth for the
+    physical size of each TPU host VM. Used to size ``with_tpu`` container
+    defaults relative to the host rather than a flat constant.
+    """
+
+    cpu: int
+    ram_gb: int
+
+
+# Per-VM host size by TPU family. Keep in sync with the `resources:` blocks in
+# lib/iris/config/marin.yaml.
+TPU_HOST_RESOURCES: dict[str, TpuHostResources] = {
+    "v4": TpuHostResources(cpu=240, ram_gb=400),
+    "v5e": TpuHostResources(cpu=112, ram_gb=192),
+    "v5p": TpuHostResources(cpu=208, ram_gb=448),
+    "v6e": TpuHostResources(cpu=180, ram_gb=720),
+}
+
+# Fraction of the host VM that `with_tpu` requests by default. Leaving headroom
+# lets the scheduler multiplex CPU-only tasks onto the same node while still
+# giving training enough host RAM for checkpoint serialization (the previous
+# flat 128g default OOM-killed large-model saves on big hosts).
+DEFAULT_TPU_HOST_FRACTION = 0.5
+
+
+def tpu_family(tpu_type: str) -> str:
+    """Return the TPU family (e.g. ``"v5e"``, ``"v5p"``) for a TPU type name."""
+    if tpu_type.startswith("v4-"):
+        return "v4"
+    if tpu_type.startswith(("v5litepod-", "v5e-")):
+        return "v5e"
+    if tpu_type.startswith("v5p-"):
+        return "v5p"
+    if tpu_type.startswith("v6e-"):
+        return "v6e"
+    raise ValueError(f"Cannot determine TPU family for type: {tpu_type}")
+
+
 DeviceKind = Literal["cpu", "gpu", "tpu"]
 
 
@@ -369,6 +412,11 @@ class ResourceConfig:
         different per-VM chip counts (e.g. ``v6e-4`` + ``v6e-8``) would let
         the scheduler co-locate two partial-VM jobs onto a VM that cannot
         actually be shared.
+
+        ``cpu``/``ram`` default to ``DEFAULT_TPU_HOST_FRACTION`` (50%) of the
+        primary type's per-VM host (see ``TPU_HOST_RESOURCES``), leaving
+        headroom for CPU-task multiplexing while giving training enough host
+        RAM for checkpoint serialization. Pass ``cpu=``/``ram=`` to override.
         """
         if isinstance(tpu_type, str):
             tpu_types = [tpu_type]
@@ -395,8 +443,9 @@ class ResourceConfig:
         topo = get_tpu_topology(primary)
         replicas = slice_count * topo.vm_count
         kwargs = dict(kwargs)
-        kwargs.setdefault("cpu", 32)
-        kwargs.setdefault("ram", "128g")
+        host = TPU_HOST_RESOURCES[tpu_family(primary)]
+        kwargs.setdefault("cpu", max(1, int(host.cpu * DEFAULT_TPU_HOST_FRACTION)))
+        kwargs.setdefault("ram", f"{int(host.ram_gb * DEFAULT_TPU_HOST_FRACTION)}g")
         kwargs.setdefault("disk", "50g")
         return ResourceConfig(device=device, replicas=replicas, device_alternatives=alternatives, **kwargs)
 
