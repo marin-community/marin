@@ -10,7 +10,7 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 ``marin.processing.tokenize.tokenize``):
 
 - :class:`Artifact` — a directory with a record (provenance + an optional JSON payload) and a
-  ``load`` that reads it back. The default ``load`` returns a handle into the path; a subclass
+  ``raw_load`` that reads it back. The default ``raw_load`` returns a handle into the path; a subclass
   that declares value fields round-trips them through the record's ``result`` automatically.
 - :class:`ArtifactRecord` — the single descriptor written next to a step's output: its config,
   fingerprint, provenance, and (for a value artifact) its ``result``.
@@ -67,18 +67,18 @@ def result_type_name(artifact_type: "type[Artifact]") -> str:
     """The canonical ``module.Qualname`` recorded as a value artifact's ``result_type``.
 
     The single source of truth for both sides of the round-trip: written into the record when a
-    step succeeds and compared against on :meth:`Artifact.load`.
+    step succeeds and compared against on :meth:`Artifact.raw_load`.
     """
     return f"{artifact_type.__module__}.{artifact_type.__qualname__}"
 
 
 class Artifact(BaseModel):
-    """A produced, persisted artifact: a directory with a record and a ``load``.
+    """A produced, persisted artifact: a directory with a record and a ``raw_load``.
 
-    The default ``load`` is a data ref — it returns a handle into ``path`` whose ``.record``
+    The default ``raw_load`` is a data ref — it returns a handle into ``path`` whose ``.record``
     carries provenance and the run's config, pulling no weights/caches into the launcher. A
     subclass that declares value fields persists and reloads them through ``record.result`` with
-    no override (see :meth:`result_payload`). Not frozen: ``load`` sets ``path``.
+    no override (see :meth:`result_payload`). Not frozen: ``raw_load`` sets ``path``.
     """
 
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
@@ -104,9 +104,11 @@ class Artifact(BaseModel):
         return self.model_dump(mode="json", include=keys) or None
 
     @classmethod
-    def load(cls, source: str) -> Self:
-        """A handle into ``source``; a subclass with value fields repopulates them from
-        ``record.result``.
+    def raw_load(cls, source: str) -> Self:
+        """The raw, unguarded loader: a handle into ``source`` whose value fields a subclass
+        repopulates from ``record.result``. Prefer :func:`run`/:func:`resolve` (driver) or
+        :meth:`StepContext.resolved` (inside a step) — reach for ``raw_load`` only to read an
+        artifact you already know is built.
 
         Tolerant of a missing record by design: an adopted or pinned artifact resolves to its
         pre-existing data location (:meth:`ArtifactStep.path`) — real data, but no marin record

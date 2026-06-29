@@ -150,7 +150,7 @@ class StepContext:
         self._require_declared(dep)
         cached = self._loaded.get(id(dep))
         if cached is None:
-            cached = dep.artifact_type.load(self._dep_ref(dep))
+            cached = dep.artifact_type.raw_load(self._dep_ref(dep))
             self._loaded[id(dep)] = cached
         return cast(T, cached)
 
@@ -447,7 +447,7 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
-    return [cast(T, h.artifact_type.load(h.path())) for h in handles]
+    return [cast(T, h.artifact_type.raw_load(h.path())) for h in handles]
 
 
 def lower(handle: "ArtifactStep") -> StepSpec:

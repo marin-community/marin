@@ -230,12 +230,12 @@ def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
     tokens_path = f"{tmp_path}/datasets/dclm_tokens/2026.06.25"
     ckpt_path = f"{tmp_path}/checkpoints/dclm_1b/2026.06.28"
 
-    saved_ckpt = Ckpt.load(ckpt_path)
+    saved_ckpt = Ckpt.raw_load(ckpt_path)
     assert saved_ckpt.kind == "ckpt"
     # The training run actually received the dependency's resolved output path.
     assert saved_ckpt.data == tokens_path
 
-    assert Tokens.load(tokens_path).kind == "tokens"
+    assert Tokens.raw_load(tokens_path).kind == "tokens"
 
     # Re-running is a cache hit (no error, idempotent).
     run(dclm_1b())
@@ -312,7 +312,7 @@ def echo_consumer() -> ArtifactStep[TokenizerEcho]:
 def test_consumer_reads_dependency_value_via_ctx_resolved(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     run(echo_consumer())
-    saved = TokenizerEcho.load(f"{tmp_path}/checkpoints/echo/2026.06.28")
+    saved = TokenizerEcho.raw_load(f"{tmp_path}/checkpoints/echo/2026.06.28")
     # The dep's tokenizer flowed from its record into the consumer's output.
     assert saved.tokenizer == "llama3"
 
