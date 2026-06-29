@@ -39,6 +39,12 @@ DEFAULT_TPU = "v6e-8"
 DEFAULT_CPU = 180.0
 DEFAULT_MEMORY = "1400GB"
 
+# The Iris named port and endpoint name the server binds/registers. Must match
+# DuckyConfig.port_name (the server calls ctx.get_port(config.port_name)), and is
+# independent of the job --name. The dashboard resolves to the namespaced endpoint
+# wire name "<job-namespace>/ducky" through the controller proxy.
+PORT_NAME = "ducky"
+
 
 def _ducky_env_vars() -> dict[str, str]:
     """Forward all DUCKY_* env vars from this process to the task."""
@@ -89,7 +95,7 @@ def submit_ducky(
         name=name,
         resources=ResourceSpec(cpu=cpu, memory=memory, device=device),
         environment=EnvironmentSpec(env_vars=env_vars),
-        ports=[name],
+        ports=[PORT_NAME],
         constraints=[region_constraint([region])],
         # Always-on: ride out preemptions rather than exiting.
         max_retries_preemption=1000,
@@ -125,7 +131,11 @@ def cli(
     with _controller_connection(cluster, controller_url) as (url, token_provider):
         client = IrisClient.remote(url, workspace=Path.cwd(), token_provider=token_provider)
         job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)
-    logger.info("submitted ducky job %s — reachable at /proxy/%s/ once running", job.job_id, name)
+    logger.info(
+        "submitted ducky job %s (endpoint %r) — reachable via the controller endpoint proxy once running",
+        job.job_id,
+        PORT_NAME,
+    )
 
 
 if __name__ == "__main__":
