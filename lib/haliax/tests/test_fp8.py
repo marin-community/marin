@@ -61,19 +61,25 @@ def _all_dot_general_eqns(jaxpr):
                 yield from _all_dot_general_eqns(sub)
 
 
-def test_fp8_feeds_fp8_operands_to_dot():
-    # Assert the lowered jaxpr has a dot_general with float8 operands.
+def test_fp8_all_dots_contract_fp8_operands():
+    # All three dot_general GEMMs (fwd + dgrad + wgrad) must contract fp8 operands
     In = hax.Axis("In", 16)
     Out = hax.Axis("Out", 8)
     fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init())
-    input = hax.random.normal(jrandom.PRNGKey(3), In)
+    x = hax.random.normal(jrandom.PRNGKey(3), In)
 
-    jaxpr = jax.make_jaxpr(lambda m, x: m(x).array)(fp8_linear, input)
-    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
-    assert dot_eqns, "expected a dot_general in the lowered op"
-    assert any(
-        all(v.aval.dtype == jnp.float8_e4m3fn for v in eqn.invars) for eqn in dot_eqns
-    ), "forward dot_general should contract two float8_e4m3fn operands"
+    def loss(model, x):
+        return hax.sum(model(x) ** 2).scalar()
+
+    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
+    dots = [tuple(v.aval.dtype for v in eqn.invars) for eqn in _all_dot_general_eqns(jaxpr.jaxpr)]
+
+    fp8 = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    assert len(dots) == 3, f"expected 3 dot_generals (fwd + dgrad + wgrad); found {len(dots)}: {dots}"
+    assert all(dt in fp8 for operands in dots for dt in operands), f"a dot_general contracts non-fp8 operands: {dots}"
+    # forward contracts e4m3 x e4m3; both grad dots contract the e5m2 output gradient
+    assert (jnp.float8_e4m3fn, jnp.float8_e4m3fn) in dots, f"no e4m3 x e4m3 forward dot: {dots}"
+    assert sum(jnp.float8_e5m2 in operands for operands in dots) == 2, f"expected 2 grad dots with e5m2: {dots}"
 
 
 def test_fp8_quant_dtype_overrides_reach_dot_operands():
@@ -115,12 +121,10 @@ def _gpu_is_fp8_capable() -> bool:
     reason="needs an FP8-capable GPU (CUDA sm89+: Ada/Hopper/Blackwell)",
 )
 def test_fp8_emits_fp8_kernels_on_gpu():
-    # The default recipe's three GEMMs -- the forward dot (e4m3 x e4m3) and the two
-    # grad dots (e5m2 output grad x e4m3 operand) -- must each run as an fp8 GEMM, not
-    # fall back to a bf16 GEMM that dequantizes first. Triton GEMM is disabled at
-    # compile time so all three lower to cuBLASLt, whose kernel name self-identifies
-    # fp8 via the $f8 suffix -- a deterministic check that doesn't ride on which
-    # backend the autotuner would otherwise pick.
+    # The three GEMMs (forward + dgrad + wgrad) must each run as an fp8 GEMM, not a
+    # bf16 fallback. Pin the GEMM backend (Triton off, cuBLASLt on) so all three lower
+    # to cuBLASLt, whose $f8 kernel name self-identifies fp8; pinning both flags keeps
+    # this immune to ambient XLA_FLAGS (per-compile options override the environment).
     Batch = hax.Axis("Batch", 512)
     In = hax.Axis("In", 512)
     Out = hax.Axis("Out", 512)
@@ -142,7 +146,7 @@ def test_fp8_emits_fp8_kernels_on_gpu():
     hlo = (
         jax.jit(jax.grad(loss, argnums=(0, 1)))
         .lower(params, x)
-        .compile(compiler_options={"xla_gpu_enable_triton_gemm": False})
+        .compile(compiler_options={"xla_gpu_enable_triton_gemm": False, "xla_gpu_enable_cublaslt": True})
         .as_text()
     )
 
@@ -305,24 +309,6 @@ def test_fp8_forward_matches_reference_under_nonunit_scales():
     ref = lhs @ rhs
     rel = np.linalg.norm(np.asarray(y) - ref) / np.linalg.norm(ref)
     assert rel < 0.1, f"forward rel err {rel} too large"
-
-
-def test_fp8_backward_quantizes_grad_to_e5m2():
-    # Mirror of the forward FP8-operand check for the backward pass: the output
-    # gradient must reach the gradient GEMMs as float8_e5m2.
-    In = hax.Axis("In", 16)
-    Out = hax.Axis("Out", 8)
-    fp8_linear = Linear.init(In, Out, key=jrandom.PRNGKey(0), dot_general=Fp8DotGeneralOp.init())
-    x = hax.random.normal(jrandom.PRNGKey(3), In)
-
-    def loss(model, x):
-        return hax.sum(model(x) ** 2).scalar()
-
-    jaxpr = jax.make_jaxpr(eqx.filter_grad(loss))(fp8_linear, x)
-    dot_eqns = list(_all_dot_general_eqns(jaxpr.jaxpr))
-    assert any(
-        any(v.aval.dtype == jnp.float8_e5m2 for v in eqn.invars) for eqn in dot_eqns
-    ), "a backward dot_general should contract a float8_e5m2 output-gradient operand"
 
 
 # https://github.com/google/flax/blob/6f2b08e024c2fd2f8cec42a6c82408cb35412319/tests/linen/linen_test.py#L1222
