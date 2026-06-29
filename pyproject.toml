@@ -25,6 +25,9 @@ dependencies = [
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
+    # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
+    # a workspace member so service fixes land without a wheel republish.
+    "marin-ducky",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
@@ -121,6 +124,7 @@ members = [
     "lib/iris",
     "lib/fray",
     "lib/finelog",
+    "lib/ducky",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -147,6 +151,7 @@ vllm = [
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
 marin-finelog = { workspace = true }
+marin-ducky = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
@@ -266,6 +271,7 @@ project-includes = [
     "lib/fray/src/**/*.py",
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
+    "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "scripts/ci",
@@ -283,6 +289,7 @@ search-path = [
     "lib/zephyr/src",
     "lib/fray/src",
     "lib/iris/src",
+    "lib/ducky/src",
     # benchmark_controller.py imports controller test fixtures from lib/iris/tests
     # (`from tests.cluster.controller... import`), run with lib/iris on sys.path.
     "lib/iris",
