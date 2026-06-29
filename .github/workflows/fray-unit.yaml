@@ -53,5 +53,5 @@ jobs:
 
       - name: Test fray
         run: |
-          cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
+          cd lib/fray && uv run --group=test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
 

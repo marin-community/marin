@@ -60,7 +60,7 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/
+          cd lib/iris && uv run --group test python -m pytest -n auto --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/
 
   iris-e2e-smoke:
     needs: changes

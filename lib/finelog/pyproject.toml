@@ -26,7 +26,7 @@ dependencies = [
 finelog = "finelog.deploy.cli:cli"
 
 [dependency-groups]
-dev = [
+test = [
     # The native in-process server ext (module `finelog_server`) is NOT a
     # runtime dependency of the pure client — only the embedded-server smoke
     # test and the dashboard demo need it. It ships as the companion
@@ -39,6 +39,7 @@ dev = [
     "pytest-timeout",
     "pytest-xdist",
 ]
+dev = [{ include-group = "test" }]
 
 # Without an explicit list the sdist sweeps the whole directory — including
 # dashboard/node_modules and the rust/ tree, which ship separately.

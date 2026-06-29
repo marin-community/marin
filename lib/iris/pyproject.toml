@@ -57,12 +57,8 @@ examples = [
     "nbconvert>=7.16.6",
     "nbformat>=5.10.4",
 ]
-dev = [
+test = [
     "kubernetes>=31.0.0,<36",
-    "ipykernel>=7.1.0",
-    "jupyter>=1.1.1",
-    "nbconvert>=7.16.6",
-    "nbformat>=5.10.4",
     "playwright>=1.49.0",
     "pytest-asyncio",
     "pytest-flakefinder>=1.1.0",
@@ -70,6 +66,10 @@ dev = [
     "pytest-timeout",
     "pytest-xdist",
     "pytest>=8.4",
+]
+dev = [
+    { include-group = "examples" },
+    { include-group = "test" },
 ]
 
 [tool.hatch.build.targets.wheel]
