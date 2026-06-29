@@ -5306,3 +5306,43 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: monitor to terminal state or a clear blocker; record final
   metrics/logs if it succeeds, and keep #6597 quiet unless the run reaches a
   meaningful milestone or fundamental blocker.
+
+### 2026-06-29 13:58 - MOE-MGPU-349 32-node smoke killed before training
+- Hypothesis: the launched 32-node/256-H100 scale smoke would progress from
+  child-task build into the real trainer, giving either a 20-step scale result
+  or a concrete scale-only blocker.
+- Commit Hash: `4b51cb0cd` plus unrelated local edits outside this MoE lane in
+  `lib/levanter/src/levanter/kernels/pallas/fused_cross_entropy_loss/batched_xla.py`
+  and `lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609/grug-train-grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`
+- Saved local logs:
+  - `scratch/moe-mgpu-32node-20step-scale-fe788a6e5-killed/full_parent_and_child_logs.txt`
+  - `scratch/moe-mgpu-32node-20step-scale-fe788a6e5-killed/high_signal_excerpt.txt`
+  - `scratch/moe-mgpu-32node-20step-scale-fe788a6e5-killed/parent_summary.txt`
+  - `scratch/moe-mgpu-32node-20step-scale-fe788a6e5-killed/child_summary.txt`
+  - `scratch/moe-mgpu-32node-20step-scale-fe788a6e5-killed/job_list.json`
+- Result:
+  - Parent final state: `JOB_STATE_KILLED`, exit `0`, error
+    `Terminated by user`, failures `0`, preemptions `0`.
+  - Child final state: `JOB_STATE_KILLED`, exit `0`, error
+    `Terminated by user`, task state counts `{"killed": 32}`, failures `0`,
+    preemptions `0`.
+  - The useful logs never progressed past driver setup and Fray dispatch:
+    `Dispatching grug training via Fray:
+    grug-train-grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`.
+  - No `Progress on:train`, metric, checkpoint, OOM, traceback, pending
+    capacity, or Iris failure signal appeared before termination.
+  - Babysitter Ramanujan (`019f1522-8dac-7a03-b504-37fb6acb9c6b`) was closed
+    after the main thread saved logs. Heartbeat
+    `poll-moe-mgpu-32-node-smoke-babysitter` was deleted.
+- Interpretation: this is an operational interruption before training, not
+  evidence about Pallas MGPU correctness/performance at 32-node scale and not a
+  fundamental code blocker. Do not post to #6597. The clean one-node 20-step
+  smoke remains the best full-trainer evidence.
+- Next action: if scale evidence is still desired, relaunch a 32-node 20-step
+  smoke when capacity/user scheduling is suitable, or wait for the lint-review
+  quota reset and run `./infra/pre-commit.py --review` for PR readiness.
