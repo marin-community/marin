@@ -247,7 +247,7 @@ def _sonic_gather_sum_bwd_impl(
 @jax.custom_vjp
 def sonic_gather_sum(
     dispatch_output: Float[Array, "M H"],
-    dispatch_positions: Int[Array, "M"],
+    dispatch_positions: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
 ) -> Float[Array, "T H"]:
     tokens, topk = combine_weights.shape
@@ -266,9 +266,9 @@ def sonic_gather_sum(
 
 def _sonic_gather_sum_fwd(
     dispatch_output: Float[Array, "M H"],
-    dispatch_positions: Int[Array, "M"],
+    dispatch_positions: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-) -> tuple[Float[Array, "T H"], tuple[Float[Array, "M H"], Int[Array, "M"], Float[Array, "T K"]]]:
+) -> tuple[Float[Array, "T H"], tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]]]:
     tokens, topk = combine_weights.shape
     weights_flat = combine_weights.reshape(tokens * topk).astype(jnp.float32)
     positions_flat = dispatch_positions.reshape(tokens * topk).astype(jnp.int32)
@@ -285,7 +285,7 @@ def _sonic_gather_sum_fwd(
 
 
 def _sonic_gather_sum_bwd(
-    residuals: tuple[Float[Array, "M H"], Int[Array, "M"], Float[Array, "T K"]],
+    residuals: tuple[Float[Array, "M H"], Int[Array, "T K"], Float[Array, "T K"]],
     dout: Float[Array, "T H"],
 ) -> tuple[Float[Array, "M H"], None, Float[Array, "T K"]]:
     dispatch_output, dispatch_positions, combine_weights = residuals
