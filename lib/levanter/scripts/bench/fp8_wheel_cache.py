@@ -18,27 +18,16 @@ creds as ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` + ``AWS_ENDPOINT_URL`
 import argparse
 import hashlib
 import os
-import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fp8_artifact_store import fs as _fs  # noqa: E402  (shared R2/S3 plumbing)
 
 # Override with FP8_WHEEL_URI. Lives under MARIN_PREFIX (s3://marin-na/marin), which task pods can write.
 WHEEL_URI = os.environ.get("FP8_WHEEL_URI", "s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.0-cp312-cw.whl")
 # uv/pip require a PEP440-valid wheel filename, so `get` restores the original basename. `put` records it
 # in a sidecar; this is the fallback for the first wheel (stashed before the sidecar existed).
 _DEFAULT_WHEEL_NAME = "jaxlib-0.10.0.dev0+selfbuilt-cp312-cp312-manylinux_2_27_x86_64.whl"
-
-
-def _fs():
-    try:
-        import s3fs  # noqa: PLC0415  (optional dep: pip-install on miss in the task container)
-    except ImportError:
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "s3fs"], check=True)
-        import s3fs  # noqa: PLC0415
-    client_kwargs = {}
-    endpoint = os.environ.get("AWS_ENDPOINT_URL")
-    if endpoint:
-        client_kwargs["endpoint_url"] = endpoint
-    return s3fs.S3FileSystem(client_kwargs=client_kwargs)
 
 
 def _sha256(path):

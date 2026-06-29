@@ -70,6 +70,16 @@ _MOSAIC_RAW = [
     (128, 128, 64, 8, 4),
     (256, 256, 128, 2, 4),
     (64, 64, 128, 8, 8),
+    # R2: F=1280 regime (fwd/dlhs GEMM is M-skinny per expert ~512-1024, N=2F=2560, K=2560/1280).
+    # Favor wide block_n (cover N=2560 in fewer tiles) and small block_m (less ragged-group padding).
+    (64, 256, 128, 4, 4),
+    (64, 256, 64, 6, 4),
+    (128, 256, 64, 6, 4),
+    (64, 256, 128, 4, 2),
+    (64, 128, 256, 2, 4),
+    (128, 256, 256, 2, 4),
+    (256, 256, 64, 4, 4),
+    (64, 64, 256, 4, 8),
 ]
 
 # Independent f8 weight-gradient kernel candidates (default grid_block_n=2).
@@ -85,6 +95,13 @@ _WGRAD_RAW = [
     (128, 256, 128, 4, 2),
     (128, 128, 128, 8, 2),
     (128, 128, 128, 6, 1),
+    # R2: F=1280 wgrad (dW = x_t[D,T] x g[T,2F], so K = tokens/expert ~512-1024 is SMALL; M=N=2560).
+    # Favor small block_k (short token-reduction) and wide block_m/n over the 2560 output.
+    (256, 128, 64, 4, 2),
+    (128, 256, 64, 4, 2),
+    (256, 256, 64, 4, 2),
+    (128, 128, 64, 8, 2),
+    (256, 128, 128, 4, 1),
 ]
 
 # bf16 Triton baseline: (BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, NUM_STAGES). Default 128/128/32/4/4.

@@ -94,6 +94,7 @@ if not os.environ.get("BENCH_SKIP_CUDA_BOOTSTRAP"):
 
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
+import jax.profiler  # noqa: E402
 import numpy as np  # noqa: E402
 
 import haliax._src.fp8_ragged as fp8_ragged  # noqa: E402
@@ -264,6 +265,47 @@ def time_steady_state(fn, args, *, samples: int, inner_steps: int, warmup: int):
         _batch()
         times[i] = (time.perf_counter() - t0) / inner_steps
     return compile_time, times
+
+
+# ---------------------------------------------------------------------------------------------------
+# Profiling capture (attribution, not a metric): where does the fp8 fwd+bwd spend its time?
+# ---------------------------------------------------------------------------------------------------
+
+
+def _run_profile(shape, dtype, grad_dtype, mosaic_wgrad, *, steps, warmup, profile_dir, log):
+    """Capture jax profiler traces of the fp8 and bf16 fwd+bwd at default block config, one shape.
+
+    Writes ``<profile_dir>/{fp8,bf16}/`` TensorBoard-style dirs (each with
+    ``plugins/profile/<ts>/*.xplane.pb``) for kernel-level attribution via
+    ``lib/marin/tools/profile_summary.py``. This answers *where* the fp8 path spends time — the Mosaic
+    GEMM kernels (fwd / dlhs / wgrad) vs the fp8 fixed overhead (quantize/scale, cast-transpose,
+    dequant) — which the headline speedup cannot. The fp8 path runs at the GFP8 default
+    ``MosaicBlockConfig`` / ``WgradBlockConfig`` (the held d2560 winner); bf16 at the Triton default.
+    Not a timing metric: trace overhead perturbs absolute times, so use it only for the *breakdown*.
+    """
+    x, w13, w2, group_sizes = _make_inputs(shape, dtype)
+    args = (x, w13, w2)
+
+    def capture(name, timed, ctx):
+        jax.clear_caches()
+        with ctx:
+            compiled = jax.jit(timed).lower(*args).compile()
+            for _ in range(warmup):
+                jax.block_until_ready(compiled(*args))
+            sub = os.path.join(profile_dir, name)
+            os.makedirs(sub, exist_ok=True)
+            with jax.profiler.trace(sub):
+                out = None
+                for _ in range(steps):
+                    out = compiled(*args)
+                jax.block_until_ready(out)
+        log(f"  profiled {name} ({shape}): {steps} steps -> {sub}")
+
+    d13, d2 = _build_dots("mosaic", dtype, grad_dtype, mosaic_wgrad)
+    capture("fp8", _grad_fn(d13, d2, group_sizes), _mosaic_config_override(_mosaic_candidates()[0], _wgrad_candidates()[0]))
+
+    b13, b2 = _build_dots("bf16", dtype, grad_dtype, MosaicWgradMode.BF16)
+    capture("bf16", _grad_fn(b13, b2, group_sizes), contextlib.nullcontext())
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -650,6 +692,9 @@ def main():
     ap.add_argument("--numerics-tol", type=float, default=0.25, help="max grad rel_frob vs bf16 to accept a config")
     ap.add_argument("--out-dir", default=None, help="defaults to scratch/fp8_bench/<timestamp>")
     ap.add_argument("--smoke", action="store_true", help="CPU mechanics check: bf16/xla only, tiny budget, no mosaic")
+    ap.add_argument("--profile", action="store_true", help="capture fp8+bf16 fwd+bwd traces (attribution) for one shape, then exit")
+    ap.add_argument("--profile-steps", type=int, default=30, help="dispatched steps inside the profiler trace window")
+    ap.add_argument("--profile-dir", default=None, help="profile: trace output dir (defaults to <out-dir>/profiler)")
     ap.add_argument(
         "--worker", action="store_true", help="evaluate an orchestrator-supplied request list (single GPU)"
     )
@@ -687,6 +732,17 @@ def main():
         f"shapes={[str(s) for s in shapes]} samples={args.samples} inner_steps={args.inner_steps} warmup={args.warmup}"
     )
     log(f"out_dir={out_dir}")
+
+    if args.profile:
+        profile_dir = args.profile_dir or os.path.join(out_dir, "profiler")
+        shape = shapes[0]
+        log(f"  [profile] {shape} grad_dtype={grad_dtype} mosaic_wgrad={mosaic_wgrad} steps={args.profile_steps}")
+        _run_profile(
+            shape, dtype, grad_dtype, mosaic_wgrad,
+            steps=args.profile_steps, warmup=args.warmup, profile_dir=profile_dir, log=log,
+        )
+        log("result_json " + json.dumps({"profile_dir": profile_dir, "shape": str(shape)}))
+        return
 
     rows = []
     headline = []

@@ -17,6 +17,8 @@ for the genuine-mixed-fp8 correctness invariant see the `grug-fp8-ragged-mixed-r
 | `orchestrate_fp8_autotune.py` | multi-GPU orchestrator: one worker subprocess per GPU, coordinate descent as parallel waves |
 | `fp8_autotune_configs.py` | jax-free experiment design: shapes + block-config candidates + smem pruning (single source of truth) |
 | `fp8_autotune_stats.py` | jax-free stats: bootstrap median CI, ratio-of-medians CI |
+| `fp8_wheel_cache.py` | stash/fetch the forked jaxlib wheel in R2 so jobs skip the ~11 min build |
+| `fp8_artifact_store.py` | shared R2/S3 plumbing + generic `cp` (ships profile-trace tarballs local<->cluster) |
 | `mixed_fp8_fork_setup.sh` | builds/installs the forked jaxlib + jax overlay + Mosaic toolchain in the job container |
 | `../../tests/test_bench_ragged_fp8_autotune.py` | jax-free unit tests (stats, smem pruning, orchestrator planning) |
 
@@ -147,6 +149,39 @@ uv run --no-sync iris --cluster=cw-us-east-02a job logs --since-seconds 2400 "$J
 `result_json` / `--out-dir/summary.json` carries per-shape `bf16_best`, `fp8_best` (winning mosaic+wgrad
 configs + median/CI/min + grad_rel_frob_vs_bf16), and `speedup_vs_bf16_best` (median + 95% CI). Raw
 per-config rows are in `--out-dir/rows.jsonl` (skill-required machine-readable fields).
+
+## Profiling capture (attribution, not a metric)
+
+`--profile` answers *where* the fp8 fwd+bwd spends time (Mosaic GEMM kernels vs fp8 fixed overhead:
+quantize/scale, cast-transpose, dequant) — which the headline speedup cannot. It writes jax profiler
+traces for one shape at the default block config; analyze with the `profile-training` skill's
+`lib/marin/tools/profile_summary.py`. It is **not** a timing metric (trace overhead perturbs absolute
+times); use it only for the breakdown.
+
+```bash
+export KUBECONFIG=~/.kube/coreweave-iris-gpu
+uv run --no-sync iris --cluster=cw-us-east-02a job run \
+  --gpu H100x1 --enable-extra-resources --extra gpu \
+  --cpu 16 --memory 64GB --disk 64GB --no-wait \
+  -- bash -lc "set -euo pipefail; nvidia-smi -L; \
+     uv run --no-sync python lib/levanter/scripts/bench/fp8_wheel_cache.py get /tmp/wheels; \
+     JAXLIB_WHEEL=\$(ls /tmp/wheels/*.whl | head -1) bash lib/levanter/scripts/bench/mixed_fp8_fork_setup.sh; \
+     uv run --no-sync python lib/levanter/scripts/bench/bench_ragged_fp8_autotune.py \
+       --profile --shapes d2560_e32_t1k --out-dir /app/scratch/fp8_profile --profile-steps 30; \
+     for K in fp8 bf16; do \
+       uv run --no-sync --with protobuf python lib/marin/tools/profile_summary.py summarize \
+         --profile-dir /app/scratch/fp8_profile/profiler/\$K --output /tmp/sum_\$K.json || true; \
+       echo \"===== TOP OPS \$K =====\"; \
+       uv run --no-sync --with protobuf python lib/marin/tools/profile_summary.py query \
+         --summary /tmp/sum_\$K.json --question 'What are the top 25 ops by exclusive time?' || true; \
+     done; \
+     tar czf /tmp/fp8_profile.tgz -C /app/scratch fp8_profile; \
+     uv run --no-sync python lib/levanter/scripts/bench/fp8_artifact_store.py cp \
+       /tmp/fp8_profile.tgz s3://marin-na/marin/grug-fp8/profiles/d2560_e32_t1k.tgz"
+```
+
+The top-ops tables print to the job logs (`job logs | grep -A30 'TOP OPS'`); the raw trace tarball is
+stashed in R2 for richer local analysis (`fp8_artifact_store.py cp s3://.../d2560_e32_t1k.tgz /tmp/`).
 
 ## Gotchas (learned the hard way)
 
