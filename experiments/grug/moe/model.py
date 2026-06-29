@@ -122,6 +122,7 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.001
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    moe_capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -144,6 +145,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.moe_capacity_factor <= 0:
+            raise ValueError("moe_capacity_factor must be positive")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -492,7 +495,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert_mlp,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.moe_capacity_factor,
             ),
             cfg=cfg,
         )

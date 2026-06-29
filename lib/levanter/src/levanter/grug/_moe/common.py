@@ -16,7 +16,7 @@ from jaxtyping import Array, Float, Int
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
-# #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+# Keep EP capacity conservative enough to avoid systematic over/under-packing.
 
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
@@ -24,11 +24,16 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "pallas_mgpu",  # Expert-parallel Hopper Pallas Mosaic GPU backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
+MoeImplementationChoice: TypeAlias = MoeImplementation | str
+MoeImplementationSpec: TypeAlias = (
+    MoeImplementationChoice | list[MoeImplementationChoice] | tuple[MoeImplementationChoice, ...] | None
+)
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep", "pallas_mgpu")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -70,13 +75,23 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
-def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+def resolve_moe_implementation(implementation: MoeImplementationChoice | None) -> MoeImplementation:
     if implementation is None:
         return "ring"
     if implementation not in _VALID_MOE_IMPLEMENTATIONS:
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
     return cast(MoeImplementation, implementation)
+
+
+def resolve_moe_implementations(implementation: MoeImplementationSpec) -> tuple[MoeImplementation, ...]:
+    if implementation is None or isinstance(implementation, str):
+        return (resolve_moe_implementation(implementation),)
+
+    implementations = tuple(implementation)
+    if not implementations:
+        raise ValueError("implementation sequence must contain at least one implementation")
+    return tuple(resolve_moe_implementation(candidate) for candidate in implementations)
 
 
 def split_moe_w13_output(
@@ -115,7 +130,7 @@ def _prepare_moe_dispatch(
     expert_ids = selected_experts.reshape(tokens * topk)
     dispatch_weights = combine_weights.reshape(tokens * topk)
 
-    sort_idx = jnp.argsort(expert_ids, axis=0)
+    sort_idx = jnp.argsort(expert_ids, axis=0, stable=True)
     token_ids = jnp.arange(tokens * topk, dtype=jnp.int32) // topk
     token_ids_sort = token_ids[sort_idx]
     x_sort = x[token_ids_sort]
@@ -140,7 +155,7 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
     assignments = tokens * topk
     expert_ids = selected_experts.reshape(assignments)
 
-    sort_idx = jnp.argsort(expert_ids, axis=0)
+    sort_idx = jnp.argsort(expert_ids, axis=0, stable=True)
     assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
     sorted_assignment_ids = assignment_ids[sort_idx]
     token_ids_sort = sorted_assignment_ids // topk

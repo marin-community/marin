@@ -1,0 +1,156 @@
+# MoE MGPU H100 Tryout Snapshot
+
+This snapshot exposes `implementation="pallas_mgpu"` through the Grug MoE scale
+launcher and adds `SCALE_MOE_CAPACITY_FACTOR` so full trainer runs can use the
+same padded-capacity path validated by the H100 kernel tests.
+
+## Known Good Evidence
+
+- Public Grug MoE Pallas forward/grad validation:
+  `/dlwh/iris-run-test_grugformer_moe-20260629-topology-hardening-public-refresh`
+  passed `3 passed, 107 deselected, 1 warning in 218.99s`.
+- Broader Hopper Pallas test slice:
+  `/dlwh/iris-run-test_grugformer_moe-20260629-lint-cleanup-broad-plus-chunked`
+  passed `11 passed, 98 deselected, 1 warning`.
+- Module-boundary training-step smoke:
+  `/dlwh/iris-run-test_grugformer_moe-20260629-module-training-step`
+  passed `1 passed, 110 deselected, 1 warning in 63.41s`.
+- Target forward+backward benchmark:
+  `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`
+  reported `steady_state_time=0.069388s`, `139.27 TFLOP/s/rank`,
+  `14.08%` of nominal H100 bf16 roofline, and zero dropped routes.
+
+## Recommended 20-Step Integration Smoke
+
+This is the first run to try from the snapshot. It uses one 8xH100 node, keeps
+the full trainer path, and sets the local MoE token shape to the benchmark
+target (`batch=128`, `seq=2048`, `8` expert-parallel ranks gives
+`32768` tokens/rank). It uses two layers to keep the run cheap.
+
+```bash
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "grug-moe-pallas-mgpu-20step-smoke-$(date +%Y%m%d-%H%M%S)" \
+  --cpu=2 --memory=4G --disk=16G --extra=cpu \
+  -- env \
+    RUN_ID="grug-moe-pallas-mgpu-20step-smoke-$(date +%Y%m%d-%H%M%S)" \
+    SCALE_GPU_REPLICAS=1 \
+    SCALE_EXPERT_AXIS=8 \
+    SCALE_REPLICA_AXIS=1 \
+    SCALE_BATCH=128 \
+    SCALE_SEQ_LEN=2048 \
+    SCALE_STEPS=20 \
+    SCALE_HIDDEN_DIM=2560 \
+    SCALE_NUM_LAYERS=2 \
+    SCALE_NUM_EXPERTS=256 \
+    SCALE_TOP_K=4 \
+    SCALE_MOE_IMPLEMENTATION=pallas_mgpu \
+    SCALE_MOE_CAPACITY_FACTOR=1.25 \
+    SCALE_REMAT=save_moe \
+    SCALE_CHECKPOINTS=local \
+    SCALE_TRACKER=json_logger \
+    uv run python -m experiments.grug.moe.launch_cw_scale
+```
+
+Use this as the pass/fail gate before trying the full 32-node shape.
+
+## Full-Scale 20-Step Run
+
+This keeps the scale launcher's default 90B-total shape but switches the MoE
+backend to Pallas MGPU and limits training to 20 steps.
+
+```bash
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "grug-moe-pallas-mgpu-20step-scale-$(date +%Y%m%d-%H%M%S)" \
+  --cpu=2 --memory=4G --disk=16G --extra=cpu \
+  -- env \
+    RUN_ID="grug-moe-pallas-mgpu-20step-scale-$(date +%Y%m%d-%H%M%S)" \
+    SCALE_GPU_REPLICAS=32 \
+    SCALE_EXPERT_AXIS=8 \
+    SCALE_REPLICA_AXIS=1 \
+    SCALE_STEPS=20 \
+    SCALE_MOE_IMPLEMENTATION=pallas_mgpu \
+    SCALE_MOE_CAPACITY_FACTOR=1.25 \
+    SCALE_REMAT=save_moe \
+    SCALE_CHECKPOINTS=local \
+    SCALE_TRACKER=json_logger \
+    uv run python -m experiments.grug.moe.launch_cw_scale
+```
+
+Switch `SCALE_TRACKER=wandb` and pass `WANDB_API_KEY` through the Iris job when
+you want W&B metrics/artifacts instead of JSON logs.
+
+## Tuning Knobs
+
+- `SCALE_MOE_CAPACITY_FACTOR=1.25` is the robust setting from the target H100
+  parity/perf runs. `1.125` was faster in balanced target benchmarks, but only
+  use it after checking route drops in the run metrics.
+- `SCALE_REMAT=save_moe` keeps MoE dispatch tensors for backward and avoids
+  rerunning EP dispatch during recompute. Use `recompute_all` if memory is the
+  blocker.
+- `SCALE_BATCH` controls local tokens/rank. For one 8-GPU node at seq 2048,
+  `SCALE_BATCH=128` gives `32768` tokens/rank; `64` gives `16384`.
+- `SCALE_NUM_LAYERS` is the cheapest smoke knob. Use `2` for integration,
+  `4` or `8` if compile/runtime looks stable, and the default `48` for the
+  production-size run.
+- `SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16` can reduce
+  FSDP parameter traffic, but the validated benchmark evidence used the default
+  float32 parameter policy.
+- `SCALE_PROFILER_STEPS=N SCALE_PROFILER_START=K` enables a JAX profile window.
+  Pair this with `SCALE_TRACKER=wandb` so the profile uploads.
+
+## Benchmark Rechecks
+
+Target forward+backward benchmark:
+
+```bash
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "bench-grug-moe-pallas-mgpu-target-fwd-bwd-$(date +%Y%m%d-%H%M%S)" \
+  --cpu=16 --memory=128GB --disk=16GB --gpu=H100x8 --reserve=H100x8 \
+  --enable-extra-resources --extra=gpu \
+  -- uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py \
+    --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 \
+    --experts-per-rank 32 --topk 4 --capacity-factor 1.25 \
+    --implementations pallas_mgpu --pass-mode forward_backward \
+    --routing uniform --warmup 1 --steps 3 --fail-on-error \
+    --git-sha "$(git rev-parse --short HEAD)" \
+    --jsonl /tmp/moe_mgpu_target_fwd_bwd.jsonl
+```
+
+Backward stage breakdown:
+
+```bash
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "bench-grug-moe-pallas-mgpu-bwd-stages-$(date +%Y%m%d-%H%M%S)" \
+  --cpu=16 --memory=128GB --disk=16GB --gpu=H100x8 --reserve=H100x8 \
+  --enable-extra-resources --extra=gpu \
+  -- uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py \
+    --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 \
+    --experts-per-rank 32 --topk 4 --capacity-factor 1.25 \
+    --implementations none --include-pallas-stages \
+    --pallas-stages saved_backward_pipeline combine_bwd w2_bwd w13_bwd dx_unpermute_vector \
+    --routing uniform --warmup 1 --steps 3 --fail-on-error \
+    --git-sha "$(git rev-parse --short HEAD)" \
+    --jsonl /tmp/moe_mgpu_bwd_stages.jsonl
+```
+
+Forward chunked `permute_up` remains an opt-in benchmark lane, not the default
+production launcher path:
+
+```bash
+uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+  --job-name "bench-grug-moe-pallas-mgpu-permute-up-chunked-$(date +%Y%m%d-%H%M%S)" \
+  --cpu=16 --memory=128GB --disk=16GB --gpu=H100x8 --reserve=H100x8 \
+  --enable-extra-resources --extra=gpu \
+  -- uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py \
+    --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 \
+    --experts-per-rank 32 --topk 4 --capacity-factor 1.25 \
+    --implementations none --include-pallas-stages --pallas-stages permute_up_compare \
+    --routing balanced --dispatch-chunked-permute-up \
+    --dispatch-chunk-copy-tile 256 --dispatch-chunk-copy-rows 1 \
+    --warmup 1 --steps 3 --fail-on-error \
+    --git-sha "$(git rev-parse --short HEAD)" \
+    --jsonl /tmp/moe_mgpu_permute_up_chunked.jsonl
+```

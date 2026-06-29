@@ -1,0 +1,541 @@
+---
+topic: 6597-moe-mgpu-forward
+issue: https://github.com/marin-community/marin/issues/6597
+description: Forward-only scheduling and performance work for Hopper Pallas Mosaic MGPU Grug MoE.
+author: dlwh
+---
+
+# 6597 MoE MGPU Forward: Task Logbook
+
+## Scope
+- Goal: optimize the forward `pallas_mgpu` path, especially `permute_up`, without changing the backward workstream.
+- Primary metrics: target-shape forward and `permute_up` steady-state time on H100x8 `cw-us-east-02a`.
+- Constraints: preserve existing worktree changes, do not restart/bounce Iris, babysit any H100 jobs, keep routine logs here rather than on issue #6597.
+- Coordinating issue: https://github.com/marin-community/marin/issues/6597
+
+## Baseline
+- Date: 2026-06-28.
+- Code refs: `lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py`, `lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py`.
+- Baseline numbers from `.agents/logbooks/6597-moe-mgpu.md`:
+  - Target forward compare: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-target-forward-compare-tiled`; `ragged_all_to_all=0.082044s`, `pallas_mgpu=0.039230s`, `max_abs_diff=0.03125`, no dropped routes.
+  - Repeated target forward: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-target-forward-tiled-repeat`; `steady_state_time=0.038529s`.
+  - Target forward+backward: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-target-fwd-bwd-vector-dx`; `steady_state_time=0.128115s`, `75.43 TFLOP/s/rank`, no dropped routes.
+
+## Current TL;DR
+- 2026-06-28: Inspection shows the current `permute_up_mgpu` does not implement expert-group outer / rotating-peer inner scheduling. It computes all metadata, materializes full `recv_x` with `_permute_up_tiled_values_mgpu_kernel`, then runs W13 via `_moe_mgpu_dispatch_w13_activation`. This means chunk pipelining across copy/W13 is not possible with the current public kernel boundaries; it requires a structural split/rewrite that exposes chunk buffers and cross-kernel or in-kernel synchronization.
+- 2026-06-28: Added a narrow schedule experiment: `MoeMgpuConfig.dispatch_copy_schedule` can select the existing assignment-major copy order or a new `expert_group_peer` copy order sorted by `(expert_group, rotating peer phase, local expert, local position)`. Added `--routing balanced` so the target shape has exactly 512 rows per global expert per source rank.
+- 2026-06-28: Fusing dispatch metadata writes into the value-copy kernel is a medium-shape win and is now the default: `permute_up` improved from `0.005956s` to `0.005093s` on T/rank=4096, D=2560, I=1280, E_local=32, K=4, EP=8 balanced routing. Public H100 parity against `ragged_all_to_all` passed. This is still only about `5.3%` of H100 bf16 peak for the `permute_up` stage; W13-only was `0.001202s` / `223.3 TFLOP/s/rank` / `22.6%` roofline, so W13 tile tuning is the next compute-side target.
+
+## Entry Log
+
+### 2026-06-28 13:25 - FWD-SCHED-001 current schedule inspection and copy-order experiment
+- Hypothesis: the current target forward is partly software-structure-bound in `permute_up` because dispatch copy and W13 are separate full-buffer stages; changing only copy order may affect locality/contention but cannot provide the desired copy/compute overlap.
+- Commit Hash: uncommitted worktree, preserving existing changes.
+- Command:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q`
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 1 --tokens-per-rank 8 --hidden-dim 128 --intermediate-dim 128 --experts-per-rank 1 --topk 1 --routing balanced --implementations none --include-pallas-stages --pallas-stages staged_forward --warmup 0 --steps 1 --dispatch-copy-schedule expert_group_peer --dispatch-expert-group-size 1 --git-sha local-smoke`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up --warmup 1 --steps 3 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --git-sha forward-schedule-local --jsonl scratch/moe_mgpu_target_permute_up_assignment_major.jsonl`
+- Config:
+  - Target H100 stage run: EP=8, T/rank=32768, K=4, D=2560, I=1280, E_local=32, capacity_factor=1.25, balanced routing, `dispatch_copy_schedule=assignment_major`, expert group size 8.
+  - New comparison config to run next: same shape but `dispatch_copy_schedule=expert_group_peer`.
+- Result:
+  - Current scheduling inspection: `_permute_up_tiled_values_mgpu_kernel` linearizes `(assignment, D_tile)` over the globally expert-sorted assignment list. Since assignment sorting is by `global_expert = dst * E_local + local_expert`, this is effectively destination-major then local-expert-major, not expert-group outer with rotating-peer inner.
+  - Current `permute_up_mgpu` materializes all `recv_x` before W13. There is no chunk buffer handed from copy to W13, and the W13 kernel only sees the final dense expert-major receive layout.
+  - Added `_expert_group_peer_copy_order`, `_permute_up_tiled_values_scheduled_mgpu_kernel`, `MoeMgpuConfig.dispatch_copy_schedule`, `MoeMgpuConfig.dispatch_expert_group_size`, benchmark CLI flags, balanced routing, and CPU tests.
+  - Local benchmark tests passed: `6 passed, 11 warnings`.
+  - CPU Pallas smoke emitted a benchmark row with expected `AttributeError` because the Pallas GPU stage is not available on CPU; this only exercised CLI row emission.
+  - H100 job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-202548` launched and is being babysat. As of the 13:38 check, it is still `JOB_STATE_RUNNING`, with only the stage-start log emitted.
+- Interpretation:
+  - Compute/comm judgment: the existing implementation is software-structure-bound for the requested pipelining hypothesis. W13 itself is compute-heavy, but the implementation has a hard full-buffer dispatch barrier before compute, so copy/compute overlap cannot appear from tile-size tuning alone.
+  - The implemented patch directly tests loop-order locality/contention. It does not test true pipeline overlap; that requires a structural fused or chunked `permute_up` rewrite.
+- Next action:
+  - Wait for assignment-major target stage result or timeout.
+  - If healthy, run the same target stage with `dispatch_copy_schedule=expert_group_peer`.
+  - If target compile/lowering remains excessive, run a medium balanced paired schedule benchmark first, then revisit target pipelining.
+
+### 2026-06-28 13:54 - FWD-SCHED-002 medium paired copy-order result
+- Hypothesis: on a same-D/I medium shape, the expert-group/rotating-peer copy order will show whether changing copy order alone materially improves `permute_up` before attempting another target run.
+- Commit Hash: uncommitted worktree, preserving existing changes.
+- Command:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job stop /dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-202548`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-202548`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up --warmup 1 --steps 3 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --git-sha forward-schedule-local --jsonl scratch/moe_mgpu_t4096_permute_up_assignment_major.jsonl`
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up --warmup 1 --steps 3 --dispatch-copy-schedule expert_group_peer --dispatch-expert-group-size 8 --git-sha forward-schedule-local --jsonl scratch/moe_mgpu_t4096_permute_up_expert_group_peer.jsonl`
+- Config:
+  - EP=8, T/rank=4096, K=4, D=2560, I=1280, E_local=32, capacity_factor=1.25, balanced routing, H100x8 on `cw-us-east-02a`.
+- Result:
+  - Target attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-202548` was stopped after no row was emitted for more than 20 minutes. Iris summary: state `killed`, error `Terminated by user`, duration `1,380,084 ms`, no failure/preemption. Only the stage-start log appeared.
+  - Medium assignment-major job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-204913` succeeded: compile `68.659757s`, steady-state `0.006049s`, `44.38 TFLOP/s/rank`, no dropped routes.
+  - Medium expert-group/rotating-peer job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-205141` succeeded: compile `68.625544s`, steady-state `0.006006s`, `44.69 TFLOP/s/rank`, no dropped routes.
+- Interpretation:
+  - The copy-order-only change is neutral/slightly positive on this shape: about `0.7%` faster, which is not enough to call a meaningful speedup.
+  - This supports the structural diagnosis: the useful next experiment is chunked/fused `permute_up` with explicit copy/compute overlap, not more loop-order tuning inside a full-buffer copy kernel.
+- Next action:
+  - Keep the schedule toggle as a benchmarkable diagnostic.
+  - For target shape, retry only after adding better progress visibility or after implementing a structural chunked `permute_up` path; otherwise the target stage can spend too long without emitting a row.
+
+### 2026-06-28 14:49 - FWD-SCHED-003 fused dispatch metadata result
+- Hypothesis: since medium decomposition showed `permute_metadata=0.001860s`, `permute_values=0.003701s`, full `permute=0.005184s`, and `w13=0.001202s`, fusing metadata writes into the value-copy kernel should remove one launch/semaphore phase and improve `permute_up`.
+- Commit Hash: uncommitted worktree, preserving existing changes.
+- Command:
+  - Decomposition: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_metadata permute_values permute w13 permute_up --warmup 1 --steps 3 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --git-sha forward-decomp-local --jsonl scratch/moe_mgpu_t4096_permute_decomp_assignment_major.jsonl`
+  - Fused assignment-major: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up permute --warmup 1 --steps 3 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --dispatch-fuse-metadata --git-sha forward-fused-dispatch-local --jsonl scratch/moe_mgpu_t4096_fused_dispatch_assignment_major.jsonl`
+  - Public parity: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1200s uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k 'moe_mlp_pallas_mgpu_matches_ragged_a2a_ep8_topk4_on_hopper_when_available or moe_mlp_pallas_mgpu_matches_ragged_a2a_on_hopper_when_available'`
+  - Target forward attempt: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 32768 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --implementations pallas_mgpu --warmup 1 --steps 3 --git-sha forward-fused-dispatch-local --jsonl scratch/moe_mgpu_target_forward_fused_dispatch.jsonl`
+  - Fused expert-group/peer: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up permute --warmup 1 --steps 3 --dispatch-copy-schedule expert_group_peer --dispatch-expert-group-size 8 --git-sha forward-fused-dispatch-local --jsonl scratch/moe_mgpu_t4096_fused_dispatch_expert_group_peer.jsonl`
+- Config:
+  - Medium balanced H100x8: EP=8, T/rank=4096, K=4, D=2560, I=1280, E_local=32, capacity_factor=1.25.
+  - Default `MoeMgpuConfig.dispatch_fuse_metadata=True` after public parity passed.
+- Result:
+  - Decomposition job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-210723`: `permute_metadata=0.001860s`, `permute_values=0.003701s`, `permute=0.005184s`, `w13=0.001202s`, `permute_up=0.005956s`, no dropped routes.
+  - Fused assignment-major job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-211614`: `permute=0.003983s`, `permute_up=0.005093s`, no dropped routes. This is about `23%` faster for `permute` and `14.5%` faster for `permute_up` on this shape.
+  - Public parity job `/dlwh/iris-run-test_grugformer_moe-20260628-212258`: `2 passed, 42 deselected`, including EP=8/top_k=4 parity against `ragged_all_to_all`.
+  - Target forward job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-212953` emitted only the stage-start line for about 15 minutes and was stopped. Summary: `killed`, duration `895,033 ms`, no failure/preemption.
+  - Fused expert-group/peer job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-214508`: `permute=0.003999s`, `permute_up=0.005081s`, no dropped routes. This is effectively tied with fused assignment-major.
+- Interpretation:
+  - Fused dispatch metadata is a validated medium-shape speedup and should remain default.
+  - Expert-group/peer order is still neutral after fixing `permute_up` to honor the schedule.
+  - The objective remains far from complete: medium `permute_up` is `~52.8 TFLOP/s/rank`, `~5.3%` of H100 bf16 peak. Even W13-only is only `~22.6%` roofline, so the next useful path toward `45%` is W13 tile/autotune and/or a more radical dispatch/compute overlap rewrite.
+- Next action:
+  - Run a bounded W13 tile sweep on the medium balanced shape to see whether block sizes can move W13 toward 45% roofline before attempting chunked dispatch/compute overlap.
+
+### 2026-06-28 15:38 - FWD-SCHED-004 opt-in chunked permute_up structural experiment
+- Hypothesis: a fused/chunked `permute_up` path that avoids full `recv_x` materialization can move the stage toward the requested 45% roofline; a single-buffer scratch handoff is expected to validate structure but not fully overlap copy and W13.
+- Commit Hash: uncommitted worktree, preserving existing changes.
+- Command:
+  - Sequential chunked stage: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up --warmup 1 --steps 3 --block-m 64 --block-n 128 --block-k 64 --max-concurrent-steps 4 --grid-block-n 2 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --dispatch-fuse-metadata --dispatch-chunked-permute-up --git-sha forward-chunked-fixed-local --jsonl scratch/moe_mgpu_t4096_permute_up_chunked_fixed.jsonl`
+  - Full-forward correctness attempt: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations ragged_all_to_all pallas_mgpu --warmup 0 --steps 1 --block-m 64 --block-n 128 --block-k 64 --max-concurrent-steps 4 --grid-block-n 2 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --dispatch-fuse-metadata --dispatch-chunked-permute-up --git-sha forward-chunked-correctness-local --jsonl scratch/moe_mgpu_t4096_forward_chunked_correctness.jsonl`
+  - Split-warpgroup overlap attempt: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up --warmup 1 --steps 3 --block-m 64 --block-n 128 --block-k 64 --max-concurrent-steps 4 --grid-block-n 2 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 8 --dispatch-fuse-metadata --dispatch-chunked-permute-up --git-sha forward-chunked-overlap-scope-local --jsonl scratch/moe_mgpu_t4096_permute_up_chunked_overlap_scope.jsonl`
+- Config:
+  - EP=8, T/rank=4096, K=4, D=2560, I=1280, E_local=32, capacity_factor=1.25, balanced routing.
+  - New opt-in config: `MoeMgpuConfig.dispatch_chunked_permute_up=True`, expert group size 8, rows per source/expert 64, chunk rows 512.
+- Result:
+  - Added an opt-in fused/chunked path. The first version wrote one destination-rank x 8-local-expert chunk into per-rank scratch, computed W13/SwiGLU from that scratch, and stored final `hidden` rows without returning full `recv_x`. It kept `recv_src_rank` and `recv_src_assignment` metadata writes.
+  - Stale-bundle job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-222528` reported `permute_up=0.004714s`, but the branch was accidentally inserted in `permute_mgpu`, not `permute_up_mgpu`, so this is not valid chunked evidence.
+  - Corrected sequential chunked job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-222809`: `permute_up=0.005617s`, `47.79 TFLOP/s/rank`, `4.83%` roofline, no dropped routes. This is slower than the best current staged medium row (`0.004665s`).
+  - Full-forward correctness attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-223054`: ragged baseline completed, but Pallas comparison failed before a Pallas row with `ShardingTypeError: sub got incompatible shardings for broadcasting: ('expert', None), (('data', 'expert'), None)`. This did not validate chunked correctness.
+  - First split-warpgroup overlap attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-223401` failed lowering with `NotImplementedError: Only thread-collective allocations are supported in multithreaded kernels`; patched WGMMA/store `run_scoped` calls with `collective_axes="wg"` and relaunched `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-223717`.
+  - Second split-warpgroup overlap attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-223717` failed lowering with `ValueError: WGMMA accumulators can only be allocated non-collectively`; removed `collective_axes="wg"` from the accumulator scope while keeping it on store SMEM.
+  - Third split-warpgroup overlap attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-224021` again failed lowering with `NotImplementedError: Only thread-collective allocations are supported in multithreaded kernels`, likely from the existing W13 `emit_pipeline` allocation path rather than the explicit accumulator/store scopes.
+  - Single-warpgroup ping-pong prefetch `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-224707`: `permute_up=0.005457s`, `49.19 TFLOP/s/rank`, `4.97%` roofline, no dropped routes.
+  - Exchanged loop order:
+    - Expert-group outer / peer inner `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-225040`: `permute_up=0.005617s`, `47.79 TFLOP/s/rank`, `4.83%` roofline.
+    - Peer outer / expert-group inner `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-225333`: `permute_up=0.005600s`, `47.94 TFLOP/s/rank`, `4.85%` roofline.
+  - Larger chunk sizes:
+    - Group size 16 `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-225626`: `permute_up=0.005408s`, `49.64 TFLOP/s/rank`, `5.02%` roofline.
+    - Group size 32 `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-225857`: `permute_up=0.005407s`, `49.64 TFLOP/s/rank`, `5.02%` roofline.
+  - Direct `permute_up` compare stage was added to compare chunked and staged Pallas without the full-forward sharding comparison path.
+  - Medium group-size 32 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-232322`: exact match against staged Pallas, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no metadata mismatches, no dropped routes.
+  - Correctness debugging:
+    - Small direct compare with ping-pong scratch had exact metadata but hidden mismatch: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-230711`, `max_abs_diff=0.4697`, metadata mismatches 0.
+    - SMEM-to-remote-copy attempt failed lowering: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-231026`, `GMEM refs with peer ids are not supported in warpgroup lowering`.
+    - `mgpu.semaphore_signal_parallel` with full mesh device id did not fix ping-pong mismatch: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-231719`, `max_abs_diff=0.4697`, metadata mismatches 0.
+    - One scratch slot per phase fixed correctness on the small shape: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-232042`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`.
+  - Corrected medium group-size 32 phase-slot perf `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-232554`: `permute_up=0.005420s`, `49.53 TFLOP/s/rank`, `5.01%` roofline, no dropped routes.
+  - Corrected target group-size 32 phase-slot perf `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-232909`: `permute_up=0.025261s`, `85.01 TFLOP/s/rank`, `8.60%` roofline, no dropped routes.
+  - Target group-size 32 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-233205`: exact match against staged Pallas, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no metadata mismatches, no dropped routes.
+- Interpretation:
+  - The sequential scratch handoff proves the structural path can lower/run, but it is software-structure-bound and slower. It removes full `recv_x` but replaces it with per-phase scratch synchronization and no actual overlap.
+  - The correct overlap shape likely requires split memory/compute warpgroups with ping-pong scratch. The JAX collective matmul ring can forward the current LHS shard; MoE cannot directly forward because each destination chunk is for that destination's experts, so the source rank must send its next destination chunk while computing an independently received chunk.
+  - The existing W13 implementation's plain `mgpu.emit_pipeline` does not compose cleanly with a multithreaded memory/compute split. The next overlap implementation should use a warp-specialized pipeline pattern instead of wrapping the current W13 body.
+  - Reducing phase count from 32 to 16 or 8 phases helps only about `1%`; phase count alone is not the dominant gap versus staged best.
+  - Ping-pong scratch reuse is not correctness-safe with the current direct remote-store synchronization. A correctness-preserving version needs one slot per phase, which gives up the intended double-buffer memory reuse.
+  - Target shape amortizes the chunked overhead better than medium: corrected chunked `permute_up=0.025261s` is modestly faster than the earlier target tiled `permute_up` baseline around `0.026288s`, but still only `8.60%` of H100 bf16 peak.
+- Next action:
+  - Keep the opt-in path experimental and off by default.
+  - Rework the W13 chunk compute around `mgpu.emit_pipeline_warp_specialized` or a smaller attention/matmul-style split-warpgroup prototype before another overlap H100 launch.
+  - Decide whether to keep the correctness-preserving phase-slot path as a benchmark-only baseline or hide/remove it before production wiring, since it uses near-full-assignment scratch and is still far from the 45% roofline goal.
+
+### 2026-06-28 16:58 - FWD-SCHED-005 padding-only hidden zeroing and target tile probes
+- Hypothesis: the corrected chunked path zeroes all `hidden[capacity, I]` before compute, but chunk W13 overwrites every real routed row. Only capacity padding rows need zeroing to match the staged path. This should reduce initialization work without changing real-row numerics.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Medium compare: `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 1800s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py --ep-size 8 --tokens-per-rank 4096 --hidden-dim 2560 --intermediate-dim 1280 --experts-per-rank 32 --topk 4 --capacity-factor 1.25 --routing balanced --implementations none --include-pallas-stages --pallas-stages permute_up_compare --warmup 0 --steps 1 --block-m 64 --block-n 128 --block-k 64 --max-concurrent-steps 4 --grid-block-n 2 --dispatch-copy-schedule assignment_major --dispatch-expert-group-size 32 --dispatch-fuse-metadata --dispatch-chunked-permute-up --git-sha 0fab191fd-padding-zero-only --jsonl scratch/moe_mgpu_t4096_permute_up_chunked_padding_zero_compare.jsonl`
+  - Medium timing: same shape/config, `--pallas-stages permute_up --warmup 1 --steps 3`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_padding_zero_perf.jsonl`.
+  - Target timing: same config at `--tokens-per-rank 32768`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_padding_zero_perf.jsonl`.
+  - Target compare: same target config, `--pallas-stages permute_up_compare --warmup 0 --steps 1`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_padding_zero_compare.jsonl`.
+  - Target `block_m=128` timing: same target config with `--block-m 128`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_padding_zero_blockm128_perf.jsonl`.
+  - Target `block_n=256` timing: same target config with `--block-n 256 --grid-block-n 1`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_padding_zero_blockn256_perf.jsonl`.
+- Config: H100x8 `cw-us-east-02a`, EP=8, D=2560, I=1280, E_local=32, K=4, capacity_factor=1.25, balanced routing, opt-in `dispatch_chunked_permute_up=true`, group size 32.
+- Result:
+  - Prior no-zero-fill experiment `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-233753` was incorrect: metadata exact but hidden mismatch `max_abs_diff=0.51171875`, `mean_abs_diff=0.001993936`, `matches_baseline=false`.
+  - Medium padding-only compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-234242`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+  - Medium padding-only timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-234517`: `permute_up=0.0053650147s`, `50.03 TFLOP/s/rank`, `5.06%` roofline, no drops. Previous corrected phase-slot group32 medium was `0.005420s`.
+  - Target padding-only timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-234751`: `permute_up=0.0251573777s`, `85.36 TFLOP/s/rank`, `8.63%` roofline, no drops. Previous corrected phase-slot target was `0.025261s`.
+  - Target padding-only compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-235027`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+  - Target `block_m=128` `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-235307`: `permute_up=0.0322281403s`, `66.63 TFLOP/s/rank`, no drops. This is slower than `block_m=64`.
+  - Target `block_n=256` `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260628-235544` failed at lowering with `Mosaic GPU kernel exceeds available shared memory: smem_bytes=294944 > max_smem_bytes=232448`.
+- Interpretation:
+  - Padding-only hidden zeroing is correctness-preserving and gives a small speedup, about `1.0%` on medium and `0.4%` on target. Keep it in the experimental chunked path.
+  - The fractional gain confirms initialization is not the main bottleneck. The chunked path remains software-structure-bound by per-phase scratch/synchronization and lack of true copy/W13 overlap.
+  - Larger target-only M tile is worse, likely due occupancy/register/shared-memory pressure despite fewer M tiles. N=256 exceeds shared memory in this kernel shape.
+- Next action:
+  - Stop broad scalar tile probing for this body. The next meaningful speedup requires a different overlap structure, likely warp-specialized copy/compute with a correctness-safe ping-pong protocol or a separate smaller prototype before reintegrating into `permute_up`.
+
+### 2026-06-28 17:32 - FWD-SCHED-006 row-base precompute and 256-wide chunk copies
+- Hypothesis: the corrected chunked kernel still spends scalar work in `_remote_row` by recomputing expert/source prefix sums for every metadata write and output tile. Precomputing flattened receiver row-base tables outside the kernel should reduce that overhead. Separately, using 256-wide D copy tiles should reduce remote copy loop iterations relative to the 128-wide default and directly test the wider physical-copy-tile hypothesis.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Row-base multidimensional compare: medium `permute_up_compare` with `--dispatch-expert-group-size 32`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_compare.jsonl`.
+  - Row-base flattened compare: same medium compare, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_flat_compare.jsonl`.
+  - Row-base flattened timing: same medium `permute_up --warmup 1 --steps 3`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_flat_perf.jsonl`.
+  - Row-base flattened target timing: target `permute_up --warmup 1 --steps 3`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_rowbase_flat_perf.jsonl`.
+  - Row-base flattened target compare: target `permute_up_compare`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_rowbase_flat_compare.jsonl`.
+  - Copy-tile-256 medium compare/timing: same medium config plus `--dispatch-chunk-copy-tile 256`, JSONLs `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_copytile256_compare.jsonl` and `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_copytile256_perf.jsonl`.
+  - Copy-tile-256 target timing/compare: same target config plus `--dispatch-chunk-copy-tile 256`, JSONLs `scratch/moe_mgpu_target_permute_up_chunked_rowbase_copytile256_perf.jsonl` and `scratch/moe_mgpu_target_permute_up_chunked_rowbase_copytile256_compare.jsonl`.
+- Config: H100x8 `cw-us-east-02a`, EP=8, D=2560, I=1280, E_local=32, K=4, capacity_factor=1.25, balanced routing, opt-in `dispatch_chunked_permute_up=true`, group size 32, block `64x128x64`, `max_concurrent_steps=4`, `grid_block_n=2`.
+- Result:
+  - Multidimensional row-base refs `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-000425` hit CUDA illegal address before a JSON result. This variant was abandoned.
+  - Flattened row-base medium compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-000821`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+  - Flattened row-base medium timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-001102`: `permute_up=0.0049983410s`, `53.70 TFLOP/s/rank`, `5.43%` roofline, no drops. Previous padding-only group32 medium was `0.005365s`.
+  - Flattened row-base target timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-001345`: `permute_up=0.0217378077s`, `98.79 TFLOP/s/rank`, `9.99%` roofline, no drops. Previous padding-only target was `0.025157s`.
+  - Flattened row-base target compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-001626`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+  - Copy-tile-256 medium compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002111`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+  - Copy-tile-256 medium timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002403`: `permute_up=0.0043783033s`, `61.31 TFLOP/s/rank`, `6.20%` roofline, no drops.
+  - Copy-tile-256 target timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002645`: `permute_up=0.0151669517s`, `141.59 TFLOP/s/rank`, `14.32%` roofline, no drops.
+  - Copy-tile-256 target compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-002937`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops.
+- Interpretation:
+  - Precomputing flattened row bases is a validated speedup; multidimensional dynamic ref indexing is unsafe in this kernel shape and caused illegal address.
+  - Wider 256-column copy tiles are a large target-shape win, cutting target chunked `permute_up` from `0.021738s` to `0.015167s`. This is about `40%` faster than the corrected phase-slot target `0.025261s` and about `42%` faster than the older tiled `permute_up≈0.026288s`.
+  - The kernel remains below the 45% roofline objective: best target row is `14.32%` roofline. The remaining bottleneck is still software-structure/overlap, not just copy tile width.
+  - Keep `dispatch_chunk_copy_tile` default at 128 for compatibility with existing small chunked H100 correctness shapes (`D=128`), and use `256` explicitly for target/benchmark configs.
+- Next action:
+  - Use the row-base + 256-copy-tile path as the best fused/chunked baseline.
+  - Next structural experiment should target true copy/W13 overlap or safe scratch reuse; copy-tile and scalar-prefix overhead are no longer the dominant visible gap.
+
+### 2026-06-28 17:49 - FWD-SCHED-007 copytile512 and split-WG overlap prototype
+- Hypothesis:
+  - A wider 512-column physical copy tile may reduce remote-copy loop overhead beyond the validated 256-column copy tile.
+  - A minimal producer/consumer split-WG variant of the chunked fused kernel can overlap remote token exchange for phase `n+1` with W13/SILU compute for phase `n`, preserving the existing one-scratch-slot-per-phase protocol to avoid the earlier ping-pong correctness race.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Copytile512 medium compare: same medium balanced `permute_up_compare` config as FWD-SCHED-006, plus `--dispatch-chunk-copy-tile 512`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_rowbase_copytile512_compare.jsonl`.
+  - Split-WG medium compare attempts: same medium balanced `permute_up_compare` config with row-base, `--dispatch-chunk-copy-tile 256`, `--dispatch-chunked-permute-up`, and `--dispatch-split-wg-permute-up`.
+- Config: H100x8 `cw-us-east-02a`, EP=8, D=2560, I=1280, E_local=32, K=4, capacity_factor=1.25, balanced routing, opt-in chunked fused `permute_up`, group size 32, block `64x128x64`, `max_concurrent_steps=4`, `grid_block_n=2`.
+- Result:
+  - Copytile512 medium compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-003432`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, no drops. It reported `steady_state_time=0.0085388550s`, `62.87 TFLOP/s/rank`, which is slower than the copytile256 medium timing row `0.0043783033s`.
+  - Split-WG attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-004109`: benchmark row error `NameError: Found an unbound axis name: wg`; this was a local patch placement bug, not a kernel result.
+  - Split-WG attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-004339`: benchmark row error `NotImplementedError: Only thread-collective allocations are supported in multithreaded kernels`; added `collective_axes="wg"` to the explicit store SMEM allocation.
+  - Split-WG attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-004544`: benchmark row error `ValueError: WGMMA accumulators can only be allocated non-collectively`; removed `collective_axes` from the ACC allocation.
+  - Split-WG attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-004749`: benchmark row error `NotImplementedError: Only thread-collective allocations are supported in multithreaded kernels`.
+- Interpretation:
+  - Copytile512 is correctness-preserving but not promising; 256 remains the best validated physical copy tile.
+  - The remaining split-WG lowering error is from `mgpu.emit_pipeline` allocating its internal SMEM under the non-collective ACC scope. The non-warp-specialized `emit_pipeline` helper does not expose `get_allocations`, so this cannot be fixed by only wrapping the existing W13 body in a producer/consumer kernel.
+  - The revised goal is confirmed: a true fused `permute_up` with token exchange overlapping W13/SILU needs a structural W13 rewrite around `mgpu.emit_pipeline_warp_specialized`/manual allocations or a custom explicit K-loop. The current fused chunked path avoids full `recv_x` but still does not provide the requested overlap.
+- Next action:
+  - Keep row-base + copytile256 as the best current chunked fused baseline.
+  - Do not spend more H100 time on copytile512.
+  - Build the next overlap experiment by rewriting the chunk W13 compute pipeline itself, rather than nesting the existing `mgpu.emit_pipeline` inside an outer multithreaded kernel.
+
+### 2026-06-28 18:13 - FWD-SCHED-008 manual split-WG W13 prototype
+- Hypothesis:
+  - The previous split-WG wrapper failed because the current W13 body uses `mgpu.emit_pipeline`, whose internal SMEM allocations cannot be made `wg`-collective while keeping WGMMA ACC refs non-collective.
+  - A manual 3-WG W13 pipeline can remove `mgpu.emit_pipeline` from split mode: one WG remote-copies the next phase chunk, one WG copies current W13 operands into SMEM, and one WG performs WGMMA/SILU/direct hidden stores.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Medium balanced `permute_up_compare` with row-base, `--dispatch-chunk-copy-tile 256`, `--dispatch-chunked-permute-up`, and `--dispatch-split-wg-permute-up`.
+- Config: H100x8 `cw-us-east-02a`, EP=8, D=2560, I=1280, E_local=32, K=4, capacity_factor=1.25, balanced routing, chunked fused `permute_up`, group size 32, block `64x128x64`, `max_concurrent_steps=4`, `grid_block_n=2`.
+- Result:
+  - Manual 3-WG attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-005424`: benchmark row error `JaxRuntimeError: INTERNAL: Pass pipeline failed`; key lowering line was `nvvm.tcgen05.fence op is not supported on sm_90a`. Removed `orders_tensor_core=True` from the ready barrier.
+  - No-tc-fence attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-005712`: compiled/launched, then failed at runtime with `CUDA_ERROR_LAUNCH_FAILED`. Found that remote copy was moved outside the per-tile `collective_axes="wg"` scope in one version, while the prior in-scope version duplicated `_copy_phase(next_phase)` once per `(M,N)` tile.
+  - Phase-copy attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-010343`: still failed at runtime with `CUDA_ERROR_LAUNCH_FAILED` after moving remote copy back inside the collective tile scope, guarded to first `(M,N)` tile per phase.
+  - Tile-done-barrier attempt `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-010912`: still failed at runtime with `CUDA_ERROR_LAUNCH_FAILED` after adding a tile completion barrier so remote/loader WGs wait for compute WG before leaving the tile scope.
+- Interpretation:
+  - The manual W13 split path is now past the original `mgpu.emit_pipeline` allocation-lowering blocker and can lower far enough to launch.
+  - The custom synchronization protocol is still unsafe. Current evidence points to a runtime barrier/scope hazard rather than the old full-`recv_x` materialization issue or a scalar copy-tile issue.
+  - The current best validated forward remains row-base + copytile256: target `permute_up=0.0151669517s`, `141.59 TFLOP/s/rank`, `14.32%` roofline, exact vs staged.
+- Next action:
+  - Isolate the manual W13 pipeline without remote-copy overlap on a reduced `E_local` shape, ideally with CUDA launch blocking/logging, before another full medium compare.
+  - Keep the split-WG path opt-in and experimental; do not promote it until it matches staged Pallas on medium.
+
+### 2026-06-28 18:46 - FWD-SCHED-009 helper-based split-WG W13 isolation and overlap attempts
+- Hypothesis:
+  - The manual split-WG W13 path was failing because its custom barrier protocol was invalid, not because split WG itself is impossible.
+  - JAX's `emit_pipeline_warp_specialized` can provide a launchable local W13 pipeline. A third WG can then be used to overlap remote token exchange for phase `n+1` with W13 compute for phase `n`.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Reduced no-overlap compare: H100x8 `cw-us-east-02a`, `T/rank=512`, `E_local=4`, `D=2560`, `I=1280`, `K=4`, `EP=8`, balanced routing, `--dispatch-chunked-permute-up --dispatch-split-wg-permute-up --no-dispatch-split-wg-overlap-permute-up`, JSONL `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_nooverlap_compare.jsonl`.
+  - Reduced overlap compares: same shape/config but `--dispatch-split-wg-overlap-permute-up`, JSONLs `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_overlap_compare.jsonl`, `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_overlap_stepped_compare.jsonl`, and `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_overlap_local_index_compare.jsonl`.
+- Config:
+  - `dispatch_chunk_copy_tile=256`, `dispatch_expert_group_size=4`, block `64x128x64`, `max_concurrent_steps=4`, `grid_block_n=2`.
+  - New config/CLI: `dispatch_split_wg_overlap_permute_up`, default `False` after the overlap deadlocks below.
+- Result:
+  - Manual no-overlap isolation `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-011700`: benchmark row error `JaxRuntimeError: INTERNAL: CUDA error: Failed to launch CUDA graph: CUDA_ERROR_LAUNCH_FAILED`.
+  - Manual ready-barrier=1 isolation `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-012113`: same `CUDA_ERROR_LAUNCH_FAILED`.
+  - Helper-based no-overlap isolation `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-012622`: passed exact compare vs staged Pallas, `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, `dropped_routes=0`, `compile_time=54.392361s`, `steady_state_time=0.0045712420s`, `14.68 TFLOP/s/rank`, `1.48%` roofline on the reduced shape.
+  - Helper overlap, full next-phase copy before entering the helper pipeline `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-013020`: start-only for several minutes on the reduced shape; stopped as a deadlock.
+  - Helper overlap, copy steps distributed by global `(mi, ni, kk)` `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-013619`: start-only for several minutes; stopped. Diagnosis: `nd_loop(..., collective_axes="sm")` distributes output tiles across SMs, so not every SM reaches the global tile used to signal phase completion.
+  - Helper overlap, copy steps distributed by per-SM `loop_info.local_index` `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-014206`: still start-only for several minutes; stopped. This avoids the obvious global-tile signal bug, but the helper's consumed-barrier protocol still does not tolerate the remote copy work as written.
+- Interpretation:
+  - Replacing the manual W13 barrier loop with `emit_pipeline_warp_specialized` is a real structural improvement: it lowers, launches, and matches staged Pallas on a reduced H100 shape.
+  - True token-exchange/W13 overlap is still unresolved. The failed overlap attempts are deadlocks, not numeric mismatches. The likely issue is interaction between the helper's automatic consumed barriers and making one compute WG perform remote GMEM stores while also participating as a compute WG.
+  - The best validated target result remains the row-base + copytile256 chunked path from FWD-SCHED-006: target `permute_up=0.0151669517s`, `141.59 TFLOP/s/rank`, `14.32%` roofline, exact vs staged.
+  - The split-WG overlap flag is kept explicit and off by default to avoid accidental benchmark hangs.
+- Next action:
+  - Keep helper-based no-overlap split W13 as a launchable isolation baseline, but do not promote it as a speedup.
+  - The next overlap attempt should either use manual consumed barriers with explicit arrival from the remote-copy compute WG, or split remote copy into a separate producer kernel/phase with a simpler completion signal. Continuing to put a full remote copy before `eval_pipeline` is a dead end.
+
+### 2026-06-28 19:08 - FWD-SCHED-010 split-WG overlap deadlock narrowing and medium helper baseline
+- Hypothesis:
+  - The helper overlap deadlock was caused by automatic consumed-barrier management or by signaling only one SM after distributed next-phase copy work.
+  - If those are fixed, the reduced overlap compare should complete. If not, remote GMEM stores inside the helper W13 pipeline body are likely not a viable structure.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Reduced overlap manual-consumed compare: same reduced config as FWD-SCHED-009, `--dispatch-split-wg-overlap-permute-up`, JSONL `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_overlap_manual_consumed_compare.jsonl`.
+  - Reduced overlap per-SM signal compare: JSONL `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_overlap_persm_signal_compare.jsonl`.
+  - Reduced two-WG interleaved-copy compare: JSONL `scratch/moe_mgpu_t512_e4_permute_up_splitwg_ws_interleaved_copy_compare.jsonl`.
+  - Medium helper no-overlap compare: `T/rank=4096`, `E_local=32`, `D=2560`, `I=1280`, group size 32, copytile256, `--dispatch-split-wg-permute-up --no-dispatch-split-wg-overlap-permute-up`, JSONL `scratch/moe_mgpu_t4096_permute_up_splitwg_ws_nooverlap_compare.jsonl`.
+- Config:
+  - H100x8 `cw-us-east-02a`, balanced routing, `block_m=64`, `block_n=128`, `block_k=64`, `max_concurrent_steps=4`, `grid_block_n=2`.
+- Result:
+  - Manual consumed-barrier overlap `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-014952`: start-only for several minutes; stopped. This used `emit_pipeline_warp_specialized(..., manual_consumed_barriers=True)`, delay-release disabled, and explicit arrivals from both compute WGs on all three input consumed barriers.
+  - Per-SM phase completion signal overlap `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-015519`: start-only for several minutes; stopped. This fixed the earlier one-SM signal bug by signaling each SM at its local final tile/K step, but still deadlocked.
+  - Two-WG interleaved-copy overlap `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-020051`: start-only for several minutes; stopped. This removed the third compute WG and had WG0 interleave next-phase remote copy steps with WGMMA while WG1 remained the helper memory WG. It still deadlocked.
+  - Medium helper no-overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-020512`: passed exact compare vs staged, `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, `dropped_routes=0`, `compile_time=91.147510s`, `steady_state_time=0.0087931879s`, `61.06 TFLOP/s/rank`, `6.17%` roofline.
+- Interpretation:
+  - The launchable helper no-overlap path scales to the medium shape and is numerically exact, but it is about `2x` slower than the best current medium fused/chunked row (`0.0043783033s` from FWD-SCHED-006). Keep it as an isolation tool, not a perf candidate.
+  - The overlap deadlock survived manual consumed barriers, per-SM completion signaling, and removing the third WG. The common remaining factor is issuing remote GMEM stores from inside the helper W13 pipeline body. That structure is likely incompatible with the helper's pipeline/synchronization assumptions.
+  - The next overlap experiment should not put remote GMEM stores inside `emit_pipeline_warp_specialized`'s body. It should use a separate producer/consumer structure outside the helper or a custom pipeline that owns both remote-store completion and local SMEM staging barriers.
+- Next action:
+  - Stop iterating on remote stores inside the helper body.
+  - Either write a smaller custom producer/consumer kernel with explicit per-SM phase barriers, or return to optimizing the validated serial fused chunked path while planning a separate copy producer.
+
+### 2026-06-28 19:16 - FWD-SCHED-011 serial fused W13 K-tile probes
+- Hypothesis:
+  - The validated serial fused/chunked path may spend too much overhead in 40 K-pipeline iterations at `block_k=64`. Increasing `block_k` to 128 would halve W13 pipeline steps and could improve the current best row-base + copytile256 path if it fits Mosaic shared-memory/layout constraints.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Medium `block_k=128` compare: H100x8 `cw-us-east-02a`, `T/rank=4096`, `E_local=32`, `D=2560`, `I=1280`, `K=4`, balanced routing, group size 32, copytile256, `--block-m 64 --block-n 128 --block-k 128 --grid-block-n 2`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_blockk128_compare.jsonl`.
+  - Medium `block_n=64, block_k=128` compare: same shape/config except `--block-n 64 --block-k 128 --grid-block-n 4`, JSONL `scratch/moe_mgpu_t4096_permute_up_chunked_blockn64_blockk128_compare.jsonl`.
+- Result:
+  - `block_k=128` job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-021015`: benchmark row error `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=327712 > max_smem_bytes=232448`.
+  - `block_n=64, block_k=128` job `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-021256`: benchmark row error `NotImplementedError: Arrays with the splat layout can only be stored when they have a single element or a multiple of 128 elements`.
+- Interpretation:
+  - Wider K tiles are not currently a viable way to reduce serial fused W13 overhead. `block_k=128` with the normal `N=128` tile exceeds Hopper Mosaic shared memory, and reducing N to 64 hits a Mosaic layout/store limitation.
+  - Keep the current best fused/chunked tile shape at `block_m=64, block_n=128, block_k=64`, `grid_block_n=2`, copytile256.
+- Next action:
+  - Do not spend more H100 time on K=128 variants unless the output/store layout is rewritten.
+  - Next useful serial-path probe is likely a bounded schedule/phase-count change that keeps the same WGMMA tile shape, or a custom producer/consumer kernel outside `emit_pipeline_warp_specialized`.
+
+### 2026-06-28 19:35 - FWD-SCHED-012 group-size and three-WG overlap probes
+- Hypothesis:
+  - The user-specified group8 chunk may improve the serial fused path at target shape if peer/expert scheduling dominates.
+  - The previous overlap deadlocks may have been caused by incomplete next-phase copies: one W13 K-step issued at most one remote copy step, while target chunks need more copy steps than per-SM W13 K steps. A three-WG helper variant can dedicate WG0 to W13 compute, WG2 to the helper memory loader, and WG1 to next-phase token copy with enough copy-step coverage.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Target group8 serial timing: H100x8 `cw-us-east-02a`, target balanced shape, `--dispatch-expert-group-size 8 --dispatch-chunk-copy-tile 256 --dispatch-chunked-permute-up --no-dispatch-split-wg-permute-up`, JSONL `scratch/moe_mgpu_target_permute_up_chunked_group8_copytile256_perf.jsonl`.
+  - Medium three-WG overlap compare: H100x8 `cw-us-east-02a`, `T/rank=4096`, `D=2560`, `I=1280`, `E_local=32`, balanced routing, group size 8, copytile256, `--dispatch-split-wg-permute-up --dispatch-split-wg-overlap-permute-up`, JSONL `scratch/moe_mgpu_t4096_permute_up_splitwg_overlap3_copy2_compare.jsonl`.
+  - Medium serial schedule sweep launched as `/dlwh/iris-run-job-20260629-023447`: group8 expert-group/peer, group16 assignment-major, group16 expert-group/peer.
+- Result:
+  - Target group8 serial timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-022329`: `permute_up=0.0154087737s`, `139.37 TFLOP/s/rank`, `14.09%` roofline, no dropped routes. This is slower than the best target group32 row-base + copytile256 result `0.0151669517s`.
+  - Three-WG overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-023011`: benchmark row error `JaxRuntimeError: INTERNAL: CUDA error: Could not synchronize CUDA stream: CUDA_ERROR_LAUNCH_FAILED`. It was not a start-only deadlock; the row arrived about 94s after stage start.
+  - Medium serial schedule sweep `/dlwh/iris-run-job-20260629-023447`: group8 expert-group/peer `0.0042880860s`, `62.60 TFLOP/s/rank`, `6.33%` roofline; group16 assignment-major `0.0045453267s`, `59.06 TFLOP/s/rank`, `5.97%`; group16 expert-group/peer `0.0044951577s`, `59.72 TFLOP/s/rank`, `6.04%`. All had no dropped routes/errors.
+- Interpretation:
+  - Expert group size 8 is not a target-shape speedup in the validated serial fused path. The current best target remains group32/copytile256 at `0.0151669517s`.
+  - Fixing next-phase copy coverage changes the overlap failure mode from start-only deadlock to launch failure, but does not make the helper-overlap path viable. The remaining issue is still structural: remote token stores from a WG participating in the helper's warp-specialized pipeline are not a safe runtime protocol.
+  - Loop order and group size are exhausted as easy serial wins: the user-requested expert-group outer / rotating-peer inner order is neutral/slower on medium and slower on target for group8.
+  - Current bottleneck judgment remains software-structure-bound. The serial fused path avoids materializing full `recv_x`, but it still does copy-then-W13 per phase rather than overlapping token exchange and W13/SwiGLU.
+- Next action:
+  - Keep group32/copytile256 as the serial fused baseline.
+  - Test whether recycling serial scratch from one slot per phase to two slots reduces memory footprint/cache pressure without changing correctness.
+  - The next true-overlap patch should stop using `emit_pipeline_warp_specialized` as the outer owner for both W13 and remote token stores. It likely needs a custom explicit producer/consumer kernel whose barriers own both remote-store completion and local SMEM staging.
+
+### 2026-06-28 19:48 - FWD-SCHED-013 two-slot scratch recycling
+- Hypothesis:
+  - The serial fused/chunked path may be slowed by a large scratch allocation: one full `chunk_rows x D` scratch slot per global phase. Since the serial path copies phase `n+1` before computing phase `n`, two scratch slots might be enough and could reduce memory footprint/cache pressure.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Medium group32/copytile256 compare+timing job `/dlwh/iris-run-job-20260629-024322`, H100x8 `cw-us-east-02a`, `T/rank=4096`, `D=2560`, `I=1280`, `E_local=32`, balanced routing, `--dispatch-expert-group-size 32 --dispatch-chunk-copy-tile 256 --dispatch-chunked-permute-up --no-dispatch-split-wg-permute-up`.
+- Result:
+  - Compare row `forward-chunked-twoslot-medium-compare-local`: `matches_baseline=false`, `max_abs_diff=3.01171875`, `mean_abs_diff=0.0077860630`, no rank/assignment metadata mismatches and no dropped routes.
+  - Timing row `forward-chunked-twoslot-medium-perf-local`: `permute_up=0.0046039953s`, `58.30 TFLOP/s/rank`, `5.90%` roofline, no drops. This is slower than the best medium group32/copytile256 row `0.0043783033s`.
+- Interpretation:
+  - Scratch-slot recycling is unsafe with the current serial copy-then-compute semaphore protocol. The wrong values with matching metadata imply a scratch overwrite/read-after-write hazard, not routing metadata corruption.
+  - The patch was reverted locally. Keeping one scratch slot per global phase remains necessary until the kernel has an explicit consumed/completion protocol.
+- Next action:
+  - Do not target-test two-slot scratch.
+  - True overlap and scratch reuse should be solved together with an explicit producer/consumer protocol rather than by changing scratch indexing alone.
+
+### 2026-06-28 20:12 - FWD-SCHED-014 manual overlap and SMEM-copy exchange probes
+- Hypothesis:
+  - The manual split-WG overlap path may have deadlocked because each W13 K-step issued too little next-phase copy work and because the manual W13 loader used one ready barrier for three GMEM-to-SMEM copies while the barrier expected one arrival.
+  - JAX collective matmul uses a different exchange primitive: copy a loaded SMEM tile to peer GMEM and signal after `wait_smem_to_gmem(0)`. A reduced opt-in probe can test whether that primitive works for MoE remote scratch writes.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Reduced manual-overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-025106`: first attempt at `T/rank=512`, `E_local=4`, group4, copytile256, `--dispatch-split-wg-overlap-permute-up`.
+  - Reduced manual-overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-025433`: same config after fixing the compare harness to clear split flags in the staged baseline.
+  - Reduced SMEM-copy exchange compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-030821`: same reduced shape, chunked path with an opt-in SMEM-copy remote scratch write, no split WG.
+- Result:
+  - `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-025106` emitted an immediate benchmark error row: `ValueError: dispatch_split_wg_permute_up requires dispatch_chunked_permute_up=True`. This was a benchmark compare harness bug: the staged baseline used `replace(config, dispatch_chunked_permute_up=False)` without clearing dependent split flags.
+  - Fixed the compare harness so `permute_up_compare` staged baseline disables `dispatch_chunked_permute_up`, `dispatch_split_wg_permute_up`, and `dispatch_split_wg_overlap_permute_up` together.
+  - `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-025433` stayed start-only for about 11 minutes with only the stage-start row, then was stopped as an owned benchmark job. Final state `killed`, task duration about `684s`.
+  - `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-030821` emitted an immediate lowering error row: `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+- Interpretation:
+  - The manual split-WG protocol is still deadlocking even after fixing the obvious copy-coverage and ready-barrier arrival bugs. The remaining issue is likely a deeper barrier/scope ordering problem in the hand-written producer/loader/compute split.
+  - The collective-matmul SMEM-to-GMEM send pattern is not directly portable to MoE's `remote_ref` scratch writes under current warpgroup lowering; `copy_smem_to_gmem` into a peer GMEM ref is rejected. The SMEM-copy experiment was removed locally after the negative result.
+  - Current forward bottleneck remains software-structure-bound: validated serial fused/chunked `permute_up` avoids full `recv_x`, but true token-exchange/W13 overlap is still unresolved.
+- Next action:
+  - Keep the compare harness fix.
+  - Stop iterating on nested helper/manual split protocols inside the current monolithic fused kernel unless a smaller standalone producer/consumer kernel can prove the barrier protocol first.
+  - Next viable implementation direction is a purpose-built minimal two-phase producer/consumer prototype with local scratch only, then add remote writes after local barriers are proven; or reframe overlap around separate Pallas kernels/events rather than one multithreaded kernel.
+
+### 2026-06-28 20:52 - FWD-SCHED-015 split-WG producer/consumer W13 and all-worker overlap
+- Hypothesis:
+  - The reduced producer/consumer copy success means the barrier protocol is viable if only the intended WGs participate.
+  - The previous overlap deadlock may be caused by the remote-copy WG participating in W13 tile barriers and later by next-phase copy completion being signaled only by SMs that owned compute tiles. Moving next-phase copy outside the compute-tile loop should make all workers participate in the copy/signal path while compute and W13 operand loading proceed in their own WGs.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Reduced local producer/consumer copy: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-031619`, `T/rank=512`, `D=2560`, `E_local=4`, stage `producer_consumer_copy`.
+  - Reduced local split-WG W13: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032032`, same reduced shape, stage `split_wg_w13`.
+  - Reduced fused split-WG non-overlap compare: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032240`, group4, copytile256, `--dispatch-split-wg-permute-up`.
+  - Reduced fused overlap compare before all-worker fix: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032513`, group4, copytile256, `--dispatch-split-wg-overlap-permute-up`.
+  - Medium non-overlap timing: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032931`, group32, copytile256.
+  - Reduced fused overlap compare after all-worker fix: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033309`, group4, copytile256.
+  - Medium overlap timings:
+    - Group32 assignment-major: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033552`.
+    - Group8 expert-group/peer: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033856`.
+  - Target group8 expert-group/peer overlap compare and timing:
+    - Compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034222`.
+    - Timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034250`.
+  - Target group8 assignment-major overlap timing: `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034803`.
+- Result:
+  - Reduced producer/consumer copy `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-031619`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, `steady_state_time=0.0010899530s`.
+  - Reduced local split-WG W13 `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032032`: `matches_baseline=true`, `max_abs_diff=0.0076508522`, `mean_abs_diff=0.0001147638`, `steady_state_time=0.0010832720s`.
+  - Reduced fused split-WG non-overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032240`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0, `steady_state_time=0.0043374790s`.
+  - Reduced overlap before all-worker signal fix `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032513`: start-only after about `229s` task duration; stopped and final state `killed`.
+  - Medium non-overlap timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-032931`: `permute_up=0.0044141740s`, `60.81 TFLOP/s/rank`, `6.15%` roofline, dropped=0. This is slightly slower than the best medium serial chunked row-base/copytile256 row `0.0043783033s`.
+  - Reduced overlap after all-worker fix `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033309`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0, `steady_state_time=0.0039477310s`.
+  - Medium group32 overlap `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033552`: `permute_up=0.0044826980s`, `59.88 TFLOP/s/rank`, `6.05%` roofline, dropped=0. This is slower than serial.
+  - Medium group8 expert-group/peer overlap `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-033856`: `permute_up=0.0037807003s`, `71.00 TFLOP/s/rank`, `7.18%` roofline, dropped=0. This is a medium-shape win over the previous group8 serial medium row `0.0042880860s`.
+  - Target group8 expert-group/peer overlap compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034222`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+  - Target group8 expert-group/peer overlap timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034250`: `permute_up=0.0155906007s`, `137.74 TFLOP/s/rank`, `13.93%` roofline, dropped=0.
+  - Target group8 assignment-major overlap timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-034803`: `permute_up=0.0159485233s`, `134.65 TFLOP/s/rank`, `13.61%` roofline, dropped=0.
+- Interpretation:
+  - The desired fused shape is now structurally implemented and correct on reduced and target compare rows: the kernel can copy next-phase tokens while compute and W13 operand staging run in separate WGs.
+  - The all-worker copy/signal fix explains and resolves one deadlock mode: next-phase readiness waits for one signal per worker, so overlap copy must be driven by all worker/SM instances, not only SMs with W13 compute tiles.
+  - The target-shape result is not a speedup. Best target remains serial fused/chunked group32 row-base/copytile256 at `0.0151669517s`, `141.59 TFLOP/s/rank`, `14.32%` roofline. The best target overlap row is `0.0155906007s`, about `2.8%` slower.
+  - Medium and target disagree: group8 overlap improves medium but loses at target. At target, the extra WG/barrier/control overhead and smaller group8 chunks appear to outweigh copy/W13 overlap; assignment-major loop order is worse than expert-group/peer.
+  - Current bottleneck judgment: still software-structure-bound for the 45% roofline goal. The fused overlap path is correct, but this monolithic split-WG Pallas structure does not expose enough useful overlap at target to beat the best serial chunked implementation.
+- Next action:
+  - Keep `dispatch_split_wg_overlap_permute_up` experimental/off by default.
+  - Do not promote group8 overlap as the target baseline unless a later patch reduces split-WG overhead or reuses scratch safely.
+  - Next forward-performance experiments should focus on reducing W13 compute-side overhead in the serial group32 path or designing a lower-overhead fused overlap kernel, rather than more loop-order sweeps.
+
+### 2026-06-28 21:38 - FWD-SCHED-016 target decomposition and packed copy-row sweep
+- Hypothesis:
+  - Since standalone target W13 may be much faster than fused `permute_up`, the remaining target gap is likely dispatch/scratch/software structure rather than WGMMA tile math.
+  - The serial fused copy path issues one remote scratch store per routed row per D tile. Packing multiple contiguous chunk rows into one copy loop step may reduce scheduler/loop overhead without changing the final scratch layout.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Target serial fused scheduling sweep `/dlwh/iris-run-job-20260629-035521`: group32, copytile256, target balanced shape; varied `max_concurrent_steps` and `grid_block_n`.
+  - Target staged `permute,w13` decomposition `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-040741`.
+  - Added opt-in `MoeMgpuConfig.dispatch_chunk_copy_rows` and benchmark CLI flag `--dispatch-chunk-copy-rows`.
+  - Medium copy_rows=2 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041356`.
+  - Medium copy_rows=2 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041632`.
+  - Target copy_rows=2 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041953`.
+  - Target copy_rows=2 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042028`.
+  - Target copy_rows=4 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042532`.
+  - Target copy_rows=4 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042958`.
+  - Target copy_rows=8 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-043425`.
+- Result:
+  - Target serial fused scheduling sweep had no new best:
+    - mcs2/grid2: `0.0167079829s`, `128.53 TFLOP/s/rank`, `13.00%` roofline.
+    - mcs3/grid2: `0.0154225247s`, `139.24 TFLOP/s/rank`, `14.08%` roofline.
+    - mcs4/grid1: `0.0162699033s`, `131.99 TFLOP/s/rank`, `13.35%` roofline.
+    - mcs4/grid4: `0.0152818493s`, `140.53 TFLOP/s/rank`, `14.21%` roofline.
+    - mcs5/grid2: `0.0153161830s`, `140.21 TFLOP/s/rank`, `14.18%` roofline.
+  - Target decomposition `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-040741`: staged `permute=0.0173103674s`; standalone `w13=0.0050598900s`, `424.41 TFLOP/s/rank`, `42.91%` roofline.
+  - Medium copy_rows=2 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041356`: `matches_baseline=true`, `max_abs_diff=0.0`, dropped=0.
+  - Medium copy_rows=2 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041632`: `permute_up=0.0040955003s`, `65.54 TFLOP/s/rank`, `6.63%` roofline, dropped=0.
+  - Target copy_rows=2 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-041953`: `permute_up=0.0139568353s`, `153.87 TFLOP/s/rank`, `15.56%` roofline, dropped=0.
+  - Target copy_rows=2 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042028`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+  - Target copy_rows=4 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042532`: `permute_up=0.0135601843s`, `158.37 TFLOP/s/rank`, `16.01%` roofline, dropped=0.
+  - Target copy_rows=4 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-042958`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+  - Target copy_rows=8 timing `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-043425`: `permute_up=0.0145722897s`, `147.37 TFLOP/s/rank`, `14.90%` roofline, dropped=0.
+- Interpretation:
+  - The 45% target is still not met, but copy_rows=4 is a new validated target best: `0.0135601843s`, about `10.6%` faster than the previous best `0.0151669517s` and `16.01%` roofline.
+  - W13 tile math is not the primary limiter: staged W13 alone is already `42.91%` roofline, close to the requested 45%. Fused `permute_up` remains dominated by token exchange, scratch staging, and phase/software structure.
+  - Packing copy rows helps up to 4 rows on the target shape, then regresses at 8 rows. This suggests the prior copy loop was instruction/scheduling-bound, but too much row packing increases loop/register pressure or reduces parallelism.
+  - The target best config is now serial fused group32, copytile256, copy_rows=4, `block_m=64`, `block_n=128`, `block_k=64`, `max_concurrent_steps=4`, `grid_block_n=2`, assignment-major schedule.
+- Next action:
+  - Keep `dispatch_chunk_copy_rows` opt-in until more shapes are checked.
+  - Next target experiment should test copy_rows=4 with nearby copy tile widths or a vectorized multi-row gather/store implementation that reduces per-row stores without an inner scalar loop.
+  - Do not spend more time on W13 scheduling until dispatch/scratch overhead is reduced; W13 itself is near the desired roofline.
+
+### 2026-06-28 22:10 - FWD-SCHED-017 wide copy tiles, split compare, and vector copy-row probe
+- Hypothesis:
+  - The copy-row win in FWD-SCHED-016 implies the serial fused chunked path is still limited by copy-loop scheduling and remote-store issue overhead. Wider physical copy tiles may reduce that overhead further.
+  - A true vectorized multi-row copy might remove the inner scalar loop used by `dispatch_chunk_copy_rows > 1`.
+- Commit Hash: `0fab191fd` plus uncommitted working-tree changes.
+- Command:
+  - Target interaction sweep `/dlwh/iris-run-job-20260629-045404`: target balanced shape, group32, serial fused chunked, varied copy tile and copy rows.
+  - In-JIT target compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-045400`: copy_rows=4, copytile512.
+  - In-JIT target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-050400-copytile1280-compare`: copy_rows=4, copytile1280.
+  - Medium vectorized-copy compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-050317`: copy_rows=4, copytile1280, `--dispatch-chunk-vectorized-copy-rows`.
+  - Split target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-050750-copytile1280-splitcompare`: copy_rows=4, copytile1280, staged baseline and candidate compiled separately.
+- Result:
+  - In-JIT copytile512 compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-045400`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+  - Target interaction sweep `/dlwh/iris-run-job-20260629-045404`:
+    - copy_rows=4, copytile640: `permute_up=0.0112071030s`, `191.62 TFLOP/s/rank`, `19.37%` roofline, dropped=0.
+    - copy_rows=4, copytile1280: `permute_up=0.0098001337s`, `219.13 TFLOP/s/rank`, `22.16%` roofline, dropped=0.
+    - copy_rows=2, copytile512: `permute_up=0.0102370807s`, `209.78 TFLOP/s/rank`, `21.21%` roofline, dropped=0.
+    - copy_rows=8, copytile512: `permute_up=0.0111212727s`, `193.10 TFLOP/s/rank`, `19.52%` roofline, dropped=0.
+  - In-JIT copytile1280 compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-050400-copytile1280-compare` failed before compile with `ValueError: (WGStridedFragLayout(shape=(1280,), vec_size=4), 128)`. The failure came from the compare/lowering shape, not from the timing-only candidate path.
+  - Added opt-in `MoeMgpuConfig.dispatch_chunk_vectorized_copy_rows` and benchmark flag `--dispatch-chunk-vectorized-copy-rows`.
+  - Medium vectorized-copy compare `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-050317` failed before compile with the same `WGStridedFragLayout(shape=(1280,), vec_size=4)` layout error. This vectorized `[copy_rows, copy_tile]` remote scratch write is not viable as written.
+  - Added `permute_up_compare_split`, a benchmark-only correctness stage that compiles the staged baseline and chunked candidate separately, then compares hidden output and route metadata outside the fused compare JIT. The first split compare inherited the 1280 copy tile into the staged baseline and hit the same layout error; the harness now resets baseline-only copy tile/row/vector flags when chunking is disabled.
+  - Fixed split target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-050750-copytile1280-splitcompare`: metadata and dropped routes matched, but hidden did not: `matches_baseline=false`, `max_abs_diff=2.15234375`, `mean_abs_diff=0.0000250616504`, dropped=0.
+  - Split target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-051330-copytile640-splitcompare`: metadata and dropped routes matched, but hidden did not: `matches_baseline=false`, `max_abs_diff=1.81640625`, `mean_abs_diff=0.0003104442`, dropped=0.
+  - Split target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-051750-copyrows2-copytile512-splitcompare`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+  - Nearby timing sweep `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052330-copytile-nearby-sweep`:
+    - copy_rows=1, copytile512: `permute_up=0.0092931247s`, `231.08 TFLOP/s/rank`, `23.37%` roofline, dropped=0.
+    - copytile320 with copy_rows 1, 2, and 4 failed layout inference before compile.
+  - Split target compare `/dlwh/bench_grug_moe_pallas_mgpu-20260629-052800-copyrows1-copytile512-splitcompare`: `matches_baseline=true`, `max_abs_diff=0.0`, `mean_abs_diff=0.0`, dropped=0.
+- Interpretation:
+  - The copy_rows=4, copytile1280 and copytile640 timing rows are not correct and must not be promoted despite their faster timings.
+  - The current validated target best is copy_rows=1, copytile512 at `0.0092931247s`, `231.08 TFLOP/s/rank`, `23.37%` roofline. This is about `31.5%` faster than the previous validated copy_rows=4/copytile256 row `0.0135601843s`, and about `38.7%` faster than the earlier row-base/copytile256 row `0.0151669517s`.
+  - The wide-copy result strengthens the bottleneck judgment: the path is software/copy-issue-bound more than W13-compute-bound.
+  - Direct vectorized row copy is blocked by Mosaic layout constraints for this store shape, so the next copy-side speedup likely needs a different tiling/layout strategy rather than simply assigning a rank-2 slice.
+- Next action:
+  - Treat copy_rows=1/copytile512 as the validated forward `permute_up` target best unless a later structural overlap kernel beats it.
+  - Avoid copytile640/1280 despite faster timing-only rows; they are numerically wrong.
+
+### 2026-06-28 22:43 - FWD-SCHED-018 copy_rows1/copytile512 schedule sweep
+- Hypothesis:
+  - After validating copy_rows=1/copytile512, nearby `max_concurrent_steps` and `grid_block_n` choices might recover additional W13 scheduling efficiency without changing the copy path.
+- Command:
+  - Target schedule sweep `/dlwh/bench_grug_moe_pallas_mgpu-20260629-053230-copyrows1-copytile512-sched`: target balanced shape, group32, serial fused chunked, copy_rows=1, copytile512; varied `max_concurrent_steps` and `grid_block_n`.
+- Result:
+  - mcs3/grid2: `permute_up=0.0093825480s`, `228.88 TFLOP/s/rank`, `23.14%` roofline, dropped=0.
+  - mcs4/grid1: `permute_up=0.0096283526s`, `223.04 TFLOP/s/rank`, `22.55%` roofline, dropped=0.
+  - mcs4/grid4: `permute_up=0.0098319799s`, `218.42 TFLOP/s/rank`, `22.08%` roofline, dropped=0.
+  - mcs5/grid2: `permute_up=0.0111446994s`, `192.69 TFLOP/s/rank`, `19.48%` roofline, dropped=0.
+- Interpretation:
+  - No schedule row beat the validated copy_rows=1/copytile512 mcs4/grid2 row `0.0092931247s`.
+  - The current validated best remains copy_rows=1/copytile512, mcs4/grid2, group32, serial fused chunked.
+- Next action:
+  - Stop scalar schedule/copy-width sweeps here; the remaining gap to 45% likely needs a lower-overhead structural overlap/copy protocol rather than more knob tuning.
+
+### 2026-06-28 22:50 - FWD-SCHED-019 user kernel hook
+- Hypothesis:
+  - Further progress likely needs a fresh fused kernel implementation rather than more changes to the current serial chunked path.
+- Result:
+  - Added `MoeMgpuConfig.dispatch_user_kernel_permute_up`.
+  - Added `_permute_up_mgpu_user_kernel(...)` in `pallas_mgpu.py`, selected before existing chunked/staged paths when the flag is true.
+  - The hook receives normalized routing metadata, remote rows, keep mask, aggregate `clipped_counts[src, dst, local_expert]`, `rows_per_expert`, weights, activation, rank/EP metadata, and config. It must return `(hidden, recv_src_rank, recv_src_assignment)`.
+  - Added benchmark CLI flag `--dispatch-user-kernel-permute-up`.
+- Verification:
+  - `py_compile` passed for `pallas_mgpu.py` and `bench_grug_moe_pallas_mgpu.py`.
+  - `pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q`: `20 passed`.
+
+### 2026-06-29 02:41 - FWD-SCHED-020 forward logbook correction after hook removal
+- Coordination:
+  - This forward logbook is retained as historical context for the forward-performance lane, but its previous tail entry is no longer current implementation state.
+  - The `dispatch_user_kernel_permute_up` hook described in `FWD-SCHED-019` was later removed from `MoeMgpuConfig`, `pallas_mgpu.py`, the benchmark CLI, and tests before PR-readiness cleanup.
+  - Current coordination state is recorded in `.agents/logbooks/6597-moe-mgpu.md` entry `MOE-MGPU-193`: `#6597-forward` now owns broad `permute_up` forward-performance work, while the main lane handles readiness, validation, logbook hygiene, and non-overlapping cleanup.
+- Current validated public baseline to carry forward:
+  - `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-hook-removal`: target full forward+backward steady `0.06913681999625017s`, `139.77611953405054 TFLOP/s/rank`, `14.133075787062743%`, no dropped routes/error.
+- Issue policy:
+  - No issue #6597 comment for this correction. It is a local handoff/logbook hygiene update, not a milestone or blocker.
+- Next action:
+  - Forward-performance agents should coordinate through `#6597-forward` and should not resurrect the removed user-kernel hook as a PR surface.

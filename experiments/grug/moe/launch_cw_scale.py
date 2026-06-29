@@ -23,6 +23,11 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_STEPS         training steps (default 50)
     SCALE_HIDDEN_DIM / SCALE_NUM_LAYERS / SCALE_NUM_EXPERTS / SCALE_TOP_K
                         model-shape overrides (e.g. a smaller FSDP smoke test)
+    SCALE_MOE_IMPLEMENTATION
+                        MoE backend override, e.g. pallas_mgpu (default ring)
+    SCALE_MOE_CAPACITY_FACTOR
+                        MoE dispatch capacity factor (default 1.0; use 1.25 for
+                        pallas_mgpu target smokes)
     SCALE_REMAT         recompute_all (default) | save_moe -- save_moe keeps the
                         tagged MoE dispatch tensors for backward so the EP
                         collectives are not re-run during recompute
@@ -46,6 +51,7 @@ from typing import cast
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.grug.grug_moe import MoeImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -101,6 +107,8 @@ def build_scale_model() -> GrugModelConfig:
     remat_mode = os.environ.get("SCALE_REMAT", "recompute_all")
     if remat_mode not in ("recompute_all", "save_moe"):
         raise ValueError(f"SCALE_REMAT={remat_mode!r} must be 'recompute_all' or 'save_moe'")
+    moe_implementation = os.environ.get("SCALE_MOE_IMPLEMENTATION") or None
+    moe_capacity_factor = float(os.environ.get("SCALE_MOE_CAPACITY_FACTOR") or "1.0")
     return GrugModelConfig(
         vocab_size=VOCAB_SIZE,
         hidden_dim=hidden_dim,
@@ -114,6 +122,8 @@ def build_scale_model() -> GrugModelConfig:
         num_experts_per_token=env_int("SCALE_TOP_K", 4),
         max_seq_len=seq_len,
         sliding_window=seq_len,
+        moe_implementation=cast(MoeImplementation | None, moe_implementation),
+        moe_capacity_factor=moe_capacity_factor,
         remat_mode=cast(RematMode, remat_mode),
     )
 
