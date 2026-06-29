@@ -5962,3 +5962,31 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Run `./infra/pre-commit.py --review` after the 16:30 PDT quota reset and
     address or explicitly answer every advisory before PR extraction.
+
+### 2026-06-29 15:34 - MOE-MGPU-366 Dalton local log bundle refresh
+- Hypothesis: the local Dalton-readable log bundle should include the newest
+  current-commit one-node H100 target-shape 20-step success, not only the older
+  OOM, scale, and runtime-failure attempts.
+- Commit Hash: `737193f3d`.
+- Change:
+  - Refreshed `scratch/for-dalton-moe-mgpu-logs/PROJECT_LOGBOOK_6597_MOE_MGPU.md`
+    from this logbook.
+  - Added
+    `scratch/for-dalton-moe-mgpu-logs/07-current-commit-20step-success/`
+    with local copies of `summary.md`, `high_signal_excerpt.txt`,
+    `full_parent_and_child_logs.txt`, `final_metrics_summary.json`,
+    `metrics_events.jsonl`, parent/child summaries, final job list, and the
+    babysitter monitoring state from
+    `scratch/20260629-1508_moe_mgpu_current_20step_babysit/`.
+  - Updated `README_FOR_DALTON.txt` and `MANIFEST.txt` inside the scratch
+    bundle.
+- Result:
+  - The bundle now has seven run folders. The newest one documents
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755`, which completed
+    `20/20` steps and saved the step-20 checkpoint.
+- Interpretation:
+  - This is local artifact/handoff hygiene only; it is not a new kernel
+    milestone and does not warrant a #6597 issue comment.
+- Next action:
+  - Keep waiting for the post-quota `./infra/pre-commit.py --review` gate, then
+    address any advisory findings.
