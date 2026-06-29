@@ -10,7 +10,6 @@ import { parseLogLinks } from '@/utils/logLinks'
 const props = withDefaults(defineProps<{
   taskId?: string
   workerId?: string
-  source?: 'controller' | 'worker'
   maxHeight?: string
   attempts?: TaskAttempt[]
   currentAttemptId?: number
@@ -105,13 +104,16 @@ function applyDefaults() {
   resetAndFetch()
 }
 
-const sinceMs = computed<number | undefined>(() => {
+// Resolve the lower time bound at request time. A relative preset must be
+// recomputed on every fetch (including auto-refresh polls) so the window stays
+// anchored to "now", not to when the preset was first selected.
+function computeSinceMs(): number | undefined {
   if (customSince.value) {
     const ms = Date.parse(customSince.value)
     return Number.isNaN(ms) ? undefined : ms
   }
   return presetMs.value > 0 ? Date.now() - presetMs.value : undefined
-})
+}
 
 // Monotonic generation to discard responses from superseded requests (e.g.
 // when the filter changes while a poll is in flight).
@@ -123,7 +125,7 @@ function baseRequest() {
     matchScope: WIRE_SCOPE[matchScope.value],
     substring: filter.value || undefined,
     minLevel: level.value ? level.value.toUpperCase() : undefined,
-    sinceMs: sinceMs.value,
+    sinceMs: computeSinceMs(),
   }
 }
 
@@ -206,12 +208,13 @@ async function resetAndFetch() {
 const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(doPoll, POLL_INTERVAL_MS)
 
 // Free-text fields (source key, substring filter) apply on Enter, not on every
-// keystroke. The discrete selectors below refetch immediately on change.
+// keystroke. The discrete selectors below refetch immediately on change. The
+// match-scope select refetches via @change rather than a watch, so the
+// reassignment in applyDefaults() doesn't fire a redundant second fetch.
 watch(selectedAttemptId, applyDefaults)
-watch(matchScope, resetAndFetch)
 watch(tailLines, resetAndFetch)
 watch(level, resetAndFetch)
-watch(sinceMs, resetAndFetch)
+watch([presetMs, customSince], resetAndFetch)
 
 function selectPreset(ms: number) {
   // The synthetic "Custom" option (-1) only appears while an absolute time is
@@ -244,7 +247,17 @@ watch(
   },
 )
 watch(() => props.workerId, applyDefaults)
-watch(() => props.source, applyDefaults)
+
+// vue-router reuses this instance when only the query changes (e.g. clicking a
+// link to a different attempt of the same task), so onMounted alone won't catch
+// it — keep selectedAttemptId in sync with ?attempt= on query-only navigation.
+watch(() => route.query.attempt, () => {
+  if (!props.taskId) return
+  const routeAttempt = attemptFromRoute()
+  if (routeAttempt >= 0 && routeAttempt !== selectedAttemptId.value) {
+    selectedAttemptId.value = routeAttempt
+  }
+})
 
 onMounted(() => {
   if (props.taskId) {
@@ -287,7 +300,9 @@ const logRows = computed<LogRow[]>(() =>
   entries.value.map(entry => ({
     entry,
     taskRef: showTaskLinks.value ? parseTaskFromKey(entry.key) : null,
-    segments: parseLogLinks(entry.data),
+    // proto3-JSON omits default scalars, so an empty log line arrives with
+    // `data` absent (undefined); coalesce so matchAll() doesn't throw.
+    segments: parseLogLinks(entry.data ?? ''),
   })),
 )
 
@@ -312,6 +327,7 @@ defineExpose({ selectedAttemptId })
         v-model="matchScope"
         title="How the source is matched against log keys"
         class="px-2 py-1.5 border border-surface-border rounded text-sm"
+        @change="resetAndFetch"
       >
         <option value="EXACT">Exact</option>
         <option value="PREFIX">Prefix</option>
