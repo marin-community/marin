@@ -73,7 +73,7 @@ class TokenizedAttrData(BaseModel):
     source_main_dirs: dict[str, str]
     tokenizer: str
     tokenizer_backend: str
-    counters: dict[str, dict[str, int]]
+    counters: dict[str, dict[str, int | float]]
 
     def shard_paths(self, split: str) -> list[str]:
         """Return parquet shard paths for ``split`` in order, or ``[]`` if absent."""
@@ -121,7 +121,7 @@ def _process_split(
     source: NormalizedData,
     split: str,
     config: TokenizeAttributesConfig,
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, dict[str, int | float]]:
     """Tokenize one split's NormalizedData into co-partitioned attribute parquet.
 
     Returns ``(split_output_dir, counters)``.
@@ -203,7 +203,7 @@ def tokenize_attributes(config: TokenizeAttributesConfig) -> TokenizedAttrData:
     """
     output_dirs: dict[str, str] = {}
     source_main_dirs: dict[str, str] = {}
-    counters: dict[str, dict[str, int]] = {}
+    counters: dict[str, dict[str, int | float]] = {}
 
     splits: list[tuple[str, NormalizedData]] = []
     if config.train_source is not None:

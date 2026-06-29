@@ -79,7 +79,7 @@ class FuzzyDupsAttrData(BaseModel):
     version: str = "v1"
     params: MinHashParams
     sources: dict[str, FuzzyDupsPerSource]
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _validate_inputs(inputs: list[MinHashAttrData]) -> MinHashParams:
@@ -213,13 +213,13 @@ def _make_per_shard_writer(output_path: str, counter_prefix: str):
             nonlocal cluster_members, canonicals
             for record in records:
                 if record["is_singleton"]:
-                    counters.increment(f"{counter_prefix}/singletons_skipped")
+                    counters.pipeline.update_counter(f"{counter_prefix}/singletons_skipped", 1)
                     continue
                 cluster_members += 1
-                counters.increment(f"{counter_prefix}/cluster_members")
+                counters.pipeline.update_counter(f"{counter_prefix}/cluster_members", 1)
                 if record["is_canonical"]:
                     canonicals += 1
-                    counters.increment(f"{counter_prefix}/canonicals")
+                    counters.pipeline.update_counter(f"{counter_prefix}/canonicals", 1)
                 yield {
                     "id": record["id"],
                     "attributes": {

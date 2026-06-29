@@ -129,7 +129,7 @@ class ClusteredStoreData(BaseModel):
     buckets: list[BucketCacheStats]
     source_names: list[str]
     tokenizer: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +367,7 @@ def _join_filter_stream_shard(
     sidecar = _sidecar_path(output_path, shard_info.shard_idx, shard_info.total_shards)
     cached = _load_shard_sidecar(sidecar)
     if cached is not None:
-        counters.increment("datakit_store/shards_resumed", 1)
+        counters.pipeline.update_counter("datakit_store/shards_resumed", 1)
         yield {"shard_idx": shard_info.shard_idx, "n_buckets": len(cached)}
         return
 
@@ -496,10 +496,10 @@ def _join_filter_stream_shard(
     # ExitStack done: SerialCacheWriter.__exit__ wrote each per-shard ledger;
     # atomic_rename.__exit__ renamed tmp_path -> cache_dir. Load each ledger
     # once so the driver can run _merge_sharded_ledgers without re-reading.
-    counters.increment("datakit_store/records_in", n_in_total)
-    counters.increment("datakit_store/contaminated_dropped", n_contaminated_total)
-    counters.increment("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped_total)
-    counters.increment("datakit_store/records_out", n_out_total)
+    counters.pipeline.update_counter("datakit_store/records_in", n_in_total)
+    counters.pipeline.update_counter("datakit_store/contaminated_dropped", n_contaminated_total)
+    counters.pipeline.update_counter("datakit_store/dedup_noncanonical_dropped", n_dedup_dropped_total)
+    counters.pipeline.update_counter("datakit_store/records_out", n_out_total)
 
     metadata = CacheMetadata.empty()
     records: list[_WrittenShard] = []
@@ -652,7 +652,7 @@ def build_clustered_store(
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
 
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     if aggregate_only:
         # Skip the zephyr pass entirely and pick up from the durable sidecars
