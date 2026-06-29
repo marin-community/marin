@@ -41,7 +41,6 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
-from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import marin_prefix, marin_temp_bucket
 
@@ -260,7 +259,7 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
             data = mixture(ctx, {slimpajama: 1.0})
             if attention_implementation == _GPU_FA4_THD_ATTENTION:
                 # THD attention only handles full causal windows; pack so each example is one.
-                data = with_pack(data, 1)
+                data = dataclasses.replace(data, pack=1)
             return data
 
     num_steps = env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))

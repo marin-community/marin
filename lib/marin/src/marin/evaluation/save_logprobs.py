@@ -37,8 +37,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
 from rigging.filesystem import open_url
 
-from marin.processing.tokenize.data_configs import with_pack
-
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +63,7 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    return replace(with_pack(data, True), block_cross_document_attention=True)
+    return replace(data, pack=True, block_cross_document_attention=True)
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:

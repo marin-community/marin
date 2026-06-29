@@ -510,6 +510,47 @@ def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
 
 
+def test_top_level_pack_override_packs_otherwise_unpacked_component(tmp_path):
+    records = [
+        {"input": "1 ", "target": "2"},
+        {"input": "3 ", "target": "4"},
+    ]
+    data_path = tmp_path / "supervised_top_pack.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    # The component itself sets no pack, so supervised data is unpacked by default.
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 4)
+
+    packed_config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+        pack=2,
+    )
+    caches = packed_config.build_caches("train")
+    packed = packed_config.build_token_datasets(caches, Pos, split="train")["supervised"].as_sync_dataset()[0]
+    # Packing merges both documents into one example with per-document loss boundaries.
+    np.testing.assert_array_equal(np.asarray(packed.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(packed.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
+
+    unpacked_config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+    unpacked = unpacked_config.build_token_datasets(caches, Pos, split="train")["supervised"].as_sync_dataset()[0]
+    # Packing tags each document with segment ids; the unpacked stream is a single causal block.
+    assert packed.attn_mask.segment_ids is not None
+    assert unpacked.attn_mask.segment_ids is None
+
+
 def test_train_set_last_mile_wraps_to_named(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_train.jsonl"
@@ -799,6 +840,33 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+def test_chat_dataset_top_level_pack_false_disables_packing(dummy_chat_data):
+    """A top-level ``pack=False`` override must unpack chat components rather than pass
+    ``max_segments_per_example=0`` (bool is an int subclass) into GreedyPrepackedDataset."""
+    with tempfile.TemporaryDirectory() as cache_dir:
+        tokenizer = load_tokenizer("marin-community/marin-tokenizer")
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
+            format=ChatLmDatasetFormat(messages_field="messages"),
+            cache_dir=cache_dir,
+        )
+        source = component.source.get_shard_source("train")  # type: ignore
+        cache = build_lm_dataset_cache(cache_dir, source, component.format, tokenizer)
+        Pos = hax.Axis("position", 100)
+
+        unpacked = dataset_for_component(
+            component, Pos, cache, eos_id=None, block_cross_document_attention=True, pack_override=False
+        ).as_sync_dataset()
+        # Two conversations stay as two single-document examples instead of raising.
+        assert len(unpacked) == 2
+
+        packed = dataset_for_component(
+            component, Pos, cache, eos_id=None, block_cross_document_attention=True, pack_override=True
+        ).as_sync_dataset()
+        # Packing collapses both conversations into one example.
+        assert len(packed) == 1
 
 
 # --- LmDataConfig.build_caches ---------------------------------------------

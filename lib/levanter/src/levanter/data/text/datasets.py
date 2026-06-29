@@ -490,8 +490,9 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
+    pack_override: bool | int | Literal["pad"] | None = None,
 ) -> AsyncDataset[GrugLmExample]:
-    pack = _effective_pack(component)
+    pack = pack_override if pack_override is not None else _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
         if pack == "pad":
@@ -533,9 +534,15 @@ def dataset_for_component(
         effective_pack = pack
         if effective_pack == "pad":
             raise NotImplementedError("Padding mode not yet implemented.")
-        max_segments = (
-            64 if effective_pack is True else (int(effective_pack) if isinstance(effective_pack, int) else 1)
-        )
+        # Chat examples are always emitted through ChatDataset, so a disabled pack must map to a
+        # single-document cap rather than 0. Any falsy pack (False, 0, None) means "no packing";
+        # note bool is an int subclass, so `pack is True` must be checked before the int branch.
+        if effective_pack is True:
+            max_segments = 64
+        elif effective_pack:
+            max_segments = int(effective_pack)
+        else:
+            max_segments = 1
         mask_user_turns = fmt.mask_user_turns
         return ChatDataset(
             cache,
@@ -646,6 +653,14 @@ class LmDataConfig:
     If False, full causal attention is allowed across packed documents.
     """
 
+    pack: bool | int | Literal["pad"] | None = None
+    """Top-level packing override applied to every cache-backed component.
+
+    When set, it overrides each component's own ``pack`` (and the per-format default) for
+    the whole mixture: ``True`` packs greedily, an ``int`` caps segments per example, and
+    ``"pad"`` pads. ``None`` (default) leaves each component's own packing in effect.
+    """
+
     components: dict[str, DatasetComponentBase] = field(default_factory=dict)
     train_weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None = None
 
@@ -732,6 +747,7 @@ class LmDataConfig:
                         cache,
                         eos_id=self.the_tokenizer.eos_token_id,
                         block_cross_document_attention=self.block_cross_document_attention,
+                        pack_override=self.pack,
                     )
                 if child_datasets:
                     datasets[name] = ConcatDataset(child_datasets)
@@ -752,6 +768,7 @@ class LmDataConfig:
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
+                pack_override=self.pack,
             )
 
         return datasets
@@ -1051,6 +1068,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            pack_override=config.pack,
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
@@ -1080,6 +1098,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            pack_override=config.pack,
         )
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 
