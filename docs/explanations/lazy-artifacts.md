@@ -101,7 +101,8 @@ return train_lm(
 
 `lower(handle)` converts an `ArtifactStep[T]` graph into a `StepSpec` graph that
 `StepRunner` can execute; it traverses dependencies recursively. `run(handle)` lowers and
-runs in one call, and `handle.resolve()` runs the handle then loads its typed result.
+runs in one call, `resolve(handle)` runs the handle then loads its typed result, and
+`load(handle)` loads an already-run handle's typed result without running anything.
 
 ```python
 from marin.execution.lazy import lower

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import pytest
 from fray.types import ResourceConfig
 from marin.execution.artifact import Artifact, ArtifactTypeMismatchError
-from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
+from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, resolve, run
 from marin.execution.remote import remote
 
 # --- Toy configs/fns standing in for tokenize + train --------------------------
@@ -244,7 +244,7 @@ def test_end_to_end_through_step_runner(tmp_path, monkeypatch):
 def test_resolve_round_trips_a_value_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    result = dclm_tokens().resolve()
+    result = resolve(dclm_tokens())
     assert isinstance(result, Tokens)
     assert (result.kind, result.tokenizer) == ("tokens", "llama3")
     assert result.path == f"{tmp_path}/datasets/dclm_tokens/2026.06.25"
@@ -257,7 +257,7 @@ class OtherValue(Artifact):
 def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
     """A value artifact whose type changed under a reused version is a hard error at load."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    dclm_tokens().resolve()  # records artifact type Tokens at this address
+    resolve(dclm_tokens())  # records artifact type Tokens at this address
 
     drifted = ArtifactStep(
         name="datasets/dclm_tokens",
@@ -267,7 +267,7 @@ def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
         build_config=lambda ctx: {"out": ctx.output_path},
     )
     with pytest.raises(ArtifactTypeMismatchError):
-        drifted.resolve()
+        resolve(drifted)
 
 
 # --- ctx.resolved: reading a dependency's value, and the declared-deps gate ----

@@ -7,7 +7,7 @@ The model:
 
 - An :class:`ArtifactStep` is a content-free handle to a versioned artifact:
   ``(name, version, artifact_type)`` plus how to build it — ``run``, ``build_config``, ``deps``.
-  Constructing one runs nothing; :func:`run` / :meth:`ArtifactStep.resolve` execute it.
+  Constructing one runs nothing; :func:`run` / :func:`resolve` execute it.
 - ``build_config(ctx)`` is a pure function of a :class:`StepContext`, which draws the line between
   identity and execution: values written as literals (model, hyperparameters, dep *versions*)
   bear identity, while values *pulled* from the context — ``ctx.output_path``,
@@ -23,7 +23,7 @@ The model:
   everything pulled from ``ctx``) is recorded for an advisory drift check, never in the path.
 
 Pre-existing data is brought in with :func:`adopt`. :func:`run` runs handles for their side
-effects; :meth:`ArtifactStep.resolve` runs one and loads its typed artifact. A custom step is
+effects; :func:`resolve` runs one and loads its typed artifact. A custom step is
 just a function that constructs and returns an ``ArtifactStep`` (see ``marin.experiment.data`` /
 ``marin.experiment.train`` for the dataset and training builders) — there is no generic wrapper to
 learn.
@@ -240,7 +240,7 @@ class ArtifactStep(Generic[T]):
     """For an adopted artifact, the synthetic ``config`` to record (e.g. a tokenized cache's
     tokenizer/format), so consumers read metadata the same way as for a produced artifact."""
     expected_fingerprint: str | None = None
-    """Opt-in hard pin: when set, :meth:`lower` raises :class:`FingerprintMismatchError` if the
+    """Opt-in hard pin: when set, :func:`lower` raises :class:`FingerprintMismatchError` if the
     config now fingerprints to something else, and the drift check raises rather than warns. Leave
     ``None`` to opt out."""
 
@@ -278,28 +278,10 @@ class ArtifactStep(Generic[T]):
     def lower(self) -> StepSpec:
         """Lower this handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.
 
-        Captures provenance once and threads it through the graph. See :func:`_lower`.
+        A pure structural transform (no execution): captures provenance once and threads it
+        through the graph. See :func:`_lower`.
         """
         return _lower(self, Provenance.capture())
-
-    def resolve(self: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:
-        """Run this handle then load its realized, typed :class:`Artifact` via ``artifact_type.load``.
-
-        Checks the served record's ``result_type`` matches and raises
-        :class:`ArtifactTypeMismatchError` on a mismatch (a value artifact whose schema changed
-        under a reused version) before loading. No build on a cache hit.
-        """
-        run(self, max_concurrent=max_concurrent)
-        path = self.path()
-        record = read_record(path)
-        expected = _result_type_name(self.artifact_type)
-        if record is not None and record.result_type and record.result_type != expected:
-            raise ArtifactTypeMismatchError(
-                f"{self.name}@{self.version}: recorded result_type is {record.result_type}, "
-                f"but the handle requests {expected}. The value type changed under a reused version — "
-                "bump the version."
-            )
-        return self.artifact_type.load(path)
 
 
 def _result_type_name(artifact_type: type[Artifact]) -> str:
@@ -479,18 +461,40 @@ def run(
 def lower(handle: "ArtifactStep") -> StepSpec:
     """Lower ``handle``'s graph into a ``StepSpec`` the ``StepRunner`` can run.
 
-    The free-function form of :meth:`ArtifactStep.lower`, for the
+    Captures provenance once and threads it through the graph; for the
     ``StepRunner().run([lower(step) for step in steps])`` idiom.
     """
-    return handle.lower()
+    return _lower(handle, Provenance.capture())
+
+
+def load(handle: "ArtifactStep[T]") -> T:
+    """Load ``handle``'s realized, typed :class:`Artifact` without running anything.
+
+    The driver-side read of an already-materialized artifact (call after :func:`run`). Checks the
+    served record's ``result_type`` matches and raises :class:`ArtifactTypeMismatchError` on a
+    mismatch (a value artifact whose schema changed under a reused version).
+    """
+    path = handle.path()
+    record = read_record(path)
+    expected = _result_type_name(handle.artifact_type)
+    if record is not None and record.result_type and record.result_type != expected:
+        raise ArtifactTypeMismatchError(
+            f"{handle.name}@{handle.version}: recorded result_type is {record.result_type}, "
+            f"but the handle requests {expected}. The value type changed under a reused version — "
+            "bump the version."
+        )
+    return handle.artifact_type.load(path)
 
 
 def resolve(handle: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:
-    """Run ``handle`` then load its realized, typed :class:`Artifact`.
+    """Run ``handle`` then load its realized, typed :class:`Artifact` — :func:`run` then :func:`load`.
 
-    The free-function form of :meth:`ArtifactStep.resolve`.
+    A one-shot convenience. To read several handles, run them together with one :func:`run` call
+    and :func:`load` each, rather than ``resolve``-ing in a loop (which re-enters the runner per
+    handle).
     """
-    return handle.resolve(max_concurrent=max_concurrent)
+    run(handle, max_concurrent=max_concurrent)
+    return load(handle)
 
 
 class _OutSentinel:

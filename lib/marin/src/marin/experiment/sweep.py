@@ -5,7 +5,7 @@
 
 A sweep is fan-out over a grid of parameters; :func:`grid` enumerates the points and
 :func:`sweep` builds one handle per point. There is no framework ``select``: selection is
-ordinary code over the resolved, typed outputs — e.g. reduce ``trial.resolve()`` by
+ordinary code over the resolved, typed outputs — e.g. reduce ``resolve(trial)`` by
 ``LevanterCheckpoint.training_metrics().eval_loss`` — and the chosen result is persisted, when
 wanted, with the low-level :func:`marin.execution.artifact.write_artifact`.
 """

@@ -14,7 +14,7 @@ import json
 
 import fsspec
 import pytest
-from marin.execution.lazy import ArtifactStep
+from marin.execution.lazy import ArtifactStep, resolve
 from marin.experiment.sweep import grid, sweep
 from marin.training.training import LevanterCheckpoint
 
@@ -61,7 +61,7 @@ def test_selection_is_user_code_over_resolved_metrics(tmp_path, monkeypatch):
     # losses: 0.1, 0.3 (lr.1), 0.3, 0.5 (lr.3) -> min is lr=0.1, wd=0.0
     trials = sweep(_trial, learning_rate=[0.1, 0.3], weight_decay=[0.0, 0.2])
 
-    scored = [(trial, trial.resolve().training_metrics().eval_loss) for trial in trials]
+    scored = [(trial, resolve(trial).training_metrics().eval_loss) for trial in trials]
     best, best_loss = min(scored, key=lambda pair: pair[1])
 
     assert best_loss == pytest.approx(0.1)

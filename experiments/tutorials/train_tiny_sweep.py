@@ -25,7 +25,7 @@ Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional
 
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.lazy import ArtifactStep, load, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.sweep import sweep
 from marin.experiment.train import EvalSuite, train_lm
@@ -83,8 +83,8 @@ if __name__ == "__main__":
     # each trial trains on its own TPU job, recording its validation loss next to its checkpoints.
     StepRunner().run([lower(t) for t in trials])
 
-    # Selection is ordinary code over the resolved checkpoints: read each trial's recorded
-    # held-out loss through its typed artifact, and keep the lowest.
-    scored = [(t, t.resolve().training_metrics().eval_loss) for t in trials]
+    # Selection is ordinary code over the resolved checkpoints: the trials are already built
+    # above, so load each one's typed artifact, read its recorded held-out loss, keep the lowest.
+    scored = [(t, load(t).training_metrics().eval_loss) for t in trials]
     best, best_loss = min(scored, key=lambda pair: pair[1])
     print(f"best trial: {best.name} (eval_loss={best_loss:.4f})")
