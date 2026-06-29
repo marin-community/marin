@@ -18,33 +18,6 @@ from datetime import UTC, datetime, timedelta
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
-from iris.cluster.backends.gcp.bootstrap import (
-    build_worker_bootstrap_script,
-    rewrite_ghcr_to_ar_remote,
-    zone_to_multi_region,
-)
-from iris.cluster.backends.gcp.handles import (
-    _ACTIVE_VM_SLICE_STATES,
-    _QR_STATE_MAP,
-    _TPU_STATE_MAP,
-    _VM_STATE_MAP,
-    CloudSliceState,
-    GcpSliceHandle,
-    GcpStandaloneWorkerHandle,
-    GcpVmSliceHandle,
-    _build_gce_resource_name,
-)
-from iris.cluster.backends.gcp.service import (
-    CAPACITY_TYPE_LABEL,
-    CAPACITY_TYPE_RESERVED_VALUE,
-    CloudGcpService,
-    GcpService,
-    TpuCreateRequest,
-    VmCreateRequest,
-    operation_error,
-)
-from iris.cluster.backends.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
-from iris.cluster.backends.remote_exec import GceRemoteExec
 from iris.cluster.backends.types import (
     InfraError,
     Labels,
@@ -61,6 +34,33 @@ from iris.cluster.config import (
     VmConfig,
     WorkerConfig,
 )
+from iris.cluster.platforms.gcp.handles import (
+    _ACTIVE_VM_SLICE_STATES,
+    _QR_STATE_MAP,
+    _TPU_STATE_MAP,
+    _VM_STATE_MAP,
+    CloudSliceState,
+    GcpSliceHandle,
+    GcpStandaloneWorkerHandle,
+    GcpVmSliceHandle,
+    _build_gce_resource_name,
+)
+from iris.cluster.platforms.gcp.service import (
+    CAPACITY_TYPE_LABEL,
+    CAPACITY_TYPE_RESERVED_VALUE,
+    CloudGcpService,
+    GcpService,
+    TpuCreateRequest,
+    VmCreateRequest,
+    operation_error,
+)
+from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA, ssh_impersonate_service_account
+from iris.cluster.platforms.gcp.worker_bootstrap import (
+    build_worker_bootstrap_script,
+    rewrite_ghcr_to_ar_remote,
+    zone_to_multi_region,
+)
+from iris.cluster.platforms.remote_exec import GceRemoteExec
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode

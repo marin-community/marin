@@ -55,7 +55,7 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
 
     When the deployment specifies a service account, the gcloud client
     impersonates it for SSH-key push (mirroring iris's pattern in
-    `iris.cluster.backends.remote_exec`). Without impersonation, an
+    `iris.cluster.platforms.remote_exec`). Without impersonation, an
     operator without OS Login privileges on the VM cannot connect even
     if they have the role on its service account.
     """

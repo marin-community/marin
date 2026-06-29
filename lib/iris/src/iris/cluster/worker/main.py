@@ -12,9 +12,9 @@ from pathlib import Path
 import click
 from rigging.log_setup import configure_logging
 
-from iris.cluster.backends.factory import create_provider_bundle
 from iris.cluster.config import SshConfig
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
+from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_wire

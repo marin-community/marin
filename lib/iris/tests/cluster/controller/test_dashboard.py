@@ -10,7 +10,6 @@ The dashboard serves a web UI that fetches data via RPC calls.
 from unittest.mock import Mock
 
 import pytest
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_QUEUE_NAME,
@@ -19,7 +18,6 @@ from iris.cluster.backends.k8s.tasks import (
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
 )
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
@@ -27,6 +25,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
@@ -41,6 +40,8 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl, _overlay_worker_usability
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
@@ -213,7 +214,11 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
-        system_endpoints={"/system/log-server": embedded_log_server.address},
+        endpoint_service=EndpointServiceImpl(
+            db=state._db,
+            endpoints=state._endpoints,
+            system_endpoints={"/system/log-server": embedded_log_server.address},
+        ),
     )
 
 
@@ -234,6 +239,7 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 
@@ -1433,6 +1439,7 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
     k8s_client = TestClient(dashboard.app)
@@ -1468,6 +1475,7 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
     return TestClient(dashboard.app), k8s, provider

@@ -14,8 +14,6 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from finelog.client.log_client import Table
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -58,6 +56,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot, SchedulableWorker
@@ -73,6 +72,8 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
     TERMINAL_TASK_STATES,
@@ -210,6 +211,7 @@ def controller_service(state, log_client, mock_controller, tmp_path) -> Controll
         health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 

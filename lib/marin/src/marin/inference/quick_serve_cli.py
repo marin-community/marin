@@ -28,10 +28,10 @@ import click
 import requests
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient, Job
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from rigging.config_discovery import resolve_cluster_config

@@ -24,12 +24,12 @@ HF_REVISION = "44e0280"
 def row_to_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not messages:
-        counters.increment("swe_zero_12m/dropped")
+        counters.pipeline.update_counter("swe_zero_12m/dropped", 1)
         return []
 
     text = "\n\n".join(render_role_message(m) for m in messages)
 
-    counters.increment("swe_zero_12m/kept")
+    counters.pipeline.update_counter("swe_zero_12m/kept", 1)
     return [text_document(text, HF_DATASET_ID)]
 
 

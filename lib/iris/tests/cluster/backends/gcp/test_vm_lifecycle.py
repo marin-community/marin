@@ -10,10 +10,10 @@ need a full cluster fixture.
 import unittest.mock
 
 import pytest
-from iris.cluster.backends.gcp.fake import InMemoryGcpService
-from iris.cluster.backends.gcp.workers import GcpWorkerProvider
 from iris.cluster.backends.types import CloudSliceState, QuotaExhaustedError
 from iris.cluster.config import GcpPlatformConfig, GcpSliceConfig, SliceConfig, WorkerConfig
+from iris.cluster.platforms.gcp.fake import InMemoryGcpService
+from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import AcceleratorType
 
@@ -62,7 +62,7 @@ def test_tpu_init_stuck():
     # suppressed: bootstrap never reports healthy, so the slice must not present
     # as READY while the node sits in CREATING.
     wc = WorkerConfig(docker_image="img:latest", port=10001, controller_address="c:10000", cache_dir="/var/cache/iris")
-    with unittest.mock.patch("iris.cluster.backends.gcp.workers.threading.Thread"):
+    with unittest.mock.patch("iris.cluster.platforms.gcp.workers.threading.Thread"):
         handle = platform.create_slice(_make_slice_config("stuck"), worker_config=wc)
 
     status = handle.describe()

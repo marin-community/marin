@@ -17,7 +17,6 @@ from pathlib import Path
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client import IrisClient
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
 from iris.cluster.backends.types import find_free_port
 from iris.cluster.bundle import BundleStore
@@ -35,6 +34,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.cluster.worker.env_probe import EnvironmentProvider

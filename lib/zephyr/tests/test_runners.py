@@ -59,8 +59,8 @@ def test_user_counters_propagate(local_client, tmp_path, runner_factory):
     """User counters flow back from the worker (or its subprocess child) to the coordinator."""
 
     def increment(x: int) -> int:
-        counters.increment("docs", 1)
-        counters.increment("doubled_sum", x * 2)
+        counters.pipeline.update_counter("docs", 1)
+        counters.pipeline.update_counter("doubled_sum", x * 2)
         return x
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_factory)
@@ -123,7 +123,7 @@ def test_runner_parametrization_isolates_processes(local_client, tmp_path, runne
     """
 
     def record_pid(x: int) -> int:
-        counters.increment(f"shard_pid_{os.getpid()}", 1)
+        counters.pipeline.update_counter(f"shard_pid_{os.getpid()}", 1)
         return x
 
     ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_factory_fn)

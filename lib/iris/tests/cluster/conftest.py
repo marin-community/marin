@@ -7,14 +7,13 @@ from unittest.mock import Mock
 
 import pytest
 from finelog.client import LogClient
-from iris.cluster.backends.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -25,6 +24,8 @@ from iris.cluster.controller.run_template import RunTemplateCache, new_run_templ
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
@@ -456,6 +457,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
     return ServiceTestHarness(
@@ -486,6 +488,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
     return ServiceTestHarness(

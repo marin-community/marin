@@ -110,7 +110,7 @@ resolved client-side from `EnvironmentSpec.setup_scripts` — `None` for the def
 appends its own runtime-deps step. The script builders, the `IRIS_*` env scripts
 parameterize against (notably `$IRIS_VENV`, the venv the run phase activates), child
 inheritance, and the Docker gotcha (setup runs in a separate container, so `export`
-does not reach the command — use `env_vars`) all live in `iris.cluster.setup`. See
+does not reach the command — use `env_vars`) all live in `iris.cluster.setup_scripts`. See
 https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
