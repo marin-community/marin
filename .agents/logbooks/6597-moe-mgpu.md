@@ -5437,3 +5437,26 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   memory first, or test the training-state initialization path separately from
   the MoE kernel path. The clean one-node 20-step smoke remains the best
   full-trainer evidence for the current PR-readiness lane.
+
+### 2026-06-29 14:25 - MOE-MGPU-352 sync full-run docs after B-tiled scale OOM
+- Hypothesis: the full-run tryout and PR-readiness notes should prevent the
+  next agent or human from treating the larger B-tiled R=N scale sweep as a
+  known-good recipe or as kernel performance evidence.
+- Commit Hash: `46ab0920f` plus uncommitted documentation updates.
+- Change:
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` to record
+    that the larger B-tiled R=N sweep OOMed before train-step metrics and to
+    mark the full-scale command as a template, not a known-good recipe.
+  - Updated `.agents/projects/20260628_moe_mgpu_pr_readiness.md` so current
+    status, full-trainer evidence, the spec-compliance table, and the PR body
+    draft all treat the scale sweep as larger-recipe memory evidence only.
+- Result:
+  - The tryout guidance now says not to relaunch the larger R=N scale recipe
+    unchanged; reduce model or optimizer-state memory first.
+  - #6597 was not updated because this is not a new correctness milestone,
+    throughput milestone, or fundamental kernel blocker.
+- Interpretation: the one-node 20-step smoke remains the best tryout config;
+  larger multi-node scale evidence is still unproven and currently blocked by
+  full-trainer memory at the larger shape.
+- Next action: run narrow Markdown/precheck for the docs/logbook sync, then
+  commit if clean.

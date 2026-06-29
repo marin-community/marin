@@ -33,6 +33,11 @@ same padded-capacity path validated by the H100 kernel tests.
   externally killed while the 32 child tasks were still building, before any
   training metrics appeared. It is not evidence about Pallas MGPU scale
   correctness or performance.
+- A later B-tiled CE R=N scale sweep at the larger default 90B-ish shape
+  (`hidden_dim=3072`, `num_layers=48`, `num_experts=128`) was killed after n4,
+  n8, and n16 jobs hit pre-step GPU OOM while allocating 576 MiB during
+  `int(state.step)`, before any train-step metrics. Do not relaunch that larger
+  recipe unchanged; reduce model or optimizer-state memory first.
 
 ## Recommended 20-Step Integration Smoke
 
@@ -73,9 +78,12 @@ the branch changes behavior or if you need a fresh trainer smoke.
 ## Full-Scale 20-Step Run
 
 This keeps the scale launcher's default 90B-total shape but switches the MoE
-backend to Pallas MGPU and limits training to 20 steps. A first attempt was
-killed before training while child tasks were building; relaunch only when
-capacity/user scheduling is suitable and babysit it to a terminal result.
+backend to Pallas MGPU and limits training to 20 steps. The current larger-shape
+scale evidence is not clean: one 32-node attempt was killed while child tasks
+were building, and a later R=N B-tiled sweep OOMed before the train iterator
+started. Treat the command below as a template, not a known-good recipe; reduce
+model or optimizer-state memory before relaunching and babysit it to a terminal
+result.
 
 ```bash
 uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \

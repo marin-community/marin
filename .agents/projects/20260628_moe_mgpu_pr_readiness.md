@@ -37,8 +37,9 @@ before review. It is a coordination artifact for the implementation in
   best one-node and 32-node 20-step H100 launch commands. The one-node
   target-shape trainer smoke passed 20/20 steps with watch disabled in
   `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; the first 32-node
-  attempt was externally killed before training and is not correctness or
-  performance evidence.
+  attempt was externally killed before training. A later larger-shape B-tiled
+  R=N scale sweep reached pre-step initialization but OOMed before any
+  train-step metrics. Neither run is scale correctness or performance evidence.
 
 ## Current Best Evidence
 
@@ -144,6 +145,12 @@ before review. It is a coordination artifact for the implementation in
     training progress, metrics, checkpoint, OOM, traceback, pending capacity, or
     Iris failure signal appeared. This is recorded in `MOE-MGPU-349` as an
     operational interruption only.
+  - A later B-tiled CE R=N larger-shape scale sweep
+    `/dlwh/grug-moe-pallas-mgpu-btiled-r{4,8,16,32}-scale-n{4,8,16,32}-ed130604e-20260629-140300`
+    was killed after n4, n8, and n16 jobs hit pre-step GPU OOM while allocating
+    576 MiB during `int(state.step)`, before any train-step metrics. This is
+    recorded in `MOE-MGPU-351` as larger-model scale-recipe evidence, not a
+    kernel milestone.
 - Observability:
   - H100 diagnostic stage progress schema smoke
     `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-stage-progress-schema`
@@ -296,7 +303,8 @@ Do not add fake cost estimates that are not consumed by the actual launch API.
   full-run tryout launcher/runbook wiring and changed-file precommit are
   covered by `MOE-MGPU-343`; the successful one-node 20-step trainer smoke is
   covered by `MOE-MGPU-347`, and the externally killed pre-training 32-node
-  attempt is covered by `MOE-MGPU-349`.
+  attempt is covered by `MOE-MGPU-349`, and the later B-tiled R=N larger-shape
+  pre-step OOM sweep is covered by `MOE-MGPU-351`.
 - `./infra/pre-commit.py --review` previously reported actionable advisories,
   and the latest concrete findings from `/tmp/marin-linter/20260629T184150`
   were addressed in `MOE-MGPU-316`. The latest rerun could not execute any
@@ -355,7 +363,7 @@ files remain branch-local unless explicitly requested.
 | Module-boundary training-step integration on H100 | Done | `MoEExpertMlp.init(..., implementation="pallas_mgpu")` passes a tiny H100 differentiable loss/update check in `/dlwh/iris-run-test_grugformer_moe-20260629-module-training-step`. |
 | Target-shape performance evidence | Done | Target forward is faster than `ragged_all_to_all`; current lint-cleanup target fwd+bwd row is recorded above. |
 | One-node full-trainer smoke | Done | `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` completed 20/20 steps, saved checkpoint `step-20`, and reported mean MFU `20.13%`. |
-| 32-node full-scale smoke | Not yet proven | `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609` was externally killed before training; relaunch when scheduling is suitable if scale evidence is required. |
+| 32-node full-scale smoke | Not yet proven | `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609` was externally killed before training; the later B-tiled R=N larger-shape sweep hit pre-step GPU OOM before train metrics. Reduce model or optimizer-state memory before relaunching scale evidence. |
 | Machine-readable benchmark rows | Done | Benchmark rows include identity, timing, status/error, capacity/padding, estimates, tolerances, and environment fields; duplicate keys and row counts are tested. |
 | `cost_estimate=` | Documented API limitation | This backend uses `mgpu.kernel(...)`, not checked-in `pl.pallas_call(...)`; inspected `mgpu.kernel`/`mgpu.Mesh` signatures show no consumed `cost_estimate=` hook in this usage. |
 | Static tuned config lookup | Done | `infer_moe_mgpu_config(...)` returns the current H100 bf16 single-node defaults for the reviewed shape bucket, preserves explicit capacity factors for matched and fallback buckets, and falls back to `MoeMgpuConfig` for unknown buckets. |
@@ -459,8 +467,9 @@ Performance evidence:
   change the first-PR default of `1.25`.
 - Full-run scale note: a first 32-node 20-step run
   `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609` was
-  externally killed before training. It does not change the one-node
-  full-trainer evidence or the kernel benchmark evidence above.
+  externally killed before training. A later larger-shape B-tiled R=N scale
+  sweep hit pre-step GPU OOM before train metrics. These do not change the
+  one-node full-trainer evidence or the kernel benchmark evidence above.
 
 Limitations:
 - Hopper/H100 only.
