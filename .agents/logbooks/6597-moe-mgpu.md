@@ -5904,3 +5904,26 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: run the required lint-review/PR readiness checks after the
   quota reset, while leaving forward `permute_up` performance work with
   `#6597-forward`.
+
+### 2026-06-29 15:18 - MOE-MGPU-364 quarantine unvalidated task-decomposition diff
+- Hypothesis: the remaining dirty `experiments/grug/moe/launch_cw_scale.py`
+  change should not be part of readiness checks until it has an explicit
+  validation plan, because it changes CoreWeave trainer task decomposition from
+  one 8-GPU task per node to a configurable number of GPUs per task.
+- Commit Hash: `e2eca0066`.
+- Change:
+  - Preserved the uncommitted `SCALE_GPUS_PER_TASK` launcher experiment in
+    `stash@{0}` with message
+    `moe-mgpu-launch-cw-scale-gpus-per-task`.
+  - Left the working tree clean for lint-review/readiness checks.
+- Interpretation:
+  - The successful current-code 20-step run used the committed default path,
+    one task with eight local H100s, which matches the spec's single-node
+    NVLink EP target.
+  - The stashed launcher experiment is not validated by that success and may
+    conflict with the intended one-process/one-NVLink-island execution model if
+    used for Pallas MGPU without a co-location/topology guarantee.
+  - No #6597 issue update; this is local handoff hygiene.
+- Next action:
+  - Keep the stash unless the user explicitly asks to validate or discard it.
+    Proceed with post-quota lint-review on the clean committed tree.
