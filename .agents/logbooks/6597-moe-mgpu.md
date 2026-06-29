@@ -5659,3 +5659,48 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: run focused Markdown/precheck, commit the runbook/logbook
   correction, then launch the corrected r4 smoke and babysit it to terminal
   state.
+
+### 2026-06-29 15:00 - MOE-MGPU-358 launch corrected progressive r4 smoke
+- Hypothesis: relaunching the 4-node target-shape smoke with
+  `SCALE_REPLICA_AXIS=4` should preserve the one-node local MoE shape while
+  satisfying the current Pallas MGPU requirement that the data mesh axis have
+  size `1`.
+- Commit Hash: `1d6b031ad`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835/grug-train-grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`
+- Command:
+  - `RUN_ID="grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835"; SCALE_GPU_REPLICAS=4; SCALE_REPLICA_AXIS=4; SCALE_BATCH=512; uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name "$RUN_ID" --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID="$RUN_ID" SCALE_GPU_REPLICAS="$SCALE_GPU_REPLICAS" SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS="$SCALE_REPLICA_AXIS" SCALE_BATCH="$SCALE_BATCH" SCALE_SEQ_LEN=2048 SCALE_STEPS=20 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=2 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger SCALE_WATCH_TARGETS= uv run python -m experiments.grug.moe.launch_cw_scale`
+- Initial status:
+  - Submission succeeded.
+  - Initial `iris job list --json --prefix` showed parent `JOB_STATE_RUNNING`
+    and child `JOB_STATE_RUNNING` with `task_count=4`,
+    `task_state_counts={"running": 4}`, no pending reason, no preemptions, and
+    one early child failure count while all four tasks remained running.
+  - Initial logs show the corrected hparams, including
+    `moe_implementation="pallas_mgpu"`, `moe_capacity_factor=1.25`,
+    `remat_mode="save_moe"`, `train_batch_size=512`,
+    `expert_axis_size=8`, and `replica_axis_size=4`.
+  - The corrected run reached the train progress initialization line
+    `Progress on:train -/20` and did not repeat the earlier
+    `requires data mesh axis size 1` error in the initial log window.
+- Local artifacts:
+  - Monitor state:
+    `scratch/20260629-1438_moe_mgpu_progressive_r4_fixedaxis_monitoring_state.json`
+  - Initial status/log snapshot:
+    `scratch/moe-mgpu-progressive-r4-grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835-launch-20260629-1442/`
+- Monitoring:
+  - Babysitter Volta (`019f1552-a615-7502-858a-d6d9bc9328af`) owns the
+    terminal-state monitoring loop.
+  - Heartbeat `resume-moe-mgpu-lint-review-gate` now polls Volta every
+    10 minutes and still runs the lint-review gate after the 16:30 PDT quota
+    reset.
+- Interpretation: the corrected r4 smoke has passed the earlier topology guard
+  failure point and is now in-flight. This is not a terminal milestone; keep
+  #6597 quiet until success, a meaningful scale blocker, or a fundamental
+  kernel blocker.
+- Next action: babysit to terminal state, save final logs/metrics, append the
+  result to this logbook, and only update #6597 if the terminal result warrants
+  promotion.
