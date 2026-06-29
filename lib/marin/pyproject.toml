@@ -108,6 +108,13 @@ conflicts = [
         { extra = "vllm" },
         { extra = "gpu" },
     ],
+    [
+        # cpu (CPU dev/testing) and vllm (TPU inference) pin conflicting
+        # versions of common deps (e.g. numba) and are never activated
+        # together in any workflow or deployment.
+        { extra = "cpu" },
+        { extra = "vllm" },
+    ],
 ]
 
 
