@@ -23,6 +23,7 @@ from levanter.grug._moe.ep_common import (
     _expert_prefix_keep_mask,
     _prefix_cap_counts,
 )
+from levanter.grug._moe.common import _DEFAULT_EP_CAPACITY_FACTOR
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 
 
@@ -46,7 +47,7 @@ class MoeMgpuConfig:
     block_k: int = 64
     max_concurrent_steps: int = 4
     grid_block_n: int = 2
-    capacity_factor: float = 1.25
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     num_sms: int | None = None
     deterministic: bool = True
     dispatch_copy_schedule: str = _DISPATCH_COPY_ASSIGNMENT_MAJOR
@@ -302,9 +303,9 @@ class GroupInfo:
         group_end = group_start = block = group = end = jnp.array(0, dtype=jnp.int32)
 
         for i, b in enumerate(group_boundaries):
-            # Start/end are inclusive
             start = end
             end = start + b
+            # `end` is exclusive; `final` is the inclusive last row in the group.
             final = end - 1
             start_block = lax.div(start, tile)
             final_block = lax.div(final, tile)

@@ -6328,3 +6328,41 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
     the next review reveals another small local fix.
 - Next action:
   - Commit and run one final advisory lint review. Keep #6597 quiet.
+
+### 2026-06-29 16:26 - MOE-MGPU-376 final small lint-review fixes
+- Hypothesis: the final advisory review includes a couple of small correctness
+  cleanups worth landing now, while the remaining broad findings should stay as
+  future refactor work.
+- Base Commit Hash: `9347ce5dd`.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+  - `uv run python -m py_compile lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py lib/levanter/tests/grug/test_grugformer_moe.py`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'padded_capacity or pallas_mgpu or capacity_overflow or expert_parallel or ordered_implementation' -o addopts=`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+- Result:
+  - Fifth lint-review artifact:
+    `/tmp/marin-linter/20260629T232223`.
+  - Fixed:
+    - `MoeMgpuConfig.capacity_factor` now uses canonical
+      `_DEFAULT_EP_CAPACITY_FACTOR` instead of repeating `1.25`.
+    - Clarified the `GroupInfo.create` exclusive `end` / inclusive `final`
+      comment.
+    - Strengthened the non-tile-aligned capacity warning test to compare Pallas
+      output and dropped-route count against `ragged_all_to_all`, not just
+      shape/finite output.
+  - Validation:
+    - `py_compile` -> passed.
+    - broader Grug Pallas/capacity/EP/ordered slice -> `65 passed, 11 skipped,
+      35 deselected, 1 warning`.
+    - changed-file pre-commit -> passed.
+    - benchmark unit tests -> `41 passed, 1 warning`.
+- Interpretation:
+  - Remaining advisory review findings are larger design work:
+    explicit dispatch mode enum instead of coupled booleans, splitting the large
+    benchmark stage driver, reducing duplication between production saved
+    backward and benchmark staging, and centralizing H100 test skip helpers.
+  - No #6597 issue update.
+- Next action:
+  - Commit, rerun advisory review to confirm only broad design findings remain,
+    then push the branch.

@@ -2839,8 +2839,20 @@ def test_moe_mlp_pallas_mgpu_warns_and_pads_non_tile_aligned_capacity_on_hopper_
         w_up_gate = jax.sharding.reshard(w_up_gate, expert_sharding)
         w_down = jax.sharding.reshard(w_down, expert_sharding)
 
+        expected, expected_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation=ActivationFunctionEnum.silu,
+            implementation="ragged_all_to_all",
+            mesh=None,
+            capacity_factor=1.25,
+            report_capacity_overflow=True,
+        )
         with pytest.warns(RuntimeWarning, match="padded receiver capacity"):
-            out = moe_mlp(
+            actual, actual_dropped = moe_mlp(
                 x,
                 selected_experts,
                 combine_weights,
@@ -2850,10 +2862,12 @@ def test_moe_mlp_pallas_mgpu_warns_and_pads_non_tile_aligned_capacity_on_hopper_
                 implementation="pallas_mgpu",
                 mesh=None,
                 capacity_factor=1.25,
+                report_capacity_overflow=True,
             )
 
-    assert out.shape == x.shape
-    assert jnp.isfinite(out).all()
+    assert actual.shape == x.shape
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-2, atol=0.1)
+    assert int(actual_dropped) == int(expected_dropped) == 0
 
 
 @pytest.mark.parametrize("combine_weight_dtype", [jnp.bfloat16, jnp.float32], ids=["bf16_combine", "fp32_combine"])
