@@ -5381,3 +5381,59 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: commit the docs/logbook sync, then wait for the lint-review quota
   reset or continue non-forward readiness work that does not conflict with
   `#6597-forward`.
+
+### 2026-06-29 14:18 - MOE-MGPU-351 B-tiled R=N scale sweep killed after pre-step OOM
+- Hypothesis: the replacement B-tiled CE scale sweep with `SCALE_REPLICA_AXIS=N`
+  and data mesh axis size 1 would determine whether the Pallas MGPU path could
+  reach 20 real training steps on larger multi-node Grug MoE scale jobs after
+  the B-tiled cross-entropy fix.
+- Commit Hash: `ed130604e` plus later bookkeeping commits on
+  `codex/6597-moe-mgpu`.
+- Jobs:
+  - `/dlwh/grug-moe-pallas-mgpu-btiled-r4-scale-n4-ed130604e-20260629-140300`
+  - `/dlwh/grug-moe-pallas-mgpu-btiled-r8-scale-n8-ed130604e-20260629-140300`
+  - `/dlwh/grug-moe-pallas-mgpu-btiled-r16-scale-n16-ed130604e-20260629-140300`
+  - `/dlwh/grug-moe-pallas-mgpu-btiled-r32-scale-n32-ed130604e-20260629-140300`
+- Config summary from logs:
+  - `moe_implementation="pallas_mgpu"`, `moe_capacity_factor=1.25`,
+    `remat_mode="save_moe"`, `watch_targets=[]`, local checkpoints,
+    JSON logger, 20 train steps.
+  - Larger scale shape than the one-node smoke: hparams show
+    `hidden_dim=3072`, `intermediate_dim=1536`, `num_experts=128`,
+    `num_layers=48`; n4 logged `replicas=4`, `expert_axis_size=8`,
+    `replica_axis_size=4`, and `train_batch_size=256`.
+- Saved local artifacts:
+  - `scratch/moe-mgpu-btiled-rn-scale-ed130604e-status-20260629-141353/`
+  - `scratch/moe-mgpu-btiled-rn-scale-latest` symlink points at that snapshot.
+- Result:
+  - All four parent and child jobs reached terminal `JOB_STATE_KILLED` with
+    `Error: Terminated by user`.
+  - Child summaries:
+    - n4: killed 4/4 tasks, failures `3`, preemptions `0`; one task exit `1`.
+    - n8: killed 8/8 tasks, failures `1`, preemptions `0`; one task exit `1`.
+    - n16: killed 16/16 tasks, failures `0`, preemptions `0`; all task exits
+      `0` in Iris summary despite traceback lines in logs.
+    - n32: killed 32/32 tasks, failures `0`, preemptions `0`; no train metrics
+      or useful child traceback before kill in the captured recent logs.
+  - n4, n8, and n16 logs all show `jax.errors.JaxRuntimeError:
+    RESOURCE_EXHAUSTED: Out of memory while trying to allocate 576.00MiB`
+    before any train-step metric was logged.
+  - The tracebacks occur in `experiments/grug/moe/train.py:457` at
+    `train_loader.iter_from_step(int(state.step))`, after parameter-count and
+    analytic-flop summaries and before the train iterator starts.
+  - No `train/loss`, `train/cross_entropy_loss`, `throughput/mfu`, or
+    `Progress on:train` step-completion metrics were captured for any of the
+    four jobs.
+  - The Codex app automation `watch-moe-mgpu-btiled-scale` was already absent
+    when deletion was attempted after terminal state.
+- Interpretation: this is not new evidence about the Pallas MGPU kernels'
+  single-node correctness or target microbench performance; it is larger-model
+  full-trainer integration evidence showing pre-step GPU memory exhaustion in
+  the multi-node scale recipe. Keep #6597 quiet: this is an operational/scale
+  smoke result, not a new correctness milestone or a fundamental kernel
+  blocker.
+- Next action: do not relaunch the same B-tiled R=N scale recipe unchanged.
+  If a larger multi-node smoke is still needed, reduce model or optimizer-state
+  memory first, or test the training-state initialization path separately from
+  the MoE kernel path. The clean one-node 20-step smoke remains the best
+  full-trainer evidence for the current PR-readiness lane.
