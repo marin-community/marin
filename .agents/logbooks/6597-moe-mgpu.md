@@ -5566,3 +5566,55 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   evidence.
 - Next action: commit the runbook/logbook update, then wait for the 16:30 PDT
   lint-review quota reset before rerunning `./infra/pre-commit.py --review`.
+
+### 2026-06-29 14:50 - MOE-MGPU-356 launch progressive r4 target-shape smoke
+- Hypothesis: after the one-node target-shape 20-step trainer success, the next
+  safer full-run scale check is a 4-node target-shape run that preserves
+  `32768` tokens/rank rather than jumping back to the larger default 90B-ish
+  model shape that hit pre-step memory pressure.
+- Commit Hash: `cd1a5ff1f`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-20260629-143058`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-20260629-143058/grug-train-grug-moe-pallas-mgpu-target-20step-r4-20260629-143058`
+- Command:
+  - `RUN_ID="grug-moe-pallas-mgpu-target-20step-r4-20260629-143058"; SCALE_GPU_REPLICAS=4; SCALE_BATCH=512; uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name "$RUN_ID" --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID="$RUN_ID" SCALE_GPU_REPLICAS="$SCALE_GPU_REPLICAS" SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_BATCH="$SCALE_BATCH" SCALE_SEQ_LEN=2048 SCALE_STEPS=20 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=2 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger SCALE_WATCH_TARGETS= uv run python -m experiments.grug.moe.launch_cw_scale`
+- Config:
+  - `SCALE_GPU_REPLICAS=4`, `SCALE_BATCH=512`, `SCALE_EXPERT_AXIS=8`,
+    `SCALE_REPLICA_AXIS=1`.
+  - `SCALE_SEQ_LEN=2048`, `SCALE_STEPS=20`, `SCALE_HIDDEN_DIM=2560`,
+    `SCALE_NUM_LAYERS=2`, `SCALE_NUM_EXPERTS=256`, `SCALE_TOP_K=4`.
+  - `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`,
+    `SCALE_MOE_CAPACITY_FACTOR=1.25`, `SCALE_REMAT=save_moe`,
+    `SCALE_CHECKPOINTS=local`, `SCALE_TRACKER=json_logger`,
+    `SCALE_WATCH_TARGETS=`.
+- Initial status:
+  - Submission succeeded.
+  - Immediate `iris job list --json --prefix` showed the parent
+    `JOB_STATE_RUNNING` with one running task and the child `JOB_STATE_RUNNING`
+    with `task_count=4`, `task_state_counts={"running": 4}`, no pending reason,
+    no failures, and no preemptions.
+  - Initial logs show the expected hparams, including
+    `moe_implementation="pallas_mgpu"`, `moe_capacity_factor=1.25`,
+    `remat_mode="save_moe"`, `train_batch_size=512`, `hidden_dim=2560`,
+    `num_layers=2`, `num_experts=256`, and local checkpoint base path
+    `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-target-20step-r4-20260629-143058`.
+- Local artifacts:
+  - Monitor state:
+    `scratch/20260629-1431_moe_mgpu_progressive_r4_monitoring_state.json`
+  - Initial status/log snapshot:
+    `scratch/moe-mgpu-progressive-r4-grug-moe-pallas-mgpu-target-20step-r4-20260629-143058-launch/`
+- Monitoring:
+  - Babysitter Aristotle (`019f154b-a11b-7821-bca4-032fe5430710`) owns the
+    terminal-state monitoring loop.
+  - Existing heartbeat `resume-moe-mgpu-lint-review-gate` was updated to poll
+    Aristotle every 10 minutes and still run the lint-review gate after the
+    16:30 PDT quota reset.
+- Interpretation: the progressive r4 target-shape smoke has passed parent
+  submission, child creation, and initial hparams validation. This is in-flight
+  full-run evidence only, not a terminal milestone; keep #6597 quiet until the
+  run reaches a meaningful terminal result or fundamental blocker.
+- Next action: babysit to terminal state, save final logs/metrics, append the
+  result to this logbook, and only update #6597 if the terminal result is a
+  meaningful milestone or fundamental blocker.
