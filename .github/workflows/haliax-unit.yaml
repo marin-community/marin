@@ -53,5 +53,7 @@ jobs:
           python -m pip install uv
           uv sync --package marin-haliax --group test
       - name: Test with pytest
+        env:
+          JAX_NUM_CPU_DEVICES: "8"
         run: |
           PYTHONPATH=tests:src:. uv run --package marin-haliax pytest tests
