@@ -145,7 +145,9 @@ class QueryRunner:
 
         try:
             self._con.execute(f"COPY ({sql}) TO {path_literal} (FORMAT parquet)")
-            total_rows = self._con.execute(f"SELECT count(*) FROM read_parquet({path_literal})").fetchone()[0]
+            count_row = self._con.execute(f"SELECT count(*) FROM read_parquet({path_literal})").fetchone()
+            assert count_row is not None  # count(*) always returns exactly one row
+            total_rows = int(count_row[0])
             preview = self._con.execute(
                 f"SELECT * FROM read_parquet({path_literal}) LIMIT {self._config.preview_row_cap}"
             ).fetch_arrow_table()
@@ -157,8 +159,8 @@ class QueryRunner:
         return QueryResult(
             columns=columns,
             preview_rows=preview_rows,
-            total_rows=int(total_rows),
-            truncated=int(total_rows) > len(preview_rows),
+            total_rows=total_rows,
+            truncated=total_rows > len(preview_rows),
             result_path=result_path,
         )
 
