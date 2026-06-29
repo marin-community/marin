@@ -28,6 +28,8 @@ const AUTO_REFRESH_MAX_LINES = 2000
 const POLL_INTERVAL_MS = 30_000
 // Retain at most this many rendered lines to keep the DOM bounded.
 const MAX_RETAINED_LINES = 20_000
+// Debounce free-text inputs (source key, substring filter) before refetching.
+const INPUT_DEBOUNCE_MS = 250
 
 const route = useRoute()
 
@@ -210,13 +212,13 @@ const { active: autoRefreshActive, toggle: toggleAutoRefresh } = useAutoRefresh(
 let sourceDebounce: ReturnType<typeof setTimeout> | undefined
 function onSourceInput() {
   if (sourceDebounce) clearTimeout(sourceDebounce)
-  sourceDebounce = setTimeout(resetAndFetch, 250)
+  sourceDebounce = setTimeout(resetAndFetch, INPUT_DEBOUNCE_MS)
 }
 
 let filterDebounce: ReturnType<typeof setTimeout> | undefined
 watch(filter, () => {
   if (filterDebounce) clearTimeout(filterDebounce)
-  filterDebounce = setTimeout(resetAndFetch, 250)
+  filterDebounce = setTimeout(resetAndFetch, INPUT_DEBOUNCE_MS)
 })
 
 watch(selectedAttemptId, applyDefaults)
