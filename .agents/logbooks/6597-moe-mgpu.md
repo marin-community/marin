@@ -5172,6 +5172,9 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
     stopped after the OOM/rendezvous signal.
   - Babysitter Dalton (`019f1507-2e83-7d73-a2b6-0e570985d44e`) was closed after
     reporting the same blocker. The polling heartbeat was deleted.
+  - After saving the logs, stopped the stuck parent job to avoid leaving the
+    8xH100 child in rendezvous. Iris reported both parent and child terminated;
+    parent final state was `killed`, exit `0`, failures `0`, preemptions `0`.
 - Interpretation: the Pallas MGPU path successfully entered the real Grug MoE
   trainer and ran several optimizer steps, but the current one-node smoke shape
   is not a robust 20-step recipe. The next run should lower memory pressure
@@ -5179,5 +5182,5 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   `SCALE_SEQ_LEN`, or trying `SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16`.
   No GitHub issue comment; this is useful integration evidence but not yet a
   clean milestone.
-- Next action: decide whether to stop the still-running Iris job, then revise
-  the tryout runbook to use a memory-safer smoke shape before resubmitting.
+- Next action: revise the tryout runbook to use a memory-safer smoke shape
+  before resubmitting.
