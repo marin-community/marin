@@ -16,11 +16,12 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.client.endpoint_client import EndpointClient, EndpointLeaseRenewer, renew_interval
-from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, EndpointServiceImpl
+from iris.cluster.controller.endpoint_service import ENDPOINT_LEASE, MIN_ENDPOINT_LEASE, EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
+from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import update as sa_update
 
@@ -44,7 +45,7 @@ def _row(endpoint_id: str, name: str, task_id: JobName, *, lease_deadline: Times
 
 
 def _register_request(
-    name: str, task_id: JobName, *, attempt_id: int, endpoint_id: str = ""
+    name: str, task_id: JobName, *, attempt_id: int, endpoint_id: str = "", lease: Duration | None = None
 ) -> controller_pb2.Controller.RegisterEndpointRequest:
     return controller_pb2.Controller.RegisterEndpointRequest(
         name=name,
@@ -52,6 +53,7 @@ def _register_request(
         task_id=task_id.to_wire(),
         attempt_id=attempt_id,
         endpoint_id=endpoint_id,
+        lease_duration=duration_to_proto(lease) if lease is not None else None,
     )
 
 
@@ -156,6 +158,19 @@ def test_register_returns_lease_duration(state):
     assert response.endpoint_id
     assert response.lease_duration.milliseconds == ENDPOINT_LEASE.to_ms()
     assert state._endpoints.resolve("svc").address == "h:1"
+
+
+def test_register_honors_and_clamps_requested_lease(state):
+    task, attempt = _live_task(state)
+    svc = _service(state)  # ceiling is the default ENDPOINT_LEASE
+
+    def granted(lease: Duration) -> int:
+        request = _register_request("svc", task, attempt_id=attempt, lease=lease)
+        return svc.register_endpoint(request, None).lease_duration.milliseconds
+
+    assert granted(Duration.from_minutes(10)) == Duration.from_minutes(10).to_ms()  # in range → honored
+    assert granted(Duration.from_seconds(1)) == MIN_ENDPOINT_LEASE.to_ms()  # below floor → clamped up
+    assert granted(Duration.from_hours(999)) == ENDPOINT_LEASE.to_ms()  # above ceiling → clamped down
 
 
 def test_reregister_renews_expired_endpoint(state):

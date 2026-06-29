@@ -363,6 +363,10 @@ message Controller {
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
     string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+    // Lease length the registrant wants; it renews within this. Unset selects
+    // the server default. The server clamps it to its own [min, max] bounds and
+    // returns the granted value in RegisterEndpointResponse.lease_duration.
+    iris.time.Duration lease_duration = 7;
   }
 
   message RegisterEndpointResponse {

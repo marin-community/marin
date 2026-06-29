@@ -27,14 +27,17 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
-from iris.time_proto import duration_to_proto
+from iris.time_proto import duration_from_proto, duration_to_proto
 
 logger = logging.getLogger(__name__)
 
-# Long only to support old clients that register once and never renew. Dropped
-# to ~10m once renewing clients have rolled out:
-# https://github.com/marin-community/marin/issues/6729
+# Lease granted when the client does not request one. Long so an old client that
+# registers once and never renews keeps its endpoint served; a renewing client
+# requests a much shorter lease and gets it (see MIN_ENDPOINT_LEASE).
 ENDPOINT_LEASE = Duration.from_hours(72)
+# Floor on a granted lease: bounds how often a client may force the controller to
+# re-register by capping the renewal rate a short requested lease can ask for.
+MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
 
 
 class EndpointServiceImpl:
@@ -57,6 +60,22 @@ class EndpointServiceImpl:
         """Register a never-expiring ``/system/`` endpoint (e.g. the log server)."""
         self._system_endpoints[name] = address
 
+    def _granted_lease(self, request: controller_pb2.Controller.RegisterEndpointRequest) -> Duration:
+        """Lease to grant: the client's request clamped to ``[MIN_ENDPOINT_LEASE, self._lease]``.
+
+        Unset selects the default (``self._lease``), so old clients that never
+        set the field keep the long lease. A renewing client requests a short
+        one and gets it, down to the floor.
+        """
+        if not request.HasField("lease_duration"):
+            return self._lease
+        requested = duration_from_proto(request.lease_duration)
+        if requested < MIN_ENDPOINT_LEASE:
+            return MIN_ENDPOINT_LEASE
+        if requested > self._lease:
+            return self._lease
+        return requested
+
     # --- RPC surface ---------------------------------------------------------
 
     def register_endpoint(
@@ -76,6 +95,7 @@ class EndpointServiceImpl:
         task_id = JobName.from_wire(request.task_id)
         task_id.require_task()
 
+        granted = self._granted_lease(request)
         endpoint = EndpointRow(
             endpoint_id=endpoint_id,
             name=request.name,
@@ -83,7 +103,7 @@ class EndpointServiceImpl:
             task_id=task_id,
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
-            lease_deadline=Timestamp.now().add(self._lease),
+            lease_deadline=Timestamp.now().add(granted),
         )
 
         # Validation runs inside the writer transaction in
@@ -106,7 +126,7 @@ class EndpointServiceImpl:
 
         return controller_pb2.Controller.RegisterEndpointResponse(
             endpoint_id=endpoint_id,
-            lease_duration=duration_to_proto(self._lease),
+            lease_duration=duration_to_proto(granted),
         )
 
     def unregister_endpoint(

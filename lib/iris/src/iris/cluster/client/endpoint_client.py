@@ -22,17 +22,22 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from iris.cluster.types import TaskAttempt
 from iris.rpc import controller_pb2
 from iris.rpc.errors import call_with_retry
-from iris.time_proto import duration_from_proto
+from iris.time_proto import duration_from_proto, duration_to_proto
 
 logger = logging.getLogger(__name__)
 
+# Lease this client requests at registration; the server clamps it to its own
+# bounds and the renewer paces off whatever it grants. Short so a crashed task's
+# endpoint expires promptly.
+DEFAULT_REQUESTED_LEASE = Duration.from_minutes(10)
 # Renew a third of the way into the lease, leaving margin for retries; the floor
 # keeps short (e.g. test) leases from busy-renewing.
 RENEW_FRACTION = 1 / 3
 MIN_RENEW_INTERVAL = Duration.from_seconds(30)
-# Exponential backoff bounds for failed renewals.
-RETRY_INITIAL = Duration.from_seconds(30)
-RETRY_MAXIMUM = Duration.from_minutes(5)
+# Exponential backoff bounds for failed renewals, sized to land several retries
+# inside the requested-lease margin rather than the 72h legacy default.
+RETRY_INITIAL = Duration.from_seconds(10)
+RETRY_MAXIMUM = Duration.from_minutes(1)
 # Cap on a single sleep so the loop revisits its state; track/untrack/close wake
 # it sooner.
 _MAX_WAIT = Duration.from_minutes(5)
@@ -84,10 +89,11 @@ class EndpointClient:
     best-effort unregisters everything still registered before disconnecting.
     """
 
-    def __init__(self, stub: EndpointStub) -> None:
+    def __init__(self, stub: EndpointStub, *, requested_lease: Duration = DEFAULT_REQUESTED_LEASE) -> None:
         self._stub = stub
         self._renewer = EndpointLeaseRenewer(stub.register_endpoint)
         self._registered: set[str] = set()
+        self._requested_lease = requested_lease
 
     def register(
         self,
@@ -105,6 +111,7 @@ class EndpointClient:
             attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
             metadata=metadata or {},
             endpoint_id=endpoint_id,
+            lease_duration=duration_to_proto(self._requested_lease),
         )
         response = call_with_retry("register_endpoint", lambda: self._stub.register_endpoint(request))
         self._renewer.track(request, duration_from_proto(response.lease_duration))
