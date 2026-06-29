@@ -6075,3 +6075,47 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Run changed-file pre-commit, commit the readiness-note update, then wait for
     the post-quota lint-review gate.
+
+### 2026-06-29 15:52 - MOE-MGPU-370 active N2 one-GPU task probe status
+- Hypothesis: the active `watch-moe-mgpu-works-probes` automation references a
+  real H100 CoreWeave N2 one-GPU-per-process diagnostic probe, and current
+  branch state should account for it while keeping the main PR-readiness lane
+  quiet unless it produces a milestone or blocker.
+- Commit Hash: `a1a4b0bc9` current branch head; active run launched from
+  `d2304dea9`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542/grug-train-grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+- Commands:
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 420 /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542 | rg -i "..."`
+- Result:
+  - Parent job state: `JOB_STATE_RUNNING`, one running parent task, no failures,
+    no preemptions.
+  - Child job state: `JOB_STATE_RUNNING`, `task_count=16`,
+    `task_state_counts={"running": 16}`, no failures, no preemptions.
+  - This confirms the `SCALE_GPUS_PER_TASK=1` run created the intended
+    one-GPU-per-process child topology for an N2 / 16-task probe.
+  - Logs reached `levanter.distributed` / `iris.runtime.jax_init`
+    distributed initialization for all child tasks, with task indices `0..15`
+    and `IRIS_NUM_TASKS=16`.
+  - Logs then reached trainer setup lines including
+    `levanter.trainer Setting per_device_eval_parallelism to 16` and
+    credential discovery. No train-step metrics, checkpoint, terminal state,
+    OOM/HBM, traceback, CUDA error, one-device-per-process error, or repeated
+    NVSHMEM bootstrap UID socket timeout was visible in the bounded log scan.
+- Interpretation:
+  - The active probe has progressed beyond the earlier wrong-topology
+    `NVSHMEM API is only supported with one device per process` failure.
+  - It has not yet produced useful training metrics or a terminal blocker.
+  - Existing heartbeat automation `watch-moe-mgpu-works-probes` remains active
+    on a 10-minute cadence, so this thread does not need to duplicate a
+    continuous babysitting loop.
+  - No #6597 issue update; this is an operational in-flight status.
+- Next action:
+  - Let the existing watch automation continue. Main lane should still run
+    `./infra/pre-commit.py --review --agent-command 'codex exec'` after the
+    16:30 PDT quota window unless the probe reaches a terminal milestone first.
