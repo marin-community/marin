@@ -5704,3 +5704,42 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: babysit to terminal state, save final logs/metrics, append the
   result to this logbook, and only update #6597 if the terminal result warrants
   promotion.
+
+### 2026-06-29 15:05 - MOE-MGPU-359 save corrected r4 terminal logs
+- Hypothesis: the corrected 4-node target-shape smoke with
+  `SCALE_REPLICA_AXIS=4` would preserve the one-node local MoE shape, satisfy
+  the current Pallas MGPU data-axis guard, and reach a 20-step full trainer run.
+- Commit Hash: `9b2015a3f`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835/grug-train-grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`
+- Command:
+  - Status/log capture used `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a ...` because local `uv run` dependency
+    resolution without `--no-sync` currently conflicts on `numba`.
+- Saved local artifacts:
+  - Dalton-friendly bundle:
+    `scratch/for-dalton-moe-mgpu-logs/05-target-r4-fixedaxis-nvshmem/`
+  - Files:
+    `job_list.json`, `parent_summary.txt`, `child_summary.txt`,
+    `full_parent_and_child_logs.txt`, `high_signal_excerpt.txt`, and
+    `babysitter_monitoring_state.json`.
+- Result:
+  - Parent terminal state: failed, exit `0`, failures `1`, preemptions `0`.
+  - Child terminal state: failed, failures `4`, preemptions `0`,
+    task state counts `{"failed": 1, "cosched_failed": 3}`.
+  - The corrected run got past the earlier
+    `implementation='pallas_mgpu' currently requires data mesh axis size 1`
+    error.
+  - No training steps completed; logs reached `Progress on:train -/20`.
+  - Root cause in all task logs:
+    `jax.errors.JaxRuntimeError: INTERNAL: Failed to load the NVSHMEM library. Make sure it is installed (e.g. pip install nvidia-nvshmem-cu12).`
+- Interpretation: this is a multi-node distributed runtime dependency failure,
+  not evidence against the single-node/NVLink EP kernel path. The project spec
+  explicitly does not require multi-host EP or NVSHMEM support, so keep #6597
+  quiet and avoid relaunching this exact 4-node recipe unchanged.
+- Next action: keep the one-node target-shape 20-step run as the spec-aligned
+  full trainer evidence for now; if multi-node trainer evidence is still
+  desired, decide separately whether to add/fix NVSHMEM in the runtime image or
+  constrain the tryout instructions to one-node H100 runs.

@@ -33,6 +33,13 @@ same padded-capacity path validated by the H100 kernel tests.
   externally killed while the 32 child tasks were still building, before any
   training metrics appeared. It is not evidence about Pallas MGPU scale
   correctness or performance.
+- A corrected 4-node target-shape attempt
+  `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835` set
+  `SCALE_REPLICA_AXIS=4` and got past the earlier Pallas MGPU data-axis guard,
+  but failed before any train step completed because the multi-node distributed
+  runtime could not load NVSHMEM. This does not contradict the single-node
+  NVLink EP target in the spec, but it means the current multi-node tryout
+  recipe is not known-good.
 - A later B-tiled CE R=N scale sweep at the larger default 90B-ish shape
   (`hidden_dim=3072`, `num_layers=48`, `num_experts=128`) was killed after n4,
   n8, and n16 jobs hit pre-step GPU OOM while allocating 576 MiB during
@@ -76,17 +83,23 @@ Use this as the pass/fail gate before trying the full 32-node shape. It passed
 with run id `grug-moe-pallas-mgpu-20step-smoke-2d87348e7`; rerun this recipe if
 the branch changes behavior or if you need a fresh trainer smoke.
 
-## Progressive Multi-Node 20-Step Smoke
+## Experimental Multi-Node 20-Step Smoke
 
-This is the next H100 run to try after the one-node smoke. It scales the
-known-good target-shape recipe across multiple 8xH100 nodes while keeping the
-per-device MoE token shape fixed at `32768` tokens/rank. Set
-`SCALE_GPU_REPLICAS` to `4`, `8`, `16`, then `32` as capacity allows; the command
-sets global batch to `128 * SCALE_GPU_REPLICAS` so each device sees the same
-local token count as the passing one-node run. Keep
-`SCALE_REPLICA_AXIS=$SCALE_GPU_REPLICAS` for this target-shape scale smoke so
-the cross-node data mesh axis stays size `1`, which the current Pallas MGPU
-backend requires.
+The target Pallas MGPU backend is single-node / single-NVLink-domain EP, so the
+one-node smoke above is the current best integration gate. The command below is
+only for checking that the full trainer can replicate that single-node EP group
+across multiple nodes. It is not known-good as of
+`/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`: the
+corrected r4 run passed the Pallas MGPU data-axis guard but failed pre-step on a
+missing NVSHMEM load in the multi-node distributed runtime.
+
+Do not relaunch this exact recipe unchanged unless the runtime image or JAX
+distributed setup is known to provide the required NVSHMEM bits. If you do
+retest it, set `SCALE_GPU_REPLICAS` to `4`, `8`, `16`, then `32` as capacity
+allows; the command sets global batch to `128 * SCALE_GPU_REPLICAS` so each
+device sees the same local token count as the passing one-node run. Keep
+`SCALE_REPLICA_AXIS=$SCALE_GPU_REPLICAS` so the cross-node data mesh axis stays
+size `1`, which the current Pallas MGPU backend requires.
 
 ```bash
 SCALE_GPU_REPLICAS=4
