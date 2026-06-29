@@ -510,6 +510,47 @@ def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
     np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
 
 
+def test_top_level_pack_override_packs_otherwise_unpacked_component(tmp_path):
+    records = [
+        {"input": "1 ", "target": "2"},
+        {"input": "3 ", "target": "4"},
+    ]
+    data_path = tmp_path / "supervised_top_pack.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    # The component itself sets no pack, so supervised data is unpacked by default.
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+    )
+    Pos = hax.Axis("position", 4)
+
+    packed_config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+        pack=2,
+    )
+    caches = packed_config.build_caches("train")
+    packed = packed_config.build_token_datasets(caches, Pos, split="train")["supervised"].as_sync_dataset()[0]
+    # Packing merges both documents into one example with per-document loss boundaries.
+    np.testing.assert_array_equal(np.asarray(packed.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(packed.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
+
+    unpacked_config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+    unpacked = unpacked_config.build_token_datasets(caches, Pos, split="train")["supervised"].as_sync_dataset()[0]
+    # Packing tags each document with segment ids; the unpacked stream is a single causal block.
+    assert packed.attn_mask.segment_ids is not None
+    assert unpacked.attn_mask.segment_ids is None
+
+
 def test_train_set_last_mile_wraps_to_named(tmp_path):
     records = [{"input_ids": [1, 2, 3, 4]}]
     data_path = tmp_path / "prebuilt_train.jsonl"

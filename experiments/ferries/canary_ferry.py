@@ -34,7 +34,6 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import DatasetComponent
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -201,15 +200,8 @@ def _build_step_from_env() -> ExecutorStep:
 
         data = slimpajama_6b_data()
         if attention_implementation == _GPU_FA4_THD_ATTENTION:
-            data = dataclasses.replace(
-                data,
-                components={
-                    name: (
-                        dataclasses.replace(component, pack=1) if isinstance(component, DatasetComponent) else component
-                    )
-                    for name, component in data.components.items()
-                },
-            )
+            # The THD backend only handles full causal windows, so pack every component.
+            data = dataclasses.replace(data, pack=1)
         resources = ResourceConfig.with_gpu(
             gpu_type,
             count=gpu_count,

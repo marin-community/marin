@@ -28,7 +28,7 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
 from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
+from levanter.data.text import LmDataConfig, LMMixtureDatasetConfig
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -67,12 +67,7 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    packed_components = {
-        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
-        for name, component in data.components.items()
-    }
-    packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
-    return packed_data
+    return replace(data, pack=True, block_cross_document_attention=True)
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:
