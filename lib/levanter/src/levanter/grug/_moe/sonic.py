@@ -166,7 +166,7 @@ def _sonic_kernel_config(hidden_dim: int) -> tuple[int, int, int]:
     return block_h, block_k, num_warps
 
 
-def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "T+1"]:
+def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "Tp1"]:
     return jnp.arange(0, tokens * topk + 1, topk, dtype=jnp.int32)
 
 
@@ -174,7 +174,7 @@ def _sonic_gather_sum_impl(
     dispatch_output: Float[Array, "M H"],
     weights_flat: Float[Array, "M"],
     positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "T+1"],
+    offsets: Int[Array, "Tp1"],
     *,
     tokens: int,
     topk: int,
@@ -212,7 +212,7 @@ def _sonic_gather_sum_bwd_impl(
     dispatch_output: Float[Array, "M H"],
     weights_flat: Float[Array, "M"],
     positions_flat: Int[Array, "M"],
-    offsets: Int[Array, "T+1"],
+    offsets: Int[Array, "Tp1"],
     *,
     tokens: int,
     topk: int,
@@ -310,15 +310,15 @@ sonic_gather_sum.defvjp(_sonic_gather_sum_fwd, _sonic_gather_sum_bwd)
 
 
 def _moe_mlp_local_sonic(
-    x: Float[Array, "T D"],
+    x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-    moe_w13: Float[Array, "E D I2"],
-    moe_w2: Float[Array, "E I D"],
+    moe_w13: Float[Array, "E H I2"],
+    moe_w2: Float[Array, "E I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
