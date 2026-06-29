@@ -22,7 +22,7 @@ def load_parquet_batched(path: str) -> Iterator[dict]:
             try:
                 rows = batch.to_pydict()
             except UnicodeDecodeError as e:
-                counters.increment("load_parquet_batched/utf8_skip_batch")
+                counters.pipeline.update_counter("load_parquet_batched/utf8_skip_batch", 1)
                 logger.warning("Skipping batch from %s due to invalid UTF-8: %s", path, e)
                 continue
             n = len(next(iter(rows.values())))

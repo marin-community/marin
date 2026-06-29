@@ -88,7 +88,7 @@ def test_filter(zephyr_ctx):
 def test_propagates_user_counters(zephyr_ctx):
     """User counters incremented inside a shard flow back to the coordinator.
 
-    Each task runs in the worker's own process; ``counters.increment`` writes
+    Each task runs in the worker's own process; ``counters.pipeline.update_counter`` writes
     into the per-task ``_InProcessWorkerContext``. This test verifies the
     worker forwards the final counter dict to the coordinator via
     ``report_result``, otherwise the coordinator's ``get_counters`` would
@@ -99,8 +99,8 @@ def test_propagates_user_counters(zephyr_ctx):
     """
 
     def increment_per_item(x: int) -> int:
-        counters.increment("docs", 1)
-        counters.increment("doubled_sum", x * 2)
+        counters.pipeline.update_counter("docs", 1)
+        counters.pipeline.update_counter("doubled_sum", x * 2)
         return x
 
     captured: list[str] = []

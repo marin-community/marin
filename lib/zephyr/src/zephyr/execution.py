@@ -1543,11 +1543,11 @@ class ZephyrExecutionResult:
             pipeline (e.g. output file paths for write stages).
         counters: Aggregated counter values from the run, including built-in
             zephyr counters (e.g. ``zephyr/records_in``) and any user counters
-            recorded via ``zephyr.counters.increment``.
+            recorded via ``zephyr.counters.pipeline``.
     """
 
     results: list
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 @dataclass(frozen=True)
@@ -1650,7 +1650,7 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         try:
             results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
             raw_counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-            payload = ZephyrExecutionResult(results=results, counters={k: int(v) for k, v in raw_counters.items()})
+            payload = ZephyrExecutionResult(results=results, counters=dict(raw_counters))
 
             ensure_parent_dir(result_path)
             with open_url(result_path, "wb") as f:

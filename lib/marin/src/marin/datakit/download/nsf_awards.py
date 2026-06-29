@@ -89,16 +89,16 @@ def download_and_convert_year(year: int, download_url: str, output_path: str) ->
                 continue
             with z.open(name) as f:
                 award = json.load(f)
-            counters.increment("awards_total")
+            counters.pipeline.update_counter("awards_total", 1)
             record = _award_to_record(award)
             if record is None:
-                counters.increment("awards_missing_abstract")
+                counters.pipeline.update_counter("awards_missing_abstract", 1)
                 continue
             for k in KEEP_FIELDS:
                 if not award.get(k):
-                    counters.increment(f"awards_missing_field.{k}")
+                    counters.pipeline.update_counter(f"awards_missing_field.{k}", 1)
             records.append(record)
-    counters.increment("awards_kept", len(records))
+    counters.pipeline.update_counter("awards_kept", len(records))
 
     if not records:
         logger.warning(f"No awards with abstracts for {year}, skipping.")

@@ -129,8 +129,8 @@ def _assign_shard(
                 rec[f"cluster_{k}"] = int(coarser[k][i])
             yield rec
 
-    counters.increment("assign/docs_in", n_docs)
-    counters.increment("assign/shards_in", 1)
+    counters.pipeline.update_counter("assign/docs_in", n_docs)
+    counters.pipeline.update_counter("assign/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs assigned (K=%d centroids, %d coarser views)",
         shard.shard_idx,

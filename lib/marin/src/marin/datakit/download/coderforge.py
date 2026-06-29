@@ -64,19 +64,19 @@ def render_message(msg: dict) -> str:
 def row_to_doc(row: dict) -> list[dict]:
     messages_raw = row.get("messages", "")
     if not messages_raw:
-        counters.increment("coderforge/dropped")
+        counters.pipeline.update_counter("coderforge/dropped", 1)
         return []
 
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
-        counters.increment("coderforge/dropped")
+        counters.pipeline.update_counter("coderforge/dropped", 1)
         return []
 
     tag = reward_to_tag(row.get("reward"))
     rendered = "\n\n".join(render_message(m) for m in messages)
     text = f"{tag}\n\n{rendered}"
 
-    counters.increment("coderforge/kept")
+    counters.pipeline.update_counter("coderforge/kept", 1)
     return [text_document(text, "togethercomputer/CoderForge-Preview")]
 
 

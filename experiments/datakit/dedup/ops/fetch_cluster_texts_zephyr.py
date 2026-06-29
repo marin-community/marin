@@ -200,10 +200,10 @@ def _fetch_one(task: dict) -> Iterator[dict]:
                     break
             if found == target:
                 break
-    counters.increment("fetch/shards_done")
-    counters.increment("fetch/members_found", found)
+    counters.pipeline.update_counter("fetch/shards_done", 1)
+    counters.pipeline.update_counter("fetch/members_found", found)
     if found < target:
-        counters.increment("fetch/members_missing", target - found)
+        counters.pipeline.update_counter("fetch/members_missing", target - found)
 
 
 def _collect_members(cluster_id: str, items: Iterator[dict]) -> dict:
