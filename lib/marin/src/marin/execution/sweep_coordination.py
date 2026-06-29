@@ -23,8 +23,6 @@ Multi-host sweep jobs must request an ``actor`` port (``ports=['actor']``) so th
 leader's actor server is reachable by its followers.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 from dataclasses import dataclass

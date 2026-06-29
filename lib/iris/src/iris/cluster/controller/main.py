@@ -22,18 +22,15 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.factory import create_provider_bundle
-from iris.cluster.config import load_config, make_provider
-from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
-from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import BackendCapability, TaskBackend
+from iris.cluster.composer import make_backend
+from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
-from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +40,14 @@ DRY_RUN_STATE_DIR_ROOT = Path("/tmp/dry-run")
 HOURLY_CHECKPOINT_SECONDS = 3600.0
 
 
-def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> dict[str, str]:
+def _resolve_cluster_endpoints(cluster_config: IrisClusterConfig) -> dict[str, str]:
     """Resolve ``cluster_config.endpoints`` to concrete URLs.
 
     Each EndpointSpec is dispatched through ``resolve_endpoint_uri`` so callers
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
 
     ``/system/log-server`` is optional: when absent, the Controller starts a
-    bundled in-process DuckDB-backed log server as a fallback (state lives in
+    bundled in-process finelog log server as a fallback (state lives in
     a tempdir for the controller's lifetime). Production deployments should
     declare an external endpoint.
     """
@@ -70,93 +67,8 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     return resolved
 
 
-def _build_worker_config(
-    worker_defaults: config_pb2.WorkerConfig,
-    platform: config_pb2.PlatformConfig,
-    *,
-    controller_address: str,
-    storage_prefix: str,
-    auth_token: str,
-) -> config_pb2.WorkerConfig:
-    """Build the worker config once instead of mutating a shared proto across bootstrap.
-
-    ``controller_address`` is pre-resolved by the caller (discovery runs only when the
-    configured default is empty).
-    """
-    worker_config = config_pb2.WorkerConfig()
-    worker_config.CopyFrom(worker_defaults)
-    worker_config.controller_address = controller_address
-    worker_config.platform.CopyFrom(platform)
-    worker_config.storage_prefix = storage_prefix
-    if auth_token:
-        worker_config.auth_token = auth_token
-    return worker_config
-
-
-def make_backend(
-    cluster_config: config_pb2.IrisClusterConfig,
-    *,
-    db: ControllerDB,
-    auth: ControllerAuth,
-    remote_state_dir: str,
-    dry_run: bool,
-) -> TaskBackend:
-    """Create the TaskBackend and, for Iris-provisioned-capacity backends, build,
-    restore, and attach the autoscaler.
-
-    Capacity-managing backends (k8s) provision their own pods, so no autoscaler is
-    attached. In dry-run both the autoscaler and the provider bundle are skipped
-    (bundle creation needs platform credentials unavailable on a dev machine).
-    """
-    provider = make_provider(cluster_config)
-    logger.info("Backend created: %s", type(provider).__name__)
-
-    if dry_run:
-        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
-        return provider
-    if BackendCapability.IRIS_AUTOSCALER not in provider.capabilities:
-        return provider
-
-    bundle = create_provider_bundle(
-        platform_config=cluster_config.platform,
-        worker_port=cluster_config.defaults.worker.port,
-        cluster_config=cluster_config,
-        ssh_config=cluster_config.defaults.ssh,
-    )
-    workers = bundle.workers
-    logger.info("Provider bundle created")
-
-    base_worker_config = None
-    if cluster_config.defaults.worker.docker_image:
-        controller_address = cluster_config.defaults.worker.controller_address
-        if not controller_address:
-            controller_address = bundle.controller.discover_controller(cluster_config.controller)
-        base_worker_config = _build_worker_config(
-            cluster_config.defaults.worker,
-            cluster_config.platform,
-            controller_address=controller_address,
-            storage_prefix=remote_state_dir,
-            auth_token=auth.worker_token or "",
-        )
-
-    autoscaler = create_autoscaler(
-        platform=workers,
-        autoscaler_config=cluster_config.defaults.autoscaler,
-        scale_groups=cluster_config.scale_groups,
-        label_prefix=cluster_config.platform.label_prefix or "iris",
-        base_worker_config=base_worker_config,
-    )
-    logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-
-    autoscaler.restore_from_db(db, workers)
-    logger.info("Autoscaler state restored from DB")
-
-    provider.attach_autoscaler(autoscaler)
-    return provider
-
-
 def run_controller_serve(
-    cluster_config: config_pb2.IrisClusterConfig,
+    cluster_config: IrisClusterConfig,
     *,
     host: str = "0.0.0.0",
     port: int = 10000,
@@ -234,7 +146,20 @@ def run_controller_serve(
     db = ControllerDB(db_dir=db_dir)
 
     auth = create_controller_auth(cluster_config.auth, db=db)
-    provider = make_backend(cluster_config, db=db, auth=auth, remote_state_dir=remote_state_dir, dry_run=dry_run)
+    log_stack = build_log_stack(
+        log_service_address=log_service_address,
+        local_log_dir=local_state_dir / "log-server",
+        host=host,
+        worker_token=auth.worker_token if auth.worker_token else None,
+    )
+    provider = make_backend(
+        cluster_config,
+        db=db,
+        auth=auth,
+        remote_state_dir=remote_state_dir,
+        dry_run=dry_run,
+        log_stack=log_stack,
+    )
 
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
@@ -259,14 +184,14 @@ def run_controller_serve(
         auth_provider=auth.provider,
         auth=auth,
         dry_run=dry_run,
-        log_service_address=log_service_address,
         endpoints=endpoints,
-        autoscaler_evaluation_interval=duration_from_proto(cluster_config.defaults.autoscaler.evaluation_interval),
+        autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
     )
 
     controller = Controller(
         config=config,
         provider=provider,
+        log_stack=log_stack,
         db=db,
     )
     logger.info("Controller instance created")

@@ -133,10 +133,6 @@ def logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
     return cast(hax.NamedArray, -nll)
 
 
-def _logp_sum(model: LmHeadModel, example, *, key=None) -> hax.NamedArray:
-    return logp_sum(model, example, key=key)
-
-
 def _cached_logp_named(logps: Any, axes: tuple[hax.Axis, ...]) -> hax.NamedArray:
     return hax.named(jnp.reshape(jnp.asarray(logps), tuple(axis.size for axis in axes)), axes)
 

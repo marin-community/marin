@@ -31,9 +31,10 @@ from .helpers import TestJobs
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
-# LocalCluster sets worker_unreachable_grace=10s and poll_interval defaults to
-# 1s, so a worker is torn down after this many consecutive failed reconcile
-# passes. Must equal round(grace / poll_interval).
+# Worker-death detection is time-based: LocalCluster sets
+# worker_unreachable_grace=10s, so a worker continuously unreachable for ~10s is
+# torn down. With the default 1s reconcile cadence that is roughly this many
+# failed passes; the chaos cases size their max_failures relative to it.
 RECONCILE_FAILURE_THRESHOLD = 10
 
 
@@ -47,7 +48,7 @@ def test_bundle_download_intermittent(cluster):
     enable_chaos(
         "worker.bundle_download", failure_rate=0.5, max_failures=2, error=RuntimeError("chaos: download failed")
     )
-    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3)
+    job = cluster.submit(TestJobs.quick, "bundle-fail", max_retries_failure=3, max_task_failures=3)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -76,7 +77,7 @@ def test_coscheduled_sibling_failure(cluster):
 def test_retry_budget_exact(cluster):
     """Task fails exactly N-1 times, succeeds on last attempt."""
     enable_chaos("worker.create_container", failure_rate=1.0, max_failures=2, error=RuntimeError("chaos: transient"))
-    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "exact-retry", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -158,7 +159,7 @@ def test_task_fails_once_then_succeeds(cluster):
         max_failures=1,
         error=RuntimeError("chaos: transient container failure"),
     )
-    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2)
+    job = cluster.submit(TestJobs.quick, "retry-once", max_retries_failure=2, max_task_failures=2)
     status = cluster.wait(job, timeout=30)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
@@ -205,10 +206,10 @@ def test_dispatch_permanent_failure(cluster):
 
 # ---------------------------------------------------------------------------
 # Reconcile-RPC threshold: a worker whose Reconcile RPCs keep failing accrues
-# UNREACHABLE health events and is torn down once consecutive failures reach
-# RECONCILE_FAILURE_THRESHOLD. The reconcile RPC outcome is the only liveness
-# signal (no ping loop), so worker-failure detection is chaos-tested via
-# "controller.reconcile".
+# UNREACHABLE health events and is torn down once it has been continuously
+# unreachable for the grace (~RECONCILE_FAILURE_THRESHOLD failed passes at the
+# 1s local cadence). The reconcile RPC outcome is the only liveness signal (no
+# ping loop), so worker-failure detection is chaos-tested via "controller.reconcile".
 # ---------------------------------------------------------------------------
 
 

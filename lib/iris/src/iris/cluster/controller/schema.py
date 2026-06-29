@@ -11,7 +11,6 @@ live on a separate ``auth_metadata`` because they are stored in the attached
 import json
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from rigging.timing import Timestamp
@@ -40,7 +39,6 @@ from iris.cluster.types import JobName, WorkerId
 USER_ROLE_DEFAULT = "user"
 USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
-IS_RESERVATION_HOLDER_CHECK = "is_reservation_holder IN (0, 1)"
 
 
 class JobNameType(TypeDecorator):
@@ -264,10 +262,7 @@ jobs_table = Table(
     Column("error", String),
     Column("exit_code", Integer),
     Column("num_tasks", Integer, nullable=False),
-    Column("is_reservation_holder", BoolIntType, nullable=False),
     Column("name", String, nullable=False, server_default="''"),
-    Column("has_reservation", BoolIntType, nullable=False, server_default="0"),
-    CheckConstraint(IS_RESERVATION_HOLDER_CHECK, name="jobs_is_reservation_holder_check"),
     Index("idx_jobs_parent", "parent_job_id"),
     Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
     Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
@@ -275,17 +270,6 @@ jobs_table = Table(
     Index("idx_jobs_root_depth", "root_job_id", "depth"),
     Index("idx_jobs_depth_submitted", text("depth"), text("submitted_at_ms DESC")),
     Index("idx_jobs_name", "name"),
-    Index(
-        "idx_jobs_has_reservation",
-        "has_reservation",
-        "state",
-        sqlite_where=text("has_reservation = 1"),
-    ),
-    Index(
-        "idx_jobs_reservation_holder",
-        "job_id",
-        sqlite_where=text("is_reservation_holder = 1"),
-    ),
 )
 
 
@@ -294,7 +278,6 @@ job_config_table = Table(
     metadata,
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
     Column("name", String, nullable=False, server_default="''"),
-    Column("has_reservation", BoolIntType, nullable=False, server_default="0"),
     Column("res_cpu_millicores", Integer, nullable=False, server_default="0"),
     Column("res_memory_bytes", Integer, nullable=False, server_default="0"),
     Column("res_disk_bytes", Integer, nullable=False, server_default="0"),
@@ -316,15 +299,9 @@ job_config_table = Table(
     Column("priority_band", Integer, nullable=False, server_default="0"),
     Column("task_image", String, nullable=False, server_default="''"),
     Column("submit_argv_json", JSONList(), nullable=False, server_default="'[]'"),
-    Column("reservation_json", String),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
+    Column("container_profile", Integer, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
-    Index(
-        "idx_job_config_has_reservation",
-        "has_reservation",
-        "job_id",
-        sqlite_where=text("has_reservation = 1"),
-    ),
 )
 
 
@@ -478,6 +455,12 @@ endpoints_table = Table(
     Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
     Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
+    # Lease expiry. Registration grants a lease; re-registering renews it. A row
+    # past its deadline is hidden from reads and swept by the pruner, independent
+    # of the FK CASCADE. Nullable so it can be added to an existing DB without a
+    # backfill; a NULL deadline is treated as never-expiring until the registrant
+    # next re-registers with a real lease.
+    Column("lease_deadline_ms", TimestampMsType, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
@@ -509,28 +492,6 @@ slices_table = Table(
     Column("error_message", String, nullable=False, server_default="''"),
     Index("idx_slices_scale_group", "scale_group"),
 )
-
-
-reservation_claims_table = Table(
-    "reservation_claims",
-    metadata,
-    Column("worker_id", WorkerIdType, primary_key=True),
-    Column("job_id", String, nullable=False),
-    Column("entry_idx", Integer, nullable=False),
-)
-
-
-@dataclass(frozen=True)
-class ReservationClaim:
-    """A claim binding a worker to a specific reservation entry.
-
-    The controller assigns unclaimed workers to unsatisfied reservation entries
-    each scheduling cycle. Once every entry for a job is claimed, the
-    reservation gate opens and the job's tasks can be scheduled.
-    """
-
-    job_id: str
-    entry_idx: int
 
 
 user_budgets_table = Table(

@@ -7,12 +7,14 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy.exc
-from finelog.client.proxy import LogServiceProxy
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
+    _make_iap_role_resolver,
     create_api_key,
     list_api_keys,
     lookup_api_key_by_id,
@@ -22,17 +24,26 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     ControllerDashboard,
-    _LegacyFetchLogsRedirect,
+    _DashboardAuthInterceptor,
     _RouteAuthMiddleware,
     _SubdomainProxyMiddleware,
     requires_auth,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, resolve_auth
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
+from rigging.server_auth import (
+    AuthRequest,
+    RequestAuthPolicy,
+    StaticTokenVerifier,
+    VerifiedIdentity,
+    build_request_authenticators,
+    get_verified_identity,
+    resolve_auth,
+)
 from rigging.timing import Timestamp
 from sqlalchemy import text
 from starlette.responses import JSONResponse
@@ -63,11 +74,6 @@ def state(db, tmp_path):
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
-
-
-@pytest.fixture
 def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -82,8 +88,9 @@ def service(state, tmp_path, log_client):
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 
@@ -93,14 +100,18 @@ def verifier():
 
 
 @pytest.fixture
-def authed_client(service, log_service, verifier):
-    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
+def authed_client(service, verifier):
+    dashboard = ControllerDashboard(
+        service,
+        auth_provider="gcp",
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
+    )
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def noauth_client(service, log_service):
-    dashboard = ControllerDashboard(service, log_service=log_service)
+def noauth_client(service):
+    dashboard = ControllerDashboard(service)
     return TestClient(dashboard.app)
 
 
@@ -283,14 +294,6 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
         assert rows[0].key_id == "k1"
 
 
-def test_auth_db_file_created(tmp_path):
-    auth_path = tmp_path / "auth.sqlite3"
-    assert not auth_path.exists()
-    db = ControllerDB(db_dir=tmp_path)
-    assert auth_path.exists()
-    db.close()
-
-
 # -- API keys and JWT ----------------------------------------------------------
 
 
@@ -354,14 +357,12 @@ def test_revoke_login_keys(db: ControllerDB):
 
 
 @pytest.fixture
-def optional_auth_client(service, log_service, verifier):
+def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
-        auth_verifier=verifier,
         auth_provider="static",
-        auth_optional=True,
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -441,7 +442,7 @@ def test_auth_config_reports_not_optional(authed_client):
 def test_resolve_auth_policy(verifier, token, optional, should_succeed):
     """resolve_auth encodes the single auth policy used by both gRPC and HTTP."""
     if should_succeed:
-        identity = resolve_auth(token, verifier, optional)
+        identity = resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
         if token == _TEST_TOKEN:
             assert identity is not None
             assert identity.user_id == _TEST_USER
@@ -449,7 +450,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
             assert identity is None
     else:
         with pytest.raises(ValueError):
-            resolve_auth(token, verifier, optional)
+            resolve_auth(AuthRequest(token=token, headers={}), build_request_authenticators(verifier), optional)
 
 
 @pytest.mark.parametrize(
@@ -471,7 +472,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
         "invalid-optional",
     ],
 )
-def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier, token, optional, should_allow):
+def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
     """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
 
     We build a dashboard with a @requires_auth route injected and verify it
@@ -484,17 +485,13 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
 
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
-        auth_verifier=verifier,
         auth_provider="static",
-        auth_optional=optional,
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )
-    # Inject a @requires_auth route. The app is wrapped in
-    # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
-    # → Starlette; walk down to the Starlette router so the new route
-    # participates in route matching.
+    # Inject a @requires_auth route. Walk down to the Starlette router so the
+    # new route participates in route matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | _LegacyFetchLogsRedirect | _RouteAuthMiddleware):
+    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
 
@@ -508,3 +505,135 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
         assert resp.status_code == 200, f"Expected 200 but got {resp.status_code}"
     else:
         assert resp.status_code == 401, f"Expected 401 but got {resp.status_code}"
+
+
+# -- IAP implicit dashboard role through the live auth interceptor ------------
+
+
+class _StubAssertionVerifier:
+    """IapAssertionVerifier stand-in: a present signed-header => dashboard identity."""
+
+    def identity_from_headers(self, headers):
+        if headers.get("x-goog-iap-jwt-assertion"):
+            return VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)
+        return None
+
+
+def _assertion_ctx(method_name: str):
+    """Fake RPC ctx for an IAP-fronted, tokenless request (no Iris JWT)."""
+
+    class _Ctx:
+        def method(self):
+            info = Mock()
+            info.name = method_name  # Mock(name=...) sets repr, not the attribute
+            return info
+
+        def request_headers(self):
+            return {"x-goog-iap-jwt-assertion": "signed.assertion.jwt"}
+
+        def client_address(self):
+            return "10.0.0.7:443"  # arrived via the load balancer, not loopback
+
+    return _Ctx()
+
+
+def test_dashboard_interceptor_allows_read_for_iap_browser():
+    interceptor = _DashboardAuthInterceptor(
+        RequestAuthPolicy.from_verifiers(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        )
+    )
+    seen = []
+
+    def handler(_req, _ctx):
+        seen.append(get_verified_identity())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("ListJobs"))
+    assert result == "ok"
+    assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
+
+
+def test_dashboard_interceptor_denies_mutation_for_iap_browser():
+    interceptor = _DashboardAuthInterceptor(
+        RequestAuthPolicy.from_verifiers(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
+        )
+    )
+    ran = []
+
+    def handler(_req, _ctx):
+        ran.append(True)
+        return "ok"
+
+    with pytest.raises(ConnectError) as exc:
+        interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("LaunchJob"))
+    assert exc.value.code == Code.PERMISSION_DENIED
+    assert ran == []  # the handler never runs for a denied mutation
+
+
+class _RoleAssertionVerifier:
+    """IapAssertionVerifier stand-in returning a fixed role for the asserted email.
+
+    Mirrors the controller's email->role resolution: a provisioned admin/user
+    resolves to their real role, an unprovisioned email to read-only dashboard.
+    """
+
+    def __init__(self, role):
+        self._role = role
+
+    def identity_from_headers(self, headers):
+        if headers.get("x-goog-iap-jwt-assertion"):
+            return VerifiedIdentity(user_id="admin@example.com", role=self._role)
+        return None
+
+
+def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
+    # The point of resolving the IAP identity to its real role: a provisioned
+    # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
+    # gated mutation that the read-only dashboard role would be denied.
+    interceptor = _DashboardAuthInterceptor(
+        RequestAuthPolicy.from_verifiers(
+            verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
+        )
+    )
+    seen = []
+
+    def handler(_req, _ctx):
+        seen.append(get_verified_identity())
+        return "ok"
+
+    result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("LaunchJob"))
+    assert result == "ok"
+    assert seen == [VerifiedIdentity(user_id="admin@example.com", role="admin")]
+
+
+def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
+    # `Login`/`GetAuthInfo` are exempt from auth (in _UNAUTHENTICATED_RPCS), so
+    # even an unprovisioned IAP caller (read-only dashboard role) reaches the
+    # Login handler — `iris login` is never blocked by the dashboard gate. Guards
+    # against accidentally moving the role check ahead of that exemption.
+    interceptor = _DashboardAuthInterceptor(
+        RequestAuthPolicy.from_verifiers(
+            verifier=StaticTokenVerifier({}),
+            optional=False,
+            iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),
+        )
+    )
+    result = interceptor.intercept_unary_sync(lambda _req, _ctx: "ok", "req", _assertion_ctx("Login"))
+    assert result == "ok"
+
+
+def test_iap_role_resolver_maps_provisioned_and_unknown_emails(db: ControllerDB):
+    # The resolver the controller injects into IapAssertionVerifier: a provisioned
+    # email gets its stored role; an unprovisioned email gets read-only dashboard.
+    now = Timestamp.now()
+    with db.transaction() as tx:
+        writes.ensure_user(tx, "admin@example.com", now, role="admin")
+        writes.set_user_role(tx, "admin@example.com", "admin")
+        writes.ensure_user(tx, "user@example.com", now, role="user")
+
+    resolve = _make_iap_role_resolver(db)
+    assert resolve("admin@example.com") == "admin"
+    assert resolve("user@example.com") == "user"
+    assert resolve("stranger@example.com") == DASHBOARD_ROLE

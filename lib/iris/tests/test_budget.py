@@ -17,16 +17,16 @@ from iris.cluster.controller.budget import (
     interleave_by_user,
     resource_value,
 )
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
+from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
 
 from tests.cluster.controller.conftest import (
@@ -292,9 +292,10 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
         log_client=log_client,
         db=state._db,
         health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 

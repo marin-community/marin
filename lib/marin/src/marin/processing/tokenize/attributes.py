@@ -22,8 +22,6 @@ Downstream:
 * Other datakit attribute consumers (joins, mixing) can use the ``id`` column to
   align tokens with quality scores, dedup flags, etc.
 """
-from __future__ import annotations
-
 import dataclasses
 import logging
 import os

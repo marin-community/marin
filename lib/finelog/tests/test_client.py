@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import io
 import logging
 import threading
@@ -24,7 +22,7 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import Column, Schema, schema_to_proto
+from finelog.schema import Column, Schema, schema_from_proto, schema_to_proto
 
 
 class FakeLogClient:
@@ -714,3 +712,20 @@ def test_schema_from_proto_consistency():
         assert proto_col.name == src_col.name
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
+        assert proto_col.index.trigram == src_col.trigram_index
+
+
+def test_trigram_index_round_trips_through_proto():
+    s = Schema(
+        columns=(
+            Column(name="data", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
+            Column(name="level", type=stats_pb2.COLUMN_TYPE_INT32, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+    )
+    back = schema_from_proto(schema_to_proto(s))
+    assert {c.name: c.trigram_index for c in back.columns} == {
+        "data": True,
+        "level": False,
+        "timestamp_ms": False,
+    }

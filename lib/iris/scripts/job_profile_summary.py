@@ -38,8 +38,6 @@ Usage:
     uv run python scripts/job_profile_summary.py <job> -o merged.folded --svg flame.svg
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -241,7 +239,7 @@ def leaf_of(stack: str) -> str:
 
 
 # A frame is "native" if py-spy couldn't symbolize it (``<addr>``) or it lives in
-# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.11``)
+# a shared object (``*.so``/``*.dylib``). The interpreter binary (``python3.12``)
 # and ``.py`` frames are kept — they carry meaningful symbols (e.g. gc).
 _NATIVE_LIB_RE = re.compile(r"\.so(\.\d+)*$|\.dylib$")
 
@@ -289,7 +287,7 @@ class Aggregate:
     tasks: set[str]
 
     @classmethod
-    def empty(cls) -> Aggregate:
+    def empty(cls) -> "Aggregate":
         return cls(
             stacks=defaultdict(float),
             leaves=defaultdict(float),
@@ -411,7 +409,7 @@ def library_rollup_rows(agg: Aggregate, top: int) -> list[list[str]]:
 class CallNode:
     label: str
     value: float
-    children: dict[str, CallNode]
+    children: "dict[str, CallNode]"
 
 
 def build_call_tree(stacks: dict[str, float]) -> CallNode:

@@ -5,7 +5,7 @@
 """Configure TTL lifecycle rules on each marin data bucket (GCS and R2).
 
 This script owns the lifecycle rules that delete objects under ``tmp/ttl=Nd/``
-after ``N`` days, for every ``N`` in :data:`rigging.filesystem.ALLOWED_TTL_DAYS`.
+after ``N`` days, for every ``N`` in `config/marin.yaml`.
 Rules it does not recognize as its own are preserved untouched, so it is safe to
 re-run alongside hand-curated lifecycle rules.
 
@@ -46,13 +46,15 @@ import botocore.config
 import botocore.session
 import click
 from botocore.exceptions import ClientError
-from rigging.filesystem import ALLOWED_TTL_DAYS, R2_DATA_BUCKETS, REGION_TO_DATA_BUCKET, TEMP_PATH_PREFIX
+from rigging.filesystem import R2_DATA_BUCKETS, load_cluster_config
 
 logger = logging.getLogger(__name__)
 
+_MARIN_CONFIG = load_cluster_config("marin")
+
 # Region from which each bucket is served. Built from the canonical
-# REGION_TO_DATA_BUCKET map so this script never drifts from the runtime view.
-BUCKETS: dict[str, str] = {bucket: region for region, bucket in REGION_TO_DATA_BUCKET.items()}
+# region_buckets map so this script never drifts from the runtime view.
+BUCKETS: dict[str, str] = {bucket: region for region, bucket in _MARIN_CONFIG.region_buckets.items()}
 
 PROJECT = "hai-gcp-models"
 
@@ -87,7 +89,7 @@ def run(argv: list[str], *, raise_on_error: bool = True) -> subprocess.Completed
 
 
 def _ttl_prefix(n: int) -> str:
-    return f"{TEMP_PATH_PREFIX}/ttl={n}d/"
+    return f"{_MARIN_CONFIG.temp_path}/ttl={n}d/"
 
 
 def _apply_or_preview_lifecycle(
@@ -140,7 +142,7 @@ def build_gcs_ttl_rules() -> list[dict]:
             "action": {"type": "Delete"},
             "condition": {"age": n, "matchesPrefix": [_ttl_prefix(n)]},
         }
-        for n in ALLOWED_TTL_DAYS
+        for n in _MARIN_CONFIG.ttl_days
     ]
 
 
@@ -160,7 +162,7 @@ def _is_marin_gcs_ttl_rule(rule: dict) -> bool:
     prefixes = condition["matchesPrefix"]
     if not isinstance(prefixes, list) or len(prefixes) != 1:
         return False
-    return prefixes[0] in {_ttl_prefix(n) for n in ALLOWED_TTL_DAYS}
+    return prefixes[0] in {_ttl_prefix(n) for n in _MARIN_CONFIG.ttl_days}
 
 
 def merge_lifecycle_rules(existing: list[dict], owned: list[dict], is_owned: Callable[[dict], bool]) -> list[dict]:
@@ -283,7 +285,7 @@ def build_r2_ttl_rules() -> list[dict]:
             "Expiration": {"Days": n},
             "Status": "Enabled",
         }
-        for n in ALLOWED_TTL_DAYS
+        for n in _MARIN_CONFIG.ttl_days
     ]
 
 
@@ -329,7 +331,7 @@ def configure_r2_bucket(client: botocore.client.BaseClient, bucket: str, owned: 
     "--bucket",
     type=str,
     default=None,
-    help="Only configure this bucket (a GCS bucket in REGION_TO_DATA_BUCKET or an R2 bucket in R2_DATA_BUCKETS).",
+    help=("Only configure this bucket (a GCS bucket in config/marin.yaml " "or an R2 bucket in R2_DATA_BUCKETS)."),
 )
 def main(dry_run: bool, bucket: str | None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

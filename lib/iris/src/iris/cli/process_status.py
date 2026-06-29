@@ -11,15 +11,17 @@ controller itself.
 
 import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import click
 import humanfriendly
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from google.protobuf import json_format
+from rigging.connect import proxy_path
 
-from iris.cli.connect import require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.rpc import job_pb2
 
@@ -65,7 +67,7 @@ def status(ctx, target: str | None, as_json: bool):
     """Show process status (host info, resource usage)."""
     url = require_controller_url(ctx)
     label = target or "Controller"
-    with rpc_client(url) as client:
+    with rpc_client_for_ctx(ctx, url=url) as client:
         # GetProcessStatus uses empty string for controller
         resp = client.get_process_status(job_pb2.GetProcessStatusRequest(max_log_lines=0, target=target or ""))
     if as_json:
@@ -90,8 +92,11 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
     """Show process logs."""
     url = require_controller_url(ctx)
     source = target or _CONTROLLER_LOG_TARGET
+    credentials = ctx.obj.get("credentials") if ctx.obj else None
+    interceptors = credentials.interceptors() if credentials is not None else ()
 
-    with contextlib.closing(LogClient.connect(url)) as log_client:
+    log_server_url = f"{url.rstrip('/')}{proxy_path(LOG_SERVER_ENDPOINT_NAME)}"
+    with contextlib.closing(LogClient.connect(log_server_url, interceptors=interceptors)) as log_client:
         cursor = 0
         first = True
         while True:
@@ -110,7 +115,7 @@ def logs(ctx, target: str | None, level: str, follow: bool, max_lines: int, subs
             for entry in resp.entries:
                 ts = ""
                 if entry.timestamp and entry.timestamp.epoch_ms:
-                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=timezone.utc)
+                    dt = datetime.fromtimestamp(entry.timestamp.epoch_ms / 1000, tz=UTC)
                     ts = dt.strftime("%H:%M:%S")
                 click.echo(f"[{ts}] {entry.data}")
 
@@ -161,7 +166,7 @@ def profile(
         raise click.ClickException(f"Unknown profiler type: {profiler}")
 
     click.echo(f"Profiling {label} ({profiler}, {duration}s)...")
-    with rpc_client(url) as client:
+    with rpc_client_for_ctx(ctx, url=url) as client:
         resp = client.profile_task(
             job_pb2.ProfileTaskRequest(
                 target=rpc_target,

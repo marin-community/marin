@@ -37,15 +37,12 @@ def _build_multi_root_descendants_stmt():
     """Build a single recursive CTE walking descendants from many roots.
 
     Seeds with all roots (each row carries its own ``root_id``) and walks down
-    via ``parent_job_id``. Returns ``(root_id, descendant_id, is_holder)``
-    triples so a single statement covers both the full and the
-    ``exclude_holders`` views.
+    via ``parent_job_id``. Returns ``(root_id, descendant_id)`` pairs.
     """
     j_seed = jobs_table.alias("j_seed")
     base_q = select(
         j_seed.c.job_id.label("root_id"),
         j_seed.c.job_id.label("descendant_id"),
-        j_seed.c.is_reservation_holder.label("is_holder"),
     ).where(j_seed.c.job_id.in_(bindparam("root_ids", expanding=True)))
     subtree = base_q.cte("subtree", recursive=True)
 
@@ -53,12 +50,11 @@ def _build_multi_root_descendants_stmt():
     recursive_q = select(
         subtree.c.root_id,
         j_child.c.job_id.label("descendant_id"),
-        j_child.c.is_reservation_holder.label("is_holder"),
     ).join(subtree, j_child.c.parent_job_id == subtree.c.descendant_id)
     full = subtree.union_all(recursive_q)
     # Drop the seed rows themselves (root_id == descendant_id) — callers only
     # want strict descendants.
-    return select(full.c.root_id, full.c.descendant_id, full.c.is_holder).where(full.c.root_id != full.c.descendant_id)
+    return select(full.c.root_id, full.c.descendant_id).where(full.c.root_id != full.c.descendant_id)
 
 
 _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
@@ -67,25 +63,20 @@ _MULTI_ROOT_DESCENDANTS_STMT = _build_multi_root_descendants_stmt()
 def _load_descendants_multi(cur: Tx, root_ids: Iterable[JobName]) -> dict[JobName, JobDescendants]:
     """Load descendants for all ``root_ids`` in one recursive-CTE query.
 
-    Returns a :class:`JobDescendants` per root, with both the full and the
-    ``exclude_holders`` views derived from a single ``(root_id, descendant_id,
-    is_holder)`` result set.
+    Returns a :class:`JobDescendants` per root from a single ``(root_id,
+    descendant_id)`` result set.
     """
     ids = list(root_ids)
     if not ids:
         return {}
     rows = cur.execute(_MULTI_ROOT_DESCENDANTS_STMT, {"root_ids": ids}).all()
     full_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
-    no_holders_by_root: dict[JobName, list[JobName]] = {root_id: [] for root_id in ids}
     for row in rows:
         full_by_root.setdefault(row.root_id, []).append(row.descendant_id)
-        if not row.is_holder:
-            no_holders_by_root.setdefault(row.root_id, []).append(row.descendant_id)
     return {
         root_id: JobDescendants(
             job_id=root_id,
-            descendants_full=tuple(full_by_root.get(root_id, ())),
-            descendants_no_holders=tuple(no_holders_by_root.get(root_id, ())),
+            descendants=tuple(full_by_root.get(root_id, ())),
         )
         for root_id in ids
     }
@@ -125,15 +116,18 @@ def _bulk_load_job_state_basis(
                 started_at=started_at,
                 max_task_failures=max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
             continue
 
         rows = all_tasks_by_job.get(job_id, ())
         histogram: dict[int, int] = {}
+        total_failures = 0
         first_error: str | None = None
         for row in rows:
             histogram[row.state] = histogram.get(row.state, 0) + 1
+            total_failures += row.failure_count
             if first_error is None and row.error is not None:
                 first_error = row.error
 
@@ -143,6 +137,7 @@ def _bulk_load_job_state_basis(
             started_at=started_at,
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
+            total_failures=total_failures,
             first_task_error=first_error,
         )
     return result
@@ -159,6 +154,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
             tasks_table.c.job_id,
             tasks_table.c.task_index,
             tasks_table.c.state,
+            tasks_table.c.failure_count,
             tasks_table.c.error,
         ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
@@ -170,6 +166,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 task_id=r.task_id,
                 task_index=int(r.task_index),
                 state=int(r.state),
+                failure_count=int(r.failure_count),
                 error=str(r.error) if r.error is not None else None,
             )
         )
@@ -269,7 +266,7 @@ def load_closed_snapshot(
     job_set: set[JobName] = set(seed_job_ids)
     if job_set:
         for desc in _load_descendants_multi(cur, job_set).values():
-            job_set.update(desc.descendants_full)
+            job_set.update(desc.descendants)
         for rows in _load_all_tasks_for_jobs(cur, job_set).values():
             seed_task_set.update(row.task_id for row in rows)
 
@@ -287,7 +284,7 @@ def load_closed_snapshot(
     job_set.update(task.job_id for task in tasks.values())
     job_descendants = _load_descendants_multi(cur, job_set)
     for desc in job_descendants.values():
-        job_set.update(desc.descendants_full)
+        job_set.update(desc.descendants)
 
     # Re-walk so descendants pulled in above also expose their own subtrees as
     # cascade sources, then close the per-job relations over the full set.

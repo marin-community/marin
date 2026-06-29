@@ -27,8 +27,6 @@ Submit on iris in eu-west4 so the GCS reads stay in-region:
           --top-k 3 --bottom-k 3
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import os

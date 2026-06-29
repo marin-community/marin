@@ -1,37 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scheduling, preemption, and reservation policy.
+"""Scheduling and preemption policy.
 
 Free functions parameterized by their dependencies (``ControllerDB``,
 ``WorkerHealthTracker``, ``SchedulingContext``) rather than the ``Controller``
-instance. DB I/O is concentrated in the context builders and the reservation-
-claim lifecycle; the gate, ordering, and preemption passes are pure transforms
-over an in-memory ``SchedulingContext``.
+instance. DB I/O is concentrated in the context builders; the gate, ordering,
+and preemption passes are pure transforms over an in-memory ``SchedulingContext``.
 """
 
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
 from rigging.log_setup import slow_log
 
 from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
     AttributeValue,
-    Constraint,
-    ConstraintOp,
     PlacementRequirements,
     WellKnownAttribute,
-    constraints_from_resources,
-    evaluate_constraint,
+    availability_key,
     extract_placement_requirements,
-    merge_constraints,
+    is_availability_key,
     split_hard_soft,
-    zone_constraint,
 )
-from iris.cluster.controller import reads, writes
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
@@ -44,13 +41,10 @@ from iris.cluster.controller.codec import (
     constraints_from_json,
     device_counts_from_json,
     device_variant_from_json,
-    reservation_entries_from_json,
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import SchedulableWorker, WorkerAttrsSource
-from iris.cluster.controller.reconcile.policy import RESERVATION_HOLDER_JOB_NAME
+from iris.cluster.controller.reads import WorkerAttrsSource
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -60,9 +54,9 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
     WorkerCapacity,
     WorkerSnapshot,
+    ranked_groups_for_req,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema import ReservationClaim
 from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
@@ -79,20 +73,6 @@ logger = logging.getLogger(__name__)
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
 
-# Reservation placements advance one claimed worker per cycle, independent of
-# the (higher) non-reservation packing cap. Each claim is one reserved slot, so
-# packing several reservation tasks onto the first claimed worker would anchor
-# reserved capacity on one worker while the other claimed workers sit tainted
-# but unused.
-_MAX_RESERVATION_PLACEMENTS_PER_WORKER_PER_CYCLE = 1
-
-
-# Taint attribute injected onto claimed workers to prevent non-reservation
-# jobs from landing on them.  Non-reservation jobs get a NOT_EXISTS constraint
-# for this key; reservation jobs do not, so they naturally prefer claimed
-# workers (which appear first in the worker list).
-RESERVATION_TAINT_KEY = "reservation-job"
-
 
 @dataclass(frozen=True)
 class PreemptionCandidate:
@@ -105,12 +85,10 @@ class PreemptionCandidate:
 
 @dataclass(frozen=True)
 class GatedCandidates:
-    """Tasks that passed deadline, reservation, and per-job-cap gates."""
+    """Tasks that passed deadline and per-job-cap gates."""
 
     schedulable_task_ids: list[JobName]
     jobs: dict[JobName, JobRequirements]
-    has_reservation: set[JobName]
-    has_direct_reservation: set[JobName]
     expired_tasks: list["PendingTask"]
 
 
@@ -139,77 +117,56 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
     )
 
 
-def reservation_unsatisfied(
-    task: PendingTask,
-    claims_by_job: dict[str, int],
-    reservation_entry_counts: dict[JobName, int],
-) -> bool:
-    """Whether a real task must wait for its job's reservation to be claimed.
-
-    A non-holder task of a directly-reserved job is *unsatisfied* until the
-    number of workers claimed for its reservation reaches the reservation's
-    entry count. Such a task must neither be scheduled nor generate autoscaler
-    demand: the reservation's holder task provisions the reserved capacity, and
-    the real task runs only once that capacity exists. Waiting for the claim also
-    fixes the reservation's zone before the task is placed or routed, so the
-    autoscaler never boots capacity in the wrong zone.
-
-    Both the scheduling gate (:func:`apply_scheduling_gates`) and the demand
-    path (:func:`compute_demand_entries`) consult this predicate so they agree.
-    If they disagree — demand emitting for a task the gate blocks — the
-    autoscaler provisions generic capacity the task can never occupy and
-    thrashes, booting workers that are reaped as idle every cycle.
-    """
-    if task.is_reservation_holder or not task.has_reservation:
-        return False
-    required = reservation_entry_counts.get(task.job_id, 0)
-    return claims_by_job.get(task.job_id.to_wire(), 0) < required
-
-
-def _claims_by_job(claims: dict[WorkerId, ReservationClaim] | None) -> dict[str, int]:
-    """Count reservation claims per claiming job (wire id) for the reservation gate."""
-    counts: dict[str, int] = defaultdict(int)
-    for claim in (claims or {}).values():
-        counts[claim.job_id] += 1
-    return counts
-
-
-def reservation_zones_from_claims(
-    claims: dict[WorkerId, ReservationClaim],
+def enrich_workers_with_availability(
     workers: list[WorkerSnapshot],
-) -> dict[JobName, frozenset[str]]:
-    """Zones in which each reserving job's workers were claimed, keyed by job.
+    zone_capabilities: Mapping[str, frozenset[str]],
+) -> list[WorkerSnapshot]:
+    """Add each worker's zone ``availability:<variant>`` markers to its attributes.
 
-    A directly-reserved job is constrained to these zones so it runs beside its
-    reservation. A job is absent until at least one of its entries is claimed on
-    a zone-reporting worker.
+    A worker inherits the accelerator variants its *zone* has been empirically
+    confirmed to provide (see :func:`empirical_zone_capabilities`), which a hard
+    ``availability:<variant>`` constraint then filters placement against. Keys on the
+    existing ``zone`` attribute; workers without a zone pass through unchanged.
     """
-    zones_by_wire: dict[str, set[str]] = defaultdict(set)
-    attrs_by_worker = {w.worker_id: w.attributes for w in workers}
-    for worker_id, claim in claims.items():
-        attrs = attrs_by_worker.get(worker_id)
-        if attrs is None:
+    if not zone_capabilities:
+        return workers
+    enriched: list[WorkerSnapshot] = []
+    for worker in workers:
+        zone_attr = worker.attributes.get(WellKnownAttribute.ZONE)
+        variants = zone_capabilities.get(str(zone_attr.value)) if zone_attr is not None else None
+        if not variants:
+            enriched.append(worker)
             continue
-        zone = attrs.get(WellKnownAttribute.ZONE)
-        if zone is not None:
-            zones_by_wire[claim.job_id].add(str(zone.value))
-    return {JobName.from_wire(wire): frozenset(zones) for wire, zones in zones_by_wire.items()}
+        attrs = dict(worker.attributes)
+        for variant in variants:
+            attrs[availability_key(variant)] = AttributeValue("true")
+        enriched.append(replace(worker, attributes=attrs))
+    return enriched
 
 
-def _reservation_zone_constraints(zones: frozenset[str]) -> list[Constraint]:
-    """Constrain a task to a set of claimed reservation zones (empty → no constraint)."""
-    if not zones:
-        return []
-    ordered = sorted(zones)
-    if len(ordered) == 1:
-        return [zone_constraint(ordered[0])]
-    return [Constraint.create(key=WellKnownAttribute.ZONE, op=ConstraintOp.IN, values=ordered)]
+def demanded_availability_variants(pending_task_rows: list[PendingTask]) -> set[str]:
+    """Accelerator variants some pending task constrains on via ``availability:<variant>``.
+
+    Returned variants are lowercased to match the ``zone_capabilities`` map (both
+    sides come through :func:`availability_key`). The caller injects only these onto
+    workers, so a tick with no availability demand rebuilds no worker attributes.
+    """
+    variants: set[str] = set()
+    for task in pending_task_rows:
+        constraints_json = task.constraints_json
+        # Substring pre-check: skip JSON parsing for the common task that carries
+        # no availability constraint at all.
+        if not constraints_json or AVAILABILITY_PREFIX not in constraints_json:
+            continue
+        for constraint in constraints_from_json(constraints_json):
+            if is_availability_key(constraint.key):
+                variants.add(constraint.key[len(AVAILABILITY_PREFIX) :])
+    return variants
 
 
 def compute_demand_entries(
     ctx: SchedulingContext,
     scheduler: Scheduler,
-    claims: dict[WorkerId, ReservationClaim],
     exclude_task_ids: AbstractSet[JobName] = frozenset(),
 ) -> list[DemandEntry]:
     """Compute the autoscaler demand entries for a scheduling snapshot.
@@ -217,34 +174,20 @@ def compute_demand_entries(
     Returns the unmet demand the autoscaler must provision: every pending task
     the current fleet cannot already absorb, grouped into ``DemandEntry`` records.
 
-    All pending tasks — both real and reservation holder — flow through a single
-    unified path. A limits-free capacity-fit dry-run (per-worker building and
-    assignment caps disabled) marks which tasks the existing fleet could already
-    absorb; only the unabsorbed remainder emits demand. This is deliberate work
-    distinct from the (limits-on) assignment pass: a task blocked only by the
-    per-cycle assignment cap has capacity waiting for it and must not signal
-    demand.
+    A limits-free capacity-fit dry-run (per-worker building and assignment caps
+    disabled) marks which tasks the existing fleet could already absorb; only the
+    unabsorbed remainder emits demand. This is deliberate work distinct from the
+    (limits-on) assignment pass: a task blocked only by the per-cycle assignment
+    cap has capacity waiting for it and must not signal demand.
 
-    Holder tasks request the reserved resources, so spare capacity does not
-    absorb them and they keep reserved capacity alive via the autoscaler. The
-    taint/constraint mechanism ensures only peer jobs can use the reserved
-    workers.
-
-    .. note::
-
-        Demand from holder tasks and parent real tasks is additive. On a cold
-        start with N reservation entries and M real tasks this reports N + M
-        demand entries, which may overprovision. In practice reservations are
-        used when the parent job does not request its own resources, so the
-        additive behavior is correct. If that changes, a dedup path (e.g.
-        ``max(real_pending, holders)``) should be added here.
+    Each entry carries the job's constraints, so a hard ``availability:<variant>``
+    constraint rides along to the autoscaler, which restricts scaling groups to the
+    zones that expose that capability (see ``route_demand``).
 
     Args:
         ctx: The per-tick scheduling context (workers, pending task rows,
-            reservation entry counts, reserved job ids, building counts).
+            building counts).
         scheduler: The ``Scheduler`` used for the capacity-fit dry-run pass.
-        claims: Reservation claims, applied as taint injection in the dry-run to
-            match the real scheduling path.
         exclude_task_ids: Pending tasks to drop from both the dry-run and the
             emitted demand — used to skip tasks the caller is retiring this tick
             (e.g. deadline-expired tasks the scheduler marks UNSCHEDULABLE), so
@@ -271,61 +214,33 @@ def compute_demand_entries(
     for task in pending:
         tasks_by_job[task.job_id].append(task)
 
-    reservation_entry_counts = ctx.reservation_entry_counts
-
-    # Index reservation claims by job so the reservation gate below can compare
-    # claimed workers against required entries, exactly as apply_scheduling_gates
-    # does for the real scheduling pass.
-    claims_by_job = _claims_by_job(claims)
-
     # Build job requirements once, shared between dry-run and demand emission.
-    # Also track which jobs have reservations so we can apply taint injection.
-    reserved_jobs = ctx.reserved_job_ids
     jobs: dict[JobName, JobRequirements] = {}
-    has_reservation: set[JobName] = set()
-    has_direct_reservation: set[JobName] = set()
     for task in pending:
         if task.job_id in jobs:
             continue
         jobs[task.job_id] = job_requirements_from_job(task)
-        if task.has_reservation:
-            has_reservation.add(task.job_id)
-            has_direct_reservation.add(task.job_id)
-        elif _find_reservation_ancestor(reserved_jobs, task.job_id) is not None:
-            has_reservation.add(task.job_id)
 
-    # Dry-run scheduling with building/assignment limits disabled.
-    # Reservation-gated tasks are excluded: the real scheduling pass
-    # (apply_scheduling_gates) does not place them, so letting them consume
-    # absorption capacity here would make the fleet look full and push other
-    # tasks into false demand.
+    # Dry-run scheduling with building/assignment limits disabled: mark which
+    # tasks the existing fleet can already absorb so only the remainder emits
+    # demand. Building/assignment limits are disabled so big workers can absorb
+    # multiple tasks (prevents false demand on idle clusters).
     absorbed_task_ids: set[JobName] = set()
     if ctx.workers:
-        dry_run_workers = inject_reservation_taints(ctx.workers, claims)
-        dry_run_jobs = inject_taint_constraints(
-            jobs, has_reservation, has_direct_reservation, ctx.reservation_zones_by_job
-        )
-        dry_run_pending = [
-            t.task_id for t in pending if not reservation_unsatisfied(t, claims_by_job, reservation_entry_counts)
-        ]
-
         # Dry-run scheduling context — only the per-(task, worker) matching loop
         # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
-        # empty. Building/assignment limits are disabled so big workers can
-        # absorb multiple tasks (prevents false demand on idle clusters).
+        # empty.
         dry_run_context = SchedulingContext(
-            workers=dry_run_workers,
+            workers=ctx.workers,
             building_counts=ctx.building_counts,
             max_building_tasks=_UNLIMITED,
             max_assignments_per_worker=_UNLIMITED,
-            pending_tasks=dry_run_pending,
-            jobs=dry_run_jobs,
+            pending_tasks=[t.task_id for t in pending],
+            jobs=jobs,
             pending_task_rows=[],
             user_spend={},
             user_budget_limits={},
             requested_bands={},
-            reserved_job_ids=frozenset(),
-            reservation_entry_counts={},
             user_budget_defaults=UserBudgetDefaults(),
         )
         result = scheduler.find_assignments(dry_run_context)
@@ -341,27 +256,7 @@ def compute_demand_entries(
         if is_job_finished(job_row.job_state):
             continue
 
-        # Reservation gate (mirrors apply_scheduling_gates): a real task of a
-        # directly-reserved job emits no demand until its reservation is
-        # claimed. The holder task (a separate job) provisions the reserved
-        # capacity; emitting demand for the real task here would provision
-        # generic capacity the scheduler gate will never let it occupy, so the
-        # autoscaler would boot workers that idle out and get reaped forever.
-        if reservation_unsatisfied(job_row, claims_by_job, reservation_entry_counts):
-            continue
-
         job_constraints = constraints_from_json(job_row.constraints_json)
-        # A directly-reserved parent routes its own demand to the reservation's
-        # claimed zone, matching the zone pin the scheduler applies in
-        # inject_taint_constraints. The reservation gate above ensures we only
-        # reach here once claimed, so the zone is known. Without this the
-        # autoscaler would route the parent's demand to an arbitrary zone the
-        # scheduler then rejects.
-        if job_id in has_direct_reservation:
-            job_constraints = [
-                *job_constraints,
-                *_reservation_zone_constraints(ctx.reservation_zones_by_job.get(job_id, frozenset())),
-            ]
         # Build the proto here — DemandEntry.resources is an autoscaler RPC field (legitimate boundary).
         job_resources = resource_spec_from_scalars(
             job_row.res_cpu_millicores, job_row.res_memory_bytes, job_row.res_disk_bytes, job_row.res_device_json
@@ -416,19 +311,10 @@ def compute_demand_entries(
     return demand_entries
 
 
-def read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
-    """Read reservation claims from the canonical DB table."""
-    with db.read_snapshot() as tx:
-        return reads.list_claims(tx)
-
-
 def get_running_tasks_with_band_and_value(
     db: ControllerDB,
-    claimed_workers: set[WorkerId],
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
-
-    Skips tasks on reservation-claimed workers since those workers are spoken for.
 
     The reported band is the value persisted in ``tasks.priority_band``, which
     is stamped at assignment time (see ``_commit_assignments`` and
@@ -439,21 +325,15 @@ def get_running_tasks_with_band_and_value(
     users sitting at their limits.
     """
     with db.read_snapshot() as tx:
-        return _running_tasks_with_band_and_value(tx, claimed_workers)
+        return _running_tasks_with_band_and_value(tx)
 
 
-def _running_tasks_with_band_and_value(tx: Tx, claimed_workers: set[WorkerId]) -> list[RunningTaskInfo]:
-    """Map the running-task band/resource rows into :class:`RunningTaskInfo`.
-
-    Skips tasks on reservation-claimed workers, since those workers are spoken
-    for and must not be considered as preemption victims.
-    """
+def _running_tasks_with_band_and_value(tx: Tx) -> list[RunningTaskInfo]:
+    """Map the running-task band/resource rows into :class:`RunningTaskInfo`."""
     rows = reads.running_task_band_rows(tx)
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
-        if wid in claimed_workers:
-            continue
         dc = device_counts_from_json(row.res_device_json)
         result.append(
             RunningTaskInfo(
@@ -579,6 +459,111 @@ def _preempt_coscheduled(
     return []
 
 
+def _solo_victims_freeing_host(
+    candidate: PreemptionCandidate,
+    cap: WorkerCapacity,
+    host_victims: list[RunningTaskInfo],
+) -> list[RunningTaskInfo] | None:
+    """Lowest-priority solo victims whose eviction lets the gang's req fit on
+    ``cap``'s host, or None if the host cannot be freed. Only victims strictly
+    lower band than the candidate are eligible; ``host_victims`` must be ordered
+    lowest-priority-first.
+
+    The host's build-slot count is treated as fixed: a long-running squatter
+    holds no build slot, so a host blocked solely by the build limit is not
+    recoverable here (that limit is transient back-pressure, not a held resource).
+    """
+    req = candidate.requirements
+    available_cpu = cap.available_cpu_millicores
+    available_memory = cap.available_memory
+    available_gpus = cap.available_gpus
+    available_tpus = cap.available_tpus
+    chosen: list[RunningTaskInfo] = []
+    for victim in host_victims:
+        if victim.already_preempted:
+            continue
+        # Only strictly lower priority (higher band_sort_key) victims are eligible.
+        if victim.band_sort_key <= candidate.band:
+            continue
+        chosen.append(victim)
+        available_cpu += victim.cpu_millicores
+        available_memory += victim.memory_bytes
+        available_gpus += victim.gpu_count
+        available_tpus += victim.tpu_count
+        hypothetical = WorkerCapacity(
+            worker_id=cap.worker_id,
+            available_cpu_millicores=available_cpu,
+            available_memory=available_memory,
+            available_gpus=available_gpus,
+            available_tpus=available_tpus,
+            attributes=cap.attributes,
+            building_task_count=cap.building_task_count,
+            max_building_tasks=cap.max_building_tasks,
+        )
+        if hypothetical.can_fit(req) is None:
+            return chosen
+    return None
+
+
+def _preempt_coscheduled_partial_hosts(
+    candidate: PreemptionCandidate,
+    n_required: int,
+    solo_victims_by_worker: Mapping[WorkerId, list[RunningTaskInfo]],
+    reserved_workers: set[WorkerId],
+    context: SchedulingContext,
+) -> list[tuple[JobName, JobName]]:
+    """Free a blocked gang by evicting lower-band solo co-tenants on its hosts,
+    returning (preemptor, victim) pairs or [] if the gang cannot be placed.
+
+    Fallback for when no whole victim slice qualifies but the gang is short a few
+    hosts whose only blocker is a solo task squatting on per-host CPU/RAM. Evicts
+    only when enough hosts can be freed for the whole gang (``n_required``
+    workers) to place; otherwise nothing is evicted, since a partial eviction
+    would be wasted.
+
+    ``reserved_workers`` is read and updated so two gangs contending for one group
+    never double-book the same hosts.
+    """
+    req = candidate.requirements
+    for _group_key, worker_ids in ranked_groups_for_req(context, req):
+        if len(worker_ids) < n_required:
+            continue
+        fitting: list[WorkerId] = []
+        recoverable: list[tuple[WorkerId, list[RunningTaskInfo]]] = []
+        for wid in worker_ids:
+            if wid in reserved_workers:
+                continue
+            cap = context.capacities.get(wid)
+            if cap is None:
+                continue
+            if cap.can_fit(req) is None:
+                fitting.append(wid)
+                continue
+            victims = _solo_victims_freeing_host(candidate, cap, solo_victims_by_worker.get(wid, []))
+            if victims is not None:
+                recoverable.append((wid, victims))
+
+        needed = n_required - len(fitting)
+        if needed <= 0:
+            return []  # group already has room for the gang; no preemption needed
+        if len(recoverable) < needed:
+            continue  # cannot free enough hosts in this group; try the next
+
+        # Commit the cheapest `needed` host-evictions (fewest victims, then least
+        # resource) to bound blast radius; reserve every host the gang will use.
+        recoverable.sort(key=lambda item: (len(item[1]), sum(v.resource_value for v in item[1])))
+        used_hosts: set[WorkerId] = set(fitting)
+        pairs: list[tuple[JobName, JobName]] = []
+        for wid, victims in recoverable[:needed]:
+            used_hosts.add(wid)
+            for victim in victims:
+                victim.already_preempted = True
+                pairs.append((candidate.job_name, victim.task_id))
+        reserved_workers |= used_hosts
+        return pairs
+    return []
+
+
 def run_preemption_pass(
     unscheduled_tasks: list[PreemptionCandidate],
     running_tasks_info: list[RunningTaskInfo],
@@ -607,6 +592,18 @@ def run_preemption_pass(
         key=lambda t: (-t.band_sort_key, t.resource_value),
     )
 
+    # Same solo victims bucketed by host for the gang partial-host fallback. Holds
+    # the *same* RunningTaskInfo objects, so already_preempted is shared across the
+    # solo path, the fallback, and competing gangs. Each bucket inherits the sort
+    # above: lowest-priority-first, then cheapest-first.
+    solo_victims_by_worker: dict[WorkerId, list[RunningTaskInfo]] = defaultdict(list)
+    for v in solo_victims:
+        solo_victims_by_worker[v.worker_id].append(v)
+
+    # Hosts a gang's partial-host eviction has claimed this pass; keeps two gangs
+    # contending for one group from double-booking the same hosts.
+    reserved_workers: set[WorkerId] = set()
+
     # Lazy: only build coscheduled-victim slice index if some preemptor needs
     # one. The common case (no coscheduled preemptors) skips the bucketing.
     sorted_groups: list[tuple[JobName, list[RunningTaskInfo]]] = []
@@ -630,6 +627,11 @@ def run_preemption_pass(
     # Preemptor jobs whose siblings have already been satisfied by a slice
     # eviction this pass; the remaining N-1 siblings short-circuit.
     satisfied_preemptor_jobs: set[JobName] = set()
+    # Gangs whose coscheduled preemption was already attempted this pass (success
+    # or failure). A gang's siblings select identically (same req, n_required, and
+    # candidate group), so one attempt suffices and a failed gang does not re-run
+    # the index-scanning search for each of its N pending siblings.
+    attempted_coscheduled_jobs: set[JobName] = set()
     sibling_count: dict[JobName, int] = defaultdict(int)
     for c in unscheduled_tasks:
         if c.job_name.parent is not None:
@@ -652,8 +654,20 @@ def run_preemption_pass(
                 preemptions.append(pair)
             continue
 
+        # Attempt a gang's coscheduled preemption once per gang, not per sibling.
+        if parent is not None and parent in attempted_coscheduled_jobs:
+            continue
+        if parent is not None:
+            attempted_coscheduled_jobs.add(parent)
+
         n_required = sibling_count.get(parent, 1) if parent is not None else 1
         pairs = _preempt_coscheduled(candidate, wanted_variant, n_required, sorted_groups, context)
+        if not pairs:
+            # No whole victim slice qualified; try freeing the gang's blocking
+            # hosts by evicting lower-band solo co-tenants squatting on them.
+            pairs = _preempt_coscheduled_partial_hosts(
+                candidate, n_required, solo_victims_by_worker, reserved_workers, context
+            )
         if pairs:
             preemptions.extend(pairs)
             if parent is not None:
@@ -680,321 +694,16 @@ def _sort_pending_tasks_by_resolved_band(
     )
 
 
-def _worker_matches_reservation_entry(
-    worker: SchedulableWorker,
-    res_entry: job_pb2.ReservationEntry,
-) -> bool:
-    """Check if a worker is eligible for a reservation entry.
-
-    Auto-injects device constraints from the reservation entry's resource spec
-    and merges them with explicit constraints on the entry, then evaluates all
-    constraints against the worker's attributes.
-    """
-    auto = constraints_from_resources(res_entry.resources)
-    explicit = [Constraint.from_proto(c) for c in res_entry.constraints]
-    merged = merge_constraints(auto, explicit)
-
-    for constraint in merged:
-        attr = worker.attributes.get(constraint.key)
-        if not evaluate_constraint(attr, constraint):
-            return False
-
-    return True
-
-
-def cleanup_stale_claims(
-    claims: dict[WorkerId, ReservationClaim],
-    tx: Tx,
-    health: WorkerHealthTracker,
-) -> bool:
-    """Remove claims for workers that disappeared or jobs that finished.
-
-    Reads job state from the caller's snapshot ``tx``. Mutates ``claims`` in
-    place; returns whether anything was removed.
-    """
-    active_worker_ids = {wid for wid, lease in health.all().items() if lease.active}
-    claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
-    job_states = reads.job_states_by_id(tx, claimed_job_ids)
-    stale: list[WorkerId] = []
-    for worker_id, claim in claims.items():
-        if worker_id not in active_worker_ids:
-            stale.append(worker_id)
-            continue
-        job_state = job_states.get(JobName.from_wire(claim.job_id))
-        if job_state is None or is_job_finished(job_state):
-            stale.append(worker_id)
-    for wid in stale:
-        del claims[wid]
-    return bool(stale)
-
-
-def claim_workers_for_reservations(
-    claims: dict[WorkerId, ReservationClaim],
-    tx: Tx,
-    health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
-) -> bool:
-    """Assign unclaimed workers to unsatisfied reservation entries.
-
-    Scans all non-finished jobs with reservations from the caller's snapshot
-    ``tx``. For each unfulfilled entry, finds an eligible unclaimed worker and
-    records the claim. Mutates ``claims`` in place; returns whether any new
-    claim was added.
-    """
-    claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
-    claimed_worker_ids: set[WorkerId] = set(claims.keys())
-    reservable_states = (
-        job_pb2.JOB_STATE_PENDING,
-        job_pb2.JOB_STATE_BUILDING,
-        job_pb2.JOB_STATE_RUNNING,
-    )
-    all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
-    reservation_jobs = reads.jobs_with_reservations(tx, reservable_states)
-    changed = False
-
-    for job in reservation_jobs:
-        job_wire = job.job_id.to_wire()
-        for idx, res_entry in enumerate(reservation_entries_from_json(job.reservation_json)):
-            if (job_wire, idx) in claimed_entries:
-                continue
-
-            for worker in all_workers:
-                if worker.worker_id in claimed_worker_ids:
-                    continue
-                if not _worker_matches_reservation_entry(worker, res_entry):
-                    continue
-
-                claims[worker.worker_id] = ReservationClaim(job_id=job_wire, entry_idx=idx)
-                claimed_worker_ids.add(worker.worker_id)
-                claimed_entries.add((job_wire, idx))
-                changed = True
-                break
-    return changed
-
-
-def refresh_reservation_claims(
-    db: ControllerDB,
-    health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
-    *,
-    persist: bool = True,
-) -> dict[WorkerId, ReservationClaim]:
-    """Read, clean up, and re-claim reservation workers; return updated claims.
-
-    Claims are read outside any scheduling transaction. This creates a narrow
-    race window where a worker could be removed between the claim read and
-    scheduling, but it's benign: ``assign`` re-validates assignments
-    transactionally and stale claims are cleaned up on the next cycle. Pass
-    ``persist=False`` to compute the updated claims without writing them
-    (dry-run).
-    """
-    with db.read_snapshot() as tx:
-        claims, changed = refresh_reservation_claims_in_tx(tx, health, worker_attrs)
-    if changed and persist:
-        with db.transaction() as cur:
-            writes.replace_reservation_claims(cur, claims)
-    return claims
-
-
-def refresh_reservation_claims_in_tx(
-    tx: Tx,
-    health: WorkerHealthTracker,
-    worker_attrs: WorkerAttrsProjection,
-) -> tuple[dict[WorkerId, ReservationClaim], bool]:
-    """Read claims and run the stale-sweep + re-claim passes over ``tx``.
-
-    The DB-less core shared by :func:`refresh_reservation_claims` and the control
-    tick's snapshot build. Returns the updated claims plus whether anything
-    changed, so the caller persists them in its own write transaction.
-    """
-    claims = reads.list_claims(tx)
-    changed = cleanup_stale_claims(claims, tx, health)
-    changed = claim_workers_for_reservations(claims, tx, health, worker_attrs) or changed
-    return claims, changed
-
-
-def inject_reservation_taints(
-    workers: list[WorkerSnapshot],
-    claims: dict[WorkerId, ReservationClaim],
-) -> list[WorkerSnapshot]:
-    """Create modified worker snapshots with reservation taints and prioritization.
-
-    Claimed workers receive a ``reservation-job`` attribute set to the claiming
-    job's ID.  The returned list is ordered with claimed workers first so that
-    reservation jobs (which have no NOT_EXISTS constraint) naturally pick from
-    their claimed workers before unclaimed ones.
-
-    Snapshots are never mutated — ``dataclasses.replace`` produces shallow copies.
-    """
-    if not claims:
-        return workers
-
-    claimed: list[WorkerSnapshot] = []
-    unclaimed: list[WorkerSnapshot] = []
-    for worker in workers:
-        claim = claims.get(worker.worker_id)
-        if claim is not None:
-            modified_attrs = dict(worker.attributes)
-            modified_attrs[RESERVATION_TAINT_KEY] = AttributeValue(claim.job_id)
-            claimed.append(replace(worker, attributes=modified_attrs))
-        else:
-            unclaimed.append(worker)
-    return claimed + unclaimed
-
-
-def inject_taint_constraints(
-    jobs: dict[JobName, JobRequirements],
-    has_reservation: set[JobName],
-    has_direct_reservation: set[JobName] | None = None,
-    reservation_zones_by_job: dict[JobName, frozenset[str]] | None = None,
-) -> dict[JobName, JobRequirements]:
-    """Add reservation zone/taint constraints to jobs.
-
-    A reservation maps its job to the *zone* where its accelerators were claimed;
-    it never pins to a specific worker. The reserved workers are held by the
-    job's ``:reservation:`` holder child and protected from third parties by the
-    taint below.
-
-    - Directly-reserved jobs (the reservation's parent): the zone constraint.
-      The parent must run in the reserved zone; the scheduler's normal matching
-      then places it on the reserved worker if its own request fits, or on other
-      capacity in that zone otherwise. No taint — the parent may use the claimed
-      workers.
-    - Descendants of reservation jobs (has_reservation minus direct): no
-      constraint — they are *allowed* to use the claimed workers but are not
-      required to, and may run anywhere.
-    - Non-reservation jobs: a NOT_EXISTS constraint blocking claimed workers.
-    """
-    if not has_reservation and not jobs:
-        return jobs
-
-    has_direct_reservation = has_direct_reservation or set()
-    zones_by_job = reservation_zones_by_job or {}
-
-    taint_constraint = Constraint(key=RESERVATION_TAINT_KEY, op=ConstraintOp.NOT_EXISTS)
-
-    modified: dict[JobName, JobRequirements] = {}
-    for job_id, req in jobs.items():
-        if job_id in has_direct_reservation:
-            extra = _reservation_zone_constraints(zones_by_job.get(job_id, frozenset()))
-            modified[job_id] = replace(req, constraints=[*list(req.constraints), *extra])
-        elif job_id in has_reservation:
-            modified[job_id] = req
-        else:
-            modified[job_id] = replace(req, constraints=[*list(req.constraints), taint_constraint])
-    return modified
-
-
-def _find_reservation_ancestor(reserved_jobs: AbstractSet[JobName], job_id: JobName) -> JobName | None:
-    """Walk up the job hierarchy to find the nearest ancestor with a reservation.
-
-    Pure Python walk against the pre-fetched ``reserved_jobs`` set. The old
-    SQL-per-call form opened a fresh ``read_snapshot`` and issued 1-3 round
-    trips per unique pending job, which dominated ``compute_demand_entries``
-    once the SA Core machinery became the per-call floor.
-    """
-    current = job_id.parent
-    while current is not None:
-        if current in reserved_jobs:
-            return current
-        current = current.parent
-    return None
-
-
-def preference_pass(
-    context: SchedulingContext,
-    has_reservation: set[JobName],
-    claims: dict[WorkerId, ReservationClaim],
-) -> list[tuple[JobName, WorkerId]]:
-    """Try to assign reservation-job tasks to their claimed workers first.
-
-    Iterates reservation-job tasks and, for each, checks the (small) set of
-    workers claimed for that job. If a claimed worker has capacity, the task
-    is assigned immediately — deducting resources and marking the worker as
-    scheduled in the shared context so the subsequent find_assignments pass
-    sees the updated state.
-
-    Coscheduled jobs are skipped because they require atomic all-or-nothing
-    assignment across a worker group.
-
-    Returns the list of (task_id, worker_id) assignments made.
-    """
-    if not has_reservation or not claims:
-        return []
-
-    # Reverse index: job_wire -> list of claimed worker IDs
-    claimed_by_job: dict[str, list[WorkerId]] = defaultdict(list)
-    for wid, claim in claims.items():
-        claimed_by_job[claim.job_id].append(wid)
-
-    assignments: list[tuple[JobName, WorkerId]] = []
-    preference_scheduled: set[JobName] = set()
-
-    for task_id in context.pending_tasks:
-        job_id = task_id.parent
-        if job_id is None or job_id not in has_reservation:
-            continue
-
-        req = context.jobs.get(job_id)
-        if req is None or req.is_coscheduled:
-            continue
-
-        # Enforce the task's hard placement constraints against the claimed
-        # worker, exactly as the normal scheduler does (compute_candidates).
-        # ``can_fit`` checks resource counts only — not device type/variant,
-        # region, or zone — so without this gate a reservation task could be
-        # placed on a claimed worker that violates its own constraints and then
-        # be stripped from ``pending_tasks`` before find_assignments can correct
-        # it. ``split_hard_soft`` keeps soft constraints as preferences, not
-        # filters. For direct-reservation jobs the injected EQ taint is itself a
-        # hard constraint and is satisfied by the claimed worker's taint
-        # attribute, so this does not reject a worker for its own claim.
-        hard_constraints, _ = split_hard_soft(list(req.constraints))
-
-        job_wire = job_id.to_wire()
-        # Holder jobs are children of the reservation job — look up claims
-        # under the parent's wire ID.
-        claim_key = job_wire
-        if RESERVATION_HOLDER_JOB_NAME in job_wire:
-            parent = job_id.parent
-            if parent is not None:
-                claim_key = parent.to_wire()
-        for wid in claimed_by_job.get(claim_key, ()):
-            if context.assignment_counts.get(wid, 0) >= _MAX_RESERVATION_PLACEMENTS_PER_WORKER_PER_CYCLE:
-                continue
-            capacity = context.capacities.get(wid)
-            if capacity is None:
-                continue
-            if not capacity.matches_constraints(hard_constraints):
-                continue
-            if capacity.can_fit(req) is not None:
-                continue
-            capacity.deduct(req)
-            context.assignment_counts[wid] = context.assignment_counts.get(wid, 0) + 1
-            assignments.append((task_id, wid))
-            preference_scheduled.add(task_id)
-            break
-
-    # Remove preference-assigned tasks from pending so find_assignments skips them.
-    if preference_scheduled:
-        context.pending_tasks = [t for t in context.pending_tasks if t not in preference_scheduled]
-
-    return assignments
-
-
 def build_scheduling_context(
     snap: Tx,
     health: WorkerHealthTracker,
     worker_attrs: WorkerAttrsSource,
     defaults: UserBudgetDefaults,
-    claims: dict[WorkerId, ReservationClaim],
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
 ) -> SchedulingContext:
     """Build a ``SchedulingContext`` from the caller's read snapshot ``snap``.
 
-    All scheduling-tick DB reads live here. The returned context carries
-    un-tainted workers; reservation taints are applied during the assignment
-    pass only (in ``run_scheduling_decision``). Every read shares the caller's
+    All scheduling-tick DB reads live here. Every read shares the caller's
     snapshot, so the control tick issues a single DB read for the whole tick.
     """
     with slow_log(logger, "scheduling tick context", threshold_ms=50):
@@ -1004,15 +713,11 @@ def build_scheduling_context(
         user_spend = compute_user_spend(snap)
         user_budget_limits = reads.get_all_user_budget_limits(snap)
         requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
-        reserved_jobs = reads.reserved_job_ids(snap)
-        reserved_pending_ids = {t.job_id for t in pending if t.has_reservation}
-        reservation_entry_counts = reads.reservation_entry_counts(snap, reserved_pending_ids)
         building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-        running = _running_tasks_with_band_and_value(snap, set(claims.keys()))
+        running = _running_tasks_with_band_and_value(snap)
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
-    reservation_zones = reservation_zones_from_claims(claims, snapshots)
     return SchedulingContext(
         workers=snapshots,
         building_counts=building_counts,
@@ -1024,22 +729,18 @@ def build_scheduling_context(
         user_spend=user_spend,
         user_budget_limits=user_budget_limits,
         requested_bands=requested_bands,
-        reserved_job_ids=frozenset(reserved_jobs),
-        reservation_entry_counts=reservation_entry_counts,
         user_budget_defaults=defaults,
         running_for_preemption=running,
-        reservation_zones_by_job=reservation_zones,
     )
 
 
 def apply_scheduling_gates(
     ctx: SchedulingContext,
-    claims: dict[WorkerId, ReservationClaim],
     *,
     max_tasks_per_job_per_cycle: int,
     trace: bool = False,
 ) -> GatedCandidates:
-    """Filter ``ctx.pending_task_rows`` by deadline, reservation, and per-job cap.
+    """Filter ``ctx.pending_task_rows`` by deadline and per-job cap.
 
     Expired tasks are returned in ``GatedCandidates.expired_tasks`` for the
     caller to mark UNSCHEDULABLE; this function does no DB writes.
@@ -1047,13 +748,8 @@ def apply_scheduling_gates(
     schedulable_task_ids: list[JobName] = []
     expired_tasks: list[PendingTask] = []
     jobs: dict[JobName, JobRequirements] = {}
-    has_reservation: set[JobName] = set()
-    has_direct_reservation: set[JobName] = set()
     tasks_per_job: dict[JobName, int] = defaultdict(int)
     filter_counts: dict[str, int] = defaultdict(int)
-
-    # Index claims by wire id so reservation-satisfaction is O(1) per check.
-    claims_by_job = _claims_by_job(claims)
 
     for task in ctx.pending_task_rows:
         if not task_row_can_be_scheduled(task):
@@ -1063,11 +759,6 @@ def apply_scheduling_gates(
         if deadline is not None and deadline.expired():
             filter_counts["deadline_expired"] += 1
             expired_tasks.append(task)
-            continue
-        # Gate: skip real tasks whose job has an unsatisfied reservation.
-        # Holder tasks are always schedulable (they ARE the reservation).
-        if reservation_unsatisfied(task, claims_by_job, ctx.reservation_entry_counts):
-            filter_counts["reservation_unsatisfied"] += 1
             continue
         if (
             max_tasks_per_job_per_cycle > 0
@@ -1080,11 +771,6 @@ def apply_scheduling_gates(
         schedulable_task_ids.append(task.task_id)
         if task.job_id not in jobs:
             jobs[task.job_id] = job_requirements_from_job(task)
-            if task.has_reservation:
-                has_reservation.add(task.job_id)
-                has_direct_reservation.add(task.job_id)
-            elif _find_reservation_ancestor(ctx.reserved_job_ids, task.job_id) is not None:
-                has_reservation.add(task.job_id)
     if trace:
         logger.info(
             "[TRACE] Phase 2 gates: %d/%d tasks passed, %d distinct jobs; filtered: %s",
@@ -1096,8 +782,6 @@ def apply_scheduling_gates(
     return GatedCandidates(
         schedulable_task_ids=schedulable_task_ids,
         jobs=jobs,
-        has_reservation=has_reservation,
-        has_direct_reservation=has_direct_reservation,
         expired_tasks=expired_tasks,
     )
 

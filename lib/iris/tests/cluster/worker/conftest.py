@@ -195,8 +195,7 @@ def create_run_task_request(
             "TEST_VAR": "value",
             "TASK_VAR": "task_value",
         },
-        extras=["dev"],
-        dockerfile="FROM python:3.11-slim\nRUN echo test",
+        setup_scripts=["uv sync\n"],
     )
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3)

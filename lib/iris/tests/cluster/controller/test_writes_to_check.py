@@ -3,8 +3,6 @@
 
 """Tests for the Stage 12 ``@writes_to`` owned-table startup check."""
 
-from __future__ import annotations
-
 import shutil
 import tempfile
 from collections.abc import Iterator

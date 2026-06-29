@@ -19,8 +19,6 @@ Interceptors are not adapted here — each interceptor that participates in
 an ASGI chain implements ``async intercept_unary`` directly.
 """
 
-from __future__ import annotations
-
 import asyncio
 import functools
 import inspect

@@ -50,9 +50,12 @@ message Controller {
     // Worker allocates ports and injects FLUSTER_PORT_<NAME> env vars into the container
     repeated string ports = 9;
 
-    // Job-level failure tolerance
-    // A job fails when this many tasks have exhausted their retries (default 0 = fail on first task failure)
-    // Preemptions do not count toward this limit
+    // Job-level failure tolerance.
+    // A job fails when the cumulative number of failed task attempts across the
+    // whole job exceeds this (default 0 = fail on the first failure). The count
+    // accumulates across retries, so a job cannot crash-loop indefinitely. For a
+    // coscheduled gang one crashed round charges one failure. Preemptions are
+    // retried by Iris and never count toward this limit.
     int32 max_task_failures = 11;
 
     // Per-task retry limits
@@ -85,8 +88,11 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // Resource reservation. When set, the autoscaler pre-provisions capacity
-    // and the reserving job is held pending until the reservation is satisfied.
+    // DEPRECATED, back-compat only. Reservations were replaced by the hard
+    // availability:<variant> constraint. Current clients leave this empty; when a
+    // pre-availability client sets it, the server converts each entry into a hard
+    // availability constraint at ingestion and discards the field. Scheduled for
+    // removal once stragglers have upgraded — do not add new uses.
     iris.job.ReservationConfig reservation = 30;
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;
@@ -113,6 +119,11 @@ message Controller {
     // Nested submissions (is_root == false) are exempt. Empty string is
     // interpreted as FEATURE_INTRODUCTION_DATE — see service.py.
     string client_revision_date = 36;
+
+    // Requested container security profile. UNSPECIFIED => DEFAULT. Elevated
+    // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
+    // when auth is enabled; see service.LaunchJob.
+    iris.job.ContainerProfile container_profile = 37;
   }
 
   message LaunchJobResponse {
@@ -224,6 +235,35 @@ message Controller {
     repeated iris.job.TaskStatus tasks = 1;
   }
 
+  // --- Task administrative overrides ---
+  // KickTasks forces task attempts into a terminal state out-of-band, for
+  // emergencies such as a scheduling bug wedging a task on a machine. The
+  // controller queues each kick and applies it through the normal reconcile
+  // finalization on the next control tick, so it shares one write transaction
+  // with the scheduler instead of racing it.
+  message KickTasksRequest {
+    // Task, task-attempt, or job identifiers. A task id (/user/job/0) or
+    // task-attempt id (/user/job/0:3) targets a single task; a job id
+    // (/user/job) expands to that job's active tasks. The optional ":attempt"
+    // suffix is honored only when it matches the task's current attempt.
+    repeated string targets = 1;
+    // Terminal state to force. Only TASK_STATE_PREEMPTED (retried if budget
+    // remains) and TASK_STATE_FAILED (no retry) are accepted.
+    iris.job.TaskState desired_state = 2;
+    string reason = 3;
+  }
+
+  message KickResult {
+    string target = 1;   // The requested target, verbatim.
+    string task_id = 2;  // Resolved task id, when the target was understood.
+    bool queued = 3;     // True if the kick was accepted and queued.
+    string detail = 4;   // Rejection reason when queued is false.
+  }
+
+  message KickTasksResponse {
+    repeated KickResult results = 1;
+  }
+
   // --- Exec in Container (proxied to worker) ---
   message ExecInContainerRequest {
     string task_id = 1;             // Task whose container to exec into
@@ -323,10 +363,18 @@ message Controller {
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
     string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+    // Lease length the registrant wants; it renews within this. Unset selects
+    // the server default. The server clamps it to its own [min, max] bounds and
+    // returns the granted value in RegisterEndpointResponse.lease_duration.
+    iris.time.Duration lease_duration = 7;
   }
 
   message RegisterEndpointResponse {
     string endpoint_id = 1;
+    // Lease granted for this endpoint. The registrant re-registers (renews)
+    // before this elapses; an unrenewed endpoint expires and is GC'd. Unset
+    // on the legacy ControllerService surface, which does not lease-renew.
+    iris.time.Duration lease_duration = 2;
   }
 
   message UnregisterEndpointRequest {
@@ -336,6 +384,7 @@ message Controller {
   message ListEndpointsRequest {
     string prefix = 1;               // Prefix to match: "abc123/" or "abc123/my-actor"
     bool exact = 2;                  // If true, match prefix as an exact name instead
+    repeated string task_ids = 3;    // Wire-format task IDs; when set, only endpoints registered by these tasks are returned (ANDed with prefix/exact).
   }
 
   message ListEndpointsResponse {
@@ -536,6 +585,8 @@ service ControllerService {
   // Task operations
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
+  // Force task attempts into a terminal state out-of-band (emergency override).
+  rpc KickTasks(Controller.KickTasksRequest) returns (Controller.KickTasksResponse);
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);
@@ -587,4 +638,21 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
+}
+
+// Service-discovery endpoint registry, leased.
+//
+// Registration grants a time-bounded lease; the registrant renews by
+// re-registering with the same endpoint_id before the lease elapses, and an
+// unrenewed endpoint expires (stops being served and is GC'd) independent of
+// the owning task's row lifetime. RegisterEndpoint returns the granted
+// lease_duration so the client can pace its renewals off the server's policy.
+//
+// The ControllerService.{RegisterEndpoint,UnregisterEndpoint,ListEndpoints}
+// RPCs forward here so clients that call the old surface keep working; clients
+// that want to renew call this service directly to learn their lease.
+service EndpointService {
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 }

@@ -3,8 +3,6 @@
 
 """Ingest XPlane protobuf profiles directly and through xprof tables."""
 
-from __future__ import annotations
-
 import json
 import logging
 import re
@@ -18,7 +16,6 @@ from typing import Any, cast
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from marin.profiling.schema import (
-    BreakdownPart,
     CommunicationOp,
     DurationStats,
     HotOp,
@@ -29,6 +26,7 @@ from marin.profiling.schema import (
     TimeBreakdown,
     TraceOverview,
     TraceProvenance,
+    breakdown_part,
 )
 from marin.profiling.semantics import canonical_op_name
 from marin.profiling.trace_summary import (
@@ -764,17 +762,12 @@ def _make_time_breakdown(duration_basis: str, totals: dict[str, float], *, total
     return TimeBreakdown(
         duration_basis=duration_basis,
         total_duration=total,
-        compute=_breakdown_part(totals["compute"], total),
-        communication=_breakdown_part(totals["communication"], total),
-        host=_breakdown_part(totals["host"], total),
-        stall=_breakdown_part(totals["stall"], total),
-        other=_breakdown_part(totals["other"], total),
+        compute=breakdown_part(totals["compute"], total),
+        communication=breakdown_part(totals["communication"], total),
+        host=breakdown_part(totals["host"], total),
+        stall=breakdown_part(totals["stall"], total),
+        other=breakdown_part(totals["other"], total),
     )
-
-
-def _breakdown_part(value: float, total: float):
-    share = (value / total) if total > 0 else 0.0
-    return BreakdownPart(total_duration=value, share_of_total=share)
 
 
 def _hot_ops_from_kernel_rows(rows: list[dict[str, Any]], *, limit: int) -> list[HotOp]:

@@ -4,7 +4,7 @@
 import logging
 
 from marin.execution.executor import infer_tpu_variant_regions_from_iris
-from rigging.filesystem import REGION_TO_DATA_BUCKET, marin_region
+from rigging.filesystem import data_config, marin_region
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
 
 def marin_prefix_for_region(region: str) -> str:
     """Return the canonical Marin bucket prefix for a region."""
-    bucket = REGION_TO_DATA_BUCKET.get(region.lower())
+    bucket = data_config().region_buckets.get(region.lower())
     if bucket is None:
         raise ValueError(f"No Marin data bucket configured for region {region!r}.")
     return f"gs://{bucket}"

@@ -6,8 +6,6 @@
 Modeled on Vortex expressions: https://docs.vortex.dev/api/python/expr
 """
 
-from __future__ import annotations
-
 import operator
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -41,56 +39,56 @@ class Expr(ABC):
         return hash(repr(self))
 
     # Comparison operators
-    def __eq__(self, other: object) -> CompareExpr:  # type: ignore[override]
+    def __eq__(self, other: object) -> "CompareExpr":  # type: ignore[override]
         return CompareExpr(self, _to_expr(other), "eq")
 
-    def __ne__(self, other: object) -> CompareExpr:  # type: ignore[override]
+    def __ne__(self, other: object) -> "CompareExpr":  # type: ignore[override]
         return CompareExpr(self, _to_expr(other), "ne")
 
-    def __lt__(self, other: object) -> CompareExpr:
+    def __lt__(self, other: object) -> "CompareExpr":
         return CompareExpr(self, _to_expr(other), "lt")
 
-    def __le__(self, other: object) -> CompareExpr:
+    def __le__(self, other: object) -> "CompareExpr":
         return CompareExpr(self, _to_expr(other), "le")
 
-    def __gt__(self, other: object) -> CompareExpr:
+    def __gt__(self, other: object) -> "CompareExpr":
         return CompareExpr(self, _to_expr(other), "gt")
 
-    def __ge__(self, other: object) -> CompareExpr:
+    def __ge__(self, other: object) -> "CompareExpr":
         return CompareExpr(self, _to_expr(other), "ge")
 
     # Arithmetic operators
-    def __add__(self, other: object) -> ArithmeticExpr:
+    def __add__(self, other: object) -> "ArithmeticExpr":
         return ArithmeticExpr(self, _to_expr(other), "add")
 
-    def __sub__(self, other: object) -> ArithmeticExpr:
+    def __sub__(self, other: object) -> "ArithmeticExpr":
         return ArithmeticExpr(self, _to_expr(other), "sub")
 
-    def __mul__(self, other: object) -> ArithmeticExpr:
+    def __mul__(self, other: object) -> "ArithmeticExpr":
         return ArithmeticExpr(self, _to_expr(other), "mul")
 
-    def __truediv__(self, other: object) -> ArithmeticExpr:
+    def __truediv__(self, other: object) -> "ArithmeticExpr":
         return ArithmeticExpr(self, _to_expr(other), "truediv")
 
     # Logical operators (use & and | since and/or can't be overloaded)
-    def __and__(self, other: object) -> LogicalExpr:
+    def __and__(self, other: object) -> "LogicalExpr":
         return LogicalExpr(self, _to_expr(other), "and")
 
-    def __or__(self, other: object) -> LogicalExpr:
+    def __or__(self, other: object) -> "LogicalExpr":
         return LogicalExpr(self, _to_expr(other), "or")
 
-    def __invert__(self) -> NotExpr:
+    def __invert__(self) -> "NotExpr":
         return NotExpr(self)
 
     # Field access for nested structs
-    def __getitem__(self, key: str) -> FieldAccessExpr:
+    def __getitem__(self, key: str) -> "FieldAccessExpr":
         return FieldAccessExpr(self, key)
 
     # Null checks
-    def is_null(self) -> IsNullExpr:
+    def is_null(self) -> "IsNullExpr":
         return IsNullExpr(self)
 
-    def is_not_null(self) -> NotExpr:
+    def is_not_null(self) -> "NotExpr":
         return NotExpr(IsNullExpr(self))
 
 

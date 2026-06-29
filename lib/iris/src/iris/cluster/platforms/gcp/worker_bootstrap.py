@@ -1,0 +1,325 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bootstrap script generation for worker VMs.
+
+Centralizes the worker bootstrap script template and generation logic. Worker
+bootstrap handles Docker setup and container startup. TPU metadata discovery
+is performed by the worker environment probe at runtime. The shared registry
+helpers (zone_to_multi_region, rewrite_ghcr_to_ar_remote, render_template)
+live here so controller bootstrap can reuse them.
+"""
+
+import json
+import re
+
+from iris.cluster.config import WorkerConfig
+
+# GCP multi-region locations used for AR remote repos that proxy GHCR.
+# Each AR remote repo is a pull-through cache for ghcr.io, deployed to a
+# multi-region location. GCP VMs pull from their continent's cache; egress
+# within a multi-region is free.
+_ZONE_PREFIX_TO_MULTI_REGION = {
+    "us": "us",
+    "europe": "europe",
+}
+
+_UNSUPPORTED_ZONE_PREFIXES = {"asia", "me"}
+
+GHCR_MIRROR_REPO = "ghcr-mirror"
+
+
+def zone_to_multi_region(zone: str) -> str | None:
+    """Map a GCP zone to its multi-region location (e.g. 'us-central1-a' → 'us').
+
+    Returns None for unknown prefixes. Raises ValueError for zones in regions
+    where AR remote repos are not yet provisioned (asia, me).
+    """
+    prefix = zone.split("-", 1)[0]
+    if prefix in _UNSUPPORTED_ZONE_PREFIXES:
+        raise ValueError(
+            f"Zone {zone!r} is in region prefix {prefix!r} which has no AR remote repo provisioned. "
+            f"Supported prefixes: {sorted(_ZONE_PREFIX_TO_MULTI_REGION)}"
+        )
+    return _ZONE_PREFIX_TO_MULTI_REGION.get(prefix)
+
+
+def rewrite_ghcr_to_ar_remote(
+    image_tag: str,
+    multi_region: str,
+    project: str,
+    mirror_repo: str = GHCR_MIRROR_REPO,
+) -> str:
+    """Rewrite a ghcr.io image tag to pull from an AR remote repo.
+
+    ghcr.io/marin-community/iris-worker:v1
+    → us-docker.pkg.dev/hai-gcp-models/ghcr-mirror/marin-community/iris-worker:v1
+
+    Non-GHCR images pass through unchanged.
+    """
+    if not image_tag.startswith("ghcr.io/"):
+        return image_tag
+    path = image_tag.removeprefix("ghcr.io/")
+    return f"{multi_region}-docker.pkg.dev/{project}/{mirror_repo}/{path}"
+
+
+def render_template(template: str, **variables: str | int) -> str:
+    """Render a template string with {{ variable }} placeholders.
+
+    Uses ``{{ variable }}`` syntax (double braces with exactly one space) to
+    avoid conflicts with shell ``${var}`` and Docker ``{{.Field}}`` syntax.
+
+    Args:
+        template: Template string with ``{{ variable }}`` placeholders.
+        **variables: Variable values to substitute.
+
+    Returns:
+        Rendered template string.
+
+    Raises:
+        ValueError: If a required variable is missing from the template or if
+            variables are passed that do not appear in the template.
+    """
+    used_vars: set[str] = set()
+
+    def replace_var(match: re.Match) -> str:
+        var_name = match.group(1)
+        if var_name not in variables:
+            raise ValueError(f"Template variable '{var_name}' not provided")
+        used_vars.add(var_name)
+        value = variables[var_name]
+        return str(value)
+
+    # Match {{ variable_name }} — exactly one space inside each brace pair.
+    result = re.sub(r"\{\{ (\w+) \}\}", replace_var, template)
+
+    unused = set(variables) - used_vars
+    if unused:
+        raise ValueError(f"Unused template variables: {', '.join(sorted(unused))}")
+
+    return result
+
+
+# ============================================================================
+# Worker Bootstrap Script
+# ============================================================================
+
+
+# Bootstrap script template for worker VMs.
+WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
+set -e
+
+echo "[iris-init] Starting Iris worker bootstrap"
+
+echo "[iris-init] Phase: tpu_ready_gate"
+
+# Gate the whole bootstrap -- and thus controller registration -- on the TPU
+# node reaching READY, before any Docker install/pull work. A host can boot and
+# run this script while sibling hosts in the same slice are still provisioning;
+# registering early would let the controller schedule a task before the slice is
+# up. The node's aggregate state flips to READY only once every host is healthy,
+# so it is the cleanest in-VM signal that the whole slice is Active.
+#
+# The gate applies only to TPU slices (accelerator-type metadata present); CPU
+# and standalone GCE VMs have no such attribute and skip it. It is fail-open: if
+# gcloud is unavailable, the describe never succeeds, or the node never reaches
+# READY within the window, bootstrap proceeds anyway and the autoscaler's slice
+# health probe owns give-up -- exactly as it does for the /health wait below.
+IRIS_META="http://metadata.google.internal/computeMetadata/v1/instance"
+IRIS_ACCEL_TYPE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/attributes/accelerator-type" || true)
+if [ -n "$IRIS_ACCEL_TYPE" ]; then
+    export PATH="$PATH:/snap/bin:/opt/google-cloud-sdk/bin"
+    IRIS_TPU_NODE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/attributes/instance-id" || true)
+    IRIS_TPU_ZONE=$(curl -sf -H "Metadata-Flavor: Google" "$IRIS_META/zone" | sed 's#.*/##')
+    if command -v gcloud &> /dev/null && [ -n "$IRIS_TPU_NODE" ]; then
+        echo "[iris-init] Gating bootstrap on TPU node $IRIS_TPU_NODE (zone=$IRIS_TPU_ZONE) reaching READY"
+        # Reserved/queued multi-host slices can take a long time to fully
+        # provision; wait up to an hour before failing open. SECONDS is a bash
+        # builtin reset to 0 here, so the deadline accounts for gcloud latency.
+        SECONDS=0
+        IRIS_TPU_GATE_TIMEOUT=3600
+        IRIS_TPU_GATE_INTERVAL=15
+        IRIS_TPU_GATE_ATTEMPT=0
+        while [ "$SECONDS" -lt "$IRIS_TPU_GATE_TIMEOUT" ]; do
+            IRIS_TPU_GATE_ATTEMPT=$((IRIS_TPU_GATE_ATTEMPT + 1))
+            IRIS_TPU_STATE=$(gcloud compute tpus tpu-vm describe "$IRIS_TPU_NODE" \
+                --zone="$IRIS_TPU_ZONE" --format='value(state)' 2>/dev/null || true)
+            if [ "$IRIS_TPU_STATE" = "READY" ]; then
+                echo "[iris-init] TPU node READY after ${SECONDS}s (${IRIS_TPU_GATE_ATTEMPT} check(s)); proceeding"
+                break
+            fi
+            echo "[iris-init] TPU node state=${IRIS_TPU_STATE:-<describe-failed>}; waited ${SECONDS}s"
+            sleep "$IRIS_TPU_GATE_INTERVAL"
+        done
+        if [ "$IRIS_TPU_STATE" != "READY" ]; then
+            echo "[iris-init] WARNING: TPU node not READY after ${IRIS_TPU_GATE_TIMEOUT}s; proceeding (fail-open)"
+        fi
+    else
+        echo "[iris-init] gcloud or node name unavailable; skipping TPU ready gate"
+    fi
+fi
+
+echo "[iris-init] Phase: prerequisites"
+
+# Install Docker if missing
+if ! command -v docker &> /dev/null; then
+    echo "[iris-init] Installing Docker..."
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo systemctl enable docker
+    sudo systemctl start docker
+    echo "[iris-init] Docker installed"
+else
+    echo "[iris-init] Docker already installed"
+fi
+
+# Ensure docker daemon is running
+sudo systemctl start docker || true
+
+# gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
+# asynchronously during boot. Wait for seeding to finish here so `gcloud`
+# is on PATH for Artifact Registry auth below. Placed right after the
+# Docker daemon start so seeding overlaps with it and usually returns
+# immediately.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-init] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
+
+# Tune network stack for high-connection workloads (#3066).
+# Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
+# and raises listen backlog for actor servers handling 1000s of workers.
+sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+sudo sysctl -w net.ipv4.tcp_tw_reuse=1
+sudo sysctl -w net.core.somaxconn=4096
+
+# Create cache directory
+sudo mkdir -p {{ cache_dir }}
+
+echo "[iris-init] Phase: docker_pull"
+echo "[iris-init] Pulling image: {{ docker_image }}"
+
+# Resolve the Artifact Registry host (empty for non-AR images). Auth is only
+# configured when pulling from AR; root's docker config is used by `sudo docker`.
+AR_HOST=""
+if echo "{{ docker_image }}" | grep -q -- "-docker.pkg.dev/"; then
+    AR_HOST=$(echo "{{ docker_image }}" | cut -d/ -f1)
+fi
+
+# Retry AR auth + pull. gcloud ships as a snap on tpu-ubuntu2204-base and can be
+# slow to become usable at first boot even after `snap wait system seed.loaded`:
+# /snap/bin/gcloud may not be linked yet, or docker-credential-gcloud may fail
+# mid-pull ("the required argument <snap> was not provided"). Either way docker
+# falls back to an unauthenticated request and Artifact Registry denies it.
+# Re-running configure-docker + pull on each attempt absorbs the race. This MUST
+# retry: the pull runs before the self-healing --restart=unless-stopped worker
+# container is created, so a single transient failure here strands the worker
+# permanently -- its /health never comes up and the slice health probe
+# eventually reaps the whole slice, healthy siblings included.
+IRIS_PULL_OK=0
+for attempt in $(seq 1 20); do
+    if [ -n "$AR_HOST" ]; then
+        echo "[iris-init] Configuring docker auth for $AR_HOST (attempt $attempt/20)"
+        if command -v gcloud &> /dev/null; then
+            sudo gcloud auth configure-docker "$AR_HOST" -q || true
+        else
+            echo "[iris-init] gcloud not yet on PATH; waiting for snap to settle"
+        fi
+    fi
+    if sudo docker pull {{ docker_image }}; then
+        IRIS_PULL_OK=1
+        break
+    fi
+    echo "[iris-init] docker pull failed (attempt $attempt/20); retrying in 15s"
+    sleep 15
+done
+
+if [ "$IRIS_PULL_OK" -ne 1 ]; then
+    echo "[iris-init] ERROR: docker pull failed after 20 attempts; giving up"
+    exit 1
+fi
+
+echo "[iris-init] Phase: config_setup"
+sudo mkdir -p /etc/iris
+cat > /tmp/iris_worker_config.json << 'IRIS_WORKER_CONFIG_EOF'
+{{ worker_config_json }}
+IRIS_WORKER_CONFIG_EOF
+sudo mv /tmp/iris_worker_config.json /etc/iris/worker_config.json
+
+echo "[iris-init] Phase: worker_start"
+
+# Force-remove existing worker (handles restart policy race).
+# Task containers are NOT removed here — the worker process handles
+# adoption-or-cleanup in start() so it can adopt running containers
+# from a previous worker during rolling restarts.
+sudo docker rm -f iris-worker 2>/dev/null || true
+
+# Start worker container with restart policy from the start so transient
+# failures (image pull races, network hiccups, etc.) self-heal. Give-up is
+# owned by the autoscaler's slice health probe, not by docker.
+sudo docker run -d --name iris-worker \\
+    --restart=unless-stopped \\
+    --network=host \\
+    --ulimit core=0:0 \\
+    -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v /var/run/docker.sock:/var/run/docker.sock \\
+    -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
+    {{ docker_image }} \\
+    .venv/bin/python -m iris.cluster.worker.main serve \\
+        --worker-config /etc/iris/worker_config.json
+
+echo "[iris-init] Worker container started"
+echo "[iris-init] Phase: registration"
+echo "[iris-init] Waiting for worker to register with controller..."
+
+# Poll the health endpoint to report bootstrap status. Docker handles
+# restarts; the autoscaler health probe handles give-up if /health never
+# comes up.
+for i in $(seq 1 60); do
+    if curl -sf http://localhost:{{ worker_port }}/health > /dev/null 2>&1; then
+        echo "[iris-init] Worker is healthy"
+        echo "[iris-init] Bootstrap complete"
+        exit 0
+    fi
+    sleep 2
+done
+
+echo "[iris-init] WARNING: Worker not healthy after 120s. Docker will keep restarting the"
+echo "[iris-init] container (--restart=unless-stopped); the autoscaler health probe will reap"
+echo "[iris-init] this slice if /health stays down for ~100s of probes."
+echo "[iris-init] Container status:"
+sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
+echo "[iris-init] Container logs:"
+sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
+exit 1
+"""
+
+
+def build_worker_bootstrap_script(
+    worker_config: WorkerConfig,
+) -> str:
+    """Build the bootstrap script for a worker VM.
+
+    Serializes the WorkerConfig as JSON and embeds it in the bootstrap script.
+    The worker reads the JSON at startup via --worker-config.
+    """
+    if not worker_config.controller_address:
+        raise ValueError("worker_config.controller_address is required for worker bootstrap")
+    if not worker_config.docker_image:
+        raise ValueError("worker_config.docker_image is required for worker bootstrap")
+    if worker_config.port <= 0:
+        raise ValueError("worker_config.port must be > 0 for worker bootstrap")
+    if not worker_config.cache_dir:
+        raise ValueError("worker_config.cache_dir is required for worker bootstrap")
+
+    worker_config_json = json.dumps(
+        worker_config.model_dump(mode="json", exclude_none=True),
+        indent=2,
+    )
+
+    return render_template(
+        WORKER_BOOTSTRAP_SCRIPT,
+        cache_dir=worker_config.cache_dir,
+        docker_image=worker_config.docker_image,
+        worker_port=worker_config.port,
+        worker_config_json=worker_config_json,
+    )

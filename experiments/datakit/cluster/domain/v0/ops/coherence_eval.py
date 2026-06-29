@@ -20,8 +20,6 @@ Anthropic API key is read from ``ANTHROPIC_API_KEY`` (env var). The repo's
 it manually -- never echo or commit it.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

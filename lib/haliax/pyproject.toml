@@ -11,7 +11,7 @@ authors = [
 ]
 description = "Named Tensors for Legible Deep Learning in JAX"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: Apache Software License",
@@ -66,7 +66,7 @@ haliax = ["src/haliax/*"]
 
 [tool.black]
 line-length = 119
-target-version = ["py311"]
+target-version = ["py312"]
 preview = true
 
 [tool.isort]

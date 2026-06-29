@@ -22,6 +22,7 @@ const ALL_TABS: (Tab & { requires?: string })[] = [
   { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
   { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
+  { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
 ]
@@ -36,6 +37,7 @@ const PATH_TO_TAB: Record<string, string> = {
   '/fleet': 'fleet',
   '/cluster': 'cluster',
   '/endpoints': 'endpoints',
+  '/logs': 'logs',
   '/account': 'account',
   '/status': 'status',
 }

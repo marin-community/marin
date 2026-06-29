@@ -50,14 +50,14 @@ class JobStateBasis:
     started_at: Timestamp | None
     max_task_failures: int
     task_state_counts: dict[int, int]  # task state → count
+    total_failures: int  # cumulative failed attempts across the job (sum of task failure_count)
     first_task_error: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class JobDescendants:
     job_id: JobName
-    descendants_full: tuple[JobName, ...]  # exclude_holders=False
-    descendants_no_holders: tuple[JobName, ...]  # exclude_holders=True
+    descendants: tuple[JobName, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +65,7 @@ class TaskHistogramRow:
     task_id: JobName
     task_index: int
     state: int
+    failure_count: int
     error: str | None
 
 

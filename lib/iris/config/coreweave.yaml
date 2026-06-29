@@ -61,8 +61,6 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-    startup_grace_period:
-      milliseconds: 2400000    # 40 min — covers autoscaler node provisioning + Pod startup
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
   # inject_env captures named environment variables from the operator's shell at

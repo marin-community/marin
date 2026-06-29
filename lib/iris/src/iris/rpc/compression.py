@@ -10,8 +10,6 @@ zstd is listed first as the preferred response encoding; gzip is kept for
 interop with older peers.
 """
 
-from __future__ import annotations
-
 from connectrpc.compression.gzip import GzipCompression
 from connectrpc.compression.zstd import ZstdCompression
 

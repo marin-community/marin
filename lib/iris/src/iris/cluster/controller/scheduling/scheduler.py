@@ -348,8 +348,8 @@ class SchedulingContext:
     Construction is direct: callers supply ``workers``, ``building_counts``,
     ``max_building_tasks``, and the raw-read fields; ``__post_init__`` derives
     ``capacities``, ``index``, and ``_str_to_wid`` once. To rebuild the index
-    after taint injection mid-tick, use :meth:`evolve_with_workers` which reuses
-    the raw-read fields and only redoes the per-worker derivation.
+    mid-tick, use :meth:`evolve_with_workers` which reuses the raw-read fields
+    and only redoes the per-worker derivation.
 
     Posting lists are read-only after construction; capacity deductions don't
     touch them. Workers are tracked via ``assignment_counts`` to bound tasks
@@ -366,14 +366,8 @@ class SchedulingContext:
     user_spend: dict[str, int]
     user_budget_limits: dict[str, int]
     requested_bands: dict[JobName, int]
-    reserved_job_ids: frozenset[JobName]
-    reservation_entry_counts: dict[JobName, int]
     user_budget_defaults: UserBudgetDefaults
     running_for_preemption: list[RunningTaskInfo] = field(default_factory=list)
-    # Zones in which each directly-reserved job's workers were claimed, keyed by
-    # job. A reservation pins its parent (and routes its demand) to these zones;
-    # the parent never pins to a specific worker. Empty for a job until claimed.
-    reservation_zones_by_job: dict[JobName, frozenset[str]] = field(default_factory=dict)
 
     # Derived from ``workers`` in __post_init__.
     capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
@@ -414,13 +408,12 @@ class SchedulingContext:
         building_counts: dict[WorkerId, int],
         max_building_tasks: int,
     ) -> "SchedulingContext":
-        """Rebuild capacities/index for taint-injected workers.
+        """Rebuild capacities/index for an updated worker list.
 
         Reuses all raw-read fields (``pending_task_rows``, ``user_spend``, etc.)
-        verbatim. The caller supplies updated ``workers``/``jobs`` (e.g. after
-        reservation taint injection) and fresh ``building_counts``. The
-        returned context starts a fresh placement pass with empty
-        ``assignment_counts`` and an empty soft-score cache.
+        verbatim. The caller supplies updated ``workers``/``jobs`` and fresh
+        ``building_counts``. The returned context starts a fresh placement pass
+        with empty ``assignment_counts`` and an empty soft-score cache.
         """
         return SchedulingContext(
             workers=workers,
@@ -433,11 +426,8 @@ class SchedulingContext:
             user_spend=self.user_spend,
             user_budget_limits=self.user_budget_limits,
             requested_bands=self.requested_bands,
-            reserved_job_ids=self.reserved_job_ids,
-            reservation_entry_counts=self.reservation_entry_counts,
             user_budget_defaults=self.user_budget_defaults,
             running_for_preemption=self.running_for_preemption,
-            reservation_zones_by_job=self.reservation_zones_by_job,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
@@ -542,6 +532,43 @@ def first_fitting_worker(
     return None
 
 
+def ranked_groups_for_req(
+    context: SchedulingContext,
+    req: JobRequirements,
+) -> list[tuple[str, list[WorkerId]]]:
+    """Constraint-matched worker groups for a coscheduled req, ranked by total
+    soft-constraint score (descending) — the order placement tries them in.
+    Returns ``[]`` for a req with no ``coscheduling_group_by``.
+    """
+    group_by = req.coscheduling_group_by
+    if group_by is None:
+        return []
+    hard_constraints, soft_constraints = split_hard_soft(list(req.constraints))
+    matching_worker_ids = context.matching_workers(hard_constraints)
+    groups = context.workers_by_group(group_by, matching_worker_ids)
+    if not soft_constraints:
+        return list(groups.items())
+
+    soft_key_tail = tuple(soft_constraints)
+    cache = context._soft_score_cache
+
+    def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
+        total = 0
+        for wid in group_worker_ids:
+            cap = context.capacities.get(wid)
+            if cap is None:
+                continue
+            key = (wid, soft_key_tail)
+            score = cache.get(key)
+            if score is None:
+                score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+                cache[key] = score
+            total += score
+        return total
+
+    return sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
+
+
 def _format_rejection_summary(
     rejection_counts: dict[RejectionKind, int],
     rejection_samples: dict[RejectionKind, RejectionReason],
@@ -557,6 +584,27 @@ def _format_rejection_summary(
     return "\n".join(reason_lines)
 
 
+# Diagnostic returned when a task fits but has not yet been placed by the
+# scheduling loop — i.e. the failure is transient, not a capacity problem.
+_SCHEDULABLE_NEXT_CYCLE = "Schedulable — waiting for next scheduling cycle"
+
+
+def diagnose_fit(
+    req: JobRequirements,
+    context: SchedulingContext,
+    max_building_tasks_per_worker: int,
+) -> str:
+    """Explain whether a non-coscheduled req fits, and why not if it doesn't.
+
+    Returns ``_SCHEDULABLE_NEXT_CYCLE`` if a fitting worker exists (the task is
+    just awaiting the next cycle); otherwise delegates to :func:`explain_unfittable`.
+    """
+    candidates = compute_candidates(req, context)
+    if first_fitting_worker(candidates, context, req) is not None:
+        return _SCHEDULABLE_NEXT_CYCLE
+    return explain_unfittable(req, context, max_building_tasks_per_worker)
+
+
 def explain_unfittable(
     req: JobRequirements,
     context: SchedulingContext,
@@ -566,8 +614,8 @@ def explain_unfittable(
 
     Diagnostics-only — walks candidates a second time accumulating rejection
     counts and formatting per-dimension messages with totals. Returns
-    "Schedulable — waiting for next scheduling cycle" if the req does fit
-    after all (race against `find_assignments`).
+    ``_SCHEDULABLE_NEXT_CYCLE`` if the req does fit after all (race against
+    `find_assignments`).
     """
     if not context.capacities:
         return "No healthy workers available"
@@ -583,7 +631,7 @@ def explain_unfittable(
             continue
         rejection = context.capacities[worker_id].can_fit(req)
         if rejection is None:
-            return "Schedulable — waiting for next scheduling cycle"
+            return _SCHEDULABLE_NEXT_CYCLE
         rejection_counts[rejection.kind] += 1
         if rejection.kind not in rejection_samples:
             rejection_samples[rejection.kind] = rejection
@@ -762,42 +810,16 @@ class Scheduler:
 
         Returns None if no valid worker group exists with sufficient capacity.
         """
-        group_by = req.coscheduling_group_by
-        if group_by is None:
+        if req.coscheduling_group_by is None:
             return None
 
         if not task_ids:
             return None
 
         num_tasks = len(task_ids)
-        all_constraints = list(req.constraints)
-        hard_constraints, soft_constraints = split_hard_soft(all_constraints)
-
-        # Only hard constraints filter candidates; soft constraints rank groups.
-        matching_worker_ids = context.matching_workers(hard_constraints)
-        groups = context.workers_by_group(group_by, matching_worker_ids)
-
-        # Sort groups so those satisfying more soft constraints are tried first.
-        soft_key_tail = tuple(soft_constraints)
-        cache = context._soft_score_cache
-
-        def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
-            if not soft_constraints:
-                return 0
-            total = 0
-            for wid in group_worker_ids:
-                cap = context.capacities.get(wid)
-                if cap is None:
-                    continue
-                key = (wid, soft_key_tail)
-                score = cache.get(key)
-                if score is None:
-                    score = soft_constraint_score(dict(cap.attributes), soft_constraints)
-                    cache[key] = score
-                total += score
-            return total
-
-        sorted_groups = sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
+        # Constraint-match + group + soft-rank, shared with the preemption fallback
+        # so placement and preemption agree on which group the gang prefers.
+        sorted_groups = ranked_groups_for_req(context, req)
 
         # Find first group with enough workers that have capacity.
         # Note: matching_worker_ids passed attribute constraints (e.g., tpu-name=my-tpu),
@@ -839,7 +861,7 @@ class Scheduler:
         logger.debug(
             "Coscheduled job: no group with %d available workers for group_by=%s",
             num_tasks,
-            group_by,
+            req.coscheduling_group_by,
         )
         return None
 
@@ -873,10 +895,7 @@ class Scheduler:
         if schedulable_task_id is None:
             return "No schedulable tasks (all tasks have non-terminal attempts)"
 
-        candidates = compute_candidates(req, context)
-        if first_fitting_worker(candidates, context, req) is not None:
-            return "Schedulable — waiting for next scheduling cycle"
-        return explain_unfittable(req, context, self._max_building_tasks_per_worker)
+        return diagnose_fit(req, context, self._max_building_tasks_per_worker)
 
     def _diagnose_coscheduled_job(
         self,
@@ -898,10 +917,7 @@ class Scheduler:
 
         if not group_by:
             if schedulable_task_id:
-                candidates = compute_candidates(req, context)
-                if first_fitting_worker(candidates, context, req) is not None:
-                    return "Schedulable — waiting for next scheduling cycle"
-                return explain_unfittable(req, context, self._max_building_tasks_per_worker)
+                return diagnose_fit(req, context, self._max_building_tasks_per_worker)
             return "No schedulable tasks"
 
         groups = context.workers_by_group(group_by, matching_ids)

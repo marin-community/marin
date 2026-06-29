@@ -19,15 +19,13 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
-from finelog.types import str_to_log_level
-from rigging.log_setup import parse_log_level
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.log_keys import task_log_key
+from iris.cluster.log_keys import classify_log_level, task_log_key
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -352,6 +350,10 @@ class TaskAttempt:
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+        # Restore host-port reservations and re-mark them taken so the worker
+        # never re-allocates an in-use port to a new task after restart.
+        instance.ports = dict(discovered.ports)
+        port_allocator.reserve(list(discovered.ports.values()))
         return instance
 
     def resume_monitoring(self) -> None:
@@ -759,6 +761,7 @@ class TaskAttempt:
             entrypoint=rt_ep,
             env=env,
             resources=self.request.resources if self.request.HasField("resources") else None,
+            container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
             mounts=mounts,
             workdir_host_path=self.workdir,
@@ -768,6 +771,7 @@ class TaskAttempt:
             job_id=job_id.to_wire(),
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
+            ports=self.ports,
         )
 
         chaos_raise("worker.create_container")
@@ -952,10 +956,8 @@ class TaskAttempt:
             time.sleep(self._poll_interval_seconds)
 
     def _make_log_entry(self, *, source: str, data: str) -> logging_pb2.LogEntry:
-        """Build a LogEntry proto from a source/data pair, parsing the level prefix."""
-        level_name = parse_log_level(data)
-        level = str_to_log_level(level_name)
-        entry = logging_pb2.LogEntry(source=source, data=data, level=level)
+        """Build a LogEntry proto from a source/data pair, classifying its level."""
+        entry = logging_pb2.LogEntry(source=source, data=data, level=classify_log_level(source, data))
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
         return entry
 

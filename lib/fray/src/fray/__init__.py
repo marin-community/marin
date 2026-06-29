@@ -3,6 +3,8 @@
 
 """Fray: minimal job and actor scheduling interface."""
 
+from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
+
 from fray.actor import (
     ActorContext,
     ActorFuture,
@@ -15,6 +17,7 @@ from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, wait_all
 from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
 from fray.types import (
+    ANY_REGION,
     ActorConfig,
     BinaryEntrypoint,
     CallableEntrypoint,
@@ -36,6 +39,7 @@ from fray.types import (
 )
 
 __all__ = [
+    "ANY_REGION",
     "ActorConfig",
     "ActorContext",
     "ActorFuture",
@@ -68,7 +72,9 @@ __all__ = [
     "create_environment",
     "current_actor",
     "current_client",
+    "default_setup_script",
     "get_tpu_topology",
+    "iris_runtime_setup_script",
     "set_current_client",
     "wait_all",
 ]

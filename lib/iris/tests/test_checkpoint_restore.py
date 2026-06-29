@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 from iris.client.client import IrisClient, Job
-from iris.cluster.backends.local.cluster import LocalCluster
 from iris.cluster.config import load_config, make_local_config
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync

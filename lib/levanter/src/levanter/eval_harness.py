@@ -56,7 +56,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.utils import INVALID
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty, next_token_loss_weight
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.py_utils import set_global_rng_seeds
@@ -269,8 +269,7 @@ class _LmEvalHarnessWorker:
             Pos = pred_embeddings.resolve_axis(self.EvalPos.name)
 
             target_y = hax.roll(packed_example.tokens, -1, Pos)
-            not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-            loss_weight = packed_example.loss_weight.astype(jnp.float32) * not_last_mask.astype(jnp.float32)
+            loss_weight = next_token_loss_weight(Pos, packed_example.loss_weight.astype(jnp.float32))
 
             loss, pred_targets = fused_cross_entropy_loss_and_logsumexp_penalty(
                 pred_embeddings,
@@ -554,10 +553,6 @@ class LevanterHarnessLM(TemplateLM):
 
         return None
 
-    def _log_profiler_artifact(self):
-        """Log profiler artifact to the tracker."""
-        levanter.tracker.current_tracker().log_artifact(self.profiler_config.profile_path, type="jax_profile")
-
     def _handle_profiler_step(self):
         """Check if we should start or stop the profiler at this step."""
         if not self.profiler_config.enabled:
@@ -586,7 +581,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info(f"Stopping profiler at step {self._current_step}")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _stop_profiler_if_needed(self):
         """Ensure profiler is stopped if it was started."""
@@ -594,7 +588,6 @@ class LevanterHarnessLM(TemplateLM):
             logger.info("Stopping profiler (end of evaluation).")
             jax.profiler.stop_trace()
             self._profiler_started = False
-            self._log_profiler_artifact()
 
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         raise NotImplementedError("_loglikelihood_tokens is not yet supported")

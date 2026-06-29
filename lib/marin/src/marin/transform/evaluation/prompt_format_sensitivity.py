@@ -3,8 +3,6 @@
 
 """Deterministic prompt-format sensitivity records for supervised PPL evals."""
 
-from __future__ import annotations
-
 import csv
 import html
 import io

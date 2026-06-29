@@ -3,8 +3,6 @@
 
 """Deterministic hashing and sort-key helpers for Zephyr shard routing."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 import msgspec

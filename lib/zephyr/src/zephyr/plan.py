@@ -8,8 +8,6 @@ They encapsulate execution logic as callables, decoupling the backend from
 knowledge of logical operation types.
 """
 
-from __future__ import annotations
-
 import functools
 import heapq
 import logging
@@ -151,7 +149,7 @@ class Join:
     """Join two sorted streams."""
 
     fn: Callable[[Iterator, Iterator], Iterator]
-    right_plan: PhysicalPlan | None = None
+    right_plan: "PhysicalPlan | None" = None
 
 
 PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join
@@ -675,14 +673,17 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterReader)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
+    # Resolve the memory limit at most once: from_environment() re-reads cgroup
+    # files and logs a line each call, so the decision and the fan-in sizing
+    # below share a single lookup.
+    memory_limit: int | None = None
+    use_external = False
+    if external_sort_dir is not None and isinstance(shard, ScatterReader):
+        memory_limit = _TaskResources.from_environment().memory_bytes
+        use_external = shard.needs_external_sort(memory_limit)
 
     if use_external:
-        memory_limit = _TaskResources.from_environment().memory_bytes
+        assert memory_limit is not None
         # Per-iterator memory ~= compressed bytes for one chunk held by
         # cat_file. Use the actual max compressed chunk size from the sidecar.
         per_iter_bytes = shard.max_compressed_chunk_bytes

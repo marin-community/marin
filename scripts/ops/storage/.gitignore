@@ -6,4 +6,3 @@
 *.csv
 *.csv.sha256
 *.sha256
-purge/backup/

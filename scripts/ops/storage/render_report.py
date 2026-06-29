@@ -16,12 +16,11 @@ This keeps the working set in the low millions of rows regardless of how
 many billions of objects the scan produced.
 
 Usage (standalone):
-    uv run scripts/ops/storage/render_report.py [PARQUET_DIR]
+    uv run scripts/ops/storage/render_report.py PARQUET_DIR
 
-The default parquet directory is scripts/ops/storage/purge/objects_parquet/.
+PARQUET_DIR (a local dir or gs:// path) is required; it points at the parquet
+segments written by the scan stage.
 """
-
-from __future__ import annotations
 
 import hashlib
 import re

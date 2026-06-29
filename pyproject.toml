@@ -7,7 +7,7 @@ name = "marin-root"
 version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # workspaces
     "marin-iris",
@@ -17,24 +17,23 @@ dependencies = [
     "marin-core",
     "marin-rigging",
     "marin-zephyr",
+    # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
+    # workspace member (editable source) so deploy/CLI fixes land without a wheel
+    # republish. Its native companion marin-finelog-server (the in-process
+    # log-server ext, module `finelog_server`, maturin lib/finelog/rust) is NOT a
+    # member: it ships as a pre-built wheel and reaches us transitively via
+    # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
+    # marin-finelog-server to a local source build.
+    "marin-finelog",
     # top level deps. try to keep these small.
     "watchdog",
-    # marin-dupekit and marin-finelog are native (maturin) packages shipped as
-    # pre-built platform wheels (built by their *-release-wheels.yaml workflows)
-    # rather than pure-Python workspace members. A `>= X.Y.Z.dev0` floor opts uv
-    # into the daily nightly wheels (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain
-    # `>= X.Y.Z` floor pins to a stable tag (`dupekit-v<X.Y.Z>` /
-    # `finelog-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
+    # marin-dupekit is a native (maturin) package shipped as pre-built platform
+    # wheels (built by dupekit-release-wheels.yaml) rather than a workspace
+    # member. A `>= X.Y.Z.dev0` floor opts uv into the daily nightly wheels
+    # (`X.Y.Z.dev<YYYYMMDDhhmm>`); a plain `>= X.Y.Z` floor pins to a stable tag
+    # (`dupekit-v<X.Y.Z>`). uv prefers the higher version, so a stable supersedes
     # any earlier dev of the same Z; bump the floor to whichever is newest.
-    # Published by .github/workflows/dupekit-release-wheels.yaml.
     "marin-dupekit >= 0.1.2.dev202606060824",
-    # marin-finelog is the pure-Python client. The iris controller also starts
-    # an in-process native log server (module `finelog_server`); that ships as
-    # the separate marin-finelog-server wheel (maturin, lib/finelog/rust), which
-    # the controller depends on explicitly (see lib/iris) and reaches us
-    # transitively via marin-iris — the pure client does not depend on it.
-    # `scripts/rust_mode.py dev` swaps both to local path sources.
-    "marin-finelog >= 0.2.10",
 ]
 
 [tool.uv]
@@ -88,8 +87,9 @@ override-dependencies = [
     "tornado>=6.5.5",
 ]
 conflicts = [
-    # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
-    # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
+    # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
+    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
+    # resolve together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -117,23 +117,36 @@ conflicts = [
 ]
 
 [tool.uv.workspace]
-# lib/finelog is intentionally NOT a member: marin-finelog and its native
-# companion marin-finelog-server (maturin, lib/finelog/rust) are consumed as
-# published wheels (see [project] dependencies and the RUST-DEV SOURCES block
-# below), mirroring marin-dupekit.
 members = [
     "lib/iris",
     "lib/fray",
+    "lib/finelog",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
 ]
+# lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
+# log-server ext is consumed as a pre-built wheel by default and only built from
+# source under `scripts/rust_mode.py dev`. Exclude it so workspace discovery
+# doesn't pull the nested package into the workspace.
+exclude = ["lib/finelog/rust"]
+
+[tool.uv.extra-build-variables]
+vllm = { VLLM_TARGET_DEVICE = "tpu" }
+
+[tool.uv.extra-build-dependencies]
+vllm = [
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "torch @ https://download-r2.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
+]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
+marin-finelog = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
@@ -145,6 +158,12 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# TF5 fork branch: codex/issue-6735-tf5-from-marin-pin-20260628.
+# https://github.com/marin-community/vllm/compare/9b02ecc2115a1b3d190d8bdfd39b893495e75eff...571de565eb1ef76dfdff9bd70ca8ab31b7136f11
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "571de565eb1ef76dfdff9bd70ca8ab31b7136f11" }
+# TF5 fork branch: codex/issue-6735-tf5-from-marin-pin-20260628.
+# https://github.com/marin-community/tpu-inference/compare/67a07c1083bdc7c177ba71522a2d935b24d6d03f...29faff43207e42836217ba9bf33691c6e5f28614
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "29faff43207e42836217ba9bf33691c6e5f28614" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -156,7 +175,7 @@ explicit = true
 
 [tool.black]
 line-length = 121
-target-version = ["py310"]
+target-version = ["py312"]
 preview = true
 
 # Note :: Grow more strict over time!
@@ -168,13 +187,14 @@ extend-exclude = """
 
 [tool.ruff]
 line-length = 121
-target-version = "py310"
+target-version = "py312"
 
 # Note :: Grow more strict over time!
-# Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
-# is CI infrastructure and stays under ruff.
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
+# `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
+# and stay under ruff.
 extend-exclude = ["scripts/"]
-extend-include = ["scripts/workflows/**/*.py"]
+extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
 # A,B,E,F,I,NPY,RUF,UP,W are the established families. The individually-listed
@@ -200,7 +220,9 @@ select = [
     # two rules are mirrored there via extend-select so they apply repo-wide.
     "TID252", "ICN001",
 ]
-ignore = ["F722", "B008", "UP015", "A005", "E741"]
+# Keep UP046/UP047 ignored for now: migrating generics to PEP 695 syntax is
+# out of scope for the Python 3.12 floor bump.
+ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
@@ -213,11 +235,14 @@ ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]
-known-third-party = ["wandb"]
+# "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
+# config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
+# as first-party and reorder it, so pin it to the third-party group it already sits in.
+known-third-party = ["wandb", "config"]
 
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 
 # Note: Grow more strict over time!
 ignore_missing_imports = true
@@ -225,6 +250,7 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
+python-version = "3.12"
 # Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
 # Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
 # the entire project when running from those paths.
@@ -239,7 +265,8 @@ project-includes = [
     "lib/iris/scripts/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
-    "scripts/workflows",
+    "scripts/ci",
+    "scripts/cost_manager",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
@@ -323,19 +350,14 @@ ignore-missing-imports = [
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/canary/**",
     "scripts/datakit/**",
     "scripts/debug/**",
     "scripts/ferries/**",
-    "scripts/gcs-reorganization/**",
     "scripts/gpu_eval/**",
     "scripts/iris/**",
-    "scripts/migrations/**",
     "scripts/ops/**",
     "scripts/pm/**",
-    "scripts/ray/**",
     "scripts/speedrun/**",
-    "scripts/storage/**",
     "scripts/training/**",
     "scripts/*.py",
     "tests/**",

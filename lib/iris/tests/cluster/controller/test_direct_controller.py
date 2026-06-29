@@ -57,9 +57,6 @@ class FakeDirectProvider:
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")
 
-    def set_log_sink(self, *args, **kwargs) -> None:
-        pass
-
     def fetch_live_logs(
         self,
         task_id: str,
@@ -274,6 +271,7 @@ def test_apply_failed_with_retry(state):
     jid = JobName.root("test-user", "retry-job")
     req = make_direct_job_request("retry-job")
     req.max_retries_failure = 2
+    req.max_task_failures = 2
     with state._db.transaction() as cur:
         ops.job.submit(cur, job_id=jid, request=req, ts=Timestamp.now(), run_template_cache=state._run_template_cache)
     task_id = query_tasks_for_job(state, jid)[0].task_id

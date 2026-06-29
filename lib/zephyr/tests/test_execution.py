@@ -3,8 +3,6 @@
 
 """Tests for the actor-based execution engine (ZephyrContext)."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -38,13 +36,12 @@ from zephyr.execution import (
 from zephyr.plan import PhysicalStage, StageType, compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
-    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
-    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     PickleDiskChunk,
     ShardTask,
     TaskResult,
 )
-from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
 
 
 class _UnpicklableError(Exception):
@@ -459,7 +456,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Once a counter snapshot exists, the throughput segment reappears.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()
@@ -469,7 +466,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Same when only the byte counter is present.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()

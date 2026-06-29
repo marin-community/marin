@@ -6,11 +6,11 @@
 import json
 
 import click
+from rigging.auth import GcpAccessTokenProvider, TokenProvider
 
 from iris.actor import ActorClient, ProxyResolver
 from iris.actor.resolver import ResolveResult
 from iris.cli.connect import require_controller_url
-from iris.rpc.auth import GcpAccessTokenProvider, TokenProvider
 
 
 class _AuthProxyResolver(ProxyResolver):
@@ -52,11 +52,12 @@ def call(ctx: click.Context, endpoint: str, method: str, kwargs: str | None, tim
     KWARGS is an optional JSON object of keyword arguments (e.g. '{"worker_id": "w-3"}').
     """
     controller_url = require_controller_url(ctx)
-    tp = ctx.obj.get("token_provider") if ctx.obj else None
-    if tp is None:
-        tp = GcpAccessTokenProvider()
+    credentials = ctx.obj.get("credentials") if ctx.obj else None
+    token_provider = credentials.token_provider if credentials is not None else None
+    if token_provider is None:
+        token_provider = GcpAccessTokenProvider()
 
-    resolver = _AuthProxyResolver(controller_url, tp)
+    resolver = _AuthProxyResolver(controller_url, token_provider)
     client = ActorClient(resolver, endpoint, call_timeout=timeout)
 
     parsed_kwargs = json.loads(kwargs) if kwargs else {}

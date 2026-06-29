@@ -102,17 +102,24 @@ class Overlay:
                 started_at=basis.started_at,
                 max_task_failures=basis.max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
-        # Single pass: build the accumulator-aware state histogram and the first
-        # non-null error. ``all_tasks_by_job`` is pre-sorted by ``task_index``,
-        # so the first error encountered is the canonical "first task error".
+        # Single pass: build the accumulator-aware state histogram, the cumulative
+        # failure count, and the first non-null error. ``all_tasks_by_job`` is
+        # pre-sorted by ``task_index``, so the first error encountered is the
+        # canonical "first task error".
         counts: dict[int, int] = {}
+        total_failures = 0
         first_error: str | None = None
         for row in self._snapshot.all_tasks_by_job.get(job_id, ()):
             delta = self._effects.tasks.get(row.task_id)
             state = delta.state if delta is not None else row.state
             counts[state] = counts.get(state, 0) + 1
+            # failure_count only rises (a hard failure charges it); a delta that
+            # leaves it None did not touch the count, so fall back to the row.
+            fc = delta.failure_count if (delta is not None and delta.failure_count is not None) else row.failure_count
+            total_failures += fc
             if first_error is None:
                 # The accumulator only carries an error when a delta set a
                 # non-null error; otherwise fall back to the snapshot row.
@@ -125,6 +132,7 @@ class Overlay:
             started_at=basis.started_at,
             max_task_failures=basis.max_task_failures,
             task_state_counts=counts,
+            total_failures=total_failures,
             first_task_error=first_error,
         )
 
@@ -180,17 +188,16 @@ class Overlay:
                     preemption_count=row.preemption_count,
                     max_retries_failure=row.max_retries_failure,
                     max_retries_preemption=row.max_retries_preemption,
-                    is_reservation_holder=row.is_reservation_holder,
                     has_coscheduling=row.has_coscheduling,
                 )
             out.append(row)
         return out
 
-    def job_descendants(self, job_id: JobName, *, exclude_holders: bool = False) -> list[JobName]:
+    def job_descendants(self, job_id: JobName) -> list[JobName]:
         desc = self._snapshot.job_descendants.get(job_id)
         if desc is None:
             return []
-        return list(desc.descendants_no_holders if exclude_holders else desc.descendants_full)
+        return list(desc.descendants)
 
     def job_preemption_policy(self, job_id: JobName) -> int:
         """Resolve the effective preemption policy.
