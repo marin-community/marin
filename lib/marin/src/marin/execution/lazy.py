@@ -46,10 +46,9 @@ from marin.execution.artifact import (
     VERSION_KEY,
     Artifact,
     ArtifactRecord,
-    ArtifactTypeMismatchError,
     FingerprintMismatchError,
     is_mutable_version,
-    read_record,
+    result_type_name,
     write_record,
 )
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
@@ -284,10 +283,6 @@ class ArtifactStep(Generic[T]):
         return _lower(self, Provenance.capture())
 
 
-def _result_type_name(artifact_type: type[Artifact]) -> str:
-    return f"{artifact_type.__module__}.{artifact_type.__qualname__}"
-
-
 def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
@@ -372,7 +367,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
                 )
 
     dep_refs = [f"{d.name}@{d.version}" for d in handle.deps]
-    result_type_name = _result_type_name(handle.artifact_type)
+    rt_name = result_type_name(handle.artifact_type)
     # A pin references existing data; it writes no record. Everything else records provenance.
     record_provenance = handle.override_path is None
 
@@ -405,7 +400,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
                     name=_handle.name,
                     version=_handle.version,
                     fingerprint=fingerprint,
-                    result_type=result_type_name,
+                    result_type=rt_name,
                     output_path=output_path,
                     deps=dep_refs,
                     config=config_json,
@@ -420,7 +415,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     hash_attrs: dict[str, Any] = {
         FINGERPRINT_KEY: fingerprint,
         VERSION_KEY: handle.version,
-        RESULT_TYPE_KEY: result_type_name,
+        RESULT_TYPE_KEY: rt_name,
         "deps": dep_refs,
     }
     if handle.expected_fingerprint is not None:
@@ -437,25 +432,22 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     )
 
 
-def run(
-    *handles: "ArtifactStep",
-    max_concurrent: int = 8,
-    dry_run: bool = False,
-    force_run_failed: bool = True,
-) -> None:
-    """Lower and run ``handles`` for side effects — the entry point for one or several handles.
+def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: bool = True) -> list[T]:
+    """Build ``handles`` and return their loaded, typed artifacts, in argument order.
 
-    Provenance is captured once for the whole invocation, so every artifact built records the
-    same launch. ``dry_run`` logs without touching remote status; ``force_run_failed`` reruns a
-    previously-FAILED step instead of raising.
+    The entry point for one or several handles: lowers the graph, builds every step (independent
+    steps in parallel up to ``max_concurrent``), then loads each top-level handle's typed artifact
+    from the record the runner just wrote — so the caller gets the resolved values directly, no
+    separate read. Provenance is captured once, so every artifact built records the same launch.
+    ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
     provenance = Provenance.capture()
     StepRunner().run(
         [_lower(h, provenance) for h in handles],
-        dry_run=dry_run,
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )
+    return [cast(T, h.artifact_type.load(h.path())) for h in handles]
 
 
 def lower(handle: "ArtifactStep") -> StepSpec:
@@ -467,34 +459,14 @@ def lower(handle: "ArtifactStep") -> StepSpec:
     return _lower(handle, Provenance.capture())
 
 
-def load(handle: "ArtifactStep[T]") -> T:
-    """Load ``handle``'s realized, typed :class:`Artifact` without running anything.
-
-    The driver-side read of an already-materialized artifact (call after :func:`run`). Checks the
-    served record's ``result_type`` matches and raises :class:`ArtifactTypeMismatchError` on a
-    mismatch (a value artifact whose schema changed under a reused version).
-    """
-    path = handle.path()
-    record = read_record(path)
-    expected = _result_type_name(handle.artifact_type)
-    if record is not None and record.result_type and record.result_type != expected:
-        raise ArtifactTypeMismatchError(
-            f"{handle.name}@{handle.version}: recorded result_type is {record.result_type}, "
-            f"but the handle requests {expected}. The value type changed under a reused version — "
-            "bump the version."
-        )
-    return handle.artifact_type.load(path)
-
-
 def resolve(handle: "ArtifactStep[T]", *, max_concurrent: int = 8) -> T:
-    """Run ``handle`` then load its realized, typed :class:`Artifact` — :func:`run` then :func:`load`.
+    """Build one ``handle`` and return its loaded, typed artifact — :func:`run` for a single handle.
 
-    A one-shot convenience. To read several handles, run them together with one :func:`run` call
-    and :func:`load` each, rather than ``resolve``-ing in a loop (which re-enters the runner per
-    handle).
+    The driver-side "build this and give me the value" verb. To resolve several handles, prefer
+    one :func:`run` call (which builds them in parallel and returns all their artifacts) over
+    ``resolve``-ing in a loop.
     """
-    run(handle, max_concurrent=max_concurrent)
-    return load(handle)
+    return run(handle, max_concurrent=max_concurrent)[0]
 
 
 class _OutSentinel:

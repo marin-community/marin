@@ -63,6 +63,15 @@ class ArtifactTypeMismatchError(Exception):
     """A served record's ``result_type`` differs from the requested handle's ``result_type``."""
 
 
+def result_type_name(artifact_type: "type[Artifact]") -> str:
+    """The canonical ``module.Qualname`` recorded as a value artifact's ``result_type``.
+
+    The single source of truth for both sides of the round-trip: written into the record when a
+    step succeeds and compared against on :meth:`Artifact.load`.
+    """
+    return f"{artifact_type.__module__}.{artifact_type.__qualname__}"
+
+
 class Artifact(BaseModel):
     """A produced, persisted artifact: a directory with a record and a ``load``.
 
@@ -97,10 +106,26 @@ class Artifact(BaseModel):
     @classmethod
     def load(cls, source: str) -> Self:
         """A handle into ``source``; a subclass with value fields repopulates them from
-        ``record.result``."""
+        ``record.result``.
+
+        Tolerant of a missing record by design: an adopted or pinned artifact resolves to its
+        pre-existing data location (:meth:`ArtifactStep.path`) — real data, but no marin record
+        there — and its resolved value is intentionally path-only, so a missing record yields a
+        path handle rather than an error. A normal computed handle is never loaded before it is
+        built (``run``/``resolve`` build first; ``StepContext.resolved`` reads only
+        runner-materialized deps), so a missing record cannot arise through the supported paths.
+
+        When a record *is* present it must agree: raises :class:`ArtifactTypeMismatchError` if it
+        was written by a different artifact class (a value type that changed under a reused
+        version).
+        """
         rec = read_record(source)
-        data = (rec.result if rec is not None else None) or {}
-        return cls(path=source, **data)
+        if rec is not None and rec.result_type and rec.result_type != result_type_name(cls):
+            raise ArtifactTypeMismatchError(
+                f"{source}: recorded result_type is {rec.result_type}, but loading as "
+                f"{result_type_name(cls)}. The value type changed under a reused version — bump the version."
+            )
+        return cls(path=source, **((rec.result if rec is not None else None) or {}))
 
 
 class ArtifactRecord(BaseModel):

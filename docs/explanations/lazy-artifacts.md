@@ -100,17 +100,21 @@ return train_lm(
 ## Lowering and running
 
 `lower(handle)` converts an `ArtifactStep[T]` graph into a `StepSpec` graph that
-`StepRunner` can execute; it traverses dependencies recursively. `run(handle)` lowers and
-runs in one call, `resolve(handle)` runs the handle then loads its typed result, and
-`load(handle)` loads an already-run handle's typed result without running anything.
+`StepRunner` can execute; it traverses dependencies recursively. `run(*handles)` lowers and
+builds them (independent steps in parallel) and **returns each handle's loaded, typed
+artifact**, in argument order — so the driver gets the resolved values directly, no separate
+read. `resolve(handle)` is `run` for a single handle, returning its one artifact.
 
 ```python
-from marin.execution.lazy import lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import run
 
 checkpoint = build()                      # returns ArtifactStep[LevanterCheckpoint]; nothing runs yet
-StepRunner().run([lower(checkpoint)])     # materializes deps, then runs training
+result = resolve(checkpoint)              # materializes deps, runs training, returns LevanterCheckpoint
+print(result.training_metrics().eval_loss)
 ```
+
+Inside a step you never read a dependency this way — use `ctx.resolved(dep)`, which the runner
+guarantees is materialized first. `run`/`resolve` are the driver-level entry points.
 
 `StepRunner.run` applies two guards before executing each step:
 

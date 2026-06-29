@@ -250,6 +250,15 @@ def test_resolve_round_trips_a_value_artifact(tmp_path, monkeypatch):
     assert result.path == f"{tmp_path}/datasets/dclm_tokens/2026.06.25"
 
 
+def test_run_returns_loaded_artifacts(tmp_path, monkeypatch):
+    """run() builds and hands back each top-level handle's loaded, typed artifact, in order."""
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    results = run(dclm_tokens())
+    assert len(results) == 1
+    assert isinstance(results[0], Tokens)
+    assert (results[0].kind, results[0].tokenizer) == ("tokens", "llama3")
+
+
 class OtherValue(Artifact):
     note: str = ""
 
