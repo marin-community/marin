@@ -5116,3 +5116,27 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   before commenting on #6597.
 - Next action: stage and commit the snapshot, then use the runbook's one-node
   20-step smoke as the next H100 run if continuing execution from this branch.
+
+### 2026-06-29 13:16 - MOE-MGPU-344 launched one-node 20-step Pallas MGPU smoke
+- Hypothesis: the stable snapshot should be exercised through the real Grug MoE
+  scale launcher before attempting a 32-node 20-step run.
+- Commit Hash: `42ba9b7d4` plus a follow-up runbook resource-flag fix.
+- Commands:
+  - Initial CPU-driver attempts with `--memory=4G --disk=16G` and then
+    `--memory=2G --disk=16G` were rejected by Iris before submission because
+    those modest-looking values cross the extra-resource guardrails.
+  - Submitted smoke:
+    `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4 --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID=grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4 SCALE_GPU_REPLICAS=1 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_BATCH=128 SCALE_SEQ_LEN=2048 SCALE_STEPS=20 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=2 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger uv run python -m experiments.grug.moe.launch_cw_scale`
+- Result:
+  - Submitted Iris driver job:
+    `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4`.
+  - Assigned babysitter agent Dalton (`019f1507-2e83-7d73-a2b6-0e570985d44e`)
+    and repointed the active heartbeat to poll the babysitter every 10 minutes.
+  - Updated the tryout runbook to use `--memory=2G --disk=8G` for the CPU
+    driver job.
+- Interpretation: the first real full-trainer smoke is in flight. Do not post
+  to #6597 unless this run reaches terminal success or reveals a fundamental
+  blocker.
+- Next action: monitor `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4` to
+  terminal state; if it succeeds, consider the 32-node 20-step command in the
+  runbook.
