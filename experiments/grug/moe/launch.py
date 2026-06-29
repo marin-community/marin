@@ -15,6 +15,7 @@ from datetime import timedelta
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
 from levanter.optim import OptimizerConfig
@@ -55,6 +56,7 @@ class GrugMoeLaunchConfig:
     tracker: TrackerConfig
     optimizer: OptimizerConfig
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
+    watch: WatchConfig = field(default_factory=WatchConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     checkpointer: CheckpointerConfig | None = None
@@ -127,6 +129,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
+        watch=config.watch,
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,

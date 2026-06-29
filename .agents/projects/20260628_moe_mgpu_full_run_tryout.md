@@ -19,6 +19,12 @@ same padded-capacity path validated by the H100 kernel tests.
   `/dlwh/iris-run-bench_grug_moe_pallas_mgpu-20260629-target-fwd-bwd-lint-cleanup`
   reported `steady_state_time=0.069388s`, `139.27 TFLOP/s/rank`,
   `14.08%` of nominal H100 bf16 roofline, and zero dropped routes.
+- One-node full-trainer target-shape smoke
+  `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4` reached
+  `global_step=9/20` with `tokens_per_second=549668.13`, `MFU ~= 20.1%`, then
+  OOMed during the default step-10 watch/per-parameter-norm path. The scale
+  launcher now disables watch stats by default; opt in explicitly with
+  `SCALE_WATCH_TARGETS`.
 
 ## Recommended 20-Step Integration Smoke
 
@@ -48,6 +54,7 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
     SCALE_REMAT=save_moe \
     SCALE_CHECKPOINTS=local \
     SCALE_TRACKER=json_logger \
+    SCALE_WATCH_TARGETS= \
     uv run python -m experiments.grug.moe.launch_cw_scale
 ```
 
@@ -73,6 +80,7 @@ uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job
     SCALE_REMAT=save_moe \
     SCALE_CHECKPOINTS=local \
     SCALE_TRACKER=json_logger \
+    SCALE_WATCH_TARGETS= \
     uv run python -m experiments.grug.moe.launch_cw_scale
 ```
 
@@ -95,6 +103,10 @@ you want W&B metrics/artifacts instead of JSON logs.
 - `SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16` can reduce
   FSDP parameter traffic, but the validated benchmark evidence used the default
   float32 parameter policy.
+- `SCALE_WATCH_TARGETS` defaults to empty in the CoreWeave scale launcher.
+  Leave it empty for throughput/full-run smoke tests. To opt in, set e.g.
+  `SCALE_WATCH_TARGETS=grads,params`; keep
+  `SCALE_WATCH_PER_PARAMETER_NORMS=false` unless the run has ample memory.
 - `SCALE_PROFILER_STEPS=N SCALE_PROFILER_START=K` enables a JAX profile window.
   Pair this with `SCALE_TRACKER=wandb` so the profile uploads.
 

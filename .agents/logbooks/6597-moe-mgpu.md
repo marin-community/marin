@@ -5184,3 +5184,41 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   clean milestone.
 - Next action: revise the tryout runbook to use a memory-safer smoke shape
   before resubmitting.
+
+### 2026-06-29 13:37 - MOE-MGPU-346 disable scale-run watch by default
+- Hypothesis: the one-node target-shape smoke OOM at step 9/10 came from the
+  inherited Levanter watch/per-parameter norm path rather than from steady
+  Pallas MGPU training, because useful training metrics progressed through
+  `global_step=9` and the OOM happened exactly at the default watch interval.
+- Commit Hash: `c1e31e410` plus uncommitted working-tree changes.
+- Code/docs change:
+  - Added `watch: WatchConfig` to `GrugMoeLaunchConfig` and passed it into the
+    constructed `TrainerConfig`, preserving default watch behavior for existing
+    Grug MoE launches.
+  - Added `SCALE_WATCH_TARGETS`, `SCALE_WATCH_INTERVAL`,
+    `SCALE_WATCH_NORMS`, `SCALE_WATCH_PER_PARAMETER_NORMS`,
+    `SCALE_WATCH_HISTOGRAMS`, and `SCALE_WATCH_SPLIT_SCAN_LAYERS` handling to
+    `experiments/grug/moe/launch_cw_scale.py`.
+  - The CoreWeave scale launcher now defaults `SCALE_WATCH_TARGETS` to empty,
+    disabling watch stats for throughput/full-run smokes unless explicitly
+    opted in.
+  - Updated `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` so the
+    recommended 20-step commands keep `SCALE_WATCH_TARGETS=` and record the
+    prior step-9 OOM as a watch-path issue.
+- Commands:
+  - `uv run python -m py_compile experiments/grug/moe/launch.py experiments/grug/moe/launch_cw_scale.py`
+  - `git diff --check`
+  - `./infra/pre-commit.py --changed-files --fix` (first run auto-fixed one
+    Ruff import-order issue)
+  - `./infra/pre-commit.py --changed-files --fix && git diff --check`
+- Result:
+  - Syntax passed.
+  - Final changed-file precheck passed: Ruff, Black, license headers, Pyrefly,
+    large files, Python AST, merge conflicts, trailing whitespace, EOF newline,
+    and Markdown pre-commit all reported `ok`.
+- Interpretation: this should directly test whether the full-trainer Pallas
+  MGPU path can complete 20 target-shape steps once the diagnostic watch path
+  is removed. No GitHub issue comment until the retry reaches terminal success
+  or exposes a stronger blocker.
+- Next action: commit the patch, relaunch the one-node 20-step smoke with
+  `SCALE_WATCH_TARGETS=`, and babysit it.

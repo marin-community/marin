@@ -34,6 +34,12 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_MP            jmp policy (default params=float32,compute=bfloat16,
                         output=bfloat16); params=bfloat16 halves FSDP gather bytes
     SCALE_TRACKER       wandb | json_logger (default json_logger)
+    SCALE_WATCH_TARGETS comma-separated Levanter watch targets. Empty disables
+                        watch stats (default empty for scale throughput smokes)
+    SCALE_WATCH_INTERVAL
+                        watch interval when watch targets are set (default 10)
+    SCALE_WATCH_PER_PARAMETER_NORMS
+                        true | false (default false for scale runs)
     SCALE_PROFILER_STEPS  >0 enables a jax_profile capture window of N steps
                           (use SCALE_TRACKER=wandb so the artifact uploads)
     SCALE_PROFILER_START  profiler start step (default 8, past compile/warmup)
@@ -50,6 +56,7 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.optim import AdamConfig
@@ -125,6 +132,38 @@ def build_scale_model() -> GrugModelConfig:
         moe_implementation=cast(MoeImplementation | None, moe_implementation),
         moe_capacity_factor=moe_capacity_factor,
         remat_mode=cast(RematMode, remat_mode),
+    )
+
+
+def env_bool(key: str, default: bool) -> bool:
+    """Read a boolean from ``os.environ[key]``, falling back to ``default`` when unset/empty."""
+    raw = os.environ.get(key, "")
+    if not raw:
+        return default
+    normalized = raw.lower()
+    if normalized in ("1", "true", "t", "yes", "y", "on"):
+        return True
+    if normalized in ("0", "false", "f", "no", "n", "off"):
+        return False
+    raise ValueError(f"{key}={raw!r} must be a boolean")
+
+
+def build_scale_watch_config() -> WatchConfig:
+    """Build watch config for scale runs.
+
+    Watch stats are useful diagnostics, but per-parameter norms are expensive
+    enough to OOM the one-node target-shape smoke around the default interval.
+    Keep scale runs throughput-oriented unless the caller opts in.
+    """
+    watch_targets = tuple(target.strip() for target in os.environ.get("SCALE_WATCH_TARGETS", "").split(","))
+    watch_targets = tuple(target for target in watch_targets if target)
+    return WatchConfig(
+        watch_targets=list(watch_targets),
+        include_norms=env_bool("SCALE_WATCH_NORMS", True),
+        include_per_parameter_norms=env_bool("SCALE_WATCH_PER_PARAMETER_NORMS", False),
+        include_histograms=env_bool("SCALE_WATCH_HISTOGRAMS", False),
+        split_scan_layers=env_bool("SCALE_WATCH_SPLIT_SCAN_LAYERS", True),
+        interval=env_int("SCALE_WATCH_INTERVAL", 10),
     )
 
 
@@ -205,6 +244,7 @@ def build_scale_step() -> ExecutorStep:
             mp=versioned(os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")),
             tracker=tracker,
             optimizer=versioned(SCALE_OPTIMIZER),
+            watch=versioned(build_scale_watch_config()),
             grug_trainer=versioned(grug_trainer),
             eval=None,
             profiler=profiler,
