@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import re
 
 import duckdb
@@ -101,26 +102,33 @@ class QueryRunner:
             self._con.execute(f"SET memory_limit = '{settings.memory_limit_bytes}B'")
         logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", settings.threads, settings.memory_limit_bytes)
         self._install_secrets()
+        # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;
+        # object stores create the prefix implicitly.
+        if "://" not in config.scratch_bucket:
+            os.makedirs(f"{config.scratch_bucket.rstrip('/')}/ducky", exist_ok=True)
 
     def _install_secrets(self) -> None:
-        """Load httpfs and create one DuckDB SECRET per object-store backend."""
+        """Load httpfs and create a DuckDB SECRET for each configured object-store backend."""
         cfg = self._config
         self._con.execute("INSTALL httpfs")
         self._con.execute("LOAD httpfs")
-        self._con.execute(
-            f"CREATE OR REPLACE SECRET ducky_gcs "
-            f"(TYPE GCS, KEY_ID {_sql_literal(cfg.gcs_hmac_key_id)}, SECRET {_sql_literal(cfg.gcs_hmac_secret)})"
-        )
-        self._con.execute(
-            f"CREATE OR REPLACE SECRET ducky_r2 "
-            f"(TYPE R2, ACCOUNT_ID {_sql_literal(cfg.r2_account_id)}, "
-            f"KEY_ID {_sql_literal(cfg.r2_access_key)}, SECRET {_sql_literal(cfg.r2_secret_key)})"
-        )
-        self._con.execute(
-            f"CREATE OR REPLACE SECRET ducky_cw "
-            f"(TYPE S3, ENDPOINT {_sql_literal(cfg.cw_endpoint)}, URL_STYLE 'path', "
-            f"KEY_ID {_sql_literal(cfg.cw_access_key)}, SECRET {_sql_literal(cfg.cw_secret_key)})"
-        )
+        if cfg.gcs_enabled:
+            self._con.execute(
+                f"CREATE OR REPLACE SECRET ducky_gcs "
+                f"(TYPE GCS, KEY_ID {_sql_literal(cfg.gcs_hmac_key_id)}, SECRET {_sql_literal(cfg.gcs_hmac_secret)})"
+            )
+        if cfg.r2_enabled:
+            self._con.execute(
+                f"CREATE OR REPLACE SECRET ducky_r2 "
+                f"(TYPE R2, ACCOUNT_ID {_sql_literal(cfg.r2_account_id)}, "
+                f"KEY_ID {_sql_literal(cfg.r2_access_key)}, SECRET {_sql_literal(cfg.r2_secret_key)})"
+            )
+        if cfg.cw_enabled:
+            self._con.execute(
+                f"CREATE OR REPLACE SECRET ducky_cw "
+                f"(TYPE S3, ENDPOINT {_sql_literal(cfg.cw_endpoint)}, URL_STYLE 'path', "
+                f"KEY_ID {_sql_literal(cfg.cw_access_key)}, SECRET {_sql_literal(cfg.cw_secret_key)})"
+            )
 
     def run_query(self, sql: str, query_id: str) -> QueryResult:
         """Run ``sql`` once, spill the full result to parquet, and return a capped preview.

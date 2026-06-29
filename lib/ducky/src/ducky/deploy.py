@@ -23,13 +23,13 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_de
 
 logger = logging.getLogger(__name__)
 
-# A single v6e-8 host (ct6e-standard-8t). DuckDB runs on CPU/RAM only — the TPU sits
-# idle; we request the slice to grab the host's large CPU/RAM envelope exclusively.
+# Prod default: a single v6e-8 host (ct6e-standard-8t). DuckDB runs on CPU/RAM only —
+# the TPU sits idle; we request the slice to grab the host's large CPU/RAM envelope.
 # TODO(ducky): confirm the exact host vCPU/RAM so the request schedules and gets the
 # whole host (over-request → never schedules; under-request → DuckDB capped below host).
-TPU_VARIANT = "v6e-8"
-ALL_CPU = 180.0
-ALL_MEMORY = "1400GB"
+DEFAULT_TPU = "v6e-8"
+DEFAULT_CPU = 180.0
+DEFAULT_MEMORY = "1400GB"
 
 
 def _ducky_env_vars() -> dict[str, str]:
@@ -46,18 +46,27 @@ def _ducky_env_vars() -> dict[str, str]:
 )
 @click.option("--region", default="us-east5", show_default=True, help="Region to pin the job to.")
 @click.option("--name", default="ducky", show_default=True, help="Job name.")
-def cli(controller_url: str, region: str, name: str) -> None:
+@click.option(
+    "--tpu",
+    default=DEFAULT_TPU,
+    show_default=True,
+    help="TPU variant for the whole-host grab. Pass empty ('') for a CPU-only smoke deploy.",
+)
+@click.option("--cpu", default=DEFAULT_CPU, show_default=True, type=float, help="CPUs to request.")
+@click.option("--memory", default=DEFAULT_MEMORY, show_default=True, help="Memory to request (e.g. 16GB).")
+def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memory: str) -> None:
     """Submit the always-on ducky service to an Iris cluster."""
     logging.basicConfig(level=logging.INFO)
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
 
+    device = tpu_device(tpu) if tpu else None
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     job = client.submit(
         entrypoint=Entrypoint.from_command("python", "-m", "ducky.server"),
         name=name,
-        resources=ResourceSpec(cpu=ALL_CPU, memory=ALL_MEMORY, device=tpu_device(TPU_VARIANT)),
+        resources=ResourceSpec(cpu=cpu, memory=memory, device=device),
         environment=EnvironmentSpec(env_vars=env_vars),
         ports=[name],
         constraints=[region_constraint([region])],
