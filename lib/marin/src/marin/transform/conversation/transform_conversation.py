@@ -51,6 +51,7 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        load_dataset_features (dict | None): Optional serialized Hugging Face features override.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
@@ -62,6 +63,7 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    load_dataset_features: dict[str, Any] | None = None
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
@@ -221,11 +223,24 @@ def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) ->
     return [split for split in split_names if split not in ("validation", "test")]
 
 
+def _load_dataset_features(cfg: TransformSFTDatasetConfig) -> datasets.Features | None:
+    load_dataset_features = unwrap_versioned_value(cfg.load_dataset_features)
+    if load_dataset_features is None:
+        return None
+    return datasets.Features.from_dict(load_dataset_features)
+
+
 def _shard_filename(output_path: str, shard_idx: int) -> str:
     return os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
-def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: str | None) -> dict[str, object]:
+def _streaming_dataset_kwargs(
+    source: str,
+    split: str,
+    revision: str,
+    subset: str | None,
+    features: datasets.Features | None = None,
+) -> dict[str, object]:
     """Build kwargs for a streaming ``datasets.load_dataset`` call.
 
     The HF config name is omitted for the default/unnamed subset so the loader
@@ -239,6 +254,8 @@ def _streaming_dataset_kwargs(source: str, split: str, revision: str, subset: st
     }
     if subset not in (None, "default"):
         kwargs["name"] = subset
+    if features is not None:
+        kwargs["features"] = features
     return kwargs
 
 
@@ -288,7 +305,13 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
             dataset = load_dataset_with_backoff(
                 context=f"{source} subset={subset_name} split={split}",
-                **_streaming_dataset_kwargs(source, split, revision, subset),
+                **_streaming_dataset_kwargs(
+                    source,
+                    split,
+                    revision,
+                    subset,
+                    features=_load_dataset_features(cfg),
+                ),
             )
             num_shards = dataset.num_shards
             if not num_shards:
@@ -336,7 +359,13 @@ def process_shard_task(task: ShardTask) -> dict:
 
     dataset = load_dataset_with_backoff(
         context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
-        **_streaming_dataset_kwargs(task.source, task.split, task.revision, task.subset),
+        **_streaming_dataset_kwargs(
+            task.source,
+            task.split,
+            task.revision,
+            task.subset,
+            features=_load_dataset_features(task.cfg),
+        ),
     )
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
 

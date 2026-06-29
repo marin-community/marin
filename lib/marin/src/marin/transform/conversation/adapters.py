@@ -79,6 +79,7 @@ class TransformAdapter:
     assistant_value: str = "assistant"
     system_value: str = "system"
     content_key: str = "content"
+    reasoning_content_key: str = ""
     tool_value: str = "tool"
 
     # If specified, the key will be used to select the message with
@@ -128,7 +129,12 @@ class TransformAdapter:
             conversation = row[self.conversation_column]
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                content = conv[self.content_key]
+                if role == "assistant" and self.reasoning_content_key:
+                    reasoning_content = conv.get(self.reasoning_content_key)
+                    if isinstance(reasoning_content, str) and reasoning_content.strip():
+                        content = f"<think>{reasoning_content}</think>\n{content}"
+                messages.append(OpenAIChatMessage(role=role, content=content))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
