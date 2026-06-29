@@ -28,7 +28,6 @@ from levanter.store import SerialCacheWriter, TreeCache
 from levanter.tokenizers import load_tokenizer
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
 from rigging.filesystem import open_url
-from rigging.log_setup import configure_logging
 from tqdm_loggable.auto import tqdm
 
 logger = logging.getLogger(__name__)
@@ -188,10 +187,3 @@ def _patch_source_config(
     """
     base_tags = input_config.tags or []
     return dataclasses.replace(input_config, cache_dir=output_path, tags=base_tags + extra_tags)
-
-
-def _slice_cache_entrypoint(cfg: SliceCacheConfig):
-
-    configure_logging(level=logging.INFO)
-    logger.info(f"Starting slice cache with config: {cfg}")
-    return _do_slice_cache(cfg)

@@ -4,7 +4,7 @@
 """Run provenance: who/when/which-commit/which-argv produced an artifact.
 
 A single :class:`Provenance` value captured once in the launching process and recorded on every
-artifact built by that invocation, so an artifact answers "what produced me" without the executor.
+artifact built by that invocation, so an artifact's own record answers "what produced me".
 """
 
 import getpass
