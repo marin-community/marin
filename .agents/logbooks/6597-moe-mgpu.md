@@ -24,6 +24,7 @@ author: dlwh
 - 2026-06-29: The forward-performance lane has broad ownership of `permute_up` scheduling/copy/fused/chunked experiments in `#6597-forward`. The best opt-in chunked stage result reported there is row-base + copy-tile 256 on the target shape at `0.015167s`, `141.59 TFLOP/s/rank`, `14.32%` roofline, exact vs staged but still below the forward goal and not promoted to the default. Main-lane work is staying on API/readiness/validation unless forward changes are explicitly coordinated.
 - 2026-06-29: Static audits in `MOE-MGPU-320`, `MOE-MGPU-336`, and the latest current-state re-audit `MOE-MGPU-340` confirm the current production metadata/dataflow still matches the spec's deterministic source-local assignment contract: return metadata is limited to `recv_src_rank` and `recv_src_assignment`, token/route are derived from the assignment id, production combine paths avoid remote atomic add, there are no checked-in `pl.pallas_call(...)` sites or fake `cost_estimate` placeholders, and the expected H100/test hooks remain present. The stale Meitner vector-dx heartbeat was freshly polled and remains a terminal success but is superseded by newer target fwd+bwd evidence.
 - 2026-06-29: Full-run tryout wiring is now present: `experiments/grug/moe/launch_cw_scale.py` accepts `SCALE_MOE_IMPLEMENTATION` and `SCALE_MOE_CAPACITY_FACTOR`, `GrugModelConfig` carries `moe_capacity_factor`, and `.agents/projects/20260628_moe_mgpu_full_run_tryout.md` has one-node and 32-node 20-step H100 launch commands. Local syntax, `git diff --check`, and `./infra/pre-commit.py --changed-files --fix` passed in `MOE-MGPU-343`. Remaining formal local gate for the first stacked PR is `./infra/pre-commit.py --review`; latest concrete lint-review findings were addressed in `MOE-MGPU-316`, but the rerun is agent-quota blocked until 2026-06-29 16:30 America/Los_Angeles.
+- 2026-06-29: The first target-shape real Grug MoE trainer smoke completed 20/20 steps on one 8xH100 node with `implementation="pallas_mgpu"`, `capacity_factor=1.25`, and scale-run watch disabled. Job `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7` and child `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7/grug-train-grug-moe-pallas-mgpu-20step-smoke-2d87348e7` both succeeded, saved checkpoint `step-20`, and reported mean MFU `20.13%`, p50 MFU `20.15%`, and `554k` tokens/s in `MOE-MGPU-347`.
 
 ## Decision Log
 - 2026-06-28: Use the existing ragged all-to-all backend as the staged EP reference under the public `pallas_mgpu` boundary until the two Pallas MGPU kernels replace it. This keeps API validation and metadata tests moving without claiming final kernel performance.
@@ -5222,3 +5223,56 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   or exposes a stronger blocker.
 - Next action: commit the patch, relaunch the one-node 20-step smoke with
   `SCALE_WATCH_TARGETS=`, and babysit it.
+
+### 2026-06-29 13:44 - MOE-MGPU-347 one-node 20-step trainer smoke success
+- Hypothesis: the previous step-9/10 OOM was caused by the default watch path,
+  so the target-shape one-node full trainer should complete 20 steps once
+  scale-run watch stats are disabled.
+- Commit Hash: `2d87348e7`.
+- Job:
+  - Parent: `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7/grug-train-grug-moe-pallas-mgpu-20step-smoke-2d87348e7`
+- Command:
+  - Submitted with:
+    `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name grug-moe-pallas-mgpu-20step-smoke-2d87348e7 --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID=grug-moe-pallas-mgpu-20step-smoke-2d87348e7 SCALE_GPU_REPLICAS=1 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_BATCH=128 SCALE_SEQ_LEN=2048 SCALE_STEPS=20 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=2 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger SCALE_WATCH_TARGETS= uv run python -m experiments.grug.moe.launch_cw_scale`
+  - Verification:
+    `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary /dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`
+  - Log capture:
+    `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --tail --max-lines 2600 /dlwh/grug-moe-pallas-mgpu-20step-smoke-2d87348e7`
+- Saved local logs:
+  - `scratch/moe-mgpu-watch-disabled-20step-2d87348e7/full_parent_and_child_logs.txt`
+  - `scratch/moe-mgpu-watch-disabled-20step-2d87348e7/high_signal_excerpt.txt`
+  - `scratch/moe-mgpu-watch-disabled-20step-2d87348e7/parent_summary.txt`
+  - `scratch/moe-mgpu-watch-disabled-20step-2d87348e7/child_summary.txt`
+- Result:
+  - Parent Iris final state: `succeeded`, exit `0`, failures `0`,
+    preemptions `0`, duration `3 minutes and 7.27 seconds`.
+  - Child Iris final state: `succeeded`, exit `0`, failures `0`,
+    preemptions `0`, duration `2 minutes and 14.02 seconds`.
+  - Training reached `Progress on:train 20.0it/20.0it`.
+  - Checkpoint saved successfully at
+    `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-20step-smoke-2d87348e7/step-20`.
+  - Final logged `global_step=19`, `run_progress=0.95`,
+    `train/loss=7.496628761291504`, and
+    `train/cross_entropy_loss=7.468381404876709`.
+  - Final throughput sample reported `554162.1451621387` tokens/s,
+    `270.58698494245056` examples/s, and `20.237663275595505%` MFU.
+  - Summary reported `parameter_count=5747625472`,
+    mean MFU `20.127821040818162%`, p50 MFU `20.15132069436141%`,
+    p10 MFU `19.995927776439103%`, p90 MFU `20.28122631924249%`,
+    and `19` MFU samples.
+  - Post-finish `WatchTasksAsync failed` / connection-refused lines appeared
+    only after checkpoint save and the finish summary; Iris still marked both
+    parent and child succeeded, so these are shutdown noise.
+  - Babysitter Kant (`019f151a-f63a-7c91-a2f9-ab3fb1fa63dc`) independently
+    reported the same success and was closed. The polling heartbeat
+    `poll-moe-mgpu-watch-disabled-smoke` was deleted.
+- Interpretation: the Pallas MGPU path now has a clean target-shape,
+  full-trainer, one-node 20-step H100 smoke. Disabling scale-run watch removed
+  the previous step-9/10 memory blocker. This is a meaningful milestone for
+  #6597 and should be summarized on the issue without raw logs.
+- Next action: keep the runbook's watch-disabled one-node recipe as the best
+  known full-run smoke, then decide whether to try the 32-node 20-step scale
+  command or finish the first stacked PR readiness gate with
+  `./infra/pre-commit.py --review`.
