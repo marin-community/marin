@@ -53,16 +53,13 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
-    apply_dispatch_updates,
     finalize,
-)
-from iris.cluster.controller.ops.worker import (
-    apply_reconcile,
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import ControllerEffects, dispatch
+from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
@@ -82,8 +79,8 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.controller.worker_source import DbWorkerSource
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_source import DbTransitionReader, DbWorkerSource
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -380,10 +377,13 @@ class Controller:
 
         # Give each worker-daemon backend its own scale-group-scoped view of the
         # DB so it sources its own workers (the controller never partitions a
-        # worker snapshot). Capacity-managing backends (k8s) own their placement.
+        # worker snapshot). A placement-owning backend (k8s) has no workers but
+        # still authors its dispatch effects from a controller-DB read snapshot.
         for backend_id, backend in self._backends.items():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.attach_worker_source(self._build_worker_source(backend_id))
+            elif BackendCapability.CLUSTER_VIEW in backend.capabilities:
+                backend.attach_transition_reader(DbTransitionReader(self._db))
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
@@ -813,7 +813,7 @@ class Controller:
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
 
-        reconcile_effects = self._commit_tick(
+        self._commit_tick(
             sched_result=merged_sched,
             backend_pins=backend_pins,
             routing_unschedulable=routing_unschedulable,
@@ -831,7 +831,7 @@ class Controller:
             self._tick_wake.set()
 
         # Post-commit, in-memory: cache scheduling diagnostics, request a prompt
-        # dispatch follow-up for fresh assignments, fold health.
+        # dispatch follow-up for fresh assignments.
         if merged_sched is not None:
             self._scheduling_diagnostics = merged_sched.diagnostics
             self._last_scheduling_context = merged_sched.scheduling_context
@@ -839,9 +839,13 @@ class Controller:
                 self._force_reconcile = True
                 self._tick_wake.set()
 
-        if recon_results:
-            health_events = [event for result in recon_results.values() for event in result.health_events]
-            self._fold_health(health_events, reconcile_effects, now)
+        # Each backend already folded the liveness it observed during reconcile and
+        # returned the workers its fold reaped. Tear them down over a FRESH snapshot
+        # AFTER the reconcile effects are committed: ``fail_workers`` skips the
+        # just-finalized terminal attempts only when it sees them already terminal.
+        dead = [wid for result in recon_results.values() for wid in result.dead_workers]
+        if dead:
+            self._fail_and_teardown(dead)
 
     def _build_tick_inputs(
         self,
@@ -1081,17 +1085,15 @@ class Controller:
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
         now: Timestamp,
-    ) -> ControllerEffects | None:
-        """Apply this tick's merged decisions and observations in one write transaction.
+    ) -> None:
+        """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), reconcile observations, execution-timeout finalizations,
-        administrative kicks, per-backend autoscaler state. Returns the reconcile
-        kernel effects (consumed by the health fold) or None when no backend
-        reported worker results. A no-op tick opens no transaction.
+        UNSCHEDULABLE), each backend's reconcile effects, execution-timeout
+        finalizations, administrative kicks, per-backend autoscaler state. Each
+        backend already authored its own ``effects`` during reconcile; the
+        controller just commits them uniformly. A no-op tick opens no transaction.
         """
-        worker_results = [pair for result in recon_results.values() for pair in result.worker_results]
-        updates = [update for result in recon_results.values() for update in result.updates]
         states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
 
         has_sched = sched_result is not None and bool(
@@ -1101,18 +1103,17 @@ class Controller:
             or backend_pins
             or routing_unschedulable
         )
-        has_recon = bool(worker_results or updates)
+        has_recon = any(not result.effects.is_empty for result in recon_results.values())
         if not (has_sched or has_recon or timeout_decisions or pending_kicks or states):
-            return None
+            return
 
-        reconcile_effects: ControllerEffects | None = None
         with self._db.transaction() as cur:
             if sched_result is not None:
                 self._commit_schedule_decisions(cur, sched_result, now, backend_pins, routing_unschedulable)
-            if worker_results:
-                reconcile_effects = apply_reconcile(cur, worker_results, endpoints=self._endpoints, now=now)
-            if updates:
-                apply_dispatch_updates(cur, updates, endpoints=self._endpoints, now=now)
+            for backend_id in self._backend_ids:
+                result = recon_results.get(backend_id)
+                if result is not None and not result.effects.is_empty:
+                    commit_effects(cur, result.effects, endpoints=self._endpoints)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
             if pending_kicks:
@@ -1124,7 +1125,6 @@ class Controller:
                     logger.info("Admin kick: finalized %d task attempt(s)", len(kick_decisions))
             for state in states:
                 persist_autoscaler_state(cur, state)
-        return reconcile_effects
 
     def _commit_schedule_decisions(
         self,
@@ -1372,32 +1372,6 @@ class Controller:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
-
-    def _fold_health(
-        self,
-        observed: list[WorkerHealthEvent],
-        reconcile_effects: ControllerEffects | None,
-        now: Timestamp,
-    ) -> None:
-        """Fold backend-observed + kernel-derived health through the one apply site.
-
-        The backend reports the per-worker liveness it observed
-        (REACHED/UNREACHABLE); the reconcile kernel derives build failures
-        (BUILDING/ASSIGNED→FAILED on the worker path). Both feed the single
-        ``WorkerHealthTracker.apply``, which returns the workers over a
-        termination threshold for ``_fail_and_teardown``.
-        """
-        events = list(observed)
-        if reconcile_effects is not None:
-            events.extend(
-                WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED)
-                for wid in reconcile_effects.health.build_failed
-            )
-        if not events:
-            return
-        dead_workers = self._health.apply(events, now_ms=now.epoch_ms())
-        if dead_workers:
-            self._fail_and_teardown(dead_workers)
 
     def _fail_and_teardown(
         self,

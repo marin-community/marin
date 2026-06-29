@@ -64,9 +64,10 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.reconcile.worker import WorkerReconcileResult
+from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -134,6 +135,25 @@ def run_worker_daemon_schedule(
     )
 
 
+def run_worker_daemon_reconcile(
+    worker_source: WorkerSource | None,
+    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
+    transport_events: list[WorkerHealthEvent],
+) -> ReconcileResult:
+    """Author reconcile effects from a fake's worker results and fold the observed
+    liveness — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.reconcile``'s
+    tail (resolve observations into effects, then fold transport + BUILD_FAILED
+    through the shared tracker reached via the source)."""
+    assert worker_source is not None, "worker-daemon backend reconciled before worker source attached"
+    now = Timestamp.now()
+    effects = apply_reconcile(worker_source, worker_results, now=now)
+    events = transport_events + [
+        WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
+    ]
+    dead = worker_source.health.apply(events, now_ms=now.epoch_ms())
+    return ReconcileResult(effects=effects, dead_workers=dead)
+
+
 class FakeProvider:
     """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
@@ -168,13 +188,14 @@ class FakeProvider:
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
         # reached worker healthy with no observations (these tests drive task
-        # transitions directly via the transition driver, not through RPCs).
+        # transitions directly via the transition driver, not through RPCs), then
+        # author effects + fold liveness exactly as the real backend does.
         assert self.worker_source is not None, "FakeProvider.reconcile called before worker source attached"
         snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return ReconcileResult(worker_results=worker_results, health_events=events)
+        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()

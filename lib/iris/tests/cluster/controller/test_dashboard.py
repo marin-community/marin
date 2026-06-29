@@ -1520,7 +1520,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path, l
     )
 
     # Reconcile to populate ClusterState.
-    provider.reconcile(
+    provider.sync(
         ControlSnapshot(
             worker_addresses={},
             reconcile_rows=[],
@@ -1603,7 +1603,7 @@ def test_k8s_cluster_status_enriches_scheduling_gated_pods_with_kueue_workload(s
         },
     )
 
-    provider.reconcile(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
+    provider.sync(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

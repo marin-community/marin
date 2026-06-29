@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
-from iris.cluster.backends.rpc.backend import RpcTaskBackend
+from iris.cluster.backends.rpc.backend import FleetObservation, RpcTaskBackend
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -32,7 +32,6 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
 )
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -49,6 +48,7 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
+    BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
     WorkerHealthEventKind,
@@ -60,7 +60,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_reconcile,
+)
 
 from .conftest import (
     dispatch_task,
@@ -73,6 +77,7 @@ from .conftest import (
     query_worker,
     reconcile_once,
     register_worker,
+    run_worker_daemon_reconcile,
     run_worker_daemon_schedule,
     submit_job,
 )
@@ -577,17 +582,17 @@ class _StubWorkerSource:
         raise NotImplementedError
 
 
-def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> ReconcileResult:
+def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> FleetObservation:
     provider.attach_worker_source(_StubWorkerSource(_reconcile_snapshot(worker_addresses)))
-    return provider.reconcile(ReconcileRequest())
+    return provider._observe_fleet()
 
 
 def _reconcile_one(provider: RpcTaskBackend, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
     # The backend now builds plans from the snapshot; ``plan`` here only fixes
     # which worker is reconciled. The RPC fan-out and observation surfacing are
     # what these dispatch-layer tests exercise.
-    result = _reconcile_with(provider, {plan.worker_id: address})
-    return [r for _, r in result.worker_results]
+    observation = _reconcile_with(provider, {plan.worker_id: address})
+    return [r for _, r in observation.worker_results]
 
 
 def test_dispatch_reconcile_plans_empty_short_circuits():
@@ -638,7 +643,7 @@ def test_reconcile_matching_responder_id_is_reached():
 
     result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
-    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
+    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
     assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
 
 
@@ -663,7 +668,7 @@ def test_reconcile_recycled_address_is_unreachable_not_reached():
 
     result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
-    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
+    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
     # The stale stub is evicted so the next tick re-resolves the address.
     assert _W1_ADDR not in factory.stubs
 
@@ -746,7 +751,7 @@ def _apply_observations(
         plan = _make_plan(worker_id, desired=desired)
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             [(plan, result)],
             endpoints=state._endpoints,
@@ -762,7 +767,7 @@ def _apply_failure(
 ):
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             [(plan, result)],
             endpoints=state._endpoints,
@@ -1195,7 +1200,7 @@ class _ScriptedProvider:
             (p, WorkerReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
         ]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return ReconcileResult(worker_results=worker_results, health_events=events)
+        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
 
     def close(self):
         pass
@@ -1370,7 +1375,7 @@ class _UnreachableProvider:
                     (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None))
                 )
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return ReconcileResult(worker_results=worker_results, health_events=events)
+        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         self.autoscale_calls.append(list(request.dead_workers))
@@ -1513,6 +1518,83 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     assert wid not in ctrl._health.all(), "evicted worker should be forgotten from the tracker"
 
 
+def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
+    """Report the worker's first still-held run attempt as a launch failure.
+
+    The kernel attributes an ASSIGNED -> WORKER_FAILED transition observed over
+    reconcile to the worker (a host that couldn't bring the attempt up), so
+    reporting exactly one held attempt WORKER_FAILED per tick charges exactly one
+    build failure. The attempt retries to an unassigned PENDING task without
+    consuming budget and drops out of the worker's held set, so the next tick's
+    first held attempt is a fresh one.
+    """
+    for desired in plan.request.desired:
+        if desired.HasField("run"):
+            return [
+                worker_pb2.Worker.AttemptObservation(
+                    attempt_uid=desired.attempt_uid,
+                    state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    error="host failed to launch attempt",
+                )
+            ]
+    return []
+
+
+def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
+    """The in-process backend's reconcile fold reaps a build-failing worker at the
+    threshold -- not one failure before.
+
+    Each reconcile pass charges one build failure (a worker-reported
+    ASSIGNED -> FAILED transition). The liveness fold now lives in the backend, so
+    the worker that crosses ``BUILD_FAILURE_THRESHOLD`` rides back as
+    ``dead_workers`` and the controller tears it down. The boundary is exact: the
+    worker survives the first ``BUILD_FAILURE_THRESHOLD - 1`` failures and is
+    removed on the one that reaches the threshold.
+    """
+    provider = _ScriptedProvider(script=[_fail_first_held] * BUILD_FAILURE_THRESHOLD)
+    ctrl = make_controller(provider=provider)
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl._health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    # One task per build failure we mean to charge, all assigned up front so the
+    # responder always has a fresh held attempt to fail. Generous retry budget
+    # keeps every task retrying (never terminal) so the job stays active and the
+    # worker keeps its place across all the passes.
+    tasks = submit_job(
+        state,
+        "build-fail-job",
+        make_job_request(
+            name="build-fail-job",
+            replicas=BUILD_FAILURE_THRESHOLD,
+            max_retries_failure=BUILD_FAILURE_THRESHOLD,
+        ),
+    )
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=wid) for task in tasks],
+            health=state._health,
+        )
+
+    # The first THRESHOLD - 1 build failures accrue but stay under the bar.
+    for expected_failures in range(1, BUILD_FAILURE_THRESHOLD):
+        reconcile_once(ctrl)
+        assert query_worker(state, wid) is not None, "worker reaped before reaching the build-failure threshold"
+        assert ctrl._health.liveness(wid).build_failures == expected_failures
+
+    # The THRESHOLD-th build failure trips the bar: the backend's fold returns the
+    # worker dead and the controller reaps it.
+    reconcile_once(ctrl)
+    assert query_worker(state, wid) is None, "worker should be reaped at the build-failure threshold"
+    assert wid not in ctrl._health.all(), "reaped worker should be forgotten from the tracker"
+
+
 # ===========================================================================
 # Section 6: same-batch coscheduling split-slice corruption (#2 / #3)
 # ===========================================================================
@@ -1627,7 +1709,7 @@ def _apply_batch(
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             plan_results,
             endpoints=state._endpoints,

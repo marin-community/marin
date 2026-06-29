@@ -13,19 +13,87 @@ placement state move into the backend's own store, only this class is replaced â
 the backend contract does not change.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+
+from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads
 from iris.cluster.controller.backend import BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow, WorkerAttrsSource
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, WorkerStatus, WorkerStatusMap, WorkerUsability
+from iris.cluster.types import (
+    AttemptUid,
+    JobName,
+    UserBudgetDefaults,
+    WorkerId,
+    WorkerStatus,
+    WorkerStatusMap,
+    WorkerUsability,
+)
 from iris.rpc import job_pb2
+
+
+def load_transition_snapshot(
+    db: ControllerDB,
+    *,
+    now: Timestamp,
+    seed_worker_ids: Iterable[WorkerId] = (),
+    observation_uids: Iterable[AttemptUid] = (),
+    seed_task_ids: Iterable[JobName] = (),
+    extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+) -> TransitionSnapshot:
+    """Open a control read snapshot and close it over the seeded entities.
+
+    The DB-backed read surface a backend authors its task projection through: it
+    runs the same loader the commit-side glue runs, but against a read-only
+    snapshot rather than the tick's write transaction, so the backend never
+    touches the controller database directly.
+    """
+    with db.control_read_snapshot() as snap:
+        return load_closed_snapshot(
+            snap,
+            now=now,
+            seed_worker_ids=seed_worker_ids,
+            observation_uids=observation_uids,
+            seed_task_ids=seed_task_ids,
+            extra_attempt_keys=extra_attempt_keys,
+        )
+
+
+@dataclass(frozen=True)
+class DbTransitionReader:
+    """A controller-DB-backed :class:`~...reconcile.loader.TransitionReader`.
+
+    Gives a placement-owning backend (one with no :class:`WorkerSource`) a read
+    snapshot to author its dispatch effects from, without handing it the DB.
+    """
+
+    db: ControllerDB
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        return load_transition_snapshot(
+            self.db,
+            now=now,
+            seed_worker_ids=seed_worker_ids,
+            observation_uids=observation_uids,
+            seed_task_ids=seed_task_ids,
+            extra_attempt_keys=extra_attempt_keys,
+        )
 
 
 @dataclass(frozen=True)
@@ -42,6 +110,24 @@ class DbWorkerSource:
     worker_attrs: WorkerAttrsSource
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        return load_transition_snapshot(
+            self.db,
+            now=now,
+            seed_worker_ids=seed_worker_ids,
+            observation_uids=observation_uids,
+            seed_task_ids=seed_task_ids,
+            extra_attempt_keys=extra_attempt_keys,
+        )
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         with self.db.control_read_snapshot() as snap:

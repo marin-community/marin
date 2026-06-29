@@ -5,9 +5,10 @@
 
 The worker-daemon backend used by the GCP/TPU, CoreWeave-bare-metal, manual, and
 local clusters. The Iris scheduler assigns task→worker; this backend fans the
-per-worker Reconcile RPC out to the worker daemons, reports the raw observations
-back to the controller, and surfaces the per-worker liveness it observed
-(REACHED / UNREACHABLE) as health events the controller folds.
+per-worker Reconcile RPC out to the worker daemons, resolves the observations
+into task ``effects`` from its own read snapshot, and folds the per-worker
+liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
+through the single shared liveness tracker into the ``dead_workers`` it returns.
 """
 
 import asyncio
@@ -17,7 +18,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
-from rigging.timing import Duration
+from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
@@ -38,6 +39,8 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
     user_admitted,
 )
+from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
@@ -88,6 +91,20 @@ def _fan_out(
         return await asyncio.gather(*(run_one(sem, item) for item in items))
 
     return asyncio.run(_run())
+
+
+@dataclass(frozen=True)
+class FleetObservation:
+    """One reconcile fan-out's raw outcome.
+
+    The per-worker results paired with their plans, and the transport liveness
+    each yielded (REACHED / UNREACHABLE). :meth:`RpcTaskBackend.reconcile`
+    resolves the results into effects and folds the liveness; the split is a seam
+    the dispatch-layer tests target.
+    """
+
+    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
+    transport_events: list[WorkerHealthEvent]
 
 
 class WorkerStubFactory(Protocol):
@@ -175,6 +192,9 @@ class RpcTaskBackend:
         """Attach this backend's live-worker read surface."""
         self.worker_source = source
 
+    def attach_transition_reader(self, reader: TransitionReader) -> None:
+        raise AssertionError("worker-daemon backend authors effects through its worker source")
+
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
@@ -209,15 +229,14 @@ class RpcTaskBackend:
             zone_capabilities,
         )
 
-    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Source this backend's placement, fan the Reconcile RPC out, observe liveness.
+    def _observe_fleet(self) -> "FleetObservation":
+        """Source this backend's placement, fan the Reconcile RPC out, classify liveness.
 
         The reconcile snapshot (worker addresses + reconcile rows + job specs) comes
-        from this backend's own :class:`WorkerSource`; ``request`` (the cluster-view
-        dispatch drain) is unused here. Each per-worker RPC carries the stub
-        factory's deadline and the fan-out caps concurrency at ``parallelism``, so
-        this returns in bounded time even when the whole fleet is hung. Each outcome
-        yields a health event the controller folds:
+        from this backend's own :class:`WorkerSource`. Each per-worker RPC carries
+        the stub factory's deadline and the fan-out caps concurrency at
+        ``parallelism``, so this returns in bounded time even when the whole fleet
+        is hung. Each outcome yields a transport liveness signal:
 
         * a healthy response is REACHED;
         * an RPC error/timeout is UNREACHABLE, and the (likely broken) stub is
@@ -226,7 +245,8 @@ class RpcTaskBackend:
           UNREACHABLE so the worker is eventually reaped, but the connection is
           fine so the stub is kept.
 
-        The backend never decides a worker is dead — it only observes.
+        Pure observation: the raw per-worker results and their transport signals,
+        which :meth:`reconcile` then resolves into effects and folds into liveness.
         """
         assert self.worker_source is not None, "RpcTaskBackend.reconcile called before worker source attached"
         snapshot = self.worker_source.reconcile_snapshot()
@@ -238,11 +258,11 @@ class RpcTaskBackend:
         results = _fan_out(plans, self.parallelism, _one)
 
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
-        health_events: list[WorkerHealthEvent] = []
+        transport_events: list[WorkerHealthEvent] = []
         for plan, result in worker_results:
             address = snapshot.worker_addresses[plan.worker_id]
             if result.error is not None:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
             elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
                 # Misrouted reconcile: a *different* live worker answered at this
@@ -259,13 +279,40 @@ class RpcTaskBackend:
                     address,
                     result.responder_worker_id,
                 )
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
             elif not result.self_healthy:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return ReconcileResult(worker_results=worker_results, health_events=health_events)
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+        return FleetObservation(worker_results=worker_results, transport_events=transport_events)
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        """Observe the fleet, resolve its observations into effects, fold liveness.
+
+        ``request`` (the cluster-view dispatch drain) is unused here — a
+        worker-daemon backend sources its own placement. :meth:`_observe_fleet`
+        fans the Reconcile RPC out and classifies transport liveness; this resolves
+        the observations into task ``effects`` against the backend's own read
+        snapshot and folds the liveness it observed — the transport signals plus
+        the kernel-derived BUILD_FAILED — through the single shared
+        ``WorkerHealthTracker.apply``, returning the workers that fold reaped as
+        ``dead_workers``.
+        """
+        assert self.worker_source is not None, "RpcTaskBackend.reconcile called before worker source attached"
+        observation = self._observe_fleet()
+
+        # Resolve observations into effects, then fold liveness. The order matches
+        # the controller's prior fold: transport events first, then the kernel's
+        # BUILD_FAILED; both go through the SAME shared tracker reached via the
+        # worker source, so the startup seed and reopen hook are preserved.
+        now = Timestamp.now()
+        effects = apply_reconcile(self.worker_source, observation.worker_results, now=now)
+        events = observation.transport_events + [
+            WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
+        ]
+        dead = self.worker_source.health.apply(events, now_ms=now.epoch_ms())
+        return ReconcileResult(effects=effects, dead_workers=dead)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.

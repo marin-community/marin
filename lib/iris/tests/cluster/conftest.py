@@ -14,16 +14,18 @@ from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_source import DbTransitionReader
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
@@ -233,14 +235,11 @@ class ServiceTestHarness:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
+        # The backend now authors its dispatch effects; the controller (here, the
+        # harness) just commits them.
         result = self.k8s_provider.reconcile(snapshot)
         with self.db.transaction() as cur:
-            apply_dispatch_updates(
-                cur,
-                result.updates,
-                endpoints=self.state._endpoints,
-                now=Timestamp.now(),
-            )
+            commit_effects(cur, result.effects, endpoints=self.state._endpoints)
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -449,6 +448,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         controller_address="http://localhost:0",
         cluster_scan_interval=0.0,
     )
+    k8s_provider.attach_transition_reader(DbTransitionReader(db))
 
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})

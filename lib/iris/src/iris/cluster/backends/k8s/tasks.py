@@ -39,6 +39,8 @@ from iris.cluster.controller.backend import (
     WorkerSource,
     user_admitted,
 )
+from iris.cluster.controller.ops.task import apply_dispatch_updates
+from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
@@ -1443,6 +1445,9 @@ class K8sTaskProvider:
     allowed_users: frozenset[str] = frozenset({"*"})
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
+    # The controller-DB read surface this backend authors its dispatch effects
+    # from, attached by the controller once (a cluster backend has no WorkerSource).
+    transition_reader: TransitionReader | None = field(default=None, init=False, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
@@ -1490,7 +1495,24 @@ class K8sTaskProvider:
         """Never called: a cluster backend owns its own placement, with no Iris workers."""
         raise AssertionError("K8sTaskProvider sources its own placement; no worker source should be attached")
 
+    def attach_transition_reader(self, reader: TransitionReader) -> None:
+        """Attach the controller-DB read surface this backend authors effects from."""
+        self.transition_reader = reader
+
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        """Author the pod projection: sync task state, then resolve it into effects.
+
+        ``sync`` converges the cluster (apply new pods, delete strays, poll running
+        pods) and returns the neutral task updates it observed; this resolves those
+        into committable task ``effects`` against the backend's own read snapshot.
+        A cluster backend tracks no Iris workers, so ``dead_workers`` is empty.
+        """
+        assert self.transition_reader is not None, "K8sTaskProvider.reconcile called before transition reader attached"
+        updates = self.sync(request)
+        effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
+        return ReconcileResult(effects=effects, dead_workers=[])
+
+    def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
         Kill targets are derived here, not buffered in the controller: any
@@ -1533,7 +1555,7 @@ class K8sTaskProvider:
 
         now = time.time()
         if now - self._last_cluster_scan < self.cluster_scan_interval:
-            return ReconcileResult(updates=apply_failures)
+            return apply_failures
         self._last_cluster_scan = now
 
         # Single pod list for the entire cycle — excludes terminal pods via field selector.
@@ -1576,7 +1598,7 @@ class K8sTaskProvider:
 
         self._maybe_gc_terminal_resources(managed_pods)
 
-        return ReconcileResult(updates=updates)
+        return updates
 
     def profile_task(
         self,

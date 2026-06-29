@@ -20,18 +20,19 @@ The controller calls all three methods uniformly and never branches on backend
 type: a backend no-ops where a phase doesn't apply (the worker-daemon backend's
 ``schedule`` runs the Iris scheduler while a cluster backend returns empty; the
 cluster backend's ``reconcile`` reconciles pods while it owns its own capacity,
-so its ``autoscale`` returns empty). Within a method, the apply path dispatches
-on which result field is populated — e.g. a worker-daemon ``reconcile`` returns
-``worker_results`` + ``health_events`` while a cluster ``reconcile`` returns
-``updates``.
+so its ``autoscale`` returns empty). Every backend authors its own per-tick
+projection (task status + worker liveness + placement) and returns it uniformly:
+``reconcile`` yields a :class:`ReconcileResult` carrying the committable task
+``effects`` plus the ``dead_workers`` its own liveness fold reaped, and the
+controller just stores the effects and tears the dead workers down.
 
 :attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
 and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
 exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
 the controller drains the dispatch queue (a DB write it owns) and hands the
-promoted tasks to that backend's ``reconcile``. Worker liveness is OBSERVED by
-worker-daemon backends and folded by the controller; cluster backends have no
-Iris workers, so they emit no health events.
+promoted tasks to that backend's ``reconcile``. A worker-daemon backend instead
+sources its own placement and folds the liveness it observed; a cluster backend
+has no Iris workers, so its ``dead_workers`` is always empty.
 """
 
 import logging
@@ -45,13 +46,13 @@ from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.reconcile import ControllerEffects
+from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
     WorkerReconcilePlan,
-    WorkerReconcileResult,
     build_reconcile_plans,
 )
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
@@ -74,7 +75,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     WorkerSnapshot,
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.controller.worker_health import WorkerHealthEvent
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId, WorkerStatusMap
 from iris.rpc import job_pb2, worker_pb2
 
@@ -93,9 +94,10 @@ class BackendCapability(StrEnum):
     """A descriptor flag the dashboard and on-demand RPC routing key on.
 
     Mostly metadata: the controller calls ``schedule``/``reconcile``/``autoscale``
-    uniformly regardless of these flags. The one per-tick exception is
-    ``CLUSTER_VIEW``, which tells the controller to drain the dispatch queue into
-    the reconcile snapshot (a DB write the placement-owning backend can't do).
+    uniformly regardless of these flags, and stores each backend's authored
+    projection the same way. The one per-tick exception is ``CLUSTER_VIEW``, which
+    tells the controller to drain the dispatch queue into the reconcile request (a
+    DB write the placement-owning backend can't do).
     """
 
     WORKER_DAEMON = "workers"
@@ -197,24 +199,21 @@ class ScheduleResult:
 
 @dataclass(frozen=True)
 class ReconcileResult:
-    """What :meth:`TaskBackend.reconcile` observed this tick.
+    """The projection :meth:`TaskBackend.reconcile` authored this tick.
 
-    The two carriers reflect the backend kind, not different methods: a
-    worker-daemon backend populates ``worker_results`` + ``health_events``; a
-    cluster (pod) backend populates ``updates``. The controller's reconcile apply
-    path dispatches on which is non-empty.
+    Uniform across backend kinds: the backend converges its execution substrate,
+    resolves what it observed into task-state ``effects``, and folds the liveness
+    it observed into ``dead_workers``. The controller commits ``effects`` and
+    tears down ``dead_workers``; it does not re-derive either.
     """
 
-    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = field(default_factory=list)
-    """Worker-daemon reconcile outcomes, each paired with the plan that produced
-    it. The pairing is required because resolving these to task state needs the
-    DB/overlay (it is not a backend-side concern), so the backend cannot
-    pre-convert them to neutral ``updates``."""
-    updates: list[TaskUpdate] = field(default_factory=list)
-    """Neutral task-state updates from a direct (e.g. Kubernetes) provider."""
-    health_events: list[WorkerHealthEvent] = field(default_factory=list)
-    """Per-worker liveness the backend OBSERVED (REACHED / UNREACHABLE). The
-    controller folds these through the single ``WorkerHealthTracker.apply``."""
+    effects: ControllerEffects = field(default_factory=ControllerEffects)
+    """The committable task/attempt/job projection this backend authored from its
+    own read snapshot (``commit_effects`` drains it into the tick transaction)."""
+    dead_workers: list[WorkerId] = field(default_factory=list)
+    """Workers this backend's own liveness fold reaped this tick. The controller
+    fails them and tears down their slices. Always empty for a cluster backend,
+    which has no Iris workers to track."""
 
 
 @dataclass(frozen=True)
@@ -445,15 +444,23 @@ def apply_placements(
     return all_assignments, context, gated.jobs
 
 
-class WorkerSource(Protocol):
+class WorkerSource(TransitionReader, Protocol):
     """A worker-daemon backend's live worker + placement read surface.
 
-    The backend reads its own workers, placement and worker-status through this;
-    the controller never partitions a worker snapshot for it. In-process backends
-    back this with a scale-group-scoped read of the controller DB. When placement
-    state moves into the backend, only the implementation behind this interface
-    changes — the :class:`TaskBackend` contract does not.
+    The backend reads its own workers, placement and worker-status through this,
+    authors its task projection through the inherited
+    :meth:`~TransitionReader.transition_snapshot`, and folds the liveness it
+    observed through the shared :attr:`health` tracker; the controller never
+    partitions a worker snapshot for it. In-process backends back this with a
+    scale-group-scoped read of the controller DB. When placement state moves into
+    the backend, only the implementation behind this interface changes — the
+    :class:`TaskBackend` contract does not.
     """
+
+    health: WorkerHealthTracker
+    """The single shared liveness tracker. The backend folds the per-worker
+    REACHED/UNREACHABLE/BUILD_FAILED it observed through ``health.apply`` — it is
+    the SAME object the controller constructs, seeds, and reaps against."""
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         """This backend's live workers, their building counts, and running attempts."""
@@ -531,14 +538,16 @@ class TaskBackend(Protocol):
         ...
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        """Converge the backend toward the desired state and report observations.
+        """Converge the backend toward the desired state and author the projection.
 
         Bounded I/O. Worker-daemon backends source their own worker/placement
-        snapshot, fan the reconcile RPC out, and return ``worker_results`` plus
-        the per-worker liveness they OBSERVED (``health_events``); cluster backends
-        apply/poll the pods in ``request`` and return neutral ``updates``. The
-        backend never decides a worker dead — the controller folds
-        ``health_events`` through ``WorkerHealthTracker.apply``.
+        snapshot, fan the reconcile RPC out, and resolve the observations into
+        task ``effects`` while folding the per-worker liveness they observed into
+        ``dead_workers``; cluster backends apply/poll the pods in ``request`` and
+        resolve those into ``effects`` (their ``dead_workers`` is always empty).
+        Either way the backend authors its own projection from its own read
+        snapshot; the controller only commits ``effects`` and tears down
+        ``dead_workers``.
         """
         ...
 
@@ -571,6 +580,16 @@ class TaskBackend(Protocol):
         Called once by the controller after it builds the health tracker, worker
         attributes and run-template cache the source needs. Only meaningful for
         worker-daemon backends; capacity-managing backends (k8s) ignore it.
+        """
+        ...
+
+    def attach_transition_reader(self, reader: TransitionReader) -> None:
+        """Attach the read surface a placement-owning backend authors effects from.
+
+        Called once by the controller for ``CLUSTER_VIEW`` backends, which have no
+        :class:`WorkerSource` but still resolve their dispatch drain into task
+        ``effects`` from a controller-DB read snapshot. Worker-daemon backends
+        author through their :class:`WorkerSource` instead and never receive one.
         """
         ...
 

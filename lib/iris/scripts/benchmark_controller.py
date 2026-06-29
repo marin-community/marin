@@ -83,6 +83,7 @@ from iris.cluster.controller.reads import (  # noqa: F401
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
@@ -119,6 +120,7 @@ from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import CursorTransitionReader
 
 
 def _worker_addresses_for_tasks(db, tasks):
@@ -215,17 +217,18 @@ class _FakeProvider:
         raise RuntimeError("fake provider")
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
-        # Same shape the test-suite FakeProvider returns. Only exercised if
+        # Same projection the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
         assert self.worker_source is not None
         snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
-        return ReconcileResult(
-            worker_results=[
-                (p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans
-            ],
-            health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
-        )
+        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
+        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
+        now = Timestamp.now()
+        effects = apply_reconcile(self.worker_source, worker_results, now=now)
+        events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
+        dead = self.worker_source.health.apply(events, now_ms=now.epoch_ms())
+        return ReconcileResult(effects=effects, dead_workers=dead)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
@@ -1762,12 +1765,9 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
-                    ops.worker.apply_reconcile(
-                        cur,
-                        plan_results,
-                        endpoints=write_txns._endpoints,
-                        now=Timestamp.now(),
-                    )
+                    now = Timestamp.now()
+                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    commit_effects(cur, effects, endpoints=write_txns._endpoints)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
             errors.append(e)
@@ -2708,6 +2708,9 @@ class _PrebuiltWorkerSource:
     """
 
     snapshot: ControlSnapshot
+    # The benchmark times only the RPC fan-out (``_observe_fleet``), which never
+    # folds liveness; the tracker is present solely to satisfy ``WorkerSource``.
+    health: WorkerHealthTracker = dataclasses.field(default_factory=WorkerHealthTracker)
 
     def reconcile_snapshot(self) -> ControlSnapshot:
         return self.snapshot
@@ -2716,6 +2719,9 @@ class _PrebuiltWorkerSource:
         raise NotImplementedError
 
     def worker_status(self):
+        raise NotImplementedError
+
+    def transition_snapshot(self, **kwargs):
         raise NotImplementedError
 
 
@@ -2735,16 +2741,12 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     # (measured above) and hands it back through a stub source so the RPC fan-out
     # is what t2..t3 times.
     provider.attach_worker_source(_PrebuiltWorkerSource(snapshot))
-    worker_results = provider.reconcile(ReconcileRequest()).worker_results
+    worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.db.transaction() as cur:
-        apply_reconcile(
-            cur,
-            worker_results,
-            endpoints=state.txns._endpoints,
-            now=now,
-        )
+        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        commit_effects(cur, effects, endpoints=state.txns._endpoints)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
 
