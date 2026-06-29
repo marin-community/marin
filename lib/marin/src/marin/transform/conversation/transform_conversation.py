@@ -19,6 +19,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,24 @@ DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_th
 logger = logging.getLogger(__name__)
 
 
+class RowFilterOperator(StrEnum):
+    """Supported row filter operations for streamed SFT transforms."""
+
+    EQUALS = "equals"
+    NOT_EQUALS = "not_equals"
+    NON_EMPTY = "non_empty"
+    EMPTY = "empty"
+
+
+@dataclass(frozen=True)
+class RowFilter:
+    """Filter applied to raw dataset rows before transforming them."""
+
+    column: str
+    operator: RowFilterOperator
+    value: Any | None = None
+
+
 @dataclass(frozen=True)
 class TransformSFTDatasetConfig:
     """Base configuration to transform a conversation dataset from huggingface json to OpenAI format.
@@ -51,6 +70,8 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        row_filters (list[RowFilter]): Filters to apply to raw rows before transformation.
+        max_examples_per_split (int | None): Optional deterministic cap per split after filtering.
         max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
             Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
@@ -62,6 +83,8 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    row_filters: list[RowFilter] = field(default_factory=list)
+    max_examples_per_split: int | None = None
     max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
@@ -79,11 +102,11 @@ class ShardTask:
     cfg: TransformSFTDatasetConfig
 
 
-def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
+def generate_hash_from_messages(messages: list[dict[str, Any]]) -> str:
     """Generate a hash from a list of messages.
 
     Args:
-        messages (List[Dict[str, str]]): A list of messages.
+        messages (List[Dict[str, Any]]): A list of messages.
 
     Returns:
         str: A hash of the messages.
@@ -116,6 +139,50 @@ def _normalize_tool_structures(message: dict) -> dict:
         message["tool_calls"] = normalized_calls
 
     return message
+
+
+def _has_value(value: object) -> bool:
+    if value is None:
+        return False
+    if value == "":
+        return False
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return len(value) > 0
+    if isinstance(value, dict):
+        return len(value) > 0
+    return True
+
+
+def row_matches_filters(row: dict[str, Any], row_filters: Sequence[RowFilter]) -> bool:
+    """Return whether a raw dataset row satisfies all configured filters."""
+
+    for row_filter in row_filters:
+        operator = RowFilterOperator(row_filter.operator)
+        value = row.get(row_filter.column)
+        if operator == RowFilterOperator.EQUALS and value != row_filter.value:
+            return False
+        if operator == RowFilterOperator.NOT_EQUALS and value == row_filter.value:
+            return False
+        if operator == RowFilterOperator.NON_EMPTY and not _has_value(value):
+            return False
+        if operator == RowFilterOperator.EMPTY and _has_value(value):
+            return False
+    return True
+
+
+def shard_example_limit(max_examples_per_split: int | None, num_shards: int, shard_idx: int) -> int | None:
+    """Return a deterministic per-shard cap for a split-level example limit."""
+
+    if max_examples_per_split is None:
+        return None
+    if max_examples_per_split < 0:
+        raise ValueError("max_examples_per_split must be non-negative.")
+    if num_shards <= 0:
+        raise ValueError("num_shards must be positive.")
+    if shard_idx < 0 or shard_idx >= num_shards:
+        raise ValueError("shard_idx must be within num_shards.")
+    base, remainder = divmod(max_examples_per_split, num_shards)
+    return base + int(shard_idx < remainder)
 
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
@@ -314,6 +381,9 @@ def process_shard_task(task: ShardTask) -> dict:
     Loads a specific shard from HuggingFace Hub, transforms records, and writes to output file.
     """
     adapter = unwrap_versioned_value(task.cfg.adapter).copy()
+    row_filters = unwrap_versioned_value(task.cfg.row_filters) or []
+    max_examples_per_split = unwrap_versioned_value(task.cfg.max_examples_per_split)
+    shard_limit = shard_example_limit(max_examples_per_split, task.num_shards, task.shard_idx)
 
     subset_name = task.subset or "default"
     output_filename = _shard_filename(task.output_path, task.shard_idx)
@@ -342,9 +412,17 @@ def process_shard_task(task: ShardTask) -> dict:
 
     def transform_records():
         """Generator that yields transformed records."""
+        written_count = 0
+        if shard_limit == 0:
+            return
         for raw_row in shard_dataset:
+            if not row_matches_filters(raw_row, row_filters):
+                continue
+            if shard_limit is not None and written_count >= shard_limit:
+                break
             transformed_row = transform_row(raw_row, task.cfg, adapter)
             if transformed_row is not None:
+                written_count += 1
                 yield transformed_row.model_dump()
 
     result = write_jsonl_file(transform_records(), output_filename)

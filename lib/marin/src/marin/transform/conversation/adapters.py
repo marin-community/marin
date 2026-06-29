@@ -4,7 +4,7 @@
 import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from marin.core.conversation import OpenAIChatMessage
@@ -55,6 +55,13 @@ class InputDatasetFormat(str, Enum):
     INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
 
 
+class ReasoningContentMode(StrEnum):
+    """How to handle a separate reasoning field in assistant messages."""
+
+    PRESERVE_FIELD = "preserve_field"
+    DROP = "drop"
+
+
 @dataclass
 class TransformAdapter:
     dataset_format: InputDatasetFormat = InputDatasetFormat.INSTRUCTION_RESPONSE
@@ -80,6 +87,9 @@ class TransformAdapter:
     system_value: str = "system"
     content_key: str = "content"
     tool_value: str = "tool"
+    reasoning_content_key: str = ""
+    reasoning_content_mode: ReasoningContentMode = ReasoningContentMode.DROP
+    message_passthrough_keys: tuple[str, ...] = ()
 
     # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
@@ -128,7 +138,25 @@ class TransformAdapter:
             conversation = row[self.conversation_column]
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
-                messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
+                content = conv[self.content_key]
+                message_fields: dict[str, Any] = {"role": role, "content": content}
+                for key in self.message_passthrough_keys:
+                    if key in {self.role_key, self.content_key}:
+                        continue
+                    if key not in conv:
+                        continue
+                    value = conv[key]
+                    if value is None:
+                        continue
+                    if value == "":
+                        continue
+                    if isinstance(value, list) and not value:
+                        continue
+                    if key == self.reasoning_content_key:
+                        if self.reasoning_content_mode == ReasoningContentMode.DROP:
+                            continue
+                    message_fields[key] = value
+                messages.append(OpenAIChatMessage(**message_fields))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
             messages = []
