@@ -6119,3 +6119,53 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   - Let the existing watch automation continue. Main lane should still run
     `./infra/pre-commit.py --review --agent-command 'codex exec'` after the
     16:30 PDT quota window unless the probe reaches a terminal milestone first.
+
+### 2026-06-29 15:55 - MOE-MGPU-371 N2 one-GPU task probe terminal result
+- Hypothesis: the N2 one-GPU-per-process probe should clarify whether the
+  committed `SCALE_GPUS_PER_TASK` launcher decomposition gets past the previous
+  wrong-topology NVSHMEM failure, and whether the remaining multi-host runtime
+  blocker is still the NVSHMEM bootstrap UID socket path.
+- Commit Hash: active run launched from `d2304dea9`; current branch head
+  `e01c20b66`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542/grug-train-grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+- Commands:
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job list --json --prefix /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job summary --json /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542/grug-train-grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542`
+  - `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a job logs --since-seconds 900 /dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542 | rg -i "..."`
+- Result:
+  - Parent and child reached `JOB_STATE_KILLED` with `error="Terminated by user"`.
+  - Child had `task_count=16`, `task_state_counts={"killed": 16}`,
+    `completed_count=16`, `preemption_count=0`, and per-task duration about
+    `57.8s` in the final summary. Task 10 reported exit code `139`, but Iris
+    still marked the task killed with `error="Terminated by user"`.
+  - The child step name included `t16x1`, confirming the intended one-GPU task
+    decomposition.
+  - Before the kill, logs showed repeated NVSHMEM bootstrap UID socket failures
+    on multiple tasks:
+    `socketStartConnect: exceeded timeouts (3)` followed by
+    `Bootstrap plugin init failed for 'nvshmem_bootstrap_uid.so.3'`.
+  - No train-step metrics or checkpoint appeared before the terminal kill.
+  - The app-side `watch-moe-mgpu-works-probes` heartbeat delete returned
+    `not_found`, so there is no live app automation left to delete.
+- Interpretation:
+  - The one-GPU-per-process decomposition fixed the earlier wrong-topology
+    `NVSHMEM API is only supported with one device per process` failure for this
+    multi-host probe, but the run reproduced the existing NVSHMEM bootstrap UID
+    socket timeout before training.
+  - This is evidence against the experimental multi-host replicated tryout under
+    current Iris/CoreWeave runtime conditions, not against the spec's validated
+    single-node/NVLink Pallas MGPU target.
+  - The current branch's Pallas-specific launcher guard would now reject this
+    `SCALE_GPUS_PER_TASK=1`, `SCALE_EXPERT_AXIS=8`, `pallas_mgpu` combination
+    before submission; the terminal run was launched from the earlier
+    `d2304dea9` commit.
+  - No #6597 issue update: this is an out-of-spec multi-host diagnostic and an
+    operational negative result, not a new spec milestone or fundamental blocker
+    for the single-node target.
+- Next action:
+  - Keep the tryout runbook's multi-node section conservative. Proceed with the
+    post-quota lint-review gate for the single-node/NVLink branch readiness.

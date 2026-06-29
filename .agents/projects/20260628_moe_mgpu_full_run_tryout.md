@@ -46,6 +46,14 @@ same padded-capacity path validated by the H100 kernel tests.
   runtime could not load NVSHMEM. This does not contradict the single-node
   NVLink EP target in the spec, but it means the current multi-node tryout
   recipe is not known-good.
+- A later 2-node one-GPU-per-process diagnostic
+  `/dlwh/grug-moe-pallas-mgpu-target-20step-r2-onegpu2-20260629-223542` created
+  the intended 16 child tasks (`t16x1`) and got past the previous
+  one-device-per-process NVSHMEM failure, but reproduced
+  `socketStartConnect: exceeded timeouts (3)` /
+  `Bootstrap plugin init failed for 'nvshmem_bootstrap_uid.so.3'` before train
+  metrics, then was killed. Current branch code now rejects that topology for
+  `pallas_mgpu` when `SCALE_GPUS_PER_TASK < SCALE_EXPERT_AXIS`.
 - A later B-tiled CE R=N scale sweep at the larger default 90B-ish shape
   (`hidden_dim=3072`, `num_layers=48`, `num_experts=128`) was killed after n4,
   n8, and n16 jobs hit pre-step GPU OOM while allocating 576 MiB during
@@ -99,7 +107,10 @@ only for checking that the full trainer can replicate that single-node EP group
 across multiple nodes. It is not known-good as of
 `/dlwh/grug-moe-pallas-mgpu-target-20step-r4-fixedaxis-20260629-143835`: the
 corrected r4 run passed the Pallas MGPU data-axis guard but failed pre-step on a
-missing NVSHMEM load in the multi-node distributed runtime.
+missing NVSHMEM load in the multi-node distributed runtime. A later N2
+one-GPU-per-process diagnostic got past that device-topology issue but failed
+pre-step on NVSHMEM bootstrap UID socket timeouts, so multi-host Pallas MGPU
+remains a runtime/infrastructure experiment rather than a known-good tryout.
 
 The launcher has an experimental `SCALE_GPUS_PER_TASK` knob for decomposing the
 logical GPU allocation into smaller Python processes. The current validated
