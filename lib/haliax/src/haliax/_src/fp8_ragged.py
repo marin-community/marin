@@ -22,7 +22,7 @@ from jax import custom_vjp
 
 from haliax._src import mixed_fp8_wgmma_shim
 from haliax._src.fp8 import _new_scale_and_history, dequantize, in_q, out_dq, quantize
-from haliax._src.fp8_cast_transpose import cast_transpose, in_q_transpose
+from haliax._src.fp8_cast_transpose import cast_transpose, in_q_transpose, in_q_transpose_3d
 from haliax._src.fp8_ragged_guards import Fp8Contraction, assert_fp8_contraction
 from haliax.nn.ragged_dot import (
     _AUTO_FALLBACK_EXCEPTIONS,
@@ -68,10 +68,15 @@ def _ragged_dot_layout(
     dimension_numbers: jax.lax.RaggedDotDimensionNumbers,
     preferred_element_type: jnp.dtype,
     implementation: Implementation,
+    rhs_pretransposed: jax.Array | None = None,
 ) -> jax.Array:
     """Single grouped matmul for one ragged-dot layout (forward/dlhs/drhs), backend-dispatched
     like ``ragged_dot`` but with an explicit output dtype so the f8 operands accumulate into
-    ``preferred_element_type`` rather than being truncated back to f8 on store."""
+    ``preferred_element_type`` rather than being truncated back to f8 on store.
+
+    ``rhs_pretransposed`` is the K-contiguous f8 weights (from the fused cast-transpose) for the mosaic
+    forward layout; when given, the mosaic kernel skips the XLA ``swapaxes`` (GFP8-OPT-R4). Ignored by
+    the triton/xla backends, which consume the natural ``rhs`` layout."""
     last_exc: Exception | None = None
     for impl in _preferred_implementations(implementation):
         try:
@@ -82,6 +87,7 @@ def _ragged_dot_layout(
                     group_sizes,
                     dimension_numbers,
                     out_dtype=preferred_element_type,
+                    rhs_pretransposed=rhs_pretransposed,
                 )
             if impl == "triton":
                 return _triton_pallas_call(
@@ -112,7 +118,7 @@ def _ragged_dot_layout(
     )
 
 
-@partial(custom_vjp, nondiff_argnums=(10, 11, 12, 13))
+@partial(custom_vjp, nondiff_argnums=(11, 12, 13, 14))
 def quantized_ragged_dot(
     lhs,
     q_lhs,
@@ -120,6 +126,7 @@ def quantized_ragged_dot(
     lhs_scale,
     rhs,
     q_rhs,
+    q_rhs_t,
     rhs_scale,
     out_grad_scale,
     out_grad_amax_history,
@@ -133,7 +140,9 @@ def quantized_ragged_dot(
     ``grad_dtype`` output-grad backward. Full-precision ``lhs``/``rhs`` are passed only to route
     their gradients (the forward consumes the quantized operands). ``q_lhs_t`` is the cast-transposed
     (token-contiguous) f8 activations the f8 weight-gradient consumes; it is unused on the bf16-wgrad
-    / triton / xla backward (where the caller passes ``q_lhs`` as a placeholder).
+    / triton / xla backward (where the caller passes ``q_lhs`` as a placeholder). ``q_rhs_t`` is the
+    cast-transposed (K-contiguous) f8 weights the mosaic forward consumes in place of an XLA swapaxes
+    (GFP8-OPT-R4); on the triton/xla forward it is a placeholder (the caller passes ``q_rhs``).
 
     ``grad_dtype`` selects the backward gradient format: E5M2 (the Transformer-Engine hybrid
     recipe, default) or E4M3 (the all-E4M3 recipe; with coarse per-tensor scaling this is the
@@ -148,6 +157,7 @@ def quantized_ragged_dot(
         _DEFAULT_DIM_NUMS,
         preferred_element_type,
         implementation,
+        rhs_pretransposed=q_rhs_t if implementation == "mosaic" else None,
     )
 
 
@@ -158,6 +168,7 @@ def quantized_ragged_dot_fwd(
     lhs_scale,
     rhs,
     q_rhs,
+    q_rhs_t,
     rhs_scale,
     out_grad_scale,
     out_grad_amax_history,
@@ -177,6 +188,7 @@ def quantized_ragged_dot_fwd(
         _DEFAULT_DIM_NUMS,
         preferred_element_type,
         implementation,
+        rhs_pretransposed=q_rhs_t if implementation == "mosaic" else None,
     )
     res = (
         q_lhs,
@@ -274,15 +286,16 @@ def quantized_ragged_dot_bwd(
 
     return (
         grad_lhs,
-        None,
-        None,
-        None,
+        None,  # q_lhs
+        None,  # q_lhs_t
+        None,  # lhs_scale
         grad_rhs,
-        None,
-        None,
+        None,  # q_rhs
+        None,  # q_rhs_t
+        None,  # rhs_scale
         new_out_grad_scale,
         new_out_grad_amax_history,
-        None,
+        None,  # group_sizes
     )
 
 
@@ -349,7 +362,15 @@ def fp8_scaled_ragged_dot(
         q_lhs_t = (
             q_lhs  # placeholder; the bf16-wgrad / triton / xla backward never reads it
         )
-    q_rhs, new_rhs_scale = in_q(quantize_compute_type, rhs, rhs_scale, rhs_amax_history)
+    if implementation == "mosaic":
+        # Fused cast-transpose of the weights -> rowwise q_rhs (dlhs backward) + K-contiguous q_rhs_t
+        # (forward), replacing the per-step XLA swapaxes in the mosaic forward (GFP8-OPT-R4).
+        q_rhs, q_rhs_t, new_rhs_scale = in_q_transpose_3d(
+            quantize_compute_type, rhs, rhs_scale, rhs_amax_history
+        )
+    else:
+        q_rhs, new_rhs_scale = in_q(quantize_compute_type, rhs, rhs_scale, rhs_amax_history)
+        q_rhs_t = q_rhs  # placeholder; the triton/xla forward consumes the natural rhs layout
     y = quantized_ragged_dot(
         lhs,
         q_lhs,
@@ -357,6 +378,7 @@ def fp8_scaled_ragged_dot(
         new_lhs_scale,
         rhs,
         q_rhs,
+        q_rhs_t,
         new_rhs_scale,
         grad_scale,
         grad_amax_history,
