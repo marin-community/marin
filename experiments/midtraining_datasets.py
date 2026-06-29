@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
+from marin.datakit.download.olympiad_books_open_source import olympiad_books_open_source_normalize_steps
 from marin.execution import versioned
 from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
@@ -51,6 +52,14 @@ stackv2_edu_filtered_python = ExecutorStep(
 stackv2_edu_filtered_python_tokenized = default_tokenize(
     name="common_pile_stackv2_edu_filtered_python",
     dataset=stackv2_edu_filtered_python,
+    tokenizer=llama3_tokenizer,
+)
+
+_olympiad_books_open_source_normalized = olympiad_books_open_source_normalize_steps()[-1].as_executor_step()
+
+olympiad_books_open_source_cc_by_sa_reviewed_tokenized = default_tokenize(
+    name="olympiad_books_open_source_cc_by_sa_reviewed",
+    dataset=_olympiad_books_open_source_normalized,
     tokenizer=llama3_tokenizer,
 )
 
