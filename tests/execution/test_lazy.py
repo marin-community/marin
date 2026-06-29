@@ -270,6 +270,77 @@ def test_resolve_raises_on_result_type_drift(tmp_path, monkeypatch):
         drifted.resolve()
 
 
+# --- ctx.resolved: reading a dependency's value, and the declared-deps gate ----
+
+
+class TokenizerEcho(Artifact):
+    tokenizer: str = ""
+
+
+def _echo_tokenizer(config: dict) -> TokenizerEcho:
+    return TokenizerEcho(tokenizer=config["tokenizer"])
+
+
+def echo_consumer() -> ArtifactStep[TokenizerEcho]:
+    """A consumer that reads its dependency's recorded *value* (its tokenizer), not just its path."""
+    tok = dclm_tokens()
+
+    def build_config(ctx: StepContext) -> dict:
+        if ctx.is_fingerprint:
+            return {"tokenizer": "<tokenizer>"}
+        return {"tokenizer": ctx.resolved(tok).tokenizer}
+
+    return ArtifactStep(
+        name="checkpoints/echo",
+        version="2026.06.28",
+        artifact_type=TokenizerEcho,
+        run=_echo_tokenizer,
+        build_config=build_config,
+        deps=(tok,),
+    )
+
+
+def test_consumer_reads_dependency_value_via_ctx_resolved(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    run(echo_consumer())
+    saved = TokenizerEcho.load(f"{tmp_path}/checkpoints/echo/2026.06.28")
+    # The dep's tokenizer flowed from its record into the consumer's output.
+    assert saved.tokenizer == "llama3"
+
+
+def test_resolved_caches_the_loaded_artifact(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    tok = dclm_tokens()
+    run(tok)  # materialize the dep so its record exists
+    ctx = StepContext.for_run(output_path="o", prefix=str(tmp_path), deps=(tok,))
+    first = ctx.resolved(tok)
+    # Resolving the same dep again returns the cached object — one store read, not N.
+    assert ctx.resolved(tok) is first
+    assert first.tokenizer == "llama3"
+
+
+def test_resolved_unavailable_at_fingerprint_time():
+    tok = dclm_tokens()
+    ctx = StepContext.for_fingerprint(deps=(tok,))
+    with pytest.raises(ValueError, match="fingerprint time"):
+        ctx.resolved(tok)
+
+
+def test_undeclared_dependency_is_rejected():
+    """Resolving a handle the step did not list in ``deps`` is a fail-fast bug, not a silent read."""
+    orphan = dclm_tokens()
+    forgot_to_declare = ArtifactStep(
+        name="checkpoints/bad",
+        version="2026.06.28",
+        artifact_type=Ckpt,
+        run=_make_ckpt,
+        build_config=lambda ctx: TrainCfg(out=ctx.output_path, data=ctx.artifact_path(orphan), lr=1e-3, steps=1),
+        deps=(),
+    )
+    with pytest.raises(ValueError, match="not a declared dependency"):
+        materialized_config(forgot_to_declare, "gs://b")
+
+
 # --- apply: the keyword-input single-step builder ------------------------------
 
 

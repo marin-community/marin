@@ -34,7 +34,7 @@ import json
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final, Generic, TypeVar
+from typing import Any, Final, Generic, TypeVar, cast
 from urllib.parse import urlparse
 
 from rigging.filesystem import marin_prefix, marin_region, url_to_fs
@@ -112,10 +112,13 @@ class StepContext:
     which is what realizes the exclusion.
 
     Pull points: ``ctx.output_path`` (this step's output dir), ``ctx.artifact_path(dep)`` (a dep's
-    resolved path), ``ctx.prefix`` (the live storage prefix), ``ctx.region`` (the live region),
-    and ``ctx.runtime_arg(key)`` (a step-declared runtime arg, e.g. the TPU a dispatched job runs
-    on). ``is_fingerprint`` is ``True`` only under :meth:`for_fingerprint`, for a ``build_config``
-    that must emit an identity summary (rather than read records that do not exist yet).
+    resolved path), ``ctx.resolved(dep)`` (a dep's loaded, typed artifact — its value/metrics),
+    ``ctx.prefix`` (the live storage prefix), ``ctx.region`` (the live region), and
+    ``ctx.runtime_arg(key)`` (a step-declared runtime arg, e.g. the TPU a dispatched job runs on).
+    ``artifact_path`` and ``resolved`` accept only declared ``deps``: a handle the step did not
+    list is a bug (the runner never materialized it), so both raise on one. ``is_fingerprint`` is
+    ``True`` only under :meth:`for_fingerprint`, for a ``build_config`` that must emit an identity
+    summary (rather than read records that do not exist yet).
     """
 
     output_path: str
@@ -124,10 +127,40 @@ class StepContext:
     is_fingerprint: bool
     _dep_ref: Callable[["ArtifactStep"], str]
     _runtime_args: Mapping[str, Any]
+    _deps: tuple["ArtifactStep", ...] = ()
+    _loaded: dict[int, Artifact] = field(default_factory=dict)
 
     def artifact_path(self, dep: "ArtifactStep") -> str:
         """The resolved output path of a dependency this step builds on."""
+        self._require_declared(dep)
         return self._dep_ref(dep)
+
+    def resolved(self, dep: "ArtifactStep[T]") -> T:
+        """The loaded, typed artifact of a declared dependency — its value/metrics, not just a path.
+
+        Reads the dep's record once and caches it, so resolving the same dep N times costs one
+        store read. Loads the record sidecar (a data ref into the path), not the heavy payload, and
+        never runs anything: the runner has materialized every declared dep before this step's
+        function executes. Use ``.path`` on the result for the output dir.
+
+        Raises :class:`ValueError` for an undeclared dep, and at fingerprint time (no records exist
+        yet — branch on ``is_fingerprint`` and emit an identity summary instead).
+        """
+        if self.is_fingerprint:
+            raise ValueError("ctx.resolved is unavailable at fingerprint time; branch on ctx.is_fingerprint")
+        self._require_declared(dep)
+        cached = self._loaded.get(id(dep))
+        if cached is None:
+            cached = dep.artifact_type.load(self._dep_ref(dep))
+            self._loaded[id(dep)] = cached
+        return cast(T, cached)
+
+    def _require_declared(self, dep: "ArtifactStep") -> None:
+        if dep not in self._deps:
+            raise ValueError(
+                f"{dep.name}@{dep.version} is not a declared dependency of this step; "
+                "add it to deps=(...) so the runner materializes it before this step runs"
+            )
 
     def runtime_arg(self, key: str) -> Any:
         """A step-declared runtime arg: its real value at run time, a ``<key>`` placeholder at
@@ -142,7 +175,12 @@ class StepContext:
 
     @staticmethod
     def for_run(
-        output_path: str, prefix: str, *, region: str | None = None, runtime_args: Mapping[str, Any] | None = None
+        output_path: str,
+        prefix: str,
+        *,
+        region: str | None = None,
+        runtime_args: Mapping[str, Any] | None = None,
+        deps: Iterable["ArtifactStep"] = (),
     ) -> "StepContext":
         return StepContext(
             output_path=output_path,
@@ -151,10 +189,11 @@ class StepContext:
             is_fingerprint=False,
             _dep_ref=lambda d: d.path(prefix),
             _runtime_args=runtime_args or {},
+            _deps=tuple(deps),
         )
 
     @staticmethod
-    def for_fingerprint(runtime_arg_keys: Iterable[str] = ()) -> "StepContext":
+    def for_fingerprint(runtime_arg_keys: Iterable[str] = (), deps: Iterable["ArtifactStep"] = ()) -> "StepContext":
         return StepContext(
             output_path="<output_path>",
             prefix="<prefix>",
@@ -162,6 +201,7 @@ class StepContext:
             is_fingerprint=True,
             _dep_ref=lambda d: f"{d.name}@{d.version}",
             _runtime_args={key: f"<{key}>" for key in runtime_arg_keys},
+            _deps=tuple(deps),
         )
 
 
@@ -216,7 +256,7 @@ class ArtifactStep(Generic[T]):
         values; for an adopted one, its source location and recorded config."""
         if self.adopt_source is not None:
             return json.dumps({"adopt_source": self.adopt_source, "config": self.adopt_config}, sort_keys=True)
-        config = self.build_config(StepContext.for_fingerprint(self.runtime_args.keys()))
+        config = self.build_config(StepContext.for_fingerprint(self.runtime_args.keys(), self.deps))
         return canonical_json(config)
 
     def fingerprint(self) -> str:
@@ -307,7 +347,9 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
     run-time config, which also binds a real region.
     """
     return handle.build_config(
-        StepContext.for_run(output_path=handle.path(prefix), prefix=prefix, runtime_args=handle.runtime_args)
+        StepContext.for_run(
+            output_path=handle.path(prefix), prefix=prefix, runtime_args=handle.runtime_args, deps=handle.deps
+        )
     )
 
 
@@ -368,6 +410,7 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
                 prefix=marin_prefix(),
                 region=marin_region(),
                 runtime_args=_handle.runtime_args,
+                deps=_handle.deps,
             )
             config = _handle.build_config(ctx)
             result = _handle.run(config)

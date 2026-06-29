@@ -295,12 +295,12 @@ def mixture(
     weights = {}
     tokenizers: set[str] = set()
     for dataset, weight in train.items():
-        cache = TokenizedCache.load(ctx.artifact_path(dataset))
+        cache = ctx.resolved(dataset)
         components[dataset.name] = cache.as_component()
         weights[dataset.name] = weight
         tokenizers.add(cache.tokenizer)
     for dataset in validation:
-        cache = TokenizedCache.load(ctx.artifact_path(dataset))
+        cache = ctx.resolved(dataset)
         components[dataset.name] = cache.as_component()
         weights[dataset.name] = 0.0
         tokenizers.add(cache.tokenizer)
