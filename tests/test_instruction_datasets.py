@@ -1,14 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+import datasets
+import pytest
+from datasets import load_dataset
 from marin.execution.executor import unwrap_versioned_value
 from marin.transform.conversation.adapters import InputDatasetFormat
-from marin.transform.conversation.transform_conversation import transform_row
+from marin.transform.conversation.transform_conversation import _load_dataset_features_from_spec, transform_row
 
 from experiments.posttrain.instruction_datasets import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
+    NEMOTRON_SFT_SAFETY_V2_HF_ID,
+    NEMOTRON_SFT_SAFETY_V2_LOAD_DATASET_FEATURES,
+    NEMOTRON_SFT_SAFETY_V2_METADATA_COLUMNS,
+    NEMOTRON_SFT_SAFETY_V2_REVISION,
     SYNTHETIC2_SFT_VERIFIED_HF_ID,
     SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
     SYNTHETIC2_SFT_VERIFIED_REVISION,
@@ -23,6 +32,56 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
     ],
+}
+
+NEMOTRON_SFT_SAFETY_V2_SAMPLE = {
+    "uuid": "safety-row-1",
+    "used_in": ["super_v3", "ultra_v3"],
+    "prompt_source": "Aegis v2",
+    "response_policy": "refusal_with_explanation_redirection",
+    "translation_languages": None,
+    "metadata": {
+        "uuid": "safety-row-1",
+        "source": "nemotron_safety_sft_blend_v0.3.0",
+        "sdg_model": "nemotron-nano-v2-9b",
+        "source_l1": "Aegis v2",
+        "source_id": "source-1",
+        "source_l2": None,
+        "categories": "Needs Caution",
+        "subcategories": None,
+        "adversarial_persona": None,
+        "prompt_label": "unsafe",
+        "response_policy": "refusal_with_explanation_redirection",
+        "date_created": "20251217",
+    },
+    "messages": [
+        {"role": "user", "content": "Can you help me be mean to a classmate?"},
+        {
+            "role": "assistant",
+            "content": "I can't help with harassing someone. I can help you resolve the conflict respectfully.",
+            "reasoning_content": "The request asks for interpersonal harm, so the response should refuse and redirect.",
+        },
+    ],
+}
+
+NEMOTRON_SFT_SAFETY_V2_TRANSLATED_SAMPLE = {
+    **NEMOTRON_SFT_SAFETY_V2_SAMPLE,
+    "uuid": "safety-row-1-fr",
+    "translation_languages": "en_fr",
+    "metadata": {
+        **NEMOTRON_SFT_SAFETY_V2_SAMPLE["metadata"],
+        "title": "Translated safety sample",
+        "authors": ["NVIDIA"],
+        "publication_year": 2026,
+        "prompt": "Can you help me be mean to a classmate?",
+        "generated_reasoning": "The request asks for interpersonal harm, so the response should refuse and redirect.",
+        "generated_response": "I can't help with harassing someone.",
+        "type": "translated",
+        "id": "translated-1",
+        "quote": "translation smoke",
+        "generator": "riva-translate",
+        "source_l1_id": "source-l1-1",
+    },
 }
 
 
@@ -104,4 +163,95 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "problem_id": "prime_rl_code_21747",
         "task_type": "prime_rl_code",
         "reward": 1.0,
+    }
+
+
+def test_nemotron_sft_safety_v2_load_features_fix_inferred_schema_failure(tmp_path):
+    data_path = tmp_path / "nemotron_sft_safety_v2.jsonl"
+    with data_path.open("w") as f:
+        for row in [NEMOTRON_SFT_SAFETY_V2_SAMPLE, NEMOTRON_SFT_SAFETY_V2_TRANSLATED_SAMPLE]:
+            f.write(json.dumps(row) + "\n")
+
+    inferred_from_early_rows = datasets.Features(
+        {
+            "uuid": datasets.Value("string"),
+            "messages": datasets.List(
+                {
+                    "role": datasets.Value("string"),
+                    "content": datasets.Value("string"),
+                    "reasoning_content": datasets.Value("string"),
+                }
+            ),
+            "used_in": datasets.List(datasets.Value("string")),
+            "prompt_source": datasets.Value("string"),
+            "response_policy": datasets.Value("string"),
+            "translation_languages": datasets.Value("null"),
+            "metadata": {
+                "uuid": datasets.Value("string"),
+                "source": datasets.Value("string"),
+                "sdg_model": datasets.Value("string"),
+                "source_l1": datasets.Value("string"),
+                "source_id": datasets.Value("string"),
+                "source_l2": datasets.Value("null"),
+                "categories": datasets.Value("string"),
+                "subcategories": datasets.Value("null"),
+                "adversarial_persona": datasets.Value("null"),
+                "prompt_label": datasets.Value("string"),
+                "response_policy": datasets.Value("string"),
+                "date_created": datasets.Value("string"),
+            },
+        }
+    )
+    with pytest.raises(TypeError):
+        list(
+            load_dataset(
+                "json",
+                data_files=str(data_path),
+                split="train",
+                streaming=True,
+                features=inferred_from_early_rows,
+            )
+        )
+
+    features = _load_dataset_features_from_spec(NEMOTRON_SFT_SAFETY_V2_LOAD_DATASET_FEATURES)
+    streamed_rows = list(
+        load_dataset("json", data_files=str(data_path), split="train", streaming=True, features=features)
+    )
+
+    assert [row["translation_languages"] for row in streamed_rows] == [None, "en_fr"]
+    assert streamed_rows[1]["metadata"]["generated_reasoning"] == (
+        "The request asks for interpersonal harm, so the response should refuse and redirect."
+    )
+
+
+def test_nemotron_sft_safety_v2_step_transforms_chat_rows_without_reasoning_content():
+    step = get_instruction_dataset(NEMOTRON_SFT_SAFETY_V2_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert unwrap_versioned_value(cfg.source) == NEMOTRON_SFT_SAFETY_V2_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == NEMOTRON_SFT_SAFETY_V2_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == NEMOTRON_SFT_SAFETY_V2_METADATA_COLUMNS
+    assert unwrap_versioned_value(cfg.load_dataset_features) == NEMOTRON_SFT_SAFETY_V2_LOAD_DATASET_FEATURES
+    assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+
+    result = transform_row(NEMOTRON_SFT_SAFETY_V2_TRANSLATED_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SFT_SAFETY_V2_HF_ID
+    assert [message.role for message in result.messages] == ["user", "assistant"]
+    assert result.messages[0].content == "Can you help me be mean to a classmate?"
+    assert result.messages[1].content == (
+        "I can't help with harassing someone. I can help you resolve the conflict respectfully."
+    )
+    assert "interpersonal harm" not in result.messages[1].content
+    assert result.metadata == {
+        "uuid": "safety-row-1-fr",
+        "used_in": ["super_v3", "ultra_v3"],
+        "prompt_source": "Aegis v2",
+        "response_policy": "refusal_with_explanation_redirection",
+        "translation_languages": "en_fr",
+        "metadata": NEMOTRON_SFT_SAFETY_V2_TRANSLATED_SAMPLE["metadata"],
     }
