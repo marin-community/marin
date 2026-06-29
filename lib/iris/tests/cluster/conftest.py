@@ -13,6 +13,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -456,6 +457,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
     return ServiceTestHarness(
@@ -486,6 +488,7 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
     return ServiceTestHarness(

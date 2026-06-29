@@ -22,6 +22,7 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -61,6 +62,7 @@ def _make_service(db, log_client, auth=None):
         endpoints=endpoints,
         worker_attrs=worker_attrs,
         auth=auth or ControllerAuth(),
+        endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
 

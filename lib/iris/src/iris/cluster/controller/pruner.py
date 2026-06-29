@@ -38,10 +38,11 @@ class PruneResult:
     jobs_deleted: int = 0
     workers_deleted: int = 0
     slices_deleted: int = 0
+    endpoints_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.slices_deleted
+        return self.jobs_deleted + self.workers_deleted + self.slices_deleted + self.endpoints_deleted
 
 
 def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> WorkerId | None:
@@ -131,6 +132,16 @@ def _prune_orphan_slices(db: ControllerDB, cutoff_ms: int, stop_event: threading
     return deleted
 
 
+def _sweep_expired_endpoints(db: ControllerDB, endpoints: EndpointsProjection, now: Timestamp) -> int:
+    """Delete endpoints whose lease has expired. Reads already hide them; this
+    reclaims storage so the lease — not the FK CASCADE — is the GC trigger."""
+    with db.transaction() as cur:
+        removed = endpoints.sweep_expired(cur, now)
+    for endpoint_id in removed:
+        log_event("endpoint_lease_expired", endpoint_id)
+    return len(removed)
+
+
 def prune_old_data(
     db: ControllerDB,
     health: WorkerHealthTracker,
@@ -160,20 +171,23 @@ def prune_old_data(
         stop_event: If set, abort early (e.g. during shutdown).
         pause_between_s: Sleep between individual deletes to reduce lock contention.
     """
-    now_ms = Timestamp.now().epoch_ms()
+    now = Timestamp.now()
+    now_ms = now.epoch_ms()
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, endpoints, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
         workers_deleted=_prune_dead_workers(
             db, health, worker_attrs, now_ms - worker_retention.to_ms(), stop_event, pause_between_s
         ),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
+        endpoints_deleted=_sweep_expired_endpoints(db, endpoints, now),
     )
     if result.total > 0:
         logger.info(
-            "Pruned old data: %d jobs, %d workers, %d slices",
+            "Pruned old data: %d jobs, %d workers, %d slices, %d endpoints",
             result.jobs_deleted,
             result.workers_deleted,
             result.slices_deleted,
+            result.endpoints_deleted,
         )
         db.optimize()
 
