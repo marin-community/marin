@@ -15,6 +15,7 @@ The script uses temporary in-memory storage for intermediate operations.
 import json
 import os
 import tempfile
+from typing import cast
 
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -199,7 +200,7 @@ MARIN_CUSTOM_SPECIAL_TOKENS = {
 def _inject_special_tokens(
     tokenizer: PreTrainedTokenizer,
     new_tokens: dict[int, str],
-):
+) -> PreTrainedTokenizer:
     """
     Inject special tokens into the tokenizer config.
 
@@ -219,8 +220,20 @@ def _inject_special_tokens(
         tokenizer_config_path = os.path.join(temp_path, "tokenizer_config.json")
         with open(tokenizer_config_path, "r") as f:
             tokenizer_config = json.load(f)
+        added_tokens_decoder = tokenizer_config.setdefault("added_tokens_decoder", {})
         for token_id, token_str in new_tokens.items():
-            tokenizer_config["added_tokens_decoder"][str(token_id)]["content"] = token_str
+            token_config = added_tokens_decoder.setdefault(
+                str(token_id),
+                {
+                    "content": token_str,
+                    "single_word": False,
+                    "lstrip": False,
+                    "rstrip": False,
+                    "normalized": False,
+                    "special": True,
+                },
+            )
+            token_config["content"] = token_str
         with open(tokenizer_config_path, "w") as f:
             json.dump(tokenizer_config, f)
 
@@ -231,16 +244,31 @@ def _inject_special_tokens(
                 tokenizer_json = json.load(f)
             # Update the added_tokens list (id -> content)
             if "added_tokens" in tokenizer_json:
+                seen_token_ids = set()
                 for at in tokenizer_json["added_tokens"]:
                     tid = at.get("id")
                     if tid in new_tokens:
+                        seen_token_ids.add(tid)
                         at["content"] = new_tokens[tid]
+                for tid, token_str in new_tokens.items():
+                    if tid not in seen_token_ids:
+                        tokenizer_json["added_tokens"].append(
+                            {
+                                "id": tid,
+                                "content": token_str,
+                                "single_word": False,
+                                "lstrip": False,
+                                "rstrip": False,
+                                "normalized": False,
+                                "special": True,
+                            }
+                        )
             # Persist the file back
             with open(tokenizer_json_path, "w") as f:
                 json.dump(tokenizer_json, f)
 
         # Load the modified tokenizer
-        return AutoTokenizer.from_pretrained(temp_path)
+        return cast(PreTrainedTokenizer, AutoTokenizer.from_pretrained(temp_path))
 
 
 def create_marin_tokenizer(
@@ -274,7 +302,7 @@ def load_llama3_tokenizer() -> PreTrainedTokenizer:
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
-    return AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path)
+    return cast(PreTrainedTokenizer, AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path))
 
 
 def main(dry_run: bool = False):

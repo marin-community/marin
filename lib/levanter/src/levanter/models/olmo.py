@@ -18,6 +18,7 @@ from haliax.nn.scan import BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers import RmsNormConfig
 from levanter.layers.attention import (
     Attention,
@@ -115,8 +116,8 @@ class Olmo2Config(HFCompatConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = getattr(hf_config, "rope_theta", 500000)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config, default_theta=500000.0)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return Olmo2Config(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -148,7 +149,8 @@ class Olmo2Config(HFCompatConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfOlmo2Config(
+        return hf_config_from_kwargs(
+            HfOlmo2Config,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
