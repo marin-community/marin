@@ -3,7 +3,7 @@
 
 import argparse
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, replace
 import json
 import os
@@ -20,6 +20,7 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug._moe.pallas_mgpu import (
+    _DISPATCH_COPY_SCHEDULES,
     MoeMgpuConfig,
     _MoeMgpuUpMetadata,
     _group_sizes_with_padding,
@@ -313,6 +314,26 @@ class BenchInputs:
         return (self.x, self.selected_experts, self.combine_weights, self.w_up_gate, self.w_down)
 
 
+@dataclass(frozen=True, slots=True)
+class TimingResult:
+    compile_time: float
+    steady_state_time: float
+    output: Any
+
+    def __iter__(self) -> Iterator[Any]:
+        yield self.compile_time
+        yield self.steady_state_time
+        yield self.output
+
+
+@dataclass(frozen=True, slots=True)
+class BenchEstimates:
+    flops: float
+    dispatch_bytes: float
+    return_bytes: float
+    memory_footprint: float
+
+
 def _git_sha(override: str | None) -> str:
     if override is not None:
         return override
@@ -550,7 +571,7 @@ def _reshard_target(mesh: Mesh, target: jax.Array) -> jax.Array:
     return jax.sharding.reshard(target, NamedSharding(mesh, P("expert", None)))
 
 
-def _time_jitted(fn: Callable[..., Any], *args: Any, warmup: int, steps: int) -> tuple[float, float, Any]:
+def _time_jitted(fn: Callable[..., Any], *args: Any, warmup: int, steps: int) -> TimingResult:
     started = time.perf_counter()
     out = fn(*args)
     jax.block_until_ready(out)
@@ -565,7 +586,11 @@ def _time_jitted(fn: Callable[..., Any], *args: Any, warmup: int, steps: int) ->
         out = fn(*args)
         jax.block_until_ready(out)
     steady_state_time = (time.perf_counter() - started) / steps
-    return compile_time, steady_state_time, out
+    return TimingResult(
+        compile_time=compile_time,
+        steady_state_time=steady_state_time,
+        output=out,
+    )
 
 
 @contextlib.contextmanager
@@ -627,7 +652,7 @@ def _grads_allclose(
     return True
 
 
-def _estimates(shape: BenchShape, dtype: jnp.dtype) -> tuple[float, float, float, float]:
+def _estimates(shape: BenchShape, dtype: jnp.dtype) -> BenchEstimates:
     assignments = shape.tokens_per_rank * shape.topk
     received = _receiver_capacity_for_shape(shape)
     flops = 6.0 * received * shape.hidden_dim * shape.intermediate_dim
@@ -640,7 +665,12 @@ def _estimates(shape: BenchShape, dtype: jnp.dtype) -> tuple[float, float, float
         + received * shape.intermediate_dim
         + assignments * shape.hidden_dim
     ) * bytes_per_element
-    return flops, dispatch_bytes, return_bytes, memory_footprint
+    return BenchEstimates(
+        flops=flops,
+        dispatch_bytes=dispatch_bytes,
+        return_bytes=return_bytes,
+        memory_footprint=memory_footprint,
+    )
 
 
 def _stage_flops(shape: BenchShape, stage: str) -> float:
@@ -875,7 +905,8 @@ def _benchmark_implementation(
     allclose_atol: float,
     candidate_timeout_seconds: float | None,
 ) -> tuple[BenchResult, Any | None]:
-    flops, dispatch_bytes, return_bytes, memory_footprint = _estimates(shape, dtype)
+    estimates = _estimates(shape, dtype)
+    flops = estimates.flops
     kernel_name = "grug_moe_mlp_forward" if pass_mode == "forward" else "grug_moe_mlp_forward_backward"
     if pass_mode == "forward_backward":
         # Approximate dense training-step math: forward plus input/weight backward
@@ -918,22 +949,28 @@ def _benchmark_implementation(
         )
         with jax.set_mesh(mesh), _candidate_timeout(candidate_timeout_seconds):
             if pass_mode == "forward":
-                compile_time, steady_state_time, out = _time_jitted(
+                timing = _time_jitted(
                     jax.jit(call_moe),
                     *inputs.as_jit_args(),
                     warmup=warmup,
                     steps=steps,
                 )
+                compile_time = timing.compile_time
+                steady_state_time = timing.steady_state_time
+                out = timing.output
                 dropped = int(np.asarray(out[1]))
                 output = out[0]
             else:
-                compile_time, steady_state_time, out = _time_jitted(
+                timing = _time_jitted(
                     jax.jit(grad_fn),
                     *inputs.as_jit_args(),
                     target,
                     warmup=warmup,
                     steps=steps,
                 )
+                compile_time = timing.compile_time
+                steady_state_time = timing.steady_state_time
+                out = timing.output
                 (loss, dropped_array), grads = out
                 dropped = int(np.asarray(dropped_array))
                 output = (loss, grads)
@@ -985,9 +1022,9 @@ def _benchmark_implementation(
             steps=steps,
             git_sha=git_sha,
             flops=flops,
-            dispatch_bytes=dispatch_bytes,
-            return_bytes=return_bytes,
-            memory_footprint=memory_footprint,
+            dispatch_bytes=estimates.dispatch_bytes,
+            return_bytes=estimates.return_bytes,
+            memory_footprint=estimates.memory_footprint,
             compile_time=compile_time,
             steady_state_time=steady_state_time,
             error=error,
@@ -1028,7 +1065,10 @@ def _benchmark_pallas_stages(
     target_for_stages = None
     if target is not None:
         target_for_stages = jax.sharding.reshard(target, NamedSharding(mesh, P("expert", None)))
-    _total_flops, dispatch_bytes, return_bytes, memory_footprint = _estimates(shape, dtype)
+    estimates = _estimates(shape, dtype)
+    dispatch_bytes = estimates.dispatch_bytes
+    return_bytes = estimates.return_bytes
+    memory_footprint = estimates.memory_footprint
     stage_dependencies = _pallas_stage_dependencies(pallas_stages)
 
     def requested(stage: str) -> bool:
@@ -3250,7 +3290,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dispatch-copy-schedule",
-        choices=("assignment_major", "expert_group_peer"),
+        choices=sorted(_DISPATCH_COPY_SCHEDULES),
         default="assignment_major",
     )
     parser.add_argument("--dispatch-expert-group-size", type=int, default=8)

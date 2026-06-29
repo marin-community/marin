@@ -71,7 +71,7 @@ from levanter.grug.sharding import (
 from levanter.utils.activation import ActivationFunctionEnum
 
 
-_FALLBACK_EXCEPTIONS = (NotImplementedError, jax.errors.JaxRuntimeError)
+_FALLBACK_EXCEPTIONS = (NotImplementedError,)
 _LOCAL_EP_UNSUPPORTED_MESSAGE = (
     "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
     "requires a dispatch/combine schedule inside each expert shard plus cross-shard routing."

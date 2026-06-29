@@ -6253,3 +6253,41 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
     likely a separate forward-lane API decision rather than a pre-PR cleanup.
 - Next action:
   - Commit and rerun the advisory lint review one more time.
+
+### 2026-06-29 16:16 - MOE-MGPU-374 third lint-review cleanup pass
+- Hypothesis: the remaining small review findings can be addressed without
+  touching the active forward-performance schedule or H100 run recipe.
+- Base Commit Hash: `2be8c4a95`.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command 'codex exec'`
+  - `uv run python -m py_compile lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py lib/levanter/src/levanter/grug/grug_moe.py`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel or ordered_implementation' -o addopts=`
+- Result:
+  - Third lint-review artifact:
+    `/tmp/marin-linter/20260629T231114`.
+  - Fixed additional findings:
+    - Replaced positional benchmark timing and estimate returns with
+      `TimingResult` and `BenchEstimates`.
+    - Made benchmark CLI `--dispatch-copy-schedule` choices come from
+      `_DISPATCH_COPY_SCHEDULES`, matching config validation.
+    - Removed `jax.errors.JaxRuntimeError` from MoE ordered-fallback handling so
+      real backend/kernel runtime failures surface instead of silently falling
+      through to another implementation.
+  - Validation:
+    - `py_compile` -> passed.
+    - changed-file pre-commit -> passed.
+    - benchmark unit tests -> `41 passed, 1 warning`.
+    - Grug Pallas/capacity/EP/ordered-implementation slice -> `65 passed,
+      11 skipped, 35 deselected, 1 warning`.
+- Interpretation:
+  - Ordered fallback still handles explicit backend-unavailable `ValueError`
+    paths; runtime failures are now treated as real failures. This better
+    matches the spec's fail-fast requirement for explicit Pallas requests and
+    avoids hiding Pallas runtime regressions behind a later backend.
+  - No #6597 issue update; this is readiness cleanup.
+- Next action:
+  - Commit and rerun advisory lint review. Remaining expected findings, if any,
+    are likely larger design cleanups: explicit `permute_up` mode enum, breaking
+    apart the large benchmark stage body, and shared H100 test fixtures.
