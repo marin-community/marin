@@ -5140,3 +5140,44 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: monitor `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4` to
   terminal state; if it succeeds, consider the 32-node 20-step command in the
   runbook.
+
+### 2026-06-29 13:32 - MOE-MGPU-345 one-node smoke blocked after step 9
+- Hypothesis: the one-node 20-step smoke would either complete and become the
+  first real full-trainer milestone, or expose the next integration blocker.
+- Commit Hash: `b66c85ded` plus this logbook update.
+- Job:
+  - Parent: `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4/grug-train-grug-moe-pallas-mgpu-20step-smoke-42ba9b7d4`
+- Saved local logs:
+  - `scratch/dalton-moe-mgpu-20step/full_parent_and_child_logs.txt`
+  - `scratch/dalton-moe-mgpu-20step/high_signal_excerpt.txt`
+  - `scratch/dalton-moe-mgpu-20step/parent_summary.txt`
+  - `scratch/dalton-moe-mgpu-20step/child_summary.txt`
+  - `scratch/dalton-moe-mgpu-20step/job_list.json`
+  - `scratch/dalton-moe-mgpu-20step/babysitter_monitoring_state.json`
+- Result:
+  - The run reached real training with `moe_implementation="pallas_mgpu"` and
+    `moe_capacity_factor=1.25`.
+  - Step 0 logged `train/cross_entropy_loss=11.891218185424805`.
+  - Step 9 logged `train/loss=8.428400039672852`,
+    `train/cross_entropy_loss=8.394771575927734`, `global_step=9`,
+    `run_progress=0.45`, `tokens_per_second=549668.13`,
+    `examples_per_second=268.39`, and MFU around `20.1%`.
+  - At `20:28:13 UTC`, GPU BFC allocator warnings on GPUs 1-7 reported an
+    attempted `22.37 GiB` allocation, followed by a rendezvous warning waiting
+    for all 8 local participants.
+  - Iris still reported parent and child as `JOB_STATE_RUNNING` with zero
+    Iris-level failures/preemptions at the last check, but the useful logs had
+    stopped after the OOM/rendezvous signal.
+  - Babysitter Dalton (`019f1507-2e83-7d73-a2b6-0e570985d44e`) was closed after
+    reporting the same blocker. The polling heartbeat was deleted.
+- Interpretation: the Pallas MGPU path successfully entered the real Grug MoE
+  trainer and ran several optimizer steps, but the current one-node smoke shape
+  is not a robust 20-step recipe. The next run should lower memory pressure
+  before trying again, likely by reducing `SCALE_BATCH`, using a smaller
+  `SCALE_SEQ_LEN`, or trying `SCALE_MP=params=bfloat16,compute=bfloat16,output=bfloat16`.
+  No GitHub issue comment; this is useful integration evidence but not yet a
+  clean milestone.
+- Next action: decide whether to stop the still-running Iris job, then revise
+  the tryout runbook to use a memory-safer smoke shape before resubmitting.
