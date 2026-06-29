@@ -28,14 +28,14 @@ from levanter.optim import AdamConfig
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.sweep import sweep
-from marin.experiment.train import train_lm
+from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 
+from experiments.evals.task_configs import CORE_TASKS
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer, llama_30m
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
-from experiments.recipes import core_tasks
 
 # A single-host TPU slice; each trial trains on its own slice. This is a runtime arg, not
 # part of a trial's identity — re-running on a different TPU is the same checkpoint.
@@ -66,7 +66,7 @@ def trial(*, learning_rate: float, weight_decay: float, version: str = "2026.06.
         seq_len=llama_30m.max_seq_len,
         num_train_steps=10000,
         z_loss_weight=None,
-        evals=core_tasks(every=10000),
+        evals=EvalSuite(CORE_TASKS, every=10000),
         resources=RESOURCES,
         tags=["llama", "30m", "dclm", "tutorial", "sweep", "test20251117"],
     )

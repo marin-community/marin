@@ -19,10 +19,10 @@ from levanter.optim import AdamConfig
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.experiment.data import tokenized
-from marin.experiment.train import train_lm
+from marin.experiment.train import EvalSuite, train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.recipes import core_tasks
+from experiments.evals.task_configs import CORE_TASKS
 
 _TOKENIZER = "meta-llama/Meta-Llama-3.1-8B"
 _V = "2026.06.28"
@@ -131,7 +131,7 @@ def test_evals_none_means_no_harness(tmp_path):
 
 def test_eval_suite_wires_a_harness(tmp_path):
     corpus = _corpus()
-    tc = _assemble(_build(datasets={corpus: 1.0}, evals=core_tasks(every=2000)), str(tmp_path)).train_config
+    tc = _assemble(_build(datasets={corpus: 1.0}, evals=EvalSuite(CORE_TASKS, every=2000)), str(tmp_path)).train_config
     assert tc.eval_harness is not None
     assert tc.eval_harness_steps == 2000
 

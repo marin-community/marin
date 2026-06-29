@@ -18,8 +18,6 @@ weights live in the experiment that chose them, not buried in a catalog constant
 - :func:`pretokenized` handles an already-tokenized Levanter cache hosted on
   HuggingFace (e.g. the fineweb-edu prebuilt subcaches): it downloads rather than
   re-tokenizes, and is consumed like any other ``TokenizedCache``.
-- :func:`adopt_tokenized_cache` registers a pre-existing tokenized cache as a managed
-  ``name@version`` with the tokenizer/format a mixture needs.
 - :func:`mixture` assembles a Levanter ``LmDataConfig`` from ``{handle: weight}``
   training components plus weight-0 ``validation`` handles, reading each cache's
   tokenizer/format from its :class:`~marin.processing.tokenize.tokenize.TokenizedCache`
@@ -39,7 +37,7 @@ from levanter.data.text import (
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext, adopt
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.data_configs import dataset_component
@@ -239,28 +237,6 @@ def pretokenized(
         run=_on(fetch_pretokenized_cache, resources),
         build_config=build_config,
         override_path=pin,
-    )
-
-
-def adopt_tokenized_cache(
-    name: str,
-    version: str,
-    source: str,
-    *,
-    tokenizer: str,
-    text_key: str = "text",
-) -> ArtifactStep[TokenizedCache]:
-    """Register a pre-existing tokenized cache at ``source`` as a managed ``name@version``.
-
-    Records the ``tokenizer`` and text format so :func:`mixture` reads the adopted cache the
-    same way as a produced one (it is not re-tokenized, and its data stays at ``source``).
-    """
-    return adopt(
-        name,
-        version,
-        source,
-        kind=TokenizedCache,
-        config={"tokenizer": tokenizer, "format": {"text_key": text_key}},
     )
 
 

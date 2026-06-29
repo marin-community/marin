@@ -19,6 +19,7 @@ no default eval suite, no learning rate. It only removes boilerplate.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import timedelta
 
 import jmp
@@ -34,11 +35,10 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.evaluation.evaluation_config import convert_to_levanter_task_config
+from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
-from marin.experiment.evals import EvalSuite
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -55,6 +55,14 @@ _TOKEN_AXES = (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA
 # Rolling resumption checkpoint cadence. Operational (it governs recovery, not the
 # trained model), so it is not an experiment knob.
 _RESUMPTION_INTERVAL = timedelta(minutes=10)
+
+
+@dataclass(frozen=True)
+class EvalSuite:
+    """A set of harness tasks plus the step interval at which to run them."""
+
+    tasks: tuple[EvalTaskConfig, ...]
+    every: int
 
 
 def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:

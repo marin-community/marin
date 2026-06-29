@@ -13,6 +13,7 @@ For datakit-style separation (per-doc attribute parquet → store assembly), see
 :mod:`marin.processing.tokenize.attributes` and :mod:`marin.processing.tokenize.store_builder`.
 The shared tokenization core lives in :mod:`marin.processing.tokenize._core`.
 """
+
 import abc
 import dataclasses
 import logging
@@ -74,8 +75,8 @@ class TokenizedCache(Artifact):
     pulled into the launcher); the cache's tokenizer/format/tags are read from its recorded
     config, so a consumer (a training :func:`~marin.experiment.data.mixture`) builds a Levanter
     component from the artifact alone, never from the producing recipe. Adopted caches resolve
-    through ``record.source``; their tokenizer/format come from the synthetic config recorded by
-    ``adopt_tokenized_cache``.
+    through ``record.source``; their tokenizer/format come from the synthetic config recorded when
+    the cache is adopted.
     """
 
     @property
