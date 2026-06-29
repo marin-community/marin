@@ -28,7 +28,7 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from jax.experimental import multihost_utils
 from levanter.data import DataLoader
-from levanter.data.text import DatasetComponent, LmDataConfig
+from levanter.data.text import LmDataConfig
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
@@ -36,6 +36,8 @@ from levanter.models.loss import next_token_loss
 from levanter.trainer import TrainerConfig
 from levanter.utils.tree_utils import inference_mode
 from rigging.filesystem import open_url
+
+from marin.processing.tokenize.data_configs import with_pack
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +65,7 @@ class SaveLogprobsOnPodConfig:
 
 
 def _force_pack_data(data: LmDataConfig) -> LmDataConfig:
-    packed_components = {
-        name: replace(component, pack=True) if isinstance(component, DatasetComponent) else component
-        for name, component in data.components.items()
-    }
-    packed_data = replace(data, components=packed_components, block_cross_document_attention=True)
-    return packed_data
+    return replace(with_pack(data, True), block_cross_document_attention=True)
 
 
 def save_logprobs(config: SaveLogprobsConfig) -> None:
@@ -162,9 +159,10 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
                                 (b_topk_vals, b_topk_ids), tiled=True
                             )
 
-                        b_tokens, b_seg_ids = batch.tokens.rearrange((EvalBatch, Pos)), batch.attn_mask.segment_ids[
-                            0
-                        ].rearrange((EvalBatch, Pos))
+                        b_tokens, b_seg_ids = (
+                            batch.tokens.rearrange((EvalBatch, Pos)),
+                            batch.attn_mask.segment_ids[0].rearrange((EvalBatch, Pos)),
+                        )
                         b_loss, b_tokens, b_seg_ids = multihost_utils.process_allgather(
                             (b_loss, b_tokens, b_seg_ids), tiled=True
                         )

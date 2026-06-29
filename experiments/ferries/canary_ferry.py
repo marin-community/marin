@@ -34,7 +34,6 @@ from typing import cast
 
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
-from levanter.data.text import DatasetComponent
 from levanter.grug.attention import GrugAttentionImplementation
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
@@ -42,6 +41,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import marin_prefix, marin_temp_bucket
 
@@ -258,17 +258,8 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         def build_data(ctx: StepContext):
             data = mixture(ctx, {slimpajama: 1.0})
             if attention_implementation == _GPU_FA4_THD_ATTENTION:
-                data = dataclasses.replace(
-                    data,
-                    components={
-                        component_name: (
-                            dataclasses.replace(component, pack=1)
-                            if isinstance(component, DatasetComponent)
-                            else component
-                        )
-                        for component_name, component in data.components.items()
-                    },
-                )
+                # THD attention only handles full causal windows; pack so each example is one.
+                data = with_pack(data, 1)
             return data
 
     num_steps = env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))
