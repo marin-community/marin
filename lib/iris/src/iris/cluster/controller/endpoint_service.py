@@ -33,8 +33,10 @@ logger = logging.getLogger(__name__)
 
 # Lease granted when the client does not request one. Long so an old client that
 # registers once and never renews keeps its endpoint served; a renewing client
-# requests a much shorter lease and gets it (see MIN_ENDPOINT_LEASE).
-ENDPOINT_LEASE = Duration.from_hours(72)
+# requests a much shorter lease and gets it (see MIN_ENDPOINT_LEASE). This only
+# bounds the dead-but-non-terminal backstop case — a task's endpoints are still
+# reclaimed promptly when it goes terminal — so it is sized generously (5 days).
+ENDPOINT_LEASE = Duration.from_hours(120)
 # Floor on a granted lease: bounds how often a client may force the controller to
 # re-register by capping the renewal rate a short requested lease can ask for.
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)

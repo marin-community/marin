@@ -35,7 +35,7 @@ DEFAULT_REQUESTED_LEASE = Duration.from_minutes(10)
 RENEW_FRACTION = 1 / 3
 MIN_RENEW_INTERVAL = Duration.from_seconds(30)
 # Exponential backoff bounds for failed renewals, sized to land several retries
-# inside the requested-lease margin rather than the 72h legacy default.
+# inside the requested-lease margin rather than the multi-day legacy default.
 RETRY_INITIAL = Duration.from_seconds(10)
 RETRY_MAXIMUM = Duration.from_minutes(1)
 # Cap on a single sleep so the loop revisits its state; track/untrack/close wake
