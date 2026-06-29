@@ -80,7 +80,7 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 
 [project.optional-dependencies]
 gpu = [
-  "jax[cuda13]==0.10.0",
+  "jax[cuda13]==0.10.1",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -100,7 +100,7 @@ deepep = [
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
   # come from the host GPU environment.
 ]
-tpu = ["jax==0.10.0", "jaxlib==0.10.0", "libtpu==0.0.40"]
+tpu = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
