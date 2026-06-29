@@ -97,6 +97,15 @@ def _build_downloads() -> dict[str, ExecutorStep | InputName]:
                 append_sha_to_path=True,
             ).cd("15d04ee")
         ),
+        "dolma3_mix_6t": (
+            _dl(
+                "raw/dolma3_mix-6T",
+                "allenai/dolma3_mix-6T",
+                "689a3ea",
+                "raw/dolma3_mix-6T-689a3ea",
+                append_sha_to_path=True,
+            ).cd("689a3ea")
+        ),
         "dclm_baseline_wrong": _dl(
             "raw/dclm-baseline-1.0", "mlfoundations/dclm-baseline-1.0", "a3b142c", "raw/dclm_WRONG_20250211/"
         ),
@@ -154,5 +163,11 @@ tokenized = {
         downloads["dolma3_mix_150b_1025"],
         tokenizer=llama3_tokenizer,
         override_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
+    ),
+    "dolma3_mix_6t": _tokenize_simple(
+        "dolma3_mix-6T",
+        downloads["dolma3_mix_6t"],
+        tokenizer=llama3_tokenizer,
+        override_path="tokenized/dolma3_mix-6T-689a3ea/",
     ),
 }
