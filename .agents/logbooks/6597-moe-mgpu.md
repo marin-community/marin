@@ -6393,3 +6393,21 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Push the branch and leave the broad refactors for a separate cleanup or the
     forward-performance lane.
+
+### 2026-06-29 16:31 - MOE-MGPU-378 draft PR opened
+- Hypothesis: the first stacked review unit should be a draft PR now that the
+  branch has target-shape H100 correctness/performance evidence, a successful
+  one-node 20-step trainer smoke, local readiness checks, and a completed
+  advisory lint-review cleanup pass.
+- Commit Hash: `4a1146a7f`.
+- Command:
+  - `gh pr create --draft --title "[grug] Add Hopper Pallas MGPU MoE backend" --label agent-generated ...`
+- Result:
+  - Draft PR opened: https://github.com/marin-community/marin/pull/6767
+  - PR links to #6597 as `Part of #6597`.
+- Interpretation:
+  - This is a review/coordination milestone for the branch, not new H100 runtime
+    evidence. No #6597 issue comment was posted.
+- Next action:
+  - Commit this logbook note, push it, and monitor PR #6767 for CI, comments,
+    reviews, or closure.
