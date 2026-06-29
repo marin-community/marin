@@ -9,26 +9,22 @@ A routable service needs a *named* Iris port, which ``iris job run`` cannot decl
 uses. The job is pinned to a single region and grabs a whole v6e-8 host (or a
 smaller CPU-only shape for a smoke); the ``DUCKY_*`` config env vars are forwarded
 to the task.
+
+Connect to the controller by passing ``--controller-url`` (e.g. a tunnel opened by
+``iris --cluster=<name> ...``). Deploy keeps no cluster-resolution/auth logic of its
+own — that lives in the iris CLI.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Generator
-from contextlib import contextmanager
 from pathlib import Path
 
 import click
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient, Job
-from iris.cluster.config import IrisConfig
 from iris.cluster.constraints import region_constraint
-from iris.cluster.token_store import load_any_token, load_token
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
-from iris.rpc import config_pb2
-from iris.rpc.auth import GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
-from rigging.config_discovery import resolve_cluster_config
 
 logger = logging.getLogger(__name__)
 
@@ -50,54 +46,6 @@ PORT_NAME = "ducky"
 def _ducky_env_vars() -> dict[str, str]:
     """Forward all DUCKY_* env vars from this process to the task."""
     return {key: value for key, value in os.environ.items() if key.startswith("DUCKY_")}
-
-
-def _token_provider(auth_config: config_pb2.AuthConfig, cluster_name: str) -> TokenProvider | None:
-    """Build a client TokenProvider for a cluster: a stored `iris login` JWT, else the config's auth method.
-
-    Mirrors the CLI's token resolution without importing the CLI module.
-    """
-    credential = load_token(cluster_name) or load_any_token()
-    if credential is not None:
-        return StaticTokenProvider(credential.token)
-    provider = auth_config.WhichOneof("provider")
-    if provider is None:
-        return None
-    if provider == "gcp":
-        return GcpAccessTokenProvider()
-    if provider == "static":
-        tokens = dict(auth_config.static.tokens)
-        if not tokens:
-            raise ValueError("Static auth config requires at least one token")
-        return StaticTokenProvider(next(iter(tokens)))
-    raise ValueError(f"Unknown auth provider: {provider}")
-
-
-@contextmanager
-def _controller_connection(
-    cluster: str | None, controller_url: str | None
-) -> Generator[tuple[str, TokenProvider | None]]:
-    """Yield ``(controller_url, token_provider)``, tunneling to a named cluster if needed.
-
-    Mirrors ``iris.cli.connect.require_controller_url``: a direct ``--controller-url``
-    is used as-is; otherwise ``--cluster`` is resolved to its config, authenticated,
-    and tunneled for the duration of the submit.
-    """
-    if controller_url:
-        yield controller_url, None
-        return
-    if not cluster:
-        raise click.UsageError("Pass --cluster <name> or --controller-url.")
-
-    config_file = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
-    iris_config = IrisConfig.load(str(config_file))
-    proto = iris_config.proto
-    token_provider = _token_provider(proto.auth, cluster) if proto.HasField("auth") else None
-    bundle = iris_config.provider_bundle()
-    controller_address = iris_config.controller_address() or bundle.controller.discover_controller(proto.controller)
-    logger.info("Tunneling to %s controller at %s", cluster, controller_address)
-    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
-        yield tunnel_url, token_provider
 
 
 def submit_ducky(
@@ -125,11 +73,11 @@ def submit_ducky(
 
 
 @click.command()
-@click.option("--cluster", default=None, help="Named Iris cluster to deploy to (resolves config + tunnels).")
 @click.option(
     "--controller-url",
     default=lambda: os.environ.get("IRIS_CONTROLLER_URL"),
-    help="Direct controller URL (alternative to --cluster; default $IRIS_CONTROLLER_URL).",
+    required=True,
+    help="Iris controller URL, e.g. a tunnel from `iris --cluster=<name>` (default $IRIS_CONTROLLER_URL).",
 )
 @click.option("--region", default="us-east5", show_default=True, help="Region to pin the job to.")
 @click.option("--name", default="ducky", show_default=True, help="Job name.")
@@ -141,18 +89,15 @@ def submit_ducky(
 )
 @click.option("--cpu", default=DEFAULT_CPU, show_default=True, type=float, help="CPUs to request.")
 @click.option("--memory", default=DEFAULT_MEMORY, show_default=True, help="Memory to request (e.g. 16GB).")
-def cli(
-    cluster: str | None, controller_url: str | None, region: str, name: str, tpu: str, cpu: float, memory: str
-) -> None:
+def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memory: str) -> None:
     """Submit the always-on ducky service to an Iris cluster."""
     logging.basicConfig(level=logging.INFO)
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
 
-    with _controller_connection(cluster, controller_url) as (url, token_provider):
-        client = IrisClient.remote(url, workspace=Path.cwd(), token_provider=token_provider)
-        job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)
+    client = IrisClient.remote(controller_url, workspace=Path.cwd())
+    job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)
     logger.info(
         "submitted ducky job %s (endpoint %r) — reachable via the controller endpoint proxy once running",
         job.job_id,
