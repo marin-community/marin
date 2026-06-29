@@ -20,6 +20,7 @@ def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdev
     """Create a fake venv tree mirroring what jax[cuda*] installs."""
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "activate").write_text(f'VIRTUAL_ENV="{venv}"\nexport VIRTUAL_ENV\n')
     cuda = venv / "lib" / "python3.12" / "site-packages" / "nvidia" / cuda_major
     (cuda / "bin").mkdir(parents=True)
     if with_ptxas:
@@ -32,6 +33,14 @@ def _make_venv(tmp_path: Path, *, cuda_major: str, with_ptxas: bool, with_libdev
         libdevice.mkdir(parents=True)
         (libdevice / "libdevice.10.bc").write_bytes(b"BC\xc0\xde")
     return venv
+
+
+def _add_nvshmem_runtime(venv: Path) -> Path:
+    """Create the wheel layout for nvidia-nvshmem-cu13."""
+    nvshmem_lib = venv / "lib" / "python3.12" / "site-packages" / "nvidia" / "nvshmem" / "lib"
+    nvshmem_lib.mkdir(parents=True)
+    (nvshmem_lib / "libnvshmem_host.so.3").write_bytes(b"NVSHMEM")
+    return nvshmem_lib
 
 
 def _run_script(script: str, venv: Path, workdir: Path) -> None:
@@ -97,6 +106,27 @@ def test_stages_when_libdevice_missing(tmp_path):
 
     assert (venv / "bin" / "ptxas").is_symlink()
     assert not (workdir / "libdevice.10.bc").exists()
+
+
+def test_exposes_wheel_provided_nvshmem_runtime_when_present(tmp_path):
+    venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=True)
+    nvshmem_lib = _add_nvshmem_runtime(venv)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    _run_setup(venv, workdir)
+
+    nvshmem_alias = nvshmem_lib / "libnvshmem.so"
+    assert nvshmem_alias.is_symlink()
+    assert nvshmem_alias.resolve() == nvshmem_lib / "libnvshmem_host.so.3"
+
+    activation_probe = subprocess.run(
+        ["bash", "-c", f"source {venv / 'bin' / 'activate'} && printf '%s' \"$LD_LIBRARY_PATH\""],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert str(nvshmem_lib) in activation_probe.stdout.split(":")
 
 
 def test_wants_gpu_extra():

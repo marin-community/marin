@@ -5782,3 +5782,32 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: do not relaunch the direct-call recipe; use the documented
   `launch_cw_scale` executor entrypoint for any retry. Keep the single-node
   target-shape trainer success as the spec-aligned evidence.
+
+### 2026-06-29 15:06 - MOE-MGPU-361 Iris GPU library-path mitigation
+- Hypothesis: the corrected r4 target-shape trainer attempt failed at
+  multi-node runtime initialization because JAX could not find the
+  wheel-provided NVSHMEM runtime shared library, even though the single-node
+  Pallas EP kernel target does not require multi-host EP or in-kernel NVSHMEM
+  support.
+- Base Commit Hash: `c3706ed08`.
+- Change:
+  - Updated `lib/iris/src/iris/cluster/setup.py` so GPU job setup records
+    existing NVIDIA wheel shared-library directories in
+    `$IRIS_VENV/_iris_gpu_library_path.sh`, sources that file from
+    `$IRIS_VENV/bin/activate`, and creates a `libnvshmem.so` alias when the
+    `nvidia-nvshmem` wheel provides `libnvshmem_host.so.3`.
+  - Added `lib/iris/tests/cluster/runtime/test_cuda_staging.py` coverage with a
+    fake `nvidia/nvshmem/lib` wheel layout, checking both the alias and
+    activation-time `LD_LIBRARY_PATH`.
+- Validation:
+  - `./infra/pre-commit.py --files lib/iris/src/iris/cluster/setup.py lib/iris/tests/cluster/runtime/test_cuda_staging.py --fix` -> passed.
+  - `uv run pytest lib/iris/tests/cluster/runtime/test_cuda_staging.py -q -o addopts=` -> `9 passed in 0.62s`.
+- Interpretation: this is a runtime setup mitigation for full trainer
+  multi-node attempts, not a change in the Pallas MGPU kernel support contract.
+  It should make a normal `python -m experiments.grug.moe.launch_cw_scale`
+  retry a cleaner test of whether the previous missing-NVSHMEM failure is gone.
+  Keep #6597 quiet until a retry reaches train metrics, a meaningful milestone,
+  or a fundamental blocker.
+- Next action: commit this mitigation as a stable checkpoint. If retrying r4,
+  use the documented executor entrypoint rather than directly calling
+  `run_grug_moe_trial` on unresolved executor config.

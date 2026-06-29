@@ -141,8 +141,10 @@ def cuda_toolchain_setup_script() -> str:
 
     Appended to a GPU job's setup so Mosaic GPU kernels compile: it puts the
     ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH`` by symlinking it
-    into the venv's ``bin``, and stages ``libdevice.10.bc`` where XLA looks, with no
-    run-phase changes. A no-op when the venv carries no CUDA toolchain.
+    into the venv's ``bin``, stages ``libdevice.10.bc`` where XLA looks, and
+    records the wheel-provided NVIDIA shared-library directories so the run
+    phase can load runtimes such as NVSHMEM. A no-op when the venv carries no
+    CUDA toolchain.
     """
     return rf"""set -e
 cuda_bin=""
@@ -157,6 +159,28 @@ if [ -f "$_libdevice" ]; then
   mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
   cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
+fi
+cuda_lib_dirs=""
+for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/*/lib; do
+  if [ -f "$_d/libnvshmem_host.so.3" ] && [ ! -e "$_d/libnvshmem.so" ]; then
+    ln -sf libnvshmem_host.so.3 "$_d/libnvshmem.so"
+  fi
+  if [ -d "$_d" ]; then cuda_lib_dirs="${{cuda_lib_dirs:+${{cuda_lib_dirs}}:}}$_d"; fi
+done
+if [ -n "$cuda_lib_dirs" ]; then
+  cat > "$IRIS_VENV/_iris_gpu_library_path.sh" <<EOF
+export LD_LIBRARY_PATH="$cuda_lib_dirs\${{LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}}"
+EOF
+  if ! grep -q "_iris_gpu_library_path.sh" "$IRIS_VENV/bin/activate"; then
+    cat >> "$IRIS_VENV/bin/activate" <<'EOF'
+
+# Iris GPU jobs need wheel-provided NVIDIA shared libraries (for example
+# NVSHMEM) available when the run phase activates this venv.
+if [ -f "$VIRTUAL_ENV/_iris_gpu_library_path.sh" ]; then
+  . "$VIRTUAL_ENV/_iris_gpu_library_path.sh"
+fi
+EOF
+  fi
 fi
 """
 
