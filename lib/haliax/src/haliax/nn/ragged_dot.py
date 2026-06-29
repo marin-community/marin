@@ -424,6 +424,7 @@ def _mosaic_pallas_call(
     ragged_dot_dimension_numbers: jax.lax.RaggedDotDimensionNumbers = _DEFAULT_DIM_NUMS,
     out_dtype: jnp.dtype | None = None,
     config: MosaicBlockConfig = _DEFAULT_MOSAIC_CONFIG,
+    rhs_pretransposed: jax.Array | None = None,
 ) -> jax.Array:
     """Genuine f8 Mosaic-GPU grouped GEMM for the forward and dlhs layouts (H100 only).
 
@@ -440,7 +441,10 @@ def _mosaic_pallas_call(
     if not _has_pallas_mosaic:
         raise NotImplementedError("Mosaic-GPU ragged-dot backend is not available (H100-only)")
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
-        out = _mosaic_ragged_dot(lhs, jnp.swapaxes(rhs, 1, 2), group_sizes, config)
+        # Forward needs the weights K-contiguous ([G,N,K]). Use the pre-transposed f8 weights from the
+        # fused cast-transpose when provided (GFP8-OPT-R4), else fall back to the XLA swapaxes.
+        rhs_t = rhs_pretransposed if rhs_pretransposed is not None else jnp.swapaxes(rhs, 1, 2)
+        out = _mosaic_ragged_dot(lhs, rhs_t, group_sizes, config)
     elif ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
         out = _mosaic_ragged_dot(lhs, rhs, group_sizes, config)
     elif ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:

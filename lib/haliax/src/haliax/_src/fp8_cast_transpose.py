@@ -18,6 +18,7 @@ register layout cast and is bit-exact to the reference (logbook GFP8-033); elsew
 shapes, or no Pallas) it delegates to the reference.
 """
 
+import os
 from functools import partial
 
 import jax
@@ -35,10 +36,11 @@ try:
 except (ImportError, ModuleNotFoundError):
     pass
 
-# The Mosaic kernel tiles 128x128; non-conforming shapes fall back to the reference.
-_MOSAIC_BLOCK = 128
+# The Mosaic kernel tiles _MOSAIC_BLOCK x _MOSAIC_BLOCK; non-conforming shapes fall back to the
+# reference. Env-overridable for autotuning the cast-transpose tile (GFP8-OPT-R4c).
+_MOSAIC_BLOCK = int(os.environ.get("FP8_CAST_TRANSPOSE_BLOCK", "128"))
 
-__all__ = ["cast_transpose", "cast_transpose_reference", "in_q_transpose"]
+__all__ = ["cast_transpose", "cast_transpose_reference", "in_q_transpose", "in_q_transpose_3d"]
 
 
 def cast_transpose_reference(
@@ -123,3 +125,48 @@ def in_q_transpose_bwd(compute_dtype, res, _g):
 
 
 in_q_transpose.defvjp(in_q_transpose_fwd, in_q_transpose_bwd)
+
+
+# --- 3D (per-expert) cast-transpose for grouped weights ----------------------------------------
+# The forward f8 grouped GEMM needs the expert weights K-contiguous, which the mosaic kernel reaches
+# via an XLA ``swapaxes(rhs, 1, 2)`` on the quantized f8 weights every step — an uncoalesced 1-byte
+# transpose that the profile attributes ~14% of fp8 device time to (logbook GFP8-OPT-R4). This produces
+# the transposed layout from the *same* fused cast-transpose the activations already use, per expert,
+# so the XLA transpose disappears. One per-tensor scale across all experts (delayed scaling), exactly
+# like ``in_q`` on the 3D weights today.
+
+
+def _cast_transpose_per_expert(inp, new_scale, compute_dtype):
+    """Vmap the 2D fused cast-transpose over the leading expert axis: ``[G,K,N] -> ([G,K,N], [G,N,K])``."""
+    return jax.vmap(
+        lambda w: cast_transpose(w, new_scale, out_dtype=jnp.float8_e4m3fn, compute_dtype=compute_dtype)
+    )(inp)
+
+
+@partial(custom_vjp, nondiff_argnums=(0,))
+def in_q_transpose_3d(compute_dtype, inp, scale, amax_history):
+    """``in_q_transpose`` for grouped weights ``[G, K, N]``: ``(q[G,K,N], q_t[G,N,K], new_scale)``.
+
+    ``q_t`` is the K-contiguous (``swapaxes(q, 1, 2)``) f8 weight the forward wgmma consumes; ``q`` is
+    the natural layout the dlhs backward consumes. Bit-identical to ``in_q`` + ``swapaxes`` but the
+    transpose is the fused cast-transpose, not XLA. ``new_scale`` is one per-tensor scale (amax over
+    all experts), matching the current ``in_q`` on the weights."""
+    new_scale, _ = _new_scale_and_history(inp, jnp.float8_e4m3fn, scale, amax_history)
+    q, q_t = _cast_transpose_per_expert(inp, new_scale, compute_dtype)
+    return q, q_t, new_scale
+
+
+def in_q_transpose_3d_fwd(compute_dtype, inp, scale, amax_history):
+    new_scale, new_history = _new_scale_and_history(inp, jnp.float8_e4m3fn, scale, amax_history)
+    q, q_t = _cast_transpose_per_expert(inp, new_scale, compute_dtype)
+    return (q, q_t, new_scale), (new_scale, new_history)
+
+
+def in_q_transpose_3d_bwd(compute_dtype, res, _g):
+    # inp gets no gradient here (the weight gradient flows through the grouped GEMM); the freshly
+    # computed scale/history overwrite the scale/amax_history grads — exactly as in_q_transpose.
+    new_scale, new_history = res
+    return None, new_scale, new_history
+
+
+in_q_transpose_3d.defvjp(in_q_transpose_3d_fwd, in_q_transpose_3d_bwd)
