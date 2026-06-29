@@ -115,12 +115,12 @@ def _gpu_is_fp8_capable() -> bool:
     reason="needs an FP8-capable GPU (CUDA sm89+: Ada/Hopper/Blackwell)",
 )
 def test_fp8_emits_fp8_kernels_on_gpu():
-    # Both passes of the default recipe must run as FP8 GEMMs on tensor cores.
-    # Compiling the gradient exercises the forward dot (e4m3 x e4m3) and the two
-    # grad dots (e5m2 output grad x e4m3 operands) in one HLO, so none may fall
-    # back to a bf16 cuBLASLt kernel that dequantizes first. Depending on shape,
-    # XLA's autotuner lowers each to a cuBLASLt FP8 kernel (__cublas$lt$matmul$f8)
-    # or a Triton FP8 gemm fusion (__triton_nested_gemm_fusion).
+    # The default recipe's three GEMMs -- the forward dot (e4m3 x e4m3) and the two
+    # grad dots (e5m2 output grad x e4m3 operand) -- must each run as an fp8 GEMM, not
+    # fall back to a bf16 GEMM that dequantizes first. Triton GEMM is disabled at
+    # compile time so all three lower to cuBLASLt, whose kernel name self-identifies
+    # fp8 via the $f8 suffix -- a deterministic check that doesn't ride on which
+    # backend the autotuner would otherwise pick.
     Batch = hax.Axis("Batch", 512)
     In = hax.Axis("In", 512)
     Out = hax.Axis("Out", 512)
@@ -139,24 +139,21 @@ def test_fp8_emits_fp8_kernels_on_gpu():
     # Differentiate w.r.t. both the weight and the input so both grad GEMMs
     # (wgrad needs d/d weight, dgrad needs d/d input) stay live; the forward dot
     # is present too, since its residuals feed the backward.
-    hlo = jax.jit(jax.grad(loss, argnums=(0, 1))).lower(params, x).compile().as_text()
+    hlo = (
+        jax.jit(jax.grad(loss, argnums=(0, 1)))
+        .lower(params, x)
+        .compile(compiler_options={"xla_gpu_enable_triton_gemm": False})
+        .as_text()
+    )
 
-    # Forward operands reach the matmul as E4M3, the output gradient as E5M2
-    # (a bf16 fallback would dequantize them first).
-    assert "f8e4m3" in hlo, "forward should quantize operands to FP8 (e4m3)"
-    assert "f8e5m2" in hlo, "backward should quantize the output gradient to FP8 (e5m2)"
-    # ... fed to real FP8 GEMM kernels: cuBLASLt FP8 or a Triton FP8 gemm fusion.
+    # Forward operands reach the matmul as e4m3, the output gradient as e5m2.
+    assert "f8e4m3" in hlo and "f8e5m2" in hlo, "operands should quantize to e4m3 and the grad to e5m2"
+    # All three GEMMs (fwd + dgrad + wgrad) are fp8 cuBLASLt kernels, and none fell
+    # back to a bf16 __cublas$lt$matmul (which would mean the operands were dequantized).
     n_cublas = hlo.count("__cublas$lt$matmul")
     n_cublas_f8 = hlo.count("__cublas$lt$matmul$f8")
-    n_triton_f8 = hlo.count("__triton_nested_gemm_fusion")
-    # Every cuBLASLt matmul must be the $f8 variant (no bf16 cuBLASLt fallback).
-    assert n_cublas == n_cublas_f8, "a matmul fell back to a bf16 __cublas$lt$matmul"
-    # All three matmuls (forward + dgrad + wgrad) must lower to FP8 GEMMs. Counting
-    # both backends keeps this non-vacuous when XLA picks Triton fusions, where the
-    # cuBLASLt check above is trivially 0 == 0.
-    assert (
-        n_cublas_f8 + n_triton_f8 >= 3
-    ), f"expected >= 3 FP8 GEMMs (fwd + 2 grad dots); got {n_cublas_f8} cuBLASLt + {n_triton_f8} Triton"
+    assert n_cublas_f8 == 3, f"expected 3 fp8 cuBLASLt GEMMs (fwd + dgrad + wgrad); got {n_cublas_f8}"
+    assert n_cublas == n_cublas_f8, "a GEMM fell back to a bf16 __cublas$lt$matmul"
 
 
 def test_fp8_grads_match_reference():
