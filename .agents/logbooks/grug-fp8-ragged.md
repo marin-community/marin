@@ -220,7 +220,28 @@ shaky). Recommend consolidating: commit R4b, port to `grug-fp8-shim`, optionally
 further ~2pt is worth the Mosaic surgery. R4b change is purely additive and gated on mosaic, so it's
 safe to keep regardless.
 
-### GFP8-OPT-R1 (deferred) — quantize-on-load fusion. Kill the 6.6% pure-quant convert tax (`loop_convert`
+### GFP8-OPT-R1 — investigated; target subsumed by R4b
+
+**Job:** `/matt/iris-run-job-20260629-024653` (profile of the committed R4b path at t1k). Residual
+non-GEMM ops: `batched_body_mosaic_gpu_kernel` (cast-transpose) 13.5% — intrinsic; `wrapped_convert`
+3.1% — the only remaining foldable fp8-specific convert (likely the forward f8→accumulator-dtype
+astype); `input_concatenate_fusion` 3.2% / `loop_broadcast` 3.0% / `loop_multiply` 2.2% — **shared with
+bf16** (gated MLP + scaling: bf16 had 3.3 / 2.9 / 2.5), so they do NOT affect the fp8/bf16 ratio.
+
+**Conclusion:** R4b folded the weight+activation quantizes into the Mosaic cast-transposes, so the GEMM
+receives f8 directly — R1's original 6.6% convert tax fell to a single 3.1% `wrapped_convert`. R1's
+realistic ceiling is now ~1–3pt for hard kernel work (a fork-kernel patch so the forward GEMM emits its
+accumulator dtype directly instead of f8→astype — would also improve forward numerics). Low ROI vs the
+banked R4b win. Plateau counter: 2 of 5, but the remaining levers are all intrinsic/shared/small.
+
+## Loop conclusion
+
+**Result: realistic operating point 1.156× → 1.212× (R4b), validated, committed (`7f5268deb7`).** The
+loop closed ~half the device-busy distance to the ~1.38× ceiling; the rest is intrinsic (the f8
+K-contiguity cast-transpose, 13.5%) or shared-with-bf16 (doesn't move the ratio). R2/R4c/R1 are
+negatives/subsumed that bound the remaining space. Recommend banking R4b and porting to
+`grug-fp8-shim`; the one optional further lever is the forward-output-dtype kernel patch (~1–3pt + a
+numerics improvement). Kill the 6.6% pure-quant convert tax (`loop_convert`
   + `wrapped_convert`, no bf16 analog) by fusing the bf16→fp8 cast into the Mosaic GEMM prologue
   instead of a standalone XLA fusion. Helps *every* shape (overhead on every GEMM input). _Queued._
 - **R2 (kernel) — re-tune block configs for F=1280.** The GEMM is 71% of fp8 time; the candidate set
