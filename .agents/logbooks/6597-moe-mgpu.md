@@ -6411,3 +6411,41 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action:
   - Commit this logbook note, push it, and monitor PR #6767 for CI, comments,
     reviews, or closure.
+
+### 2026-06-29 16:37 - MOE-MGPU-379 PR mergeability restored
+- Hypothesis: PR #6767 was blocked by a merge conflict with current `main`, and
+  merging `origin/main` should preserve the MoE MGPU branch behavior while
+  making the draft PR reviewable.
+- Commit Hash: `85bac3372`.
+- Commands:
+  - `git fetch origin main`
+  - `git merge --no-ff origin/main`
+  - `uv run pytest lib/iris/tests/cluster/runtime/test_cuda_staging.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py -q -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel or ordered_implementation' -o addopts=`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `git push`
+  - `gh pr view 6767 --json mergeable,mergeStateStatus,statusCheckRollup,headRefOid,state,isDraft,url`
+- Result:
+  - Merge completed without manual conflicts.
+  - `main` renamed `iris.cluster.setup` to `iris.cluster.setup_scripts`; the
+    branch's CUDA/NVSHMEM setup-script constants carried forward into the new
+    file path.
+  - Local focused validation:
+    - Iris CUDA staging test -> `9 passed`.
+    - benchmark harness tests -> `41 passed, 1 warning`.
+    - Grug Pallas/capacity/EP/ordered slice -> `65 passed, 11 skipped,
+      35 deselected, 1 warning`.
+  - Changed-file pre-commit failed in Pyrefly on merged mainline
+    `transformers` import/type-resolution errors, while runtime Python imports
+    of the reported `transformers` symbols succeeded. This appears to be a
+    mainline Pyrefly/dependency-resolution issue exposed by the local merge
+    delta, not a MoE MGPU behavior failure.
+  - After pushing, GitHub reports PR #6767 as `mergeable="MERGEABLE"` and
+    `mergeStateStatus="BLOCKED"` only because CI is in progress.
+- Interpretation:
+  - PR #6767 is no longer conflict-blocked. CI restarted on the merge commit and
+    should be monitored for real failures.
+  - No #6597 issue update.
+- Next action:
+  - Push this logbook note and monitor PR #6767 CI/comments/reviews.
