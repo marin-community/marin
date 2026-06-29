@@ -5276,3 +5276,33 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   known full-run smoke, then decide whether to try the 32-node 20-step scale
   command or finish the first stacked PR readiness gate with
   `./infra/pre-commit.py --review`.
+
+### 2026-06-29 13:50 - MOE-MGPU-348 launched 32-node 20-step scale smoke
+- Hypothesis: after the one-node target-shape trainer smoke succeeded, the
+  same watch-disabled Pallas MGPU recipe should be exercised through the
+  launcher default 32-node/256-H100 scale shape for 20 steps.
+- Commit Hash: `fe788a6e5`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`
+  - Expected child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609/grug-train-grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`
+- Command:
+  - `RUN_ID="grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609"; uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name "$RUN_ID" --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID="$RUN_ID" SCALE_GPU_REPLICAS=32 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_STEPS=20 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger SCALE_WATCH_TARGETS= uv run python -m experiments.grug.moe.launch_cw_scale`
+- Initial status:
+  - Parent submitted successfully and was `JOB_STATE_RUNNING` after the
+    initial 120-second wait.
+  - `iris job list --json --prefix` showed the child training job present as
+    `JOB_STATE_RUNNING` with `task_count=32`, `task_state_counts={"building":
+    32}`, no pending reason, no failures, and no preemptions.
+  - Recent parent logs showed the training dispatch:
+    `Dispatching grug training via Fray: grug-train-grug-moe-pallas-mgpu-20step-scale-fe788a6e5-20260629-134609`.
+  - Babysitter Ramanujan (`019f1522-8dac-7a03-b504-37fb6acb9c6b`) owns
+    monitoring. Heartbeat `poll-moe-mgpu-32-node-smoke-babysitter` polls the
+    babysitter every 10 minutes.
+- Interpretation: the 32-node bounded smoke is in flight and has passed the
+  first driver/child-submission check. No GitHub issue comment yet; this is an
+  in-flight run, not a result milestone.
+- Next action: monitor to terminal state or a clear blocker; record final
+  metrics/logs if it succeeds, and keep #6597 quiet unless the run reaches a
+  meaningful milestone or fundamental blocker.
