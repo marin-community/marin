@@ -5811,3 +5811,96 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
 - Next action: commit this mitigation as a stable checkpoint. If retrying r4,
   use the documented executor entrypoint rather than directly calling
   `run_grug_moe_trial` on unresolved executor config.
+
+### 2026-06-29 15:09 - MOE-MGPU-362 launch current-commit one-node 20-step smoke
+- Hypothesis: the latest committed tree should still complete the spec-aligned
+  one-node 8xH100 target-shape full trainer smoke after readiness/runtime setup
+  cleanup.
+- Commit Hash: `14fd25a73`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755/grug-train-grug-moe-pallas-mgpu-20step-current-20260629-150755`
+- Command:
+  - `RUN_ID="grug-moe-pallas-mgpu-20step-current-20260629-150755"; uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name "$RUN_ID" --cpu=2 --memory=2G --disk=8G --extra=cpu -- env RUN_ID="$RUN_ID" SCALE_GPU_REPLICAS=1 SCALE_EXPERT_AXIS=8 SCALE_REPLICA_AXIS=1 SCALE_BATCH=128 SCALE_SEQ_LEN=2048 SCALE_STEPS=20 SCALE_HIDDEN_DIM=2560 SCALE_NUM_LAYERS=2 SCALE_NUM_EXPERTS=256 SCALE_TOP_K=4 SCALE_MOE_IMPLEMENTATION=pallas_mgpu SCALE_MOE_CAPACITY_FACTOR=1.25 SCALE_REMAT=save_moe SCALE_CHECKPOINTS=local SCALE_TRACKER=json_logger SCALE_WATCH_TARGETS= uv run python -m experiments.grug.moe.launch_cw_scale`
+- Initial status:
+  - Submission succeeded.
+  - Launch snapshot showed parent `JOB_STATE_RUNNING` and one child
+    `JOB_STATE_RUNNING` with `task_count=1`, `task_state_counts={"running": 1}`,
+    no failures, no preemptions, and no pending reason.
+  - Hparams confirmed `moe_implementation="pallas_mgpu"`,
+    `moe_capacity_factor=1.25`, `remat_mode="save_moe"`,
+    `train_batch_size=128`, `num_train_steps=20`, `hidden_dim=2560`,
+    `num_layers=2`, `num_experts=256`, `expert_axis_size=8`,
+    `replica_axis_size=1`, and checkpoint base
+    `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-20step-current-20260629-150755`.
+- Local artifacts:
+  - Launch snapshot:
+    `scratch/20260629-1508_moe_mgpu_current_20step_launch/`
+- Monitoring:
+  - Babysitter Rawls (`019f156d-351e-7e20-a61b-a319e982b006`) owns terminal
+    monitoring and artifact capture under
+    `scratch/20260629-1508_moe_mgpu_current_20step_babysit/`.
+  - Thread heartbeat `resume-moe-mgpu-lint-review-gate` now polls Rawls every
+    10 minutes and still preserves the post-16:30 lint-review reminder.
+- Interpretation: this is the current-code full trainer integration smoke. It
+  is in flight and not yet a terminal milestone; keep #6597 quiet until it
+  succeeds, produces meaningful full-run evidence, or hits a fundamental
+  blocker.
+- Next action: babysit to terminal state, save final logs/metrics/checkpoint
+  evidence, append the terminal result, then decide whether to promote an issue
+  update or move to PR-readiness/lint-review.
+
+### 2026-06-29 15:13 - MOE-MGPU-363 current-commit one-node 20-step success
+- Hypothesis: the latest committed tree should still complete the spec-aligned
+  one-node 8xH100 target-shape full trainer smoke after readiness/runtime setup
+  cleanup.
+- Commit Hash: `14fd25a73`.
+- Job:
+  - Parent:
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755`
+  - Child:
+    `/dlwh/grug-moe-pallas-mgpu-20step-current-20260629-150755/grug-train-grug-moe-pallas-mgpu-20step-current-20260629-150755`
+- Command:
+  - Status/log capture used
+    `uv run --no-sync --package marin-iris --extra controller iris --cluster=cw-us-east-02a ...`.
+- Config:
+  - One 8xH100 node, `SCALE_GPU_REPLICAS=1`, `SCALE_EXPERT_AXIS=8`,
+    `SCALE_REPLICA_AXIS=1`, `SCALE_BATCH=128`, `SCALE_SEQ_LEN=2048`,
+    `SCALE_STEPS=20`, `SCALE_HIDDEN_DIM=2560`, `SCALE_NUM_LAYERS=2`,
+    `SCALE_NUM_EXPERTS=256`, `SCALE_TOP_K=4`,
+    `SCALE_MOE_IMPLEMENTATION=pallas_mgpu`,
+    `SCALE_MOE_CAPACITY_FACTOR=1.25`, `SCALE_REMAT=save_moe`,
+    `SCALE_CHECKPOINTS=local`, `SCALE_TRACKER=json_logger`, and
+    `SCALE_WATCH_TARGETS=`.
+- Saved local artifacts:
+  - `scratch/20260629-1508_moe_mgpu_current_20step_babysit/`
+  - Key files: `job_list_final.json`, `parent_summary_final.json`,
+    `child_summary_final.json`, `logs_after_120s.txt`,
+    `high_signal_excerpt_raw.txt`, `metrics_events.jsonl`,
+    `final_metrics_summary.json`, `summary.md`, and
+    `babysitter_monitoring_state.json`.
+- Result:
+  - Parent and child reached `JOB_STATE_SUCCEEDED`, exit `0`, failures `0`,
+    preemptions `0`.
+  - Trainer reached `20.0it/20.0it`; logs use zero-indexed training metrics, so
+    the last logged `global_step` is `19`.
+  - Checkpoint evidence: checkpoint saved to
+    `/tmp/grug-scale-ckpt/grug-moe-pallas-mgpu-20step-current-20260629-150755/step-20`
+    for step 20.
+  - Final JSON metrics reported parameter count `5,747,625,472`, final train
+    loss `7.496264457702637`, final cross-entropy loss
+    `7.468044757843018`, final throughput `552901.8144131473` tokens/s,
+    final MFU `20.191636765959945`, and MFU summary p10/p50/p90/mean
+    `19.88243326098224` / `20.118615659083623` /
+    `20.23426536539268` / `20.108652513850707` over `19` samples.
+- Interpretation: this is a clean current-code reproduction of the
+  spec-aligned one-node H100 full-trainer evidence for the Pallas MGPU MoE path.
+  It reinforces that the current validated path is single-node/NVLink EP; the
+  earlier multi-node failures remain separate runtime/config issues.
+- Issue update:
+  - https://github.com/marin-community/marin/issues/6597#issuecomment-4837719816
+- Next action: run the required lint-review/PR readiness checks after the
+  quota reset, while leaving forward `permute_up` performance work with
+  `#6597-forward`.
