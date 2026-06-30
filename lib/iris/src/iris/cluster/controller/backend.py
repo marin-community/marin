@@ -453,7 +453,6 @@ class RegisterOutcome:
     recycled IP), queued for the next control tick to reap.
     """
 
-    worker_id: WorkerId
     queued_eviction: list[WorkerId]
 
 

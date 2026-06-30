@@ -81,11 +81,11 @@ class BackendWorkerStore(TransitionReader, Protocol):
         ...
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """Persist a registering worker and queue any recycled-address eviction.
+        """Persist a registering worker; queue any recycled-address eviction.
 
-        Runs on the Register RPC thread. Writes the worker row, seeds its liveness,
-        and queues any stale prior owner of the same address (a recycled IP) for
-        :meth:`drain_pending_evictions` to reap on the next control tick."""
+        Safe to call off the control thread. A stale prior owner of the worker's
+        address (a recycled IP) is not reaped here but queued for
+        :meth:`drain_pending_evictions` and returned in the outcome."""
         ...
 
     def drain_pending_evictions(self) -> list[WorkerId]:
@@ -123,11 +123,6 @@ class DbBackendWorkerStore:
     _pending_evictions_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """Persist a registering worker and queue any recycled-address eviction.
-
-        Writes the worker row and seeds its liveness, then detects a stale prior
-        owner of the same address (a recycled internal IP) and queues it for
-        :meth:`drain_pending_evictions`. Returns the queued stale owners, if any."""
         now = Timestamp.now()
         with self.db.transaction() as cur:
             register_worker_row(
@@ -146,7 +141,7 @@ class DbBackendWorkerStore:
         if stale:
             with self._pending_evictions_lock:
                 self._pending_evictions.update(stale)
-        return RegisterOutcome(worker_id=registration.worker_id, queued_eviction=stale)
+        return RegisterOutcome(queued_eviction=stale)
 
     def drain_pending_evictions(self) -> list[WorkerId]:
         """Reap the recycled-address workers queued by :meth:`register_worker`."""
