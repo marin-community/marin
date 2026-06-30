@@ -27,6 +27,7 @@ from iris.cluster.constraints import (
     extract_placement_requirements,
     is_availability_key,
     split_hard_soft,
+    strip_backend_constraints,
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -111,7 +112,10 @@ def job_requirements_from_job(job: PendingTask) -> JobRequirements:
         req_gpu_count=dc.gpu,
         req_tpu_count=dc.tpu,
         device_variant=device_variant_from_json(job.res_device_json),
-        constraints=constraints_from_json(job.constraints_json),
+        # The reserved ``backend`` routing directive is consumed by the
+        # meta-scheduler; strip it so it never reaches per-worker matching (no
+        # worker advertises a ``backend`` attribute, so it would starve the task).
+        constraints=strip_backend_constraints(constraints_from_json(job.constraints_json)),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
@@ -691,6 +695,35 @@ def _sort_pending_tasks_by_resolved_band(
             task.submitted_at_ms.epoch_ms(),
             task.priority_insertion,
         ),
+    )
+
+
+@dataclass(frozen=True)
+class RoutingInputs:
+    """Controller-owned per-tick scheduling state: pending tasks + budgets.
+
+    Carries no worker data — the controller routes and budgets from this, then
+    each backend sources its own workers and assembles its full scheduling
+    context from this plus its worker view.
+    """
+
+    pending_task_rows: list[PendingTask]
+    requested_bands: dict[JobName, int]
+    user_spend: dict[str, int]
+    user_budget_limits: dict[str, int]
+    user_budget_defaults: UserBudgetDefaults
+
+
+def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInputs:
+    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads)."""
+    pending = reads.pending_tasks_with_jobs(snap)
+    requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
+    return RoutingInputs(
+        pending_task_rows=_sort_pending_tasks_by_resolved_band(pending, requested_bands),
+        requested_bands=requested_bands,
+        user_spend=compute_user_spend(snap),
+        user_budget_limits=reads.get_all_user_budget_limits(snap),
+        user_budget_defaults=defaults,
     )
 
 

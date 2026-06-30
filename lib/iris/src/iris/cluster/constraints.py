@@ -1000,6 +1000,29 @@ def is_any_region_marker(c: Constraint) -> bool:
     return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
+BACKEND_CONSTRAINT_KEY = "backend"
+"""Reserved constraint key carrying a ``--backend`` routing directive.
+
+A ``backend EQ <id>`` constraint pins a job to a named task backend. The
+meta-scheduler reads it via :func:`backend_directive` and strips it (no worker
+advertises a ``backend`` attribute, so a leftover hard ``backend=X`` constraint
+would match no worker and starve the task) before per-backend scheduling sees
+the constraints."""
+
+
+def strip_backend_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
+    """Drop the reserved ``backend`` routing directive from ``constraints``."""
+    return [c for c in constraints if c.key != BACKEND_CONSTRAINT_KEY]
+
+
+def backend_directive(constraints: Sequence[Constraint]) -> str | None:
+    """Return the ``--backend`` target from a ``backend EQ <id>`` constraint, if any."""
+    for c in constraints:
+        if c.key == BACKEND_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
+            return str(c.values[0].value)
+    return None
+
+
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 

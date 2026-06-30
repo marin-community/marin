@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
 from jax.sharding import PartitionSpec as P
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Float, Int, Key
 
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -80,8 +80,8 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
 
 
 def split_moe_w13_output(
-    w13_out: jax.Array, *, intermediate_dim: int, interleaved: bool
-) -> tuple[jax.Array, jax.Array]:
+    w13_out: Float[Array, "... I2"], *, intermediate_dim: int, interleaved: bool
+) -> tuple[Float[Array, "... I"], Float[Array, "... I"]]:
     expected = 2 * intermediate_dim
     if w13_out.shape[-1] != expected:
         raise ValueError(f"w13 output last dimension must be {expected}, got shape={w13_out.shape}")
@@ -91,19 +91,19 @@ def split_moe_w13_output(
     return gate, up
 
 
-def _init_weight(key: jax.Array, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+def _init_weight(key: Key[Array, ""], shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * jax.random.truncated_normal(key, -3, 3, shape)
 
 
 @named_call
 def _prepare_moe_dispatch(
-    x: Float[Array, "T D"],
+    x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
     *,
     num_experts: int,
 ) -> tuple[
-    Float[Array, "TK D"],
+    Float[Array, "TK H"],
     Float[Array, "TK"],
     Int[Array, "TK"],
     Int[Array, "E"],

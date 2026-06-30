@@ -106,7 +106,7 @@ class EmbeddingAttrData(BaseModel):
     quantization_scale: float
     quantization_range: float
     batch_size: int
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
         return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
@@ -199,9 +199,9 @@ def _embed_shard(
         q = quantize_to_int8(raw)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
-    counters.increment("embed/docs_in", n_docs)
-    counters.increment("embed/bytes_in", n_bytes)
-    counters.increment("embed/shards_in", 1)
+    counters.pipeline.update_counter("embed/docs_in", n_docs)
+    counters.pipeline.update_counter("embed/bytes_in", n_bytes)
+    counters.pipeline.update_counter("embed/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs (%.1f MB) encoded",
         shard.shard_idx,

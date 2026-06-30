@@ -516,7 +516,7 @@ def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock
     # Direct call: prune_old_data is intentionally not an IrisEvent.
     prune_old_data(
         transitions._db,
-        transitions._health,
+        [transitions._health],
         transitions._endpoints,
         transitions._worker_attrs,
         job_retention=Duration.from_seconds(0),

@@ -90,7 +90,7 @@ class DeconAttributes(BaseModel):
     output_dir: str
     num_partitions: int
     eval_hash_index_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 _BLOOM_FILENAME = "filter.bin"
@@ -360,7 +360,7 @@ def _make_marker(
                             max_score = score
                         matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
-                    counters.increment("decon/contaminated" if contaminated else "decon/clean")
+                    counters.pipeline.update_counter("decon/contaminated" if contaminated else "decon/clean", 1)
                     # Dataset.from_list yields one shard per item in input order, so shard.shard_idx
                     # matches the input's "part-NNNNN-of-NNNNN" partition number on a sorted file list.
                     yield {

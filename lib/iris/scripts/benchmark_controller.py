@@ -49,16 +49,27 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    RpcTaskBackend,
+    RpcWorkerStubFactory,
+    teardown_dead_workers,
+)
 from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
+    ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskBackend,
+    WorkerSource,
+    assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
@@ -78,6 +89,7 @@ from iris.cluster.controller.reads import (  # noqa: F401
     healthy_active_workers_with_attributes,
 )
 from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
     ReconcileRow,
@@ -104,7 +116,8 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.controller.worker_source import DbWorkerSource
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -114,6 +127,7 @@ from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.transition_driver import CursorTransitionReader
 
 
 def _worker_addresses_for_tasks(db, tasks):
@@ -168,15 +182,53 @@ class _FakeProvider:
 
     def __init__(self) -> None:
         self._scheduler = Scheduler()
+        self.worker_source: WorkerSource | None = None
+        self.health: WorkerHealthTracker = WorkerHealthTracker()
+        self.advertised: dict[str, set[str]] = {}
+        self.allowed_users: frozenset[str] = frozenset({"*"})
+        self._pending_dead: list[WorkerId] = []
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        assert self.worker_source is not None
+        context = assemble_scheduling_context(self.worker_source.scheduling_inputs(), request)
+        return run_scheduling_decision(
+            self._scheduler,
+            ScheduleInput(
+                context=context,
+                max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
+                trace=request.trace,
+            ),
+        )
 
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        pass
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_source = DbWorkerSource(
+            db=runtime.db,
+            owns_scale_group=runtime.owns_scale_group,
+            health=self.health,
+            worker_attrs=runtime.worker_attrs,
+            endpoints=runtime.endpoints,
+            run_template_cache=runtime.run_template_cache,
+            defaults=runtime.budget_defaults,
+        )
+
+    def seed_liveness(self) -> None:
+        assert self.worker_source is not None
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def set_log_sink(self, *args, **kwargs):
         pass
@@ -184,18 +236,38 @@ class _FakeProvider:
     def profile_task(self, target, request, timeout_ms):
         raise RuntimeError("fake provider")
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
-        # Same shape the test-suite FakeProvider returns. Only exercised if
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        # Same projection the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
+        assert self.worker_source is not None
+        snapshot = self.worker_source.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
-        return ReconcileResult(
-            worker_results=[
-                (p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans
-            ],
-            health_events=[WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans],
+        worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
+        events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
+        now = Timestamp.now()
+        effects = apply_reconcile(self.worker_source, worker_results, now=now)
+        events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
+        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
+        return ReconcileResult(effects=effects)
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        assert self.worker_source is not None
+        teardown_dead_workers(
+            dead_workers,
+            db=self.worker_source.db,
+            health=self.health,
+            endpoints=self.worker_source.endpoints,
+            worker_attrs=self.worker_source.worker_attrs,
+            autoscale=self.autoscale,
+            reason=reason,
         )
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
     def close(self):
@@ -1730,12 +1802,9 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
-                    ops.worker.apply_reconcile(
-                        cur,
-                        plan_results,
-                        endpoints=write_txns._endpoints,
-                        now=Timestamp.now(),
-                    )
+                    now = Timestamp.now()
+                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    commit_effects(cur, effects, endpoints=write_txns._endpoints)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
             errors.append(e)
@@ -2296,7 +2365,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
     )
     controller = Controller(
         config=config,
-        provider=cast(TaskBackend, _FakeProvider()),
+        backends={DEFAULT_BACKEND_ID: cast(TaskBackend, _FakeProvider())},
         log_stack=log_stack,
         db=db,
         threads=threads,
@@ -2666,6 +2735,33 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
+@dataclasses.dataclass
+class _PrebuiltWorkerSource:
+    """Hands the backend a reconcile snapshot the benchmark built itself.
+
+    The synthetic reconcile benchmark times snapshot assembly separately, then
+    drives ``RpcTaskBackend.reconcile`` against the prebuilt snapshot; the backend
+    sources its snapshot through this O(1) stub so only the RPC fan-out is timed.
+    """
+
+    snapshot: ControlSnapshot
+    # The benchmark times only the RPC fan-out (``_observe_fleet``), which never
+    # folds liveness; the tracker is present solely to satisfy ``WorkerSource``.
+    health: WorkerHealthTracker = dataclasses.field(default_factory=WorkerHealthTracker)
+
+    def reconcile_snapshot(self) -> ControlSnapshot:
+        return self.snapshot
+
+    def scheduling_inputs(self):
+        raise NotImplementedError
+
+    def worker_status(self):
+        raise NotImplementedError
+
+    def transition_snapshot(self, **kwargs):
+        raise NotImplementedError
+
+
 def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
@@ -2678,16 +2774,17 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
         job_specs=inputs.job_specs,
     )
     t2 = time.perf_counter()
-    worker_results = provider.reconcile(snapshot).worker_results
+    # The backend sources its own reconcile snapshot; the benchmark prebuilds it
+    # (measured above) and hands it back through a stub source so the RPC fan-out
+    # is what t2..t3 times. The stub implements only the fan-out read surface (it
+    # never folds liveness or tears down), so it is cast to the full WorkerSource.
+    provider.worker_source = cast(WorkerSource, _PrebuiltWorkerSource(snapshot))
+    worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.db.transaction() as cur:
-        apply_reconcile(
-            cur,
-            worker_results,
-            endpoints=state.txns._endpoints,
-            now=now,
-        )
+        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        commit_effects(cur, effects, endpoints=state.txns._endpoints)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
 

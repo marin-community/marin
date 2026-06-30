@@ -115,6 +115,9 @@ class ControllerService(Protocol):
     async def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -440,6 +443,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_scheduler_state,
+                ),
+                "/iris.cluster.ControllerService/ListBackends": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListBackends",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ListBackendsRequest,
+                        output=controller__pb2.Controller.ListBackendsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_backends,
                 ),
             },
             interceptors=interceptors,
@@ -1094,6 +1107,147 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_backends(
+        self,
+        request: controller__pb2.Controller.ListBackendsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListBackendsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListBackends",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ListBackendsRequest,
+                output=controller__pb2.Controller.ListBackendsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+
+
+class EndpointService(Protocol):
+    async def register_endpoint(self, request: controller__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterEndpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def unregister_endpoint(self, request: controller__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> job__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_endpoints(self, request: controller__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListEndpointsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+
+class EndpointServiceASGIApplication(ConnectASGIApplication[EndpointService]):
+    def __init__(self, service: EndpointService | AsyncGenerator[EndpointService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
+        super().__init__(
+            service=service,
+            endpoints=lambda svc: {
+                "/iris.cluster.EndpointService/RegisterEndpoint": Endpoint.unary(
+                    method=MethodInfo(
+                        name="RegisterEndpoint",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.RegisterEndpointRequest,
+                        output=controller__pb2.Controller.RegisterEndpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.register_endpoint,
+                ),
+                "/iris.cluster.EndpointService/UnregisterEndpoint": Endpoint.unary(
+                    method=MethodInfo(
+                        name="UnregisterEndpoint",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.UnregisterEndpointRequest,
+                        output=job__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.unregister_endpoint,
+                ),
+                "/iris.cluster.EndpointService/ListEndpoints": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListEndpoints",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.ListEndpointsRequest,
+                        output=controller__pb2.Controller.ListEndpointsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_endpoints,
+                ),
+            },
+            interceptors=interceptors,
+            read_max_bytes=read_max_bytes,
+            compressions=compressions,
+        )
+
+    @property
+    def path(self) -> str:
+        """Returns the URL path to mount the application to when serving multiple applications."""
+        return "/iris.cluster.EndpointService"
+
+
+class EndpointServiceClient(ConnectClient):
+    async def register_endpoint(
+        self,
+        request: controller__pb2.Controller.RegisterEndpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.RegisterEndpointResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RegisterEndpoint",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.RegisterEndpointRequest,
+                output=controller__pb2.Controller.RegisterEndpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def unregister_endpoint(
+        self,
+        request: controller__pb2.Controller.UnregisterEndpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> job__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="UnregisterEndpoint",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.UnregisterEndpointRequest,
+                output=job__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_endpoints(
+        self,
+        request: controller__pb2.Controller.ListEndpointsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListEndpointsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListEndpoints",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.ListEndpointsRequest,
+                output=controller__pb2.Controller.ListEndpointsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class ControllerServiceSync(Protocol):
     def launch_job(self, request: controller__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> controller__pb2.Controller.LaunchJobResponse:
@@ -1159,6 +1313,8 @@ class ControllerServiceSync(Protocol):
     def list_user_budgets(self, request: controller__pb2.Controller.ListUserBudgetsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUserBudgetsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1485,6 +1641,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_scheduler_state,
+                ),
+                "/iris.cluster.ControllerService/ListBackends": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListBackends",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ListBackendsRequest,
+                        output=controller__pb2.Controller.ListBackendsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_backends,
                 ),
             },
             interceptors=interceptors,
@@ -2133,6 +2299,142 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.GetSchedulerStateRequest,
                 output=controller__pb2.Controller.GetSchedulerStateResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_backends(
+        self,
+        request: controller__pb2.Controller.ListBackendsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListBackendsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListBackends",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ListBackendsRequest,
+                output=controller__pb2.Controller.ListBackendsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+class EndpointServiceSync(Protocol):
+    def register_endpoint(self, request: controller__pb2.Controller.RegisterEndpointRequest, ctx: RequestContext) -> controller__pb2.Controller.RegisterEndpointResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def unregister_endpoint(self, request: controller__pb2.Controller.UnregisterEndpointRequest, ctx: RequestContext) -> job__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_endpoints(self, request: controller__pb2.Controller.ListEndpointsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListEndpointsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+
+class EndpointServiceWSGIApplication(ConnectWSGIApplication):
+    def __init__(self, service: EndpointServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
+        super().__init__(
+            endpoints={
+                "/iris.cluster.EndpointService/RegisterEndpoint": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="RegisterEndpoint",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.RegisterEndpointRequest,
+                        output=controller__pb2.Controller.RegisterEndpointResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.register_endpoint,
+                ),
+                "/iris.cluster.EndpointService/UnregisterEndpoint": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="UnregisterEndpoint",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.UnregisterEndpointRequest,
+                        output=job__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.unregister_endpoint,
+                ),
+                "/iris.cluster.EndpointService/ListEndpoints": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListEndpoints",
+                        service_name="iris.cluster.EndpointService",
+                        input=controller__pb2.Controller.ListEndpointsRequest,
+                        output=controller__pb2.Controller.ListEndpointsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_endpoints,
+                ),
+            },
+            interceptors=interceptors,
+            read_max_bytes=read_max_bytes,
+            compressions=compressions,
+        )
+
+    @property
+    def path(self) -> str:
+        """Returns the URL path to mount the application to when serving multiple applications."""
+        return "/iris.cluster.EndpointService"
+
+
+class EndpointServiceClientSync(ConnectClientSync):
+    def register_endpoint(
+        self,
+        request: controller__pb2.Controller.RegisterEndpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.RegisterEndpointResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RegisterEndpoint",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.RegisterEndpointRequest,
+                output=controller__pb2.Controller.RegisterEndpointResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def unregister_endpoint(
+        self,
+        request: controller__pb2.Controller.UnregisterEndpointRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> job__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="UnregisterEndpoint",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.UnregisterEndpointRequest,
+                output=job__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_endpoints(
+        self,
+        request: controller__pb2.Controller.ListEndpointsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListEndpointsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListEndpoints",
+                service_name="iris.cluster.EndpointService",
+                input=controller__pb2.Controller.ListEndpointsRequest,
+                output=controller__pb2.Controller.ListEndpointsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

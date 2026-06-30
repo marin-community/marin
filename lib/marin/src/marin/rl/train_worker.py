@@ -426,14 +426,9 @@ class TrainWorker:
         replay_stats = self.replay_buffer.get_stats()
         replay_stats["current_step"] = self.replay_buffer._current_step
 
-        transfer_snapshot: dict[str, object] = {}
-        if hasattr(self.transfer_server, "get_debug_snapshot"):
-            maybe_snapshot = self.transfer_server.get_debug_snapshot()
-            transfer_snapshot = dict(maybe_snapshot)
-
         return {
             "replay_buffer": replay_stats,
-            "weight_transfer": transfer_snapshot,
+            "weight_transfer": dict(self.transfer_server.get_debug_snapshot()),
         }
 
     def train(self):

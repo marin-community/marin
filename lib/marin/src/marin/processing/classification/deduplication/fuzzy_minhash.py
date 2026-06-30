@@ -75,7 +75,7 @@ class MinHashAttrData(BaseModel):
     params: MinHashParams
     source_main_dir: str
     attr_dir: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
@@ -106,7 +106,7 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
             else:
                 truncated.append(text)
         if n_truncated:
-            counters.increment("minhash/text_truncated", n_truncated)
+            counters.pipeline.update_counter("minhash/text_truncated", n_truncated)
         batch = batch.set_column(
             batch.schema.get_field_index("text"),
             "text",
@@ -132,11 +132,11 @@ def _attr_records(batch: pa.RecordBatch, params: MinHashParams) -> list[dict]:
     out: list[dict] = []
     for doc_id, doc_buckets in zip(ids, buckets_col, strict=True):
         if not doc_buckets.is_valid:
-            counters.increment("minhash/empty_signatures")
+            counters.pipeline.update_counter("minhash/empty_signatures", 1)
             continue
         bucket_strs = [str(b) for b in doc_buckets.as_py()]
-        counters.increment("minhash/documents")
-        counters.increment("minhash/buckets", len(bucket_strs))
+        counters.pipeline.update_counter("minhash/documents", 1)
+        counters.pipeline.update_counter("minhash/buckets", len(bucket_strs))
         out.append({"id": doc_id.as_py(), "buckets": bucket_strs})
     return out
 

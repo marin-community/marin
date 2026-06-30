@@ -98,7 +98,7 @@ class LlmQualityOutput(BaseModel):
     version: str = "v1"
     output_dir: str
     model_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str | None = None) -> StepSpec:

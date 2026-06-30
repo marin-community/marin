@@ -73,27 +73,27 @@ def _make_coordinator(
     return coord
 
 
-def test_counters_increment_and_snapshot():
-    """increment() accumulates in-memory; get_counter_snapshot() returns current values."""
+def test_counters_update_and_snapshot():
+    """update_counter() accumulates in-memory; pipeline.get_counters() returns current values."""
     worker = FakeWorker()
     token = _worker_ctx_var.set(worker)
     try:
-        counters.increment("docs", 10)
-        counters.increment("docs", 5)
-        counters.increment("errors", 1)
+        counters.pipeline.update_counter("docs", 10)
+        counters.pipeline.update_counter("docs", 5)
+        counters.pipeline.update_counter("errors", 1)
 
-        snapshot = counters.get_counters()
+        snapshot = counters.pipeline.get_counters()
         assert snapshot == {"docs": 15, "errors": 1}
     finally:
         _worker_ctx_var.reset(token)
 
 
 def test_counters_noop_outside_worker():
-    """increment() is a no-op when not inside a Zephyr worker context."""
+    """update_counter() is a no-op when not inside a Zephyr worker context."""
     token = _worker_ctx_var.set(None)
     try:
-        counters.increment("anything", 999)  # should not raise
-        assert counters.get_counters() == {}
+        counters.pipeline.update_counter("anything", 999)  # should not raise
+        assert counters.pipeline.get_counters() == {}
     finally:
         _worker_ctx_var.reset(token)
 
@@ -103,13 +103,13 @@ def test_counters_set_counter():
     worker = FakeWorker()
     token = _worker_ctx_var.set(worker)
     try:
-        counters.increment("visits", 5)
-        counters.set_counter("visits", 2)  # overwrites, not 5+2
-        assert counters.get_counters() == {"visits": 2}
+        counters.pipeline.update_counter("visits", 5)
+        counters.pipeline.set_counter("visits", 2)  # overwrites, not 5+2
+        assert counters.pipeline.get_counters() == {"visits": 2}
 
-        counters.set_counter("mem_bytes", 1024)
-        counters.set_counter("mem_bytes", 2048)  # replaces previous value
-        assert counters.get_counters()["mem_bytes"] == 2048
+        counters.pipeline.set_counter("mem_bytes", 1024)
+        counters.pipeline.set_counter("mem_bytes", 2048)  # replaces previous value
+        assert counters.pipeline.get_counters()["mem_bytes"] == 2048
     finally:
         _worker_ctx_var.reset(token)
 
@@ -118,8 +118,8 @@ def test_set_counter_noop_outside_worker():
     """set_counter() is a no-op when not inside a Zephyr worker context."""
     token = _worker_ctx_var.set(None)
     try:
-        counters.set_counter("anything", 999)  # should not raise
-        assert counters.get_counters() == {}
+        counters.pipeline.set_counter("anything", 999)  # should not raise
+        assert counters.pipeline.get_counters() == {}
     finally:
         _worker_ctx_var.reset(token)
 
@@ -136,20 +136,6 @@ def test_zephyr_execution_result_empty():
     result = ZephyrExecutionResult(results=[], counters={})
     assert result.results == []
     assert result.counters == {}
-
-
-def test_legacy_aliases_delegate_to_pipeline():
-    """Module-level increment/set_counter/get_counters delegate to pipeline scope."""
-    worker = FakeWorker()
-    token = _worker_ctx_var.set(worker)
-    try:
-        counters.increment("x", 3)
-        counters.set_counter("y", 7)
-        result = counters.get_counters()
-        assert result == {"x": 3, "y": 7}
-        assert counters.pipeline.get_counters() == {"x": 3, "y": 7}
-    finally:
-        _worker_ctx_var.reset(token)
 
 
 def test_stage_scoped_counters():

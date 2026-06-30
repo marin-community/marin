@@ -108,7 +108,7 @@ class WeborgTopicOutput(BaseModel):
     version: str = "v1"
     output_dir: str
     model_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _run_one_source(

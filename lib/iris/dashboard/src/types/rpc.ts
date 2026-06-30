@@ -101,6 +101,7 @@ export interface TaskStatus {
   // Genuine application-failure count for this task. The list view attaches only
   // the latest failed attempt, so this carries the true count for the badge.
   failureCount?: number
+  backendId?: string
 }
 
 // -- Jobs --
@@ -127,6 +128,7 @@ export interface JobStatus {
   pendingReason?: string
   hasChildren?: boolean
   parentJobId?: string
+  backendId?: string
 }
 
 export interface JobQuery {
@@ -140,6 +142,7 @@ export interface JobQuery {
   limit?: number
   // Anchored prefix match against the full wire job_id (e.g. "/alice/").
   jobIdPrefix?: string
+  backendId?: string
 }
 
 // -- Controller RPC Responses --
@@ -203,6 +206,14 @@ export interface ListTasksResponse {
 
 // -- Workers --
 
+export interface Provenance {
+  treeHash?: string
+  baseCommit?: string
+  dirty?: boolean
+  branch?: string
+  builtBy?: string
+}
+
 export interface WorkerMetadata {
   hostname?: string
   ipAddress?: string
@@ -221,7 +232,7 @@ export interface WorkerMetadata {
   gceZone?: string
   attributes?: Record<string, AttributeValue>
   vmAddress?: string
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface WorkerHealthStatus {
@@ -233,6 +244,8 @@ export interface WorkerHealthStatus {
   address?: string
   metadata?: WorkerMetadata
   statusMessage?: string
+  backendId?: string
+  scaleGroup?: string
 }
 
 export interface WorkerQuery {
@@ -241,6 +254,7 @@ export interface WorkerQuery {
   sortDirection?: string
   offset?: number
   limit?: number
+  backendId?: string
 }
 
 export interface ListWorkersResponse {
@@ -330,6 +344,7 @@ export interface SliceInfo {
 
 export interface ScaleGroupStatus {
   name: string
+  backendId?: string
   deviceType?: string
   deviceVariant?: string
   quotaPool?: string
@@ -479,7 +494,7 @@ export interface ProcessInfo {
   openFdCount?: number
   memoryTotalBytes?: string
   cpuCount?: number
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface GetProcessStatusResponse {
@@ -525,6 +540,7 @@ export interface PendingTaskBucket {
   userId: string
   jobId: string
   count: number
+  backendId?: string
 }
 
 /** Aggregated running-task count keyed by (band, user, worker, job). */
@@ -534,6 +550,7 @@ export interface RunningTaskBucket {
   workerId: string
   jobId: string
   count: number
+  backendId?: string
 }
 
 export interface SchedulerUserBudget {
@@ -586,4 +603,43 @@ export interface GetRpcStatsResponse {
   slowSamples?: RpcCallSample[]
   discoverySamples?: RpcCallSample[]
   collectorStartedAt?: ProtoTimestamp
+}
+
+// -- Multi-backend --
+
+/** Lightweight backend descriptor from /auth/config `backends` array. */
+export interface BackendInfo {
+  id: string
+  name: string
+  capabilities: string[]
+}
+
+/** Per-backend summary returned by the ListBackends RPC. */
+export interface BackendSummary {
+  backendId: string
+  name: string
+  kind: string
+  capabilities: string[]
+  /** Map of attribute key → list of string values. */
+  advertisedAttributes: Record<string, { values: string[] }>
+  restricted: boolean
+  allowedUserCount: number
+  scaleGroups: string[]
+  workerCount: number
+  pendingTaskCount: number
+  runningTaskCount: number
+  hasAutoscaler: boolean
+  /** availability_status string → pool count. */
+  capacityHealth: Record<string, number>
+}
+
+export interface UnroutableJob {
+  jobId: string
+  reason: string
+}
+
+export interface ListBackendsResponse {
+  backends: BackendSummary[]
+  unroutableJobCount: number
+  unroutableSample: UnroutableJob[]
 }

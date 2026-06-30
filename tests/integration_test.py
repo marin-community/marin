@@ -53,7 +53,8 @@ LOCAL_SYNTH_DATA = REPO_ROOT / "tests" / "quickstart-data"
 # Reduced GPT-2 tokenizer already vendored in the repo for offline tests. Reused here so the
 # local-mode pipeline never touches HF Hub (frequently unavailable in CI). `load_tokenizer`
 # short-circuits a local directory, so pointing the tokenize step at it skips Hub staging.
-LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
+LOCAL_TOKENIZER_FILE = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer.json"
+LOCAL_TOKENIZER_CONFIG = REPO_ROOT / "lib" / "levanter" / "tests" / "gpt2_tokenizer_config.json"
 # Vocab size of the reduced fixture above (matches lib/levanter/tests/conftest.py).
 LOCAL_TOKENIZER_VOCAB_SIZE = 5027
 
@@ -70,10 +71,8 @@ def _materialize_local_tokenizer(dest_dir: Path) -> str:
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(LOCAL_TOKENIZER_FILE, dest_dir / "tokenizer.json")
+    shutil.copy(LOCAL_TOKENIZER_CONFIG, dest_dir / "tokenizer_config.json")
     (dest_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": LOCAL_TOKENIZER_VOCAB_SIZE}))
-    (dest_dir / "tokenizer_config.json").write_text(
-        json.dumps({"model_max_length": 1024, "tokenizer_class": "GPT2Tokenizer"})
-    )
     return str(dest_dir)
 
 

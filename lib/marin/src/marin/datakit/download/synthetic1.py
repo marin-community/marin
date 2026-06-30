@@ -41,18 +41,18 @@ def row_to_doc(row: dict) -> list[dict]:
     prompt = row.get("prompt", "")
     response = row.get("llm_response", "")
     if not prompt or not response:
-        counters.increment("synthetic1/dropped")
+        counters.pipeline.update_counter("synthetic1/dropped", 1)
         return []
 
     response = strip_think_tags(response)
     if not response.strip():
-        counters.increment("synthetic1/dropped")
+        counters.pipeline.update_counter("synthetic1/dropped", 1)
         return []
 
     tag = score_to_tag(row.get("score"))
     text = f"{prompt}\n\n{tag}\n\n{response}"
 
-    counters.increment("synthetic1/kept")
+    counters.pipeline.update_counter("synthetic1/kept", 1)
     return [text_document(text, "PrimeIntellect/SYNTHETIC-1")]
 
 

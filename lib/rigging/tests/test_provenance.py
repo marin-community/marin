@@ -1,0 +1,64 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import subprocess
+from pathlib import Path
+
+from rigging.provenance import Provenance
+
+
+def test_str_clean_shows_commit_branch_user():
+    p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=False, branch="main", built_by="power")
+    assert str(p) == "bbbb (main) (power)"
+
+
+def test_str_dirty_shows_tree_off_of_base():
+    p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=True, branch="feat", built_by="power")
+    assert str(p) == "aaaa (off of bbbb) (feat) (power)"
+
+
+def test_str_omits_missing_branch_and_user():
+    p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=False, branch=None, built_by=None)
+    assert str(p) == "bbbb"
+
+
+def test_json_round_trip():
+    p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=True, branch=None, built_by="power")
+    assert Provenance.from_json(p.to_json()) == p
+
+
+def _run(args: list[str], cwd: Path) -> None:
+    subprocess.run(args, cwd=cwd, check=True, capture_output=True)
+
+
+def _init_repo(tmp_path: Path) -> Path:
+    _run(["git", "init", "-b", "main"], tmp_path)
+    _run(["git", "config", "user.email", "t@example.com"], tmp_path)
+    _run(["git", "config", "user.name", "tester"], tmp_path)
+    (tmp_path / "f.txt").write_text("hello\n")
+    _run(["git", "add", "f.txt"], tmp_path)
+    _run(["git", "commit", "-m", "init"], tmp_path)
+    return tmp_path
+
+
+def test_from_git_clean(tmp_path):
+    repo = _init_repo(tmp_path)
+    p = Provenance.from_git(repo)
+    assert p.dirty is False
+    assert p.branch == "main"
+    assert p.tree_hash and p.base_commit
+    # A clean tree's hash is HEAD's tree; dedup_key is that tree hash.
+    head_tree = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD^{tree}"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    assert p.dedup_key == head_tree
+
+
+def test_from_git_dirty_changes_tree_not_base(tmp_path):
+    repo = _init_repo(tmp_path)
+    clean = Provenance.from_git(repo)
+    (repo / "f.txt").write_text("changed\n")
+    dirty = Provenance.from_git(repo)
+    assert dirty.dirty is True
+    assert dirty.base_commit == clean.base_commit
+    assert dirty.tree_hash != clean.tree_hash
