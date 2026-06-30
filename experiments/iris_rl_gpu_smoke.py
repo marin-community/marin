@@ -1,0 +1,135 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Shared configuration for small GPU-only Iris RL smoke experiments."""
+
+from urllib.parse import urlparse
+
+from fray.types import ResourceConfig
+from marin.execution.lazy import ArtifactStep
+from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
+from marin.rl.environments import EnvConfig
+from marin.rl.placement import marin_prefix_for_region
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import data_config
+
+from experiments.models import qwen3_0_6b
+
+CANONICAL_MODEL_NAME = "Qwen/Qwen3-0.6B"
+DEFAULT_MODEL_ARTIFACT = qwen3_0_6b
+
+DEFAULT_EXPERIMENT_REGION = "us-central1"
+DEFAULT_GPU_TYPE = "H100"
+DEFAULT_GPU_COUNT = 1
+DEFAULT_NUM_TRAIN_STEPS = 5
+
+DEFAULT_MAX_INPUT_TOKENS = 256
+DEFAULT_MAX_OUTPUT_TOKENS = 256
+DEFAULT_NUM_ROLLOUT_WORKERS = 1
+DEFAULT_GPU_MEMORY_UTILIZATION = 0.90
+
+GPU_WORKER_CPU = 32
+GPU_WORKER_RAM = "240g"
+GPU_WORKER_DISK = "128g"
+
+
+def _data_bucket_to_region() -> dict[str, str]:
+    return {bucket: bucket_region for bucket_region, bucket in data_config().region_buckets.items()}
+
+
+def gpu_smoke_resources(*, region: str, gpu_type: str, gpu_count: int) -> ResourceConfig:
+    """Return the single-host GPU resource shape for the RL smoke path."""
+    if gpu_count <= 0:
+        raise ValueError("gpu_count must be positive")
+    return ResourceConfig.with_gpu(
+        gpu_type,
+        count=gpu_count,
+        cpu=GPU_WORKER_CPU,
+        ram=GPU_WORKER_RAM,
+        disk=GPU_WORKER_DISK,
+        regions=[region],
+    )
+
+
+def gpu_smoke_train_batch_size(gpu_count: int) -> int:
+    """Use one training example per GPU for the smallest stable trainer shape."""
+    if gpu_count <= 0:
+        raise ValueError("gpu_count must be positive")
+    return gpu_count
+
+
+def gpu_smoke_rollout_count(gpu_count: int) -> int:
+    """Return the smallest RLOO-valid rollout group for the GPU smoke path."""
+    if gpu_count <= 0:
+        raise ValueError("gpu_count must be positive")
+    return max(2, gpu_count)
+
+
+def gpu_smoke_curriculum(
+    *,
+    run_id: str,
+    max_input_tokens: int = DEFAULT_MAX_INPUT_TOKENS,
+    num_generations: int,
+    train_decoding: DecodingConfig,
+) -> CurriculumConfig:
+    """Single-lesson math curriculum sized for a short GPU smoke run."""
+    return CurriculumConfig(
+        lessons={
+            "math_full": LessonConfig(
+                lesson_id="math_full",
+                env_config=EnvConfig(
+                    env_class="marin.rl.environments.math_env.MathEnv",
+                    env_args={"seed": 42},
+                ),
+                dependencies=[],
+                sampling_params=SamplingParams(
+                    n_prompts=1,
+                    n_generations_per_prompt=num_generations,
+                    train_decoding=train_decoding,
+                ),
+            ),
+        },
+        eval_frequency=5,
+        micro_eval_frequency=None,
+        actor_name=f"curriculum-{run_id}",
+        eval_n_examples=max(4, num_generations),
+        max_seq_len=max_input_tokens + train_decoding.max_output_tokens,
+    )
+
+
+def gpu_smoke_prefix(region: str) -> str:
+    """Return the regional Marin prefix used for smoke-run outputs."""
+    return marin_prefix_for_region(region)
+
+
+def gpu_smoke_model_path(region: str) -> str:
+    """Return the canonical region-local GCS model artifact path."""
+    return DEFAULT_MODEL_ARTIFACT.path(gpu_smoke_prefix(region))
+
+
+def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
+    """Reject cross-region Marin GCS reads while allowing external model sources."""
+    parsed = urlparse(model_path)
+    if parsed.scheme != "gs":
+        return
+
+    expected_bucket = data_config().region_buckets.get(region.lower())
+    model_bucket_region = _data_bucket_to_region().get(parsed.netloc)
+    if model_bucket_region is None or parsed.netloc == expected_bucket:
+        return
+
+    expected_prefix = f"gs://{expected_bucket}" if expected_bucket is not None else f"region {region!r}"
+    actual_prefix = f"gs://{parsed.netloc}"
+    raise ValueError(
+        "GPU smoke model_path must stay in the launcher region to avoid cross-region model reads. "
+        f"Expected a path under {expected_prefix!r}, got {actual_prefix!r} for region {model_bucket_region!r}."
+    )
+
+
+def resolve_gpu_smoke_model_artifact(*, region: str, model_path: str | None) -> ArtifactStep[LevanterCheckpoint] | str:
+    """Return the managed default artifact or a validated explicit override."""
+    if model_path is None:
+        return DEFAULT_MODEL_ARTIFACT
+    validate_gpu_smoke_model_path(region=region, model_path=model_path)
+    return model_path

@@ -23,7 +23,9 @@ from fray import (
     wait_all,
 )
 from fray.actor import HostedActor
+from fray.types import GpuConfig
 from marin.rl.curriculum import Curriculum
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.job_config import RLJobConfig, build_worker_configs
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rollout_worker import RolloutWorker
@@ -53,6 +55,11 @@ TF_CPP_CHECKPOINT_DEBUG_VMODULE = ",".join(
         "tsl=1",
     )
 )
+_DEVICE_DEPENDENCY_GROUPS = {"gpu", "tpu"}
+_VLLM_DEPENDENCY_GROUPS = {"vllm"}
+# Keep CUDA vLLM pinned at the worker boundary instead of a Marin extra. The
+# runai extra provides vLLM's object-store streaming loader for GCS/S3 models.
+_GPU_VLLM_PIP_PACKAGES = ("vllm[runai]==0.13.0",)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,19 +71,85 @@ class _HostedRuntime:
 def _coordinator_extras(config: RLJobConfig) -> list[str]:
     """Dependency extras for the CPU coordinator layer.
 
-    Keep this layer minimal: no vLLM and no TPU runtime package install.
+    Keep this layer minimal: no vLLM and no TPU/GPU runtime package install.
     """
-    return sorted(set(config.pip_dependency_groups) - {"vllm", "tpu"})
+    return sorted(set(config.pip_dependency_groups) - _VLLM_DEPENDENCY_GROUPS - _DEVICE_DEPENDENCY_GROUPS)
 
 
-def _train_worker_extras(config: RLJobConfig) -> list[str]:
-    """Dependency extras for trainer workers."""
-    return sorted({*config.pip_dependency_groups, "tpu"} - {"vllm"})
+def _worker_dependency_groups(
+    config: RLJobConfig,
+    resources: ResourceConfig,
+    *,
+    needs_vllm: bool,
+) -> tuple[list[str], list[str]]:
+    extras = set(config.pip_dependency_groups) - _DEVICE_DEPENDENCY_GROUPS - _VLLM_DEPENDENCY_GROUPS
+    pip_packages: list[str] = []
+    device_kind = resources.device.kind
+
+    if device_kind != "cpu":
+        extras.add(device_kind)
+
+    if needs_vllm:
+        if device_kind == "tpu":
+            extras.add("vllm")
+        elif device_kind == "gpu":
+            pip_packages.extend(_GPU_VLLM_PIP_PACKAGES)
+        else:
+            raise ValueError("vLLM rollout workers require GPU or TPU resources")
+    else:
+        extras.discard("vllm")
+
+    return sorted(extras), pip_packages
 
 
-def _rollout_worker_extras(config: RLJobConfig) -> list[str]:
-    """Dependency extras for rollout workers."""
-    return sorted({*config.pip_dependency_groups, "tpu", "vllm"})
+def _worker_environment(
+    config: RLJobConfig,
+    resources: ResourceConfig,
+    *,
+    needs_vllm: bool,
+    extra_env_vars: dict[str, str] | None = None,
+):
+    env = {"EQX_ON_ERROR": "nan"}
+    if extra_env_vars is not None:
+        env.update(extra_env_vars)
+    env = add_run_env_variables(env)
+    extras, pip_packages = _worker_dependency_groups(config, resources, needs_vllm=needs_vllm)
+    return create_environment(
+        env_vars=env_vars_for_dependency_groups(resources, extras, env),
+        extras=extras,
+        pip_packages=pip_packages,
+    )
+
+
+def _pin_worker_region(resources: ResourceConfig, launcher_region: str) -> ResourceConfig:
+    """Return resources pinned to the concrete launcher region."""
+    return dataclasses.replace(
+        resources,
+        regions=singleton_region_list(launcher_region),
+    )
+
+
+def _validate_worker_configuration(config: RLJobConfig) -> None:
+    run_config = config.run_config
+    if run_config is None:
+        raise ValueError("RLJobConfig.run_config must be set for v2/Iris orchestration")
+
+    rollout_device_kind = run_config.rollout_resources.device.kind
+    if config.inference_type == "levanter" and rollout_device_kind != "tpu":
+        raise ValueError("Levanter rollout inference currently requires TPU rollout_resources")
+    if config.inference_type == "vllm" and rollout_device_kind == "cpu":
+        raise ValueError("vLLM rollout inference requires GPU or TPU rollout_resources")
+    if config.inference_type == "vllm" and rollout_device_kind == "gpu" and config.inflight_weight_updates:
+        raise ValueError("GPU vLLM rollout inference does not yet support inflight_weight_updates")
+
+    if config.inference_type != "vllm" or not isinstance(config.inference_config, vLLMInferenceContextConfig):
+        return
+    if rollout_device_kind != "gpu":
+        return
+    rollout_device = run_config.rollout_resources.device
+    assert isinstance(rollout_device, GpuConfig)
+    if config.inference_config.engine.tensor_parallel_size > rollout_device.count:
+        raise ValueError("rollout_resources must provide at least tensor_parallel_size GPUs for vLLM rollout inference")
 
 
 def submit_rl_job(config: RLJobConfig) -> JobHandle:
@@ -118,73 +191,59 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
     logger.info("RL coordinator starting for run %s", config.run_id)
 
     client = current_client()
+    _validate_worker_configuration(config)
     train_config, rollout_config = build_worker_configs(config)
     run_config = config.run_config
+    assert run_config is not None
     hosted_runtime: _HostedRuntime | None = None
 
     try:
-        # Create shared control-plane actors (non-preemptible, CPU-only)
         hosted_runtime = _create_runtime_handles(client, config)
         runtime = hosted_runtime.runtime
         logger.info("Runtime handles created: curriculum, run_state, weight_transfer coordinator")
 
-        # Create worker dependency groups.
-        train_extras = _train_worker_extras(config)
-        rollout_extras = _rollout_worker_extras(config)
-
-        env = {"EQX_ON_ERROR": "nan"}
+        worker_env_overrides: dict[str, str] | None = None
         if train_config.trainer.checkpointer.debug.enabled or train_config.weight_transfer.debug_weight_transfer:
-            env["PYTHONUNBUFFERED"] = "1"
+            worker_env_overrides = {"PYTHONUNBUFFERED": "1"}
         if train_config.trainer.checkpointer.debug.enabled:
-            env["JAX_TRACEBACK_FILTERING"] = "off"
-            env["JAX_LOGGING_LEVEL"] = "INFO"
-            env["JAX_DEBUG_LOG_MODULES"] = JAX_CHECKPOINT_DEBUG_MODULES
-            env["JAX_INCLUDE_FULL_TRACEBACKS_IN_LOCATIONS"] = "1"
-            env["TF_CPP_MIN_LOG_LEVEL"] = "0"
-            env["TF_CPP_MAX_VLOG_LEVEL"] = "1"
-            env["TF_CPP_VMODULE"] = TF_CPP_CHECKPOINT_DEBUG_VMODULE
+            if worker_env_overrides is None:
+                worker_env_overrides = {}
+            worker_env_overrides.update(
+                {
+                    "JAX_TRACEBACK_FILTERING": "off",
+                    "JAX_LOGGING_LEVEL": "INFO",
+                    "JAX_DEBUG_LOG_MODULES": JAX_CHECKPOINT_DEBUG_MODULES,
+                    "JAX_INCLUDE_FULL_TRACEBACKS_IN_LOCATIONS": "1",
+                    "TF_CPP_MIN_LOG_LEVEL": "0",
+                    "TF_CPP_MAX_VLOG_LEVEL": "1",
+                    "TF_CPP_VMODULE": TF_CPP_CHECKPOINT_DEBUG_VMODULE,
+                }
+            )
         if train_config.weight_transfer.debug_weight_transfer:
-            env["JAX_TRACEBACK_FILTERING"] = "off"
-            env["TF_CPP_MIN_LOG_LEVEL"] = "0"
-        env = add_run_env_variables(env)
-        # Resource configs
-        inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type
-        # All Iris compute is preemptible — never set preemptible=False.
-        # Use one concrete region for the whole RL run so CPU/driver and TPU
-        # layers stay co-located. Fall back to resolving from the current launcher
-        # region for older callers that do not set run_config.regions.
-        if run_config.regions:
-            tpu_regions = list(run_config.regions)
-        else:
-            tpu_regions = singleton_region_list(resolve_launcher_region(run_config.train_tpu_type, inference_tpu_type))
-        train_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
-        if run_config.zone is not None:
-            train_resource_kwargs["zone"] = run_config.zone
-        if run_config.train_ram is not None:
-            train_resource_kwargs["ram"] = run_config.train_ram
-        train_resources = ResourceConfig.with_tpu(
-            run_config.train_tpu_type,
-            slice_count=run_config.num_train_slices,
-            **train_resource_kwargs,
+            if worker_env_overrides is None:
+                worker_env_overrides = {}
+            worker_env_overrides.update(
+                {
+                    "JAX_TRACEBACK_FILTERING": "off",
+                    "TF_CPP_MIN_LOG_LEVEL": "0",
+                }
+            )
+        train_worker_env = _worker_environment(
+            config,
+            run_config.train_resources,
+            needs_vllm=False,
+            extra_env_vars=worker_env_overrides,
+        )
+        rollout_worker_env = _worker_environment(
+            config,
+            run_config.rollout_resources,
+            needs_vllm=config.inference_type == "vllm",
+            extra_env_vars=worker_env_overrides,
         )
 
-        rollout_resource_kwargs: dict[str, object] = {"regions": tpu_regions}
-        if run_config.zone is not None:
-            rollout_resource_kwargs["zone"] = run_config.zone
-        if run_config.inference_ram is not None:
-            rollout_resource_kwargs["ram"] = run_config.inference_ram
-        rollout_resources = ResourceConfig.with_tpu(
-            inference_tpu_type,
-            **rollout_resource_kwargs,
-        )
-        train_worker_env = create_environment(
-            env_vars=env_vars_for_dependency_groups(train_resources, train_extras, env),
-            extras=train_extras,
-        )
-        rollout_worker_env = create_environment(
-            env_vars=env_vars_for_dependency_groups(rollout_resources, rollout_extras, env),
-            extras=rollout_extras,
-        )
+        launcher_region = resolve_launcher_region(run_config.train_resources, run_config.rollout_resources)
+        train_resources = _pin_worker_region(run_config.train_resources, launcher_region)
+        rollout_resources = _pin_worker_region(run_config.rollout_resources, launcher_region)
 
         train_job = client.submit(
             JobRequest(

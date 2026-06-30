@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
@@ -58,6 +58,7 @@ class VLLMEngineConfig:
     gpu_memory_utilization: float
     seed: int = 0
     """Engine-level vLLM seed. TPU vLLM does not support per-request sampling seeds."""
+    device_kind: Literal["gpu", "tpu"] = "tpu"
     canonical_model_name: str | None = None
     mode: InferenceMode = InferenceMode.SYNC
     load_format: str = "auto"
@@ -236,7 +237,8 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     @staticmethod
     def _get_llm_engine(engine_config: VLLMEngineConfig):
-        vLLMInferenceContext._patch_tpu_inference_registry()
+        if engine_config.device_kind == "tpu":
+            vLLMInferenceContext._patch_tpu_inference_registry()
 
         if engine_config.mode == InferenceMode.SYNC:
             if LLM is None:
