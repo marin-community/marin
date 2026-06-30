@@ -171,22 +171,17 @@ def test_run_query_coerces_non_scalar_cells_to_str(make_runner):
     assert "2020-01-01" in cell
 
 
-def test_run_query_strips_trailing_semicolon(make_runner):
-    runner = make_runner()
-    result = runner.run_query("SELECT 1 AS a;", uuid.uuid4().hex)
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 1 AS a;",  # trailing semicolon
+        "SELECT 1 AS a -- trailing comment",  # trailing line comment
+        "SELECT 1 AS a; -- trailing comment",  # semicolon then comment
+    ],
+)
+def test_run_query_accepts_trailing_semicolons_and_comments(make_runner, sql):
+    result = make_runner().run_query(sql, uuid.uuid4().hex)
     assert result.columns == ["a"]
-    assert result.preview_rows == [[1]]
-
-
-def test_run_query_handles_trailing_line_comment(make_runner):
-    runner = make_runner()
-    result = runner.run_query("SELECT 1 AS a -- trailing comment", uuid.uuid4().hex)
-    assert result.preview_rows == [[1]]
-
-
-def test_run_query_handles_semicolon_then_comment(make_runner):
-    runner = make_runner()
-    result = runner.run_query("SELECT 1 AS a; -- trailing comment", uuid.uuid4().hex)
     assert result.preview_rows == [[1]]
 
 

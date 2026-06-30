@@ -32,6 +32,9 @@ import click
 import httpx
 
 DEFAULT_BASE_URL = "http://127.0.0.1:10000/proxy/ducky"
+# Per-request HTTP timeout. Each submit/poll call is fast (the query runs async on the
+# server), so this only bounds a single round-trip — not the query.
+_HTTP_TIMEOUT = 30
 # matches the local tunnel address the iris CLI prints (port varies)
 _TUNNEL_URL_RE = re.compile(r"https?://127\.0\.0\.1:\d+")
 
@@ -103,14 +106,14 @@ def _cluster_tunnel(cluster: str, endpoint: str, timeout: float = 90.0) -> Itera
 
 def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int) -> None:
     base = base.rstrip("/")
-    submit = httpx.post(f"{base}/query", json={"sql": sql}, timeout=30)
+    submit = httpx.post(f"{base}/query", json={"sql": sql}, timeout=_HTTP_TIMEOUT)
     if submit.status_code != 202:
         raise click.ClickException(_error_message(submit))
     query_id = submit.json()["query_id"]
 
     deadline = time.monotonic() + timeout
     while True:
-        resp = httpx.get(f"{base}/result/{query_id}", timeout=30)
+        resp = httpx.get(f"{base}/result/{query_id}", timeout=_HTTP_TIMEOUT)
         if resp.status_code != 200:
             raise click.ClickException(_error_message(resp))
         result = resp.json()
