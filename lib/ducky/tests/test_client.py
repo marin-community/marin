@@ -77,3 +77,9 @@ def test_query_requires_sql():
     result = CliRunner().invoke(query, ["--base-url", _BASE], input="")
     assert result.exit_code != 0
     assert "No SQL provided" in result.output
+
+
+def test_query_cluster_and_base_url_conflict():
+    result = CliRunner().invoke(query, ["SELECT 1", "--cluster", "marin", "--base-url", _BASE])
+    assert result.exit_code != 0
+    assert "not both" in result.output
