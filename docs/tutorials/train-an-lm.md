@@ -10,25 +10,33 @@ using the DCLM 1B/1x baseline as a concrete example.
 
 ## How a training script is structured
 
-A Marin training script builds a lazy `ArtifactStep[LevanterCheckpoint]` handle, lowers it to
-a runnable step graph, and passes it to `StepRunner`. Nothing executes at import time.
+A Marin training script builds a lazy `ArtifactStep[LevanterCheckpoint]` handle and hands it
+to the launcher, which runs the step graph — in-process, or on a cluster you name with
+`--cluster`. Nothing executes at import time.
 
 ```python
-from marin.execution.lazy import ArtifactStep, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
+
+from experiments.launch import LaunchConfig, launch, run_steps
+import draccus
 
 def build() -> ArtifactStep[LevanterCheckpoint]:
     ...  # assemble the checkpoint handle
 
+def train(config: LaunchConfig) -> None:
+    run_steps(config, build())
+
 if __name__ == "__main__":
-    StepRunner().run([lower(build())])
+    launch(draccus.parse(LaunchConfig), train)
 ```
 
-`StepRunner.run` walks the dependency graph, checks the cache for each step, and runs any
-that are missing or explicitly forced. Dataset tokenization runs before training; a step
-that already succeeded is skipped.
+`run_steps` applies any `--tpu_type` / `--region` overrides, then lowers the handle and runs it
+through a `StepRunner`, which walks the dependency graph, checks the cache for each step, and
+runs any that are missing or explicitly forced. Dataset tokenization runs before training; a
+step that already succeeded is skipped. Without `--cluster` the graph runs in this process; with
+it, `launch` ships `train` to a CPU coordinator job on the cluster (see "Running it" below).
 
 ## Defining the model
 
@@ -89,13 +97,14 @@ my_data = tokenized(
 of them. The complete `build()` function for DCLM 1B/1x:
 
 ```python
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import ArtifactStep, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
 from experiments.evals.uncheatable import uncheatable_validation
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
@@ -132,8 +141,11 @@ def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
         tags=["DCLM_1B_1X"],
     )
 
+def train(config: LaunchConfig) -> None:
+    run_steps(config, build())
+
 if __name__ == "__main__":
-    StepRunner().run([lower(build())])
+    launch(draccus.parse(LaunchConfig), train)
 ```
 
 ### Required arguments
@@ -164,19 +176,25 @@ any other GPU spec). Everything else stays the same.
 
 ## Running the experiment
 
-Submit the script as a CPU-only Iris job. `StepRunner` inside the script dispatches the
-TPU or GPU training sub-job via Fray:
+Run the script in-process:
 
 ```bash
-uv run iris --cluster=marin job run \
-  --cpu=1 --memory=2G --extra=cpu \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
+uv run python experiments/tutorials/exp1078_reproduce_dclm_7b1x.py
 ```
 
-See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
-for the full `iris job run` reference, including `--no-wait` for detached submission and
-`iris job logs -f` for log streaming.
+Or run it on a cluster by naming one — the script connects itself, no `--cpu` / `--memory` /
+`--extra` to hand-type, because it declares its own resources:
+
+```bash
+uv run python experiments/tutorials/exp1078_reproduce_dclm_7b1x.py --cluster=marin
+```
+
+`launch` ships the `train` body to a small CPU **coordinator** job on the cluster and returns;
+the coordinator runs the `StepRunner`, which dispatches the TPU/GPU training as its child via
+Fray, so the run survives your laptop disconnecting. Add `--follow=true` to stream logs (or
+reconnect later with `iris job logs -f <id>`), and `--tpu_type=` / `--region=` to override the
+declared resources. See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+for cluster troubleshooting.
 
 ## Monitoring training
 

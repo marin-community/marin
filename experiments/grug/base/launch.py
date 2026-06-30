@@ -19,6 +19,7 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 
+import draccus
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -29,13 +30,13 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
 from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.nemotron import nemotron_datasets
@@ -254,5 +255,10 @@ def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]
     )
 
 
+def train_grug_base(config: LaunchConfig) -> None:
+    """Build the base grug trial and run it, in-process or on ``--cluster``."""
+    run_steps(config, grug_base_trial())
+
+
 if __name__ == "__main__":
-    StepRunner().run([grug_base_trial().lower()])
+    launch(draccus.parse(LaunchConfig), train_grug_base)

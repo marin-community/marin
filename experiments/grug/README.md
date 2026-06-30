@@ -32,21 +32,28 @@ Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
-Local run (lowers the trial and runs it through the `StepRunner`):
+The script is self-running: it states its own resources (`ResourceConfig.with_tpu("v5p-8")`)
+and connects to the cluster itself, so you don't hand-type `--cpu` / `--memory` / `--extra` /
+`--region` on an `iris job run` line.
+
+Local run (builds the trial and runs it in-process through the `StepRunner`):
 
 ```bash
 uv run python experiments/grug/base/launch.py
 ```
 
-Iris cluster run (from a dev box, on `marin` prod cluster):
+Iris cluster run (from a dev box, on the `marin` prod cluster):
 
 ```bash
-uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
-  -e WANDB_API_KEY "$WANDB_API_KEY" \
-  -- python -m experiments.grug.base.launch
+uv run python experiments/grug/base/launch.py --cluster=marin
 ```
 
-The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
+This ships the trial to a small CPU **coordinator** job on the cluster (the same worker-ship
+mechanism used elsewhere) and returns; the coordinator runs the `StepRunner`, which submits the
+TPU training as its child via Fray, so closing your laptop never strands the run. Add
+`--follow=true` to stream its logs, or reconnect later with `iris job logs -f <id>`. Override the
+declared resources with `--tpu_type=v6e-8` / `--region=us-east5`. See
+[`lib/iris/OPS.md`](../../lib/iris/OPS.md) for troubleshooting.
 
 ## Visual diff for template variants
 

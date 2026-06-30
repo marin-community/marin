@@ -11,7 +11,6 @@ spokes without forming an import cycle.
 """
 
 import logging
-from pathlib import Path
 
 import click
 from rigging.credentials import ClientCredentials
@@ -23,46 +22,6 @@ from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
-
-
-def _bundled_iris_config_dir() -> str | None:
-    """Return the iris package's bundled config/ dir when it ships on disk.
-
-    Probes two layouts because the config directory can physically live in
-    two places depending on how iris was installed:
-
-    1. Wheel installs (site-packages): hatchling force-include places the
-       yamls at ``iris/config/`` inside the package. Resolve that via
-       ``Path(__file__).parent.parent / "config"``.
-    2. Editable workspace installs: the yamls stay at their source location
-       ``lib/iris/config/`` — reachable via ``parents[3] / "config"`` from
-       ``lib/iris/src/iris/cli/connect.py``.
-
-    Returns the first directory that exists, or ``None`` for wheel installs
-    that don't ship configs at all.
-    """
-    here = Path(__file__).resolve()
-    wheel_path = here.parent.parent / "config"
-    if wheel_path.is_dir():
-        return str(wheel_path)
-    editable_path = here.parents[3] / "config"
-    if editable_path.is_dir():
-        return str(editable_path)
-    return None
-
-
-# Directories searched (in priority order) to resolve ``--cluster=<name>`` to
-# a YAML config file. Relative paths are resolved against the marin project
-# root by ``rigging.config_discovery``; absolute paths are used as-is.
-IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
-    p
-    for p in (
-        "~/.config/marin/clusters",  # user override — checked first
-        "lib/iris/config",  # in-tree marin checkout
-        _bundled_iris_config_dir(),  # editable install from sibling workspace
-    )
-    if p is not None
-)
 
 
 def rpc_client(

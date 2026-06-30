@@ -1,204 +1,153 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior tests for the self-running experiment launcher (``experiments/launch.py``)."""
+"""Tests for the self-running experiment launcher (``experiments/launch.py``)."""
 
-import contextlib
 import dataclasses
 
 import draccus
 import pytest
-from fray.current_client import current_client
-from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
-from marin.execution.executor import ExecutorMainConfig, ExecutorStep
-from marin.execution.types import VersionedValue, versioned
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
 
 import experiments.launch as launch
-from experiments.launch import LaunchConfig, override_resources
+from experiments.launch import LaunchConfig, apply_overrides, override_resources
 
 
-def test_launch_config_parses_embedded_executor_flags():
-    cfg = draccus.parse(
-        LaunchConfig,
-        args=["--cluster=marin", "--tpu_type=v4-8", "--region=us-central2", "--executor.dry_run=True"],
+def _handle(runtime_args: dict) -> ArtifactStep:
+    """A minimal handle carrying ``runtime_args`` (the build/run callables never fire here)."""
+    return ArtifactStep(
+        name="test/handle",
+        version="dev",
+        artifact_type=Artifact,
+        run=lambda config: None,
+        build_config=lambda ctx: None,
+        runtime_args=runtime_args,
     )
-    assert cfg.cluster == "marin"
-    assert cfg.tpu_type == "v4-8"
-    assert cfg.region == "us-central2"
-    assert cfg.executor.dry_run is True
+
+
+# --- override_resources -------------------------------------------------------
 
 
 def test_override_resources_region_zone_preserves_other_fields():
-    base = ResourceConfig.with_tpu("v5p-8", slice_count=2, regions=["eu-west4"], preemptible=False)
-    out = override_resources(base, LaunchConfig(region="us-central2", zone="us-central2-b"))
+    base = dataclasses.replace(ResourceConfig.with_tpu("v4-8"), replicas=3)
+    out = override_resources(LaunchConfig(region="us-central2", zone="us-central2-b"), base)
     assert out.regions == ("us-central2",)
     assert out.zone == "us-central2-b"
-    # Untouched scheduling fields survive.
-    assert out.replicas == base.replicas
-    assert out.preemptible is False
-    assert out.device.variant == "v5p-8"
+    assert out.replicas == 3
+    assert out.device.variant == "v4-8"
 
 
 def test_override_resources_swaps_tpu_variant_when_vm_count_matches():
-    # v5p-8 and v4-8 are both single-VM, so the replica count stays valid.
-    base = ResourceConfig.with_tpu("v5p-8")
-    out = override_resources(base, LaunchConfig(tpu_type="v4-8"))
-    assert out.device.variant == "v4-8"
-    assert out.replicas == base.replicas
+    base = ResourceConfig.with_tpu("v5litepod-16")
+    out = override_resources(LaunchConfig(tpu_type="v6e-16"), base)
+    assert out.device.variant == "v6e-16"
 
 
 def test_override_resources_rejects_vm_count_mismatch():
-    # v5p-16 spans two VMs; swapping a single-VM default would corrupt replicas.
-    base = ResourceConfig.with_tpu("v5p-8")
+    base = ResourceConfig.with_tpu("v5p-8")  # vm_count 1
     with pytest.raises(ValueError, match="vm_count"):
-        override_resources(base, LaunchConfig(tpu_type="v5p-16"))
+        override_resources(LaunchConfig(tpu_type="v5p-16"), base)  # vm_count 2
 
 
 def test_override_resources_rejects_flexible_tpu_config():
-    base = ResourceConfig.with_tpu(["v5p-8", "v4-8"])
+    base = ResourceConfig.with_tpu(["v5litepod-8", "v6e-8"])  # same vm_count + chips_per_vm
+    assert base.device_alternatives
     with pytest.raises(ValueError, match="flexible"):
-        override_resources(base, LaunchConfig(tpu_type="v4-8"))
+        override_resources(LaunchConfig(tpu_type="v5litepod-8"), base)
 
 
 def test_override_resources_rejects_tpu_type_on_non_tpu():
-    base = ResourceConfig.with_gpu("H100", count=8)
-    with pytest.raises(ValueError, match="TPU"):
-        override_resources(base, LaunchConfig(tpu_type="v4-8"))
+    with pytest.raises(ValueError, match="only applies to TPU"):
+        override_resources(LaunchConfig(tpu_type="v4-8"), ResourceConfig.with_cpu())
 
 
-def test_override_resources_noop_without_overrides():
-    base = ResourceConfig.with_tpu("v5p-8")
-    assert override_resources(base, LaunchConfig()) is base
+def test_override_resources_noop_without_overrides_returns_same_object():
+    base = ResourceConfig.with_tpu("v4-8")
+    assert override_resources(LaunchConfig(), base) is base
 
 
-@dataclasses.dataclass(frozen=True)
-class _PodConfigStub:
-    resources: ResourceConfig | VersionedValue[ResourceConfig]
-    note: str = "x"
+# --- apply_overrides (handle level) -------------------------------------------
 
 
-def test_apply_overrides_updates_both_step_and_config_resources():
-    base = ResourceConfig.with_tpu("v5p-8")
-    step = ExecutorStep(
-        name="train/x",
-        fn=lambda p: None,
-        config=_PodConfigStub(resources=base),
-        resources=base,
-    )
-    out = launch._apply_overrides_to_step(step, LaunchConfig(tpu_type="v4-8", region="us-central2"))
-    # Both the scheduling resources and the embedded config resources are overridden in sync.
-    assert out.resources.device.variant == "v4-8"
-    assert out.resources.regions == ("us-central2",)
-    assert out.config.resources.device.variant == "v4-8"
-    assert out.config.resources.regions == ("us-central2",)
-    # Non-resource config fields survive.
-    assert out.config.note == "x"
+def test_apply_overrides_rewrites_train_resources_and_preserves_other_runargs():
+    handle = _handle({"train_resources": ResourceConfig.with_tpu("v4-8"), "other": 7})
+    out = apply_overrides(LaunchConfig(tpu_type="v4-8", region="us-central2"), handle)
+    assert out.runtime_args["train_resources"].regions == ("us-central2",)
+    assert out.runtime_args["other"] == 7
+    assert out.name == handle.name and out.version == handle.version
 
 
-def test_apply_overrides_updates_versioned_config_resources():
-    # grug executor steps leave ExecutorStep.resources unset and stash the real
-    # TPU config in config.resources wrapped in versioned(...); run_grug submits
-    # from config.resources, so the override must reach it and keep the wrapper.
-    base = ResourceConfig.with_tpu("v5p-8")
-    step = ExecutorStep(name="train/x", fn=lambda p: None, config=_PodConfigStub(resources=versioned(base)))
-    out = launch._apply_overrides_to_step(step, LaunchConfig(tpu_type="v4-8", region="us-central2"))
-    assert isinstance(out.config.resources, VersionedValue)
-    assert out.config.resources.value.device.variant == "v4-8"
-    assert out.config.resources.value.regions == ("us-central2",)
+def test_apply_overrides_noop_without_overrides_returns_same_handle():
+    handle = _handle({"train_resources": ResourceConfig.with_tpu("v4-8")})
+    assert apply_overrides(LaunchConfig(), handle) is handle
 
 
-def test_apply_overrides_leaves_inline_cpu_step_untouched():
-    # A CPU data-prep step keeps its cached identity: even with config.resources set
-    # and --region passed, a CPU device is not an accelerator target, so it's skipped.
-    step = ExecutorStep(name="data/x", fn=lambda p: None, config=_PodConfigStub(resources=ResourceConfig.with_cpu()))
-    assert launch._apply_overrides_to_step(step, LaunchConfig(region="us-central2")) is step
+def test_apply_overrides_without_train_resources_warns_and_returns_unchanged(caplog):
+    handle = _handle({})
+    out = apply_overrides(LaunchConfig(region="us-central2"), handle)
+    assert out is handle
+    assert "train_resources" in caplog.text
 
 
-def _must_not_bootstrap(*args, **kwargs):
-    raise AssertionError("must not bootstrap a coordinator")
+# --- launch dispatch ----------------------------------------------------------
 
 
-def _noop_body() -> None:
-    pass
+def _forbid_submit(*_args, **_kwargs):
+    raise AssertionError("_submit_coordinator_job should not be called")
 
 
-@pytest.mark.parametrize("cluster", [None, "marin"])
-def test_launch_in_job_runs_body_and_never_bootstraps(monkeypatch, cluster):
-    # Already inside an Iris job (the coordinator): the body runs *here* against
-    # the in-cluster client; an inert --cluster must not trigger another bootstrap.
+def test_launch_in_job_runs_body_and_never_submits(monkeypatch):
     monkeypatch.setattr(launch, "get_job_info", lambda: object())
-    monkeypatch.setattr(launch, "_submit_coordinator_job", _must_not_bootstrap)
-    ran = []
-    launch.launch(LaunchConfig(cluster=cluster), lambda *a, **k: ran.append((a, k)), 1, x=2)
-    assert ran == [((1,), {"x": 2})]
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _forbid_submit)
+    seen = []
+    launch.launch(LaunchConfig(cluster="marin"), lambda config: seen.append(config))
+    assert len(seen) == 1
 
 
-def test_launch_local_runs_body_with_local_client(monkeypatch):
-    # No --cluster: the body runs in-process and current_client() is LocalClient.
+def test_launch_local_runs_body(monkeypatch):
     monkeypatch.setattr(launch, "get_job_info", lambda: None)
-    seen = {}
-    launch.launch(LaunchConfig(cluster=None), lambda: seen.update(client=current_client()))
-    assert isinstance(seen["client"], LocalClient)
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _forbid_submit)
+    seen = []
+    launch.launch(LaunchConfig(cluster=None), lambda config: seen.append(config))
+    assert len(seen) == 1
 
 
 def test_launch_dry_run_against_cluster_stays_local(monkeypatch):
-    # A dry run against a cluster stays in-process — no coordinator job.
     monkeypatch.setattr(launch, "get_job_info", lambda: None)
-    monkeypatch.setattr(launch, "_submit_coordinator_job", _must_not_bootstrap)
-    ran = []
-    cfg = LaunchConfig(cluster="marin", executor=ExecutorMainConfig(dry_run=True))
-    launch.launch(cfg, lambda: ran.append(True))
-    assert ran == [True]
+    monkeypatch.setattr(launch, "_submit_coordinator_job", _forbid_submit)
+    seen = []
+    launch.launch(LaunchConfig(cluster="marin", dry_run=True), lambda config: seen.append(config))
+    assert len(seen) == 1
 
 
-def test_launch_laptop_with_cluster_bootstraps_and_skips_body(monkeypatch):
-    # Laptop + --cluster: launch ships the body (and its args/kwargs) to a
-    # coordinator job and exits with its status; the body never runs locally.
+def test_launch_laptop_with_cluster_submits_and_skips_body(monkeypatch):
     monkeypatch.setattr(launch, "get_job_info", lambda: None)
-    captured = {}
+    submitted = []
 
-    def _fake_bootstrap(config, body, args, kwargs):
-        captured.update(cluster=config.cluster, args=args, kwargs=kwargs)
+    def fake_submit(config, body):
+        submitted.append((config, body))
         return 0
 
-    monkeypatch.setattr(launch, "_submit_coordinator_job", _fake_bootstrap)
+    monkeypatch.setattr(launch, "_submit_coordinator_job", fake_submit)
     ran = []
     with pytest.raises(SystemExit) as exc:
-        launch.launch(LaunchConfig(cluster="marin"), lambda *a, **k: ran.append(True), 7, x=9)
+        launch.launch(LaunchConfig(cluster="marin"), lambda config: ran.append(True))
     assert exc.value.code == 0
-    assert captured == {"cluster": "marin", "args": (7,), "kwargs": {"x": 9}}
+    assert len(submitted) == 1
     assert ran == []
 
 
-@pytest.mark.parametrize(("follow", "expect_stream"), [(True, True), (False, False)])
-def test_submit_coordinator_job_follow_controls_streaming(monkeypatch, follow, expect_stream):
-    # The launcher returns right after submitting; --follow streams instead.
-    # Pins the CPU-only coordinator extras and exercises the real
-    # Entrypoint.from_callable packing of the body.
-    class _FakeJob:
-        job_id = "job-1"
+# --- LaunchConfig surface -----------------------------------------------------
 
-    submitted = {}
 
-    class _FakeClient:
-        def submit(self, *, entrypoint, name, resources, environment, constraints):
-            submitted.update(name=name, extras=environment.extras, constraints=constraints)
-            return _FakeJob()
+def test_launch_config_subclass_parses_its_own_flags():
+    @dataclasses.dataclass
+    class WithDevice(LaunchConfig):
+        device: str = "cpu"
 
-    @contextlib.contextmanager
-    def _fake_connect(cluster, *, workspace):
-        yield _FakeClient()
-
-    streamed = []
-    monkeypatch.setattr(launch, "connect_to_cluster", _fake_connect)
-    monkeypatch.setattr(launch, "stream_until_complete", lambda client, job: streamed.append(job) or 0)
-    monkeypatch.setattr(launch, "load_env_vars", lambda flags: {})
-    monkeypatch.setattr(launch, "add_standard_env_vars", lambda env: env)
-
-    rc = launch._submit_coordinator_job(LaunchConfig(cluster="marin", follow=follow), _noop_body, (), {})
-    assert rc == 0
-    assert submitted["extras"] == ["cpu"]
-    # No --region/--zone, so the coordinator is unconstrained.
-    assert submitted["constraints"] is None
-    assert bool(streamed) is expect_stream
+    parsed = draccus.parse(WithDevice, args=["--cluster", "marin", "--device", "h100x8", "--follow", "true"])
+    assert parsed.cluster == "marin"
+    assert parsed.device == "h100x8"
+    assert parsed.follow is True

@@ -26,8 +26,8 @@ from pathlib import Path
 
 import click
 import requests
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient, Job
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint

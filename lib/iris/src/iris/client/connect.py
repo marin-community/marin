@@ -3,14 +3,15 @@
 
 """Click-free cluster connection helpers shared by the CLI and the SDK.
 
-Connecting to a cluster means resolving a named cluster to its config, opening a
-tunnel to its controller, and building an authenticated
-:class:`~iris.client.client.IrisClient`. The primitives for that — cluster-config
-search dirs, cluster-name resolution, token-provider creation — live here so both
-the CLI (``iris.cli.*`` imports down from here) and non-CLI callers reach them
-without a ``click.Context``.
+Connecting to a cluster means resolving a named cluster to its config, reaching
+its controller (a tunnel, or a direct HTTPS endpoint for an IAP-fronted
+cluster), resolving its credentials, and building an authenticated
+:class:`~iris.client.client.IrisClient`. The primitives for that — the
+cluster-config search dirs, cluster-name resolution, and credential assembly —
+live here so both the CLI (``iris.cli.*`` imports down from here) and non-CLI
+callers reach them without a ``click.Context``.
 
-:func:`connect_to_cluster` runs the full resolve → tunnel → authenticate →
+:func:`connect_to_cluster` runs the full resolve → reach → authenticate →
 connect sequence and yields a live client; :func:`stream_until_complete` waits on
 a submitted job, streaming its logs and surviving a dropped connection. Together
 they let an experiment script connect to a cluster and submit jobs on its own.
@@ -23,15 +24,17 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
+from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
+from rigging.credential_store import cluster_name_from_url
+from rigging.credentials import ClientCredentials, credentials_for
 
 from iris.client.client import IrisClient, Job, JobFailedError
-from iris.cluster.backends.k8s.controller import configure_client_s3
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
-from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
-from iris.rpc import config_pb2, job_pb2
-from iris.rpc.auth import ClientCredentials, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import AuthConfig, IrisClusterConfig, load_config
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.platforms.k8s.controller import configure_client_s3
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,7 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 
 def resolve_cluster_name(
-    config: config_pb2.IrisClusterConfig | None,
+    config: IrisClusterConfig | None,
     controller_url: str | None,
     cli_cluster_name: str | None,
 ) -> str:
@@ -88,45 +91,66 @@ def resolve_cluster_name(
         return cli_cluster_name
     if config and config.name:
         return config.name
-    if config and config.controller.WhichOneof("controller") == "local":
+    if config and config.controller.controller_kind() == "local":
         return "local"
     if controller_url:
         return cluster_name_from_url(controller_url)
     return "default"
 
 
-def create_client_token_provider(
-    auth_config: config_pb2.AuthConfig, cluster_name: str = "default"
-) -> TokenProvider | None:
-    """Create a TokenProvider from an AuthConfig proto for client usage.
+def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
+    """Adapt iris's ``AuthConfig`` to rigging's ``ClusterAuth``.
 
-    Checks the named-cluster token store first (from ``iris login``),
-    then falls back to config-based token providers.
+    The single boundary where iris's wire config meets the shared credential
+    vocabulary; everything downstream resolves through ``rigging.credentials``.
     """
-    credential = load_token(cluster_name)
-    if credential is None:
-        credential = load_any_token()
-    if credential is not None:
-        return StaticTokenProvider(credential.token)
-
-    provider = auth_config.WhichOneof("provider")
-    if provider is None:
-        return None
+    provider = auth.provider_kind()
+    if provider == "iap":
+        # ``audiences`` are the login audiences the controller accepts; they
+        # include the desktop client id (interactive flow). A service-account
+        # edge token must carry an IAP-secured audience — never the desktop one,
+        # which IAP rejects — so the desktop client id is dropped here and only
+        # genuine programmatic audiences reach the service-account token path.
+        desktop_oauth_client_id = auth.iap.oauth_client_id or None
+        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != desktop_oauth_client_id)
+        return ClusterAuth(
+            AuthProvider.IAP,
+            iap=IapAuth(
+                url=auth.iap.url,
+                desktop_oauth_client_id=desktop_oauth_client_id,
+                desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
+                programmatic_audiences=programmatic_audiences,
+                signed_header_audience=auth.iap.signed_header_audience or None,
+            ),
+        )
     if provider == "gcp":
-        return GcpAccessTokenProvider()
-    elif provider == "static":
-        tokens = dict(auth_config.static.tokens)
-        if not tokens:
-            raise ValueError("Static auth config requires at least one token")
-        first_token = next(iter(tokens))
-        return StaticTokenProvider(first_token)
-    elif provider == "iap":
-        # The Iris JWT for an IAP cluster comes only from the token store after
-        # `iris login` (handled above). With none cached yet there is no
-        # config-derived fallback — return None so commands fail clearly until
-        # the user logs in.
+        return ClusterAuth(AuthProvider.GCP)
+    if provider == "static":
+        return ClusterAuth(AuthProvider.STATIC)
+    return ClusterAuth(AuthProvider.NONE)
+
+
+def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
+    """Resolve the cluster's client credentials via the shared rigging resolver."""
+    if config is None or config.auth is None:
+        return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
+    auth = config.auth
+    static_token = next(iter(auth.static.tokens), None) if auth.provider_kind() == "static" else None
+    return credentials_for(cluster_name, _cluster_auth_from_config(auth), static_token=static_token)
+
+
+def _iap_url(config: IrisClusterConfig) -> str | None:
+    """The public HTTPS controller URL for an IAP-fronted cluster, else None.
+
+    IAP clusters are reachable directly (gated by IAP at the ingress), so they
+    skip the SSH tunnel; the URL comes from the auth config.
+    """
+    if config.auth is None or config.auth.provider_kind() != "iap":
         return None
-    raise ValueError(f"Unknown auth provider: {provider}")
+    iap = config.auth.iap
+    if iap is None or not iap.url:
+        raise ValueError("IAP auth config is missing the ingress 'url'")
+    return iap.url
 
 
 @contextlib.contextmanager
@@ -136,12 +160,11 @@ def connect_to_cluster(
     workspace: Path | None = None,
     timeout_ms: int = 30_000,
 ) -> Iterator[IrisClient]:
-    """Resolve a named cluster, tunnel to its controller, and yield a connected client.
+    """Resolve a named cluster, reach its controller, and yield a connected client.
 
-    A context manager: the tunnel, any local controller it starts, and the
-    client are all torn down on exit. Requests authenticate with the token
-    cached by ``iris login`` for this cluster, falling back to the cluster
-    config's auth provider.
+    A context manager: the tunnel (or local controller) and the client are torn
+    down on exit. Requests authenticate with the cluster's resolved credentials
+    (the token cached by ``iris login``, or the config's auth provider).
 
     Args:
         cluster: Named cluster to resolve (e.g. ``"marin"``) against
@@ -157,36 +180,27 @@ def connect_to_cluster(
     """
     config_path = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
     logger.info("Resolved cluster %r to config: %s", cluster, config_path)
-    iris_config = IrisConfig.load(str(config_path))
-    proto = iris_config.proto
+    config = load_config(str(config_path))
 
-    configure_client_s3(proto)
-    name = resolve_cluster_name(proto, None, cluster)
-    token_provider = create_client_token_provider(proto.auth, cluster_name=name)
-
-    bundle = iris_config.provider_bundle()
+    configure_client_s3(config)
+    name = resolve_cluster_name(config, None, cluster)
+    credentials = client_credentials(config, name)
 
     with contextlib.ExitStack() as stack:
-        if proto.controller.WhichOneof("controller") == "local":
-            local_cluster = LocalCluster(proto)
-            controller_address = local_cluster.start()
+        controller_url = _iap_url(config)
+        if controller_url is None and config.controller.controller_kind() == "local":
+            local_cluster = LocalCluster(config)
+            controller_url = local_cluster.start()
             stack.callback(local_cluster.close)
-        else:
-            controller_address = iris_config.controller_address()
-            if not controller_address:
-                controller_address = bundle.controller.discover_controller(proto.controller)
+        elif controller_url is None:
+            bundle = provider_bundle(config)
+            controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
+            logger.info("Establishing tunnel to controller at %s ...", controller_address)
+            controller_url = stack.enter_context(bundle.controller.tunnel(address=controller_address))
 
-        logger.info("Establishing tunnel to controller at %s ...", controller_address)
-        tunnel_url = stack.enter_context(bundle.controller.tunnel(address=controller_address))
-        logger.info("Connected to cluster %r via %s", name, tunnel_url)
-
+        logger.info("Connected to cluster %r via %s", name, controller_url)
         client = stack.enter_context(
-            IrisClient.remote(
-                tunnel_url,
-                workspace=workspace,
-                timeout_ms=timeout_ms,
-                credentials=ClientCredentials(token_provider=token_provider),
-            )
+            IrisClient.remote(controller_url, workspace=workspace, timeout_ms=timeout_ms, credentials=credentials)
         )
         yield client
 

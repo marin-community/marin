@@ -49,8 +49,8 @@ from pathlib import Path
 import click
 import fsspec
 from fray import ResourceConfig
-from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, client_credentials, resolve_cluster_name
 from iris.client import IrisClient
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS, client_credentials, resolve_cluster_name
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import Constraint, preemptible_constraint

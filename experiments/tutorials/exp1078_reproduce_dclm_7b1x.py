@@ -6,16 +6,17 @@
 The DCLM baseline for the 7B/1x competition pool, Chinchilla-optimal for 7B parameters.
 """
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import ArtifactStep, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.evals.uncheatable import uncheatable_validation
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
@@ -66,6 +67,10 @@ def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
+def train_dclm_7b(config: LaunchConfig) -> None:
+    """Run the DCLM 7B/1x reproduction, in-process or on ``--cluster``."""
+    run_steps(config, build())
+
+
 if __name__ == "__main__":
-    # The data tokenizes (cached), then one TPU training job runs.
-    StepRunner().run([lower(build())])
+    launch(draccus.parse(LaunchConfig), train_dclm_7b)

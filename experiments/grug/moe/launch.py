@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import draccus
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -30,7 +31,6 @@ from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
@@ -39,6 +39,7 @@ from experiments.evals.uncheatable import uncheatable_validation
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama3_tokenizer
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.nemotron import nemotron_datasets
@@ -251,5 +252,10 @@ def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoin
     )
 
 
+def train_grug_moe(config: LaunchConfig) -> None:
+    """Build the baseline MoE grug trial and run it, in-process or on ``--cluster``."""
+    run_steps(config, grug_moe_baseline())
+
+
 if __name__ == "__main__":
-    StepRunner().run([grug_moe_baseline().lower()])
+    launch(draccus.parse(LaunchConfig), train_grug_moe)
