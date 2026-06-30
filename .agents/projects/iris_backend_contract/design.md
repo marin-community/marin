@@ -131,8 +131,13 @@ orphan-slice GC** for abandoned/retired groups that have no owning backend
 abandoned-group slices after a config removal.
 
 **Phased migration** (each phase byte-identical, suite green):
-1. `BackendWorkerStore` over shared tables; `WorkerSource` stops exposing raw `db`;
-   all backend reads/writes route through the store. Structural boundary.
+1. **Faithful store wrap.** `BackendWorkerStore` over shared tables preserving the
+   exact current read surface **plus `reap_workers` carrying the full teardown
+   algorithm** (removing the raw `db` breaks `RpcTaskBackend.teardown`, which needs
+   `db`/`endpoints`/`worker_attrs`). `WorkerSource` deleted; `BackendRuntime.db`→`store`.
+   `teardown(dead_workers)` stays until P2. No registration/assignment/view/autoscaler
+   changes. The store is operation-scoped (reads task/job tables in-process for the
+   scheduler join), not a worker-table partition — see `spec.md`.
 2. Registration backend-authored + backend-local control-thread eviction drain;
    delete controller eviction routing + `teardown(dead_workers)`. (Byte-identical
    only if the drain preserves control-thread timing.)
