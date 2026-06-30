@@ -19,8 +19,9 @@ from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.runtime.jax_init import (
+    _CoordinatorRole,
     _poll_for_coordinator,
-    _supervised_coordinator_plan,
+    _supervised_coordinator_role,
     configure_jax_compilation_cache,
     initialize_jax,
 )
@@ -220,17 +221,17 @@ def test_initialize_jax_poll_timeout(
 @pytest.mark.parametrize(
     "proc_index,task_index,num_tasks,expected",
     [
-        (0, 0, 1, (False, False)),  # single-host global rank 0: bind, no registry
-        (0, 0, 4, (True, False)),  # multi-host global rank 0: register its address
-        (3, 0, 1, (False, False)),  # host-0 local rank: reuse advertise_host directly
-        (5, 0, 4, (False, False)),  # host-0 local rank on a multi-host job: same
-        (8, 2, 4, (False, True)),  # other host: poll the registry for rank 0
+        (0, 0, 1, _CoordinatorRole.REUSE_LOCAL),  # single-host global rank 0: bind, no registry
+        (0, 0, 4, _CoordinatorRole.REGISTER),  # multi-host global rank 0: register its address
+        (3, 0, 1, _CoordinatorRole.REUSE_LOCAL),  # host-0 local rank: reuse advertise_host directly
+        (5, 0, 4, _CoordinatorRole.REUSE_LOCAL),  # host-0 local rank on a multi-host job: same
+        (8, 2, 4, _CoordinatorRole.POLL),  # other host: poll the registry for rank 0
     ],
 )
-def test_supervised_coordinator_plan(
-    proc_index: int, task_index: int, num_tasks: int, expected: tuple[bool, bool]
+def test_supervised_coordinator_role(
+    proc_index: int, task_index: int, num_tasks: int, expected: _CoordinatorRole
 ) -> None:
-    assert _supervised_coordinator_plan(proc_index, task_index, num_tasks) == expected
+    assert _supervised_coordinator_role(proc_index, task_index, num_tasks) == expected
 
 
 @patch("iris.runtime.jax_init.atexit")

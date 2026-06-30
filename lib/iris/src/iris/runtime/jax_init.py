@@ -13,6 +13,7 @@ import atexit
 import logging
 import os
 import time
+from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -22,6 +23,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.runtime.multigpu import JAX_LOCAL_DEVICE_IDS_ENV, JAX_PROCESS_COUNT_ENV, JAX_PROCESS_INDEX_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +131,6 @@ def _poll_for_coordinator(
             time.sleep(interval)
 
 
-# Env vars stamped per child by iris.runtime.multigpu (the in-task GPU
-# supervisor). Their presence switches initialize_jax into supervised mode.
-_SUPERVISED_PROCESS_COUNT_ENV = "JAX_PROCESS_COUNT"
-_SUPERVISED_PROCESS_INDEX_ENV = "JAX_PROCESS_INDEX"
-_SUPERVISED_LOCAL_DEVICE_IDS_ENV = "JAX_LOCAL_DEVICE_IDS"
-
-
 def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     """Parse a ``JAX_LOCAL_DEVICE_IDS`` value ("0" or "2,3") into a list, or None."""
     if not raw:
@@ -143,23 +138,32 @@ def _parse_local_device_ids(raw: str | None) -> list[int] | None:
     return [int(part) for part in raw.split(",") if part]
 
 
-def _supervised_coordinator_plan(proc_index: int, task_index: int, num_tasks: int) -> tuple[bool, bool]:
-    """Decide how a supervised rank obtains the coordinator address.
+class _CoordinatorRole(StrEnum):
+    """How a supervised rank obtains the JAX coordinator address."""
 
-    Returns ``(register, poll)``. Global rank 0 (``proc_index == 0``) owns the
-    coordinator and registers its own address, but only when the job spans
-    multiple hosts (otherwise no peer needs to discover it). Other ranks on
-    host 0 reuse that same advertise_host directly, with no registry round-trip.
-    Ranks on other hosts poll the registry for global rank 0's address.
+    REGISTER = "register"  # global rank 0 on a multi-host job: bind + publish its address
+    POLL = "poll"  # a rank on another host: discover rank 0's address via the registry
+    REUSE_LOCAL = "reuse_local"  # rank 0 single-host, or a host-0 peer: use advertise_host directly
+
+
+def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: int) -> _CoordinatorRole:
+    """Pick the coordinator-discovery role for a supervised rank.
+
+    Global rank 0 (``proc_index == 0``) owns the coordinator: it publishes its
+    address only when the job spans multiple hosts (otherwise no peer needs to
+    discover it). Other ranks on host 0 reuse that same advertise_host directly,
+    with no registry round-trip. Ranks on other hosts poll for rank 0's address.
     """
     if proc_index == 0:
-        return (num_tasks > 1, False)
+        return _CoordinatorRole.REGISTER if num_tasks > 1 else _CoordinatorRole.REUSE_LOCAL
     if task_index == 0:
-        return (False, False)
-    return (False, True)
+        return _CoordinatorRole.REUSE_LOCAL
+    return _CoordinatorRole.POLL
 
 
-def _initialize_supervised_jax(jax, job_info, *, port: int, endpoint_name: str) -> None:
+def _initialize_supervised_jax(
+    jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
+) -> None:
     """Join the JAX mesh for a process launched by ``iris.runtime.multigpu``.
 
     The supervisor runs N JAX processes inside one Iris task and stamps each
@@ -169,9 +173,9 @@ def _initialize_supervised_jax(jax, job_info, *, port: int, endpoint_name: str) 
     from per-task to per-global-rank so every process across every host joins one
     mesh.
     """
-    proc_count = int(os.environ[_SUPERVISED_PROCESS_COUNT_ENV])
-    proc_index = int(os.environ[_SUPERVISED_PROCESS_INDEX_ENV])
-    device_ids = _parse_local_device_ids(os.environ.get(_SUPERVISED_LOCAL_DEVICE_IDS_ENV))
+    proc_count = int(os.environ[JAX_PROCESS_COUNT_ENV])
+    proc_index = int(os.environ[JAX_PROCESS_INDEX_ENV])
+    device_ids = _parse_local_device_ids(os.environ.get(JAX_LOCAL_DEVICE_IDS_ENV))
 
     if proc_count <= 1:
         jax.distributed.initialize(num_processes=1, process_id=0, local_device_ids=device_ids)
@@ -183,11 +187,11 @@ def _initialize_supervised_jax(jax, job_info, *, port: int, endpoint_name: str) 
     bound_port = job_info.ports.get("jax", port) if job_info else port
     coordinator = f"{advertise_host}:{bound_port}"
 
-    register, poll = _supervised_coordinator_plan(proc_index, task_index, num_tasks)
-    if poll:
+    role = _supervised_coordinator_role(proc_index, task_index, num_tasks)
+    if role is _CoordinatorRole.POLL:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, 300.0, 2.0)
-    elif register:
+        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+    elif role is _CoordinatorRole.REGISTER:
         ctx = iris_ctx()
         endpoint_id = ctx.registry.register(endpoint_name, coordinator)
         atexit.register(ctx.registry.unregister, endpoint_id)
@@ -268,8 +272,15 @@ def initialize_jax(
     # rank, so the single/multi-task branches below (which assume one process
     # per task) do not apply. This runs even when job_info is None so a local
     # supervisor smoke can bring up a localhost mesh.
-    if _SUPERVISED_PROCESS_COUNT_ENV in os.environ:
-        _initialize_supervised_jax(jax, job_info, port=port, endpoint_name=endpoint_name)
+    if JAX_PROCESS_COUNT_ENV in os.environ:
+        _initialize_supervised_jax(
+            jax,
+            job_info,
+            port=port,
+            endpoint_name=endpoint_name,
+            poll_timeout=poll_timeout,
+            poll_interval=poll_interval,
+        )
         return
 
     if job_info is None:

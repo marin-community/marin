@@ -42,6 +42,14 @@ _SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 # How often to re-poll child liveness while waiting for the group (seconds).
 _REAP_POLL_INTERVAL = 1.0
 
+# The supervisor→child rank contract: each child is stamped with these env vars,
+# and iris.runtime.jax_init reads them to switch initialize_jax into supervised
+# mode. Defined here (the producer) and imported by the consumer so the names
+# cannot drift between the two.
+JAX_PROCESS_COUNT_ENV = "JAX_PROCESS_COUNT"
+JAX_PROCESS_INDEX_ENV = "JAX_PROCESS_INDEX"
+JAX_LOCAL_DEVICE_IDS_ENV = "JAX_LOCAL_DEVICE_IDS"
+
 
 def _child_rank_env(
     local_rank: int, nproc: int, devices_per_proc: int, task_index: int, num_tasks: int
@@ -54,9 +62,9 @@ def _child_rank_env(
     begin = local_rank * devices_per_proc
     device_ids = ",".join(str(d) for d in range(begin, begin + devices_per_proc))
     return {
-        "JAX_PROCESS_COUNT": str(num_tasks * nproc),
-        "JAX_PROCESS_INDEX": str(task_index * nproc + local_rank),
-        "JAX_LOCAL_DEVICE_IDS": device_ids,
+        JAX_PROCESS_COUNT_ENV: str(num_tasks * nproc),
+        JAX_PROCESS_INDEX_ENV: str(task_index * nproc + local_rank),
+        JAX_LOCAL_DEVICE_IDS_ENV: device_ids,
     }
 
 

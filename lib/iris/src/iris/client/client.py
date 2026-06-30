@@ -669,12 +669,11 @@ class IrisClient:
             constraints: Constraints for filtering workers by attribute
             coscheduling: Configuration for atomic multi-task scheduling
             replicas: Number of tasks to create for gang scheduling (default: 1)
-            processes_per_task: Number of GPU processes to run inside each task
-                (default: 1). When > 1, the entrypoint is wrapped with the
-                iris.runtime.multigpu supervisor, which spawns that many JAX
-                processes per task — one per GPU group — so jax.process_count()
-                equals the total GPU process count. Requires a GPU device whose
-                count is divisible by this value. ``1`` is a strict no-op.
+            processes_per_task: Number of JAX processes to run inside each task,
+                one per GPU group, so ``jax.process_count()`` equals
+                ``replicas * processes_per_task`` (default: 1, one process per
+                task). Must divide the task's GPU count, and requires a GPU
+                device. ``1`` is a strict no-op.
             max_retries_failure: Max retries per task on failure (default: 0)
             max_retries_preemption: Max retries per task on preemption (default: 100)
             max_task_failures: Cumulative failed task attempts the job tolerates before
