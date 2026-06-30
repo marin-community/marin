@@ -17,14 +17,14 @@ const authEnabled = ref(false)
 const legendOpen = ref(false)
 
 // Tabs always shown have no `requires`; conditional tabs name the capability
-// the backend must advertise (see backend_descriptor in backend.py).
-// The `requiresMultiBackend` tabs are shown only when the controller has >1 backend.
-const ALL_TABS = computed<(Tab & { requires?: string; requiresMultiBackend?: boolean })[]>(() => [
+// the backend must advertise (see backend_descriptor in backend.py). The
+// always-on Backends tab subsumes the per-backend Kubernetes cluster view in its
+// detail panels, so there is no separate Cluster tab.
+const ALL_TABS = computed<(Tab & { requires?: string })[]>(() => [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
   { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
-  { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
-  { key: 'backends', label: 'Backends', to: '/backends', requiresMultiBackend: true },
+  { key: 'backends', label: 'Backends', to: '/backends' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
@@ -32,18 +32,13 @@ const ALL_TABS = computed<(Tab & { requires?: string; requiresMultiBackend?: boo
 ])
 
 const TABS = computed<Tab[]>(() =>
-  ALL_TABS.value.filter(t => {
-    if (t.requiresMultiBackend && !multiBackend.value) return false
-    if (t.requires && !capabilities.value.includes(t.requires)) return false
-    return true
-  })
+  ALL_TABS.value.filter(t => !t.requires || capabilities.value.includes(t.requires))
 )
 
 const PATH_TO_TAB: Record<string, string> = {
   '/': 'jobs',
   '/capacity': 'capacity',
   '/fleet': 'fleet',
-  '/cluster': 'cluster',
   '/backends': 'backends',
   '/endpoints': 'endpoints',
   '/logs': 'logs',

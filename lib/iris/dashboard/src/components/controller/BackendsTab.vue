@@ -4,12 +4,12 @@ import { RouterLink } from 'vue-router'
 import { useBackends } from '@/composables/useBackends'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { BackendSummary, UnroutableJob } from '@/types/rpc'
-import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import MetricCard from '@/components/shared/MetricCard.vue'
 import ConstraintChip from '@/components/shared/ConstraintChip.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
+import BackendDetailPanel from '@/components/controller/BackendDetailPanel.vue'
 
 // Above this threshold render a compact table instead of the card grid.
 const TABLE_THRESHOLD = 8
@@ -21,6 +21,22 @@ const unroutableJobCount = ref(0)
 const unroutableSample = ref<UnroutableJob[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+
+// Per-backend detail panels expand on demand; the always-on overview stays
+// compact until a backend is opened.
+const expanded = ref<Set<string>>(new Set())
+
+function toggleExpanded(backendId: string) {
+  const next = new Set(expanded.value)
+  if (next.has(backendId)) next.delete(backendId)
+  else next.add(backendId)
+  expanded.value = next
+}
+
+/** A backend has an expandable detail panel when status() authored a variant. */
+function hasDetail(b: BackendSummary): boolean {
+  return b.detail?.kubernetes != null || b.detail?.worker != null
+}
 
 async function refresh() {
   loading.value = true
@@ -156,45 +172,61 @@ function deviceChips(b: BackendSummary): string[] {
           </tr>
         </thead>
         <tbody>
-          <tr
+          <template
             v-for="b in backendSummaries"
             :key="b.backendId"
-            class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
           >
-            <td class="px-3 py-2 font-mono text-xs">
-              <span class="flex items-center gap-1.5">
-                <span
-                  class="w-2 h-2 rounded-full shrink-0"
-                  :class="healthDotClass(b)"
-                />
-                {{ b.name || b.backendId }}
-              </span>
-            </td>
-            <td class="px-3 py-2 text-text-secondary">{{ b.kind }}</td>
-            <td class="px-3 py-2">
-              <span class="flex flex-wrap gap-1">
-                <span
-                  v-for="cap in b.capabilities"
-                  :key="cap"
-                  class="inline-block rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-secondary"
-                >
-                  {{ cap }}
+            <tr
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+              :class="hasDetail(b) ? 'cursor-pointer' : ''"
+              @click="hasDetail(b) && toggleExpanded(b.backendId)"
+            >
+              <td class="px-3 py-2 font-mono text-xs">
+                <span class="flex items-center gap-1.5">
+                  <span
+                    v-if="hasDetail(b)"
+                    class="inline-block w-3 text-text-muted transition-transform"
+                    :class="expanded.has(b.backendId) ? 'rotate-90' : ''"
+                  >▸</span>
+                  <span v-else class="inline-block w-3" />
+                  <span
+                    class="w-2 h-2 rounded-full shrink-0"
+                    :class="healthDotClass(b)"
+                  />
+                  {{ b.name || b.backendId }}
                 </span>
-              </span>
-            </td>
-            <td class="px-3 py-2 text-right font-mono tabular-nums">
-              <RouterLink
-                :to="`/fleet?backend=${b.backendId}`"
-                class="text-accent hover:underline"
-              >
-                {{ b.workerCount }}
-              </RouterLink>
-            </td>
-            <td class="px-3 py-2 text-right font-mono tabular-nums text-xs">
-              {{ b.runningTaskCount }} · {{ b.pendingTaskCount }}
-            </td>
-            <td class="px-3 py-2 text-xs text-text-secondary">{{ healthLabel(b) }}</td>
-          </tr>
+              </td>
+              <td class="px-3 py-2 text-text-secondary">{{ b.kind }}</td>
+              <td class="px-3 py-2">
+                <span class="flex flex-wrap gap-1">
+                  <span
+                    v-for="cap in b.capabilities"
+                    :key="cap"
+                    class="inline-block rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-secondary"
+                  >
+                    {{ cap }}
+                  </span>
+                </span>
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums" @click.stop>
+                <RouterLink
+                  :to="`/fleet?backend=${b.backendId}`"
+                  class="text-accent hover:underline"
+                >
+                  {{ b.workerCount }}
+                </RouterLink>
+              </td>
+              <td class="px-3 py-2 text-right font-mono tabular-nums text-xs">
+                {{ b.runningTaskCount }} · {{ b.pendingTaskCount }}
+              </td>
+              <td class="px-3 py-2 text-xs text-text-secondary">{{ healthLabel(b) }}</td>
+            </tr>
+            <tr v-if="hasDetail(b) && expanded.has(b.backendId)">
+              <td colspan="6" class="p-0">
+                <BackendDetailPanel :backend="b" />
+              </td>
+            </tr>
+          </template>
         </tbody>
       </table>
     </div>
@@ -268,8 +300,8 @@ function deviceChips(b: BackendSummary): string[] {
 
           <InfoRow label="capacity">{{ healthLabel(b) }}</InfoRow>
 
-          <!-- Quick-navigation links -->
-          <div class="flex gap-3 pt-1 text-xs">
+          <!-- Quick-navigation links + detail toggle -->
+          <div class="flex items-center gap-3 pt-1 text-xs">
             <RouterLink
               v-if="b.capabilities.includes('workers')"
               :to="`/fleet?backend=${b.backendId}`"
@@ -284,8 +316,18 @@ function deviceChips(b: BackendSummary): string[] {
             >
               Capacity →
             </RouterLink>
+            <button
+              v-if="hasDetail(b)"
+              class="ml-auto text-accent hover:underline"
+              @click="toggleExpanded(b.backendId)"
+            >
+              {{ expanded.has(b.backendId) ? 'Hide details ▾' : 'Show details ▸' }}
+            </button>
           </div>
         </div>
+
+        <!-- Expanded detail panel -->
+        <BackendDetailPanel v-if="hasDetail(b) && expanded.has(b.backendId)" :backend="b" />
       </div>
     </div>
   </div>

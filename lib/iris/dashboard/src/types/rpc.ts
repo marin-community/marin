@@ -614,6 +614,19 @@ export interface BackendInfo {
   capabilities: string[]
 }
 
+/** Worker-daemon fleet detail: the backend's autoscaler view plus DB-derived health counts. */
+export interface WorkerFleetDetail {
+  autoscaler?: AutoscalerStatus
+  healthyWorkerCount?: number
+  totalWorkerCount?: number
+}
+
+/** Backend-authored expanded status; exactly one variant is set per the backend's capability. */
+export interface BackendStatus {
+  kubernetes?: GetKubernetesClusterStatusResponse
+  worker?: WorkerFleetDetail
+}
+
 /** Per-backend summary returned by the ListBackends RPC. */
 export interface BackendSummary {
   backendId: string
@@ -631,6 +644,8 @@ export interface BackendSummary {
   hasAutoscaler: boolean
   /** availability_status string → pool count. */
   capacityHealth: Record<string, number>
+  /** Expanded per-backend status rendered in the Backends tab detail panel. */
+  detail?: BackendStatus
 }
 
 export interface UnroutableJob {

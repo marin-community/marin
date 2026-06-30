@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
-import { useControllerRpc } from '@/composables/useRpc'
-import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
+import { computed } from 'vue'
 import { timestampMs, formatRelativeTime } from '@/utils/formatting'
-import MetricCard from '@/components/shared/MetricCard.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import type { GetKubernetesClusterStatusResponse, NodePoolStatus } from '@/types/rpc'
 
-const { data, loading, error, refresh } = useControllerRpc<GetKubernetesClusterStatusResponse>('GetKubernetesClusterStatus')
-useAutoRefresh(refresh, DEFAULT_REFRESH_MS)
-onMounted(refresh)
+// Presentational cluster-status view rendered inside a backend's detail panel on
+// the Backends tab. The parent supplies the BackendStatus.kubernetes snapshot;
+// this component owns no data fetching.
+const props = defineProps<{ status: GetKubernetesClusterStatusResponse }>()
 
 // -- Pod phase styling --
 
@@ -86,8 +84,8 @@ function poolProgressBarClass(pool: NodePoolStatus): string {
 
 // -- Computed --
 
-const pools = computed(() => data.value?.nodePools ?? [])
-const pods = computed(() => data.value?.podStatuses ?? [])
+const pools = computed(() => props.status.nodePools ?? [])
+const pods = computed(() => props.status.podStatuses ?? [])
 
 const provisioningPools = computed(() =>
   pools.value.filter(p => poolProvisioningStatus(p) === 'provisioning')
@@ -135,43 +133,28 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
 </script>
 
 <template>
-  <!-- Loading -->
-  <div v-if="loading && !data" class="flex items-center justify-center py-12 text-text-muted text-sm">
-    Loading cluster status...
-  </div>
-
-  <!-- Error -->
-  <div
-    v-else-if="error"
-    class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg rounded-lg border border-status-danger-border"
-  >
-    {{ error }}
-  </div>
-
-  <!-- Main -->
-  <div v-else-if="data" class="space-y-6">
-
+  <div class="space-y-4">
     <!-- ===== Status Bar ===== -->
     <div class="flex flex-wrap items-center gap-3 text-sm">
       <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface border border-surface-border">
         <span
           :class="[
             'w-2 h-2 rounded-full',
-            (data.schedulableNodes ?? 0) > 0 ? 'bg-status-success' : 'bg-text-muted',
+            (status.schedulableNodes ?? 0) > 0 ? 'bg-status-success' : 'bg-text-muted',
           ]"
         />
         <span class="text-text-secondary">Nodes:</span>
-        <span class="font-semibold font-mono">{{ data.schedulableNodes ?? 0 }} / {{ data.totalNodes ?? 0 }}</span>
+        <span class="font-semibold font-mono">{{ status.schedulableNodes ?? 0 }} / {{ status.totalNodes ?? 0 }}</span>
       </div>
 
       <div class="px-3 py-1.5 rounded-lg bg-surface border border-surface-border">
         <span class="text-text-secondary">CPU:</span>
-        <span class="font-semibold font-mono ml-1">{{ data.allocatableCpu || '0' }}</span>
+        <span class="font-semibold font-mono ml-1">{{ status.allocatableCpu || '0' }}</span>
       </div>
 
       <div class="px-3 py-1.5 rounded-lg bg-surface border border-surface-border">
         <span class="text-text-secondary">Memory:</span>
-        <span class="font-semibold font-mono ml-1">{{ data.allocatableMemory || '0' }}</span>
+        <span class="font-semibold font-mono ml-1">{{ status.allocatableMemory || '0' }}</span>
       </div>
 
       <div class="px-3 py-1.5 rounded-lg bg-surface border border-surface-border">
@@ -186,7 +169,7 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
 
       <div class="px-3 py-1.5 rounded-lg bg-surface border border-surface-border">
         <span class="text-text-secondary">Namespace:</span>
-        <span class="font-semibold font-mono ml-1">{{ data.namespace || '-' }}</span>
+        <span class="font-semibold font-mono ml-1">{{ status.namespace || '-' }}</span>
       </div>
     </div>
 
@@ -230,16 +213,9 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
               :key="pool.name"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
-              <!-- Pool name -->
               <td class="px-3 py-2 text-[13px] font-semibold">{{ pool.name }}</td>
-
-              <!-- Instance type -->
               <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">{{ pool.instanceType }}</td>
-
-              <!-- Scale group -->
               <td class="px-3 py-2 text-[13px] text-text-secondary">{{ pool.scaleGroup || '-' }}</td>
-
-              <!-- Nodes: current / target (min-max) -->
               <td class="px-3 py-2 text-[13px] text-right font-mono">
                 <span :class="pool.currentNodes < pool.targetNodes ? 'text-status-warning' : 'text-text'">
                   {{ pool.currentNodes }}
@@ -247,8 +223,6 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                 <span class="text-text-muted"> / {{ pool.targetNodes }}</span>
                 <span class="text-text-muted text-xs ml-1">({{ pool.minNodes }}-{{ pool.maxNodes }})</span>
               </td>
-
-              <!-- Progress bar -->
               <td class="px-3 py-2">
                 <div class="flex items-center gap-2">
                   <div class="flex-1 h-1.5 rounded-full bg-surface-border overflow-hidden">
@@ -260,8 +234,6 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                   <span class="text-xs font-mono text-text-muted w-8 text-right">{{ poolProgressPercent(pool) }}%</span>
                 </div>
               </td>
-
-              <!-- Status badge -->
               <td class="px-3 py-2">
                 <span
                   :class="[
@@ -276,8 +248,6 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                   {{ poolStatusLabel(pool) }}
                 </span>
               </td>
-
-              <!-- Capacity / Quota -->
               <td class="px-3 py-2 text-[13px]">
                 <span
                   v-if="pool.capacity"
@@ -330,28 +300,23 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.podName">
                   {{ pod.podName }}
                 </td>
-
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.taskId">
                   {{ pod.taskId || '-' }}
                 </td>
-
                 <td class="px-3 pt-2 pb-1 text-[13px]">
                   <span class="inline-flex items-center gap-1.5">
                     <span :class="['w-1.5 h-1.5 rounded-full flex-shrink-0', phaseDotClass(pod.phase)]" />
                     <span :class="['font-semibold', phaseClass(pod.phase)]">{{ pod.phase }}</span>
                   </span>
                 </td>
-
                 <td class="px-3 pt-2 pb-1 text-[13px] font-mono truncate" :title="pod.nodeName || undefined">
                   <span :class="nodeDisplayClass(pod.nodeName, pod.phase)">
                     {{ nodeDisplayName(pod.nodeName, pod.phase) }}
                   </span>
                 </td>
-
                 <td class="px-3 pt-2 pb-1 text-[13px] text-text-secondary truncate" :title="pod.reason || undefined">
                   {{ pod.reason || '-' }}
                 </td>
-
                 <td class="px-3 pt-2 pb-1 text-[13px] text-text-muted font-mono whitespace-nowrap">
                   {{ formatTransition(pod.lastTransition) }}
                 </td>
@@ -378,6 +343,5 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
         </table>
       </div>
     </section>
-
   </div>
 </template>
