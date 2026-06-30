@@ -36,15 +36,16 @@ def test_render_table_aligns_and_marks_null():
 class _FakeHttp:
     """Routes ducky's POST /query + GET /result to canned responses."""
 
-    def __init__(self, result: dict, submit_status: int = 202):
+    def __init__(self, result: dict, submit_status: int = 202, get_status: int = 200):
         self._result = result
         self._submit_status = submit_status
+        self._get_status = get_status
 
     def post(self, url, json=None, timeout=None):
         return httpx.Response(self._submit_status, json={"query_id": "abc"}, request=httpx.Request("POST", url))
 
     def get(self, url, timeout=None):
-        return httpx.Response(200, json=self._result, request=httpx.Request("GET", url))
+        return httpx.Response(self._get_status, json=self._result, request=httpx.Request("GET", url))
 
 
 def test_query_prints_table_and_stats(monkeypatch):
@@ -71,6 +72,15 @@ def test_query_error_exits_nonzero(monkeypatch):
     result = CliRunner().invoke(query, ["SELECT * FROM nope", "--base-url", _BASE])
     assert result.exit_code != 0
     assert "Catalog Error: nope" in result.output
+
+
+def test_query_poll_http_error_exits_cleanly(monkeypatch):
+    # a non-200 /result (e.g. server restart, proxy failure) must surface as a CLI error,
+    # not a KeyError on the missing "status" field
+    monkeypatch.setattr(client, "httpx", _FakeHttp({"error": "upstream timeout"}, get_status=504))
+    result = CliRunner().invoke(query, ["SELECT 1", "--base-url", _BASE])
+    assert result.exit_code != 0
+    assert "upstream timeout" in result.output
 
 
 def test_query_requires_sql():

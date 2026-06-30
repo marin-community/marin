@@ -184,6 +184,12 @@ def test_run_query_handles_trailing_line_comment(make_runner):
     assert result.preview_rows == [[1]]
 
 
+def test_run_query_handles_semicolon_then_comment(make_runner):
+    runner = make_runner()
+    result = runner.run_query("SELECT 1 AS a; -- trailing comment", uuid.uuid4().hex)
+    assert result.preview_rows == [[1]]
+
+
 def test_run_query_coerces_non_finite_floats_to_str(make_runner):
     runner = make_runner()
     result = runner.run_query("SELECT 'nan'::DOUBLE AS x, 'inf'::DOUBLE AS y", uuid.uuid4().hex)

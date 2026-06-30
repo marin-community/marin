@@ -21,6 +21,7 @@ import dataclasses
 import enum
 import logging
 import threading
+import time
 import uuid
 from concurrent.futures import Executor, ThreadPoolExecutor
 
@@ -78,17 +79,20 @@ class QueryManager:
     are process-local; ducky is stateless and restartable, so a restart drops both.
     """
 
-    def __init__(self, runner: QueryRunner, executor: Executor | None = None, max_workers: int = 8) -> None:
+    def __init__(
+        self, runner: QueryRunner, executor: Executor | None = None, max_workers: int = 8, cache_ttl: float = 0.0
+    ) -> None:
         self._runner = runner
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
         self._states: dict[str, QueryState] = {}
-        self._cache: dict[str, QueryResult] = {}
+        self._cache: dict[str, tuple[QueryResult, float]] = {}  # sql -> (result, monotonic ts)
+        self._cache_ttl = cache_ttl  # seconds; entries older than this are re-run (their parquet may be gone)
         self._lock = threading.Lock()
 
     def submit(self, sql: str) -> str:
         query_id = uuid.uuid4().hex
         with self._lock:
-            cached = self._cache.get(sql)
+            cached = self._cached_result(sql)
             if cached is not None:
                 self._states[query_id] = QueryState(QueryStatus.DONE, result=cached, cached=True)
                 logger.info(
@@ -107,6 +111,22 @@ class QueryManager:
     def get(self, query_id: str) -> QueryState | None:
         with self._lock:
             return self._states.get(query_id)
+
+    def _cached_result(self, sql: str) -> QueryResult | None:
+        """Return a still-valid cached result, or None. Call under the lock.
+
+        Entries older than the cache TTL are dropped — their spilled parquet may have
+        been deleted by the scratch bucket's lifecycle rule, so the cached result_path
+        would dangle.
+        """
+        entry = self._cache.get(sql)
+        if entry is None:
+            return None
+        result, created = entry
+        if self._cache_ttl and (time.monotonic() - created) > self._cache_ttl:
+            del self._cache[sql]
+            return None
+        return result
 
     def _run(self, sql: str, query_id: str) -> None:
         try:
@@ -129,7 +149,7 @@ class QueryManager:
             result.elapsed_ms,
         )
         with self._lock:
-            self._cache[sql] = result
+            self._cache[sql] = (result, time.monotonic())
             self._states[query_id] = QueryState(QueryStatus.DONE, result=result, cached=False)
 
     def shutdown(self) -> None:
@@ -308,7 +328,12 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     ``executor`` overrides the query executor (tests inject a synchronous one).
     """
     index_html = _index_html(config.result_ttl_days)
-    manager = QueryManager(runner, executor=executor, max_workers=config.max_concurrent_queries)
+    manager = QueryManager(
+        runner,
+        executor=executor,
+        max_workers=config.max_concurrent_queries,
+        cache_ttl=config.result_ttl_days * 86400,
+    )
 
     @requires_auth
     async def index(_request: Request) -> HTMLResponse:

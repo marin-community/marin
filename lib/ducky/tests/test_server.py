@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 from concurrent.futures import Future
 
 import pytest
 from ducky.config import DuckyConfig
 from ducky.runner import QueryError, QueryResult
-from ducky.server import create_app
+from ducky.server import QueryManager, create_app
 from starlette.testclient import TestClient
 
 _CONFIG = DuckyConfig(
@@ -146,3 +147,13 @@ def test_query_missing_sql_is_400(body):
     resp = _client(_FakeRunner()).post("/query", json=body)
     assert resp.status_code == 400
     assert resp.json() == {"error": "missing 'sql'"}
+
+
+def test_cache_entry_expires_after_ttl():
+    """A cached result older than the TTL is dropped (its spilled parquet may be gone)."""
+    manager = QueryManager(_FakeRunner(), executor=_InlineExecutor(), cache_ttl=10)
+    result = QueryResult(["a"], [[1]], 1, False, "gs://b/x.parquet", 1, 1)
+    manager._cache["SELECT 1"] = (result, time.monotonic() - 100)  # stale
+    manager._cache["SELECT 2"] = (result, time.monotonic())  # fresh
+    assert manager._cached_result("SELECT 1") is None
+    assert manager._cached_result("SELECT 2") is result

@@ -24,6 +24,7 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 
@@ -73,19 +74,26 @@ def _cluster_tunnel(cluster: str, endpoint: str, timeout: float = 90.0) -> Itera
         stderr=subprocess.STDOUT,
         text=True,
     )
+    # Reading proc.stdout line-by-line blocks if iris emits nothing, so a wall-clock
+    # check inside the loop never fires — enforce the startup timeout by terminating
+    # the process (which EOFs the read) if the URL hasn't appeared in time.
+    startup_kill = threading.Timer(timeout, proc.terminate)
+    startup_kill.start()
+    base = None
     try:
-        base = None
-        deadline = time.monotonic() + timeout
         assert proc.stdout is not None
         for line in proc.stdout:
             match = _TUNNEL_URL_RE.search(line)
             if match:
                 base = f"{match.group(0)}/proxy/{endpoint}"
                 break
-            if time.monotonic() > deadline or proc.poll() is not None:
-                break
-        if base is None:
-            raise click.ClickException(f"Could not open a tunnel to cluster {cluster!r} via `iris cluster dashboard`.")
+    finally:
+        startup_kill.cancel()  # startup done (found or EOF); stop guarding it
+
+    if base is None:
+        proc.terminate()
+        raise click.ClickException(f"Could not open a tunnel to cluster {cluster!r} via `iris cluster dashboard`.")
+    try:
         yield base
     finally:
         proc.terminate()
@@ -102,7 +110,10 @@ def _run_query(base: str, sql: str, output_format: str, poll_interval: float, ti
 
     deadline = time.monotonic() + timeout
     while True:
-        result = httpx.get(f"{base}/result/{query_id}", timeout=30).json()
+        resp = httpx.get(f"{base}/result/{query_id}", timeout=30)
+        if resp.status_code != 200:
+            raise click.ClickException(_error_message(resp))
+        result = resp.json()
         if result.get("status") != "running":
             break
         if time.monotonic() > deadline:

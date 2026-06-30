@@ -206,13 +206,6 @@ class QueryRunner:
 
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
         path_literal = _sql_literal(result_path)
-
-        # Strip a trailing `;` (else it lands mid-`COPY (...)` and is a syntax error), and
-        # wrap the user SQL on its own lines so a trailing `-- comment` can't eat the
-        # generated `)`.
-        normalized_sql = sql.strip().rstrip(";").rstrip()
-        copy_stmt = f"COPY (\n{normalized_sql}\n) TO {path_literal} (FORMAT parquet)"
-
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
         readback = f"read_parquet({path_literal}, hive_partitioning=false)"
@@ -226,7 +219,10 @@ class QueryRunner:
         watchdog.start()
         start = time.monotonic()
         try:
-            cursor.execute(copy_stmt)
+            # Run the user SQL as a relation and write it out, rather than wrapping it in a
+            # COPY (...) string — DuckDB parses it as a complete statement, so a trailing
+            # ';' or '-- comment' just works.
+            cursor.sql(sql).write_parquet(result_path)
             count_row = cursor.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
