@@ -189,12 +189,47 @@ worker-projection `status()` method (the `BackendStatus` enum is just a column).
    point at backend-owned worker rows in one SQLite file; a physical store split
    forces the scheduler/reconcile joins to cross the interface or denormalize.
 
-## Open / unclear (to resolve in Interrogate)
+## Decisions (from Interrogate)
 
-- Physical store split (separate tables/DB the backend exclusively owns) vs a
-  typed `BackendWorkerStore` boundary over the *shared* tables (physical split
-  only for remote).
-- Whether `RegisterWorker` routes wholesale to the backend, or the controller
-  keeps the RPC endpoint + auth and delegates only collision-detection.
-- Whether all worker reads (dashboard/list_workers) route through the backend's
-  projection, or the controller keeps a read-projection the backend publishes into.
+- Partition depth: **typed `BackendWorkerStore` over shared tables** (logical
+  partition; physical split only for remote).
+- Projection: **generic published, cached `BackendStatus`** per backend
+  (generalize #6773); controller reasons about worker state only as an opaque
+  cached object, never reads worker tables for views.
+- Doc scope: **full target contract + phased migration.**
+
+## codex review of design.md (corrections folded in)
+
+- **"No worker IDs cross for control" is false.** `ScheduleResult.assignments`
+  carry `WorkerId` (backend.py:180) and assignment-commit re-reads `workers.address`
+  (ops/task.py:80). The real invariant is **the controller never independently
+  *reads worker state***; the backend authors the address/lease into placements.
+- **The store is a thread-affinity boundary, not a DB wrapper** (the biggest risk).
+  Slice teardown is control-thread-only; recycled-IP eviction is *deferred* via
+  `_pending_evictions` (controller.py:487/1424). Registration must keep a
+  backend-local control-thread eviction drain — no synchronous teardown in the
+  Register RPC handler.
+- **Registration internalizes partially:** controller keeps auth + scale-group→
+  backend routing (service.py:1816/1827); backend owns the write + collision
+  decision + drain.
+- **Surviving non-view worker reads:** assignment-commit address (ops/task.py:84)
+  and `profile`/`process`/`exec` via `_read_worker` (service.py:2170/2348/2559).
+  Meta-scheduler/budget do **not** need live worker reads (policy.py:717).
+- **Pruner stays split:** thin controller loop calls `store.prune_dead_workers()`
+  per live backend; controller retains a **global orphan-slice GC** for
+  abandoned/retired groups (pruner.py:115, recovery.py:122).
+- **#6773 `BackendStatus` is absent on this branch** (a DB enum, types.py:67;
+  `BackendSummary` aggregate-only, controller.proto:588). Needs a dedicated cached
+  `BackendStatus(workers_by_id, autoscaler_status, counts)` with explicit
+  worker-detail fields; keep recent attempts as controller-owned task history.
+- **Placement projection is permanent** (keep `task_attempts.worker_id`); remote
+  stores opaque `backend_id + worker_id + address/lease`, no SQLite FK.
+- **Phasing:** Phase 1 must also drop raw `db` on `WorkerSource` (backend.py:450);
+  Phase 2 keep the control-thread drain; Phase 3 preserve list/detail semantics;
+  autoscaler-persist and pruning are separate phases; remote placement-projection
+  is an explicit contract, not "free."
+
+Verdict: direction sound, not as originally specified. Biggest risk = treating the
+store as only a DB abstraction when it is also a thread-affinity + ownership
+boundary across RPC handlers, the control loop, the autoscaler thread, liveness
+hooks, and pruning.
