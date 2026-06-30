@@ -61,7 +61,7 @@ def test_index_serves_form():
 
 
 def test_query_accepts_and_returns_uuid_query_id():
-    fake = _FakeRunner(result=QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/a.parquet"))
+    fake = _FakeRunner(result=QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/a.parquet", 12, 345))
     client = TestClient(create_app(fake, _CONFIG))
 
     resp = client.post("/query", json={"sql": "SELECT 1"})
@@ -73,7 +73,7 @@ def test_query_accepts_and_returns_uuid_query_id():
 
 
 def test_query_result_delivered_via_polling():
-    result = QueryResult(["x"], [[1], [2]], 5, True, "gs://marin-ducky-us-east5/ducky/abc.parquet")
+    result = QueryResult(["x"], [[1], [2]], 5, True, "gs://marin-ducky-us-east5/ducky/abc.parquet", 1234, 5678)
     fake = _FakeRunner(result=result)
     client = TestClient(create_app(fake, _CONFIG))
 
@@ -88,6 +88,8 @@ def test_query_result_delivered_via_polling():
         "truncated": True,
         "result_path": "gs://marin-ducky-us-east5/ducky/abc.parquet",
         "cached": False,
+        "elapsed_ms": 1234,
+        "result_bytes": 5678,
     }
     assert fake.received_query_id == query_id
 
@@ -104,7 +106,7 @@ def test_identical_sql_served_from_cache():
             self.calls += 1
             return super().run_query(sql, query_id)
 
-    result = QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet")
+    result = QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet", 50, 99)
     runner = _CountingRunner(result)
     client = TestClient(create_app(runner, _CONFIG))
 

@@ -70,6 +70,8 @@ def test_run_query_caps_preview_and_spills(make_runner):
     assert result.truncated is True
     assert result.result_path.endswith(".parquet")
     assert Path(result.result_path).exists()
+    assert result.elapsed_ms >= 0
+    assert result.result_bytes > 0  # the spilled parquet has content
 
 
 def test_run_query_full_result_not_truncated(make_runner):

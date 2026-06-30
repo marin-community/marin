@@ -121,6 +121,8 @@ def _result_payload(state: QueryState) -> dict:
         "truncated": result.truncated,
         "result_path": result.result_path,
         "cached": state.cached,
+        "elapsed_ms": result.elapsed_ms,
+        "result_bytes": result.result_bytes,
     }
 
 
@@ -215,6 +217,18 @@ async function poll(queryId) {
   }
 }
 
+function fmtBytes(n) {
+  if (n == null) return "?";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(1)) + " " + u[i];
+}
+function fmtDuration(ms) {
+  if (ms == null) return "?";
+  return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s";
+}
+
 function renderResult(data) {
   const shown = data.rows.length;
   const rowsLabel = data.truncated
@@ -223,7 +237,9 @@ function renderResult(data) {
   const cacheBadge = data.cached
     ? '<span class="cached">cached ✓</span>'
     : '<span class="computed">computed</span>';
-  statusEl.innerHTML = rowsLabel + " · " + cacheBadge
+  statusEl.innerHTML = rowsLabel
+    + " · " + fmtDuration(data.elapsed_ms) + " · " + fmtBytes(data.result_bytes) + " result"
+    + " · " + cacheBadge
     + ' · output: <span class="loc"></span> <span style="color:#888">(expires in ' + TTL_DAYS + "d)</span>";
   statusEl.querySelector(".loc").textContent = data.result_path;
 

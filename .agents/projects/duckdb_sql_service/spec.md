@@ -68,6 +68,8 @@ class QueryResult:
     total_rows: int              # full row count of the result (>= len(preview_rows))
     truncated: bool              # True iff total_rows > len(preview_rows)
     result_path: str             # gs:// path to the full result parquet (always written, even when not truncated)
+    elapsed_ms: int              # server-side execution wall time (COPY + readback)
+    result_bytes: int            # on-disk size of the spilled result parquet (sum of parquet_metadata sizes)
 
 
 class QueryRunner:
@@ -158,10 +160,11 @@ while the query runs for as long as it needs.
 - 200 `{"status": "error", "error": "<message>"}` — `QueryError` (or an unexpected
   error) raised while running.
 - 200 `{"status": "done", "columns": [...], "rows": [[...]], "total_rows": N,
-  "truncated": bool, "result_path": "<gs://…>", "cached": bool}` — `rows` is
-  `QueryResult.preview_rows`; `result_path` is the spilled full result's GCS
-  location; `cached` is true when the result was served from the in-memory
-  result cache (identical SQL) rather than re-executed.
+  "truncated": bool, "result_path": "<gs://…>", "cached": bool, "elapsed_ms": int,
+  "result_bytes": int}` — `rows` is `QueryResult.preview_rows`; `result_path` is the
+  spilled full result's GCS location; `cached` is true when served from the in-memory
+  result cache (identical SQL); `elapsed_ms` is execution wall time and `result_bytes`
+  the spilled parquet size. (On a cache hit these reflect the original run.)
 - 404 `{"error": "unknown query_id"}` — no such (or expired) query.
 
 The page (a CodeMirror SQL-highlighted editor) polls `/result/{query_id}` every

@@ -15,6 +15,7 @@ import dataclasses
 import logging
 import os
 import re
+import time
 
 import duckdb
 from iris.env_resources import TaskResources
@@ -47,6 +48,8 @@ class QueryResult:
     total_rows: int
     truncated: bool
     result_path: str
+    elapsed_ms: int  # server-side execution wall time (COPY + readback)
+    result_bytes: int  # on-disk size of the spilled result parquet
 
 
 @dataclasses.dataclass(frozen=True)
@@ -146,16 +149,22 @@ class QueryRunner:
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
         readback = f"read_parquet({path_literal}, hive_partitioning=false)"
+        start = time.monotonic()
         try:
             self._con.execute(f"COPY ({sql}) TO {path_literal} (FORMAT parquet)")
             count_row = self._con.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
+            size_row = self._con.execute(
+                f"SELECT sum(total_compressed_size) FROM parquet_metadata({path_literal})"
+            ).fetchone()
+            result_bytes = int(size_row[0]) if size_row and size_row[0] is not None else 0
             preview = self._con.execute(
                 f"SELECT * FROM {readback} LIMIT {self._config.preview_row_cap}"
             ).fetch_arrow_table()
         except duckdb.Error as e:
             raise QueryError(str(e)) from e
+        elapsed_ms = int((time.monotonic() - start) * 1000)
 
         columns = list(preview.column_names)
         preview_rows = [[_coerce_cell(row[col]) for col in columns] for row in preview.to_pylist()]
@@ -165,6 +174,8 @@ class QueryRunner:
             total_rows=total_rows,
             truncated=total_rows > len(preview_rows),
             result_path=result_path,
+            elapsed_ms=elapsed_ms,
+            result_bytes=result_bytes,
         )
 
     def close(self) -> None:
