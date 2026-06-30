@@ -30,7 +30,8 @@ from iris.cli.build import (
     find_marin_root,
     get_git_sha,
 )
-from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client_for_ctx
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
+from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.cluster.backends.types import Labels
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import clear_remote_state, make_local_config
@@ -457,8 +458,7 @@ def _require_log_server_config(ctx: click.Context) -> str:
         raise click.ClickException("--config is required for cluster log-server commands")
     if not cfg.log_server_config:
         raise click.ClickException(
-            "cluster does not declare log_server_config; "
-            "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare log_server_config; set it or manage the log server via `finelog deploy` directly"
         )
     return cfg.log_server_config
 
@@ -1270,6 +1270,5 @@ def _check_worker_health(client, worker_ids: set[str]) -> list[tuple[str, str]]:
 
 def _print_summary(succeeded: int, failures: int, remaining: int, offset: int):
     click.echo(
-        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining "
-        f"(aborted at worker {offset + 1})"
+        f"\nSummary: {succeeded} succeeded, {failures} failed, {remaining} remaining (aborted at worker {offset + 1})"
     )

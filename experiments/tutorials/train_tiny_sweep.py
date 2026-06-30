@@ -17,12 +17,14 @@ selecting on the held-out loss:
   :class:`~marin.training.training.LevanterCheckpoint`, read its recorded validation loss via
   :meth:`~marin.training.training.LevanterCheckpoint.training_metrics`, and keep the lowest.
 
-Run it against a cluster (with ``MARIN_PREFIX`` pointing at a bucket co-regional with
-``RESOURCES``)::
+Run it in-process, or ship it to a cluster (the coordinator resolves storage region-locally;
+``--region`` pins the trials' TPUs and the run's buckets together)::
 
-    python -m experiments.tutorials.train_tiny_sweep
+    python experiments/tutorials/train_tiny_sweep.py
+    python experiments/tutorials/train_tiny_sweep.py --cluster marin
 """
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from marin.execution.lazy import ArtifactStep, run
@@ -32,6 +34,7 @@ from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.task_configs import CORE_TASKS
 from experiments.evals.uncheatable import uncheatable_validation
+from experiments.launch import LaunchConfig, apply_overrides, launch
 from experiments.llama import llama3_tokenizer, llama_30m
 from experiments.paloma import paloma_validation
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
@@ -72,20 +75,22 @@ def trial(*, learning_rate: float, weight_decay: float, version: str = "dev") ->
     )
 
 
-if __name__ == "__main__":
-    trials = sweep(
-        trial,
-        learning_rate=[3e-4, 6e-4, 1e-3],
-        weight_decay=[0.0, 0.1, 0.2],
-    )
+def run_tiny_sweep(config: LaunchConfig) -> None:
+    """Run the LR/WD sweep and select the lowest held-out loss, in-process or on ``--cluster``.
 
-    # Build every trial and get back its resolved checkpoint: the shared caches tokenize once,
-    # then each trial trains on its own TPU job (in parallel), recording its validation loss next
-    # to its checkpoints. run() returns the loaded, typed LevanterCheckpoint per trial.
+    Each trial gets the launcher's ``--tpu_type`` / ``--region`` overrides applied before it
+    runs; the shared caches tokenize once, then each trial trains on its own TPU job in parallel
+    and records its validation loss. Selection is then ordinary code over the resolved checkpoints.
+    """
+    trials = [
+        apply_overrides(config, t) for t in sweep(trial, learning_rate=[3e-4, 6e-4, 1e-3], weight_decay=[0.0, 0.1, 0.2])
+    ]
+    # run() returns the loaded, typed LevanterCheckpoint per trial.
     checkpoints = run(*trials)
-
-    # Selection is ordinary code over the resolved checkpoints: read each one's recorded held-out
-    # loss through its typed artifact and keep the lowest.
     scored = [(t, ckpt.training_metrics().eval_loss) for t, ckpt in zip(trials, checkpoints, strict=True)]
     best, best_loss = min(scored, key=lambda pair: pair[1])
     print(f"best trial: {best.name} (eval_loss={best_loss:.4f})")
+
+
+if __name__ == "__main__":
+    launch(draccus.parse(LaunchConfig), run_tiny_sweep)

@@ -45,6 +45,7 @@ import datetime
 import os
 from typing import cast
 
+import draccus
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -53,13 +54,13 @@ from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama3_tokenizer_vocab_size
 
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
@@ -230,5 +231,10 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
     )
 
 
+def train_grug_moe_cw_scale(config: LaunchConfig) -> None:
+    """Build the CoreWeave-scale MoE checkpoint and run it, in-process or on ``--cluster``."""
+    run_steps(config, build_scale_checkpoint())
+
+
 if __name__ == "__main__":
-    StepRunner().run([build_scale_checkpoint().lower()])
+    launch(draccus.parse(LaunchConfig), train_grug_moe_cw_scale)

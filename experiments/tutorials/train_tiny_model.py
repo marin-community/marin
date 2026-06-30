@@ -3,26 +3,28 @@
 
 """Tutorial: train a tiny model, choosing the accelerator and dataset on the command line.
 
-    python -m experiments.tutorials.train_tiny_model --device cpu --dataset tinystories
-    python -m experiments.tutorials.train_tiny_model --device h100x8 --dataset wikitext
-    python -m experiments.tutorials.train_tiny_model --device v5litepod-16 --dataset fineweb-edu
+    python experiments/tutorials/train_tiny_model.py --device cpu --dataset tinystories
+    python experiments/tutorials/train_tiny_model.py --device h100x8 --dataset wikitext --cluster marin
+    python experiments/tutorials/train_tiny_model.py --device v5litepod-16 --dataset fineweb-edu --cluster marin
 
 Every training decision is stated inline: the model, the data, the optimizer, the token
 budget. :func:`~marin.experiment.train.train_lm` handles only the accelerator plumbing (the
 mesh, the resumption checkpointer, the Fray dispatch); the same script runs on every device.
+Without ``--cluster`` it runs in-process; with ``--cluster`` it ships to a coordinator job.
 """
 
-import argparse
+from dataclasses import dataclass
 
+import draccus
 from fray import ResourceConfig
 from levanter.optim import AdamConfig
-from marin.execution.lazy import ArtifactStep, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.data import pretokenized, tokenized
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint
 
+from experiments.launch import LaunchConfig, launch, run_steps
 from experiments.llama import llama_150m, llama_nano
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -82,11 +84,21 @@ def build(*, device: str, data: str, version: str = "dev") -> ArtifactStep[Levan
     )
 
 
+@dataclass
+class TinyModelLaunch(LaunchConfig):
+    """Launcher flags plus this tutorial's device/dataset choice."""
+
+    device: str = "cpu"
+    """One of ``DEVICES`` (cpu, h100x8, v5litepod-16)."""
+
+    dataset: str = "tinystories"
+    """One of tinystories, wikitext, fineweb-edu."""
+
+
+def train_tiny(config: TinyModelLaunch) -> None:
+    """Build the chosen device/dataset run and execute it, in-process or on ``--cluster``."""
+    run_steps(config, build(device=config.device, data=config.dataset))
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", choices=tuple(DEVICES), default="cpu")
-    parser.add_argument("--dataset", choices=("tinystories", "wikitext", "fineweb-edu"), default="tinystories")
-    args = parser.parse_args()
-    # Lower the checkpoint to a StepSpec graph and run it: the dataset tokenizes/downloads
-    # (cached), then one training job runs on the chosen device.
-    StepRunner().run([lower(build(device=args.device, data=args.dataset))])
+    launch(draccus.parse(TinyModelLaunch), train_tiny)

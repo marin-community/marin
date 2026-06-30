@@ -19,10 +19,12 @@ import logging
 import os
 from dataclasses import dataclass
 
+import draccus
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, lower
-from marin.execution.step_runner import StepRunner
+from marin.execution.lazy import ArtifactStep
 from rigging.filesystem import open_url
+
+from experiments.launch import LaunchConfig, launch, run_steps
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,10 @@ def build() -> ArtifactStep[Artifact]:
     return _stats
 
 
+def run_hello_world(config: LaunchConfig) -> None:
+    """Run the two-step hello-world pipeline, in-process or on ``--cluster``."""
+    run_steps(config, build())
+
+
 if __name__ == "__main__":
-    # Lower the artifact graph to StepSpecs and run it: data generates first,
-    # then stats computes.
-    StepRunner().run([lower(build())])
+    launch(draccus.parse(LaunchConfig), run_hello_world)
