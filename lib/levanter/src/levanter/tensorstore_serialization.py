@@ -102,20 +102,15 @@ def _serialize_with_fresh_ts_context():
     """Route ``GlobalAsyncCheckpointManager.serialize`` through a fresh tensorstore ``Context``.
 
     JAX serializes every checkpoint with one process-lifetime ``Context`` singleton
-    (``tensorstore_impl._TS_CONTEXT``), and ``GlobalAsyncCheckpointManager.serialize`` never
-    lets a caller override it. A ``Context`` strongly owns its cache pool, so caches registered
-    in it live until the ``Context`` itself is dropped. Levanter writes each save to a distinct
-    OCDBT database (a fresh ``step-{N}`` dir → new cache keys), so successive saves register new,
-    never-reused caches under the one shared ``Context``. They are never reclaimed, and the
-    pinned-host source buffers they reference (``can_reference_source_data_indefinitely=True`` for
-    ``jax.Array`` inputs) accumulate as anonymous host RAM — ~linear in the number of saves — until
-    the container cgroup OOM-kills training.
+    (``tensorstore_impl._TS_CONTEXT``) that strongly owns its cache pool. Each save writes a
+    distinct OCDBT database (fresh ``step-{N}`` dir → new cache keys), so caches accumulate in
+    the shared ``Context`` and are never reused or reclaimed. The pinned-host source buffers they
+    reference grow as anonymous host RAM until the cgroup OOM-kills training.
 
-    Wrapping ``async_serialize`` to inject a fresh ``Context`` per save means the previous save's
-    pool is released as soon as its commit drains (``serialize`` waits on the prior commit before
-    starting), bounding live checkpoint host RAM to roughly one save instead of all of them. The
-    fresh ``Context`` clones the JAX config (10 GB cache pools, concurrency limits), so write
-    behavior is unchanged; the only cost is rebuilding the lightweight ``Context`` per save.
+    Injecting a fresh ``Context`` per save releases the prior save's pool once its commit drains
+    (``serialize`` waits on the previous commit first), bounding live host RAM to one save. The
+    ``Context`` clones the JAX config (same pool sizes and concurrency limits), so write behavior
+    is unchanged.
     """
     fresh_context = ts.Context(ts_impl._TS_CONTEXT.spec)
     original_async_serialize = ts_impl.async_serialize
