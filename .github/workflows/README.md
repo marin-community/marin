@@ -8,12 +8,12 @@ This directory contains thin trigger YAML around behavior implemented in `script
 | --- | --- | --- | --- | --- | --- |
 | `dupekit-release-wheels.yaml` | Dupekit - Release Wheels | PR + push to main + workflow_dispatch | release | dupekit | see job steps |
 | `dupekit-unit.yaml` | Dupekit - Unit | PR + push to main | unit | dupekit | `cd lib/dupekit && uv run --frozen --group test pytest tests/ -v` |
-| `fray-unit.yaml` | Fray - Unit | PR + push to main | unit | fray | `cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/` |
-| `haliax-unit.yaml` | Haliax - Unit | PR + push to main | unit | haliax | `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax pytest -c pyproject.toml tests` |
+| `fray-unit.yaml` | Fray - Unit | PR + push to main | unit | fray | `cd lib/fray && uv run --group=test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/` |
+| `haliax-unit.yaml` | Haliax - Unit | PR + push to main | unit | haliax | `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax pytest tests` |
 | `iris-dev-restart.yaml` | Iris - Dev Restart | schedule (daily) + workflow_dispatch | ops | iris | see job steps |
 | `iris-smoke-coreweave.yaml` | Iris - Smoke - CoreWeave | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
 | `iris-smoke-gcp.yaml` | Iris - Smoke - GCP | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/` |
+| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group test python -m pytest -n auto --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/` |
 | `levanter-dev-launch-small-fast.yaml` | Levanter - Dev - Launch Small Fast | workflow_dispatch | dev | levanter | see job steps |
 | `levanter-integration-gpt2-small.yaml` | Levanter - Integration - GPT-2 Small | workflow_dispatch | integration | levanter | see job steps |
 | `levanter-unit.yaml` | Levanter - Unit | PR + push to main | unit | levanter | `uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not slow and not torch"` |

@@ -25,7 +25,6 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
-
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,

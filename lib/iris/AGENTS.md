@@ -25,8 +25,8 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Development
 
 ```bash
-# Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not requires_cluster' tests/
+# Unit tests
+uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.

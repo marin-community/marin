@@ -208,7 +208,7 @@ mypy_path = ["src"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-n auto"
+addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
 pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",

@@ -25,7 +25,6 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (

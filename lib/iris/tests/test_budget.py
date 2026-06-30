@@ -27,7 +27,6 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
-
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,

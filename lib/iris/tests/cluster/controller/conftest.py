@@ -107,7 +107,6 @@ from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations

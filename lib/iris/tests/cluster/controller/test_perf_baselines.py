@@ -22,7 +22,6 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select, text
-
 from tests.cluster.controller._test_support import ControllerTestState
 
 _TICKS = 200

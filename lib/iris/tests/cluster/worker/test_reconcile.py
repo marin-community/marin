@@ -16,7 +16,6 @@ from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
-
 from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
 
 pytestmark = pytest.mark.timeout(10)

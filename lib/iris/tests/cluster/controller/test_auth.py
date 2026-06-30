@@ -49,7 +49,6 @@ from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
-
 from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"

@@ -16,7 +16,6 @@ from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import (
     FakeProvider,

@@ -52,7 +52,6 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
