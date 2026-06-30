@@ -88,7 +88,8 @@ def test_apply_overrides_without_train_resources_warns_and_returns_unchanged(cap
     handle = _handle({})
     out = apply_overrides(LaunchConfig(region="us-central2"), handle)
     assert out is handle
-    assert "train_resources" in caplog.text
+    # A requested override with nothing to apply must surface a warning, not drop silently.
+    assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
 # --- launch dispatch ----------------------------------------------------------
