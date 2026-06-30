@@ -9,14 +9,13 @@ Transform conversation format to Dolma format.
 import dataclasses
 
 import draccus
-from marin.execution.types import THIS_OUTPUT_PATH
 from zephyr import Dataset, ZephyrContext, load_jsonl
 
 
 @dataclasses.dataclass
 class ConversationToDolmaConfig:
     input_path: str
-    output_path: str = THIS_OUTPUT_PATH
+    output_path: str = ""
 
 
 def transform_conversation_to_dolma(row: dict):

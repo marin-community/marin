@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from marin.execution.executor_step_status import (
+from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StepAlreadyDone,

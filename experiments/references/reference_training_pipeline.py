@@ -3,36 +3,47 @@
 
 """Reference: Single-run pretraining → midtraining → SFT pipeline.
 
-Demonstrates that pretrain/midtrain/SFT are all just data mixing phases.
-The entire pipeline is one training run with time-varying mixture weights:
+Demonstrates that pretrain, midtrain, and SFT are all data mixing phases.
+One Grug training run covers the full pipeline by varying the mixture weights:
 
   1. Pretrain (steps 0-40k): DCLM baseline
-  2. Midtrain (steps 40k-50k): Blend DCLM + Dolmino math
-  3. SFT (steps 50k-52k): SmolTalk instruction data
+  2. Midtrain (steps 40k-50k): blend DCLM + Dolmino math
+  3. SFT (steps 50k-52k): instruction/chat data
+
+This file uses a static mixture that approximates the time-averaged dataset
+composition across all three phases. A run with step-varying weights builds
+LmDataConfig directly with train_weights as a list of (start_seq_idx, weights_dict)
+tuples. An SFT chat dataset (e.g. SmolTalk) adds a third component tokenized
+with ChatLmDatasetFormat via a custom Dataset handle.
 """
 
-import dataclasses
-
 from fray.cluster import ResourceConfig
-from levanter.data.text import ChatLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.types import this_output_path
-from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 
-from experiments.defaults import default_validation_sets
-from experiments.grug.base.launch import GrugBaseLaunchConfig, train_grug
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
-from experiments.grug.base.train import GrugEvalConfig
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.posttrain.instruction_datasets import get_instruction_dataset
-from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.dclm import dclm_datasets
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino
-from experiments.tokenization import default_tokenize
+
+# --- Schedule ---
+PRETRAIN_STEPS = 40_000
+MIDTRAIN_STEPS = 10_000
+SFT_STEPS = 2_000
+TOTAL_STEPS = PRETRAIN_STEPS + MIDTRAIN_STEPS + SFT_STEPS
+
+# Resource for TPU dispatch: a run-arg, not part of checkpoint identity.
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-8")
 
 # --- Model: 600M Grug ---
-model = GrugModelConfig(
+_MODEL = GrugModelConfig(
     vocab_size=128_256,
     max_seq_len=4096,
     hidden_dim=1024,
@@ -42,68 +53,53 @@ model = GrugModelConfig(
     num_layers=24,
 )
 
-# --- Schedule ---
-PRETRAIN_STEPS = 40_000
-MIDTRAIN_STEPS = 10_000
-SFT_STEPS = 2_000
-TOTAL_STEPS = PRETRAIN_STEPS + MIDTRAIN_STEPS + SFT_STEPS
 
-# --- Data components ---
-pretrain = {"dclm": dclm_components_llama3["dclm_baseline"]}
+def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+    """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
+    dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
+    dolmino_math = tokenize_dolmino(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
+    validation = [*paloma_validation(tokenizer=marin_tokenizer), *uncheatable_validation(tokenizer=marin_tokenizer)]
 
-dolmino = tokenize_dolmino()
-midtrain = {"dolmino_math": dolmino["dolmino/math/metamath-owmfilter"]}
+    # Mixture weights that approximate the time-averaged composition:
+    # pretrain (40k steps) at dclm=1.0; midtrain (10k steps) at dclm=0.7, dolmino=0.3.
+    train = {dclm: 1.0, dolmino_math: 0.06}
 
-smoltalk = get_instruction_dataset("HuggingFaceTB/smoltalk", splits=["train"])
-sft = {
-    "smoltalk": default_tokenize(
-        name="smoltalk_marin",
-        dataset=smoltalk / "**/*.jsonl.gz",
-        tokenizer=marin_tokenizer,
-        format=ChatLmDatasetFormat(),
+    def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
+        return GrugBaseLaunchConfig(
+            model=_MODEL,
+            data=mixture(ctx, train, validation=validation),
+            output_path=ctx.output_path,
+            run_id="reference-pipeline",
+            resources=ctx.runtime_arg("train_resources"),
+            steps=TOTAL_STEPS,
+            batch_size=256,
+            seed=0,
+            mp="params=float32,compute=bfloat16,output=bfloat16",
+            tracker=WandbConfig(
+                project="marin",
+                tags=["reference", "pipeline"],
+                group="reference-pipeline",
+                name=None,
+            ),
+            optimizer=AdamConfig(
+                learning_rate=3e-3,
+                weight_decay=0.1,
+                warmup=0.05,
+                decay=0.2,
+            ),
+            steps_per_eval=500,
+        )
+
+    return ArtifactStep(
+        name="references/reference-pipeline",
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_base_trial,
+        build_config=build_config,
+        deps=(*train, *validation),
+        runtime_args={"train_resources": _TRAIN_RESOURCES},
     )
-}
 
-# --- Time-varying mixture weights ---
-data = lm_varying_mixture_data_config(
-    components={**pretrain, **midtrain, **sft},
-    weights_list=[
-        (0, {"dclm": 1.0, "dolmino_math": 0.0, "smoltalk": 0.0}),
-        (PRETRAIN_STEPS, {"dclm": 0.7, "dolmino_math": 0.3, "smoltalk": 0.0}),
-        (PRETRAIN_STEPS + MIDTRAIN_STEPS, {"dclm": 0.0, "dolmino_math": 0.0, "smoltalk": 1.0}),
-    ],
-)
-# Override tokenizer to use marin_tokenizer (same vocab as llama3 but with chat template for SFT)
-data = dataclasses.replace(data, tokenizer=marin_tokenizer)
-data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
-
-# --- Training ---
-training_launch = GrugBaseLaunchConfig(
-    model=model,
-    data=data,
-    output_path=this_output_path(),
-    run_id="reference-pipeline",
-    resources=ResourceConfig.with_tpu("v4-8"),
-    steps=TOTAL_STEPS,
-    batch_size=256,
-    seed=0,
-    mp="params=float32,compute=bfloat16,output=bfloat16",
-    tracker=WandbConfig(
-        project="marin",
-        tags=["reference", "pipeline"],
-        group="reference-pipeline",
-        name=None,
-    ),
-    optimizer=AdamConfig(
-        learning_rate=3e-3,
-        weight_decay=0.1,
-        warmup=0.05,
-        decay=0.2,
-    ),
-    eval=GrugEvalConfig(
-        steps_per_eval=500,
-    ),
-)
 
 if __name__ == "__main__":
-    train_grug(name="reference-pipeline", launch=training_launch)
+    StepRunner().run([build().lower()])

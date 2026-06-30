@@ -40,7 +40,7 @@ from fray import ResourceConfig
 from pydantic import BaseModel
 from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, zephyr_worker_ctx
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
@@ -390,7 +390,7 @@ def compute_fuzzy_dups_attrs_step(
         name=name,
         deps=list(minhash_steps),
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
+            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=max_parallelism,

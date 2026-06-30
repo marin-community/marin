@@ -23,7 +23,6 @@ from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class DownloadConfig:
     hf_urls_glob: list[str] = field(default_factory=list)
     # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
-    gcs_output_path: str = THIS_OUTPUT_PATH
+    gcs_output_path: str = ""
     """
     Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
     This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.

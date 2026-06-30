@@ -10,7 +10,7 @@ Usage:
         --controller-url http://localhost:10000
 
 When MARIN_CI_S3_PREFIX is set, uploads test fixtures to S3 and submits
-the executor as an Iris job so child jobs inherit S3 credentials.
+the pipeline as an Iris job so child jobs inherit S3 credentials.
 Otherwise runs in-process against local filesystem.
 """
 
@@ -32,13 +32,12 @@ from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
-from marin.execution.artifact import Artifact
-from marin.execution.executor import ExecutorMainConfig, executor_main
+from marin.execution.artifact import read_artifact
+from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import ExecutorStep, this_output_path
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.exact import dedup_exact_paragraph
-from marin.processing.tokenize import lm_data_config
+from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -77,8 +76,8 @@ def _materialize_local_tokenizer(dest_dir: Path) -> str:
     return str(dest_dir)
 
 
-def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[ExecutorStep]:
-    """Build the full marin data pipeline as executor steps.
+def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[StepSpec]:
+    """Build the full marin data pipeline as lazy ``StepSpec`` artifacts.
 
     ``tokenizer`` is an HF model name or a local directory of tokenizer files.
     The local-mode runner passes a vendored fixture directory so the pipeline
@@ -98,14 +97,12 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[ExecutorS
             )
         ),
     )
-    transform_hq_data_step = transform_hq_data_spec.as_executor_step()
 
     normalize_hq_spec = normalize_step(
         name=os.path.join(prefix, "hq-normalized"),
         download=transform_hq_data_spec,
         file_extensions=(".jsonl.gz",),
     )
-    normalize_hq_step = normalize_hq_spec.as_executor_step()
 
     # Dedup (exact only — fuzzy dedup has 4 iterative rounds of pod scheduling on K8s)
     dedup_exact_paragraph_spec = StepSpec(
@@ -113,20 +110,19 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[ExecutorS
         hash_attrs={"mode": "exact_paragraph"},
         deps=[normalize_hq_spec],
         fn=lambda output_path: dedup_exact_paragraph(
-            input_paths=[Artifact.from_path(normalize_hq_spec, NormalizedData).main_output_dir],
+            input_paths=[read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir],
             output_path=output_path,
             max_parallelism=4,
             worker_resources=ResourceConfig(cpu=1, ram="1g"),
         ),
     )
-    dedup_exact_paragraph_step = dedup_exact_paragraph_spec.as_executor_step()
 
     # Consolidate
     consolidate_spec = StepSpec(
         name=os.path.join(prefix, "cleaned"),
         deps=[normalize_hq_spec, dedup_exact_paragraph_spec],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.from_path(normalize_hq_spec, NormalizedData).main_output_dir,
+            input_path=read_artifact(normalize_hq_spec.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             # Normalize emits parquet; override the jsonl.gz default.
             filetype="parquet",
@@ -141,61 +137,78 @@ def create_steps(prefix: str, synth_data: str, tokenizer: str) -> list[ExecutorS
             ],
         ),
     )
-    consolidate_step = consolidate_spec.as_executor_step()
 
     # Tokenize
-    tokenize_step = ExecutorStep(
+    tokenize_spec = StepSpec(
         name=os.path.join(prefix, "tokenized"),
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[consolidate_step],
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer=tokenizer,
+        hash_attrs={"tokenizer": tokenizer},
+        deps=[consolidate_spec],
+        fn=lambda output_path: tokenize(
+            TokenizeConfig(
+                train_paths=[consolidate_spec.output_path],
+                validation_paths=[],
+                cache_path=output_path,
+                tokenizer=tokenizer,
+            )
         ),
     )
 
+    # A single-component data mixture over the tokenized cache, for the train step.
+    train_data_config = lm_mixture_data_config(
+        components={
+            "quickstart": TokenizeConfig(
+                train_paths=[consolidate_spec.output_path],
+                validation_paths=[],
+                cache_path=tokenize_spec.output_path,
+                tokenizer=tokenizer,
+            )
+        },
+        weights={"quickstart": 1.0},
+    )
+
     # Train (tiny model for validation)
-    train_step = ExecutorStep(
+    train_spec = StepSpec(
         name=os.path.join(prefix, "train"),
-        fn=run_levanter_train_lm,
-        config=TrainLmOnPodConfig(
-            output_path=this_output_path(),
-            resources=ResourceConfig.with_cpu(),
-            env_vars={
-                "WANDB_API_KEY": "",
-                "WANDB_MODE": "disabled",
-                "JAX_TRACEBACK_FILTERING": "off",
-            },
-            train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step),
-                # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
-                # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
-                # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
-                hf_save_steps=2,
-                model=Gpt2Config(
-                    num_layers=2,
-                    num_heads=2,
-                    max_seq_len=64,
-                    hidden_dim=32,
-                    # Load the converter's tokenizer from the same source as the data so the
-                    # train step's HF-checkpoint save never reaches HF Hub in local mode.
-                    tokenizer=tokenizer,
+        deps=[tokenize_spec],
+        fn=lambda output_path: run_levanter_train_lm(
+            TrainLmOnPodConfig(
+                output_path=output_path,
+                resources=ResourceConfig.with_cpu(),
+                env_vars={
+                    "WANDB_API_KEY": "",
+                    "WANDB_MODE": "disabled",
+                    "JAX_TRACEBACK_FILTERING": "off",
+                },
+                train_config=TrainLmConfig(
+                    data=train_data_config,
+                    # hf_save_steps=2 (not 1): at num_train_steps=2, final info.step=1 doesn't match
+                    # every=2, so Trainer.train's end-of-train run_hooks(force=True) flushes the HF
+                    # save exactly once. hf_save_steps=1 would double-fire on info.step=1.
+                    hf_save_steps=2,
+                    model=Gpt2Config(
+                        num_layers=2,
+                        num_heads=2,
+                        max_seq_len=64,
+                        hidden_dim=32,
+                        # Load the converter's tokenizer from the same source as the data so the
+                        # train step's HF-checkpoint save never reaches HF Hub in local mode.
+                        tokenizer=tokenizer,
+                    ),
+                    trainer=TrainerConfig(
+                        train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
+                    ),
                 ),
-                trainer=TrainerConfig(
-                    train_batch_size=8, num_train_steps=2, max_eval_batches=1, require_accelerator=False
-                ),
-            ),
+            )
         ),
     )
 
     return [
-        transform_hq_data_step,
-        normalize_hq_step,
-        dedup_exact_paragraph_step,
-        consolidate_step,
-        tokenize_step,
-        train_step,
+        transform_hq_data_spec,
+        normalize_hq_spec,
+        dedup_exact_paragraph_spec,
+        consolidate_spec,
+        tokenize_spec,
+        train_spec,
     ]
 
 
@@ -226,17 +239,15 @@ def _s3_env_vars() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Executor entry point (runs inside the Iris job on remote clusters)
+# Pipeline entry point (runs inside the Iris job on remote clusters)
 # ---------------------------------------------------------------------------
 
 
-def _run_executor(prefix: str, synth_data: str, tokenizer: str) -> None:
-    config = ExecutorMainConfig(
-        prefix=prefix,
-        executor_info_base_path=f"{prefix}/experiments",
-    )
+def _run_pipeline(prefix: str, synth_data: str, tokenizer: str) -> None:
+    # Step output paths resolve against MARIN_PREFIX; pin it for the job process.
+    os.environ["MARIN_PREFIX"] = prefix
     steps = create_steps("quickstart-tests", synth_data, tokenizer)
-    executor_main(config, steps=steps)
+    StepRunner().run(steps)
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +295,7 @@ def main():
         )
 
         if s3_base:
-            logger.info("Submitting executor as Iris job (S3 mode)")
+            logger.info("Submitting pipeline as Iris job (S3 mode)")
             env_vars = {
                 "MARIN_PREFIX": prefix,
                 "WANDB_MODE": "disabled",
@@ -298,7 +309,7 @@ def main():
                     JobRequest(
                         name=f"marin-itest-{uuid.uuid4().hex[:8]}",
                         entrypoint=Entrypoint.from_callable(
-                            _run_executor,
+                            _run_pipeline,
                             args=(prefix, synth_data, tokenizer),
                         ),
                         resources=ResourceConfig.with_cpu(),
@@ -307,14 +318,10 @@ def main():
                 )
                 handle.wait(raise_on_failure=True, stream_logs=True)
         else:
-            logger.info("Running executor in-process (local mode)")
-            config = ExecutorMainConfig(
-                prefix=prefix,
-                executor_info_base_path=f"{prefix}/experiments",
-            )
+            logger.info("Running pipeline in-process (local mode)")
             steps = create_steps("quickstart-tests", synth_data, tokenizer)
             with set_current_client(iris_client):
-                executor_main(config, steps=steps)
+                StepRunner().run(steps)
 
         logger.info("Pipeline completed successfully")
     except Exception:

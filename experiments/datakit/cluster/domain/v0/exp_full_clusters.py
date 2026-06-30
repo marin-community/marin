@@ -42,7 +42,7 @@ os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 from fray import ResourceConfig  # noqa: E402
 from marin.datakit.normalize import NormalizedData  # noqa: E402
 from marin.datakit.sources import all_sources  # noqa: E402
-from marin.execution.artifact import Artifact  # noqa: E402
+from marin.execution.artifact import read_artifact  # noqa: E402
 from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
@@ -170,7 +170,7 @@ def _build_steps() -> list[StepSpec]:
             fn=remote(
                 lambda output_path, np=normalize_step.output_path, wr=worker_resources, w=window: embed_source(
                     output_path=output_path,
-                    normalized=Artifact.from_path(np, NormalizedData),
+                    normalized=read_artifact(np, NormalizedData),
                     batch_size=w,
                     worker_resources=wr,
                     max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
@@ -197,7 +197,7 @@ def _build_steps() -> list[StepSpec]:
         fn=remote(
             lambda output_path, eso=embed_step_outputs: sample_centroid_inputs(
                 output_path=output_path,
-                embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in eso.items()},
+                embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in eso.items()},
                 n_per_source=N_PER_SOURCE_FOR_SAMPLE,
                 worker_resources=SAMPLE_WORKER_RESOURCES,
                 max_workers=SAMPLE_MAX_WORKERS,
@@ -241,7 +241,7 @@ def _build_steps() -> list[StepSpec]:
             fn=remote(
                 lambda output_path, embed_step_output=embed_step.output_path: assign_source(
                     output_path=output_path,
-                    embedding=Artifact.from_path(embed_step_output, EmbeddingAttrData),
+                    embedding=read_artifact(embed_step_output, EmbeddingAttrData),
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
                     window_size=ASSIGN_WINDOW,
@@ -270,7 +270,7 @@ def _build_steps() -> list[StepSpec]:
                         output_path=output_path,
                         k_train=K_TRAIN,
                         k_view=k,
-                        assignments={n_: Artifact.from_path(p, AssignmentAttrData) for n_, p in aso.items()},
+                        assignments={n_: read_artifact(p, AssignmentAttrData) for n_, p in aso.items()},
                         n_sample_per_cluster=n,
                     ),
                     resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="32g"),

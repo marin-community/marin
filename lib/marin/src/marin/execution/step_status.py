@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Each `ExecutorStep` produces an `output_path`.
+Each step produces an `output_path`.
 We associate each `output_path` with:
 - A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILED, DEP_FAILED, or RUNNING
 - A LOCK file (`output_path/.executor_status.lock`) for distributed locking
@@ -157,12 +157,15 @@ class PreviousTaskFailedError(Exception):
     """Raised when a step failed previously and force_run_failed is False."""
 
 
-def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = True) -> bool:
+def should_run(
+    status_file: StatusFile, step_name: str, force_run_failed: bool = True, force_rerun: bool = False
+) -> bool:
     """Check if the step should run based on lease-based distributed locking.
 
     Uses double-check locking: check status, attempt to acquire lock,
     re-check status after acquisition to avoid overwriting a concurrent
-    completion.
+    completion. ``force_rerun`` rebuilds even over an existing ``STATUS_SUCCESS``
+    (used for mutable ``dev`` artifacts), still serializing behind any active lock.
     """
     wid = status_file.worker_id
     log_once = True
@@ -174,7 +177,7 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
             logger.info(f"[{wid}] Status {step_name}: {status}")
             log_once = False
 
-        if status == STATUS_SUCCESS:
+        if status == STATUS_SUCCESS and not force_rerun:
             logger.info(f"[{wid}] Step {step_name} has already succeeded.")
             return False
 
@@ -195,7 +198,7 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
             # Double-check: re-read status after acquiring lock to avoid
             # overwriting a concurrent SUCCESS.
             recheck = status_file.status
-            if recheck == STATUS_SUCCESS:
+            if recheck == STATUS_SUCCESS and not force_rerun:
                 logger.info(f"[{wid}] Step {step_name} completed by another worker after lock acquired.")
                 status_file.release_lock()
                 return False
@@ -218,7 +221,9 @@ class StepAlreadyDone(Exception):
 
 
 @contextlib.contextmanager
-def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = True) -> Generator[StatusFile, None, None]:
+def step_lock(
+    output_path: str, step_label: str, *, force_run_failed: bool = True, force_rerun: bool = False
+) -> Generator[StatusFile, None, None]:
     """Context manager that acquires a distributed lock with heartbeat refresh.
 
     Acquires the lock, starts a daemon heartbeat thread, yields the
@@ -227,10 +232,11 @@ def step_lock(output_path: str, step_label: str, *, force_run_failed: bool = Tru
     release ordering so the heartbeat is stopped first.
 
     Raises ``StepAlreadyDone`` if another worker completed the step
-    while we waited for the lock.
+    while we waited for the lock. ``force_rerun`` rebuilds over an existing
+    success (mutable ``dev`` artifacts).
     """
     status_file = StatusFile(output_path, worker_id())
-    if not should_run(status_file, step_label, force_run_failed=force_run_failed):
+    if not should_run(status_file, step_label, force_run_failed=force_run_failed, force_rerun=force_rerun):
         raise StepAlreadyDone(output_path)
 
     # Start heartbeat — LeaseLostError is fatal and signals the main thread.

@@ -37,7 +37,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.utils import fsspec_exists
@@ -347,7 +347,7 @@ def build_levanter_store_step(
 
     def _fn(output_path: str) -> LevanterStoreData:
         kwargs: dict = {
-            "sources": [Artifact.from_path(s, TokenizedAttrData) for s in tokenize_steps],
+            "sources": [read_artifact(s.output_path, TokenizedAttrData) for s in tokenize_steps],
             "cache_path": output_path,
             "max_workers": max_workers,
             "levanter_batch_size": levanter_batch_size,
