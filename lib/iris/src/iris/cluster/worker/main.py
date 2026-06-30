@@ -4,7 +4,6 @@
 """Click-based CLI for the Iris worker daemon."""
 
 import logging
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +14,7 @@ from rigging.log_setup import configure_logging
 from iris.cluster.config import SshConfig
 from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.platforms.factory import create_provider_bundle
+from iris.cluster.provenance import provenance_from_env
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.worker.env_probe import detect_gcp_zone
 from iris.cluster.worker.worker import Worker, worker_config_from_wire
@@ -48,7 +48,7 @@ def serve(worker_config: str):
     """Start the Iris worker service."""
     configure_logging(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    logger.info("Iris worker starting (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
+    logger.info("Iris worker starting (%s)", provenance_from_env())
 
     with open(worker_config) as f:
         wire = WorkerWireConfig.model_validate_json(f.read())

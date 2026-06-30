@@ -203,6 +203,14 @@ export interface ListTasksResponse {
 
 // -- Workers --
 
+export interface Provenance {
+  treeHash?: string
+  baseCommit?: string
+  dirty?: boolean
+  branch?: string
+  builtBy?: string
+}
+
 export interface WorkerMetadata {
   hostname?: string
   ipAddress?: string
@@ -221,7 +229,7 @@ export interface WorkerMetadata {
   gceZone?: string
   attributes?: Record<string, AttributeValue>
   vmAddress?: string
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface WorkerHealthStatus {
@@ -479,7 +487,7 @@ export interface ProcessInfo {
   openFdCount?: number
   memoryTotalBytes?: string
   cpuCount?: number
-  gitHash?: string
+  provenance?: Provenance
 }
 
 export interface GetProcessStatusResponse {

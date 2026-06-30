@@ -20,6 +20,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.backends.types import probe_outbound_ip
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.provenance import provenance_from_env, provenance_to_proto
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType
 from iris.rpc import job_pb2
@@ -441,6 +442,7 @@ def build_worker_metadata(
         extra_attributes=extra_attributes,
     )
 
+    provenance = provenance_from_env()
     return job_pb2.WorkerMetadata(
         hostname=hardware.hostname,
         ip_address=hardware.ip_address,
@@ -457,7 +459,7 @@ def build_worker_metadata(
         device=device,
         attributes=attributes,
         gce_instance_name=hardware.gce_instance_name,
-        git_hash=os.environ.get("IRIS_GIT_HASH", "unknown"),
+        provenance=provenance_to_proto(provenance),
     )
 
 

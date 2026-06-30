@@ -46,6 +46,7 @@ from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.provenance import provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_display import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
@@ -640,7 +641,7 @@ def cluster_status_cmd(ctx):
         click.echo("  Running: True")
         click.echo("  Healthy: True")
         click.echo(f"  Address: {controller_url}")
-        click.echo(f"  Git Hash: {proc.git_hash}")
+        click.echo(f"  Version: {provenance_from_proto(proc.provenance)}")
         click.echo(f"  Workers: {healthy}/{len(workers)} healthy")
         click.echo("\nAutoscaler Status:")
         if not as_status.groups:
@@ -1122,7 +1123,7 @@ def worker_restart(
                 click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
                 raise SystemExit(1)
             before = len(workers)
-            workers = [w for w in workers if w.metadata.git_hash != target_hash]
+            workers = [w for w in workers if w.metadata.provenance.tree_hash != target_hash]
             skipped = before - len(workers)
             click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
 

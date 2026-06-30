@@ -143,6 +143,17 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
+// Build provenance of an image: the content-addressed tree hash (the dedup key)
+// plus the human context needed to read it. Baked into images at build time via
+// IRIS_PROVENANCE and surfaced for version display.
+message Provenance {
+  string tree_hash = 1;    // Working-tree tree hash baked in at build time; the dedup key
+  string base_commit = 2;  // Short HEAD commit the tree was built from
+  bool dirty = 3;          // Working tree had uncommitted changes at build time
+  string branch = 4;       // Branch at build time ("" if detached HEAD)
+  string built_by = 5;     // OS user that ran the build ("" if unknown)
+}
+
 // --- Process Status ---
 // Shared by both ControllerService and WorkerService.
 // Returns local process info (host, resource usage) and recent process logs.
@@ -158,9 +169,11 @@ message ProcessInfo {
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
-  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
   reserved 7;                    // Formerly process cpu_percent; use cpu_millicores instead.
+  reserved 12;                   // Formerly git_hash; use provenance.tree_hash instead.
+  reserved git_hash;
   int32 cpu_millicores = 13;     // Process CPU usage over the sample window
+  Provenance provenance = 14;    // Build provenance (tree hash, branch, base commit, builder)
 }
 
 message GetProcessStatusRequest {
@@ -570,9 +583,13 @@ message WorkerMetadata {
 
   reserved 41;  // was vm_address, removed
 
-  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
-  // Allows the controller to surface per-worker version info for debugging.
-  string git_hash = 42;
+  reserved 42;  // was git_hash; use provenance.tree_hash instead
+  reserved git_hash;
+
+  // Build provenance baked into the worker image (tree hash + branch + base
+  // commit + builder). The controller keys version display and
+  // skip-already-current-workers on ``provenance.tree_hash``.
+  Provenance provenance = 43;
 }
 
 enum JobPreemptionPolicy {
