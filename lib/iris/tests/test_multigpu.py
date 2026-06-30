@@ -6,14 +6,17 @@ client-side entrypoint wrapping that drives it. None of this imports jax."""
 
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
+import textwrap
 
 import pytest
 from iris.client.client import _wrap_entrypoint_for_multiprocess
 from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
 from iris.runtime import multigpu
 from iris.runtime.multigpu import run
+from rigging.timing import Duration
 
 
 def _py(code: str) -> list[str]:
@@ -43,7 +46,7 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", 0.5)
+    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
@@ -74,6 +77,37 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
     assert len(started) == 1
     # Killed by SIGKILL → returncode is the negative signal number, never 0.
     assert started[0].returncode is not None and started[0].returncode < 0
+
+
+def test_external_sigterm_returns_128_plus_signum() -> None:
+    # The supervisor itself is SIGTERMed (preemption/task termination). It
+    # forwards the signal to the children, which die reporting negative signal
+    # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
+    # task — not map a child's -15 to an arbitrary failure code (241).
+    supervisor_src = textwrap.dedent(
+        """
+        import sys
+        from iris.runtime.multigpu import run
+        child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
+        sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
+        """
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    assert proc.stdout is not None
+    # Signal only once both children are live, so the forwarded SIGTERM is what
+    # ends them (rather than racing their startup).
+    ready = 0
+    for line in proc.stdout:
+        if "READY" in line:
+            ready += 1
+            if ready == 2:
+                break
+    assert ready == 2, "children did not start"
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=30)
+    assert proc.returncode == 128 + signal.SIGTERM
 
 
 def test_run_rejects_empty_command() -> None:

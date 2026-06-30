@@ -34,8 +34,9 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from types import FrameType
+
+from rigging.timing import Deadline, Duration
 
 from iris.cluster.client.job_info import get_job_info
 
@@ -46,7 +47,7 @@ _SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 _REAP_POLL_INTERVAL = 1.0
 # Grace period after a SIGTERM before escalating to SIGKILL, so a child that
 # traps or ignores SIGTERM cannot wedge the supervisor (and hence the task).
-_TERMINATE_GRACE = 10.0
+_TERMINATE_GRACE = Duration.from_seconds(10.0)
 
 # The supervisor→child rank contract: each child is stamped with these env vars,
 # and iris.runtime.jax_init reads them to switch initialize_jax into supervised
@@ -145,9 +146,11 @@ def _spawn_children(
 def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     """Spawn ``nproc`` children, supervise them, return the process exit code.
 
-    Returns the first non-zero child exit code (after tearing the rest down),
-    ``128 + signum`` if a SIGINT/SIGTERM initiated the teardown (the task did not
-    complete), or 0 once every child exits cleanly.
+    ``128 + signum`` if a SIGINT/SIGTERM was delivered to the supervisor (an
+    external termination/preemption); this takes precedence because the children
+    it forwards the signal to report their own (negative) signal codes, which
+    must not be surfaced as a task failure. Otherwise the first non-zero child
+    exit code (after tearing the rest down), or 0 once every child exits cleanly.
     """
     if nproc < 1:
         raise ValueError(f"--nproc must be >= 1, got {nproc}")
@@ -172,10 +175,10 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
 
     terminating = threading.Event()
     shutdown_signum: int | None = None
-    # Monotonic deadline after which surviving children are SIGKILLed; ``None``
-    # until a teardown begins. Shared between the signal handler and the reap
-    # loop, both of which run in the main thread (no lock needed).
-    kill_deadline: float | None = None
+    # Deadline after which surviving children are SIGKILLed; ``None`` until a
+    # teardown begins. Shared between the signal handler and the reap loop, both
+    # of which run in the main thread (no lock needed).
+    kill_deadline: Deadline | None = None
 
     def _forward_signal(signum: int, _frame: FrameType | None) -> None:
         nonlocal shutdown_signum, kill_deadline
@@ -185,7 +188,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
         logger.warning("received signal %d; forwarding to children", signum)
         _signal_children(children, range(nproc), signum)
         if kill_deadline is None:
-            kill_deadline = time.monotonic() + _TERMINATE_GRACE
+            kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
 
     for sig in _SHUTDOWN_SIGNALS:
         signal.signal(sig, _forward_signal)
@@ -195,7 +198,7 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
     while pending:
         # Escalate to SIGKILL if a requested teardown overran its grace period,
         # so a child that traps or ignores SIGTERM cannot wedge the supervisor.
-        if kill_deadline is not None and time.monotonic() >= kill_deadline:
+        if kill_deadline is not None and kill_deadline.expired():
             survivors = [r for r in pending if children[r].poll() is None]
             if survivors:
                 logger.error("SIGTERM grace expired; SIGKILL %d straggler(s): %s", len(survivors), survivors)
@@ -218,15 +221,19 @@ def run(nproc: int, devices_per_proc: int, child_argv: list[str]) -> int:
                 terminating.set()
                 logger.error("local rank %d failed (code %d); terminating %d peer(s)", local_rank, code, len(pending))
                 _signal_children(children, pending, signal.SIGTERM)
-                kill_deadline = time.monotonic() + _TERMINATE_GRACE
+                kill_deadline = Deadline.from_now(_TERMINATE_GRACE)
 
     for pump in pumps:
         pump.join(timeout=5.0)
 
-    if first_failure is not None:
-        return first_failure
+    # An external signal wins over child exit codes: the children we forwarded it
+    # to report negative (signal) codes that are an artifact of the teardown, not
+    # a task failure. A child failing on its own never sets shutdown_signum, so
+    # its genuine non-zero code surfaces.
     if shutdown_signum is not None:
         return 128 + shutdown_signum
+    if first_failure is not None:
+        return first_failure
     return 0
 
 
