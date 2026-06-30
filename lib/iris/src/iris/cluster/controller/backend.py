@@ -432,29 +432,25 @@ def apply_placements(
 
 @dataclass(frozen=True)
 class BackendRuntime:
-    """The controller-owned ingredients a worker-daemon backend builds its
+    """The controller-owned values a worker-daemon backend builds its
     :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
 
-    The controller hands this to :meth:`TaskBackend.bind_runtime` once at startup;
-    the backend joins it with its OWN liveness tracker (built in its constructor)
-    to build the scale-group-scoped store it reads and reaps through. The store
-    can't be a finished constructor arg because it closes over the backend's tracker
-    (and its ``autoscale``), so the controller supplies the rest as data here.
+    Passed to :meth:`TaskBackend.bind_runtime` at startup.
     """
 
     db: ControllerDB
-    """The controller database the source reads its workers/placement through."""
+    """The controller database."""
     endpoints: EndpointsProjection
-    """Endpoint projection the teardown's ``commit_effects`` drains into."""
+    """The worker-endpoint projection."""
     run_template_cache: RunTemplateCache
-    """Per-job ``RunTaskRequest`` template cache the reconcile snapshot reads from."""
+    """Per-job ``RunTaskRequest`` template cache."""
     worker_attrs: WorkerAttrsProjection
-    """Worker-attributes projection the teardown evicts failed workers from."""
+    """The worker-attributes projection."""
     owns_scale_group: Callable[[str], bool]
-    """The backend's worker-ownership test by scale group (the default backend also
-    claims workers whose scale group is unmapped)."""
+    """Whether a scale group belongs to this backend (the default backend also claims
+    scale groups mapped to no backend)."""
     budget_defaults: UserBudgetDefaults
-    """Per-user budget defaults the scheduling context falls back to."""
+    """Per-user budget defaults."""
 
 
 class TaskBackend(Protocol):

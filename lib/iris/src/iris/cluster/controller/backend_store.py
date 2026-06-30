@@ -1,18 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""BackendWorkerStore: a worker-daemon backend's operation-scoped state surface.
+"""The :class:`BackendWorkerStore` interface and its controller-DB implementation.
 
-A worker-daemon backend never holds a raw :class:`~iris.cluster.controller.db.ControllerDB`.
-Instead it reads its owned workers, builds the cross-seam snapshots it schedules and
-reconciles from, resolves a worker's address, and tears its dead workers down through
-this fixed set of named operations. In-process the operations run as scale-group-scoped
-reads/writes over the shared controller DB (so the scheduler's task<->worker joins
-survive); a remote backend swaps the same operations for RPCs.
-
-:class:`DbBackendWorkerStore` is the in-process implementation. The ``owns_scale_group``
-predicate is the backend's worker-ownership test (the default backend also claims workers
-whose scale group is unmapped, matching the controller's scale-group->backend resolution).
+A worker-daemon backend uses a store to read its workers, build the snapshots it
+schedules and reconciles from, resolve a worker's address, and reap dead workers.
+:class:`DbBackendWorkerStore` implements the interface against the controller database.
 """
 
 from collections.abc import Callable, Iterable, Sequence
@@ -53,49 +46,41 @@ _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
 
 
 class BackendWorkerStore(TransitionReader, Protocol):
-    """A worker-daemon backend's owned worker state plus the cross-seam snapshots and
-    effects it needs to schedule, reconcile, and tear down its workers.
-
-    In-process backed by the shared controller DB (so the scheduler's task<->worker
-    joins survive); remote, an RPC client to the backend's own store. Each read opens
-    its own scoped snapshot; the backend never receives a global worker snapshot from
-    the controller, and never holds a raw ``ControllerDB``.
-    """
+    """The worker-state operations a worker-daemon backend depends on."""
 
     def owned_worker_ids(self) -> set[WorkerId]:
-        """The persisted workers this backend owns by scale group (a fresh read)."""
+        """The worker IDs this backend owns, by scale group."""
         ...
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
-        """This backend's live workers, their building counts, and running attempts."""
+        """This backend's live workers, their building counts, and preemptible running attempts."""
         ...
 
     def reconcile_snapshot(self) -> ControlSnapshot:
-        """This backend's worker addresses + reconcile rows + job specs to converge."""
+        """This backend's worker addresses, reconcile rows, and per-job run-task templates."""
         ...
 
     def worker_status(self) -> WorkerStatusMap:
-        """This backend's per-worker idle/running status for the autoscaler refresh."""
+        """Each owned worker's idle/running status."""
         ...
 
     def worker_address(self, worker_id: WorkerId) -> str | None:
-        """Resolve a worker's address for on-demand RPC routing (profile/exec/process/status)."""
+        """The worker's address, or ``None`` if it has none."""
         ...
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
-        """Tear down ``worker_ids``: fail them, terminate their slices + healthy
-        siblings, persist the autoscaler state, and forget the lot. Returns the
-        removed set (the dead workers plus their reaped siblings)."""
+        """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
+        them. Returns every worker removed (the failed workers plus reaped siblings)."""
         ...
 
 
 @dataclass(frozen=True)
 class DbBackendWorkerStore:
-    """A worker-daemon backend's :class:`BackendWorkerStore` backed by the controller DB.
+    """:class:`BackendWorkerStore` backed by the controller database.
 
-    Each read opens its own scoped snapshot; ``reap_workers`` drives the backend's own
-    ``autoscale`` for slice termination and fails/forgets through the liveness tracker
-    it shares with the backend.
+    Built per backend with the controller DB plus the backend's own liveness tracker
+    and ``autoscale`` callback, which ``reap_workers`` uses to fail workers and
+    terminate their slices.
     """
 
     db: ControllerDB
@@ -181,11 +166,7 @@ class DbBackendWorkerStore:
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
-        them from the liveness tracker. Returns the full removed set.
-
-        The only health-driven write is removal; reads run over fresh DB snapshots, so an
-        attempt a just-committed reconcile already finalized is seen terminal and skipped.
-        """
+        them from the liveness tracker. Returns every worker removed."""
         if not worker_ids:
             return []
         for wid in worker_ids:

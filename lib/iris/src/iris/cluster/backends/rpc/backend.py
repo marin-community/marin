@@ -212,12 +212,8 @@ class RpcTaskBackend:
         self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """Build this backend's worker store from the controller-owned runtime.
-
-        Joins ``runtime`` with this backend's own liveness tracker (``self.health``)
-        and ``autoscale`` to build the scale-group-scoped store it sources its workers
-        from and reaps its dead workers through.
-        """
+        """Build this backend's worker store from ``runtime`` and the backend's own
+        liveness tracker and ``autoscale`` callback."""
         self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
@@ -370,13 +366,7 @@ class RpcTaskBackend:
         self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """Fail ``dead_workers``, reap their slices + siblings, and forget them.
-
-        Delegates to the worker store's ``reap_workers``, which drives this backend's
-        own ``autoscale`` for slice termination, so the controller hands over only the
-        worker set (the recycled-IP eviction path) or nothing at all (``run_teardown``
-        drains its own stash).
-        """
+        """Fail ``dead_workers``, reap their slices and siblings, and forget them."""
         assert self._store is not None, "RpcTaskBackend.teardown called before worker store attached"
         self._store.reap_workers(dead_workers, reason=reason)
 
