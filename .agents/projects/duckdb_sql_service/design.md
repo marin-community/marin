@@ -66,13 +66,16 @@ findings — including the iris resource model, endpoint proxy, and v6e topology
 
 A single Python package `lib/ducky` with three pieces:
 
-**1. Query runner** (`runner.py`) — pure compute, no web concerns. One DuckDB
-connection for the process lifetime (single query at a time — no pool). On startup
-it installs/loads `httpfs`, creates one DuckDB `SECRET` per backend (GCS HMAC, R2
-S3, CoreWeave S3) from injected creds, and pins `threads` + a headroom-limited
-`memory_limit` (`MEMORY_FRACTION`, default 0.8
-of host RAM — leaving room for Python/Arrow/OS) from
-`TaskResources.from_environment()`. `run_query(sql, query_id)` runs the user SQL
+**1. Query runner** (`runner.py`) — pure compute, no web concerns. A shared DuckDB
+instance; each query runs on its own cursor, so up to `MAX_CONCURRENT_QUERIES`
+(default 8) run in parallel. On startup it installs/loads `httpfs`, creates one
+DuckDB `SECRET` per backend (GCS HMAC, R2 S3, CoreWeave S3) from injected creds, and
+pins `threads` + a headroom-limited `memory_limit` (`MEMORY_FRACTION`, default 0.8 of
+host RAM) plus a disk `temp_directory` from `TaskResources.from_environment()`.
+`memory_limit` is a hard cap so the process is never OS-OOM-killed — a query needing
+more spills to disk, and if it still doesn't fit it fails alone (caught per-query)
+while the others keep running. A per-query watchdog interrupts a query past
+`QUERY_TIMEOUT` (default 600 s) so a runaway frees its slot. `run_query(sql, query_id)` runs the user SQL
 **once** via `COPY (<sql>) TO 'gs://<scratch>/ducky/<query_id>.parquet' (FORMAT
 parquet)`, then reads that parquet back for `total_rows` and the first
 `PREVIEW_ROW_CAP` (default 10k) rows. The scratch prefix uses marin's existing
@@ -92,8 +95,8 @@ killed by the proxy. So:
 - `GET /` — HTML page: a CodeMirror SQL-highlighted editor, a Run button, a result
   area that shows the row count, a **cached/computed** badge, and the result's GCS
   location.
-- `POST /query` — body `{sql}`; a `QueryManager` submits the SQL to a single-worker
-  executor (one DuckDB query at a time) and returns `{query_id}` immediately (202).
+- `POST /query` — body `{sql}`; a `QueryManager` submits the SQL to a bounded thread
+  pool (`MAX_CONCURRENT_QUERIES`) and returns `{query_id}` immediately (202).
   Identical SQL is served from an in-memory result cache (reusing the prior spilled
   parquet); otherwise the query runs in the background and spills as before.
 - `GET /result/{query_id}` — returns `{status: "running"}`, `{status: "error", error}`,
@@ -171,9 +174,9 @@ behind views/macros); empty allowlist disables enforcement.
   lifecycle convention; N must equal `RESULT_TTL_DAYS`). Open: should the result
   path be a signed URL / clickable download, or just the `gs://` path the user
   fetches themselves?
-- **Concurrency UX.** v1 is single-query-at-a-time (one DuckDB connection, a
-  single-worker executor). A second `POST /query` queues behind the running one
-  (FIFO). Is that enough, or do we want a visible queue depth / "busy" signal?
+- **Concurrency.** Up to `MAX_CONCURRENT_QUERIES` (default 8) run in parallel, each
+  on its own cursor; they share the instance's memory budget and thread pool. Is 8 a
+  good default for a single host, and should the dashboard show in-flight count?
 - **Async result retention.** Query state is in-memory and unbounded. For an
   internal tool that's fine, but should finished states expire (TTL / LRU cap), and
   should a fresh page be able to re-attach to a `query_id` from a previous session

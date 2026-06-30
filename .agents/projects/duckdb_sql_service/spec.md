@@ -57,7 +57,10 @@ class DuckyConfig:
     cw_scope: str = "s3://marin-us-east-02a"
     cw_url_style: str = "vhost"  # CoreWeave rejects path-style addressing; virtual-hosted only
     preview_row_cap: int = 10_000 # max rows returned inline to the browser
-    memory_fraction: float = 0.8  # DuckDB memory_limit = this * host RAM; headroom for Python/Arrow/OS
+    memory_fraction: float = 0.8  # DuckDB memory_limit = this * host RAM (hard cap: no OS-OOM-kill)
+    spill_directory: str = "/tmp/ducky-spill"   # local disk DuckDB spills to (out-of-core) past memory_limit
+    max_concurrent_queries: int = 8  # queries run in parallel, each on its own cursor
+    query_timeout: int = 600      # per-query wall-clock limit; a runaway is interrupted and frees its slot
     result_ttl_days: int = 7      # informational; enforced by the bucket's lifecycle rule, not by ducky
     port_name: str = "ducky"      # Iris named port; bound via ctx.get_port(port_name)
     endpoint_name: str = "/ducky" # registry name; leading slash = cluster-global, so the

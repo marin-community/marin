@@ -69,19 +69,18 @@ class QueryState:
 
 
 class QueryManager:
-    """Runs queries one at a time in a background thread and tracks their state.
+    """Runs queries in a background thread pool and tracks their state.
 
-    A single-worker executor serializes execution (one DuckDB query at a time, per
-    design); ``submit`` returns immediately so the HTTP request never blocks on the
-    query. Identical SQL is served from an in-memory result cache keyed on the exact
-    query text — a cache hit reuses the prior spilled parquet and returns instantly
-    with ``cached=True``. State and cache are process-local; ducky is stateless and
-    restartable, so a restart drops both.
+    Up to ``max_workers`` queries run concurrently; ``submit`` returns immediately so
+    the HTTP request never blocks on the query. Identical SQL is served from an
+    in-memory result cache keyed on the exact query text — a cache hit reuses the
+    prior spilled parquet and returns instantly with ``cached=True``. State and cache
+    are process-local; ducky is stateless and restartable, so a restart drops both.
     """
 
-    def __init__(self, runner: QueryRunner, executor: Executor | None = None) -> None:
+    def __init__(self, runner: QueryRunner, executor: Executor | None = None, max_workers: int = 8) -> None:
         self._runner = runner
-        self._executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="ducky-query")
+        self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
         self._states: dict[str, QueryState] = {}
         self._cache: dict[str, QueryResult] = {}
         self._lock = threading.Lock()
@@ -309,7 +308,7 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     ``executor`` overrides the query executor (tests inject a synchronous one).
     """
     index_html = _index_html(config.result_ttl_days)
-    manager = QueryManager(runner, executor=executor)
+    manager = QueryManager(runner, executor=executor, max_workers=config.max_concurrent_queries)
 
     @requires_auth
     async def index(_request: Request) -> HTMLResponse:

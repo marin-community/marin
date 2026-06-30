@@ -3,6 +3,7 @@
 
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -121,6 +122,32 @@ def test_run_query_allowlist_does_not_block_non_object_queries(make_runner):
     runner = make_runner(allowed_buckets=("gs://marin-us-east5",))
     result = runner.run_query("SELECT * FROM range(3) t(x)", uuid.uuid4().hex)
     assert result.total_rows == 3
+
+
+def test_run_query_spills_under_memory_pressure_and_survives(tmp_path):
+    # tiny memory limit forces a big sort out-of-core; the query should still succeed
+    # via the spill directory, and the runner must survive for the next query.
+    (tmp_path / "ducky").mkdir()
+    config = _make_config(str(tmp_path), spill_directory=str(tmp_path / "spill"))
+    tiny = TaskResources(memory_bytes=200 * 1024 * 1024, cpu_cores=2, gpu_count=0, tpu_count=0)
+    runner = QueryRunner(config, resources=tiny)
+    try:
+        spilled = runner.run_query("SELECT x FROM range(20000000) t(x) ORDER BY x DESC LIMIT 1", uuid.uuid4().hex)
+        assert spilled.preview_rows == [[19999999]]
+        assert runner.run_query("SELECT 1 AS a", uuid.uuid4().hex).preview_rows == [[1]]  # survives
+    finally:
+        runner.close()
+
+
+def test_run_query_is_concurrency_safe(make_runner):
+    runner = make_runner()  # one runner shared across threads; each query uses its own cursor
+
+    def run(i: int) -> int:
+        return runner.run_query(f"SELECT {i} AS v", uuid.uuid4().hex).preview_rows[0][0]
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        values = sorted(pool.map(run, range(8)))
+    assert values == list(range(8))
 
 
 def test_run_query_bad_sql_raises_query_error(make_runner):

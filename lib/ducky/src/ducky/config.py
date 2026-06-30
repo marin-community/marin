@@ -84,7 +84,22 @@ class DuckyConfig:
     """Max rows returned inline to the browser. The full result always spills to parquet."""
 
     memory_fraction: float = 0.8
-    """DuckDB ``memory_limit`` = this fraction of host RAM, leaving headroom for Python/Arrow/OS."""
+    """DuckDB ``memory_limit`` = this fraction of host RAM, leaving headroom for Python/Arrow/OS.
+    A hard self-cap: the process won't be OS-OOM-killed; a query needing more fails (and is
+    caught per-query) instead of taking down the service."""
+
+    spill_directory: str = "/tmp/ducky-spill"
+    """Local disk path DuckDB spills to when a query exceeds ``memory_limit`` (out-of-core
+    execution). Must be a real disk (not tmpfs) so spilling relieves memory pressure."""
+
+    max_concurrent_queries: int = 8
+    """How many queries run at once. Each gets its own DuckDB cursor (sharing the instance's
+    secrets/settings); they share the host's thread pool and memory budget."""
+
+    query_timeout: int = 600
+    """Hard per-query wall-clock limit (seconds). A query exceeding it is interrupted and
+    fails — so a runaway (e.g. a recursive glob over millions of objects) frees its slot
+    instead of holding it forever."""
 
     result_ttl_days: int = 7
     """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
@@ -148,6 +163,11 @@ class DuckyConfig:
             allowed_buckets=allowed_buckets,
             preview_row_cap=int(os.environ.get(f"{_ENV_PREFIX}PREVIEW_ROW_CAP", cls.preview_row_cap)),
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
+            max_concurrent_queries=int(
+                os.environ.get(f"{_ENV_PREFIX}MAX_CONCURRENT_QUERIES", cls.max_concurrent_queries)
+            ),
+            spill_directory=os.environ.get(f"{_ENV_PREFIX}SPILL_DIR", cls.spill_directory),
+            query_timeout=int(os.environ.get(f"{_ENV_PREFIX}QUERY_TIMEOUT", cls.query_timeout)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),

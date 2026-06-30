@@ -1,12 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The DuckDB query runner: one connection, one query at a time.
+"""The DuckDB query runner over a shared embedded instance.
 
 The runner runs the user's SQL exactly once via ``COPY (<sql>) TO '<parquet>'`` and
 then reads the written parquet back for the row count and a capped preview. Running
 once keeps non-deterministic SQL (``random()``, ``now()``, unordered ``LIMIT``)
 consistent between the spilled file and the preview.
+
+``run_query`` is safe to call concurrently: each call uses its own cursor on the
+shared DuckDB instance (which provides the loaded extensions, secrets, and the
+host-sized thread/memory budget). A per-query watchdog interrupts a query that
+exceeds ``query_timeout``.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 
 import duckdb
@@ -124,10 +130,9 @@ def _coerce_cell(value: object) -> object:
 
 
 class QueryRunner:
-    """Owns one embedded DuckDB connection for the process lifetime.
+    """Owns the shared embedded DuckDB instance for the process lifetime.
 
-    Not safe for concurrent use — ``run_query`` is serialized by the caller
-    (single query at a time, per design).
+    ``run_query`` is concurrency-safe — each call runs on its own cursor.
     """
 
     def __init__(self, config: DuckyConfig, resources: TaskResources | None = None) -> None:
@@ -137,6 +142,10 @@ class QueryRunner:
         self._con.execute(f"SET threads = {settings.threads}")
         if settings.memory_limit_bytes > 0:
             self._con.execute(f"SET memory_limit = '{settings.memory_limit_bytes}B'")
+        # Spill to local disk when a query exceeds memory_limit, so big sorts/joins/aggregates
+        # go out-of-core instead of OOM-failing; a query that still doesn't fit fails alone.
+        os.makedirs(config.spill_directory, exist_ok=True)
+        self._con.execute(f"SET temp_directory = {_sql_literal(config.spill_directory)}")
         logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", settings.threads, settings.memory_limit_bytes)
         self._install_secrets()
         # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;
@@ -207,21 +216,34 @@ class QueryRunner:
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
         readback = f"read_parquet({path_literal}, hive_partitioning=false)"
+
+        # A fresh cursor per query so multiple queries run concurrently on the shared
+        # DuckDB instance (one connection can't run parallel statements); the cursor
+        # inherits the instance's loaded extensions, secrets, and settings.
+        cursor = self._con.cursor()
+        timed_out = threading.Event()
+        watchdog = threading.Timer(self._config.query_timeout, lambda: (timed_out.set(), cursor.interrupt()))
+        watchdog.start()
         start = time.monotonic()
         try:
-            self._con.execute(copy_stmt)
-            count_row = self._con.execute(f"SELECT count(*) FROM {readback}").fetchone()
+            cursor.execute(copy_stmt)
+            count_row = cursor.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
-            size_row = self._con.execute(
+            size_row = cursor.execute(
                 f"SELECT sum(total_compressed_size) FROM parquet_metadata({path_literal})"
             ).fetchone()
             result_bytes = int(size_row[0]) if size_row and size_row[0] is not None else 0
-            preview = self._con.execute(
+            preview = cursor.execute(
                 f"SELECT * FROM {readback} LIMIT {self._config.preview_row_cap}"
             ).fetch_arrow_table()
         except duckdb.Error as e:
+            if timed_out.is_set():
+                raise QueryError(f"query exceeded the {self._config.query_timeout}s timeout and was cancelled") from e
             raise QueryError(str(e)) from e
+        finally:
+            watchdog.cancel()
+            cursor.close()
         elapsed_ms = int((time.monotonic() - start) * 1000)
 
         columns = list(preview.column_names)
