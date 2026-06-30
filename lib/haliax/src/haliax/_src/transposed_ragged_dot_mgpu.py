@@ -66,7 +66,11 @@ def transposed_ragged_dot(
     The contraction axis ``k`` (tokens) is ragged over ``group_sizes`` and must be the contiguous
     (last) axis of both operands — produce that with a cast-transpose at the call site.
     """
-    if lhs.dtype != rhs.dtype:
+    # Mixed E4M3xE5M2 is permitted: Hopper wgmma takes independent .atype/.btype for the FP8
+    # pair (PTX-ISA exception to atype==btype), so an E5M2 output-grad can contract against
+    # E4M3 weights/activations in a single genuine f8 wgmma (requires the mixed-fp8 JAX patch).
+    _FP8_PAIR = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    if lhs.dtype != rhs.dtype and not (lhs.dtype in _FP8_PAIR and rhs.dtype in _FP8_PAIR):
         raise NotImplementedError(f"lhs and rhs must have the same dtype, got {lhs.dtype} and {rhs.dtype}")
     block_m, block_n, block_k = config.block_m, config.block_n, config.block_k
     max_concurrent_steps, grid_block_n = config.max_concurrent_steps, config.grid_block_n

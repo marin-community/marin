@@ -1,0 +1,72 @@
+--- a/jax/_src/pallas/mosaic_gpu/primitives.py	2026-06-26 11:14:24.593394291 -0700
++++ b/jax/_src/pallas/mosaic_gpu/primitives.py	2026-06-26 11:14:24.834549730 -0700
+@@ -1200,7 +1200,8 @@
+         f" rhs={b.shape=}, acc={acc.shape}"
+     )
+ 
+-  if a.dtype != b.dtype:
++  _MIXED_FP8 = (jnp.float8_e4m3fn, jnp.float8_e5m2)
++  if a.dtype != b.dtype and not (a.dtype in _MIXED_FP8 and b.dtype in _MIXED_FP8):
+     raise ValueError(f"Mixed input dtypes for matrix multiplication unsupported: lhs={a.dtype}, rhs={b.dtype}")
+ 
+   acc_transforms_leaves: list
+--- a/jax/experimental/mosaic/gpu/wgmma.py	2026-06-26 11:14:24.593997890 -0700
++++ b/jax/experimental/mosaic/gpu/wgmma.py	2026-06-26 11:14:24.836071555 -0700
+@@ -127,6 +127,7 @@
+     n: int,
+     swizzle: int,
+     element_type: ir.Type,
++    a_element_type: ir.Type | None = None,
+ ):
+   out_ty = ir.VectorType(acc.flat[0].type).element_type
+   if not _supported_wgmma_types(out_ty, element_type):
+@@ -238,8 +239,19 @@
+   if out_ty == i32:
+     out_ty_str = "s32"
+ 
++  # .atype (A operand). Defaults to B's type for the same-type case; differs only
++  # for the FP8 e4m3/e5m2 pair, the sole PTX-ISA exception to .atype == .btype.
++  a_element_type = element_type if a_element_type is None else a_element_type
++  a_el_ty = str(a_element_type)
++  if isinstance(a_element_type, ir.Float8E5M2Type):
++    a_el_ty = "e5m2"
++  elif isinstance(a_element_type, ir.Float8E4M3FNType):
++    a_el_ty = "e4m3"
++  elif isinstance(a_element_type, ir.IntegerType):
++    a_el_ty = "s8"
++
+   wgmma_instr = (
+-      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{el_ty}.{el_ty} "
++      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{a_el_ty}.{el_ty} "
+       f"{acc_reg_vector}, {a_regs}, {b_desc_reg}, p{imm_regs};"
+   )
+   ptx = f"{{ .reg .pred p; setp.ne.b32 p, {use_out_reg}, 0; {wgmma_instr} }}\n"
+@@ -356,7 +368,8 @@
+         "WGMMA requires A and B to have the same contraction dimension (K),"
+         f" got: {k2} and {k}"
+     )
+-  if element_type != element_type2:
++  _fp8 = (f8e4m3fn, f8e5m2)
++  if element_type != element_type2 and not (element_type in _fp8 and element_type2 in _fp8):
+     raise ValueError(
+         "WGMMA requires A and B to have the same element type, got:"
+         f" {element_type2} and {element_type}"
+@@ -408,6 +421,10 @@
+   wgmma_element_type = (
+       ir.FloatTF32Type.get() if element_type == ir.F32Type.get() else element_type
+   )
++  # A operand may differ from B for the FP8 e4m3/e5m2 pair (PTX .atype != .btype).
++  a_wgmma_element_type = (
++      ir.FloatTF32Type.get() if element_type2 == ir.F32Type.get() else element_type2
++  )
+ 
+   # Step 3. Compute the operand descriptors.
+   if a_in_regs:
+@@ -476,6 +493,7 @@
+           swizzle=swizzle,
+           n=n_group_elems,
+           element_type=wgmma_element_type,
++          a_element_type=a_wgmma_element_type,
+           b_transpose=b_fastest != mma_utils.Dim.K,
+           b_k_stride=b_k_instr_stride,
+           **a_instr_params,

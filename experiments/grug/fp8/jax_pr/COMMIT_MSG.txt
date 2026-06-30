@@ -1,0 +1,24 @@
+[Mosaic GPU] Support mixed E4M3/E5M2 FP8 operands in wgmma
+
+The Hopper `wgmma.mma_async` instruction is the floating-point exception to the
+rule that both operands share an element type: for FP8 it takes independent
+`.atype` and `.btype`, each of which may be `.e4m3` or `.e5m2` (PTX ISA 9.7.16;
+CUTLASS likewise emits e.g. `...f32.e4m3.e5m2` on SM90). Mosaic GPU rejected any
+mismatch between the `a` and `b` element types, so this hardware capability was
+unreachable.
+
+Relax the same-element-type checks to allow the e4m3/e5m2 pair in the three
+places that enforced it:
+
+  - `WGMMAOp::verify()`, the MLIR op verifier in jaxlib;
+  - the `wgmma()` warpgroup emitter, which now derives the `a` operand's PTX
+    type independently and emits `.atype.btype` instead of `.btype.btype`;
+  - the Pallas `wgmma` primitive's input-dtype gate.
+
+The K-step / swizzle / descriptor math is byte-width driven and both FP8 types
+are 1 byte, so it is unchanged; the f32 (and f16) accumulator path already
+accepts both FP8 types. Any other element-type mismatch is still rejected.
+
+Add a dialect-verifier test that the e4m3/e5m2 pair now passes verification
+(non-FP8 mismatches still fail), and a numeric `test_wgmma_mixed_fp8` covering
+e4m3xe5m2 and e5m2xe4m3 on Hopper.
