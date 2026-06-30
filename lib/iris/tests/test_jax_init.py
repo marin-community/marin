@@ -19,9 +19,7 @@ from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.runtime.jax_init import (
-    _CoordinatorRole,
     _poll_for_coordinator,
-    _supervised_coordinator_role,
     configure_jax_compilation_cache,
     initialize_jax,
 )
@@ -216,22 +214,6 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    "proc_index,task_index,num_tasks,expected",
-    [
-        (0, 0, 1, _CoordinatorRole.REUSE_LOCAL),  # single-host global rank 0: bind, no registry
-        (0, 0, 4, _CoordinatorRole.REGISTER),  # multi-host global rank 0: register its address
-        (3, 0, 1, _CoordinatorRole.REUSE_LOCAL),  # host-0 local rank: reuse advertise_host directly
-        (5, 0, 4, _CoordinatorRole.REUSE_LOCAL),  # host-0 local rank on a multi-host job: same
-        (8, 2, 4, _CoordinatorRole.POLL),  # other host: poll the registry for rank 0
-    ],
-)
-def test_supervised_coordinator_role(
-    proc_index: int, task_index: int, num_tasks: int, expected: _CoordinatorRole
-) -> None:
-    assert _supervised_coordinator_role(proc_index, task_index, num_tasks) == expected
 
 
 @patch("iris.runtime.jax_init.atexit")

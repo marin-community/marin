@@ -13,7 +13,7 @@ import pytest
 from iris.client.client import _wrap_entrypoint_for_multiprocess
 from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
 from iris.runtime import multigpu
-from iris.runtime.multigpu import _child_rank_env, run
+from iris.runtime.multigpu import run
 
 
 def _py(code: str) -> list[str]:
@@ -21,25 +21,8 @@ def _py(code: str) -> list[str]:
     return [sys.executable, "-c", code]
 
 
-def test_child_rank_env_global_rank_and_device_slice() -> None:
-    # task 1 of 3, 4 procs/task, 2 devices/proc, local rank 2:
-    # global rank = 1*4 + 2 = 6; world = 3*4 = 12; devices = [2*2, 2*2+1] = 4,5
-    env = _child_rank_env(local_rank=2, nproc=4, devices_per_proc=2, task_index=1, num_tasks=3)
-    assert env == {
-        "IRIS_MULTIGPU_PROCESS_COUNT": "12",
-        "IRIS_MULTIGPU_PROCESS_INDEX": "6",
-        "IRIS_MULTIGPU_LOCAL_DEVICE_IDS": "4,5",
-    }
-
-
-def test_child_rank_env_one_device_per_proc() -> None:
-    env = _child_rank_env(local_rank=0, nproc=8, devices_per_proc=1, task_index=0, num_tasks=1)
-    assert env["IRIS_MULTIGPU_PROCESS_COUNT"] == "8"
-    assert env["IRIS_MULTIGPU_PROCESS_INDEX"] == "0"
-    assert env["IRIS_MULTIGPU_LOCAL_DEVICE_IDS"] == "0"
-
-
 def test_run_all_children_succeed_returns_zero() -> None:
+    # Each child sees the global world size the supervisor stamped on it.
     check = _py("import os; assert os.environ['IRIS_MULTIGPU_PROCESS_COUNT'] == '3'")
     assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
 
