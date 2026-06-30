@@ -1,10 +1,11 @@
 import type { Provenance } from '@/types/rpc'
 
 /**
- * Render build provenance as a single line, mirroring the Python
- * ``rigging.provenance.Provenance.__str__``:
+ * Render build provenance as a single line:
  *   clean: "<baseCommit> (<branch>) (<builtBy>)"
  *   dirty: "<treeHash> (off of <baseCommit>) (<branch>) (<builtBy>)"
+ * A clean build shows the recognizable commit; a dirty build shows the
+ * content tree hash plus the commit it was built off of.
  */
 export function formatProvenance(p?: Provenance): string {
   if (!p) return '-'

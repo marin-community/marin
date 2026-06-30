@@ -40,13 +40,12 @@ class Provenance:
 
     @classmethod
     def from_git(cls, repo_dir: Path | None = None) -> "Provenance":
-        """Capture provenance from the git repository at ``repo_dir`` (or cwd).
-
-        ``git stash create`` captures any dirty state as a transient commit
-        whose tree we deref — that drops the per-call timestamp a commit hash
-        would carry, keeping ``tree_hash`` purely content-addressed.
-        """
+        """Capture provenance from the git repository at ``repo_dir`` (or cwd)."""
         cwd = str(repo_dir) if repo_dir is not None else None
+        # `git stash create` captures any dirty state as a transient commit whose
+        # tree we deref below — dropping the per-call timestamp a commit hash
+        # would carry, so tree_hash stays purely content-addressed. Empty (no
+        # output) means a clean tree, so fall back to HEAD.
         stash = _git(["stash", "create"], cwd)
         ref = stash or "HEAD"
         return cls(
