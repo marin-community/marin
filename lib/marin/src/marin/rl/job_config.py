@@ -158,6 +158,9 @@ class RLJobConfig:
     pip_dependency_groups: list[str] = field(default_factory=list)
     """Extra pip dependency groups to include for all workers."""
 
+    runtime_env_vars: list[str] = field(default_factory=list)
+    """Env var names to copy from the current process into coordinator and worker jobs."""
+
     @property
     def resolved_instance_id(self) -> str:
         """Return the volatile instance id, falling back to run_id."""

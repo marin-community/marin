@@ -61,6 +61,7 @@ nav:
   - Home: index.md
   - Tutorials:
       - Installation: tutorials/installation.md
+      - OpenReward RL Smoke Run: tutorials/openreward-rl.md
       - First Experiment: tutorials/first-experiment.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md

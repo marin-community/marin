@@ -153,6 +153,40 @@ def test_make_rl_step_uses_model_checkpoint_path_as_dependency(monkeypatch):
     assert step_config.experiment_config.model_config.artifact == expected_path
 
 
+def test_make_rl_step_forwards_runtime_env_vars_to_launcher_job(monkeypatch):
+    monkeypatch.setenv("OPENREWARD_API_KEY", "openreward-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "tool-secret")
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        runtime_env_vars=["OPENREWARD_API_KEY", "OPENAI_API_KEY"],
+    )
+    remote_call = {}
+
+    def fake_remote(fn, *, resources=None, env_vars=None):
+        del fn
+        remote_call["resources"] = resources
+        remote_call["env_vars"] = env_vars
+
+        def run(config):
+            remote_call["config"] = config
+
+        return run
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.remote", fake_remote)
+
+    step = make_rl_step(name="rl-test", config=config, curriculum=_test_curriculum(), version="2026.06.28")
+    step_config = materialized_config(step, "gs://marin-us-central1")
+
+    step.run(step_config)
+
+    assert remote_call["env_vars"] == {
+        "OPENREWARD_API_KEY": "openreward-secret",
+        "OPENAI_API_KEY": "tool-secret",
+    }
+    assert remote_call["resources"] == step_config.resources
+    assert remote_call["config"] == step_config
+
+
 def test_is_hf_checkpoint_recognizes_gcs_hf_exports(monkeypatch):
     hf_files = {
         "gs://marin-us-central1/models/test-model/hf/config.json",

@@ -97,7 +97,9 @@ def create_test_inference_context():
             n,
             decoding,
             system_prompt=None,
+            tools=None,
         ):
+            del decoding, system_prompt, tools
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]
