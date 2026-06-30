@@ -267,9 +267,13 @@ def make_r2_client() -> botocore.client.BaseClient:
     ``AWS_ENDPOINT_URL`` / ``R2_ENDPOINT_URL``, defaulting to
     :data:`R2_ENDPOINT_URL`. R2 ignores the AWS region scheme, so we sign with
     ``region_name="auto"`` and force virtual-host addressing.
+
+    The namespaced ``R2_*`` vars take precedence over ``AWS_*``: CoreWeave uses
+    ``AWS_*`` for its own key, so a shell with both backends' credentials
+    exported would otherwise send the CoreWeave key to the R2 endpoint.
     """
-    key = os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("R2_ACCESS_KEY_ID")
-    secret = os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("R2_SECRET_ACCESS_KEY")
+    key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
+    secret = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
     if not key or not secret:
         raise click.ClickException(
             "R2 credentials are required to configure R2 buckets. Set R2_ACCESS_KEY_ID and "
