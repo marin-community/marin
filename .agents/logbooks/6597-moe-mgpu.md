@@ -6449,3 +6449,36 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   - No #6597 issue update.
 - Next action:
   - Push this logbook note and monitor PR #6767 CI/comments/reviews.
+
+### 2026-06-29 17:26 - MOE-MGPU-380 PR CI timeout evidence
+- Hypothesis: the `levanter-tpu-tests` PR check cancellation is a CI timeout
+  budget issue rather than a MoE MGPU regression.
+- Commit Hash: `0635e448b`.
+- Commands:
+  - `gh run view 28409885013 --job 84180444041 --log`
+  - `gh run rerun 28409885013 --failed`
+  - `gh run view 28409885013 --job 84184031650 --log`
+  - `gh pr checks 6767 --json name,state,bucket,startedAt,completedAt,link,workflow --watch=false`
+- Result:
+  - First `levanter-tpu-tests` attempt cancelled after 15 minutes at
+    2026-06-29T23:53:50Z while the suite was at 99% and entering
+    `lib/levanter/tests/test_viz_lm.py::test_viz_lm`.
+  - Failed-only rerun job `84184031650` cancelled again after 15 minutes at
+    2026-06-30T00:23:54Z at the same point: 99% and entering
+    `test_viz_lm`.
+  - No assertion failure appeared in either log.
+  - `cw-ci-test`, `cloud-smoke-test`, and GCP cleanup passed.
+  - Full local log copies saved under ignored artifact directory
+    `.agents/artifacts/6597-dalton-logs/`:
+    - `levanter-tpu-tests-28409885013-job-84180444041.log`
+    - `levanter-tpu-tests-rerun-28409885013-job-84184031650.log`
+    - `levanter-unit-run-28409885013.json`
+    - `pr-6767-status.json`
+- Interpretation:
+  - Two identical 15-minute cancellations at 99% make this a workflow timeout
+    budget problem. The narrow branch fix is to increase the Levanter TPU job
+    timeout and matching inner `timeout` command; this should be easy to revert
+    or adjust during PR review.
+  - No #6597 issue update.
+- Next action:
+  - Commit the timeout adjustment and rerun PR CI.
