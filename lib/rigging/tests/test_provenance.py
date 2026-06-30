@@ -4,6 +4,7 @@
 import subprocess
 from pathlib import Path
 
+import pytest
 from rigging.provenance import Provenance
 
 
@@ -62,3 +63,29 @@ def test_from_git_dirty_changes_tree_not_base(tmp_path):
     assert dirty.dirty is True
     assert dirty.base_commit == clean.base_commit
     assert dirty.tree_hash != clean.tree_hash
+
+
+def test_capture_is_best_effort_outside_a_repo(tmp_path):
+    # from_git is strict (the tree hash is the point); capture degrades instead of raising,
+    # still recording the launch context that has nothing to do with git.
+    with pytest.raises(RuntimeError):
+        Provenance.from_git(tmp_path)
+    p = Provenance.capture(tmp_path)
+    assert p.tree_hash == ""
+    assert p.dirty is False
+    assert p.command_line  # argv, captured regardless of git
+    assert p.created_at  # timestamp, captured regardless of git
+
+
+def test_json_round_trip_preserves_run_fields():
+    p = Provenance(
+        tree_hash="aaaa",
+        base_commit="bbbb",
+        dirty=False,
+        branch="main",
+        built_by="power",
+        git_remote="git@github.com:o/r.git",
+        created_at="2026-06-30T00:00:00",
+        command_line=("python", "-m", "experiments.foo"),
+    )
+    assert Provenance.from_json(p.to_json()) == p

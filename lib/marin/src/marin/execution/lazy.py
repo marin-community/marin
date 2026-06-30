@@ -38,6 +38,7 @@ from typing import Any, Final, Generic, TypeVar, cast
 from urllib.parse import urlparse
 
 from rigging.filesystem import marin_prefix, marin_region, url_to_fs
+from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
     EXPECTED_FINGERPRINT_KEY,
@@ -52,7 +53,6 @@ from marin.execution.artifact import (
     write_record,
 )
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
-from marin.execution.provenance import Provenance
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 

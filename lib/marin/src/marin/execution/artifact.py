@@ -27,9 +27,9 @@ from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import marin_prefix, open_url, url_to_fs
+from rigging.provenance import Provenance
 
 from marin.execution.fingerprint import describe_drift
-from marin.execution.provenance import Provenance
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 logger = logging.getLogger(__name__)
