@@ -2035,13 +2035,25 @@ class ControllerServiceImpl:
         usability_by_id: dict[str, WorkerUsability] = {
             str(w.worker_id): liveness_by_id[w.worker_id].usability for w, _attrs in workers
         }
+        self._overlay_autoscaler_usability(status, usability_by_id)
 
-        # Look up running tasks for every VM in the status. The vm_id IS the
-        # worker_id (the worker registers under its vm_id), so the IN-clause is
-        # bounded by visible VMs. We must NOT restrict to roster membership here:
-        # a VM running tasks but momentarily absent from the liveness snapshot
-        # would otherwise lose its worker_id and task count, dropping its tasks
-        # from the dashboard.
+        return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
+
+    def _overlay_autoscaler_usability(
+        self, status: vm_pb2.AutoscalerStatus, usability_by_id: dict[str, WorkerUsability]
+    ) -> None:
+        """Stamp per-VM running-task counts + usability onto an autoscaler status in place.
+
+        The single overlay path behind both ``GetAutoscalerStatus`` and the
+        Backends tab's worker detail, so the two views report the same per-slice
+        occupancy and can't drift apart.
+
+        Looks up running tasks for every VM in ``status``. The vm_id IS the
+        worker_id (the worker registers under its vm_id), so the IN-clause is
+        bounded by visible VMs. We must NOT restrict to roster membership here: a
+        VM running tasks but momentarily absent from the liveness snapshot would
+        otherwise lose its worker_id and task count, dropping its tasks.
+        """
         vm_ids = {vm.vm_id for group in status.groups for slice_info in group.slices for vm in slice_info.vms}
         candidate_ids = {WorkerId(vid) for vid in vm_ids if vid}
         if candidate_ids:
@@ -2049,10 +2061,7 @@ class ControllerServiceImpl:
                 running = reads.running_tasks_by_worker(tx, candidate_ids)
         else:
             running = {}
-
         _overlay_worker_usability(status, usability_by_id, running)
-
-        return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
     def _merge_autoscaler_status(self, only_backend_id: str = "") -> vm_pb2.AutoscalerStatus:
         """Merge backends' autoscaler status into one, tagging groups with backend_id.
@@ -2874,15 +2883,18 @@ class ControllerServiceImpl:
             bid = self._controller.backend_id_for_scale_group(str(row.scale_group or ""))
             worker_count_by_backend[bid] = worker_count_by_backend.get(bid, 0) + int(row.cnt)
 
-        # Healthy-worker counts per backend: a DB-derived liveness verdict the
-        # DB-less backends cannot author, overlaid onto the worker status variant
-        # below. Mirrors get_autoscaler_status's roster + liveness pass.
+        # Per-worker liveness, a DB-derived verdict the DB-less backends cannot
+        # author: healthy counts per backend plus the usability map the worker
+        # status overlay needs below. Mirrors get_autoscaler_status's roster pass.
         healthy_by_backend: dict[str, int] = {bid: 0 for bid in backends}
+        usability_by_id: dict[str, WorkerUsability] = {}
         roster = _worker_roster(self._db)
         if roster:
             all_liveness = self._controller.all_liveness()
             for w, _attrs in roster:
-                if all_liveness.get(w.worker_id, WorkerLiveness()).healthy:
+                liveness = all_liveness.get(w.worker_id, WorkerLiveness())
+                usability_by_id[str(w.worker_id)] = liveness.usability
+                if liveness.healthy:
                     bid = self._controller.backend_id_for_scale_group(str(w.scale_group or ""))
                     healthy_by_backend[bid] = healthy_by_backend.get(bid, 0) + 1
 
@@ -2941,6 +2953,9 @@ class ControllerServiceImpl:
                 summary.detail.worker.healthy_worker_count = healthy_by_backend.get(backend_id, 0)
                 for group in summary.detail.worker.autoscaler.groups:
                     group.backend_id = backend_id
+                # Same overlay GetAutoscalerStatus applies, so the detail panel's
+                # per-slice running counts / "% in use" match the Capacity tab.
+                self._overlay_autoscaler_usability(summary.detail.worker.autoscaler, usability_by_id)
 
             summaries.append(summary)
 

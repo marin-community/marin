@@ -1956,6 +1956,63 @@ def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state,
     assert detail["autoscaler"]["groups"][0]["backendId"] == DEFAULT_BACKEND_ID
 
 
+def test_list_backends_worker_detail_overlays_running_task_counts(state, scheduler, tmp_path, log_client, job_request):
+    """detail.worker runs the same usability overlay as GetAutoscalerStatus, so a VM
+    with a running task reports a non-zero running_task_count (not idle)."""
+    autoscaler = Mock()
+    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="tpu-v5e-us",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s1",
+                        state="ready",
+                        vms=[vm_pb2.VmInfo(vm_id="w-run", state=vm_pb2.VM_STATE_READY)],
+                    )
+                ],
+            )
+        ],
+    )
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            DEFAULT_BACKEND_ID: _backend_mock(
+                "worker",
+                frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+                autoscaler=autoscaler,
+            )
+        },
+    )
+    # Place a running task on the VM's worker so the overlay's DB lookup finds it.
+    wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")
+    task_id = submit_job(state, "run-job", job_request).task(0)
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+    detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
+        "detail"
+    ]["worker"]
+    vm = detail["autoscaler"]["groups"][0]["slices"][0]["vms"][0]
+    assert vm["runningTaskCount"] == 1
+
+
 def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tmp_path, log_client):
     """ListBackends.detail.kubernetes carries the CLUSTER_VIEW backend's synced node/pod snapshot."""
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
