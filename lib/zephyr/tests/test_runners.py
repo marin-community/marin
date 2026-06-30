@@ -35,8 +35,8 @@ def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
 
 @pytest.fixture(
     params=[
-        pytest.param(lambda n: InlineRunner(num_workers=n), id="inline"),
-        pytest.param(lambda n: SubprocessRunner(num_workers=n), id="subprocess"),
+        pytest.param(lambda: InlineRunner(), id="inline"),
+        pytest.param(lambda: SubprocessRunner(), id="subprocess"),
     ]
 )
 def runner_factory(request):
@@ -104,9 +104,9 @@ def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
 @pytest.mark.parametrize(
     "runner_factory_fn",
     [
-        pytest.param(lambda n: InlineRunner(num_workers=n), id="inline"),
+        pytest.param(lambda: InlineRunner(), id="inline"),
         pytest.param(
-            lambda n: SubprocessRunner(num_workers=n),
+            lambda: SubprocessRunner(),
             id="subprocess",
             marks=pytest.mark.xfail(
                 strict=True,
@@ -150,7 +150,7 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     def crash(_: int) -> int:
         os._exit(139)
 
-    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda n: SubprocessRunner(num_workers=n))
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: SubprocessRunner())
     try:
         ds = Dataset.from_list([0]).map(crash)
         with pytest.raises(ZephyrWorkerError) as exc_info:
@@ -182,7 +182,7 @@ def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypat
 
     monkeypatch.setattr(StatsWriter, "connect", staticmethod(make_writer))
 
-    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda n: InlineRunner(num_workers=n))
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda: InlineRunner())
     try:
         ds = Dataset.from_list(list(range(10))).map(lambda x: x)
         ctx.execute(ds)

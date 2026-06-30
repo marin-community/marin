@@ -13,7 +13,7 @@ import itertools
 import logging
 import pickle
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 import cloudpickle
@@ -254,6 +254,23 @@ def _write_stage_output(
 
 
 @dataclass
+class TaskResources:
+    """CPU and memory budget for a single task or worker resource pool."""
+
+    cpu: float = 0.0
+    memory: int = 0
+
+    def __add__(self, other: "TaskResources") -> "TaskResources":
+        return TaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
+
+    def __sub__(self, other: "TaskResources") -> "TaskResources":
+        return TaskResources(cpu=self.cpu - other.cpu, memory=self.memory - other.memory)
+
+    def can_fit(self, cost: "TaskResources") -> bool:
+        return self.cpu >= cost.cpu and (cost.memory == 0 or self.memory >= cost.memory)
+
+
+@dataclass
 class ShardTask:
     """Describes a unit of work for a worker: one shard through one stage."""
 
@@ -263,6 +280,7 @@ class ShardTask:
     operations: list[PhysicalOp]
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
+    cost: TaskResources = field(default_factory=TaskResources)
 
 
 class StageRunner(Protocol):

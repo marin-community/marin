@@ -68,12 +68,6 @@ class CounterSnapshot:
 
 
 class WorkerContext(Protocol):
-    # Number of concurrent worker slots sharing this actor's RAM. Consumers
-    # (e.g. the scatter writer's memory budget) divide a per-actor byte budget
-    # by this, so it is part of the contract rather than an implementation
-    # detail of a particular WorkerContext.
-    num_workers: int
-
     def get_shared(self, name: str) -> Any: ...
     def set_counter(self, name: str, value: int | float, stage: str | None = None) -> None: ...
     def update_counter(self, name: str, value: int | float, stage: str | None = None) -> None: ...

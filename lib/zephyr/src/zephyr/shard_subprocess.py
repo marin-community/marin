@@ -92,7 +92,7 @@ def _periodic_status_logger(
         )
 
 
-def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int) -> None:
+def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
@@ -128,7 +128,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
         if finelog_url:
             stats_writer = StatsWriter.connect(finelog_url)
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, num_workers=num_workers)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name)
         _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
 
@@ -219,8 +219,8 @@ def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int
 
 
 def _subprocess_main() -> None:
-    if len(sys.argv) != 4:
-        print("Usage: python -m zephyr.shard_subprocess <task_file> <result_file> <num_workers>", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("Usage: python -m zephyr.shard_subprocess <task_file> <result_file>", file=sys.stderr)
         os._exit(1)
     # Bypass interpreter shutdown: PyArrow GCS/Azure filesystem background
     # threads can race with module GC and fire ``std::terminate`` → SIGABRT,
@@ -229,7 +229,7 @@ def _subprocess_main() -> None:
     # one-shot child needs ``atexit`` / ``__del__`` to run.
     exit_code = 0
     try:
-        _execute_shard_subprocess(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+        _execute_shard_subprocess(sys.argv[1], sys.argv[2])
     except BaseException:
         traceback.print_exc()
         exit_code = 1

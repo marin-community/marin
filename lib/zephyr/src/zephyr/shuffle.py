@@ -50,7 +50,6 @@ from rigging.filesystem import is_remote_path, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
-from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -132,11 +131,10 @@ def _default_scatter_write_buffer_bytes() -> int:
     actor's RAM. Falls back to 256 MB (divided by the same factor) when the
     cgroup limit cannot be read.
     """
-    num_workers = zephyr_worker_ctx().num_workers
     memory = TaskResources.from_environment().memory_bytes
     if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK
 
 
 # ---------------------------------------------------------------------------
