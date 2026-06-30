@@ -283,12 +283,8 @@ class FakeProvider:
 
 
 def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakeProvider]:
-    """A single worker-daemon backend bound to ``state``'s db/health/worker_attrs.
-
-    The per-backend dead-worker GC ``prune_old_data`` drives lives on a backend's
-    worker store, so prune tests pass a real backend built over the test state
-    rather than reaching into a tracker directly.
-    """
+    """A single worker-daemon backend bound to ``state``'s db/health/worker_attrs,
+    for tests that drive ``prune_old_data``'s per-backend dead-worker GC."""
     provider = FakeProvider()
     provider.health = state._health
     provider.bind_runtime(
