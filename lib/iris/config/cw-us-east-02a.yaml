@@ -86,8 +86,8 @@ scale_groups:
   cpu-genoa:
     num_vms: 1
     resources:
-      cpu: 192
-      ram: 768GB
+      cpu: 192      # cd-gp-a192-genoa: 192 vCPUs (96 physical Genoa 9454 cores)
+      ram: 1536GB   # 1.5 TB on-node RAM (8 GB per vCPU)
       disk: 1TB
       device_type: cpu
       capacity_type: on-demand
