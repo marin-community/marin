@@ -12,7 +12,7 @@ them.
 
 from marin.datakit.download.dolmino import DOLMINO_DATASETS
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import tokenized
+from marin.experiment.data import dataset_main, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -38,7 +38,7 @@ DOLMINO_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+def dolmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One :class:`Dataset` handle per Dolmino split, keyed by ``dolmino/<split>``."""
     return {
         f"dolmino/{split}": tokenized(
@@ -52,13 +52,13 @@ def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifact
     }
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
+def dolmino_dataset(name: str, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """The :class:`Dataset` handle for a single named Dolmino split."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
-    return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
+    return dolmino_datasets(tokenizer=tokenizer)[f"dolmino/{name}"]
 
 
-def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
+def dolmino_math_dataset(tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Combined math-only :class:`Dataset` handle (all ``math/*`` splits merged)."""
     math_paths = [
         f"{_DOLMINO_BASE}/{split}/{pattern}"
@@ -73,3 +73,7 @@ def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer) -> ArtifactStep[Tok
         pin="tokenized/dolmino/all_math-9d507c" if tokenizer == llama3_tokenizer else None,
         version="2026.06.28",
     )
+
+
+if __name__ == "__main__":
+    dataset_main(dolmino_datasets())

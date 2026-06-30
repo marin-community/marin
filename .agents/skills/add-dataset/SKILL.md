@@ -7,15 +7,19 @@ description: Register or inspect a Hugging Face dataset for Marin pipelines.
 
 ## Overview
 Inspect a Hugging Face dataset schema with Marin's schema inspection tool, then
-register an `ExecutorStep` so the dataset can be downloaded in Marin pipelines.
-- Simple datasets: add the step to
-  [`experiments/pretraining_datasets/__init__.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/__init__.py)
-  (see the `fineweb_edu` entry).
+add a dataset module under
+[`experiments/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/datasets/__init__.py)
+so the dataset can be tokenized and consumed in Marin pipelines. Each leaf module
+exposes `<name>_dataset()` (one corpus) or `<name>_datasets() -> dict[str, ...]`
+(a keyed family) built with the lazy data builders in `marin.experiment.data`.
+- Single-corpus datasets: add a small leaf module (e.g.
+  [`experiments/datasets/svg.py`](https://github.com/marin-community/marin/blob/main/experiments/datasets/svg.py))
+  exposing a `<name>_dataset()`.
 - Multipart/complex datasets: create a dedicated file (e.g.
-  [`experiments/pretraining_datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py))
-  and add the step there.
+  [`experiments/datasets/nemotron.py`](https://github.com/marin-community/marin/blob/main/experiments/datasets/nemotron.py))
+  exposing `<name>_datasets()`.
 - Datasets with HF-exposed subsets/splits: pattern-match on `nemotron.py`,
-  defining a separate step per subset.
+  keying one handle per subset in the returned dict.
 
 ## Prerequisites
 - Prefer repo-managed dependencies over ad hoc `pip install`.

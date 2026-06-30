@@ -31,7 +31,7 @@ from marin.execution.artifact import read_artifact
 from marin.execution.lazy import materialized_config
 from marin.execution.step_runner import StepRunner
 
-from experiments.pretraining_datasets.diagnostic_logs import _ghalogs_normalized, tokenize_ghalogs
+from experiments.datasets.diagnostic_logs import _ghalogs_normalized, ghalogs_dataset
 
 
 def _read_jsonl(path: str) -> list[dict[str, object]]:
@@ -142,8 +142,8 @@ def test_all_sources_includes_normalized_ghalogs_public():
     assert source.normalized.deps == [source.normalize_steps[1]]
 
 
-def test_tokenize_ghalogs_reads_datakit_normalized_output():
-    step = tokenize_ghalogs(tokenizer="test-tokenizer")
+def test_ghalogs_dataset_reads_datakit_normalized_output():
+    step = ghalogs_dataset(tokenizer="test-tokenizer")
     normalized = _ghalogs_normalized()
 
     assert normalized.name == "normalized/ghalogs/public"

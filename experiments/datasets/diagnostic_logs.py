@@ -17,7 +17,7 @@ from marin.datakit.download.diagnostic_logs import (
 )
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -56,7 +56,7 @@ def _ghalogs_normalized() -> ArtifactStep[TokenizedCache]:
     )
 
 
-def tokenize_ghalogs(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def ghalogs_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tokenized GHALogs public training partition."""
     return tokenized(
         "ghalogs_public",
@@ -65,3 +65,7 @@ def tokenize_ghalogs(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[Tokeni
         glob="outputs/main/*.parquet",
         version="2026.06.28",
     )
+
+
+if __name__ == "__main__":
+    dataset_main({"ghalogs_public": ghalogs_dataset()})

@@ -9,7 +9,7 @@ tokenizes its ``val`` split straight from that location into a fresh explicit ca
 """
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import tokenized
+from marin.experiment.data import dataset_main, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -40,15 +40,21 @@ _PALOMA_SUBSETS = {
 }
 
 
-def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
-    """One validation ``TokenizedCache`` handle per Paloma subset, keyed by ``paloma/<subset>-llama3``."""
-    return [
-        tokenized(
-            f"paloma/{subset}-llama3",
-            tokenizer=tokenizer,
-            version="2026.06.28",
-            paths=[f"{_PALOMA_RAW}/{directory}/val/val*.jsonl.gz"],
-            validation=True,
-        )
-        for subset, directory in _PALOMA_SUBSETS.items()
-    ]
+def paloma_dataset(subset: str, *, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """One Paloma subset as a validation handle."""
+    return tokenized(
+        f"paloma/{subset}-llama3",
+        tokenizer=tokenizer,
+        version="2026.06.28",
+        paths=[f"{_PALOMA_RAW}/{_PALOMA_SUBSETS[subset]}/val/val*.jsonl.gz"],
+        validation=True,
+    )
+
+
+def paloma_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """All Paloma subsets, keyed by subset name."""
+    return {subset: paloma_dataset(subset, tokenizer=tokenizer) for subset in _PALOMA_SUBSETS}
+
+
+if __name__ == "__main__":
+    dataset_main(paloma_datasets())

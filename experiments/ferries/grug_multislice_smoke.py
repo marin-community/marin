@@ -30,12 +30,13 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.nemotron import nemotron_datasets
-from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,10 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
     def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(

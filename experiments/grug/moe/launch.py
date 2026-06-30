@@ -35,14 +35,15 @@ from marin.experiment.data import mixture, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.nemotron import nemotron_datasets
-from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 # SlimPajama-6B tokenization OOMs at the default 10g worker resources.
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -215,7 +216,10 @@ def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoin
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
