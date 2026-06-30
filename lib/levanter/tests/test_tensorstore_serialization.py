@@ -12,6 +12,7 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import tensorstore_impl as ts_impl
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -48,6 +49,45 @@ def test_tensorstore_checkpoint_simple():
             jax.tree_util.tree_leaves(arrays_only(initial_model)),
         )
         assert all(np.isclose(rkey, initial_key))
+
+
+def test_serialize_uses_fresh_context_per_save():
+    """Each save must run through its own tensorstore Context, not the shared `_TS_CONTEXT`.
+
+    JAX's process-lifetime `_TS_CONTEXT` strongly owns its cache pool; reusing it across saves
+    of distinct OCDBT databases pins each save's pinned-host source buffers forever, leaking host
+    RAM ~linearly per checkpoint. The fix injects a fresh Context per save, so this guards that
+    (a) the global singleton is never the context handed to `async_serialize`, (b) successive
+    saves get distinct contexts, and (c) the wrapper is restored after each save.
+    """
+    original_async_serialize = ts_impl.async_serialize
+    seen_contexts: list[Any] = []
+
+    def recording_async_serialize(*args, **kwargs):
+        seen_contexts.append(kwargs.get("context"))
+        return original_async_serialize(*args, **kwargs)
+
+    model = MLP(in_size=2, out_size=1, width_size=2, depth=1, key=jax.random.PRNGKey(0))
+
+    ts_impl.async_serialize = recording_async_serialize
+    try:
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(f"{tmpdir}/step-0", model)
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(f"{tmpdir}/step-1", model)
+        # The per-save wrapper must restore the prior `async_serialize` (our recorder) on exit,
+        # never leaving a leaked wrapper installed.
+        restored_to = ts_impl.async_serialize
+    finally:
+        ts_impl.async_serialize = original_async_serialize
+
+    assert restored_to is recording_async_serialize
+
+    assert len(seen_contexts) >= 2
+    assert all(ctx is not None for ctx in seen_contexts)
+    assert all(ctx is not ts_impl._TS_CONTEXT for ctx in seen_contexts)
+    # Distinct saves must not share a Context, otherwise the prior save's pool is never released.
+    assert len(set(id(ctx) for ctx in seen_contexts)) >= 2
 
 
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
