@@ -24,24 +24,21 @@ Three backends are configured:
   CoreWeave AOS is virtual-host only, served from :data:`CW_ENDPOINT_URL`, and
   signs with each bucket's CoreWeave region. Owned-rule shape is identical to R2.
 
-R2 access needs credentials (``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY``,
-or their ``AWS_*`` equivalents) and an endpoint (``AWS_ENDPOINT_URL_S3`` /
-``AWS_ENDPOINT_URL`` / ``R2_ENDPOINT_URL``, defaulting to
-:data:`R2_ENDPOINT_URL`). CoreWeave access uses the standard
-``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` env vars (set them to your
-CoreWeave object-storage key). Target a specific GCS bucket with ``--bucket`` to
+Each S3 backend reads its own namespaced credentials — ``R2_ACCESS_KEY_ID`` /
+``R2_SECRET_ACCESS_KEY`` for R2, ``CW_ACCESS_KEY_ID`` / ``CW_SECRET_ACCESS_KEY``
+for CoreWeave — each falling back to the generic ``AWS_*`` pair. The default
+all-buckets run configures R2 and CoreWeave together and they have distinct keys,
+so set the namespaced pairs there; the ``AWS_*`` fallback suits single-backend
+runs. R2's endpoint comes from ``AWS_ENDPOINT_URL_S3`` / ``AWS_ENDPOINT_URL`` /
+``R2_ENDPOINT_URL`` (defaulting to :data:`R2_ENDPOINT_URL`); CoreWeave uses
+:data:`CW_ENDPOINT_URL`. Target a specific GCS bucket with ``--bucket`` to
 configure GCS without S3 credentials on hand.
 
-CoreWeave is not part of the default all-buckets run — its ``AWS_*`` credentials
-would collide with R2's in the same invocation — so reach it with ``--coreweave``
-(all CoreWeave buckets) or ``--bucket <cw-bucket>`` (one of them).
-
 Usage:
-    uv run infra/configure_buckets.py                  # GCS + R2 (all buckets)
+    uv run infra/configure_buckets.py                  # GCS + R2 + CoreWeave (all buckets)
     uv run infra/configure_buckets.py --dry-run        # preview without applying
-    uv run infra/configure_buckets.py --bucket marin-us-central2
+    uv run infra/configure_buckets.py --bucket marin-us-central2    # one GCS bucket
     uv run infra/configure_buckets.py --bucket marin-na             # R2 only
-    uv run infra/configure_buckets.py --coreweave                   # all CoreWeave buckets
     uv run infra/configure_buckets.py --bucket marin-us-east-02a    # one CoreWeave bucket
 """
 
@@ -259,27 +256,37 @@ def configure_gcs_bucket(bucket: str, region: str, owned: list[dict], dry_run: b
 # ---------------------------------------------------------------------------
 
 
+def _resolve_s3_credentials(backend: str, prefix: str) -> tuple[str, str]:
+    """Resolve an ``(access_key, secret)`` pair for *backend* from the environment.
+
+    Reads the backend's namespaced ``{prefix}_ACCESS_KEY_ID`` /
+    ``{prefix}_SECRET_ACCESS_KEY`` first, falling back to the generic ``AWS_*``
+    pair. The default all-buckets run configures R2 and CoreWeave together, and
+    they have distinct keys, so set the namespaced ``R2_*`` and ``CW_*`` pairs
+    there; the ``AWS_*`` fallback suits a single-backend run. Raises
+    :class:`click.ClickException` if neither pair is fully set.
+    """
+    key = os.environ.get(f"{prefix}_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
+    secret = os.environ.get(f"{prefix}_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if not key or not secret:
+        raise click.ClickException(
+            f"{backend} credentials are required. Set {prefix}_ACCESS_KEY_ID and "
+            f"{prefix}_SECRET_ACCESS_KEY (or their AWS_* equivalents), or target a different "
+            f"bucket with --bucket to skip this backend."
+        )
+    return key, secret
+
+
 def make_r2_client() -> botocore.client.BaseClient:
     """Build a botocore S3 client for R2, failing fast if credentials are missing.
 
-    Credentials come from ``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY`` (or
-    their ``AWS_*`` equivalents); the endpoint from ``AWS_ENDPOINT_URL_S3`` /
+    Credentials come from ``R2_*`` (or ``AWS_*``) via
+    :func:`_resolve_s3_credentials`; the endpoint from ``AWS_ENDPOINT_URL_S3`` /
     ``AWS_ENDPOINT_URL`` / ``R2_ENDPOINT_URL``, defaulting to
     :data:`R2_ENDPOINT_URL`. R2 ignores the AWS region scheme, so we sign with
     ``region_name="auto"`` and force virtual-host addressing.
-
-    The namespaced ``R2_*`` vars take precedence over ``AWS_*``: CoreWeave uses
-    ``AWS_*`` for its own key, so a shell with both backends' credentials
-    exported would otherwise send the CoreWeave key to the R2 endpoint.
     """
-    key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if not key or not secret:
-        raise click.ClickException(
-            "R2 credentials are required to configure R2 buckets. Set R2_ACCESS_KEY_ID and "
-            "R2_SECRET_ACCESS_KEY (or their AWS_* equivalents), or target a specific GCS bucket "
-            "with --bucket to skip R2."
-        )
+    key, secret = _resolve_s3_credentials("R2", "R2")
     endpoint = (
         os.environ.get("AWS_ENDPOINT_URL_S3")
         or os.environ.get("AWS_ENDPOINT_URL")
@@ -302,17 +309,10 @@ def make_cw_client(region: str) -> botocore.client.BaseClient:
 
     CoreWeave AOS is S3-compatible but virtual-host only, served from
     :data:`CW_ENDPOINT_URL`, and signs with the bucket's CoreWeave region (e.g.
-    ``US-EAST-02A``). Credentials come from the standard ``AWS_ACCESS_KEY_ID`` /
-    ``AWS_SECRET_ACCESS_KEY`` env vars — set them to your CoreWeave
-    object-storage key.
+    ``US-EAST-02A``). Credentials come from ``CW_*`` (or ``AWS_*``) via
+    :func:`_resolve_s3_credentials`.
     """
-    key = os.environ.get("AWS_ACCESS_KEY_ID")
-    secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    if not key or not secret:
-        raise click.ClickException(
-            "CoreWeave object-storage credentials are required to configure CoreWeave buckets. "
-            "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to your CoreWeave object-storage key."
-        )
+    key, secret = _resolve_s3_credentials("CoreWeave", "CW")
     session = botocore.session.get_session()
     return session.create_client(
         "s3",
@@ -390,32 +390,19 @@ def configure_s3_bucket(
         "bucket in R2_DATA_BUCKETS, or a CoreWeave bucket in CW_DATA_BUCKETS)."
     ),
 )
-@click.option(
-    "--coreweave",
-    is_flag=True,
-    help=(
-        "Configure all CoreWeave object-storage buckets (CW_DATA_BUCKETS) and skip GCS/R2. "
-        "Uses AWS_* credentials against cwobject.com. Kept out of the default run because its "
-        "AWS_* credentials would collide with R2's."
-    ),
-)
-def main(dry_run: bool, bucket: str | None, coreweave: bool) -> None:
+def main(dry_run: bool, bucket: str | None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    if coreweave and bucket is not None:
-        raise click.UsageError("--coreweave and --bucket are mutually exclusive.")
-
-    # Default run is GCS + R2; CoreWeave is opt-in (see --coreweave help).
+    # Default run configures every backend; each S3 backend reads its own
+    # namespaced credentials (R2_* / CW_*, AWS_* fallback) in its client factory.
     gcs_targets: dict[str, str] = BUCKETS
     r2_targets: frozenset[str] = R2_DATA_BUCKETS
-    cw_targets: dict[str, str] = {}
-    if coreweave:
-        gcs_targets, r2_targets, cw_targets = {}, frozenset(), dict(CW_DATA_BUCKETS)
-    elif bucket is not None:
+    cw_targets: dict[str, str] = dict(CW_DATA_BUCKETS)
+    if bucket is not None:
         if bucket in BUCKETS:
-            gcs_targets, r2_targets = {bucket: BUCKETS[bucket]}, frozenset()
+            gcs_targets, r2_targets, cw_targets = {bucket: BUCKETS[bucket]}, frozenset(), {}
         elif bucket in R2_DATA_BUCKETS:
-            gcs_targets, r2_targets = {}, frozenset({bucket})
+            gcs_targets, r2_targets, cw_targets = {}, frozenset({bucket}), {}
         elif bucket in CW_DATA_BUCKETS:
             gcs_targets, r2_targets, cw_targets = {}, frozenset(), {bucket: CW_DATA_BUCKETS[bucket]}
         else:
