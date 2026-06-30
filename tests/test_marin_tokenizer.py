@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from levanter.data.text import ChatProcessor
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from marin.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_row
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.marin_tokenizer import (
@@ -17,7 +18,6 @@ from experiments.marin_tokenizer import (
     load_llama3_tokenizer,
 )
 from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
-from marin.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_row
 
 REASONING_TRACE = (
     "<|start_think|>User is asking how am I doing. This should be straightforward. I should reply politely.<|end_think|>"

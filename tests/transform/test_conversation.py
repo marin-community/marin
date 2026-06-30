@@ -323,7 +323,7 @@ class TestInstructionDatasetTransformVersioning:
         hooked_step = transform_dataset_step(hooked_config)
 
         assert base_step.name == hooked_step.name
-        assert base_step.override_output_path != hooked_step.override_output_path
+        assert base_step.override_path != hooked_step.override_path
 
 
 class TestPreferenceDataTransform:
