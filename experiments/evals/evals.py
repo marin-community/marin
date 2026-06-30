@@ -55,7 +55,7 @@ def _model_path(ctx: StepContext, model: ArtifactStep[LevanterCheckpoint] | str)
 
 def evaluate_lm_evaluation_harness(
     model_name: str,
-    model: ArtifactStep[LevanterCheckpoint] | str,
+    model: ArtifactStep[LevanterCheckpoint],
     evals: list[EvalTaskConfig],
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = None,
@@ -70,7 +70,8 @@ def evaluate_lm_evaluation_harness(
 
     Args:
         model_name: Name of the model.
-        model: LevanterCheckpoint handle or path string to the model.
+        model: LevanterCheckpoint handle to evaluate. Wrap a pre-existing checkpoint path with
+            ``ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)`` to pass one in.
         evals: List of evaluations to run with LM Evaluation Harness.
         env_vars: Extra env vars to set on the child iris worker.
             Needed for vLLM-on-TPU bring-up (e.g. ``VLLM_ENABLE_V1_MULTIPROCESSING=0``)
@@ -78,10 +79,10 @@ def evaluate_lm_evaluation_harness(
             The coordinator's own ``os.environ`` does NOT propagate to iris-spawned
             children — these vars must be threaded through ``remote()``.
     """
-    deps = _model_deps(model)
+    deps = (model,)
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
-        model_path = _model_path(ctx, model)
+        model_path = ctx.artifact_path(model)
         return EvaluationConfig(
             evaluator="lm_evaluation_harness",
             model_name=model_name,
@@ -138,7 +139,7 @@ def extract_model_name_and_path(
 
 def evaluate_levanter_lm_evaluation_harness(
     model_name: str,
-    model: ArtifactStep[LevanterCheckpoint] | str,
+    model: ArtifactStep[LevanterCheckpoint],
     evals: list[EvalTaskConfig],
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
@@ -153,10 +154,10 @@ def evaluate_levanter_lm_evaluation_harness(
     the cross-task scores without touching the directory layout.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
-    deps = _model_deps(model)
+    deps = (model,)
 
     def build_config(ctx: StepContext) -> EvaluationConfig:
-        model_path = _model_path(ctx, model)
+        model_path = ctx.artifact_path(model)
         return EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
             model_name=None,  # imputed automatically
@@ -180,7 +181,7 @@ def evaluate_levanter_lm_evaluation_harness(
 
 
 def default_eval(
-    step: ArtifactStep[LevanterCheckpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint],
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
@@ -191,11 +192,12 @@ def default_eval(
     Create an eval artifact for the model using LM Evaluation Harness on a step.
 
     Args:
-        step: LevanterCheckpoint handle or path string to evaluate.
+        step: LevanterCheckpoint handle to evaluate. Wrap a pre-existing checkpoint path with
+            ``ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)``.
         evals: List of evals to run. Defaults to CORE_TASKS.
         max_eval_instances: Maximum number of evaluation instances to run.
     """
-    name, model = extract_model_name_and_path(step)
+    name, model = step.name, step
 
     logger.info(f"Creating default evaluation step for {name}")
 
@@ -216,7 +218,7 @@ def default_eval(
 
 
 def default_base_eval(
-    step: ArtifactStep[LevanterCheckpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint],
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -256,7 +258,7 @@ def default_base_eval(
     )
     eval_jobs.append(mmlu_pro_5shot)
 
-    name, model = extract_model_name_and_path(step)
+    name, model = step.name, step
     if run_generation_evals:
         generation = evaluate_lm_evaluation_harness(
             name,
@@ -272,7 +274,7 @@ def default_base_eval(
 
 
 def default_sft_eval(
-    step: ArtifactStep[LevanterCheckpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint],
     resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
@@ -299,7 +301,7 @@ def default_sft_eval(
     )
     eval_jobs.append(mmlu_pro_5shot)
 
-    name, model = extract_model_name_and_path(step)
+    name, model = step.name, step
     if run_generation_evals:
         if use_levanter_inference:
             leaderboard_generation = evaluate_levanter_lm_evaluation_harness(
@@ -347,7 +349,7 @@ def default_sft_eval(
 
 
 def default_key_evals(
-    step: ArtifactStep[LevanterCheckpoint] | str,
+    step: ArtifactStep[LevanterCheckpoint],
     resource_config: ResourceConfig,
     model_name: str | None = None,
     max_eval_instances: int | None = None,
@@ -356,7 +358,7 @@ def default_key_evals(
     """
     Create a list of eval artifacts for the model using LM Evaluation Harness.
     """
-    name, model = extract_model_name_and_path(step)
+    name, model = step.name, step
 
     if model_name is None:
         model_name = name
