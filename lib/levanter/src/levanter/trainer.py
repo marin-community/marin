@@ -57,6 +57,7 @@ from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, St
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.optim.activation_capture import compute_input_grams
 from levanter.config import JsonAtom
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
@@ -692,7 +693,13 @@ class Trainer:
                 loss_for_opt, _metrics = result
                 return loss_for_opt.scalar()
 
-        new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, key=new_key)
+        grams = None
+        if self.config.compute_activation_grams:
+            example = batch[0]
+            with hax.axis_mapping(self.compute_axis_mapping):
+                grams = compute_input_grams(self.mp.cast_to_compute(model), example.tokens, example.attn_mask)
+
+        new_state, updates = state.take_step(grads, obj_fun=obj_fun, loss=loss, grams=grams, key=new_key)
         new_state = hax.shard(new_state, self.parameter_axis_mapping)
 
         hook_infos = None
@@ -841,6 +848,11 @@ class TrainerConfig:
 
     This is typically used when you want a specific batch size but have a weird number of devices.
     """
+
+    # When True, each train step computes per-layer input-activation Grams (Σ=AAᵀ) and routes
+    # them to the optimizer (for activation-aware Muon, idea 3). Off by default: it costs an
+    # extra forward pass and only the activation_aware optimizer consumes the Grams.
+    compute_activation_grams: bool = False
 
     # Config related to duration
     num_train_steps: int = 400_000  # number of training steps
