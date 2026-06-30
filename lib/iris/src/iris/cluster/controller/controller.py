@@ -80,7 +80,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
-from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -523,14 +523,6 @@ class Controller:
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.seed_liveness()
 
-    def _worker_daemon_healths(self) -> list[WorkerHealthTracker]:
-        """Each worker-daemon backend's liveness tracker (disjoint by scale group)."""
-        return [
-            backend.health
-            for backend in self._backends.values()
-            if BackendCapability.WORKER_DAEMON in backend.capabilities and backend.health is not None
-        ]
-
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
         """Union of every worker-daemon backend's liveness (the trackers are disjoint).
 
@@ -714,9 +706,8 @@ class Controller:
                 try:
                     prune_old_data(
                         self._db,
-                        self._worker_daemon_healths(),
+                        self._backends.values(),
                         self._endpoints,
-                        self._worker_attrs,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
                         slice_retention=self._config.slice_retention,

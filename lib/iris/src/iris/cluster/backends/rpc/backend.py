@@ -370,6 +370,11 @@ class RpcTaskBackend:
         assert self._store is not None, "RpcTaskBackend.teardown called before worker store attached"
         self._store.reap_workers(dead_workers, reason=reason)
 
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Garbage-collect this backend's stale DEAD workers through its worker store."""
+        assert self._store is not None, "RpcTaskBackend.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
+
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.
 

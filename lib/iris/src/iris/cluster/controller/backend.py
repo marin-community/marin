@@ -27,6 +27,7 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 """
 
 import logging
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -554,6 +555,17 @@ class TaskBackend(Protocol):
         controller resolved to this backend off the reconcile path — the
         recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
         A backend that tracks no Iris workers is a no-op.
+        """
+        ...
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Garbage-collect this backend's DEAD workers whose heartbeat predates ``cutoff_ms``.
+
+        Driven by the controller's background prune loop, not the control tick. The
+        backend deletes its own dead worker rows (and their attributes) from its own
+        tracker, one per transaction, sleeping ``pause`` between deletes and stopping
+        early once ``stop_event`` is set. Returns the count removed. A backend that
+        tracks no Iris workers returns 0.
         """
         ...
 
