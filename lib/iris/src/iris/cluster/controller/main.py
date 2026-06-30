@@ -152,27 +152,9 @@ def run_controller_serve(
         host=host,
         worker_token=auth.worker_token if auth.worker_token else None,
     )
-    backends = make_backends(
-        cluster_config,
-        db=db,
-        auth=auth,
-        remote_state_dir=remote_state_dir,
-        dry_run=dry_run,
-        log_stack=log_stack,
-    )
-
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing")
-
-    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
-
-    # Reconcile per-user budget tiers from the cluster config into the DB.
-    # Runs after migrations have cleared user_budgets (see migration 0037).
-    # Unlisted users are left without a row and fall through to
-    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config.user_budgets:
-        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     config = ControllerConfig(
         host=host,
@@ -187,6 +169,27 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
     )
+
+    # Each worker-daemon backend constructs and owns its liveness tracker, sized by
+    # the controller config's worker-unreachable grace.
+    backends = make_backends(
+        cluster_config,
+        db=db,
+        auth=auth,
+        remote_state_dir=remote_state_dir,
+        dry_run=dry_run,
+        log_stack=log_stack,
+        unreachable_grace=config.worker_unreachable_grace,
+    )
+
+    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
+
+    # Reconcile per-user budget tiers from the cluster config into the DB.
+    # Runs after migrations have cleared user_budgets (see migration 0037).
+    # Unlisted users are left without a row and fall through to
+    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
+    if cluster_config.user_budgets:
+        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     controller = Controller(
         config=config,

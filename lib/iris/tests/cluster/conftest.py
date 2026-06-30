@@ -24,7 +24,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
 from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.controller.worker_source import DbTransitionReader
 from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
@@ -124,6 +124,9 @@ class _HarnessController:
         self.last_scheduling_context = None
         self.provider: object = Mock()
         self.provider.autoscaler = None
+        # The backend owns its liveness tracker; the harness points this at the
+        # same tracker its ControllerTestState exposes (see the harness factories).
+        self.provider.health = WorkerHealthTracker()
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = new_run_template_cache()
         self.scale_group_to_backend: dict[str, str] = {}
@@ -131,6 +134,16 @@ class _HarnessController:
 
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
+        merged: dict[WorkerId, WorkerLiveness] = {}
+        for backend in self.backends.values():
+            if backend.health is not None:
+                merged.update(backend.health.all())
+        return merged
+
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
+        return self.all_liveness().get(worker_id, WorkerLiveness())
 
 
 @dataclass
@@ -459,7 +472,6 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=LogClient.connect(log_address),
         db=db,
-        health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
@@ -484,13 +496,15 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
 
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
+    # Share the harness tracker so the service registers into and reads liveness
+    # through the same object this harness's ControllerTestState exposes.
+    ctrl.provider.health = health
 
     service = ControllerServiceImpl(
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=LogClient.connect(log_address),
         db=db,
-        health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),

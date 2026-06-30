@@ -217,8 +217,11 @@ class _FakeProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        self.health = tracker
+    def seed_liveness(self) -> None:
+        assert self.worker_source is not None
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def set_log_sink(self, *args, **kwargs):
         pass

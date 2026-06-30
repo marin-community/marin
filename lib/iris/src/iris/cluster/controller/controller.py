@@ -79,7 +79,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
-from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.controller.worker_source import DbTransitionReader, DbWorkerSource
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
@@ -198,12 +198,12 @@ class ControllerConfig:
 
     worker_unreachable_grace: Duration = field(default_factory=lambda: Duration.from_seconds(50.0))
     """How long a worker may be continuously unreachable (or self-report
-    unhealthy) before the controller fails and tears it down. Realized as
-    wall-clock elapsed since the worker's last successful reconcile (see
-    ``WorkerHealthTracker``), so detection latency is ~grace regardless of the
-    reconcile cadence or how long a failing pass takes. ~50s tolerates brief
-    network blips without reaping a multi-VM slice; tests shorten it for fast
-    deterministic teardown."""
+    unhealthy) before it is failed and torn down. Threaded into each worker-daemon
+    backend at construction to size the ``WorkerHealthTracker`` it owns. Realized as
+    wall-clock elapsed since the worker's last successful reconcile, so detection
+    latency is ~grace regardless of the reconcile cadence or how long a failing pass
+    takes. ~50s tolerates brief network blips without reaping a multi-VM slice;
+    tests shorten it for fast deterministic teardown."""
 
     max_tasks_per_job_per_cycle: int = 4
     """Maximum tasks from a single non-coscheduled job to consider per scheduling
@@ -350,17 +350,9 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # The single worker-liveness tracker, shared across the worker-daemon
-        # backends (each folds and reaps through it via attach_health) and read by
-        # the controller's Fleet/exec/capacity/prune paths. Worker-death detection
-        # is wall-clock, fixed at the grace regardless of the reconcile cadence
-        # (see WorkerHealthTracker).
-        self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
         writes.validate()
-        self._seed_liveness_from_workers()
-        self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
         self._threads = threads if threads is not None else get_thread_container()
 
@@ -378,17 +370,23 @@ class Controller:
 
         self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
-        # Give each worker-daemon backend the shared liveness tracker (it folds and
-        # reaps through it) and its own scale-group-scoped view of the DB so it
-        # sources its own workers (the controller never partitions a worker
-        # snapshot). A placement-owning backend (k8s) has no workers but still
-        # authors its dispatch effects from a controller-DB read snapshot.
+        # Give each worker-daemon backend its own scale-group-scoped view of the DB
+        # so it sources its own workers (the controller never partitions a worker
+        # snapshot). Each such backend constructs and owns its liveness tracker; the
+        # controller reaches it through the backend, routed by scale group. A
+        # placement-owning backend (k8s) has no workers but still authors its
+        # dispatch effects from a controller-DB read snapshot.
         for backend_id, backend in self._backends.items():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.attach_health(self._health)
                 backend.attach_worker_source(self._build_worker_source(backend_id))
             elif BackendCapability.CLUSTER_VIEW in backend.capabilities:
                 backend.attach_transition_reader(DbTransitionReader(self._db))
+
+        # Seed each backend's liveness from its persisted workers so the scheduler
+        # sees them at startup, and reseed after a DB reopen (checkpoint restore).
+        # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
+        self._seed_backend_liveness()
+        self._db.register_reopen_hook(self._seed_backend_liveness)
 
         self._bundle_store = BundleStore(storage_dir=f"{config.remote_state_dir.rstrip('/')}/bundles")
 
@@ -402,7 +400,6 @@ class Controller:
             bundle_store=self._bundle_store,
             log_client=self._log_client,
             db=self._db,
-            health=self._health,
             endpoints=self._endpoints,
             endpoint_service=self._endpoint_service,
             worker_attrs=self._worker_attrs,
@@ -515,20 +512,47 @@ class Controller:
             self._pending_kicks.extend(kicks)
         self.wake()
 
-    def _seed_liveness_from_workers(self) -> None:
-        """Seed every persisted worker as healthy so the scheduler sees them at startup.
+    def _seed_backend_liveness(self) -> None:
+        """Seed each worker-daemon backend's tracker from its own persisted workers.
 
-        Liveness is in-memory and reseeded from the worker rows on restart;
-        workers that then go unreachable accrue failures through the reconcile
-        health-event fold and are torn down once over threshold. ``find_prunable``
-        relies on this seed to maintain the invariant that every ``workers`` row
-        has a tracker entry.
+        Each backend reads its scale-group-scoped workers and heartbeats them into
+        the tracker it owns, so every worker comes up ACTIVE at startup (and again
+        after a DB reopen). Workers that then go unreachable accrue failures through
+        the reconcile fold and are torn down once over threshold.
         """
-        now_ms = Timestamp.now().epoch_ms()
-        with self._db.read_snapshot() as q:
-            worker_ids = reads.all_worker_ids(q)
-        if worker_ids:
-            self._health.heartbeat(worker_ids, now_ms)
+        for backend in self._backends.values():
+            if BackendCapability.WORKER_DAEMON in backend.capabilities:
+                backend.seed_liveness()
+
+    def _worker_daemon_healths(self) -> list[WorkerHealthTracker]:
+        """Each worker-daemon backend's liveness tracker (disjoint by scale group)."""
+        return [
+            backend.health
+            for backend in self._backends.values()
+            if BackendCapability.WORKER_DAEMON in backend.capabilities and backend.health is not None
+        ]
+
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
+        """Union of every worker-daemon backend's liveness (the trackers are disjoint).
+
+        The controller's Fleet/exec/capacity readers reach worker liveness through
+        this instead of a single shared tracker; a backend that tracks no Iris
+        workers (k8s) contributes nothing.
+        """
+        merged: dict[WorkerId, WorkerLiveness] = {}
+        for backend in self._backends.values():
+            if backend.health is not None:
+                merged.update(backend.health.all())
+        return merged
+
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
+        """One worker's liveness from its owning backend's tracker, or a default.
+
+        The backends' trackers are disjoint by scale group, so the union resolves
+        the worker to the single tracker that holds it; an untracked worker yields a
+        default (not-healthy) snapshot, matching a direct tracker miss.
+        """
+        return self.all_liveness().get(worker_id, WorkerLiveness())
 
     @property
     def started(self) -> bool:
@@ -691,7 +715,7 @@ class Controller:
                 try:
                     prune_old_data(
                         self._db,
-                        self._health,
+                        self._worker_daemon_healths(),
                         self._endpoints,
                         self._worker_attrs,
                         job_retention=self._config.job_retention,
@@ -820,6 +844,7 @@ class Controller:
 
         self._commit_tick(
             sched_result=merged_sched,
+            sched_results=sched_results,
             backend_pins=backend_pins,
             routing_unschedulable=routing_unschedulable,
             recon_results=recon_results,
@@ -894,6 +919,8 @@ class Controller:
     def _build_worker_source(self, backend_id: str) -> DbWorkerSource:
         """Build a backend's DB-backed worker source, scoped to its scale groups.
 
+        The source reads liveness through the backend's own tracker, so its
+        scale-group-scoped projection covers exactly the workers that backend owns.
         The default backend also owns workers whose scale group is unmapped,
         matching the scale-group→backend resolution used everywhere else.
         """
@@ -901,10 +928,12 @@ class Controller:
         def owns_scale_group(scale_group: str) -> bool:
             return self.backend_id_for_scale_group(scale_group) == backend_id
 
+        health = self._backends[backend_id].health
+        assert health is not None, f"worker-daemon backend {backend_id!r} has no liveness tracker"
         return DbWorkerSource(
             db=self._db,
             owns_scale_group=owns_scale_group,
-            health=self._health,
+            health=health,
             worker_attrs=self._worker_attrs,
             endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
@@ -1084,6 +1113,7 @@ class Controller:
         self,
         *,
         sched_result: ScheduleResult | None,
+        sched_results: dict[str, ScheduleResult],
         backend_pins: list[tuple[JobName, str]],
         routing_unschedulable: list[tuple[PendingTask, str]],
         recon_results: dict[str, ReconcileResult],
@@ -1115,7 +1145,9 @@ class Controller:
 
         with self._db.transaction() as cur:
             if sched_result is not None:
-                self._commit_schedule_decisions(cur, sched_result, now, backend_pins, routing_unschedulable)
+                self._commit_schedule_decisions(
+                    cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
+                )
             for backend_id in self._backend_ids:
                 result = recon_results.get(backend_id)
                 if result is not None and not result.effects.is_empty:
@@ -1136,12 +1168,15 @@ class Controller:
         self,
         cur: Tx,
         result: ScheduleResult,
+        results: dict[str, ScheduleResult],
         now: Timestamp,
         backend_pins: list[tuple[JobName, str]],
         routing_unschedulable: list[tuple[PendingTask, str]],
     ) -> None:
         """Persist a ``ScheduleResult`` within the caller's write transaction.
 
+        ``result`` is the merged decision; ``results`` is the per-backend split,
+        used to re-check each backend's assignments against the tracker it owns.
         Backend pins stamp ``backend_id`` on routed jobs+tasks; jobs that match no
         backend finalize UNSCHEDULABLE; expired/deadline tasks finalize
         UNSCHEDULABLE; assignments stamp ASSIGNED (carrying the backend-computed
@@ -1161,8 +1196,15 @@ class Controller:
             )
         if result.unschedulable:
             finalize(cur, self._unschedulable_decisions(result.unschedulable), endpoints=self._endpoints, now=now)
-        if result.assignments:
-            ops.task.assign(cur, result.assignments, health=self._health)
+        # Each backend's assignments are re-checked against the liveness tracker that
+        # backend owns. Walking backends in order reproduces the merged ordering.
+        for backend_id in self._backend_ids:
+            backend_result = results.get(backend_id)
+            if backend_result is None or not backend_result.assignments:
+                continue
+            health = self._backends[backend_id].health
+            assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
+            ops.task.assign(cur, backend_result.assignments, health=health)
         if result.preemptions:
             finalize(cur, result.preemptions, endpoints=self._endpoints, now=now)
             logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
@@ -1253,8 +1295,12 @@ class Controller:
             for assignment in assignments:
                 logger.info("[DRY-RUN] Would assign task %s to worker %s", assignment.task_id, assignment.worker_id)
             return
+        # The dry-run scheduling path routes through the representative backend, so
+        # these assignments are all its workers — re-checked against its tracker.
+        health = self._representative_backend.health
+        assert health is not None, "scheduling assignments produced by a backend with no liveness tracker"
         with self._db.transaction() as cur:
-            ops.task.assign(cur, assignments, health=self._health)
+            ops.task.assign(cur, assignments, health=health)
 
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
         """Finalize the backend's PREEMPT decisions.

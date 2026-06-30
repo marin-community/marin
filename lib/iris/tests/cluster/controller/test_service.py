@@ -46,7 +46,6 @@ from iris.cluster.controller.service import (
     _job_status_counts,
     _live_user_stats,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
@@ -235,6 +234,9 @@ def test_profile_worker_routes_to_worker_backend(service, state):
         )
     cw = Mock()
     cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
+    # This mock backend only routes the profile dispatch; the worker's liveness is
+    # registered into the default backend's tracker above, so cw owns no tracker.
+    cw.health = None
     service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
     service._controller.scale_group_to_backend = {"cw-h100": "cw"}
 
@@ -971,7 +973,6 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
@@ -1001,7 +1002,6 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
@@ -1642,7 +1642,6 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
@@ -1678,7 +1677,6 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,

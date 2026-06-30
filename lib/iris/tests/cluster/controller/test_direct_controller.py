@@ -43,6 +43,7 @@ class FakeDirectProvider:
     name = "kubernetes"
     capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     autoscaler = None
+    health = None
 
     def __init__(self):
         self.sync_calls: list[ReconcileRequest] = []
@@ -83,8 +84,8 @@ class FakeDirectProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         raise AssertionError("cluster-view backend sources its own placement")
 
-    def attach_health(self, tracker) -> None:
-        raise AssertionError("cluster-view backend tracks no Iris worker liveness")
+    def seed_liveness(self) -> None:
+        """No-op: a cluster-view backend tracks no Iris worker liveness."""
 
     def attach_transition_reader(self, reader) -> None:
         self.transition_reader = reader

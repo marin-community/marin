@@ -8,10 +8,10 @@ local clusters. The Iris scheduler assigns task→worker; this backend fans the
 per-worker Reconcile RPC out to the worker daemons, resolves the observations
 into task ``effects`` from its own read snapshot, and folds the per-worker
 liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
-through its own liveness tracker (``self.health``, attached by the controller).
-The workers its fold reaps are stashed and torn down by ``run_teardown`` after
-the controller commits the effects, so no worker identity crosses the reconcile
-result boundary.
+through the liveness tracker it constructs and owns (``self.health``, holding
+only the workers in this backend's scale groups). The workers its fold reaps are
+stashed and torn down by ``run_teardown`` after the controller commits the
+effects, so no worker identity crosses the reconcile result boundary.
 """
 
 import asyncio
@@ -52,7 +52,12 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
+from iris.cluster.controller.worker_health import (
+    DEFAULT_UNREACHABLE_GRACE,
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+)
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -246,11 +251,9 @@ class RpcTaskBackend:
     # needs. The backend reads its own workers through this; the controller never
     # hands it a worker snapshot.
     worker_source: WorkerSource | None = None
-    # This backend's liveness tracker, attached by the controller. The backend
-    # folds (reconcile) and forgets (teardown) through it. The controller shares
-    # one tracker across its worker-daemon backends, so this is the same object the
-    # attached worker source reads. The default is a throwaway replaced at attach.
-    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
+    # Wall-clock window a worker may stay continuously unreachable before this
+    # backend's tracker reaps it; configures the WorkerHealthTracker built below.
+    unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
     # Static routing metadata the meta-scheduler reads. ``advertised`` expands into
     # routing posting lists; ``allowed_users`` is the allow policy (``*`` = any).
     advertised: dict[str, set[str]] = field(default_factory=dict)
@@ -258,6 +261,12 @@ class RpcTaskBackend:
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
+    # This backend's liveness tracker, constructed and owned here, holding only the
+    # workers in this backend's scale groups. The backend folds (reconcile) and
+    # forgets (teardown) through it; the controller reads it for its
+    # Fleet/exec/capacity/prune paths and routes a registering worker's liveness to
+    # it by scale group.
+    health: WorkerHealthTracker = field(init=False, repr=False)
     # One shared scheduler instance reused across cycles; per-tick worker state
     # comes from ``worker_source``.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
@@ -265,6 +274,9 @@ class RpcTaskBackend:
     # appends; ``run_teardown`` drains post-commit. Kept off the reconcile result so
     # no worker identity crosses that boundary back to the controller.
     _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Attach the Iris autoscaler that provisions capacity for this backend."""
@@ -274,9 +286,17 @@ class RpcTaskBackend:
         """Attach this backend's live-worker read surface."""
         self.worker_source = source
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        """Attach the liveness tracker this backend folds and reaps through."""
-        self.health = tracker
+    def seed_liveness(self) -> None:
+        """Seed this backend's persisted workers as healthy so the scheduler sees them.
+
+        Run at controller start and after a DB reopen (checkpoint restore): each
+        owned worker is heartbeat-seeded so it comes up ACTIVE, then accrues
+        failures through the reconcile fold and is reaped once over threshold.
+        """
+        assert self.worker_source is not None, "RpcTaskBackend.seed_liveness called before worker source attached"
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def attach_transition_reader(self, reader: TransitionReader) -> None:
         raise AssertionError("worker-daemon backend authors effects through its worker source")

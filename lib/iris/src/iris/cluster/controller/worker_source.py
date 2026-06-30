@@ -129,6 +129,10 @@ class DbWorkerSource:
             extra_attempt_keys=extra_attempt_keys,
         )
 
+    def owned_worker_ids(self) -> set[WorkerId]:
+        with self.db.control_read_snapshot() as snap:
+            return self._owned_worker_ids(snap)
+
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         with self.db.control_read_snapshot() as snap:
             ctx = build_scheduling_context(snap, self.health, self.worker_attrs, self.defaults)

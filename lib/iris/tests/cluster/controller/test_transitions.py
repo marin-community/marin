@@ -3575,7 +3575,7 @@ def test_prune_old_terminal_jobs(state):
     # Prune with a 1-day retention — old-job finished at ~epoch, recent-job finished just now
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
@@ -3611,7 +3611,7 @@ def test_prune_old_inactive_workers(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
@@ -3629,7 +3629,7 @@ def test_prune_noop_when_nothing_old(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
@@ -3685,7 +3685,7 @@ def test_prune_orphaned_slices(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
@@ -3715,7 +3715,7 @@ def test_prune_keeps_slice_with_live_worker_despite_empty_worker_ids(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),
@@ -3781,7 +3781,7 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
 
     result = prune_old_data(
         state._db,
-        state._health,
+        [state._health],
         state._endpoints,
         state._worker_attrs,
         job_retention=Duration.from_seconds(86400),

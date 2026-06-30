@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from finelog.client.log_client import Table
+from rigging.timing import Duration
 
 from iris.cluster.backends.k8s.tasks import _CW_DEFAULT_TOPOLOGIES, _DEFAULT_PRIORITY_CLASS_NAMES, K8sTaskProvider
 from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
@@ -52,6 +53,7 @@ _KUEUE_PRIORITY_BANDS = {
 def make_task_backend(
     config: IrisClusterConfig,
     *,
+    unreachable_grace: Duration,
     task_stats_table: Table | None = None,
     profile_table: Table | None = None,
 ) -> TaskBackend:
@@ -61,7 +63,8 @@ def make_task_backend(
     or an ``RpcTaskBackend`` when ``worker_provider`` is configured. The finelog
     tables are passed to the K8s backend (which writes per-pod resource/profile
     samples directly); the RPC backend ignores them — its worker daemons write
-    their own rows.
+    their own rows. ``unreachable_grace`` sizes the liveness tracker the
+    worker-daemon backend constructs and owns.
     """
     which = config.provider_kind()
     if which == "kubernetes_provider":
@@ -118,7 +121,7 @@ def make_task_backend(
             profile_table=profile_table,
         )
     if which == "worker_provider":
-        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
+        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory(), unreachable_grace=unreachable_grace)
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"
@@ -169,6 +172,7 @@ def make_backend(
     remote_state_dir: str,
     dry_run: bool,
     log_stack: LogStack,
+    unreachable_grace: Duration,
 ) -> TaskBackend:
     """Create the TaskBackend and, for Iris-provisioned backends, build, restore,
     and attach the autoscaler.
@@ -181,6 +185,7 @@ def make_backend(
     """
     provider = make_task_backend(
         config,
+        unreachable_grace=unreachable_grace,
         task_stats_table=log_stack.task_stats_table,
         profile_table=log_stack.profile_table,
     )
@@ -250,6 +255,7 @@ def make_backends(
     remote_state_dir: str,
     dry_run: bool,
     log_stack: LogStack,
+    unreachable_grace: Duration,
 ) -> dict[str, TaskBackend]:
     """Build the controller's ``{backend_id: TaskBackend}`` collection.
 
@@ -266,6 +272,7 @@ def make_backends(
             remote_state_dir=remote_state_dir,
             dry_run=dry_run,
             log_stack=log_stack,
+            unreachable_grace=unreachable_grace,
         )
         provider.name = backend_id
         provider.configure_routing(backend_attribute_sets(backend_cfg), frozenset(backend_cfg.allow_policy.users))

@@ -73,7 +73,7 @@ def _running_task_on_controller(ctrl, request=None):
     """Submit a single-replica job, register a worker, and drive its task to RUNNING."""
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,

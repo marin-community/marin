@@ -74,7 +74,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -933,6 +933,10 @@ class ControllerProtocol(Protocol):
 
     def backend_id_for_scale_group(self, scale_group: str) -> str: ...
 
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
+
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness: ...
+
     @property
     def last_unroutable_jobs(self) -> dict[str, str]: ...
 
@@ -982,7 +986,6 @@ class ControllerServiceImpl:
         bundle_store: Bundle store for zip storage.
         log_client: LogClient for reading task logs through LogService.FetchLogs.
         db: Underlying database connection.
-        health: Worker liveness tracker.
         endpoints: Endpoint projection (in-memory cache over the endpoints table).
         worker_attrs: Worker attributes projection.
     """
@@ -994,7 +997,6 @@ class ControllerServiceImpl:
         log_client: LogClient,
         *,
         db: ControllerDB,
-        health: WorkerHealthTracker,
         endpoints: EndpointsProjection,
         endpoint_service: EndpointServiceImpl,
         worker_attrs: WorkerAttrsProjection,
@@ -1002,7 +1004,6 @@ class ControllerServiceImpl:
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._db = db
-        self._health = health
         self._endpoints = endpoints
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
@@ -1823,6 +1824,11 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
+        # Route the worker into the liveness tracker owned by the backend that owns
+        # its scale group; a worker never registers into a k8s scale group.
+        backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
+        health = backend.health
+        assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
         with self._db.transaction() as cur:
             ops.worker.register(
                 cur,
@@ -1830,7 +1836,7 @@ class ControllerServiceImpl:
                 address=request.address,
                 metadata=request.metadata,
                 ts=Timestamp.now(),
-                health=self._health,
+                health=health,
                 worker_attrs=self._worker_attrs,
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
@@ -1869,11 +1875,10 @@ class ControllerServiceImpl:
         """List workers with their running task counts.
 
         Served directly from the workers table (cluster size is in the low
-        thousands at most), with liveness queried from
-        :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker` and
-        a single per-page running-task lookup. ``query.limit == 0`` disables
-        paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
-        is clamped to ``MAX_LIST_WORKERS_LIMIT``.
+        thousands at most), with liveness queried from the backends' trackers
+        (unioned by the controller) and a single per-page running-task lookup.
+        ``query.limit == 0`` disables paging (preserves CLI callers that fetch the
+        whole roster); ``limit > 0`` is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
         if BackendCapability.WORKER_DAEMON not in self._controller.capabilities:
             return controller_pb2.Controller.ListWorkersResponse()
@@ -1883,7 +1888,8 @@ class ControllerServiceImpl:
             query.CopyFrom(request.query)
 
         workers_all = _worker_roster(self._db)
-        liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers_all)
+        all_liveness = self._controller.all_liveness()
+        liveness_by_id = {w.worker_id: all_liveness.get(w.worker_id, WorkerLiveness()) for w, _attrs in workers_all}
         if query.backend_id:
             backend_filter = query.backend_id
             workers_all = [
@@ -2007,7 +2013,8 @@ class ControllerServiceImpl:
         status = self._merge_autoscaler_status(only_backend_id=request.backend_id)
 
         workers = _worker_roster(self._db)
-        liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
+        all_liveness = self._controller.all_liveness()
+        liveness_by_id = {w.worker_id: all_liveness.get(w.worker_id, WorkerLiveness()) for w, _attrs in workers}
         usability_by_id: dict[str, WorkerUsability] = {
             str(w.worker_id): liveness_by_id[w.worker_id].usability for w, _attrs in workers
         }
@@ -2163,7 +2170,7 @@ class ControllerServiceImpl:
             worker = _read_worker(self._db, WorkerId(worker_id_str))
             if not worker:
                 raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
-            if not self._health.liveness(worker.worker_id).healthy:
+            if not self._controller.liveness_for_worker(worker.worker_id).healthy:
                 raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
             forwarded = job_pb2.ProfileTaskRequest(
                 target="/system/process",
@@ -2210,7 +2217,7 @@ class ControllerServiceImpl:
             )
         else:
             worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._health.liveness(task_worker_id).healthy:
+            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
                 raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
             task_target = TaskTarget(
                 task_id=task.task_id.to_wire(),
@@ -2275,7 +2282,7 @@ class ControllerServiceImpl:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
         worker = detail.worker
-        liveness = self._health.liveness(worker.worker_id)
+        liveness = self._controller.liveness_for_worker(worker.worker_id)
         scale_group = str(worker.scale_group or "")
         worker_health = controller_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
@@ -2341,7 +2348,7 @@ class ControllerServiceImpl:
         worker = _read_worker(self._db, WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-        if not self._health.liveness(worker.worker_id).healthy:
+        if not self._controller.liveness_for_worker(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
         process_target = TaskTarget(
@@ -2550,7 +2557,7 @@ class ControllerServiceImpl:
             timeout = request.timeout_seconds if request.timeout_seconds else 60
         else:
             worker = _read_worker(self._db, task_worker_id)
-            if not worker or not self._health.liveness(task_worker_id).healthy:
+            if not worker or not self._controller.liveness_for_worker(task_worker_id).healthy:
                 raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
             exec_target = TaskTarget(
                 task_id=task.task_id.to_wire(),

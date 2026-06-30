@@ -1160,6 +1160,7 @@ class _ScriptedProvider:
     name: str = "worker"
     autoscaler: Any = None
     worker_source: WorkerSource | None = None
+    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1190,8 +1191,11 @@ class _ScriptedProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        self.health = tracker
+    def seed_liveness(self) -> None:
+        assert self.worker_source is not None
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1250,7 +1254,7 @@ def test_e2e_converges_to_succeeded(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1302,7 +1306,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1343,6 +1347,7 @@ class _UnreachableProvider:
     name: str = "worker"
     autoscaler: Any = None
     worker_source: WorkerSource | None = None
+    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1364,8 +1369,11 @@ class _UnreachableProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        self.health = tracker
+    def seed_liveness(self) -> None:
+        assert self.worker_source is not None
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)
@@ -1441,7 +1449,7 @@ _GRACE = Duration.from_seconds(4)
 def _expire_grace(ctrl, wid: WorkerId) -> None:
     """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
     aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
-    ctrl._health.set_last_heartbeat_for_test(wid, aged)
+    ctrl.provider.health.set_last_heartbeat_for_test(wid, aged)
 
 
 @pytest.mark.parametrize(
@@ -1467,7 +1475,7 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1488,7 +1496,7 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
-    assert wid not in ctrl._health.all(), "failed worker should be forgotten from the tracker"
+    assert wid not in ctrl.provider.health.all(), "failed worker should be forgotten from the tracker"
 
 
 def test_reconcile_failure_reaps_slice_siblings(make_controller):
@@ -1502,7 +1510,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1520,7 +1528,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
-    assert ctrl._health.all() == {}, "whole slice should be forgotten from the tracker"
+    assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
 def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
@@ -1536,7 +1544,7 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1549,7 +1557,7 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
 
     assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
     assert query_worker(state, wid) is None, "evicted worker row should be removed"
-    assert wid not in ctrl._health.all(), "evicted worker should be forgotten from the tracker"
+    assert wid not in ctrl.provider.health.all(), "evicted worker should be forgotten from the tracker"
 
 
 def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
@@ -1589,7 +1597,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1620,13 +1628,13 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     for expected_failures in range(1, BUILD_FAILURE_THRESHOLD):
         reconcile_once(ctrl)
         assert query_worker(state, wid) is not None, "worker reaped before reaching the build-failure threshold"
-        assert ctrl._health.liveness(wid).build_failures == expected_failures
+        assert ctrl.provider.health.liveness(wid).build_failures == expected_failures
 
     # The THRESHOLD-th build failure trips the bar: the backend's fold returns the
     # worker dead and the controller reaps it.
     reconcile_once(ctrl)
     assert query_worker(state, wid) is None, "worker should be reaped at the build-failure threshold"
-    assert wid not in ctrl._health.all(), "reaped worker should be forgotten from the tracker"
+    assert wid not in ctrl.provider.health.all(), "reaped worker should be forgotten from the tracker"
 
 
 # ===========================================================================

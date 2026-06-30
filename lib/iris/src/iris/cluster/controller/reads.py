@@ -1479,12 +1479,6 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-def all_worker_ids(tx: Tx) -> list[WorkerId]:
-    """Return every persisted worker id."""
-    rows = tx.execute(select(workers_table.c.worker_id)).all()
-    return [WorkerId(str(row.worker_id)) for row in rows]
-
-
 def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
     """Return ``{worker_id: scale_group}`` for every persisted worker.
 

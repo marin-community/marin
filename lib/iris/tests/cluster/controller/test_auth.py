@@ -33,7 +33,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
 from rigging.server_auth import (
@@ -89,7 +88,6 @@ def service(state, tmp_path, log_client):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),

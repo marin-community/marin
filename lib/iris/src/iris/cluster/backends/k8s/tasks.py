@@ -1446,6 +1446,9 @@ class K8sTaskProvider:
     allowed_users: frozenset[str] = frozenset({"*"})
     # K8s provisions its own capacity (cluster autoscaler + Kueue); no Iris autoscaler.
     autoscaler: Autoscaler | None = field(default=None, init=False, repr=False)
+    # A cluster backend tracks no Iris worker liveness; the controller's union read
+    # skips a None tracker, and no worker registers into a k8s scale group.
+    health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, attached by the controller once (a cluster backend has no WorkerSource).
     transition_reader: TransitionReader | None = field(default=None, init=False, repr=False)
@@ -1496,9 +1499,8 @@ class K8sTaskProvider:
         """Never called: a cluster backend owns its own placement, with no Iris workers."""
         raise AssertionError("K8sTaskProvider sources its own placement; no worker source should be attached")
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        """Never called: a cluster backend tracks no Iris worker liveness."""
-        raise AssertionError("K8sTaskProvider tracks no Iris workers; no liveness tracker should be attached")
+    def seed_liveness(self) -> None:
+        """No-op: a cluster backend tracks no Iris worker liveness to seed."""
 
     def attach_transition_reader(self, reader: TransitionReader) -> None:
         """Attach the controller-DB read surface this backend authors effects from."""

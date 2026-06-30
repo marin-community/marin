@@ -440,9 +440,9 @@ class WorkerSource(TransitionReader, Protocol):
     """
 
     health: WorkerHealthTracker
-    """The single shared liveness tracker. The backend folds the per-worker
-    REACHED/UNREACHABLE/BUILD_FAILED it observed through ``health.apply`` — it is
-    the SAME object the controller constructs, seeds, and reaps against."""
+    """The owning backend's liveness tracker (the SAME object the backend folds and
+    reaps through). It holds only this backend's workers, so the source's reads
+    project liveness over exactly the workers it owns."""
 
     db: ControllerDB
     """The controller database. The backend's teardown opens its own chunked
@@ -455,6 +455,10 @@ class WorkerSource(TransitionReader, Protocol):
     worker_attrs: WorkerAttrsProjection
     """Worker-attributes projection the teardown's ``remove_worker`` evicts the
     failed workers' cached attributes from."""
+
+    def owned_worker_ids(self) -> set[WorkerId]:
+        """The persisted workers this backend owns by scale group (a fresh read)."""
+        ...
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         """This backend's live workers, their building counts, and running attempts."""
@@ -493,6 +497,15 @@ class TaskBackend(Protocol):
     manage their own capacity or have no scale groups. Read-only handle the
     controller exposes for dashboard/status RPCs; capacity is driven through
     :meth:`autoscale`, never this attribute."""
+
+    @property
+    def health(self) -> WorkerHealthTracker | None:
+        """The worker-liveness tracker this backend constructs and owns, holding only
+        the workers in its scale groups, or None for a backend that tracks no Iris
+        workers (k8s). The backend folds and reaps through it; the controller reaches
+        worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
+        prune readers and to seed/register a worker into its owning backend."""
+        ...
 
     allowed_users: frozenset[str]
     """The allow policy: user ids permitted to route here (``"*"`` matches any).
@@ -596,13 +609,13 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        """Attach the liveness tracker this backend folds and reaps through.
+    def seed_liveness(self) -> None:
+        """Seed this backend's persisted workers as live so the scheduler sees them.
 
-        Called once by the controller for worker-daemon backends. The controller
-        shares one tracker across its worker-daemon backends, so this is the SAME
-        object its Fleet/exec/capacity readers and each scale-group-scoped worker
-        source see. Capacity-managing backends (k8s) never receive one.
+        Called by the controller at start and after a DB reopen (checkpoint
+        restore), only on worker-daemon backends. The backend reads its own
+        scale-group-scoped workers and heartbeats them into the tracker it owns.
+        Capacity-managing backends (k8s) track no liveness and no-op.
         """
         ...
 

@@ -226,25 +226,32 @@ class LocalCluster:
             provisioning_table=log_stack.provisioning_table,
         )
 
-        # The backend owns the autoscaler; the controller drives it via
-        # backend.autoscale and persists the returned state each tick.
-        provider = RpcTaskBackend(stub_factory=RpcWorkerStubFactory())
+        controller_config = ControllerConfig(
+            host="127.0.0.1",
+            port=port,
+            remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
+            local_state_dir=Path(self._db_dir.name),
+            auth_verifier=auth.verifier,
+            auth_provider=auth.provider,
+            auth=auth,
+            autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
+            # Fast worker-failure detection for local/e2e runs: reaped ~10s
+            # after the last successful reconcile, vs the ~50s production grace.
+            worker_unreachable_grace=Duration.from_seconds(10.0),
+        )
+
+        # The backend owns the autoscaler and constructs its own liveness tracker,
+        # sized by the controller config's worker-unreachable grace. The controller
+        # drives the autoscaler via backend.autoscale and persists the returned
+        # state each tick.
+        provider = RpcTaskBackend(
+            stub_factory=RpcWorkerStubFactory(),
+            unreachable_grace=controller_config.worker_unreachable_grace,
+        )
         provider.attach_autoscaler(self._autoscaler)
 
         self._controller = Controller(
-            config=ControllerConfig(
-                host="127.0.0.1",
-                port=port,
-                remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",
-                local_state_dir=Path(self._db_dir.name),
-                auth_verifier=auth.verifier,
-                auth_provider=auth.provider,
-                auth=auth,
-                autoscaler_evaluation_interval=self._config.defaults.autoscaler.evaluation_interval,
-                # Fast worker-failure detection for local/e2e runs: reaped ~10s
-                # after the last successful reconcile, vs the ~50s production grace.
-                worker_unreachable_grace=Duration.from_seconds(10.0),
-            ),
+            config=controller_config,
             backends={DEFAULT_BACKEND_ID: provider},
             log_stack=log_stack,
             threads=controller_threads,

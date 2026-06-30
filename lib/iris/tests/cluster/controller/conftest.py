@@ -82,7 +82,12 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
+from iris.cluster.controller.worker_health import (
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+    WorkerLiveness,
+)
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -200,6 +205,9 @@ class FakeProvider:
         # Attached by the controller, exactly as for RpcTaskBackend; the fake
         # sources its own workers through it rather than the controller slicing one.
         self.worker_source: WorkerSource | None = None
+        # This backend's own liveness tracker (the controller builds its worker
+        # source over this same object), mirroring RpcTaskBackend.
+        self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         # Workers this fake's reconcile fold reaped, awaiting run_teardown.
@@ -249,8 +257,11 @@ class FakeProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
-    def attach_health(self, tracker: WorkerHealthTracker) -> None:
-        self.health = tracker
+    def seed_liveness(self) -> None:
+        assert self.worker_source is not None, "FakeProvider.seed_liveness called before worker source attached"
+        worker_ids = self.worker_source.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def get_process_status(
         self,
@@ -291,6 +302,10 @@ class MockController:
         # A bare Mock would auto-create a truthy .autoscaler; the per-backend
         # feasibility/pending-hint paths read it, so pin it to "no autoscaler".
         self.provider.autoscaler = None
+        # The backend owns its liveness tracker; the service registers workers into
+        # it and the controller's union reads back through it. Tests that inspect a
+        # specific ``state._health`` point this at that tracker.
+        self.provider.health = WorkerHealthTracker()
         self.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
         self.run_template_cache: RunTemplateCache = RunTemplateCache(256)
         self.scale_group_to_backend: dict[str, str] = {}
@@ -299,6 +314,16 @@ class MockController:
 
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
+        merged: dict[WorkerId, WorkerLiveness] = {}
+        for backend in self.backends.values():
+            if backend.health is not None:
+                merged.update(backend.health.all())
+        return merged
+
+    def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness:
+        return self.all_liveness().get(worker_id, WorkerLiveness())
 
 
 @pytest.fixture
@@ -320,13 +345,18 @@ def log_service(embedded_log_server) -> LogServiceClientSync:
 
 @pytest.fixture
 def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
-    """ControllerServiceImpl with fresh DB, log service, and mock controller."""
+    """ControllerServiceImpl with fresh DB, log service, and mock controller.
+
+    The service registers workers into and reads liveness through the controller's
+    backend tracker, so point the mock backend's tracker at this state's ``_health``
+    so liveness writes and reads land on the same object the test inspects.
+    """
+    mock_controller.provider.health = state._health
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=state._health,
         endpoints=state._endpoints,
         worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
@@ -402,6 +432,12 @@ def make_controller(tmp_path):
         )
         if backends is None:
             backends = {DEFAULT_BACKEND_ID: provider if provider is not None else FakeProvider()}
+        # Test analog of make_backends: size each worker-daemon backend's tracker by
+        # the config's worker-unreachable grace (production threads it the same way),
+        # so a test passing ``worker_unreachable_grace=`` reaps on that window.
+        for backend in backends.values():
+            if backend.health is not None:
+                backend.health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         controller = Controller(
             config=config,
             backends=backends,
@@ -675,6 +711,42 @@ def register_worker(
         )
     if not healthy:
         state._health.set_health_for_test(wid, healthy=False)
+    return wid
+
+
+def register_worker_into_backend(
+    controller: Controller,
+    worker_id: str,
+    address: str,
+    metadata: job_pb2.WorkerMetadata,
+    *,
+    scale_group: str,
+    healthy: bool = True,
+    slice_id: str = "",
+) -> WorkerId:
+    """Register a worker into the liveness tracker owned by the backend that owns its scale group.
+
+    The multi-backend equivalent of :func:`register_worker`: each backend owns its
+    own tracker, so a worker must land in the tracker of the backend its scale group
+    routes to (rather than one shared tracker).
+    """
+    backend = controller.backends[controller.backend_id_for_scale_group(scale_group)]
+    assert backend.health is not None, f"backend for scale group {scale_group!r} has no liveness tracker"
+    wid = WorkerId(worker_id)
+    with controller._db.transaction() as cur:
+        ops.worker.register(
+            cur,
+            worker_id=wid,
+            address=address,
+            metadata=metadata,
+            ts=Timestamp.now(),
+            health=backend.health,
+            worker_attrs=controller._worker_attrs,
+            slice_id=slice_id,
+            scale_group=scale_group,
+        )
+    if not healthy:
+        backend.health.set_health_for_test(wid, healthy=False)
     return wid
 
 

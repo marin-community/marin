@@ -24,7 +24,7 @@ from tests.cluster.controller.conftest import (
     make_scale_group_config,
     make_worker_metadata,
     query_tasks_for_job,
-    register_worker,
+    register_worker_into_backend,
     schedule_once,
     submit_job,
 )
@@ -52,10 +52,12 @@ def two_backend_controller(make_controller):
 
 @pytest.fixture
 def state(two_backend_controller) -> ControllerTestState:
+    # Each backend owns its own tracker, so workers register through
+    # ``register_worker_into_backend`` (routed by scale group); this state's own
+    # ``_health`` is unused for these multi-backend cases.
     controller = two_backend_controller
     return ControllerTestState(
         controller._db,
-        health=controller._health,
         endpoints=controller._endpoints,
         worker_attrs=controller._worker_attrs,
         run_template_cache=controller._run_template_cache,
@@ -77,8 +79,8 @@ def _assigned(task) -> tuple[int, str | None, str]:
 
 def test_jobs_route_to_their_pinned_backend(two_backend_controller, state):
     controller = two_backend_controller
-    register_worker(state, "wa", "wa:8080", make_worker_metadata(), scale_group="sg-a")
-    register_worker(state, "wb", "wb:8080", make_worker_metadata(), scale_group="sg-b")
+    register_worker_into_backend(controller, "wa", "wa:8080", make_worker_metadata(), scale_group="sg-a")
+    register_worker_into_backend(controller, "wb", "wb:8080", make_worker_metadata(), scale_group="sg-b")
 
     job_a = _submit_pinned(state, "job-a", "a")
     job_b = _submit_pinned(state, "job-b", "b")
@@ -96,7 +98,7 @@ def test_job_never_leaks_onto_the_other_backends_worker(two_backend_controller, 
     # Only backend "b" has a worker. A job pinned to "a" must NOT be placed on
     # "b"'s worker — it stays pending for lack of capacity in its own backend.
     controller = two_backend_controller
-    register_worker(state, "wb", "wb:8080", make_worker_metadata(), scale_group="sg-b")
+    register_worker_into_backend(controller, "wb", "wb:8080", make_worker_metadata(), scale_group="sg-b")
 
     job_a = _submit_pinned(state, "job-a", "a")
 
@@ -111,7 +113,7 @@ def test_job_never_leaks_onto_the_other_backends_worker(two_backend_controller, 
 
 def test_unroutable_job_is_unschedulable(two_backend_controller, state):
     controller = two_backend_controller
-    register_worker(state, "wa", "wa:8080", make_worker_metadata(), scale_group="sg-a")
+    register_worker_into_backend(controller, "wa", "wa:8080", make_worker_metadata(), scale_group="sg-a")
 
     job_c = _submit_pinned(state, "job-c", "does-not-exist")
 
