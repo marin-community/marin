@@ -106,7 +106,9 @@ async def list_users(request: Request) -> JSONResponse:
     """
     entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
     project = request.query_params.get("project", "")
-    limit = int(request.query_params.get("limit", "300"))
+    # Authors only (no per-run dict), so a deep scan is cheap (~3s for 1000 runs on
+    # marin_moe) and captures the full contributor set, not just recent authors.
+    limit = int(request.query_params.get("limit", "1000"))
     if not project:
         return JSONResponse({"error": "project required"}, status_code=400)
 
