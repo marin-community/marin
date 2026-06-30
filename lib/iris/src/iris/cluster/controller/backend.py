@@ -168,11 +168,6 @@ class ScheduleInput:
     max_tasks_per_job_per_cycle: int
     trace: bool = False
     """Whether to emit the per-phase scheduling trace logs this cycle."""
-    autoscale_runs: bool = False
-    """Whether the autoscaler runs this tick. Cross-variant reserved-pool
-    preemption is only valid when it does: the victim PREEMPT and the slice drain
-    that reclaims its chips must commit together, so a schedule-only mini-tick
-    (a submit wake) must not emit cross-variant preemptions the drain never reaps."""
 
 
 @dataclass(frozen=True)

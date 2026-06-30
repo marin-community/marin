@@ -272,7 +272,6 @@ class RpcTaskBackend:
                 context=context,
                 max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
                 trace=request.trace,
-                autoscale_runs=request.autoscale_runs,
             ),
             zone_capabilities,
             ledger,
@@ -394,17 +393,17 @@ class RpcTaskBackend:
         """
         if self.autoscaler is None:
             return AutoscaleResult()
-        if request.dead_workers:
-            siblings = self.autoscaler.drain_slices_for_workers(
-                [str(wid) for wid in request.dead_workers], cause=SliceDrainCause.WORKER_FAILED
+        assert not (
+            request.dead_workers and request.drain_workers
+        ), "AutoscaleRequest cannot carry both dead_workers and drain_workers in one tick"
+        if request.dead_workers or request.drain_workers:
+            workers, cause = (
+                (request.dead_workers, SliceDrainCause.WORKER_FAILED)
+                if request.dead_workers
+                else (request.drain_workers, SliceDrainCause.PREEMPTED)
             )
-            removed = list(request.dead_workers) + [WorkerId(wid) for wid in siblings]
-            return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
-        if request.drain_workers:
-            siblings = self.autoscaler.drain_slices_for_workers(
-                [str(wid) for wid in request.drain_workers], cause=SliceDrainCause.PREEMPTED
-            )
-            removed = list(request.drain_workers) + [WorkerId(wid) for wid in siblings]
+            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in workers], cause=cause)
+            removed = list(workers) + [WorkerId(wid) for wid in siblings]
             return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
         assert self._store is not None, "RpcTaskBackend.autoscale called before worker store attached"
         self.autoscaler.refresh(self._store.worker_status())
