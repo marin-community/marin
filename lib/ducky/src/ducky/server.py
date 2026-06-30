@@ -39,6 +39,21 @@ from ducky.runner import DuckyError, QueryResult, QueryRunner
 logger = logging.getLogger(__name__)
 
 
+def _log_sql(sql: str, limit: int = 300) -> str:
+    """Collapse SQL to a single truncated line for logging."""
+    one_line = " ".join(sql.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
+def _human_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"
+
+
 class QueryStatus(enum.StrEnum):
     RUNNING = "running"
     DONE = "done"
@@ -77,8 +92,16 @@ class QueryManager:
             cached = self._cache.get(sql)
             if cached is not None:
                 self._states[query_id] = QueryState(QueryStatus.DONE, result=cached, cached=True)
+                logger.info(
+                    "query %s cache hit (%d rows, %s): %s",
+                    query_id,
+                    cached.total_rows,
+                    _human_bytes(cached.result_bytes),
+                    _log_sql(sql),
+                )
                 return query_id
             self._states[query_id] = QueryState(QueryStatus.RUNNING)
+        logger.info("query %s submitted: %s", query_id, _log_sql(sql))
         self._executor.submit(self._run, sql, query_id)
         return query_id
 
@@ -90,14 +113,22 @@ class QueryManager:
         try:
             result = self._runner.run_query(sql, query_id)
         except DuckyError as e:
+            logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
             with self._lock:
                 self._states[query_id] = QueryState(QueryStatus.ERROR, error=str(e))
             return
         except Exception as e:  # background task: record instead of hanging in RUNNING forever
-            logger.exception("Unexpected error running query %s", query_id)
+            logger.exception("query %s crashed", query_id)
             with self._lock:
                 self._states[query_id] = QueryState(QueryStatus.ERROR, error=f"internal error: {e}")
             return
+        logger.info(
+            "query %s done: %d rows, %s, %d ms",
+            query_id,
+            result.total_rows,
+            _human_bytes(result.result_bytes),
+            result.elapsed_ms,
+        )
         with self._lock:
             self._cache[sql] = result
             self._states[query_id] = QueryState(QueryStatus.DONE, result=result, cached=False)
@@ -315,8 +346,17 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     return app
 
 
+class _QuietPolls(logging.Filter):
+    """Drop the high-frequency dashboard-poll access lines so query lifecycle logs stand out."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return '"GET /result/' not in message and '"GET /health ' not in message
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
     config = DuckyConfig.from_environment()
     runner = QueryRunner(config)
     app = create_app(runner, config)
