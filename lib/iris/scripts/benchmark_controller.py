@@ -49,7 +49,12 @@ import click
 import uvicorn
 import yaml
 from connectrpc.request import RequestContext
-from iris.cluster.backends.rpc.backend import RpcTaskBackend, RpcWorkerStubFactory
+from iris.cluster.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    RpcTaskBackend,
+    RpcWorkerStubFactory,
+    teardown_dead_workers,
+)
 from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.backend import (
@@ -178,6 +183,7 @@ class _FakeProvider:
         self.worker_source: WorkerSource | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
+        self._pending_dead: list[WorkerId] = []
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -227,8 +233,25 @@ class _FakeProvider:
         now = Timestamp.now()
         effects = apply_reconcile(self.worker_source, worker_results, now=now)
         events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
-        dead = self.worker_source.health.apply(events, now_ms=now.epoch_ms())
-        return ReconcileResult(effects=effects, dead_workers=dead)
+        self._pending_dead.extend(self.worker_source.health.apply(events, now_ms=now.epoch_ms()))
+        return ReconcileResult(effects=effects)
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        assert self.worker_source is not None
+        teardown_dead_workers(
+            dead_workers,
+            db=self.worker_source.db,
+            health=self.worker_source.health,
+            endpoints=self.worker_source.endpoints,
+            worker_attrs=self.worker_source.worker_attrs,
+            autoscale=self.autoscale,
+            reason=reason,
+        )
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
@@ -2739,8 +2762,9 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t2 = time.perf_counter()
     # The backend sources its own reconcile snapshot; the benchmark prebuilds it
     # (measured above) and hands it back through a stub source so the RPC fan-out
-    # is what t2..t3 times.
-    provider.attach_worker_source(_PrebuiltWorkerSource(snapshot))
+    # is what t2..t3 times. The stub implements only the fan-out read surface (it
+    # never folds liveness or tears down), so it is cast to the full WorkerSource.
+    provider.attach_worker_source(cast(WorkerSource, _PrebuiltWorkerSource(snapshot)))
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()

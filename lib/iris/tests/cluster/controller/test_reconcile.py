@@ -18,7 +18,11 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import pytest
-from iris.cluster.backends.rpc.backend import FleetObservation, RpcTaskBackend
+from iris.cluster.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    FleetObservation,
+    RpcTaskBackend,
+)
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -79,6 +83,7 @@ from .conftest import (
     register_worker,
     run_worker_daemon_reconcile,
     run_worker_daemon_schedule,
+    run_worker_daemon_teardown,
     submit_job,
 )
 
@@ -1160,6 +1165,7 @@ class _ScriptedProvider:
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -1200,7 +1206,17 @@ class _ScriptedProvider:
             (p, WorkerReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
         ]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        result, dead = run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        self._pending_dead.extend(dead)
+        return result
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        run_worker_daemon_teardown(self.worker_source, dead, self.autoscale, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        run_worker_daemon_teardown(self.worker_source, dead_workers, self.autoscale, reason=reason)
 
     def close(self):
         pass
@@ -1329,6 +1345,7 @@ class _UnreachableProvider:
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -1375,7 +1392,17 @@ class _UnreachableProvider:
                     (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None))
                 )
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        result, dead = run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        self._pending_dead.extend(dead)
+        return result
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        run_worker_daemon_teardown(self.worker_source, dead, self.autoscale, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        run_worker_daemon_teardown(self.worker_source, dead_workers, self.autoscale, reason=reason)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         self.autoscale_calls.append(list(request.dead_workers))

@@ -44,10 +44,10 @@ def _attribute_value_cols(value: str | int | float) -> dict:
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    The controller's ``_fail_and_teardown`` forwards these IDs to
-    ``backend.autoscale`` for slice-sibling teardown. Per-task kill targets and
-    log events are already applied by ``commit_effects`` inside the batch, so
-    they don't need to surface in the return value.
+    A worker-daemon backend's teardown forwards these IDs to ``backend.autoscale``
+    for slice-sibling teardown. Per-task kill targets and log events are already
+    applied by ``commit_effects`` inside the batch, so they don't need to surface
+    in the return value.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]

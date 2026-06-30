@@ -8,7 +8,9 @@ local clusters. The Iris scheduler assigns task→worker; this backend fans the
 per-worker Reconcile RPC out to the worker daemons, resolves the observations
 into task ``effects`` from its own read snapshot, and folds the per-worker
 liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
-through the single shared liveness tracker into the ``dead_workers`` it returns.
+through the single shared liveness tracker. The workers its fold reaps are
+stashed and torn down by ``run_teardown`` after the controller commits the
+effects, so no worker identity crosses the reconcile result boundary.
 """
 
 import asyncio
@@ -21,7 +23,9 @@ from typing import ClassVar, Protocol, TypeVar
 from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
+from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -39,11 +43,15 @@ from iris.cluster.controller.backend import (
     run_scheduling_decision,
     user_admitted,
 )
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.ops.worker import fail as fail_workers
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -69,8 +77,73 @@ RECONCILE_FANOUT_PARALLELISM = 512
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
 EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
+# Failure reason stamped on a worker the reconcile fold reaped (drained by
+# ``run_teardown``) versus a healthy slice sibling reaped alongside it.
+WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
+_SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
+
 _T = TypeVar("_T")
 _R = TypeVar("_R")
+
+
+def teardown_dead_workers(
+    dead_workers: list[WorkerId],
+    *,
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    endpoints: EndpointsProjection,
+    worker_attrs: WorkerAttrsProjection,
+    autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
+    reason: str,
+) -> None:
+    """Serialize worker failure, tear down slices + siblings, forget the lot.
+
+    Fail the dead workers (``ops.worker.fail``), then hand the removed set to this
+    backend's ``autoscale``, which terminates their slices AND healthy siblings
+    and returns the full ``removed_workers`` set; fail those siblings, persist the
+    autoscaler state, and forget every removed worker from the tracker. The only
+    health-driven write is removal. Reads run over fresh DB snapshots, so attempts
+    a just-committed reconcile already finalized are seen terminal and skipped.
+    """
+    if not dead_workers:
+        return
+    for wid in dead_workers:
+        log_event("worker_failing", str(wid), trigger=reason)
+    failure_result = fail_workers(
+        db,
+        worker_ids=[str(wid) for wid in dead_workers],
+        reason=reason,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
+    )
+    removed_ids = [wid for wid, _ in failure_result.removed_workers]
+    if not removed_ids:
+        # A concurrent reaper already failed every candidate (or they had no
+        # address). Nothing was removed, so skip autoscale entirely: calling it
+        # with no dead workers would run a full provisioning cycle on the control
+        # thread (probe_health + update_slice_activity) racing the autoscaler
+        # thread.
+        return
+
+    removed_set = set(removed_ids)
+    auto = autoscale(AutoscaleRequest(dead_workers=removed_ids))
+    if auto.autoscaler_state is not None:
+        with db.transaction() as cur:
+            persist_autoscaler_state(cur, auto.autoscaler_state)
+    siblings = [wid for wid in auto.removed_workers if wid not in removed_set]
+    if siblings:
+        for wid in siblings:
+            log_event("worker_failing", str(wid), trigger=_SLICE_SIBLING_TEARDOWN_REASON)
+        fail_workers(
+            db,
+            worker_ids=[str(wid) for wid in siblings],
+            reason=_SLICE_SIBLING_TEARDOWN_REASON,
+            health=health,
+            endpoints=endpoints,
+            worker_attrs=worker_attrs,
+        )
+    health.forget_many(removed_set | set(siblings))
 
 
 def _fan_out(
@@ -183,6 +256,10 @@ class RpcTaskBackend:
     # One shared scheduler instance reused across cycles (mirrors the autoscaler's
     # own Scheduler); per-tick worker state comes from ``worker_source``.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    # Workers this backend's reconcile fold reaped, awaiting teardown. ``reconcile``
+    # appends; ``run_teardown`` drains post-commit. Kept off the reconcile result so
+    # no worker identity crosses that boundary back to the controller.
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
     def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
         """Attach the Iris autoscaler that provisions capacity for this backend."""
@@ -296,8 +373,8 @@ class RpcTaskBackend:
         the observations into task ``effects`` against the backend's own read
         snapshot and folds the liveness it observed — the transport signals plus
         the kernel-derived BUILD_FAILED — through the single shared
-        ``WorkerHealthTracker.apply``, returning the workers that fold reaped as
-        ``dead_workers``.
+        ``WorkerHealthTracker.apply``. The workers the fold reaped are stashed for
+        :meth:`run_teardown`; only the committable ``effects`` are returned.
         """
         assert self.worker_source is not None, "RpcTaskBackend.reconcile called before worker source attached"
         observation = self._observe_fleet()
@@ -311,8 +388,39 @@ class RpcTaskBackend:
         events = observation.transport_events + [
             WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
         ]
-        dead = self.worker_source.health.apply(events, now_ms=now.epoch_ms())
-        return ReconcileResult(effects=effects, dead_workers=dead)
+        self._pending_dead.extend(self.worker_source.health.apply(events, now_ms=now.epoch_ms()))
+        return ReconcileResult(effects=effects)
+
+    def run_teardown(self) -> None:
+        """Tear down the workers this tick's reconcile fold reaped.
+
+        Drains the stash and runs the same fail → slice-and-sibling teardown →
+        forget sequence over a fresh snapshot. The controller calls this after it
+        commits the reconcile effects, so a just-finalized attempt is already
+        terminal and skipped. Empty between reaps, so most ticks are a no-op.
+        """
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        """Fail ``dead_workers``, reap their slices + siblings, and forget them.
+
+        Sources the failure-write collaborators from this backend's worker source
+        and drives its own ``autoscale`` for slice termination, so the controller
+        hands over only the worker set (the recycled-IP eviction path) or nothing
+        at all (``run_teardown`` drains its own stash).
+        """
+        assert self.worker_source is not None, "RpcTaskBackend.teardown called before worker source attached"
+        teardown_dead_workers(
+            dead_workers,
+            db=self.worker_source.db,
+            health=self.worker_source.health,
+            endpoints=self.worker_source.endpoints,
+            worker_attrs=self.worker_source.worker_attrs,
+            autoscale=self.autoscale,
+            reason=reason,
+        )
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.

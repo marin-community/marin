@@ -21,7 +21,9 @@ from rigging.timing import Timestamp
 from iris.cluster.controller import reads
 from iris.cluster.controller.backend import BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
-from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow, WorkerAttrsSource
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
@@ -107,7 +109,8 @@ class DbWorkerSource:
     db: ControllerDB
     owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
-    worker_attrs: WorkerAttrsSource
+    worker_attrs: WorkerAttrsProjection
+    endpoints: EndpointsProjection
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
 

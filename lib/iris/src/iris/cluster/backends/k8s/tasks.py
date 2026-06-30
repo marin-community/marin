@@ -71,7 +71,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.types import JobName, get_gpu_count
+from iris.cluster.types import JobName, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
@@ -1505,12 +1505,18 @@ class K8sTaskProvider:
         ``sync`` converges the cluster (apply new pods, delete strays, poll running
         pods) and returns the neutral task updates it observed; this resolves those
         into committable task ``effects`` against the backend's own read snapshot.
-        A cluster backend tracks no Iris workers, so ``dead_workers`` is empty.
+        A cluster backend tracks no Iris workers, so it folds no liveness.
         """
         assert self.transition_reader is not None, "K8sTaskProvider.reconcile called before transition reader attached"
         updates = self.sync(request)
         effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects, dead_workers=[])
+        return ReconcileResult(effects=effects)
+
+    def run_teardown(self) -> None:
+        """No-op: a cluster backend tracks no Iris workers to reap."""
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        """No-op: a cluster backend tracks no Iris workers to reap."""
 
     def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.

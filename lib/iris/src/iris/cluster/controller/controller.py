@@ -840,12 +840,13 @@ class Controller:
                 self._tick_wake.set()
 
         # Each backend already folded the liveness it observed during reconcile and
-        # returned the workers its fold reaped. Tear them down over a FRESH snapshot
-        # AFTER the reconcile effects are committed: ``fail_workers`` skips the
-        # just-finalized terminal attempts only when it sees them already terminal.
-        dead = [wid for result in recon_results.values() for wid in result.dead_workers]
-        if dead:
-            self._fail_and_teardown(dead)
+        # stashed the workers its fold reaped. Drain those stashes AFTER the
+        # reconcile effects are committed, so each backend's teardown reads a FRESH
+        # snapshot where the just-finalized terminal attempts are already terminal
+        # and skipped. No worker identity passes through the controller.
+        if run_reconcile:
+            for backend_id in self._backend_ids:
+                self._backends[backend_id].run_teardown()
 
     def _build_tick_inputs(
         self,
@@ -901,6 +902,7 @@ class Controller:
             owns_scale_group=owns_scale_group,
             health=self._health,
             worker_attrs=self._worker_attrs,
+            endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
             defaults=self._config.user_budget_defaults,
         )
@@ -1373,79 +1375,27 @@ class Controller:
             running_tasks=batch.running_tasks,
         )
 
-    def _fail_and_teardown(
-        self,
-        dead_workers: list[WorkerId],
-        *,
-        reason: str = "worker reconcile failure threshold exceeded",
-    ) -> None:
-        """Serialize worker failure, tear down slices + siblings, forget the lot.
-
-        Fail the dead workers (``ops.worker.fail``), then hand each owning
-        backend its share to ``backend.autoscale`` (resolved from the worker's
-        scale group), which terminates their slices AND healthy siblings and
-        returns the full ``removed_workers`` set; fail those siblings, persist the
-        autoscaler state, and forget every removed worker from the tracker. The
-        only health-driven write is removal.
-        """
-        # Resolve owning backends before failing, while the worker rows still
-        # carry their scale group.
-        with self._db.read_snapshot() as snap:
-            worker_to_backend = self._worker_to_backend_map(snap)
-
-        sibling_reason = "unhealthy worker failed, slice terminated"
-        for wid in dead_workers:
-            log_event("worker_failing", str(wid), trigger=reason)
-        failure_result = ops.worker.fail(
-            self._db,
-            worker_ids=[str(wid) for wid in dead_workers],
-            reason=reason,
-            health=self._health,
-            endpoints=self._endpoints,
-            worker_attrs=self._worker_attrs,
-        )
-        removed_ids = [wid for wid, _ in failure_result.removed_workers]
-        if not removed_ids:
-            # A concurrent reaper already failed every candidate (or they had no
-            # address). Nothing was removed, so skip backend.autoscale entirely:
-            # calling it here with no dead workers would run a full provisioning
-            # cycle on the polling thread (probe_health + update_slice_activity)
-            # racing the autoscaler thread.
-            return
-
-        removed_set = set(removed_ids)
-        all_siblings: list[WorkerId] = []
-        for backend_id in self._backend_ids:
-            group = [wid for wid in removed_ids if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
-            if not group:
-                continue
-            auto = self._backends[backend_id].autoscale(AutoscaleRequest(dead_workers=group))
-            if auto.autoscaler_state is not None:
-                with self._db.transaction() as cur:
-                    persist_autoscaler_state(cur, auto.autoscaler_state)
-            all_siblings.extend(wid for wid in auto.removed_workers if wid not in removed_set)
-
-        if all_siblings:
-            for wid in all_siblings:
-                log_event("worker_failing", str(wid), trigger=sibling_reason)
-            ops.worker.fail(
-                self._db,
-                worker_ids=[str(wid) for wid in all_siblings],
-                reason=sibling_reason,
-                health=self._health,
-                endpoints=self._endpoints,
-                worker_attrs=self._worker_attrs,
-            )
-        self._health.forget_many(removed_set | set(all_siblings))
-
     def _drain_pending_evictions(self) -> None:
-        """Fail-and-teardown the workers queued by :meth:`request_worker_eviction`."""
+        """Tear down the workers queued by :meth:`request_worker_eviction`.
+
+        Resolves each evicted worker to its owning backend (by scale group, while
+        the rows still carry it) and hands that backend its share to tear down --
+        the same fail → slice-and-sibling teardown → forget the reconcile fold
+        runs, off the liveness path. The recycled-IP eviction reason is recorded on
+        the failure.
+        """
         with self._pending_evictions_lock:
             if not self._pending_evictions:
                 return
             drained = sorted(self._pending_evictions)
             self._pending_evictions.clear()
-        self._fail_and_teardown(drained, reason="address reused by newly-registered worker (recycled IP)")
+        with self._db.read_snapshot() as snap:
+            worker_to_backend = self._worker_to_backend_map(snap)
+        reason = "address reused by newly-registered worker (recycled IP)"
+        for backend_id in self._backend_ids:
+            group = [wid for wid in drained if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
+            if group:
+                self._backends[backend_id].teardown(group, reason=reason)
 
     def _drain_pending_kicks(self) -> list[PendingKick]:
         """Take the queued administrative kicks for this tick's commit."""

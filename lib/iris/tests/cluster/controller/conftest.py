@@ -5,6 +5,7 @@
 
 import shutil
 import tempfile
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace as _replace
@@ -14,6 +15,10 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from finelog.client.log_client import Table
 from finelog.rpc.logging_connect import LogServiceClientSync
+from iris.cluster.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    teardown_dead_workers,
+)
 from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -139,11 +144,15 @@ def run_worker_daemon_reconcile(
     worker_source: WorkerSource | None,
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     transport_events: list[WorkerHealthEvent],
-) -> ReconcileResult:
+) -> tuple[ReconcileResult, list[WorkerId]]:
     """Author reconcile effects from a fake's worker results and fold the observed
     liveness — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.reconcile``'s
     tail (resolve observations into effects, then fold transport + BUILD_FAILED
-    through the shared tracker reached via the source)."""
+    through the shared tracker reached via the source).
+
+    Returns the committable result plus the workers the fold reaped; the caller
+    stashes the latter for its ``run_teardown``, the way the real backend stashes
+    on ``self._pending_dead``."""
     assert worker_source is not None, "worker-daemon backend reconciled before worker source attached"
     now = Timestamp.now()
     effects = apply_reconcile(worker_source, worker_results, now=now)
@@ -151,7 +160,29 @@ def run_worker_daemon_reconcile(
         WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
     ]
     dead = worker_source.health.apply(events, now_ms=now.epoch_ms())
-    return ReconcileResult(effects=effects, dead_workers=dead)
+    return ReconcileResult(effects=effects), dead
+
+
+def run_worker_daemon_teardown(
+    worker_source: WorkerSource | None,
+    dead_workers: list[WorkerId],
+    autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
+    *,
+    reason: str,
+) -> None:
+    """Tear down ``dead_workers`` through the production teardown — the fakes'
+    shared mirror of ``RpcTaskBackend.teardown`` (source the failure-write
+    collaborators from the worker source, drive the fake's own ``autoscale``)."""
+    assert worker_source is not None, "worker-daemon backend teardown before worker source attached"
+    teardown_dead_workers(
+        dead_workers,
+        db=worker_source.db,
+        health=worker_source.health,
+        endpoints=worker_source.endpoints,
+        worker_attrs=worker_source.worker_attrs,
+        autoscale=autoscale,
+        reason=reason,
+    )
 
 
 class FakeProvider:
@@ -171,6 +202,8 @@ class FakeProvider:
         self.worker_source: WorkerSource | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
+        # Workers this fake's reconcile fold reaped, awaiting run_teardown.
+        self._pending_dead: list[WorkerId] = []
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
@@ -195,10 +228,20 @@ class FakeProvider:
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        result, dead = run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        self._pending_dead.extend(dead)
+        return result
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        run_worker_daemon_teardown(self.worker_source, dead, self.autoscale, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        run_worker_daemon_teardown(self.worker_source, dead_workers, self.autoscale, reason=reason)
 
     def attach_autoscaler(self, autoscaler) -> None:
         self.autoscaler = autoscaler

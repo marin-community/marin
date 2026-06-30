@@ -65,6 +65,12 @@ class FakeDirectProvider:
         self.sync_calls.append(request)
         return self.sync_result
 
+    def run_teardown(self) -> None:
+        """No-op: a cluster-view backend tracks no Iris workers to reap."""
+
+    def teardown(self, dead_workers, *, reason: str) -> None:
+        """No-op: a cluster-view backend tracks no Iris workers to reap."""
+
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()
 

@@ -21,10 +21,12 @@ type: a backend no-ops where a phase doesn't apply (the worker-daemon backend's
 ``schedule`` runs the Iris scheduler while a cluster backend returns empty; the
 cluster backend's ``reconcile`` reconciles pods while it owns its own capacity,
 so its ``autoscale`` returns empty). Every backend authors its own per-tick
-projection (task status + worker liveness + placement) and returns it uniformly:
-``reconcile`` yields a :class:`ReconcileResult` carrying the committable task
-``effects`` plus the ``dead_workers`` its own liveness fold reaped, and the
-controller just stores the effects and tears the dead workers down.
+projection (task status + placement) and returns it uniformly: ``reconcile``
+yields a :class:`ReconcileResult` carrying the committable task ``effects``, and
+the controller just stores them. A backend that tracks Iris workers also folds
+the liveness it observed during reconcile and tears the workers its fold reaped
+down itself: the controller calls :meth:`TaskBackend.run_teardown` post-commit
+without learning any worker identities.
 
 :attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
 and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
@@ -32,7 +34,7 @@ exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
 the controller drains the dispatch queue (a DB write it owns) and hands the
 promoted tasks to that backend's ``reconcile``. A worker-daemon backend instead
 sources its own placement and folds the liveness it observed; a cluster backend
-has no Iris workers, so its ``dead_workers`` is always empty.
+has no Iris workers, so its ``run_teardown`` is a no-op.
 """
 
 import logging
@@ -44,7 +46,10 @@ from typing import ClassVar, Protocol
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
 from iris.cluster.controller.reconcile.loader import TransitionReader
@@ -201,19 +206,17 @@ class ScheduleResult:
 class ReconcileResult:
     """The projection :meth:`TaskBackend.reconcile` authored this tick.
 
-    Uniform across backend kinds: the backend converges its execution substrate,
-    resolves what it observed into task-state ``effects``, and folds the liveness
-    it observed into ``dead_workers``. The controller commits ``effects`` and
-    tears down ``dead_workers``; it does not re-derive either.
+    Uniform across backend kinds: the backend converges its execution substrate
+    and resolves what it observed into task-state ``effects`` for the controller
+    to commit. A backend that tracks Iris workers also folds the liveness it
+    observed and stashes the workers its fold reaped for its own
+    :meth:`TaskBackend.run_teardown`; that set never crosses this boundary, so the
+    controller commits ``effects`` without learning any worker identities.
     """
 
     effects: ControllerEffects = field(default_factory=ControllerEffects)
     """The committable task/attempt/job projection this backend authored from its
     own read snapshot (``commit_effects`` drains it into the tick transaction)."""
-    dead_workers: list[WorkerId] = field(default_factory=list)
-    """Workers this backend's own liveness fold reaped this tick. The controller
-    fails them and tears down their slices. Always empty for a cluster backend,
-    which has no Iris workers to track."""
 
 
 @dataclass(frozen=True)
@@ -445,22 +448,36 @@ def apply_placements(
 
 
 class WorkerSource(TransitionReader, Protocol):
-    """A worker-daemon backend's live worker + placement read surface.
+    """A worker-daemon backend's controller-DB surface (reads + teardown writes).
 
     The backend reads its own workers, placement and worker-status through this,
     authors its task projection through the inherited
-    :meth:`~TransitionReader.transition_snapshot`, and folds the liveness it
-    observed through the shared :attr:`health` tracker; the controller never
-    partitions a worker snapshot for it. In-process backends back this with a
-    scale-group-scoped read of the controller DB. When placement state moves into
-    the backend, only the implementation behind this interface changes — the
-    :class:`TaskBackend` contract does not.
+    :meth:`~TransitionReader.transition_snapshot`, folds the liveness it observed
+    through the shared :attr:`health` tracker, and tears down the workers its fold
+    reaped through the failure-write collaborators (:attr:`db`, :attr:`endpoints`,
+    :attr:`worker_attrs`); the controller never partitions a worker snapshot for
+    it. In-process backends back this with a scale-group-scoped read of the
+    controller DB. When live worker state moves into the backend's own store, only
+    the implementation behind this interface changes — the :class:`TaskBackend`
+    contract does not.
     """
 
     health: WorkerHealthTracker
     """The single shared liveness tracker. The backend folds the per-worker
     REACHED/UNREACHABLE/BUILD_FAILED it observed through ``health.apply`` — it is
     the SAME object the controller constructs, seeds, and reaps against."""
+
+    db: ControllerDB
+    """The controller database. The backend's teardown opens its own chunked
+    failure transactions against this (``ops.worker.fail``)."""
+
+    endpoints: EndpointsProjection
+    """Endpoint projection the teardown's ``commit_effects`` drains task
+    deregistrations into."""
+
+    worker_attrs: WorkerAttrsProjection
+    """Worker-attributes projection the teardown's ``remove_worker`` evicts the
+    failed workers' cached attributes from."""
 
     def scheduling_inputs(self) -> BackendSchedulingInputs:
         """This backend's live workers, their building counts, and running attempts."""
@@ -541,13 +558,36 @@ class TaskBackend(Protocol):
         """Converge the backend toward the desired state and author the projection.
 
         Bounded I/O. Worker-daemon backends source their own worker/placement
-        snapshot, fan the reconcile RPC out, and resolve the observations into
-        task ``effects`` while folding the per-worker liveness they observed into
-        ``dead_workers``; cluster backends apply/poll the pods in ``request`` and
-        resolve those into ``effects`` (their ``dead_workers`` is always empty).
-        Either way the backend authors its own projection from its own read
-        snapshot; the controller only commits ``effects`` and tears down
-        ``dead_workers``.
+        snapshot, fan the reconcile RPC out, resolve the observations into task
+        ``effects``, and fold the per-worker liveness they observed — stashing the
+        workers their fold reaped for the matching :meth:`run_teardown`; cluster
+        backends apply/poll the pods in ``request`` and resolve those into
+        ``effects`` (they track no Iris workers). Either way the backend authors
+        its own projection from its own read snapshot; the controller only commits
+        ``effects`` and never learns which workers were reaped.
+        """
+        ...
+
+    def run_teardown(self) -> None:
+        """Tear down the workers this backend's reconcile fold reaped this tick.
+
+        Bounded I/O. Called once per backend by the controller AFTER the tick's
+        reconcile effects are committed (so the just-finalized terminal attempts
+        are already terminal and skipped), with no arguments: the backend drains
+        its own stash of reaped workers, fails them, terminates their slices and
+        healthy siblings, and forgets them from its liveness tracker. A backend
+        that tracks no Iris workers (cluster) is a no-op.
+        """
+        ...
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        """Tear down a specific set of this backend's workers now.
+
+        The same fail → slice-and-sibling teardown → forget sequence
+        :meth:`run_teardown` drains its stash into, but for an explicit set the
+        controller resolved to this backend off the reconcile path — the
+        recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
+        A backend that tracks no Iris workers is a no-op.
         """
         ...
 
