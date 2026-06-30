@@ -425,10 +425,6 @@ class Controller:
         # Set after a tick commits new ASSIGNED rows so the next tick reconciles
         # immediately (dispatching them) instead of waiting a full poll interval.
         self._force_reconcile = False
-        # Workers queued off the control loop for teardown on the next tick; see
-        # request_worker_eviction / _drain_pending_evictions.
-        self._pending_evictions: set[WorkerId] = set()
-        self._pending_evictions_lock = threading.Lock()
         # Task terminal-state overrides queued off the control loop for the next
         # tick; see request_task_kicks / _drain_pending_kicks.
         self._pending_kicks: list[PendingKick] = []
@@ -483,20 +479,6 @@ class Controller:
         of waiting a full poll interval.
         """
         self._tick_wake.set()
-
-    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None:
-        """Queue workers for fail-and-teardown on the next control tick.
-
-        Called off the control-loop thread (the Register RPC, when a worker claims
-        an address still held by a stale row — a recycled internal IP). The
-        teardown reaps the worker's slice through the autoscaler, which is only
-        safe on the control-loop thread, so the work is deferred to the tick drain.
-        """
-        if not worker_ids:
-            return
-        with self._pending_evictions_lock:
-            self._pending_evictions.update(worker_ids)
-        self.wake()
 
     def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None:
         """Queue task terminal-state overrides to apply on the next control tick.
@@ -798,7 +780,8 @@ class Controller:
             self._run_scheduling()
             return
 
-        self._drain_pending_evictions()
+        for backend_id in self._backend_ids:
+            self._backends[backend_id].drain_pending_evictions()
         pending_kicks = self._drain_pending_kicks()
 
         run_autoscale = autoscale_limiter.should_run()
@@ -935,17 +918,6 @@ class Controller:
             owns_scale_group=owns_scale_group,
             budget_defaults=self._config.user_budget_defaults,
         )
-
-    def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:
-        """Map each persisted worker to its owning backend via its scale group.
-
-        Used only to route a failed worker's slice teardown to its owning backend;
-        scheduling and reconcile do not partition workers in the controller.
-        """
-        return {
-            wid: self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
-            for wid, scale_group in reads.worker_scale_groups(snap).items()
-        }
 
     def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
         """Route unpinned jobs, then run each backend's scheduler over its tasks.
@@ -1420,28 +1392,6 @@ class Controller:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
-
-    def _drain_pending_evictions(self) -> None:
-        """Tear down the workers queued by :meth:`request_worker_eviction`.
-
-        Resolves each evicted worker to its owning backend (by scale group, while
-        the rows still carry it) and hands that backend its share to tear down --
-        the same fail → slice-and-sibling teardown → forget the reconcile fold
-        runs, off the liveness path. The recycled-IP eviction reason is recorded on
-        the failure.
-        """
-        with self._pending_evictions_lock:
-            if not self._pending_evictions:
-                return
-            drained = sorted(self._pending_evictions)
-            self._pending_evictions.clear()
-        with self._db.read_snapshot() as snap:
-            worker_to_backend = self._worker_to_backend_map(snap)
-        reason = "address reused by newly-registered worker (recycled IP)"
-        for backend_id in self._backend_ids:
-            group = [wid for wid in drained if worker_to_backend.get(wid, DEFAULT_BACKEND_ID) == backend_id]
-            if group:
-                self._backends[backend_id].teardown(group, reason=reason)
 
     def _drain_pending_kicks(self) -> list[PendingKick]:
         """Take the queued administrative kicks for this tick's commit."""

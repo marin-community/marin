@@ -13,15 +13,17 @@ from iris.cluster.controller.backend import (
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerRegistration,
 )
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.schema import tasks_table
 from iris.cluster.controller.writes import stamp_backend
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update
@@ -66,10 +68,14 @@ class FakeDirectProvider:
         self.sync_calls.append(request)
         return self.sync_result
 
-    def run_teardown(self) -> None:
-        """No-op: a cluster-view backend tracks no Iris workers to reap."""
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        raise ProviderUnsupportedError("fake k8s does not register Iris workers")
 
-    def teardown(self, dead_workers, *, reason: str) -> None:
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """No-op: a cluster-view backend queues no recycled-address evictions."""
+        return []
+
+    def run_teardown(self) -> None:
         """No-op: a cluster-view backend tracks no Iris workers to reap."""
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:

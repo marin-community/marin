@@ -33,10 +33,12 @@ from iris.cluster.controller.backend import (
     ProviderError,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleInput,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerRegistration,
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
@@ -353,6 +355,16 @@ class RpcTaskBackend:
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        """Persist a registering worker and queue any recycled-address eviction."""
+        assert self._store is not None, "RpcTaskBackend.register_worker called before worker store attached"
+        return self._store.register_worker(registration)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """Reap the recycled-address workers queued by registration this tick."""
+        assert self._store is not None, "RpcTaskBackend.drain_pending_evictions called before worker store attached"
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
         """Tear down the workers this tick's reconcile fold reaped.
 
@@ -361,14 +373,10 @@ class RpcTaskBackend:
         commits the reconcile effects, so a just-finalized attempt is already
         terminal and skipped. Empty between reaps, so most ticks are a no-op.
         """
+        assert self._store is not None, "RpcTaskBackend.run_teardown called before worker store attached"
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """Fail ``dead_workers``, reap their slices and siblings, and forget them."""
-        assert self._store is not None, "RpcTaskBackend.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.

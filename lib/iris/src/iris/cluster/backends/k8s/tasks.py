@@ -34,9 +34,11 @@ from iris.cluster.controller.backend import (
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerRegistration,
     user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
@@ -1511,10 +1513,15 @@ class K8sTaskProvider:
         effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
         return ReconcileResult(effects=effects)
 
-    def run_teardown(self) -> None:
-        """No-op: a cluster backend tracks no Iris workers to reap."""
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        """Unsupported: a worker never registers into a k8s scale group."""
+        raise ProviderUnsupportedError("K8s backend does not register Iris workers")
 
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """No-op: a cluster backend queues no recycled-address evictions."""
+        return []
+
+    def run_teardown(self) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""
 
     def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:

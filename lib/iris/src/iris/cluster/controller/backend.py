@@ -431,6 +431,33 @@ def apply_placements(
 
 
 @dataclass(frozen=True)
+class WorkerRegistration:
+    """A worker's identity and metadata as it registers with the controller.
+
+    The worker's resources and attributes ride inside ``metadata``; there are no
+    separate fields.
+    """
+
+    worker_id: WorkerId
+    address: str
+    scale_group: str
+    slice_id: str
+    metadata: job_pb2.WorkerMetadata
+
+
+@dataclass(frozen=True)
+class RegisterOutcome:
+    """The result of registering a worker.
+
+    ``queued_eviction`` holds any stale prior owners of the worker's address (a
+    recycled IP), queued for the next control tick to reap.
+    """
+
+    worker_id: WorkerId
+    queued_eviction: list[WorkerId]
+
+
+@dataclass(frozen=True)
 class BackendRuntime:
     """The controller-owned values a worker-daemon backend builds its
     :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
@@ -535,6 +562,25 @@ class TaskBackend(Protocol):
         """
         ...
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        """Persist a registering worker and queue any recycled-address eviction.
+
+        Runs on the Register RPC thread. Writes the worker row, seeds its liveness,
+        and detects a prior owner of the same address (a recycled IP), queuing that
+        stale owner for the next control tick to reap. A backend that tracks no Iris
+        workers never receives a registration.
+        """
+        ...
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """Reap the recycled-address workers queued by :meth:`register_worker`.
+
+        Runs on the control thread once per tick. Fails the queued workers,
+        terminates their slices and healthy siblings, and forgets them. Returns
+        every worker removed; empty for a backend that tracks no Iris workers.
+        """
+        ...
+
     def run_teardown(self) -> None:
         """Tear down the workers this backend's reconcile fold reaped this tick.
 
@@ -543,17 +589,6 @@ class TaskBackend(Protocol):
         are skipped. The backend drains its stash of reaped workers, fails them,
         terminates their slices and healthy siblings, and forgets them from its
         liveness tracker. A cluster backend tracks no Iris workers and no-ops.
-        """
-        ...
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """Tear down a specific set of this backend's workers now.
-
-        The same fail → slice-and-sibling teardown → forget sequence
-        :meth:`run_teardown` drains its stash into, but for an explicit set the
-        controller resolved to this backend off the reconcile path — the
-        recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
-        A backend that tracks no Iris workers is a no-op.
         """
         ...
 
