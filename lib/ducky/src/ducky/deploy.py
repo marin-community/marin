@@ -28,13 +28,13 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_de
 
 logger = logging.getLogger(__name__)
 
-# Prod default: a single v6e-8 host (ct6e-standard-8t). DuckDB runs on CPU/RAM only —
-# the TPU sits idle; we request the slice to grab the host's large CPU/RAM envelope.
-# TODO(ducky): confirm the exact host vCPU/RAM so the request schedules and gets the
-# whole host (over-request → never schedules; under-request → DuckDB capped below host).
-DEFAULT_TPU = "v6e-8"
+# Prod default: a single ct6e-standard-4t v6e host — 180 vCPU / 720 GB. DuckDB runs
+# on CPU/RAM only (the v6e chips sit idle); we grab the slice for its large CPU/RAM
+# envelope. v6e-4 is the largest SINGLE-VM v6e on marin — v6e-8 is a 2-VM slice and
+# DuckDB, being single-node, can only use one VM, so it gains nothing from v6e-8.
+DEFAULT_TPU = "v6e-4"
 DEFAULT_CPU = 180.0
-DEFAULT_MEMORY = "1400GB"
+DEFAULT_MEMORY = "720GB"
 
 # The Iris named port and endpoint name the server binds/registers. Must match
 # DuckyConfig.port_name (the server calls ctx.get_port(config.port_name)), and is
