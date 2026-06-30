@@ -656,10 +656,13 @@ def run_reserved_pool_preemption(
         if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
             continue
         # Dedup coscheduled preemptors: N task candidates are one job needing one
-        # slice's worth of chips.
+        # slice's worth of chips. Mark the job handled up front so a later sibling
+        # candidate never re-consumes incoming/replacement capacity already spent
+        # on this job, regardless of which branch below this job resolves through.
         preemptor_job = candidate.job_name.parent or candidate.job_name
         if preemptor_job in handled_preemptor_jobs:
             continue
+        handled_preemptor_jobs.add(preemptor_job)
 
         variant = candidate.requirements.device_variant
         if variant is None:
@@ -698,7 +701,6 @@ def run_reserved_pool_preemption(
             # Cannot cover the deficit even by evicting everything: do nothing.
             continue
 
-        handled_preemptor_jobs.add(preemptor_job)
         for victim in chosen:
             claimed.add(victim.slice_id)
             drain_workers.update(victim.workers)

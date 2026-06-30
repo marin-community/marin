@@ -667,6 +667,28 @@ def test_coscheduled_preemptor_handled_once():
     assert {v.to_wire() for _, v in pairs} == {"/bob/batch-a/0", "/bob/batch-a/1"}
 
 
+def test_coscheduled_preemptor_does_not_double_spend_free_chips():
+    # Pool already has exactly enough free chips (8) for the ONE v4-16 slice the
+    # coscheduled job needs. A separate evictable v4-16 BATCH victim slice also
+    # exists. Each host candidate must not independently re-charge the pool for
+    # the job's single slice need — that would deplete free chips once per host
+    # and evict the victim slice even though nothing needed to be freed.
+    preemptors = [
+        _candidate("/alice/prod/0", "v4-16", PRODUCTION, coscheduled=True),
+        _candidate("/alice/prod/1", "v4-16", PRODUCTION, coscheduled=True),
+    ]
+    victims = [
+        _running("/bob/batch/0", "wa", "v4-16", BATCH, coscheduled=True),
+        _running("/bob/batch/1", "wb", "v4-16", BATCH, coscheduled=True),
+    ]
+    ledger = _ledger(free_chips=8, worker_slice={"wa": "s-a", "wb": "s-a"})
+
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
+
+    assert pairs == []
+    assert drain == set()
+
+
 def test_slice_with_a_higher_band_task_is_not_evicted():
     # Two independent (non-coscheduled) tasks share one physical slice: a batch
     # task and an interactive task. The drain tears down the whole slice, so the
