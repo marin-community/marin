@@ -5,6 +5,7 @@
 
 import shutil
 import tempfile
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -95,6 +96,7 @@ from iris.cluster.types import (
     AcceleratorType,
     CapacityType,
     JobName,
+    UserBudgetDefaults,
     WorkerId,
     is_job_finished,
 )
@@ -248,6 +250,10 @@ class FakeProvider:
         assert self._store is not None, "FakeProvider.teardown called before worker store attached"
         self._store.reap_workers(dead_workers, reason=reason)
 
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        assert self._store is not None, "FakeProvider.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
+
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
@@ -274,6 +280,28 @@ class FakeProvider:
 
     def close(self) -> None:
         pass
+
+
+def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakeProvider]:
+    """A single worker-daemon backend bound to ``state``'s db/health/worker_attrs.
+
+    The per-backend dead-worker GC ``prune_old_data`` drives lives on a backend's
+    worker store, so prune tests pass a real backend built over the test state
+    rather than reaching into a tracker directly.
+    """
+    provider = FakeProvider()
+    provider.health = state._health
+    provider.bind_runtime(
+        BackendRuntime(
+            db=state._db,
+            endpoints=state._endpoints,
+            run_template_cache=state._run_template_cache,
+            worker_attrs=state._worker_attrs,
+            owns_scale_group=lambda _scale_group: True,
+            budget_defaults=UserBudgetDefaults(),
+        )
+    )
+    return [provider]
 
 
 @pytest.fixture

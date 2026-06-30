@@ -1517,6 +1517,10 @@ class K8sTaskProvider:
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""
 
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """No-op: a cluster backend tracks no Iris workers to garbage-collect."""
+        return 0
+
     def sync(self, request: ReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 
