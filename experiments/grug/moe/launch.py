@@ -32,6 +32,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
+from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
@@ -241,7 +242,7 @@ def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoin
         )
 
     return ArtifactStep(
-        name="grug/4_10_baseline_moe",
+        name=user_namespaced_name("grug/4_10_baseline_moe", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,

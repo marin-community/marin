@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rigging.provenance import Provenance
+from rigging.provenance import Provenance, username_segment
 
 
 def test_str_clean_shows_commit_branch_user():
@@ -26,6 +26,24 @@ def test_str_omits_missing_branch_and_user():
 def test_json_round_trip():
     p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=True, branch=None, built_by="power")
     assert Provenance.from_json(p.to_json()) == p
+
+
+def test_username_segment_reduces_an_email_login(monkeypatch):
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "Russell.Power@gmail.com")
+    assert username_segment() == "russell"
+
+
+def test_username_segment_keeps_a_plain_login(monkeypatch):
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "john_doe")
+    assert username_segment() == "john_doe"
+
+
+def test_username_segment_raises_when_unresolvable(monkeypatch):
+    # Fail-fast is the contract: a username that does not resolve must not silently namespace
+    # artifacts under a shared bucket.
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: None)
+    with pytest.raises(RuntimeError):
+        username_segment()
 
 
 def _run(args: list[str], cwd: Path) -> None:

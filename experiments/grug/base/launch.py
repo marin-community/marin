@@ -31,6 +31,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -244,7 +245,7 @@ def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]
         )
 
     return ArtifactStep(
-        name="grug/base-trial",
+        name=user_namespaced_name("grug/base-trial", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,
