@@ -1,32 +1,34 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""DbWorkerSource: a worker-daemon backend's live-worker read surface.
+"""The :class:`BackendWorkerStore` interface and its controller-DB implementation.
 
-Backs a backend's :class:`~iris.cluster.controller.backend.WorkerSource` with a
-scale-group-scoped read of the controller database, so the backend reads its own
-workers, placement and worker-status without the controller partitioning a global
-snapshot. The ``owns_scale_group`` predicate is the backend's worker-ownership
-test (the default backend also claims workers whose scale group is unmapped,
-matching the controller's scale-group→backend resolution).
+A worker-daemon backend uses a store to read its workers, build the snapshots it
+schedules and reconciles from, resolve a worker's address, and reap dead workers.
+:class:`DbBackendWorkerStore` implements the interface against the controller database.
 """
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from rigging.timing import Timestamp
 
 from iris.cluster.controller import reads
-from iris.cluster.controller.backend import BackendSchedulingInputs
+from iris.cluster.controller.audit_logging import log_event
+from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.ops.worker import fail as fail_workers
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
 from iris.cluster.controller.reconcile import dispatch
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
+from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     AttemptUid,
@@ -39,68 +41,46 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 
-
-def load_transition_snapshot(
-    db: ControllerDB,
-    *,
-    now: Timestamp,
-    seed_worker_ids: Iterable[WorkerId] = (),
-    observation_uids: Iterable[AttemptUid] = (),
-    seed_task_ids: Iterable[JobName] = (),
-    extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-) -> TransitionSnapshot:
-    """Open a control read snapshot and close it over the seeded entities.
-
-    The read-only surface a backend authors its task projection through: a closed
-    snapshot rather than the tick's write transaction, so the backend never touches
-    the controller database directly.
-    """
-    with db.control_read_snapshot() as snap:
-        return load_closed_snapshot(
-            snap,
-            now=now,
-            seed_worker_ids=seed_worker_ids,
-            observation_uids=observation_uids,
-            seed_task_ids=seed_task_ids,
-            extra_attempt_keys=extra_attempt_keys,
-        )
+# Failure reason stamped on a healthy slice sibling reaped alongside a dead worker.
+_SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
 
 
-@dataclass(frozen=True)
-class DbTransitionReader:
-    """A controller-DB-backed :class:`~...reconcile.loader.TransitionReader`.
+class BackendWorkerStore(TransitionReader, Protocol):
+    """The worker-state operations a worker-daemon backend depends on."""
 
-    Gives a placement-owning backend (one with no :class:`WorkerSource`) a read
-    snapshot to author its dispatch effects from, without handing it the DB.
-    """
+    def owned_worker_ids(self) -> set[WorkerId]:
+        """The worker IDs this backend owns, by scale group."""
+        ...
 
-    db: ControllerDB
+    def scheduling_inputs(self) -> BackendSchedulingInputs:
+        """This backend's live workers, their building counts, and preemptible running attempts."""
+        ...
 
-    def transition_snapshot(
-        self,
-        *,
-        now: Timestamp,
-        seed_worker_ids: Iterable[WorkerId] = (),
-        observation_uids: Iterable[AttemptUid] = (),
-        seed_task_ids: Iterable[JobName] = (),
-        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
-    ) -> TransitionSnapshot:
-        return load_transition_snapshot(
-            self.db,
-            now=now,
-            seed_worker_ids=seed_worker_ids,
-            observation_uids=observation_uids,
-            seed_task_ids=seed_task_ids,
-            extra_attempt_keys=extra_attempt_keys,
-        )
+    def reconcile_snapshot(self) -> ControlSnapshot:
+        """This backend's worker addresses, reconcile rows, and per-job run-task templates."""
+        ...
+
+    def worker_status(self) -> WorkerStatusMap:
+        """Each owned worker's idle/running status."""
+        ...
+
+    def worker_address(self, worker_id: WorkerId) -> str | None:
+        """The worker's address, or ``None`` if it has none."""
+        ...
+
+    def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
+        """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
+        them. Returns every worker removed (the failed workers plus reaped siblings)."""
+        ...
 
 
 @dataclass(frozen=True)
-class DbWorkerSource:
-    """A worker-daemon backend's worker source backed by the controller DB.
+class DbBackendWorkerStore:
+    """:class:`BackendWorkerStore` backed by the controller database.
 
-    Each method opens its own scoped read; the backend never receives a global
-    worker snapshot from the controller.
+    Built per backend with the controller DB plus the backend's own liveness tracker
+    and ``autoscale`` callback, which ``reap_workers`` uses to fail workers and
+    terminate their slices.
     """
 
     db: ControllerDB
@@ -110,6 +90,7 @@ class DbWorkerSource:
     endpoints: EndpointsProjection
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
+    autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
 
     def transition_snapshot(
         self,
@@ -178,6 +159,53 @@ class DbWorkerSource:
                 usability=usability[wid],
             )
         return result
+
+    def worker_address(self, worker_id: WorkerId) -> str | None:
+        with self.db.control_read_snapshot() as snap:
+            return reads.bulk_get_worker_addresses(snap, [worker_id]).get(worker_id)
+
+    def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
+        """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
+        them from the liveness tracker. Returns every worker removed."""
+        if not worker_ids:
+            return []
+        for wid in worker_ids:
+            log_event("worker_failing", str(wid), trigger=reason)
+        failure_result = fail_workers(
+            self.db,
+            worker_ids=[str(wid) for wid in worker_ids],
+            reason=reason,
+            health=self.health,
+            endpoints=self.endpoints,
+            worker_attrs=self.worker_attrs,
+        )
+        removed_ids = [wid for wid, _ in failure_result.removed_workers]
+        if not removed_ids:
+            # A concurrent reaper already failed every candidate (or they had no
+            # address). Nothing was removed, so skip autoscale entirely: calling it
+            # with no dead workers would run a full provisioning cycle on the control
+            # thread (probe_health + update_slice_activity) racing the autoscaler thread.
+            return []
+
+        removed_set = set(removed_ids)
+        auto = self.autoscale(AutoscaleRequest(dead_workers=removed_ids))
+        if auto.autoscaler_state is not None:
+            with self.db.transaction() as cur:
+                persist_autoscaler_state(cur, auto.autoscaler_state)
+        siblings = [wid for wid in auto.removed_workers if wid not in removed_set]
+        if siblings:
+            for wid in siblings:
+                log_event("worker_failing", str(wid), trigger=_SLICE_SIBLING_TEARDOWN_REASON)
+            fail_workers(
+                self.db,
+                worker_ids=[str(wid) for wid in siblings],
+                reason=_SLICE_SIBLING_TEARDOWN_REASON,
+                health=self.health,
+                endpoints=self.endpoints,
+                worker_attrs=self.worker_attrs,
+            )
+        self.health.forget_many(removed_set | set(siblings))
+        return removed_ids + siblings
 
     def _owned_worker_ids(self, snap: Tx) -> set[WorkerId]:
         """The workers this backend owns, by scale group, in the read ``snap``."""

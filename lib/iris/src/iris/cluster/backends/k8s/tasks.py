@@ -1451,7 +1451,7 @@ class K8sTaskProvider:
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
     # from, passed by the composer at construction (a cluster backend has no
-    # WorkerSource, so it reads its dispatch drain through this).
+    # worker store, so it reads its dispatch drain through this).
     transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
