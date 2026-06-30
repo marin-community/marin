@@ -933,3 +933,31 @@ def test_attention_equivalence_jax_flash(
     o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
 
     torch.testing.assert_close(o1, o2)
+
+
+def test_bidirectional_sliding_window_mask_is_symmetric():
+    """The bidirectional window admits key j for query i iff |i - j| <= radius (both directions)."""
+    QPos = Axis("position", 8)
+    KPos = Axis("key_position", 8)
+    radius = 2
+    mask = AttentionMask.bidirectional_sliding_window(radius).materialize(QPos, KPos)
+    got = np.asarray(mask.array)
+    i = np.arange(8)[:, None]
+    j = np.arange(8)[None, :]
+    expected = np.abs(i - j) <= radius
+    np.testing.assert_array_equal(got, expected)
+
+
+def test_bidirectional_window_combines_with_segment_ids():
+    """`&` keeps the symmetric window and intersects with a padding/segment mask."""
+    QPos = Axis("position", 6)
+    KPos = Axis("key_position", 6)
+    segment = hax.named(np.array([0, 0, 0, 1, 1, 1]), QPos)
+    kv_segment = segment.rename({"position": "key_position"})
+    combined = AttentionMask.bidirectional_sliding_window(1).with_segment_ids(segment, kv_segment)
+    got = np.asarray(combined.materialize(QPos, KPos).array)
+    i = np.arange(6)[:, None]
+    j = np.arange(6)[None, :]
+    same_segment = (np.array([0, 0, 0, 1, 1, 1])[:, None]) == (np.array([0, 0, 0, 1, 1, 1])[None, :])
+    expected = (np.abs(i - j) <= 1) & same_segment
+    np.testing.assert_array_equal(got, expected)

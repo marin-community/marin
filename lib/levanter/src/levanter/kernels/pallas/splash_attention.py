@@ -24,6 +24,7 @@ class SplashAttentionMaskSpec:
     is_causal: bool = False
     causal_offset: int | None = None
     sliding_window: int | None = None
+    bidirectional_window: int | None = None
     has_explicit_mask: bool = False
 
 
@@ -77,6 +78,16 @@ def lower_splash_attention_mask(
                 shard_count=q_seq_shards,
             )
             base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
+
+        if mask.bidirectional_window is not None:
+            # Symmetric window: attend to keys within `bidirectional_window` positions on either side.
+            window_mask = splash_attention_mask.LocalMask(
+                shape=(q_seq_len, kv_seq_len),
+                window_size=(mask.bidirectional_window, mask.bidirectional_window),
+                offset=0,
+                shard_count=q_seq_shards,
+            )
+            base_mask = splash_attention_mask.LogicalAnd(base_mask, window_mask)
 
         if mask.has_explicit_mask:
             raise NotImplementedError("Explicit masks are not yet supported for splash attention")
