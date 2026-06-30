@@ -12,7 +12,8 @@ import os
 from collections.abc import Sequence
 
 from levanter.models.qwen import Qwen3Config
-from marin.execution.executor import executor_main
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
@@ -21,7 +22,6 @@ from marin.rl.rl_experiment_utils import (
     RLExperimentConfig,
     config_class_path,
     default_train_decoding_for_experiment,
-    executor_main_config_for_rl_experiment,
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
@@ -269,25 +269,19 @@ def main() -> None:
         name=run_name,
         config=experiment_config,
         curriculum=curriculum,
+        version="dev",
     )
-    executor_config = executor_main_config_for_rl_experiment(experiment_config)
 
     logger.info(
-        "Launching OpenReward smoke run %s (train_manifest=%s, eval_manifest=%s, variant=%s, "
-        "rollout_workers=%d, executor_prefix=%s)",
+        "Launching OpenReward smoke run %s (train_manifest=%s, eval_manifest=%s, variant=%s, " "rollout_workers=%d)",
         run_name,
         args.train_manifest,
         args.eval_manifest or args.train_manifest,
         args.openreward_variant,
         experiment_config.num_rollout_workers,
-        executor_config.prefix,
     )
 
-    executor_main(
-        executor_config,
-        steps=[step],
-        description="Executor-backed Iris OpenReward smoke run for Qwen3 8B",
-    )
+    StepRunner().run([lower(step)])
 
 
 if __name__ == "__main__":
