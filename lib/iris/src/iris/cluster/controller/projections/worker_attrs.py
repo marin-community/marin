@@ -58,9 +58,8 @@ class WorkerAttrsProjection:
     """Process-local write-through cache over the ``worker_attributes`` table.
 
     Scoped to one backend: holds attributes only for workers whose scale group
-    ``owns_scale_group`` claims, mirroring how :class:`WorkerHealthTracker` is
-    constructed per backend. Reads serve the latest committed snapshot from an
-    in-memory dict guarded by a ``threading.Lock``. Writes register a
+    ``owns_scale_group`` claims. Reads serve the latest committed snapshot from
+    an in-memory dict guarded by a ``threading.Lock``. Writes register a
     post-commit hook that updates the dict atomically with the surrounding SQL
     commit; the hook fires under the DB write lock so concurrent readers
     cannot observe torn state.
