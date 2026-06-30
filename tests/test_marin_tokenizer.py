@@ -1,12 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
 from levanter.data.text import ChatProcessor
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from marin.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_row
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.marin_tokenizer import (
@@ -14,10 +17,12 @@ from experiments.marin_tokenizer import (
     create_marin_tokenizer,
     load_llama3_tokenizer,
 )
+from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
 
 REASONING_TRACE = (
     "<|start_think|>User is asking how am I doing. This should be straightforward. I should reply politely.<|end_think|>"
 )
+FIXTURE_DIR = Path(__file__).parent / "transform" / "fixtures" / "agent_traces"
 
 CONVERSATION = [
     {"role": "user", "content": "Hello, how are you?"},
@@ -64,6 +69,10 @@ def marin_chat_tokenizer(marin_tokenizer_dir) -> MarinTokenizer:
 
 def _decode(tokenizer, ids) -> str:
     return tokenizer.decode(list(ids), skip_special_tokens=False)
+
+
+def _load_agent_trace_fixture(name: str) -> dict:
+    return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
 def test_special_tokens_injection(marin_tokenizer: PreTrainedTokenizer):
@@ -192,4 +201,31 @@ def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokeni
     assert '{"name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
     assert "<|start_header_id|>ipython<|end_header_id|>" in rendered
     assert '{"output": "4\\n"}' in rendered
+    assert result["assistant_masks"].sum() > 0
+
+
+def test_chat_processor_renders_normalized_hermes_tool_response(marin_chat_tokenizer: MarinTokenizer):
+    """Hermes trace tool responses should render once, not as nested raw XML."""
+    dataset_cfg = INSTRUCTION_DATASET_NAME_TO_CONFIG["lambda/hermes-agent-reasoning-traces/glm-5.1"]
+    row = _load_agent_trace_fixture("hermes_glm_sample.json")
+    cfg = TransformSFTDatasetConfig(
+        source=dataset_cfg.hf_dataset_id,
+        revision=dataset_cfg.revision,
+        output_path="/tmp/output",
+        metadata_columns=dataset_cfg.metadata_columns,
+        adapter=dataset_cfg.adapter,
+        subsets=dataset_cfg.subsets,
+        splits=dataset_cfg.splits,
+    )
+    transformed = transform_row(row, cfg, dataset_cfg.adapter)
+    assert transformed is not None
+
+    processor = ChatProcessor(marin_chat_tokenizer, mask_user_turns=True)
+    result = processor([{"messages": [message.model_dump() for message in transformed.messages]}])[0]
+    rendered = _decode(marin_chat_tokenizer, result["input_ids"])
+
+    assert "<|start_think|>" in rendered
+    assert '<tool_response name="write_file" id="glm-tool-call-001">' in rendered
+    assert '"bytes_written": 15' in rendered
+    assert '<tool_response>\n{"tool_call_id": "glm-tool-call-001"' not in rendered
     assert result["assistant_masks"].sum() > 0

@@ -5,12 +5,19 @@
 
 from pathlib import Path
 
+from marin.core.conversation import OpenAIChatMessage
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_row,
+)
+
+from experiments.posttrain.instruction_datasets import (
+    InstructionDatasetConfig,
+    instruction_response_adapter,
+    transform_dataset_step,
 )
 
 OPENAI_FORMAT_SAMPLE = {
@@ -77,6 +84,17 @@ FINEPROOFS_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+
+def _replace_assistant_message(messages: list[OpenAIChatMessage], row: dict[str, str]) -> list[OpenAIChatMessage]:
+    return [
+        messages[0],
+        OpenAIChatMessage(role="assistant", content=row["postprocessed_response"]),
+    ]
+
+
+def _row_id_from_source(row: dict[str, str], _messages: list[dict[str, object]]) -> str:
+    return row["custom_row_id"]
 
 
 class TestTransformAdapters:
@@ -226,6 +244,7 @@ class TestTransformRow:
             instruction_column="instruction",
             response_column="response",
         )
+
         cfg = TransformSFTDatasetConfig(
             source="test/dataset",
             revision="main",
@@ -243,6 +262,68 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+    def test_transform_applies_message_postprocess_before_replacements(self):
+        """Test message postprocessing runs before text replacements."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+            instruction_column="instruction",
+            response_column="response",
+            replacements={"<think>": "<|start_think|>", "</think>": "<|end_think|>"},
+            message_postprocess_fn=_replace_assistant_message,
+        )
+
+        row = {
+            "instruction": "Solve this",
+            "response": "placeholder",
+            "postprocessed_response": "<think>Use the replacement path</think>",
+        }
+
+        cfg = TransformSFTDatasetConfig(
+            source="test/dataset",
+            revision="main",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+
+        result = transform_row(row, cfg, adapter)
+
+        assert result is not None
+        response_message = result.messages[1]
+        assert response_message.content == "<|start_think|>Use the replacement path<|end_think|>"
+
+
+class TestInstructionDatasetTransformVersioning:
+    """Test transform-cache versioning for behavior-changing adapter hooks."""
+
+    def test_trace_hooks_get_distinct_transform_output_path(self):
+        base_config = InstructionDatasetConfig(
+            hf_dataset_id="test/trace-source",
+            revision="abc123",
+            adapter=instruction_response_adapter(
+                instruction_column="instruction",
+                response_column="response",
+            ),
+            metadata_columns=[],
+        )
+        hooked_config = InstructionDatasetConfig(
+            hf_dataset_id="test/trace-source",
+            revision="abc123",
+            adapter=instruction_response_adapter(
+                instruction_column="instruction",
+                response_column="response",
+                message_postprocess_fn=_replace_assistant_message,
+                row_id_fn=_row_id_from_source,
+            ),
+            metadata_columns=[],
+        )
+
+        base_step = transform_dataset_step(base_config)
+        hooked_step = transform_dataset_step(hooked_config)
+
+        assert base_step.name == hooked_step.name
+        assert base_step.override_path != hooked_step.override_path
 
 
 class TestPreferenceDataTransform:

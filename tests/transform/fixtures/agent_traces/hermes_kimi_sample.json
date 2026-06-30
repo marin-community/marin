@@ -1,0 +1,29 @@
+{
+  "id": "kimi-trace-001",
+  "conversations": [
+    {
+      "from": "system",
+      "value": "You are a function calling AI model. You are provided with function signatures within <tools> </tools> XML tags.\n<tools>\n[{\"type\": \"function\", \"function\": {\"name\": \"terminal\", \"description\": \"Execute a shell command\", \"parameters\": {\"type\": \"object\", \"properties\": {\"command\": {\"type\": \"string\"}}, \"required\": [\"command\"]}}}]\n</tools>"
+    },
+    {
+      "from": "human",
+      "value": "Print the current working directory."
+    },
+    {
+      "from": "gpt",
+      "value": "<think>\nI can run pwd in the terminal.\n</think>\n<tool_call>\n{\"name\": \"terminal\", \"arguments\": {\"command\": \"pwd\"}}\n</tool_call>"
+    },
+    {
+      "from": "tool",
+      "value": "<tool_response>\n{\"tool_call_id\": \"kimi-tool-call-001\", \"name\": \"terminal\", \"content\": {\"output\": \"/workspace/project\", \"exit_code\": 0, \"error\": null}}\n</tool_response>"
+    },
+    {
+      "from": "gpt",
+      "value": "<think>\nI have the directory.\n</think>\nThe current working directory is `/workspace/project`."
+    }
+  ],
+  "tools": "[{\"type\": \"function\", \"function\": {\"name\": \"terminal\", \"description\": \"Execute a shell command\", \"parameters\": {\"type\": \"object\", \"properties\": {\"command\": {\"type\": \"string\"}}, \"required\": [\"command\"]}}}]",
+  "category": "Terminal & Coding",
+  "subcategory": "Terminal Tasks",
+  "task": "Print the current working directory."
+}

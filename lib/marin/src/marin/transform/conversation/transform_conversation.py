@@ -10,7 +10,6 @@ Usage Instructions:
 """
 
 import hashlib
-import json
 import logging
 import os
 from collections import defaultdict
@@ -29,6 +28,7 @@ from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
+from .tool_normalization import normalize_tool_call_arguments
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
@@ -76,11 +76,11 @@ class ShardTask:
     cfg: TransformSFTDatasetConfig
 
 
-def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
+def generate_hash_from_messages(messages: list[dict[str, Any]]) -> str:
     """Generate a hash from a list of messages.
 
     Args:
-        messages (List[Dict[str, str]]): A list of messages.
+        messages: A list of transformed conversation messages.
 
     Returns:
         str: A hash of the messages.
@@ -88,31 +88,19 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
     return hashlib.sha256(str(messages).encode()).hexdigest()
 
 
+def source_id_or_message_hash(row: dict[str, Any], messages: list[dict[str, Any]]) -> str:
+    """Return the source ``id`` when present, otherwise hash the transformed messages."""
+    source_id = row.get("id")
+    if isinstance(source_id, str) and source_id:
+        return source_id
+    return generate_hash_from_messages(messages)
+
+
 def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
     updated = text
     for old, new in replacements.items():
         updated = updated.replace(old, new)
     return updated
-
-
-def _normalize_tool_structures(message: dict) -> dict:
-    tool_calls = message.get("tool_calls")
-    if tool_calls:
-        normalized_calls: list[dict[str, Any]] = []
-        for call in tool_calls:
-            call_dict = dict(call)
-            function = call_dict.get("function")
-            if isinstance(function, dict):
-                arguments = function.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        function["arguments"] = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        pass
-            normalized_calls.append(call_dict)
-        message["tool_calls"] = normalized_calls
-
-    return message
 
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
@@ -123,10 +111,10 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
         logger.warning(f"{source} returning no valid messages")
         return None
 
-    messages: list[dict[str, Any]] = [message.model_dump() for message in transformed_row_messages]
+    if adapter.message_postprocess_fn:
+        transformed_row_messages = adapter.message_postprocess_fn(transformed_row_messages, row)
 
-    # Create a unique ID for the row based on the text
-    row_idx = generate_hash_from_messages(messages)
+    messages: list[dict[str, Any]] = [message.model_dump() for message in transformed_row_messages]
     metadata_columns = cfg.metadata_columns
     metadata_remap = adapter.metadata_remap or {}
     replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
@@ -147,7 +135,13 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _apply_replacements(content, replacements)
-    messages = [_normalize_tool_structures(message) for message in messages]
+    messages = [normalize_tool_call_arguments(message) for message in messages]
+
+    if adapter.row_id_fn:
+        row_idx = adapter.row_id_fn(row, messages)
+    else:
+        # Create a unique ID for the row based on the transformed text.
+        row_idx = generate_hash_from_messages(messages)
     if adapter.extra_metadata_fn:
         extra_from_fn = adapter.extra_metadata_fn(row)
         if extra_from_fn:
