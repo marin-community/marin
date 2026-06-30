@@ -978,10 +978,10 @@ def test_permute_up_mgpu_reference_builds_hidden_layout():
             check_vma=False,
         )(x, selected_experts, moe_w13)
 
-    assert hidden.shape == (2, 16, 12)
+    assert hidden.shape == (32, 12)
     assert jnp.isfinite(hidden).all()
-    assert recv_src_rank.shape == (2, 16)
-    assert recv_src_assignment.shape == (2, 16)
+    assert recv_src_rank.shape == (32,)
+    assert recv_src_assignment.shape == (32,)
     np.testing.assert_array_equal(np.asarray(rows_per_expert).reshape(2, 2).sum(axis=1), np.array([16, 16]))
     assert int(dropped) == 0
 

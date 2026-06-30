@@ -6482,3 +6482,38 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   - No #6597 issue update.
 - Next action:
   - Commit the timeout adjustment and rerun PR CI.
+
+### 2026-06-29 21:19 - MOE-MGPU-381 TPU CI shape assertion fix
+- Hypothesis: after increasing the Levanter TPU CI timeout, the remaining
+  `levanter-tpu-tests` failure is a stale test expectation about `shard_map`
+  output shape, not a production MoE layout bug.
+- Commit Hash: `6d18ecee3`.
+- Commands:
+  - `gh run view 28419328618 --job 84208975622 --log`
+  - `XLA_FLAGS=--xla_force_host_platform_device_count=2 uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'permute_up_mgpu_reference_builds_hidden_layout' -o addopts=`
+  - `uv run pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'pallas_mgpu or capacity_overflow or expert_parallel or ordered_implementation or permute_up_mgpu_reference_builds_hidden_layout' -o addopts=`
+- Result:
+  - `levanter-tpu-tests` no longer cancelled at the old 15-minute cap; it ran
+    to pytest completion in 871.45s.
+  - The single failure was
+    `test_permute_up_mgpu_reference_builds_hidden_layout`: expected
+    `hidden.shape == (2, 16, 12)`, observed `(32, 12)` on TPU.
+  - The test uses `shard_map(..., out_specs=P("expert", None))`, so the public
+    result is the global sharded array flattened across the expert axis rather
+    than an explicit leading shard axis. Updated the shape assertions for
+    `hidden`, `recv_src_rank`, and `recv_src_assignment` to match that contract.
+  - Local validation:
+    - Exact failing test with two forced CPU devices -> `1 passed, 110
+      deselected, 1 warning`.
+    - Focused Grug Pallas/capacity/EP/ordered slice -> `65 passed, 12 skipped,
+      34 deselected, 1 warning`.
+  - Saved TPU failure log locally:
+    `.agents/artifacts/6597-dalton-logs/levanter-tpu-tests-timeoutpatch-28419328618-job-84208975622.log`.
+- Interpretation:
+  - The timeout change exposed a real checked-in test failure that only appeared
+    on multi-device TPU CI because local one-device CPU skips that test. The fix
+    keeps the behavioral assertions and corrects only the stale global-shape
+    expectation.
+  - No #6597 issue update.
+- Next action:
+  - Run changed-file pre-commit, commit, push, and monitor PR CI again.
