@@ -1,4 +1,4 @@
-# Marin
+# <img alt="Marin" src="docs/design/marin-logo.svg" height="36" align="top"> Marin
 
 <a href="https://marin.readthedocs.io/en/latest/?badge=latest">
     <img alt="Documentation" src="https://readthedocs.org/projects/marin/badge/?version=latest">
@@ -12,18 +12,23 @@
 > "*I am not afraid of storms, for I am learning how to sail my ship.*"<br/>
 > – Louisa May Alcott
 
-[Marin](https://marin.community) is an open-source framework for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
+[Marin](https://marin.community) is a research program, software platform, and community for the research and development of [foundation models](https://en.wikipedia.org/wiki/Foundation_model).
 
-Marin's primary use case is training language models such as Llama, DeepSeek, and Qwen.
-This includes data curation, transformation, filtering, tokenization, pretraining, posttraining, and evaluation. Marin has also been used for building [audio-text models](https://github.com/marin-community/marin/issues/1699), [DNA](https://github.com/Open-Athena/marin-dna), and [protein models](https://github.com/Open-Athena/MarinFold).
+Marin's concern is training large language models. This includes data curation, transformation, filtering, tokenization, pretraining, posttraining, and evaluation. Beyond the artifacts, software, and infrastructure, behind these models, Marin is committed to openly sharing *all* of the process knowledge required to build these models.
 
-## Open Development
+Marin's core value is **[open development](https://openathena.ai/blog/open-development-of-frontier-ai/)**. We document our processes, experiments, and decisions as they happen. Every step, from raw data to the final model, is recorded. Failed experiments are part of that record.
 
-Marin's core value is **open development**. We document our processes, experiments, and decisions as they happen. Every step, from raw data to the final model, is recorded. Failed experiments are part of that record.
+Marin has also been used for building [audio-text models](https://github.com/marin-community/marin/issues/1699), [DNA](https://github.com/Open-Athena/marin-dna), and [protein models](https://github.com/Open-Athena/MarinFold). We encourage this work through the use of Marin as a library, in [marin/experiments](https://github.com/marin-community/marin-experiments).
 
-## Recent Work
+## Current work
 
-Delphi is Marin's open scaling suite inspired by Pythia. It has three parts: a scaling recipe that maps compute budgets to model configurations, a scaling suite trained from that recipe on the Google TPU Research Cloud, and a scaling law that uses the smaller Delphi models to predict the larger ones.
+### Frontier mixture-of-experts
+
+Our current focus is pretraining, from scratch, and posttraining a large (5e24 model-FLOPs, 500 billion+ total parameters) mixture-of-experts model to succeed on tasks of importance to scientists and researchers.
+
+### Scaling suite
+
+<a href="https://openathena.ai/blog/delphi/">Delphi</a> is Marin's open scaling suite scaling a LLM recipe from 3e18 to 1e23 FLOPs, inspired by <a href="https://github.com/eleutherai/pythia">Pythia</a>. It has three parts: a scaling recipe that maps compute budgets to model configurations, a scaling suite trained from that recipe on the Google TPU Research Cloud, and a scaling law that uses the smaller Delphi models to predict the larger ones.
 
 We released:
 
@@ -35,12 +40,23 @@ We released:
 
 Progress was tracked in [GitHub issue #1337](https://github.com/marin-community/marin/issues/1337).
 
+### Other learnings
+
+Some additional consolidated learnings can be found on the [Open Athena blog](https://openathena.ai/blog/). A selection, below:
+
+- [Cluster Scheduling with Iris](https://openathena.ai/blog/cluster-scheduling-with-iris/) · scheduling jobs across heterogeneous clusters
+- [Improving our LLM Pretraining Efficiency](https://openathena.ai/blog/pretraining-speedup/) · squeezing more throughput from pretraining
+- [Scaling Laws That Extrapolate 300× Past the Fit (Delphi)](https://openathena.ai/blog/delphi/) · predicting big models from small
+- [Mixture of Experts Quantile Balancing: Validated at 32B-A5B (1e22 FLOPs) Scale](https://openathena.ai/blog/quantile-balancing/) · keeping MoE experts load balanced
+
+### Other models
+
 Previously, we used Marin to train an 8B parameter model that outperformed Llama 3.1 8B on our [base-model benchmark suite](docs/reports/marin-8b-retro.md#base-model-results).
-You can see the [training script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py)
-or read the [retrospective](docs/reports/marin-8b-retro.md).
-We also trained [Marin 32B](docs/reports/marin-32b-retro.md).
+You can see the [training script](https://github.com/marin-community/marin/blob/main/experiments/tootsie/exp600_tootsie.py) or read the [retrospective](docs/reports/marin-8b-retro.md). We also trained [Marin 32B](docs/reports/marin-32b-retro.md).
 
 <!--marin-intro-end-->
+
+## Learning more & using Marin
 
 The documentation for Marin is available on [ReadTheDocs](https://marin.readthedocs.io/en/latest/) or in the [`docs/`](docs/) folder.
 
@@ -56,7 +72,7 @@ To get started with Marin:
 
 <!--marin-first-steps-end-->
 
-## Example
+### Example
 
 Marin experiments are defined as a set of steps that can depend on each other and are executed in a topological order,
 like a Makefile.
@@ -136,7 +152,41 @@ The training step depends on the tokenized dataset step, so it will be executed 
 With slight modifications, you can extend this to train a [larger model on a larger dataset](docs/tutorials/train-an-lm.md),
 a [mixture of datasets](docs/tutorials/train-an-lm.md#mixture-of-sources), even scaling to very large GPU or TPU pods (or multislice TPUs!).
 
-## For Contributors
+### For Contributors
 
 - See [`CONTRIBUTING.md`](CONTRIBUTING.md) for project workflow.
 - See `.agents/skills/` (also `.claude/skills/`) for loadable agent skills. For example, `.agents/skills/add-dataset/` has a step-by-step guide to adding new datasets.
+
+
+## Core Contributors
+
+Marin's core collaborators come from [Stanford CRFM](https://crfm.stanford.edu/) and [Open Athena](https://openathena.ai/).
+
+<p>
+  <a href="https://crfm.stanford.edu/"><img alt="Stanford CRFM" src="docs/design/crfm-rgb.png" height="48"></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://openathena.ai/"><img alt="Open Athena" src="docs/design/open-athena.svg" height="48"></a>
+</p>
+
+## Supporters
+
+Marin's research is made possible by the generous support of our partners.
+
+<table>
+  <tr>
+    <td align="center" width="240"><a href="https://sites.research.google/trc/about/"><img alt="Google TPU Research Cloud" src="docs/design/google-trc.png" height="44"></a></td>
+    <td align="center" width="240"><img alt="TBA" src="docs/design/supporter-tba.svg" height="44"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>for TRC accelerators</sub></td>
+    <td align="center"><sub>for GPU clusters</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://www.siegelendowment.org/"><img alt="Siegel Family Endowment" src="docs/design/supporter-sfe.png" height="44"></a></td>
+    <td align="center"><a href="https://tsffoundation.org/"><img alt="The Schmidt Family Foundation" src="docs/design/supporter-schmidt-foundation.png" height="44"></a></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>for supporting development</sub></td>
+    <td align="center"><sub>for supporting development</sub></td>
+  </tr>
+</table>
