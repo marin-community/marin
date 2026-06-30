@@ -650,8 +650,24 @@ class Controller(_message.Message):
     class ListBackendsRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
+    class WorkerFleetDetail(_message.Message):
+        __slots__ = ("autoscaler", "healthy_worker_count", "total_worker_count")
+        AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
+        HEALTHY_WORKER_COUNT_FIELD_NUMBER: _ClassVar[int]
+        TOTAL_WORKER_COUNT_FIELD_NUMBER: _ClassVar[int]
+        autoscaler: _vm_pb2.AutoscalerStatus
+        healthy_worker_count: int
+        total_worker_count: int
+        def __init__(self, autoscaler: _Optional[_Union[_vm_pb2.AutoscalerStatus, _Mapping]] = ..., healthy_worker_count: _Optional[int] = ..., total_worker_count: _Optional[int] = ...) -> None: ...
+    class BackendStatus(_message.Message):
+        __slots__ = ("kubernetes", "worker")
+        KUBERNETES_FIELD_NUMBER: _ClassVar[int]
+        WORKER_FIELD_NUMBER: _ClassVar[int]
+        kubernetes: Controller.GetKubernetesClusterStatusResponse
+        worker: Controller.WorkerFleetDetail
+        def __init__(self, kubernetes: _Optional[_Union[Controller.GetKubernetesClusterStatusResponse, _Mapping]] = ..., worker: _Optional[_Union[Controller.WorkerFleetDetail, _Mapping]] = ...) -> None: ...
     class BackendSummary(_message.Message):
-        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "restricted", "allowed_user_count", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health")
+        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "restricted", "allowed_user_count", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health", "detail")
         class AdvertisedAttributesEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -679,6 +695,7 @@ class Controller(_message.Message):
         RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
         HAS_AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
         CAPACITY_HEALTH_FIELD_NUMBER: _ClassVar[int]
+        DETAIL_FIELD_NUMBER: _ClassVar[int]
         backend_id: str
         name: str
         kind: str
@@ -692,7 +709,8 @@ class Controller(_message.Message):
         running_task_count: int
         has_autoscaler: bool
         capacity_health: _containers.ScalarMap[str, int]
-        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., restricted: _Optional[bool] = ..., allowed_user_count: _Optional[int] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ...) -> None: ...
+        detail: Controller.BackendStatus
+        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., restricted: _Optional[bool] = ..., allowed_user_count: _Optional[int] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ..., detail: _Optional[_Union[Controller.BackendStatus, _Mapping]] = ...) -> None: ...
     class UnroutableJob(_message.Message):
         __slots__ = ("job_id", "reason")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
