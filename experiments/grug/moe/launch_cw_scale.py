@@ -124,7 +124,7 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def build_scale_checkpoint(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
+def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env."""
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 

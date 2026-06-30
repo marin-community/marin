@@ -54,7 +54,7 @@ _MODEL = GrugModelConfig(
 )
 
 
-def build(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
     dolmino_math = tokenize_dolmino(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]

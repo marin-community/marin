@@ -192,7 +192,7 @@ def run_grug_base_trial(config: GrugBaseLaunchConfig) -> None:
     run_grug(build_grug_run_config(config))
 
 
-def grug_base_trial(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
+def grug_base_trial(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """The base grug trial on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via

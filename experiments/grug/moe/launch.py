@@ -199,7 +199,7 @@ _baseline_model, _baseline_optimizer, _baseline_batch, _baseline_steps = build_f
 GRUG_MOE_TRIAL_MODEL: GrugModelConfig = _baseline_model
 
 
-def grug_moe_baseline(*, version: str = "v1") -> ArtifactStep[LevanterCheckpoint]:
+def grug_moe_baseline(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """The baseline grug MoE (QB+GN+XSA+zloss) on the Nemotron mix as a lazy checkpoint.
 
     Every component is a :class:`Dataset` handle, so the whole graph lowers via
