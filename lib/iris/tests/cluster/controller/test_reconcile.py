@@ -64,7 +64,6 @@ from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,

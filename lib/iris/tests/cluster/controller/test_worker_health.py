@@ -26,7 +26,6 @@ from iris.cluster.controller.worker_health import (
 from iris.cluster.types import WorkerId, WorkerUsability
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import insert, select
-
 from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
 
 from .conftest import make_worker_metadata, register_worker

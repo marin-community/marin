@@ -21,7 +21,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-     "jax >= 0.8.0",
+    "jax >= 0.9.2",
     "equinox>=0.10.6",
     "jaxtyping>=0.2.20",
     "jmp>=0.0.4",
@@ -32,8 +32,14 @@ dynamic =[ "version" ]
 
 
 [dependency-groups]
-dev = [
+test = [
     "pytest >= 7.4.0",
+    "pytest-xdist",
+    "chex>=0.1.86",
+    "safetensors>=0.4.3",
+]
+dev = [
+    { include-group = "test" },
     "mypy >= 0.910",
     "mkdocs >= 1.4.3",
     "mkdocs-material >= 7.3.3",
@@ -44,11 +50,14 @@ dev = [
     "mkdocs-include-markdown-plugin",
     "pymdown-extensions",
     "pygments",
-    "chex>=0.1.86",
-    "safetensors>=0.4.3",
     "pre-commit",
 ]
 
+
+[tool.pytest.ini_options]
+addopts = "-n auto --import-mode=importlib"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
 
 [tool.hatch.version]
 path = "src/haliax/__about__.py"

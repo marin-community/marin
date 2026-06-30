@@ -34,8 +34,8 @@ from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.tree_utils import inference_mode
 
-from .test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
-from .test_utils import use_test_mesh
+from test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
+from test_utils import use_test_mesh
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():
