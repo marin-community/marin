@@ -23,8 +23,6 @@ separate so the ``python -m`` target is not also imported during ``zephyr``
 package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re
@@ -169,11 +167,10 @@ def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
 
 
 def _sample_process_stats(cpu_s_at_start: float, proc: psutil.Process) -> None:
-    """Sample the current process's resource usage into ``ctx`` counters.
+    """Sample the current process's resource usage into the current stage's counters.
 
     Uses set_counter (not increment) because these are point-in-time metrics.
     Peak memory is tracked as a monotonically increasing max across calls.
-    IO counters are cumulative totals from the OS; unavailable on some platforms.
     ``cpu_s_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
     ``proc`` must be the same object across calls so cpu_percent() has a
     prior measurement to diff against; prime it once before the first sample.

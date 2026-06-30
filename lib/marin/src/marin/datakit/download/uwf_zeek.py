@@ -19,8 +19,6 @@ as the ``text`` field inside a gzipped JSONL document::
     {"id": str, "text": str, "source": str, "category": str, "row_index": int}
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging
@@ -36,7 +34,6 @@ from rigging.filesystem import atomic_rename, open_url
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import THIS_OUTPUT_PATH
 from marin.utils import fsspec_mkdirs
 
 logger = logging.getLogger(__name__)
@@ -155,7 +152,7 @@ def _iter_csv_records(
 def download_uwf_zeek_sample(
     *,
     source: UwfZeekSampleSource,
-    output_path: str = THIS_OUTPUT_PATH,
+    output_path: str = "",
     output_filename: str = DEFAULT_OUTPUT_FILENAME,
     http_timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:

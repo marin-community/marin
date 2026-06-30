@@ -19,7 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
@@ -27,8 +27,65 @@ import cloudpickle
 import humanfriendly
 from rigging.timing import Timestamp
 
+from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, setup_is_quiet, wants_gpu_extra
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
+
+
+class AcceleratorType(StrEnum):
+    """Device/accelerator type for scale groups."""
+
+    CPU = "cpu"
+    GPU = "gpu"
+    TPU = "tpu"
+
+
+class CapacityType(StrEnum):
+    """Capacity type for provisioning — controls which cloud API is used."""
+
+    PREEMPTIBLE = "preemptible"
+    ON_DEMAND = "on_demand"
+    RESERVED = "reserved"
+
+
+class GcpSliceMode(StrEnum):
+    """Provisioning mode for GCP slices: a TPU pod or a plain CPU VM."""
+
+    TPU = "tpu"
+    VM = "vm"
+
+
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
+and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
+connection (no config object), so both must agree on this exact literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
+
+
+class WellKnownAttribute(StrEnum):
+    """Canonical attribute keys for constraint-based scheduling."""
+
+    DEVICE_TYPE = "device-type"
+    DEVICE_VARIANT = "device-variant"
+    PREEMPTIBLE = "preemptible"
+    REGION = "region"
+    ZONE = "zone"
+    TPU_NAME = "tpu-name"
+    TPU_WORKER_ID = "tpu-worker-id"
+    TPU_TOPOLOGY = "tpu-topology"
+    TPU_VM_COUNT = "tpu-vm-count"
+    GPU_VARIANT = "gpu-variant"
+    GPU_COUNT = "gpu-count"
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,6 +394,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
     failure_count: int
@@ -618,15 +676,34 @@ class EnvironmentSpec:
     - HF_TOKEN: from os.environ (if set)
     - WANDB_API_KEY: from os.environ (if set)
 
+    Setup:
+    - ``setup_scripts=None`` builds the default uv-sync script. ``sync_packages``
+      scopes that sync to specific workspace members (default: all members).
+    - ``setup_scripts`` set to a list runs those scripts verbatim before the
+      command, with the task's ``IRIS_*`` env available; ``[]`` means no setup (the
+      image is used as-is). Build the default and tweak it via
+      ``iris.cluster.setup_scripts.default_setup_script``.
+
+    Whenever any setup runs (default or custom), iris appends its own
+    ``iris_runtime_setup_script`` so cloudpickle/profiler support is always
+    present; it is skipped only for the no-setup (``[]``) case.
+
     Note: To specify workspace for bundle creation, use IrisClient.remote(workspace=...).
     """
 
     pip_packages: Sequence[str] | None = None
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
+    setup_scripts: Sequence[str] | None = None
+    sync_packages: Sequence[str] | None = None
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
-        """Convert to wire format with sensible defaults applied."""
+        """Convert to wire format, resolving the user setup scripts.
+
+        ``setup_scripts=None`` builds the default uv-sync script from
+        extras/pip/sync_packages; a list is used verbatim; ``[]`` is no setup. The
+        wire carries only this user list.
+        """
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
@@ -636,14 +713,26 @@ class EnvironmentSpec:
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}
 
-        py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if self.setup_scripts is None:
+            py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+            extras = list(self.extras or [])
+            setup_scripts = [
+                default_setup_script(
+                    extras=extras,
+                    pip_packages=list(self.pip_packages or []),
+                    python_version=py_version,
+                    packages=list(self.sync_packages or []) or None,
+                    quiet=setup_is_quiet(merged_env_vars),
+                )
+            ]
+            # GPU jobs need the venv's CUDA toolchain (ptxas/nvlink/libdevice)
+            # exposed for JAX/Pallas Mosaic; the script no-ops without it.
+            if wants_gpu_extra(extras):
+                setup_scripts.append(cuda_toolchain_setup_script())
+        else:
+            setup_scripts = [s for s in self.setup_scripts if s.strip()]
 
-        return job_pb2.EnvironmentConfig(
-            pip_packages=list(self.pip_packages or []),
-            env_vars=merged_env_vars,
-            extras=list(self.extras or []),
-            python_version=py_version,
-        )
+        return job_pb2.EnvironmentConfig(env_vars=merged_env_vars, setup_scripts=setup_scripts)
 
 
 class Namespace(str):

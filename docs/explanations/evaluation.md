@@ -4,7 +4,6 @@ This document explains how Marin evaluates models and where to find runnable wor
 
 For step-by-step usage, start with:
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for multiple-choice, generation, and key eval suites.
-- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md) for raw-text bpb comparisons, dashboard refreshes, and heatmaps.
 - [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
 
 ## Evaluation modes
@@ -21,7 +20,7 @@ For multiple-choice tasks, Marin uses a fork of `lm-evaluation-harness`:
 https://github.com/stanford-crfm/lm-evaluation-harness
 
 Key integration points:
-- [`default_train`][experiments.defaults.default_train] runs in-loop evaluations periodically and logs to W&B.
+- [`train_lm`][marin.experiment.train.train_lm] runs in-loop evaluations periodically and logs to W&B when an `EvalSuite` is provided.
 - [`default_eval`][experiments.evals.evals.default_eval] runs standalone harness evaluation after training (or on an existing checkpoint).
 
 ### Task sets
@@ -68,7 +67,6 @@ Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/bl
 ## Where to go next
 
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md)
-- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md)
 - [Harbor Framework Integration](../harbor-integration.md)
 - [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
 - [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)

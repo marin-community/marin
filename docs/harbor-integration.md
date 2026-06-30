@@ -93,7 +93,7 @@ def evaluate_harbor(
     agent: str = "claude-code",
     n_concurrent: int = 4,
     env: str = "local",
-) -> ExecutorStep
+) -> StepSpec
 ```
 
 **Parameters:**
@@ -214,7 +214,7 @@ Required for different agents and environments:
 
 ### "harbor: command not found"
 
-Harbor should be auto-installed via `pip_dependency_groups=["harbor"]`. If not:
+Harbor is auto-installed via the `harbor` extra. Install it manually with:
 ```bash
 cd lib/marin
 uv sync --extra harbor

@@ -1,29 +1,67 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Diagnostic-log dataset definitions and tokenization."""
+"""Diagnostic-log dataset as a lazy ``Dataset`` handle.
 
-from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_steps
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+The normalized GHALogs training partition (a 3-step Zephyr pipeline: materialize
+parquet → filter to train partition → normalize) is expressed as a single raw-data
+handle. The tokenize step reads the normalized parquet from ``outputs/main/``.
+"""
 
-from experiments.marin_models import marin_tokenizer
+from marin.datakit.download.diagnostic_logs import (
+    DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    GHALOGS_STAGED_PREFIX,
+    DiagnosticPartition,
+    materialize_ghalogs_partition_to_parquet,
+    materialize_ghalogs_to_parquet,
+)
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import raw_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-ghalogs_normalized = ghalogs_public_normalize_steps()[-1].as_executor_step()
+from experiments.marin_tokenizer import marin_tokenizer
 
 
-def tokenize_ghalogs(*, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
-    """Tokenize the normalized GHALogs public training partition."""
-    if tokenizer is None:
-        tokenizer = marin_tokenizer
+def _run_ghalogs_normalize_pipeline(output_path: str) -> None:
+    """Materialize, partition, and normalize GHALogs into ``output_path/outputs/main/``."""
+    materialized_path = f"{output_path}/_wip/materialized"
+    train_path = f"{output_path}/_wip/train"
+    materialize_ghalogs_to_parquet(
+        GHALOGS_STAGED_PREFIX,
+        materialized_path,
+        num_shards=DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
+    )
+    materialize_ghalogs_partition_to_parquet(
+        materialized_path,
+        train_path,
+        partition=DiagnosticPartition.TRAIN,
+    )
+    normalize_to_parquet(
+        input_path=train_path,
+        output_path=output_path,
+        text_field="text",
+        id_field="id",
+        file_extensions=(".parquet",),
+    )
 
-    return ExecutorStep(
-        name="tokenized/ghalogs_public",
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[ghalogs_normalized.as_input_name() / "outputs/main/*.parquet"],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
+
+def _ghalogs_normalized() -> ArtifactStep[TokenizedCache]:
+    """The normalized GHALogs public training partition as a raw-data handle."""
+    return raw_download(
+        "normalized/ghalogs/public",
+        fn=_run_ghalogs_normalize_pipeline,
+        build_config=lambda ctx: ctx.output_path,
+        version="2026.06.28",
+    )
+
+
+def tokenize_ghalogs(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """Tokenized GHALogs public training partition."""
+    return tokenized(
+        "ghalogs_public",
+        tokenizer=tokenizer,
+        raw=_ghalogs_normalized(),
+        glob="outputs/main/*.parquet",
+        version="2026.06.28",
     )

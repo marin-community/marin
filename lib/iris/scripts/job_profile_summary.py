@@ -38,8 +38,6 @@ Usage:
     uv run python scripts/job_profile_summary.py <job> -o merged.folded --svg flame.svg
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -289,7 +287,7 @@ class Aggregate:
     tasks: set[str]
 
     @classmethod
-    def empty(cls) -> Aggregate:
+    def empty(cls) -> "Aggregate":
         return cls(
             stacks=defaultdict(float),
             leaves=defaultdict(float),
@@ -411,7 +409,7 @@ def library_rollup_rows(agg: Aggregate, top: int) -> list[list[str]]:
 class CallNode:
     label: str
     value: float
-    children: dict[str, CallNode]
+    children: "dict[str, CallNode]"
 
 
 def build_call_tree(stacks: dict[str, float]) -> CallNode:

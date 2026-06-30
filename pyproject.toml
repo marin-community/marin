@@ -158,10 +158,12 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
-# https://github.com/marin-community/vllm/compare/7b98f498cdf0bf9cf0ecc37b5c0c994cb94513c3...04321f0f01b8e60d577a85a1b1af688e4433e7e0
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04321f0f01b8e60d577a85a1b1af688e4433e7e0" }
-# https://github.com/marin-community/tpu-inference/compare/0045517c4ba75b1d624dba3be8b77e16c18b1a1e...4c38590e29d33451f2b4375a78ad8f70cacd7b98
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "4c38590e29d33451f2b4375a78ad8f70cacd7b98" }
+# TF5 fork branch: codex/issue-6735-tf5-from-marin-pin-20260628.
+# https://github.com/marin-community/vllm/compare/9b02ecc2115a1b3d190d8bdfd39b893495e75eff...571de565eb1ef76dfdff9bd70ca8ab31b7136f11
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "571de565eb1ef76dfdff9bd70ca8ab31b7136f11" }
+# TF5 fork branch: codex/issue-6735-tf5-from-marin-pin-20260628.
+# https://github.com/marin-community/tpu-inference/compare/67a07c1083bdc7c177ba71522a2d935b24d6d03f...29faff43207e42836217ba9bf33691c6e5f28614
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "29faff43207e42836217ba9bf33691c6e5f28614" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -230,9 +232,6 @@ ignore = ["F722", "B008", "UP015", "UP046", "UP047", "A005", "E741"]
 # Bloom filter tests deliberately compare an object with itself to exercise its
 # reflexive comparison operators (==, <=, >=, ...), so PLR0124 is expected here.
 "lib/dupekit/tests/test_bloom.py" = ["PLR0124"]
-# The SWE tracer is injected into third-party sandbox images, which can still
-# be older than Marin's own supported Python floor.
-"experiments/swe_rebench_trace/tracer.py" = ["UP036"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["experiments"]

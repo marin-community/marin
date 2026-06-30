@@ -30,7 +30,7 @@ from pathlib import Path
 from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
-from iris.cluster.runtime.env import write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -49,12 +49,13 @@ from iris.cluster.runtime.types import (
     ContainerStatus,
     DiscoveredContainer,
     ExecutionStage,
-    ImageInfo,
     MountKind,
     MountSpec,
 )
+from iris.cluster.types import CapacityType
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import config_pb2, job_pb2
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import resolve_container_profile
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,8 @@ class _DockerProfileDispatch:
     """
 
     container_id: str
-    pyspy_bin: str = "/app/.venv/bin/py-spy"
-    memray_bin: str = "/app/.venv/bin/memray"
+    pyspy_bin: str = f"{VENV_PATH}/bin/py-spy"
+    memray_bin: str = f"{VENV_PATH}/bin/memray"
 
     @contextmanager
     def scratch(self, *suffixes: str) -> Iterator[tuple[str, ...]]:
@@ -133,6 +134,16 @@ class _DockerProfileDispatch:
             logger.warning("SIGCONT sweep failed for container %s: %s", self.container_id, e)
 
 
+def _resolve_profiler_bin(container_id: str, venv_bin: str, fallback: str) -> str:
+    """Prefer the venv-installed profiler, falling back to PATH for BYO images.
+
+    iris installs py-spy/memray into ``$IRIS_VENV``, but a bring-your-own image
+    with no venv may carry them on PATH instead.
+    """
+    probe = subprocess.run(["docker", "exec", container_id, "test", "-x", venv_bin], capture_output=True, timeout=5)
+    return venv_bin if probe.returncode == 0 else fallback
+
+
 # Network sysctl tuning for containers with their own network namespace (#3066).
 # Host-network containers inherit host settings (configured at VM bootstrap).
 _NETWORK_SYSCTLS: dict[str, str] = {
@@ -162,8 +173,10 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns appropriate Docker flags for TPU passthrough.
-    Returns empty list if no special device configuration is needed.
+    Detects TPU resources and returns the Docker flags for TPU passthrough: large
+    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
+    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
+    not here. Returns an empty list when no special device configuration is needed.
     """
     flags: list[str] = []
 
@@ -178,7 +191,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     if has_tpu:
         flags.extend(
             [
-                "--privileged",
                 "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
@@ -186,6 +198,33 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
             ]
         )
         logger.info("TPU device flags: %s", flags)
+
+    return flags
+
+
+def _security_flags(profile: int, is_tpu_run: bool) -> list[str]:
+    """Docker security flags (privilege, capabilities, docker-socket mount).
+
+    A TPU run requires ``--privileged`` for device access regardless of profile,
+    so on TPU even RESTRICTED/DEFAULT run privileged.
+    """
+    resolved = resolve_container_profile(profile)
+    privileged = resolved == job_pb2.CONTAINER_PROFILE_PRIVILEGED or is_tpu_run
+
+    flags: list[str] = []
+    if privileged:
+        flags.append("--privileged")
+    else:
+        flags.extend(["--security-opt", "no-new-privileges", "--cap-drop", "ALL"])
+
+    # SYS_PTRACE lets py-spy attach via `docker exec`. RESTRICTED deliberately
+    # omits it; every other profile adds it back (a privileged container nominally
+    # has it, but exec'd processes don't reliably inherit it).
+    if resolved != job_pb2.CONTAINER_PROFILE_RESTRICTED:
+        flags.extend(["--cap-add", "SYS_PTRACE"])
+
+    if resolved == job_pb2.CONTAINER_PROFILE_DOCKER_ACCESS:
+        flags.extend(["-v", "/var/run/docker.sock:/var/run/docker.sock"])
 
     return flags
 
@@ -430,9 +469,9 @@ class DockerContainerHandle:
             self._docker_remove(build_container_id)
 
     def _generate_setup_script(self) -> str:
-        """Generate a bash script that runs setup commands."""
+        """Generate a bash script that runs each setup command as its own step."""
         lines = ["#!/bin/bash", "set -e"]
-        lines.extend(self.config.entrypoint.setup_commands)
+        lines.extend(render_setup_steps(self.config.entrypoint.setup_commands))
         return "\n".join(lines) + "\n"
 
     def _write_setup_script(self, script: str) -> None:
@@ -449,22 +488,19 @@ class DockerContainerHandle:
         Non-blocking - returns immediately after starting the container.
         Use status() to monitor execution progress.
         """
-        # Build the run command: activate venv then exec user command
         quoted_cmd = " ".join(shlex.quote(arg) for arg in self.config.entrypoint.run_command.argv)
 
-        # If we had setup_commands, the venv exists and we should activate it
-        if self.config.entrypoint.setup_commands:
-            run_script = f"""#!/bin/bash
+        # Run from the workdir (matching the k8s task script) and activate the venv
+        # only when a setup script left one, so a bring-your-own-env command runs in
+        # the image as-is instead of failing on a missing .venv.
+        run_script = f"""#!/bin/bash
 set -e
-cd /app
-source .venv/bin/activate
+cd "$IRIS_WORKDIR"
+[ -f "$IRIS_VENV/bin/activate" ] && source "$IRIS_VENV/bin/activate"
 exec {quoted_cmd}
 """
-            self._write_run_script(run_script)
-            command = ["bash", "/app/_run.sh"]
-        else:
-            # No setup, run command directly
-            command = list(self.config.entrypoint.run_command.argv)
+        self._write_run_script(run_script)
+        command = ["bash", "/app/_run.sh"]
 
         self._run_container_id = self._docker_create(
             command=command,
@@ -523,7 +559,11 @@ exec {quoted_cmd}
         if not container_id:
             raise RuntimeError("Cannot profile: no running container")
 
-        dispatch = _DockerProfileDispatch(container_id)
+        dispatch = _DockerProfileDispatch(
+            container_id,
+            pyspy_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/py-spy", "py-spy"),
+            memray_bin=_resolve_profiler_bin(container_id, f"{VENV_PATH}/bin/memray", "memray"),
+        )
         if profile_type.HasField("threads"):
             return capture_threads(dispatch, pid="1", include_locals=profile_type.threads.locals)
         elif profile_type.HasField("cpu"):
@@ -580,8 +620,13 @@ exec {quoted_cmd}
         ]
         is_tpu_run = include_devices and _has_tpu_device(config)
 
-        if not is_tpu_run:
-            cmd.extend(["--security-opt", "no-new-privileges"])
+        cmd.extend(_security_flags(config.container_profile, is_tpu_run))
+        logger.info(
+            "Container security profile %s (tpu_run=%s) for task %s",
+            job_pb2.ContainerProfile.Name(resolve_container_profile(config.container_profile)),
+            is_tpu_run,
+            config.task_id,
+        )
 
         # Run as the owner of bind-mounted directories
         user_flag = _detect_mount_user(self._resolved_mounts)
@@ -598,12 +643,6 @@ exec {quoted_cmd}
         if config.network_mode != "host":
             for key, value in _NETWORK_SYSCTLS.items():
                 cmd.extend(["--sysctl", f"{key}={value}"])
-
-        if not is_tpu_run:
-            cmd.extend(["--cap-drop", "ALL"])
-        # Always add SYS_PTRACE so py-spy can attach via docker exec regardless of TPU/CPU.
-        # TPU containers use --privileged but docker exec processes don't reliably inherit it.
-        cmd.extend(["--cap-add", "SYS_PTRACE"])
 
         # Device flags (TPU passthrough etc) - only for run container
         if include_devices:
@@ -625,11 +664,16 @@ exec {quoted_cmd}
         # containers from transient build containers that should be cleaned up.
         phase = ExecutionStage.BUILD if label_suffix == "_build" else ExecutionStage.RUN
         cmd.extend(["--label", f"iris.phase={phase}"])
+        # Host-port reservations, so a restarted worker can re-mark them as
+        # taken when it adopts this container (otherwise the ports are dropped
+        # and can be double-allocated to a new task).
+        if config.ports:
+            cmd.extend(["--label", f"iris.ports={json.dumps(config.ports)}"])
 
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
         if cpu_millicores:
-            if self.runtime.capacity_type == config_pb2.CAPACITY_TYPE_ON_DEMAND:
+            if self.runtime.capacity_type == CapacityType.ON_DEMAND:
                 # Soft weight: on-demand workers let containers burst onto idle
                 # host CPU; the scheduler still places by cpu_millicores.
                 shares = max(2, int(cpu_millicores * 1024 / 1000))
@@ -812,7 +856,7 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self, cache_dir: Path, capacity_type: int = 0) -> None:
+    def __init__(self, cache_dir: Path, capacity_type: CapacityType | None = None) -> None:
         self._cache_dir = cache_dir
         # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
         # weight (`--cpu-shares`). On-demand workers use soft weights so small
@@ -928,10 +972,6 @@ class DockerRuntime:
         """Untrack a container ID."""
         self._created_containers.discard(container_id)
 
-    def list_containers(self) -> list[DockerContainerHandle]:
-        """List all managed container handles."""
-        return list(self._handles)
-
     def list_iris_containers(self, all_states: bool = True) -> list[str]:
         """List all containers with iris.managed=true label."""
         cmd = ["docker", "ps", "-q", "--filter", "label=iris.managed=true"]
@@ -995,6 +1035,7 @@ class DockerRuntime:
                     exit_code=state.get("ExitCode") if not state.get("Running", False) else None,
                     started_at=state.get("StartedAt", ""),
                     workdir_host_path=workdir_host_path,
+                    ports=json.loads(labels.get("iris.ports", "{}")),
                 )
             )
 
@@ -1100,26 +1141,3 @@ class DockerImageBuilder:
             capture_output=True,
             check=False,
         )
-
-    def list_images(self, pattern: str) -> list[ImageInfo]:
-        result = subprocess.run(
-            [
-                "docker",
-                "images",
-                "--format",
-                "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
-                "--filter",
-                f"reference={pattern}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        images = []
-        for line in result.stdout.strip().split("\n"):
-            if line and "\t" in line:
-                tag, created = line.split("\t", 1)
-                images.append(ImageInfo(tag=tag, created_at=created))
-
-        return images

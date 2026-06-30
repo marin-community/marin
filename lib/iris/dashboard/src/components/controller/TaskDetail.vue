@@ -4,6 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
+import { useBackends } from '@/composables/useBackends'
 import type {
   TaskStatus,
   GetTaskStatusResponse,
@@ -33,6 +34,8 @@ const props = defineProps<{
   jobId: string
   taskId: string
 }>()
+
+const { multiBackend } = useBackends()
 
 const {
   data: taskResponse,
@@ -335,6 +338,9 @@ watch(() => props.taskId, async () => {
           </InfoRow>
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
+          </InfoRow>
+          <InfoRow v-if="multiBackend && task.backendId" label="Backend">
+            <span class="font-mono">{{ task.backendId }}</span>
           </InfoRow>
           <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
             <ProfileButtons :profiling="profiling" @profile="handleProfile" />

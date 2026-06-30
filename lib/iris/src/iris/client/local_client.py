@@ -14,8 +14,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from iris.client.client import IrisClient, LocalClientConfig
-from iris.cluster.backends.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.client import RemoteClusterClient
+from iris.cluster.local_cluster import LocalCluster, make_local_cluster_config
 
 
 def make_local_client(config: LocalClientConfig | None = None) -> IrisClient:

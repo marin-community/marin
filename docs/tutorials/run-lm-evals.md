@@ -4,7 +4,8 @@ This guide shows the current evaluation entrypoints in Marin. For a high-level o
 
 ## Prerequisites
 
-- A trained model checkpoint in Hugging Face format, or an existing `ExecutorStep` from training.
+- A trained model checkpoint in Hugging Face format, or a `ArtifactStep[LevanterCheckpoint]` handle from a
+  completed training run.
 - Access to the TPU or GPU resources required by the evaluator you choose.
 
 ## Core APIs
@@ -25,6 +26,8 @@ from experiments.evals.evals import (
 - `evaluate_lm_evaluation_harness` is the lower-level helper for custom vLLM-backed LM-eval runs.
 - `evaluate_levanter_lm_evaluation_harness` is the lower-level helper for Levanter-backed evaluation runs.
 
+All helpers return step specs that `StepRunner` can execute directly.
+
 Task sets are defined in `experiments/evals/task_configs.py`. The most commonly used ones are:
 
 - `CORE_TASKS`
@@ -39,7 +42,7 @@ Use `default_eval` when you want the default multiple-choice evaluation suite:
 ```python
 from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_eval
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
@@ -52,11 +55,11 @@ core_eval_step = default_eval(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[core_eval_step])
+    StepRunner().run([core_eval_step])
 ```
 
-- `default_eval` accepts a checkpoint path, an `ExecutorStep`, or an `InputName`.
-- To include MMLU in this path, pass `evals=CORE_TASKS_PLUS_MMLU`.
+- `default_eval` accepts a checkpoint path or a `ArtifactStep[LevanterCheckpoint]` handle from a training run.
+- To include MMLU, pass `evals=CORE_TASKS_PLUS_MMLU`.
 
 ## 2. Run the Current Key-Evals Bundle
 
@@ -65,7 +68,7 @@ Use `default_key_evals` for the repository's current key-eval bundle:
 ```python
 from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_key_evals
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 
@@ -77,10 +80,10 @@ key_steps = default_key_evals(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=key_steps)
+    StepRunner().run(key_steps)
 ```
 
-Today, `default_key_evals` returns two `ExecutorStep`s:
+`default_key_evals` returns two steps:
 
 1. A generation run over `KEY_GENERATION_TASKS` using `evaluate_lm_evaluation_harness`.
 2. A multiple-choice run over `KEY_MULTIPLE_CHOICE_TASKS` using `evaluate_levanter_lm_evaluation_harness`.
@@ -108,7 +111,7 @@ Use the lower-level helpers when you want a custom task list or evaluator:
 from fray.cluster import ResourceConfig
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 
 custom_tasks = [
     EvalTaskConfig(name="commonsense_qa", num_fewshot=5),
@@ -124,7 +127,7 @@ custom_step = evaluate_lm_evaluation_harness(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[custom_step])
+    StepRunner().run([custom_step])
 ```
 
 Use `evaluate_levanter_lm_evaluation_harness` instead when you specifically want the Levanter-backed evaluator path used by `default_eval`.
@@ -136,8 +139,6 @@ The checked-in examples under `experiments/evals/` are the safest starting point
 ```bash
 uv run python experiments/evals/run_key_evals.py
 uv run python experiments/evals/run_base_model_evals.py
-uv run python experiments/evals/run_sft_model_evals.py
-uv run python experiments/evals/run_on_gpu.py
 ```
 
 These scripts launch the requested hardware, load the selected checkpoint or model definition, run the configured eval tasks, and log results to W&B.
@@ -146,7 +147,7 @@ These scripts launch the requested hardware, load the selected checkpoint or mod
 
 ### `default_eval`
 
-- `step`: checkpoint path, `ExecutorStep`, or `InputName` to evaluate.
+- `step`: checkpoint path or `ArtifactStep[LevanterCheckpoint]` handle to evaluate.
 - `resource_config`: hardware configuration for the evaluator.
 - `evals`: optional override for the task list. Defaults to `CORE_TASKS`.
 - `max_eval_instances`: optional cap on evaluated examples.
@@ -155,7 +156,7 @@ These scripts launch the requested hardware, load the selected checkpoint or mod
 
 ### `default_key_evals`
 
-- `step`: checkpoint path, `ExecutorStep`, or `InputName` to evaluate.
+- `step`: checkpoint path or `ArtifactStep[LevanterCheckpoint]` handle to evaluate.
 - `resource_config`: hardware configuration for both returned steps.
 - `model_name`: optional override for the logged model name.
 - `max_eval_instances`: optional cap on evaluated examples.

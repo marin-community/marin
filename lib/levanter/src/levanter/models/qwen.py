@@ -16,10 +16,11 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
 from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -56,8 +57,8 @@ class QwenConfig(LlamaConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
-        rope_theta = hf_config.rope_theta
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return QwenConfig(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -85,7 +86,8 @@ class QwenConfig(LlamaConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfQwenConfig(
+        return hf_config_from_kwargs(
+            HfQwenConfig,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -192,8 +194,8 @@ class QwenDecoderLayer(eqx.Module):
 class QwenTransformer(LlamaTransformer):
     # config-reuse: QwenTransformer reuses LlamaTransformer but narrows config/layers to its own
     # Qwen types (LSP narrowing; mypy flags the same)
-    config: QwenConfig = eqx.field(static=True)  # pyrefly: ignore[bad-override-mutable-attribute]
-    layers: BlockFoldable[QwenDecoderLayer]  # pyrefly: ignore[bad-override-mutable-attribute]
+    config: QwenConfig = eqx.field(static=True)  # pyrefly: ignore[bad-override]
+    layers: BlockFoldable[QwenDecoderLayer]  # pyrefly: ignore[bad-override]
     norm: hnn.RmsNorm
 
     @staticmethod
@@ -266,15 +268,10 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[QwenConfig]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
 
     @classmethod
     def init(cls, Vocab: Axis, config: QwenConfig, *, key) -> "QwenLMHeadModel":
@@ -328,7 +325,8 @@ class Qwen3Config(LlamaConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfQwen3Config(
+        return hf_config_from_kwargs(
+            HfQwen3Config,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -352,8 +350,8 @@ class Qwen3Config(LlamaConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "Qwen3Config":  # type: ignore[override]
-        rope_theta = hf_config.rope_theta
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
 
         return Qwen3Config(
             max_seq_len=hf_config.max_position_embeddings,

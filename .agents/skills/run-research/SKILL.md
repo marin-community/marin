@@ -1,255 +1,152 @@
 ---
 name: run-research
-description: "Multi-session research workflow: logbooks, experiment issues, and W&B."
+description: "Multi-session research workflow: compose logbooks, experiment issues, documentation updates, and snapshot discipline for long-running investigations."
 ---
 
 # Skill: Agent-Directed Research
 
-## Overview
-For long-running, exploratory research where an agent iterates on benchmarks,
-experiments, and hypotheses over multiple sessions. Optimizes for
-reproducibility, clear decision history, fast iteration, and handoff quality.
+Use this for long-running research where an agent iterates on benchmarks,
+experiments, and hypotheses over multiple sessions. Domain skills such as
+`add-pallas-kernel` may add constraints.
 
-## Specialization Policy
-`run-research` is the base workflow for research-like work. Layer domain
-skills on top for task-specific constraints, keeping lifecycle process here.
-- For Pallas kernel work, use `.agents/skills/add-pallas-kernel/SKILL.md` as a
-  specialization on top of this skill.
-- Keep branch/issue/logbook/snapshot cadence here; keep kernel-specific
-  safety/perf rules in `add-pallas-kernel`.
+## General Principle: Open Development
+
+Long-lived work should leave a durable record: a logbook, coordinating issue
+updates, and enough commands/config to reproduce results. Do not publish secrets
+or private work the user asks to hold back.
+
+## Subskills
+
+- `.agents/skills/background-research/SKILL.md` for prior-work foraging,
+  source ledgers, contradiction passes, and ranked hypothesis candidates.
+- `.agents/skills/task-logbook/SKILL.md` for logbooks and issue updates.
+- `.agents/skills/wandb-reporting/SKILL.md` for W&B project selection, run
+  naming, report links, and artifact hygiene.
+- `.agents/skills/task-snapshot/SKILL.md` for commit/tag snapshots and stable
+  artifact links.
+- `.agents/skills/update-docs/SKILL.md` for updating durable docs, runbooks,
+  reports, or skill guidance when research changes behavior or practice.
+
+Layer domain skills on top for task-specific constraints.
 
 ## Core Artifacts
-For each research thread, maintain all of:
-1. A long-lived branch (e.g. `research/<topic>`).
-2. A GitHub experiment issue (use the template below; label `experiment`).
-3. An append-only research logbook at `.agents/logbooks/<topic>.md`. Use the
-   term **research logbook** consistently in prose and file naming.
-4. Optional W&B runs/report for dense numeric output and charts.
-5. One or more tags to seal meaningful snapshots.
 
-## W&B Project Policy
-- Choose project scope by the type signature of the work.
-- Use the `marin` project for pretraining runs.
-- Use a new project for materially different work (e.g. kernel development or a
-  new RL variant).
-- Runs requiring explicit run-to-run comparison must share a W&B project.
-- You cannot reliably move/copy runs across projects later — decide scope early.
+1. A GitHub experiment issue. Agent-created experiment issues use the
+   `experiment` and `agent-generated` labels.
+2. A logbook at `.agents/logbooks/<topic>.md`.
+3. A living hypothesis queue in the logbook, derived from append-only entries
+   and updated as hypotheses are proposed, blocked, falsified, or promoted.
+4. A long-lived branch, for example `research/<topic>` or
+   `research/<user>/<issue>-<topic>`, with the logbook, research code, configs,
+   small artifacts, and test harnesses needed to reproduce results.
+5. One or more commit or tag snapshots for meaningful milestones.
+6. Often a "production" branch that gets PR'd and merged.
 
-## Marin Executor vs Dev TPU
-- Use the **Marin executor framework** when you need production-like pipeline
-  behavior, cluster job metadata/repro tracking, or non-trivial experiment setup.
-- Use a **dev TPU** when iteration is quick, you are tuning kernels/benchmarks,
-  or full pipeline apparatus is unnecessary. See
-  `.agents/skills/reserve-tpu/SKILL.md` for the Iris-backed workflow.
-- Rule of thumb: start with dev TPU for fast hillclimbing; confirm final claims
-  on the execution path that matters most.
+## Research Logbook
+
+Use the term **logbook** consistently. Follow `.agents/skills/task-logbook` for
+formatting and issue-update rules.
+
+## Branches
+
+Use a research branch for the logbook, one-off scripts, harnesses, and small
+artifacts. Extract a clean production branch only when the final code/docs shape
+is clear.
 
 ## Standard Workflow
 
-### 1) Kickoff
-1. Create/switch to a long-lived research branch.
-2. Create an experiment issue from the template below; apply `experiment`.
-3. Start a research logbook at `.agents/logbooks/<topic>.md`.
-4. Link both ways immediately: logbook → issue URL, issue body → logbook path.
-5. Add an agent-generated marker/tag for the thread (labels, comments, or
-   snapshot metadata).
+### 1. Prologue
 
-At kickoff, write: motivation, problem statement, success metrics, initial
-hypotheses, first experiment matrix, links to relevant code paths, key
-references (papers/blog posts), stop criteria (what evidence is enough to
-stop/ship/escalate), and a fixed baseline case for repeated comparison.
+1. Create or switch to a long-lived research branch. You may already be on one, or the user may have requested a specific branch name. Otherwise, pick a descriptive name like `research/<topic>` or `research/<user>/<issue>-<topic>`.
+2. Create an experiment issue with `file-issue` unless scope or visibility needs
+   human confirmation. If the user provides one, use it.
+3. Start the logbook and link both ways: logbook to issue URL, issue body to logbook path. See the skill.
+4. Pick a short experiment ID prefix for the series, for example `MOE-HC-001`, and
+   use IDs like `MOE-HC-001` in logbook entries, run names, and issue comments.
+5. Pick a set of tags to use for all experiments, to be used with W&B, etc.
+   Typically this is the ID prefix (without the number), the issue number, and
+   anything else reasonable. Try to keep to 2-4 shared tags. You may use more
+   tags to distinguish runs within a project as useful.
+6. Record, as applicable: motivation, problem statement, context, success
+   metrics, the initial hypothesis queue, first experiment matrix, relevant
+   code paths, references, stop criteria, and the fixed baseline case for
+   repeated comparison.
 
-Prefer creating the experiment issue sooner rather than later; confirm timing
-with the human collaborator if scope or visibility is uncertain.
+### 2. Research Loop
 
-Experiment ID convention: assign a short prefix for the series (e.g. `MOE-HC`)
-and use IDs like `MOE-HC-001` in logbook entries, W&B run names, and issue
-comments.
+1. **Forage:** gather prior work and local context.
+2. **Propose:** update the living hypothesis queue and pick the next test.
+3. **Run:** implement the smallest useful experiment and collect evidence.
+4. **Interpret:** compare against baseline, decide confidence, and update the
+   logbook.
+5. **Promote:** move only interesting, decision-relevant claims up the issue
+   funnel.
+6. **Seal:** snapshot durable results or extract production work.
 
-### 2) Day-to-Day Research Loop
+Every cycle should leave the durable record better than it found it.
+
+### 2.1 Forage: Background Research
+
+Use `background-research` at the beginning, after a significant change of
+direction, or whenever you hit a wall. Assume `medium` or `low` effort unless
+the decision is expensive.
+
+Use the background-research output to update the logbook's hypothesis queue:
+add new candidates, revise weak ones, mark known dead ends, and promote
+well-supported ideas into the next experiment matrix. Let `background-research`
+and `task-logbook` decide what belongs in the issue versus the logbook.
+
+### 2.2 Propose / Run / Interpret: Dev Work and Experiments
+
+For research-branch dev work, optimize for learning speed while preserving
+operational security and cost controls. Ad-hoc scripts, temporary config knobs,
+and copy/paste are acceptable there. Production-facing code keeps the usual
+`AGENTS.md` quality bar.
+
 For each non-trivial experiment:
-1. Run the benchmark/experiment.
-2. Append to the research logbook: date/time, exact command, shape/config, key
-   outputs (tables, deltas, failures), interpretation, next decision.
-3. Push dense scalar series and plots to W&B when tables are too large.
-4. Add a GitHub issue comment with: concise delta since last update, important
-   findings only, links to logbook sections and W&B runs, and links to
-   artifacts in the GitHub tree pinned to the relevant commit/tag (example
-   permalink for `.agents/logbooks/foo.md`:
-   `https://github.com/marin-community/marin/tree/<commit-or-tag>/.agents/logbooks/foo.md`).
 
-Update cadence: post an issue update on every significant milestone, or every 6
-hours, whichever is sooner. A significant milestone means someone is likely to
-want to find that update later. If none occurred by the 6-hour mark, post a
-brief heartbeat with current status, blockers, and next ETA.
+1. Do the dev work needed for the experiment.
+2. Run the benchmark or experiment. Use `babysit-job` for long-lived runs.
+3. Append exact commands, config, key outputs, interpretation, and next decision
+   to the logbook. Follow `task-logbook` for issue updates.
+4. Push dense scalar series, plots, or raw artifacts to W&B or another store
+   when they are too large for issue comments.
 
-Issue comment style:
-- Mostly append-only; do not rewrite historical comments. Editing a comment to
-  fix formatting/escaping/errors is fine and preferred.
-- Leave issue references like #1234 as plain text (no backticks) so GitHub
-  cross-links them.
-- Keep claims scoped and falsifiable.
+### 3. Epilogue: Seal
 
-### 3) Maintain the Issue Body
-The issue body is the public summary layer: keep a short TL;DR current, track
-scope changes, keep links current, summarize takeaways for non-specialists,
-maintain a short decision log (decision, evidence, date, owner), maintain a
-negative-results index with links, and keep a `Conclusion` section current as
-evidence solidifies.
+Sealing should ordinarily only happen if the user requests it or the research has reached the defined goal.
 
-Write the body for readers who know Marin/LLM systems generally but not this
-specific thread. Issue updates/body must stand on their own — include enough
-framing (goal, assumptions, exact commands, result interpretation) for someone
-else to reproduce or critique the claim. Logbook entries can be terse and
-context-local but should still include exact commands and links to supporting
-artifacts.
+1. Update the issue body with the final TL;DR, conclusion, decision log, and negative-results index. Again, follow the `task-logbook` skill.
+2. Add a final issue comment covering what worked, what did not, confidence
+   level, limitations, and ordered next steps.
+3. Use `update-docs` when behavior, operational practice, reusable guidance, or
+   durable research findings changed.
+4. Ensure the final logbook entry and snapshot links are present.
+5. Close the issue when the research thread is complete.
 
-Label major claims as one of: `exploratory` (single run / weak evidence),
-`replicated` (repeated and consistent), `stable` (held across shape/seed/
-hardware variants relevant to scope).
-
-### 4) Snapshot and Seal
-When you reach a meaningful milestone:
-1. Commit only relevant files.
-2. Tag the commit (annotated tag preferred).
-3. Push the tag.
-4. Add an issue comment linking the tag, commit, and benchmark/report files
-   (prefer GitHub tree permalinks pinned to that commit/tag).
-5. Include a repro bundle: exact command(s), hardware/cluster and device count,
-   critical environment variables, primary comparison table.
-
-This creates a stable checkpoint even if the branch continues.
-
-### 5) Finish
-1. Add a final issue summary: what worked, what did not, confidence level and
-   limitations, and an explicit `Conclusion` (decision/outcome and why).
-2. Add **next steps** (small, concrete, ordered).
-3. Close the issue.
-
-## Research Logbook Template
-Use this structure in `.agents/logbooks/<topic>.md`:
-
-```md
-# <Topic>: Research Logbook
-
-## Scope
-- Goal:
-- Primary metric(s):
-- Constraints:
-
-## Baseline
-- Date:
-- Code refs:
-- Baseline numbers:
-
-## Experiment Log
-### YYYY-MM-DD HH:MM - <short label>
-- Hypothesis:
-- Command:
-- Config:
-- Result:
-- Interpretation:
-- Next action:
-```
-
-## Experiment Issue Template
-Use this body when filing the GitHub experiment issue at kickoff. Title the
-issue `Experiment: <topic>` and apply the `experiment` label.
-
-```md
-## Description
-
-(Add enough context someone outside could understand what you're trying to do.
-Doesn't need to be too long, but enough you could explain it to someone working
-on LLMs at another lab.)
-
-## Hypothesis or Goal
-
-(What are you trying to learn or achieve?)
-
-### Links
-
-(Delete any that aren't applicable.)
-
-* WandB Report:  (link)
-* Data Browser: (link)
-* (etc.)
-
-## Results
-
-(What did you find, including relevant evaluation metrics, etc.)
-```
-
-## Issue Update Template
-Use concise updates in issue comments:
-
-```md
-Update: <short label>
-
-- Change:
-- Result delta:
-- Confidence:
-- Links:
-  - Tag:
-  - Logbook section:
-  - W&B:
-- Next:
-```
-
-## Issue Body Template Add-ons
-Keep these sections in the issue body:
-- `TL;DR`
-- `Scope`
-- `Decision log` (append as decisions are made)
-- `Negative results index` (links to comments/logbook entries)
-- `Current baseline` (shape/config + reference numbers)
-
-## Experiment Design Rules
-- Run one-axis sweeps first (one variable at a time), then interaction sweeps.
-- Keep comparisons apples-to-apples (same shape, dtype, pass mode, backend
-  unless that axis is the test).
-- Always compare against an explicit baseline/reference configuration.
-- Only move the baseline after enough repeated evidence; note the change
-  explicitly in the logbook.
-
-## Practical Rules
-- Prefer short-lived code changes unless a persistent harness is clearly useful.
-- Keep benchmark harnesses configurable and minimal.
-- Record exact command lines for every headline number.
-- Treat failures and negative results as first-class data; include why they
-  failed — they prevent repeated dead ends.
-- Separate measurement code from the production path whenever possible.
-- Prefer persistent remote shells/scripts for long sweeps; avoid repeated
-  sync/launch overhead.
-- Check accelerator contention (existing processes/locks) before attributing
-  regressions to code.
-- For long remote runs, track a monotonic progress signal (rows emitted, steps
-  completed, checkpoints written) and tail recent logs for context.
-- Validate machine-readable extraction before publishing (expected row counts,
-  key uniqueness) and de-duplicate when needed.
-
-Ops hygiene checklist (before claiming a regression):
-- no stale benchmark process still occupying the accelerator,
-- lockfiles/state are clean,
-- comparison uses the same device count,
-- command/config/env identical except the tested axis.
-
-## Validation Checklist
-Before posting a result:
-- Command is reproducible.
-- Shapes/config are explicitly listed.
-- Comparison is apples-to-apples.
-- Version snapshot exists (commit or tag).
-- Result is in the logbook and linked from the issue.
+If the research produced useful production changes, extract them into a clean
+branch that can link to the logbook but does not include it. Follow standard
+Marin development practices on that branch.
 
 Before closing the issue:
+
 - Final TL;DR is current.
 - Issue body includes a clear `Conclusion`.
 - Next steps are listed.
-- Final snapshot tag is linked.
+- Final snapshot is linked.
+- If there's a final production PR, link to it from the issue summary.
+
+## Practical Rules
+
+- Prefer short-lived code changes unless a persistent harness is clearly useful.
+- Keep benchmark harnesses configurable and minimal.
+- Record exact command lines for every headline number.
+- Treat failures and negative results as first-class data. Record dead ends and
+  excessive hyperparameter sensitivity; skip routine bugs or undertuning.
 
 ## See Also
+
 - `.agents/skills/organize-experiments/`
 - `.agents/skills/add-pallas-kernel/`
-</content>
-</invoke>
+- `.agents/skills/task-logbook/`
+- `.agents/skills/update-docs/`

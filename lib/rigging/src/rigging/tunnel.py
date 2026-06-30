@@ -28,8 +28,6 @@ finelog's CLI translate their own config schema into a ``TunnelTarget``
 and use this directly; iris's k8s port-forward should migrate here too.
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import os

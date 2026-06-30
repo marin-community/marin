@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from iris.rpc import config_pb2
+from iris.cluster.config import (
+    CoreweavePlatformConfig,
+    IrisClusterConfig,
+    KubernetesProviderConfig,
+    PlatformConfig,
+)
 
 from scripts.iris.dev_gpu import (
     CoreweaveTarget,
@@ -28,10 +33,11 @@ def test_state_round_trip():
 
 def test_require_coreweave_namespace_comes_from_kubernetes_provider():
     # Regression: pods are created/listed in kubernetes_provider.namespace, NOT
-    # platform.coreweave.namespace (independent proto fields that can diverge).
-    c = config_pb2.IrisClusterConfig()
-    c.platform.coreweave.namespace = "platform-ns"
-    c.kubernetes_provider.namespace = "pods-live-here"
+    # platform.coreweave.namespace (independent config fields that can diverge).
+    c = IrisClusterConfig(
+        platform=PlatformConfig(coreweave=CoreweavePlatformConfig(namespace="platform-ns")),
+        kubernetes_provider=KubernetesProviderConfig(namespace="pods-live-here"),
+    )
     assert require_coreweave_platform(c).namespace == "pods-live-here"
 
 

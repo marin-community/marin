@@ -5,7 +5,6 @@
 
 import logging
 import time
-import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +18,7 @@ from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
+from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -27,7 +27,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
@@ -106,6 +106,19 @@ class RemoteClusterClient:
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
         )
+        # Endpoint registry on its own service. EndpointClient owns the RPC stub
+        # and the background lease renewal: register() keeps the endpoint alive
+        # until unregister()/close(), so the controller keeps serving it while
+        # the task runs.
+        self._endpoint_client = EndpointClient(
+            EndpointServiceClientSync(
+                address=controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
+        )
         # In-cluster clients resolve the finelog endpoint and write direct so
         # task-status pushes don't pile up on the controller's RPC thread pool;
         # external clients route through the controller, the only ingress they
@@ -134,11 +147,13 @@ class RemoteClusterClient:
         replicas: int = 1,
         max_retries_failure: int = 0,
         max_retries_preemption: int = 1000,
+        max_task_failures: int = 0,
         timeout: Duration | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
         task_image: str | None = None,
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -161,10 +176,12 @@ class RemoteClusterClient:
             replicas=replicas,
             max_retries_failure=max_retries_failure,
             max_retries_preemption=max_retries_preemption,
+            max_task_failures=max_task_failures,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
             task_image=task_image or "",
             priority_band=priority_band,
+            container_profile=container_profile,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )
@@ -374,34 +391,14 @@ class RemoteClusterClient:
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        endpoint_id = str(uuid.uuid4())
-        request = controller_pb2.Controller.RegisterEndpointRequest(
-            name=name,
-            address=address,
-            task_id=task_attempt.task_id.to_wire(),
-            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
-            metadata=metadata or {},
-            endpoint_id=endpoint_id,
-        )
-
-        def _call():
-            return self._client.register_endpoint(request)
-
-        response = call_with_retry("register_endpoint", _call)
-        return response.endpoint_id
+        return self._endpoint_client.register(name, address, task_attempt, metadata)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
-        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        self._client.unregister_endpoint(request)
+        self._endpoint_client.unregister(endpoint_id)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        def _call():
-            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
-            response = self._client.list_endpoints(request, timeout_ms=10_000)
-            return list(response.endpoints)
-
-        return call_with_retry("list_endpoints", _call)
+        return self._endpoint_client.list_endpoints(prefix, exact=exact)
 
     def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
@@ -467,6 +464,7 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
+        self._endpoint_client.close()
         self._log_client.close()
         self._client.close()
 
@@ -504,6 +502,25 @@ class RemoteClusterClient:
             return list(response.tasks)
 
         return call_with_retry(f"list_tasks({job_id})", _call)
+
+    def kick_tasks(
+        self,
+        targets: list[str],
+        desired_state: job_pb2.TaskState,
+        reason: str,
+    ) -> list[controller_pb2.Controller.KickResult]:
+        """Force task attempts into a terminal state out-of-band (emergency override)."""
+
+        def _call():
+            request = controller_pb2.Controller.KickTasksRequest(
+                targets=targets,
+                desired_state=desired_state,
+                reason=reason,
+            )
+            response = self._client.kick_tasks(request)
+            return list(response.results)
+
+        return call_with_retry(f"kick_tasks({', '.join(targets)})", _call)
 
     def fetch_logs(
         self,

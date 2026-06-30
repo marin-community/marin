@@ -121,23 +121,38 @@ force-push.
 ## 8. Open or update the PR
 
 Do this once the branch is ready for review. The PR description becomes the
-squash-merge commit message — write it as plain text.
+squash-merge commit message, so **write it the way you'd write a good commit
+message a reviewer reads in `git log`.**
 
 **Title:** short imperative sentence; optional `[scope]` tag.
-**Body:** what changed and why. End with an issue link if one exists.
+
+**Body:** Lead with what the change does, in plain language, then the motivation —
+the problem it fixes or the reason it's shaped this way. Include only what a
+reviewer needs to understand and approve it. The body should stand on its own: a
+reader who never saw the diff should come away knowing what happened and why.
+
+Write for the reviewer, not for a template. Most PRs are a paragraph or two with
+no headings. Markdown earns its place when it makes the change *clearer* — a
+short list of the distinct things that changed, a table, a mermaid diagram of a
+new flow are all welcome when they help. Reach for them to aid the reviewer,
+never to fill in a standard set of sections. Let the change decide the shape; do
+not impose a What/Change/Scope/Testing scaffold.
 
 Keep the title and body aligned with the branch's actual scope — including when
 you change a branch that already has a PR.
 
 **Hard rules — violations are rejected:**
 
-- No "Validation" / "Testing" / "written by …" filler. The body is *what & why*,
-  not *how I tested it* or *who wrote it*.
+- No "Testing" / "Validation" / "Test plan" section, and no "how I verified it"
+  narration. The body is *what & why*. If a test result is the very thing that
+  justifies the change, fold that one fact into the *why*; otherwise leave it out.
+- No empty boilerplate headings — a `## Summary` that restates the title, a
+  `## Changes` that just lists the touched files. If a heading's body adds nothing
+  the reviewer can't get from the title or the diff, delete the heading.
+- No "written by …" / "Created by Claude" notes; don't credit yourself.
 - No checkboxes (`- [ ]`, `- [x]`), no emoji.
 - No filler openers ("This PR…", "I noticed…", "Summary of changes:").
-- Under ~500 words.
-- Don't credit yourself, no "Created by Claude" filler.
-- Only use Markdown & sections if this is a large change that requires structured description
+- Under ~500 words. Shorter is better; a one-line change gets a one-line body.
 
 Example:
 
@@ -156,12 +171,15 @@ Fixes #1234
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
 
-**Specifications (>500 LOC).** Large PRs must carry a spec.
-This may be in the linked issue, or part of the PR description.
-If a design doc exists, may also link to it instead.
-Specs cover: **Problem** (what is broken/missing, with file/line refs), **Approach**
-(which modules change, what is added/removed), and **Key code** (10–30 line
-snippets for non-obvious logic).
+**Specifications (>500 LOC only).** A *genuinely large* PR must carry a spec —
+in the linked issue, the PR description, or a linked design doc. A spec still
+obeys every rule above: it leads with what the change does and is not a template.
+It just covers more ground — what was broken or missing (with file/line refs),
+which modules change and what is added/removed, and 10–30 line snippets for
+non-obvious logic. Cover those points in whatever prose and headings genuinely
+help a reviewer; they are not a required `Problem`/`Approach` section scaffold,
+and a large PR still never gets a "Verification" section. This applies to large
+PRs; a small change gets a short prose body, never a spec template.
 
 **Create it.** Unless the user says otherwise and permissions allow, push to a
 branch on the main repository and open the PR from it (use a fork only when

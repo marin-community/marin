@@ -32,8 +32,6 @@ Submit on iris (eu-west4)::
         -- python scripts/verify_smoke_v0.py {v0,mixed}
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 from collections import Counter, defaultdict
@@ -43,7 +41,7 @@ import pyarrow.compute as pc
 from fray import ResourceConfig
 from levanter.store.cache import CacheLedger, CacheMetadata
 from marin.datakit.decon import DeconAttributes
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
@@ -154,10 +152,10 @@ def _build_shard_specs(sources: tuple[str, ...], split: str, dedup: FuzzyDupsAtt
     """Resolve per-source artifacts and project to per-shard spec dicts."""
     specs: list[dict[str, str]] = []
     for src in sources:
-        tok = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, src), TokenizedAttrData)
-        decon = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, src), DeconAttributes)
-        cluster_a = Artifact.from_path(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, src), AssignmentAttrData)
-        qual = Artifact.from_path(_resolve_artifact_dir(QUALITY_ROOT, src), LlmQualityOutput)
+        tok = read_artifact(_resolve_artifact_dir(TOKENIZE_ROOT, src), TokenizedAttrData)
+        decon = read_artifact(_resolve_artifact_dir(DECONTAM_ROOT, src), DeconAttributes)
+        cluster_a = read_artifact(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, src), AssignmentAttrData)
+        qual = read_artifact(_resolve_artifact_dir(QUALITY_ROOT, src), LlmQualityOutput)
         main_dir = tok.source_main_dirs[split]
         dedup_attr_dir = dedup.sources[main_dir].attr_dir
         specs.extend(
@@ -195,10 +193,10 @@ def main() -> None:
     output_path, sources, split = _PRESETS[args.smoke]
 
     configure_logging(logging.INFO)
-    artifact = Artifact.from_path(output_path, ClusteredStoreData)
+    artifact = read_artifact(output_path, ClusteredStoreData)
     logger.info("loaded artifact at %s: %d buckets", output_path, len(artifact.buckets))
 
-    dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
+    dedup = read_artifact(DEDUP_PATH, FuzzyDupsAttrData)
     cluster_col = f"cluster_{artifact.cluster_view}"
 
     shard_specs = _build_shard_specs(sources, split, dedup)

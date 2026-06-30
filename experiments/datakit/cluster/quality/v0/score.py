@@ -42,8 +42,6 @@ Submit:
           --budget-usd 45  # leave $5 for the held-out eval sample
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

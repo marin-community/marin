@@ -49,8 +49,12 @@ def proto_to_json(msg) -> str:
 
 @functools.lru_cache(maxsize=_CODEC_CACHE_SIZE)
 def proto_from_json(json_str: str, proto_cls):
-    """Deserialize a JSON string into a new protobuf message of *proto_cls*."""
-    return json_format.ParseDict(json.loads(json_str), proto_cls())
+    """Deserialize a JSON string into a new protobuf message of *proto_cls*.
+
+    Ignores unknown fields so jobs persisted before a field was removed still
+    replay across a controller restart.
+    """
+    return json_format.ParseDict(json.loads(json_str), proto_cls(), ignore_unknown_fields=True)
 
 
 # ---------------------------------------------------------------------------
@@ -198,10 +202,11 @@ def worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata
         gpu_memory_mb=worker.md_gpu_memory_mb,
         gce_instance_name=worker.md_gce_instance_name,
         gce_zone=worker.md_gce_zone,
-        git_hash=worker.md_git_hash,
     )
     if worker.md_device_json and worker.md_device_json != "{}":
         md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
+    if worker.md_provenance_json and worker.md_provenance_json != "{}":
+        md.provenance.CopyFrom(proto_from_json(worker.md_provenance_json, job_pb2.Provenance))
     for key, value in attributes.items():
         md.attributes[key].CopyFrom(python_value_to_attribute_value(value))
     return md

@@ -16,8 +16,6 @@ in ``sys.modules`` and warn while re-executing its body a second time. Nothing
 in the package-init graph imports ``shard_subprocess``, so no such warning.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import sys

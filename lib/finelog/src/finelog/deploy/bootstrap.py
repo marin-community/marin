@@ -11,8 +11,6 @@ The finelog Docker image is assumed to be public on GHCR; no Artifact Registry
 or `docker login` wiring is performed here.
 """
 
-from __future__ import annotations
-
 import re
 
 # Container/host conventions baked into the bootstrap.

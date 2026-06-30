@@ -18,15 +18,17 @@ from typing import Literal
 
 import click
 from google.protobuf import json_format
+from iris.cli.main import client_credentials, resolve_cluster_name
 from iris.client import IrisClient
-from iris.client.connect import create_client_token_provider, resolve_cluster_name
 from iris.cluster.backends.k8s.tasks import _sanitize_label_value
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
-from iris.cluster.token_store import cluster_name_from_url, load_any_token, load_token
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
+from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
-from iris.rpc.auth import ClientCredentials, StaticTokenProvider, TokenProvider
+from rigging.cluster_manifest import AuthProvider, ClusterAuth
+from rigging.credential_store import cluster_name_from_url
+from rigging.credentials import credentials_for
 from rigging.redaction import redact_value
 from rigging.timing import ExponentialBackoff
 
@@ -82,15 +84,6 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-def _token_provider_for_url(controller_url: str) -> TokenProvider | None:
-    credential = load_token(cluster_name_from_url(controller_url))
-    if credential is None:
-        credential = load_any_token()
-    if credential is None:
-        return None
-    return StaticTokenProvider(credential.token)
-
-
 @contextmanager
 def _open_iris_client(
     *,
@@ -99,40 +92,31 @@ def _open_iris_client(
     controller_url: str | None = None,
 ) -> Iterator[IrisClient]:
     if controller_url is not None:
-        with IrisClient.remote(
-            controller_url,
-            workspace=repo_root,
-            credentials=ClientCredentials(token_provider=_token_provider_for_url(controller_url)),
-        ) as client:
+        credentials = credentials_for(cluster_name_from_url(controller_url), ClusterAuth(AuthProvider.NONE))
+        with IrisClient.remote(controller_url, workspace=repo_root, credentials=credentials) as client:
             yield client
         return
 
     if iris_config is None:
         raise click.ClickException("No controller specified. Pass --iris-config or --controller-url.")
 
-    config = IrisConfig.load(iris_config)
-    token_provider = None
-    cluster_name = resolve_cluster_name(config.proto, None, None)
-    if config.proto.HasField("auth"):
-        token_provider = create_client_token_provider(config.proto.auth, cluster_name=cluster_name)
+    config = load_config(iris_config)
+    cluster_name = resolve_cluster_name(config, None, None)
+    credentials = client_credentials(config, cluster_name)
 
-    if config.proto.controller.WhichOneof("controller") == "local":
-        cluster = LocalCluster(config.proto)
+    if config.controller.controller_kind() == "local":
+        cluster = LocalCluster(config)
         try:
-            with IrisClient.remote(
-                cluster.start(), workspace=repo_root, credentials=ClientCredentials(token_provider=token_provider)
-            ) as client:
+            with IrisClient.remote(cluster.start(), workspace=repo_root, credentials=credentials) as client:
                 yield client
         finally:
             cluster.close()
         return
 
-    bundle = config.provider_bundle()
-    controller_address = config.controller_address() or bundle.controller.discover_controller(config.proto.controller)
+    bundle = provider_bundle(config)
+    controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
     with bundle.controller.tunnel(address=controller_address) as tunnel_url:
-        with IrisClient.remote(
-            tunnel_url, workspace=repo_root, credentials=ClientCredentials(token_provider=token_provider)
-        ) as client:
+        with IrisClient.remote(tunnel_url, workspace=repo_root, credentials=credentials) as client:
             yield client
 
 

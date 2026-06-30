@@ -7,8 +7,6 @@ Provider implementations and consumers depend on this single, self-contained
 module without pulling in the full provider protocols or any concrete implementation.
 """
 
-from __future__ import annotations
-
 import datetime
 import logging
 import os
@@ -203,7 +201,7 @@ class SliceStatus:
 
     state: CloudSliceState
     worker_count: int
-    workers: list[RemoteWorkerHandle] = field(default_factory=list)
+    workers: "list[RemoteWorkerHandle]" = field(default_factory=list)
     error_message: str = ""
 
 

@@ -18,8 +18,6 @@ Priority-tier spend is excluded from this endpoint (it is reported via the
 usage endpoint), so totals here track on-demand cost.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import logging
 from collections.abc import Mapping

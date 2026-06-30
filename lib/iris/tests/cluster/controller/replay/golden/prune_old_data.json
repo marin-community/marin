@@ -1,4 +1,14 @@
 {
+  "backends": [
+    {
+      "allow_policy_json": "{}",
+      "attributes_json": "{}",
+      "backend_id": "default",
+      "kind": "",
+      "last_seen_ms": null,
+      "status": 0
+    }
+  ],
   "endpoints": [],
   "job_config": [],
   "job_workdir_files": [],
@@ -42,13 +52,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",

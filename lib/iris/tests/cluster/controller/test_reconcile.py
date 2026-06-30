@@ -14,25 +14,29 @@ Three layers, exercised in order:
    tick's reconcile phase (``reconcile_once``).
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
-from iris.cluster.backends.rpc.backend import RpcTaskBackend
+from iris.cluster.backends.rpc.backend import (
+    WORKER_RECONCILE_TEARDOWN_REASON,
+    FleetObservation,
+    RpcTaskBackend,
+)
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
+    ReconcileRequest,
     ReconcileResult,
-    ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     plans_from_snapshot,
-    run_scheduling_decision,
 )
+from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -49,9 +53,11 @@ from iris.cluster.controller.reconcile.worker import (
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.worker_health import (
+    BUILD_FAILURE_THRESHOLD,
     MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
     WorkerHealthEventKind,
+    WorkerHealthTracker,
 )
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
@@ -60,7 +66,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from tests.cluster.controller._test_support import ControllerTestState
-from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
+from tests.cluster.controller.transition_driver import (
+    WorkerTaskUpdates,
+    apply_task_observations,
+    commit_reconcile,
+)
 
 from .conftest import (
     dispatch_task,
@@ -73,6 +83,9 @@ from .conftest import (
     query_worker,
     reconcile_once,
     register_worker,
+    run_worker_daemon_reconcile,
+    run_worker_daemon_schedule,
+    store_from_runtime,
     submit_job,
 )
 
@@ -555,17 +568,43 @@ def _reconcile_snapshot(worker_addresses: dict[WorkerId, str]) -> ControlSnapsho
     )
 
 
+@dataclass
+class _StubWorkerStore:
+    """A worker store that hands the backend a fixed reconcile snapshot.
+
+    The dispatch-layer tests exercise ``RpcTaskBackend.reconcile``'s fan-out and
+    health-event derivation given a known snapshot; the backend now sources that
+    snapshot itself, so the test supplies it through this stub.
+    """
+
+    snapshot: ControlSnapshot
+
+    def reconcile_snapshot(self) -> ControlSnapshot:
+        return self.snapshot
+
+    def scheduling_inputs(self):
+        raise NotImplementedError
+
+    def worker_status(self):
+        raise NotImplementedError
+
+
+def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> FleetObservation:
+    provider._store = cast(BackendWorkerStore, _StubWorkerStore(_reconcile_snapshot(worker_addresses)))
+    return provider._observe_fleet()
+
+
 def _reconcile_one(provider: RpcTaskBackend, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
     # The backend now builds plans from the snapshot; ``plan`` here only fixes
     # which worker is reconciled. The RPC fan-out and observation surfacing are
     # what these dispatch-layer tests exercise.
-    result = provider.reconcile(_reconcile_snapshot({plan.worker_id: address}))
-    return [r for _, r in result.worker_results]
+    observation = _reconcile_with(provider, {plan.worker_id: address})
+    return [r for _, r in observation.worker_results]
 
 
 def test_dispatch_reconcile_plans_empty_short_circuits():
     provider, _ = _provider_with_stub()
-    assert provider.reconcile(_reconcile_snapshot({})).worker_results == []
+    assert _reconcile_with(provider, {}).worker_results == []
 
 
 def test_reconcile_rpc_forwards_observations():
@@ -609,9 +648,9 @@ def test_reconcile_matching_responder_id_is_reached():
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
     provider = RpcTaskBackend(stub_factory=factory)
 
-    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
-    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
+    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
     assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
 
 
@@ -634,9 +673,9 @@ def test_reconcile_recycled_address_is_unreachable_not_reached():
     factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
     provider = RpcTaskBackend(stub_factory=factory)
 
-    result = provider.reconcile(_reconcile_snapshot({WorkerId(_W1): _W1_ADDR}))
+    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
 
-    assert result.health_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
+    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
     # The stale stub is evicted so the next tick re-resolves the address.
     assert _W1_ADDR not in factory.stubs
 
@@ -719,7 +758,7 @@ def _apply_observations(
         plan = _make_plan(worker_id, desired=desired)
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             [(plan, result)],
             endpoints=state._endpoints,
@@ -735,7 +774,7 @@ def _apply_failure(
 ):
     result = WorkerReconcileResult(worker_id=WorkerId(worker_id), observations=[], error=error)
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             [(plan, result)],
             endpoints=state._endpoints,
@@ -1121,30 +1160,50 @@ class _ScriptedProvider:
     calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
     name: str = "worker"
     autoscaler: Any = None
+    _store: BackendWorkerStore | None = None
+    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return run_worker_daemon_schedule(self._scheduler, self._store, request)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        self.autoscaler = autoscaler
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self._store = store_from_runtime(runtime, self.health, self.autoscale)
 
-    def set_log_sink(self, *_args, **_kwargs):
-        pass
+    def seed_liveness(self) -> None:
+        assert self._store is not None
+        worker_ids = self._store.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        assert self._store is not None, "_ScriptedProvider.reconcile called before worker store attached"
+        snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         self.calls.append((plans, dict(snapshot.worker_addresses)))
         tick = len(self.calls) - 1
@@ -1153,7 +1212,18 @@ class _ScriptedProvider:
             (p, WorkerReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None)) for p in plans
         ]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        return ReconcileResult(worker_results=worker_results, health_events=events)
+        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
+        self._pending_dead.extend(dead)
+        return result
+
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        assert self._store is not None, "_ScriptedProvider.teardown called before worker store attached"
+        self._store.reap_workers(dead_workers, reason=reason)
 
     def close(self):
         pass
@@ -1183,7 +1253,7 @@ def test_e2e_converges_to_succeeded(make_controller):
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1235,7 +1305,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     ctrl = make_controller(provider=provider)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1275,15 +1345,41 @@ class _UnreachableProvider:
     autoscale_calls: list[list[WorkerId]] = field(default_factory=list)
     name: str = "worker"
     autoscaler: Any = None
+    _store: BackendWorkerStore | None = None
+    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        return run_scheduling_decision(self._scheduler, snapshot)
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
+    def admits(self, user: str) -> bool:
+        return "*" in self.allowed_users or user in self.allowed_users
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+
+    def seed_liveness(self) -> None:
+        assert self._store is not None
+        worker_ids = self._store.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        return run_worker_daemon_schedule(self._scheduler, self._store, request)
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        assert self._store is not None, "_UnreachableProvider.reconcile called before worker store attached"
+        snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
         events: list[WorkerHealthEvent] = []
@@ -1310,26 +1406,31 @@ class _UnreachableProvider:
                     (plan, WorkerReconcileResult(worker_id=plan.worker_id, observations=[], error=None))
                 )
                 events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return ReconcileResult(worker_results=worker_results, health_events=events)
+        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
+        self._pending_dead.extend(dead)
+        return result
 
-    def autoscale(self, snapshot: ControlSnapshot, residual_demand, dead_workers) -> AutoscaleResult:
-        self.autoscale_calls.append(list(dead_workers))
-        removed: list[WorkerId] = list(dead_workers)
-        for dead in dead_workers:
+    def run_teardown(self) -> None:
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        assert self._store is not None, "_UnreachableProvider.teardown called before worker store attached"
+        self._store.reap_workers(dead_workers, reason=reason)
+
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
+        self.autoscale_calls.append(list(request.dead_workers))
+        removed: list[WorkerId] = list(request.dead_workers)
+        for dead in request.dead_workers:
             removed.extend(WorkerId(sib) for sib in self.siblings.get(str(dead), []))
         return AutoscaleResult(removed_workers=removed)
-
-    def attach_autoscaler(self, autoscaler) -> None:
-        self.autoscaler = autoscaler
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
 
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
-
-    def set_log_sink(self, *_args, **_kwargs):
-        pass
 
     def close(self):
         pass
@@ -1345,7 +1446,7 @@ _GRACE = Duration.from_seconds(4)
 def _expire_grace(ctrl, wid: WorkerId) -> None:
     """Backdate a worker's last heartbeat so the unreachable grace has elapsed."""
     aged = Timestamp.now().epoch_ms() - _GRACE.to_ms() - 1
-    ctrl._health.set_last_heartbeat_for_test(wid, aged)
+    ctrl.provider.health.set_last_heartbeat_for_test(wid, aged)
 
 
 @pytest.mark.parametrize(
@@ -1371,7 +1472,7 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1392,7 +1493,7 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
     reconcile_once(ctrl)
     assert provider.autoscale_calls == [[wid]]
     assert query_worker(state, wid) is None, "failed worker row should be removed"
-    assert wid not in ctrl._health.all(), "failed worker should be forgotten from the tracker"
+    assert wid not in ctrl.provider.health.all(), "failed worker should be forgotten from the tracker"
 
 
 def test_reconcile_failure_reaps_slice_siblings(make_controller):
@@ -1406,7 +1507,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1424,7 +1525,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert provider.autoscale_calls == [[dead]]
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
-    assert ctrl._health.all() == {}, "whole slice should be forgotten from the tracker"
+    assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
 def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
@@ -1440,7 +1541,7 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
-        health=ctrl._health,
+        health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
         worker_attrs=ctrl._worker_attrs,
         run_template_cache=ctrl._run_template_cache,
@@ -1453,7 +1554,84 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
 
     assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
     assert query_worker(state, wid) is None, "evicted worker row should be removed"
-    assert wid not in ctrl._health.all(), "evicted worker should be forgotten from the tracker"
+    assert wid not in ctrl.provider.health.all(), "evicted worker should be forgotten from the tracker"
+
+
+def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:
+    """Report the worker's first still-held run attempt as a launch failure.
+
+    The kernel attributes an ASSIGNED -> WORKER_FAILED transition observed over
+    reconcile to the worker (a host that couldn't bring the attempt up), so
+    reporting exactly one held attempt WORKER_FAILED per tick charges exactly one
+    build failure. The attempt retries to an unassigned PENDING task without
+    consuming budget and drops out of the worker's held set, so the next tick's
+    first held attempt is a fresh one.
+    """
+    for desired in plan.request.desired:
+        if desired.HasField("run"):
+            return [
+                worker_pb2.Worker.AttemptObservation(
+                    attempt_uid=desired.attempt_uid,
+                    state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    error="host failed to launch attempt",
+                )
+            ]
+    return []
+
+
+def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
+    """The in-process backend's reconcile fold reaps a build-failing worker at the
+    threshold -- not one failure before.
+
+    Each reconcile pass charges one build failure (a worker-reported
+    ASSIGNED -> FAILED transition). The liveness fold now lives in the backend, so
+    the worker that crosses ``BUILD_FAILURE_THRESHOLD`` rides back as
+    ``dead_workers`` and the controller tears it down. The boundary is exact: the
+    worker survives the first ``BUILD_FAILURE_THRESHOLD - 1`` failures and is
+    removed on the one that reaches the threshold.
+    """
+    provider = _ScriptedProvider(script=[_fail_first_held] * BUILD_FAILURE_THRESHOLD)
+    ctrl = make_controller(provider=provider)
+    state = ControllerTestState(
+        ctrl._db,
+        health=ctrl.provider.health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=ctrl._worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    # One task per build failure we mean to charge, all assigned up front so the
+    # responder always has a fresh held attempt to fail. Generous retry budget
+    # keeps every task retrying (never terminal) so the job stays active and the
+    # worker keeps its place across all the passes.
+    tasks = submit_job(
+        state,
+        "build-fail-job",
+        make_job_request(
+            name="build-fail-job",
+            replicas=BUILD_FAILURE_THRESHOLD,
+            max_retries_failure=BUILD_FAILURE_THRESHOLD,
+        ),
+    )
+    with state._db.transaction() as cur:
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=wid) for task in tasks],
+            health=state._health,
+        )
+
+    # The first THRESHOLD - 1 build failures accrue but stay under the bar.
+    for expected_failures in range(1, BUILD_FAILURE_THRESHOLD):
+        reconcile_once(ctrl)
+        assert query_worker(state, wid) is not None, "worker reaped before reaching the build-failure threshold"
+        assert ctrl.provider.health.liveness(wid).build_failures == expected_failures
+
+    # The THRESHOLD-th build failure trips the bar: the backend's fold returns the
+    # worker dead and the controller reaps it.
+    reconcile_once(ctrl)
+    assert query_worker(state, wid) is None, "worker should be reaped at the build-failure threshold"
+    assert wid not in ctrl.provider.health.all(), "reaped worker should be forgotten from the tracker"
 
 
 # ===========================================================================
@@ -1488,6 +1666,7 @@ def _setup_coscheduled_running_pair(
     *,
     max_retries_failure: int = 0,
     max_retries_preemption: int = 0,
+    max_task_failures: int = 0,
     sibling_assigned: bool = False,
 ) -> _CoschedPair:
     """Submit a 2-replica coscheduled job and place both replicas on workers.
@@ -1505,6 +1684,7 @@ def _setup_coscheduled_running_pair(
         replicas=2,
         max_retries_failure=max_retries_failure,
         max_retries_preemption=max_retries_preemption,
+        max_task_failures=max_task_failures,
     )
     req.coscheduling.group_by = "job"
     tasks = submit_job(state, "cosched-job", req)
@@ -1568,7 +1748,7 @@ def _apply_batch(
     """
     plan_results = [(plans[r.worker_id], r) for r in results]
     with state._db.transaction() as cur:
-        return apply_reconcile(
+        return commit_reconcile(
             cur,
             plan_results,
             endpoints=state._endpoints,
@@ -1586,7 +1766,7 @@ def test_coscheduled_running_repoll_does_not_revive_after_sibling_requeue():
     raw snapshot (attempt still RUNNING), revived t1, and split the gang.
     """
     with make_controller_state() as state:
-        pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+        pair = _setup_coscheduled_running_pair(state, max_retries_failure=1, max_task_failures=1)
         plans = {
             WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
             WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),
@@ -1663,7 +1843,7 @@ def test_reconcile_batch_order_independent_coscheduled_failure(trigger_first):
 
     def run(trigger_first_order: bool) -> dict[str, Any]:
         with make_controller_state() as state:
-            pair = _setup_coscheduled_running_pair(state, max_retries_failure=1)
+            pair = _setup_coscheduled_running_pair(state, max_retries_failure=1, max_task_failures=1)
             plans = {
                 WorkerId(_W1): _run_plan(_W1, pair.t0, pair.a0, pair.u0),
                 WorkerId(_W2): _run_plan(_W2, pair.t1, pair.a1, pair.u1),

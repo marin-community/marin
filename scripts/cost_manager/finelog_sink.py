@@ -15,8 +15,6 @@ configured destination:
   interactive IAP login.
 """
 
-from __future__ import annotations
-
 import logging
 from collections import defaultdict
 from collections.abc import Iterator, Mapping

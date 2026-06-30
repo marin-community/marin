@@ -1,194 +1,198 @@
 # Training a Language Model
 
+This tutorial walks through training a language model with Marin's lazy artifact API,
+using the DCLM 1B/1x baseline as a concrete example.
+
 ## Prerequisites
 
-Before we start training, make sure you have gone through:
-
 - Basic [installation](installation.md)
-- Set up your [local GPU](local-gpu.md)
-- Ensure you can reach a shared Iris cluster (see [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)).
+- Access to an Iris cluster or a local GPU (see [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md))
 
-This guide explains how to train a language model using Marin, with our examples reproducing the
-[DCLM](https://arxiv.org/pdf/2406.11794) 7B/1x and 1B/1x baselines.
+## How a training script is structured
 
-## Required Imports
-
-Start by importing the necessary modules:
+A Marin training script builds a lazy `ArtifactStep[LevanterCheckpoint]` handle, lowers it to
+a runnable step graph, and passes it to `StepRunner`. Nothing executes at import time.
 
 ```python
-# Import a tokenized dataset configuration from options available in Marin
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
+from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
 
-# Import training utilities and configuration classes
-from experiments.defaults import default_train
-from experiments.simple_train_config import SimpleTrainConfig
-
-# Import the self-running launcher (connects to the cluster and runs the executor)
-from experiments.launch import LaunchConfig, launch_executor
-
-# Import model architecture definitions
-from levanter.models.llama import LlamaConfig
-
-# Import evaluation task configuration
-from marin.evaluation.evaluation_config import EvalTaskConfig
-
-# draccus parses the CLI (--cluster, --tpu_type, ...) into a LaunchConfig
-import draccus
-```
-
-- [`dclm_mixture_config_llama3`](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dclm.py): A predefined dataset configuration for the DCLM mixture, this can be replaced with any tokenized dataset in Marin of the `lm_mixture_data_config` type (e.g. [Dolma](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/dolma.py) or [Nemotron](https://github.com/marin-community/marin/blob/main/experiments/pretraining_datasets/nemotron.py))
-- [`SimpleTrainConfig`][experiments.simple_train_config.SimpleTrainConfig]
-- [`default_train`][experiments.defaults.default_train]: A utility function that creates a training pipeline
-- [`LlamaConfig`][levanter.models.llama.LlamaConfig]: A dataclass that defines the model architecture from [Levanter](https://github.com/stanford-crfm/levanter)
-- [`launch_executor`](https://github.com/marin-community/marin/blob/main/experiments/launch.py): Runs the experiment through the Marin executor — in-process by default, or (with `--cluster`) on a coordinator job on [Iris](https://github.com/marin-community/marin/tree/main/lib/iris), Marin's job scheduler
-
-## Setting Up the Model Configuration
-
-Define your model architecture by creating a configuration object:
-
-```python
-model_config = LlamaConfig(
-    seq_len=2048,           # Maximum sequence length for context processing
-    hidden_dim=2048,        # Dimension of hidden representations
-    intermediate_dim=8192,  # Dimension of feedforward layers
-    num_heads=16,           # Number of attention heads
-    num_layers=24,          # Number of transformer layers
-)
-```
-
-You can also use pre-defined model configurations from [`experiments.llama`](https://www.github.com/marin-community/marin/blob/main/experiments/llama.py) for common model sizes.
-
-## Defining Training Parameters
-
-Set up your training configuration by calculating the number of training steps and defining hyperparameters:
-
-=== "GPU"
-    ```python
-    from fray.cluster import ResourceConfig
-
-    # Calculate training steps based on desired token count
-    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
-    BATCH_SIZE = 256
-    SEQ_LEN = 2048
-    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
-
-    training_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_gpu("H100", count=4), # Hardware configuration: 4 GPUs
-        train_batch_size=BATCH_SIZE,                # Sequences processed per step
-        num_train_steps=NUM_TRAIN_STEPS,            # Total optimization steps
-        learning_rate=3e-3,                         # Peak learning rate
-        weight_decay=0.033,                         # L2 regularization
-        min_lr_ratio=0.1,                           # Minimum learning rate ratio (for decay)
-        warmup=5000,                                # Steps for learning rate warmup
-        z_loss_weight=1e-4,                         # Optional stabilization technique
-    )
-    ```
-=== "TPU"
-    ```python
-    from fray.cluster import ResourceConfig
-
-    # Calculate training steps based on desired token count
-    NUM_TRAIN_TOKENS = int(30e9)  # Example: 30 billion tokens
-    BATCH_SIZE = 256
-    SEQ_LEN = 2048
-    NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
-
-    training_config = SimpleTrainConfig(
-        resources=ResourceConfig.with_tpu("v4-128"),  # Hardware configuration: 128 v4 TPU cores
-        train_batch_size=BATCH_SIZE,                  # Sequences processed per step
-        num_train_steps=NUM_TRAIN_STEPS,              # Total optimization steps
-        learning_rate=3e-3,                           # Peak learning rate
-        weight_decay=0.033,                           # L2 regularization
-        min_lr_ratio=0.1,                             # Minimum learning rate ratio (for decay)
-        warmup=5000,                                  # Steps for learning rate warmup
-        z_loss_weight=1e-4,                           # Optional stabilization technique
-    )
-    ```
-
-If you hit HBM OOM while scaling model size, batch size, or sequence length, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a practical tuning checklist.
-
-## Creating the Training Pipeline
-
-Connect your model configuration, training parameters, and dataset to create a training pipeline:
-
-```python
-# Create the training pipeline
-model = default_train(
-    name="${YOUR_MODEL_NAME}",              # Unique identifier for this training run
-    tokenized=dclm_mixture_config_llama3,   # Dataset configuration
-    model_config=model_config,              # Model architecture
-    train_config=training_config,           # Training hyperparameters
-    tags=["${YOUR_TAG1}", "${YOUR_TAG2}"],  # Tags for experiment tracking
-    eval_harness_tasks = [EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot"), EvalTaskConfig("mmlu", 5, task_alias="mmlu_5shot")],  # Evaluation Tasks to run on the checkpoint
-)
-
-# `launch_executor` connects to the cluster named by `--cluster` and runs the
-# executor; `@draccus.wrap()` parses the CLI flags into `LaunchConfig`.
-@draccus.wrap()
-def main(config: LaunchConfig):
-    launch_executor(
-        config,
-        steps=[model],  # The training pipeline is a step in the experiment
-        description="Language model training experiment",
-    )
-
+def build() -> ArtifactStep[LevanterCheckpoint]:
+    ...  # assemble the checkpoint handle
 
 if __name__ == "__main__":
-    main()
+    StepRunner().run([lower(build())])
 ```
 
-The `default_train` function creates a training pipeline that:
+`StepRunner.run` walks the dependency graph, checks the cache for each step, and runs any
+that are missing or explicitly forced. Dataset tokenization runs before training; a step
+that already succeeded is skipped.
 
-1. Loads and processes the dataset
+## Defining the model
 
-2. Initializes the model according to the configuration
+Choose a Levanter model configuration. The full architecture is stated as literals so it
+enters the artifact's fingerprint:
 
-3. Executes the training loop with the specified hyperparameters
+```python
+from levanter.models.llama import LlamaConfig
 
-4. Handles distributed training across your hardware
+SEQ_LEN = 2048
+BATCH_SIZE = 256
+NUM_TRAIN_TOKENS = 28.8e9  # 1B-1x, Chinchilla-optimal for ~1.4B parameters
+NUM_TRAIN_STEPS = int(NUM_TRAIN_TOKENS) // (BATCH_SIZE * SEQ_LEN)
 
-5. Manages checkpointing and logging
+llama_1_4b = LlamaConfig(
+    max_seq_len=SEQ_LEN,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=16,
+    num_kv_heads=16,
+    num_layers=24,
+)
+```
 
-## Launching the Training Job
+Pre-defined configurations for common sizes live in `experiments/llama.py`.
 
-Run the script and pass `--cluster`:
+## Building the data mixture
+
+Training data is expressed as a dict of `ArtifactStep[TokenizedCache]` handles to weights. Pass
+this dict as `datasets=` to `train_lm`; it assembles the Levanter data mixture internally:
+
+```python
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.llama import llama3_tokenizer
+
+train = dclm_datasets(tokenizer=llama3_tokenizer)
+weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
+```
+
+`dclm_datasets` returns a dict of pre-tokenized `ArtifactStep[TokenizedCache]` handles, one per
+DCLM component. To tokenize a custom dataset instead, use `tokenized` from `marin.experiment.data`:
+
+```python
+from marin.experiment.data import tokenized
+from experiments.marin_tokenizer import marin_tokenizer
+
+my_data = tokenized(
+    name="tokenized/my-dataset",
+    source="org/my-hf-dataset",  # HuggingFace dataset id
+    tokenizer=marin_tokenizer,
+    version="2026.06.28",
+)
+```
+
+## Calling `train_lm`
+
+`train_lm` takes every identity-bearing decision as a required argument and defaults none
+of them. The complete `build()` function for DCLM 1B/1x:
+
+```python
+from fray.cluster import ResourceConfig
+from levanter.optim import AdamConfig
+from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.train import train_lm
+from marin.training.training import LevanterCheckpoint
+from experiments.evals.uncheatable import uncheatable_validation
+from experiments.llama import llama3_tokenizer
+from experiments.paloma import paloma_validation
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.recipes import core_tasks
+
+TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
+
+def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
+    train = dclm_datasets(tokenizer=llama3_tokenizer)
+    validation = [
+        *paloma_validation(tokenizer=llama3_tokenizer),
+        *uncheatable_validation(tokenizer=llama3_tokenizer),
+    ]
+    weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
+
+    return train_lm(
+        name="checkpoints/dclm_1b_1x",
+        version=version,
+        model=llama_1_4b,
+        optimizer=AdamConfig(
+            learning_rate=3e-3,
+            weight_decay=0.033,
+            warmup=5000,
+            min_lr_ratio=0.1,
+        ),
+        datasets=weighted,
+        validation=validation,
+        batch_size=BATCH_SIZE,
+        seq_len=SEQ_LEN,
+        num_train_steps=NUM_TRAIN_STEPS,
+        z_loss_weight=1e-4,
+        evals=core_tasks(every=10000),
+        resources=TRAIN_RESOURCES,
+        tags=["DCLM_1B_1X"],
+    )
+
+if __name__ == "__main__":
+    StepRunner().run([lower(build())])
+```
+
+### Required arguments
+
+| Argument | Purpose |
+|---|---|
+| `name` | Artifact name; forms the output path `{prefix}/{name}/{version}` |
+| `version` | Artifact version; bump this to produce a new run without overwriting the old one |
+| `model` | Levanter `LmConfig` (architecture and hyperparameters) |
+| `optimizer` | Levanter `OptimizerConfig` (learning rate, schedule, weight decay) |
+| `datasets` | Dict of `ArtifactStep[TokenizedCache]` handles to weights; `train_lm` assembles the data mixture |
+| `validation` | Sequence of `ArtifactStep[TokenizedCache]` handles for held-out loss tracking (optional) |
+| `batch_size` | Training batch size in sequences |
+| `seq_len` | Sequence length |
+| `num_train_steps` | Total number of optimizer steps |
+| `z_loss_weight` | Auxiliary z-loss coefficient; pass `None` to omit |
+| `evals` | `EvalSuite` or `None`; pass `None` to opt out of harness evals |
+| `resources` | The hardware to dispatch training onto (a runtime arg, excluded from fingerprint) |
+
+`train_lm` owns the mechanical plumbing that is identical across runs: the data-parallel
+mesh, the rolling resumption checkpointer, W&B metric replication, and the Fray dispatch of
+the training job. None of those are experiment decisions.
+
+### GPU variant
+
+Swap `ResourceConfig.with_tpu(...)` for `ResourceConfig.with_gpu("H100", count=8)` (or
+any other GPU spec). Everything else stays the same.
+
+## Running the experiment
+
+Submit the script as a CPU-only Iris job. `StepRunner` inside the script dispatches the
+TPU or GPU training sub-job via Fray:
 
 ```bash
-WANDB_API_KEY="$WANDB_API_KEY" \
-  uv run python experiments/${YOUR_EXPERIMENT_SCRIPT}.py --cluster=marin
+uv run iris --cluster=marin job run \
+  --cpu=1 --memory=2G --extra=cpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
 ```
 
-The run executes on the cluster, not your laptop — the script returns right after
-submitting and the coordinator keeps running, so a disconnect won't kill it (follow
-it with `iris job logs -f <id>`, or pass `--follow=true` to stream until it
-finishes). Checkpoints land in the
-cluster's regional bucket, so there's no `MARIN_PREFIX` to set. See
-[the executor docs](../explanations/executor.md) for what `--cluster` does under
-the hood.
+See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md)
+for the full `iris job run` reference, including `--no-wait` for detached submission and
+`iris job logs -f` for log streaming.
 
-Useful flags: `--tpu_type=v4-8` overrides the accelerator, `--region=...` places
-the whole run in a region, `--local` runs in-process, and
-`--executor.dry_run=True` plans without submitting.
+## Monitoring training
 
-Following Marin's guidelines, name your experiment script `experiments/exp{GITHUB_ISSUE_NUMBER}_{DESCRIPTOR}.py`, where `GITHUB_ISSUE_NUMBER` is the issue number for your experiment and `DESCRIPTOR` is a brief description.
+W&B receives metrics throughout training. The run name defaults to the `run_id` argument
+(when omitted, `train_lm` derives one from the artifact name). Checkpoints are written to
+`{prefix}/{name}/{version}/checkpoints/`.
 
-## Monitoring Training
+## Memory pressure
 
-Monitor your training progress through:
+If training OOMs, see [Making Things Fit in HBM](../references/hbm-optimization.md) for a
+practical tuning checklist covering gradient checkpointing, activation offloading, and
+tensor parallelism.
 
-- **Experiment tracking tools**: If using WandB, you'll see real-time metrics and visualizations logged to the "Marin" project under your default W&B organization (if you have access).
-The run will be named based on the name you provided.
+## Reference implementation
 
-## Example Implementations
-
-For a complete example of training a DCLM 1B/1x model, see the implementation in:
-
-- Code: [experiments/tutorials/exp1077_reproduce_dclm_1b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1077_reproduce_dclm_1b1x.py)
-- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_1b_1x_how_to-58c8f0)
-
-This trains on the DCLM baseline mix with the same config as described in the original DCLM paper for 1X the compute optimal number of tokens!
-
-For a larger scale example of training a DCLM 7B/1x model, see the implementation in:
-
-- Code: [experiments/tutorials/exp1078_reproduce_dclm_7b1x.py](https://github.com/marin-community/marin/blob/main/experiments/tutorials/exp1078_reproduce_dclm_7b1x.py)
-- WandB: [Dashboard](https://wandb.ai/marin-community/marin/runs/dclm_7b_1x_how_to-fefaab)
+`experiments/tutorials/exp1078_reproduce_dclm_7b1x.py` is the canonical training script: every
+decision — model, data mixture, optimizer, token budget, z-loss, evals — is stated inline
+and visible without opening another file. It reproduces the DCLM 7B/1x baseline; the same
+structure scales down to smaller models by changing the `LlamaConfig` and token budget.

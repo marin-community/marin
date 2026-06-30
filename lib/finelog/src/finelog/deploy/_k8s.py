@@ -8,8 +8,6 @@ shells out to `kubectl`. No kubernetes-client Python dep — the manifest
 list is small enough that subprocess is the right tool.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import os

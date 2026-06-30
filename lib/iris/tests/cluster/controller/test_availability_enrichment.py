@@ -50,6 +50,7 @@ def _pending(constraints_json: str | None) -> PendingTask:
     return PendingTask(
         task_id=job_id.task(0),
         job_id=job_id,
+        backend_id="default",
         state=0,
         current_attempt_id=0,
         failure_count=0,

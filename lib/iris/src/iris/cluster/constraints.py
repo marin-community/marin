@@ -32,33 +32,16 @@ A job's region requirement has three distinct states:
   ``region EXISTS`` would otherwise exclude workers/groups that advertise no region).
 """
 
-from __future__ import annotations
-
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum, IntEnum, StrEnum
 from typing import Any, ClassVar
 
+from iris.cluster.config import ScaleGroupResources
 from iris.cluster.tpu_topology import TpuTopologyInfo, get_tpu_topology
-from iris.rpc import config_pb2, job_pb2
-
-
-class WellKnownAttribute(StrEnum):
-    """Canonical attribute keys for constraint-based scheduling."""
-
-    DEVICE_TYPE = "device-type"
-    DEVICE_VARIANT = "device-variant"
-    PREEMPTIBLE = "preemptible"
-    REGION = "region"
-    ZONE = "zone"
-    TPU_NAME = "tpu-name"
-    TPU_WORKER_ID = "tpu-worker-id"
-    TPU_TOPOLOGY = "tpu-topology"
-    TPU_VM_COUNT = "tpu-vm-count"
-    GPU_VARIANT = "gpu-variant"
-    GPU_COUNT = "gpu-count"
-
+from iris.cluster.types import AcceleratorType, CapacityType, WellKnownAttribute
+from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # Step 1 types: core constraint primitives (depend only on job_pb2)
@@ -131,7 +114,7 @@ class AttributeValue:
         return proto
 
     @staticmethod
-    def from_proto(proto: job_pb2.AttributeValue) -> AttributeValue:
+    def from_proto(proto: job_pb2.AttributeValue) -> "AttributeValue":
         """Convert from protobuf representation."""
         if proto.HasField("string_value"):
             return AttributeValue(proto.string_value)
@@ -259,7 +242,7 @@ class Constraint:
         return proto
 
     @staticmethod
-    def from_proto(proto: job_pb2.Constraint) -> Constraint:
+    def from_proto(proto: job_pb2.Constraint) -> "Constraint":
         """Convert from protobuf representation.
 
         Normalization (strip/lowercase for strings) happens inside
@@ -284,7 +267,7 @@ class Constraint:
         value: str | int | float | None = None,
         values: Sequence[str | int | float] | None = None,
         mode: int = job_pb2.CONSTRAINT_MODE_REQUIRED,
-    ) -> Constraint:
+    ) -> "Constraint":
         """Ergonomic factory: wraps raw scalars in AttributeValue automatically.
 
         - Singular ops (EQ/NE/GT/GE/LT/LE): pass ``value=``.
@@ -925,17 +908,11 @@ def infer_preemptible_constraint(
     return None
 
 
-def accelerator_type_to_string(accel_type: int) -> str:
-    """Convert AcceleratorType proto enum value to a scheduling string."""
-    if accel_type == config_pb2.ACCELERATOR_TYPE_UNSPECIFIED:
+def accelerator_type_to_string(accel_type: AcceleratorType | None) -> str:
+    """Convert an AcceleratorType to a scheduling string (unset → "cpu")."""
+    if accel_type is None:
         return "cpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_CPU:
-        return "cpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_GPU:
-        return "gpu"
-    if accel_type == config_pb2.ACCELERATOR_TYPE_TPU:
-        return "tpu"
-    raise ValueError(f"Unknown accelerator type: {accel_type}")
+    return accel_type.value
 
 
 def _compare_ordered(
@@ -1023,6 +1000,29 @@ def is_any_region_marker(c: Constraint) -> bool:
     return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
 
 
+BACKEND_CONSTRAINT_KEY = "backend"
+"""Reserved constraint key carrying a ``--backend`` routing directive.
+
+A ``backend EQ <id>`` constraint pins a job to a named task backend. The
+meta-scheduler reads it via :func:`backend_directive` and strips it (no worker
+advertises a ``backend`` attribute, so a leftover hard ``backend=X`` constraint
+would match no worker and starve the task) before per-backend scheduling sees
+the constraints."""
+
+
+def strip_backend_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
+    """Drop the reserved ``backend`` routing directive from ``constraints``."""
+    return [c for c in constraints if c.key != BACKEND_CONSTRAINT_KEY]
+
+
+def backend_directive(constraints: Sequence[Constraint]) -> str | None:
+    """Return the ``--backend`` target from a ``backend EQ <id>`` constraint, if any."""
+    for c in constraints:
+        if c.key == BACKEND_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
+            return str(c.values[0].value)
+    return None
+
+
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 
@@ -1099,7 +1099,7 @@ class ConstraintIndex:
     _entity_attributes: dict[str, dict[str, AttributeValue]]
 
     @classmethod
-    def build(cls, entities: dict[str, dict[str, AttributeValue]]) -> ConstraintIndex:
+    def build(cls, entities: dict[str, dict[str, AttributeValue]]) -> "ConstraintIndex":
         """Build index from entity_id -> attributes mapping."""
         discrete_lists: dict[str, dict[str | int | float, set[str]]] = {}
         for entity_id, attrs in entities.items():
@@ -1229,7 +1229,7 @@ def check_resource_fit(
     return None
 
 
-def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) -> dict[str, str]:
+def worker_attributes_from_resources(resources: ScaleGroupResources) -> dict[str, str]:
     """Derive well-known worker attributes from scale group resources config.
 
     This ensures local workers advertise the same device-type, device-variant,
@@ -1239,6 +1239,6 @@ def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) 
     attrs[WellKnownAttribute.DEVICE_TYPE] = accelerator_type_to_string(resources.device_type)
     if resources.device_variant:
         attrs[WellKnownAttribute.DEVICE_VARIANT] = resources.device_variant.lower()
-    is_preemptible = resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+    is_preemptible = resources.capacity_type == CapacityType.PREEMPTIBLE
     attrs[WellKnownAttribute.PREEMPTIBLE] = str(is_preemptible).lower()
     return attrs

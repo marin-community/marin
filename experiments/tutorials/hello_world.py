@@ -1,10 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Simple example of an experiment, which has two steps:
-1. Outputs numbers 0 through n - 1.
-2. Sum them.
+"""Simple example of a two-step lazy-artifact pipeline.
+
+Steps:
+1. Generate numbers 0 through n-1 and write them to a file.
+2. Read the file and compute summary statistics (sum, min, max).
+
+This is the simplest illustration of the Marin lazy-artifact pattern: each step is an
+:class:`~marin.execution.artifact.Artifact` built by :class:`~marin.execution.lazy.ArtifactStep`.
+Its ``build_config`` receives a :class:`~marin.execution.lazy.StepContext` that resolves
+output paths at run time. :func:`~marin.execution.step_runner.StepRunner` executes the
+dependency graph in topological order — the data step runs first, then the stats step.
 """
 
 import json
@@ -12,13 +19,14 @@ import logging
 import os
 from dataclasses import dataclass
 
-import draccus
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, lower
+from marin.execution.step_runner import StepRunner
 from rigging.filesystem import open_url
 
-from experiments.launch import LaunchConfig, launch_executor
-
 logger = logging.getLogger(__name__)
+
+N = 100
 
 
 @dataclass(frozen=True)
@@ -30,16 +38,6 @@ class GenerateDataConfig:
     """Where to write the numbers."""
 
 
-def generate_data(config: GenerateDataConfig):
-    """Generate numbers from 0 to `n` - 1 and write them to `output_path`."""
-    numbers = list(range(config.n))
-
-    # Write to file
-    numbers_path = os.path.join(config.output_path, "numbers.json")
-    with open_url(numbers_path, "w") as f:
-        json.dump(numbers, f)
-
-
 @dataclass(frozen=True)
 class ComputeStatsConfig:
     input_path: str
@@ -49,14 +47,19 @@ class ComputeStatsConfig:
     """Where to write the stats."""
 
 
-def compute_stats(config: ComputeStatsConfig):
-    """Compute the sum of numbers in the input file and write it to the output file."""
-    # Read from file
+def generate_data(config: GenerateDataConfig) -> None:
+    """Generate numbers from 0 to ``config.n - 1`` and write them to ``config.output_path``."""
+    numbers = list(range(config.n))
+    numbers_path = os.path.join(config.output_path, "numbers.json")
+    with open_url(numbers_path, "w") as f:
+        json.dump(numbers, f)
+
+
+def compute_stats(config: ComputeStatsConfig) -> None:
+    """Compute sum/min/max of the numbers in ``config.input_path`` and write stats to ``config.output_path``."""
     numbers_path = os.path.join(config.input_path, "numbers.json")
     with open_url(numbers_path) as f:
         numbers = json.load(f)
-
-    # Compute statistics
     stats = {
         "sum": sum(numbers),
         "min": min(numbers),
@@ -67,37 +70,33 @@ def compute_stats(config: ComputeStatsConfig):
         json.dump(stats, f)
 
 
-n = 100
-
-data = ExecutorStep(
+# Step 1: generate the data. build_config resolves ctx.output_path to the artifact's output dir.
+_data = ArtifactStep(
     name="hello_world/data",
-    description=f"Generate data from 0 to {n}-1.",
-    fn=generate_data,
-    config=GenerateDataConfig(
-        n=n,
-        output_path=this_output_path(),
-    ),
+    version="dev",
+    artifact_type=Artifact,
+    run=generate_data,
+    build_config=lambda ctx: GenerateDataConfig(n=N, output_path=ctx.output_path),
 )
 
-stats = ExecutorStep(
+# Step 2: compute statistics over the generated data. ctx.artifact_path(_data) gives the path
+# of step 1's output; deps=(_data,) ensures it materializes before this step runs.
+_stats = ArtifactStep(
     name="hello_world/stats",
-    description="Compute stats of the generated data.",
-    fn=compute_stats,
-    config=ComputeStatsConfig(
-        input_path=output_path_of(data),
-        output_path=this_output_path(),
-    ),
+    version="dev",
+    artifact_type=Artifact,
+    run=compute_stats,
+    build_config=lambda ctx: ComputeStatsConfig(input_path=ctx.artifact_path(_data), output_path=ctx.output_path),
+    deps=(_data,),
 )
 
 
-@draccus.wrap()
-def main(config: LaunchConfig):
-    launch_executor(
-        config,
-        steps=[data, stats],
-        description="Simple experiment to compute stats of some numbers.",
-    )
+def build() -> ArtifactStep[Artifact]:
+    """The stats computation as a lazy artifact, with its data dependency declared."""
+    return _stats
 
 
 if __name__ == "__main__":
-    main()
+    # Lower the artifact graph to StepSpecs and run it: data generates first,
+    # then stats computes.
+    StepRunner().run([lower(build())])

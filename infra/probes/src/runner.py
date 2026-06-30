@@ -13,8 +13,6 @@ Imports stay light (stdlib + ``sample``) so the runner is testable without the
 iris/finelog clients the entrypoint wires up.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

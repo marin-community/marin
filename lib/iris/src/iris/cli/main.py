@@ -10,26 +10,88 @@ import logging
 import sys
 
 import click
-from rigging.auth import run_iap_desktop_login
+from rigging.auth import GcpAccessTokenProvider, StaticTokenProvider, run_iap_desktop_login
+from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
+from rigging.credential_store import CredentialRecord, cluster_name_from_url, save_credentials
+from rigging.credentials import ClientCredentials, credentials_for
 from rigging.log_setup import configure_logging
 
 from iris.cli.connect import (
-    build_iap_provider,
+    IRIS_CLUSTER_CONFIG_DIRS,
     iap_config,
     require_controller_url,
     rpc_client,
     rpc_client_for_ctx,
 )
-from iris.client.connect import IRIS_CLUSTER_CONFIG_DIRS, create_client_token_provider, resolve_cluster_name
-from iris.cluster.backends.k8s.controller import configure_client_s3
-from iris.cluster.config import IrisConfig
-from iris.cluster.token_store import load_any_token, load_token, store_token
-from iris.rpc import config_pb2, controller_pb2, job_pb2
-from iris.rpc.auth import ClientCredentials, GcpAccessTokenProvider, StaticTokenProvider
+from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.controller import configure_client_s3
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_cluster_name(
+    config: IrisClusterConfig | None,
+    controller_url: str | None,
+    cli_cluster_name: str | None,
+) -> str:
+    if cli_cluster_name:
+        return cli_cluster_name
+    if config and config.name:
+        return config.name
+    if config and config.controller.controller_kind() == "local":
+        return "local"
+    if controller_url:
+        return cluster_name_from_url(controller_url)
+    return "default"
+
+
+def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
+    """Adapt iris's ``AuthConfig`` to rigging's ``ClusterAuth``.
+
+    The single boundary where iris's wire config meets the shared credential
+    vocabulary; everything downstream resolves through ``rigging.credentials``.
+    """
+    provider = auth.provider_kind()
+    if provider == "iap":
+        # ``audiences`` are the login audiences the controller accepts; they
+        # include the desktop client id (interactive flow). A service-account
+        # edge token must carry an IAP-secured audience — never the desktop one,
+        # which IAP rejects — so the desktop client id is dropped here and only
+        # genuine programmatic audiences reach the service-account token path.
+        desktop_oauth_client_id = auth.iap.oauth_client_id or None
+        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != desktop_oauth_client_id)
+        return ClusterAuth(
+            AuthProvider.IAP,
+            iap=IapAuth(
+                url=auth.iap.url,
+                desktop_oauth_client_id=desktop_oauth_client_id,
+                desktop_oauth_client_secret=auth.iap.oauth_client_secret or None,
+                programmatic_audiences=programmatic_audiences,
+                signed_header_audience=auth.iap.signed_header_audience or None,
+            ),
+        )
+    if provider == "gcp":
+        return ClusterAuth(AuthProvider.GCP)
+    if provider == "static":
+        return ClusterAuth(AuthProvider.STATIC)
+    return ClusterAuth(AuthProvider.NONE)
+
+
+def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> ClientCredentials:
+    """Resolve the cluster's client credentials via the shared rigging resolver."""
+    if config is None or config.auth is None:
+        return credentials_for(cluster_name, ClusterAuth(AuthProvider.NONE))
+    auth = config.auth
+    static_token = next(iter(auth.static.tokens), None) if auth.provider_kind() == "static" else None
+    return credentials_for(cluster_name, _cluster_auth_from_config(auth), static_token=static_token)
+
+
+def _configure_client_s3(config) -> None:
+    """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
+    configure_client_s3(config)
 
 
 @click.group()
@@ -92,33 +154,18 @@ def iris(
 
     # Load config if provided
     if config_file:
-        iris_config = IrisConfig.load(config_file)
-        ctx.obj["config"] = iris_config.proto
+        config = load_config(config_file)
+        ctx.obj["config"] = config
         ctx.obj["config_file"] = config_file
-        configure_client_s3(iris_config.proto)
+        _configure_client_s3(config)
 
-        name = resolve_cluster_name(iris_config.proto, controller_url, cluster_name)
+        name = resolve_cluster_name(config, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-
-        token_provider = None
-        if iris_config.proto.HasField("auth"):
-            token_provider = create_client_token_provider(iris_config.proto.auth, cluster_name=name)
-
-        # For an IAP-fronted cluster, also attach the IAP ID-token provider so
-        # every RPC carries the Proxy-Authorization header IAP requires.
-        iap = iap_config(iris_config.proto)
-        iap_provider = build_iap_provider(name) if iap is not None else None
-        ctx.obj["credentials"] = ClientCredentials(token_provider=token_provider, iap_provider=iap_provider)
+        ctx.obj["credentials"] = client_credentials(config, name)
     else:
         name = resolve_cluster_name(None, controller_url, cluster_name)
         ctx.obj["cluster_name"] = name
-
-        # Load stored token from `iris login` when no config is available
-        credential = load_token(name)
-        if credential is None:
-            credential = load_any_token()
-        if credential is not None:
-            ctx.obj["credentials"] = ClientCredentials(token_provider=StaticTokenProvider(credential.token))
+        ctx.obj["credentials"] = client_credentials(None, name)
 
     # Store direct controller URL; tunnel from config is established lazily
     # in require_controller_url() so commands like ``cluster start`` don't block.
@@ -126,7 +173,7 @@ def iris(
         ctx.obj["controller_url"] = controller_url
 
 
-def _login_iap(controller_url: str, iap: config_pb2.IapAuthConfig, cluster_name: str) -> None:
+def _login_iap(controller_url: str, iap: IapAuthConfig, cluster_name: str) -> None:
     """Two-step IAP login: desktop OAuth -> Iris JWT, caching both credentials.
 
     Authenticates to IAP via the browser desktop flow, then exchanges the OIDC
@@ -147,7 +194,15 @@ def _login_iap(controller_url: str, iap: config_pb2.IapAuthConfig, cluster_name:
         except Exception as e:
             raise click.ClickException(f"Login failed: {e}") from e
 
-    store_token(cluster_name, controller_url, response.token, iap_refresh_token=refresh_token)
+    save_credentials(
+        CredentialRecord(
+            cluster=cluster_name,
+            endpoint=controller_url,
+            app_token=response.token,
+            edge_refresh_token=refresh_token,
+            metadata={"user_id": response.user_id},
+        )
+    )
     click.echo(f"Authenticated as {response.user_id}")
     click.echo(f"Token stored for cluster '{cluster_name}' (IAP + Iris credentials cached)")
 
@@ -165,8 +220,8 @@ def login(ctx):
         _login_iap(controller_url, iap, cluster_name)
         return
 
-    if config and config.HasField("auth"):
-        provider = config.auth.WhichOneof("provider")
+    if config and config.auth is not None:
+        provider = config.auth.provider_kind()
     else:
         with rpc_client(controller_url) as client:
             try:
@@ -200,7 +255,14 @@ def login(ctx):
         except Exception as e:
             raise click.ClickException(f"Login failed: {e}") from e
 
-    store_token(cluster_name, controller_url, response.token)
+    save_credentials(
+        CredentialRecord(
+            cluster=cluster_name,
+            endpoint=controller_url,
+            app_token=response.token,
+            metadata={"user_id": response.user_id},
+        )
+    )
 
     click.echo(f"Authenticated as {response.user_id}")
     # Token in URL is visible in browser history/logs — acceptable for internal clusters

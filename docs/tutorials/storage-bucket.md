@@ -126,7 +126,16 @@ trainer:
     base_path: "$BUCKET/your-run"
 ```
 
-Commit these defaults in `.levanter.yaml` or `.envrc` so every launch script uses the same location.
+Put personal launch defaults in `~/.config/marin/config.yaml` so every launch script uses the same location:
+
+```yaml
+env:
+  MARIN_PREFIX: "gs://your-bucket"
+  WANDB_PROJECT: marin
+  WANDB_ENTITY: your-entity
+```
+
+Use a checkout-local `.levanter.yaml` only for values that should override your personal defaults for that repository.
 
 ## Ongoing Hygiene Checklist
 

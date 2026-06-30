@@ -780,6 +780,16 @@ def _is_cross_region_url(url: str) -> bool:
     return not _regions_match(vm_region, bucket_location)
 
 
+def is_cross_region_url(url: str) -> bool:
+    """Return True if reading *url* would cross regions and be charged to the budget.
+
+    Cheap: only cached region lookups, no listing or stat.  Callers can use this
+    to skip an expensive size computation when a read would not be charged
+    anyway (local paths, same-region buckets, unknown VM region, override set).
+    """
+    return _is_cross_region_url(url)
+
+
 def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None) -> None:
     """Charge *size* bytes against the cross-region transfer budget.
 
@@ -925,8 +935,16 @@ def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
 
     Caller-supplied ``config_kwargs`` values win; we only fill in keys the
     caller did not set. See :data:`_S3_READ_TIMEOUT` and #6487.
+
+    We seed ``config_kwargs`` from the ``FSSPEC_S3`` config block first. fsspec
+    builds the filesystem by shallow-merging ``{**conf, **kwargs}``, so a bare
+    ``config_kwargs`` here would *replace* (not merge with) any ``config_kwargs``
+    in ``FSSPEC_S3`` -- silently dropping settings like
+    ``{"s3": {"addressing_style": "virtual"}}`` that S3-compatible endpoints
+    (CoreWeave object storage) require, which then hangs/path-style-rejects.
     """
-    config_kwargs = dict(kwargs.get("config_kwargs") or {})
+    conf_config_kwargs = (fsspec.config.conf.get("s3") or {}).get("config_kwargs") or {}
+    config_kwargs = {**conf_config_kwargs, **dict(kwargs.get("config_kwargs") or {})}
     config_kwargs.setdefault("connect_timeout", _S3_CONNECT_TIMEOUT)
     config_kwargs.setdefault("read_timeout", _S3_READ_TIMEOUT)
     config_kwargs.setdefault("retries", {"max_attempts": _S3_RETRY_MAX_ATTEMPTS, "mode": "standard"})

@@ -10,8 +10,6 @@ and explicit; finelog owns its deployment knobs so iris's cluster yaml only
 has to reference the config by name.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -89,7 +87,7 @@ class FinelogConfig:
     remote_log_dir: str
     deployment: Deployment
     # Rigging transport URL clients use to reach this server through the controller proxy
-    # (e.g. `iap+https://iris-marin.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
+    # (e.g. `iap+https://iris.oa.dev/proxy/system.log-server`); unset = fall back to SSH/k8s tunnel.
     client_url: str | None = None
 
 

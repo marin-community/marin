@@ -4,6 +4,7 @@
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
 from collections.abc import Iterable
+from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
@@ -31,6 +32,29 @@ from iris.cluster.types import (
     JobName,
     WorkerId,
 )
+
+
+class TransitionReader(Protocol):
+    """A read surface that yields a closed :class:`TransitionSnapshot` for the kernel.
+
+    Lets a backend author its task-state projection from a point-in-time snapshot
+    without reading the controller database directly. Implementations seed by
+    whichever entities their reconcile path starts from (workers + observation
+    uids for the worker path, tasks + attempt keys for the direct path); the
+    snapshot closes over everything the kernel may touch.
+    """
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        """Load a closed snapshot stamped with ``now``, seeded by the given entities."""
+        ...
 
 
 def _build_multi_root_descendants_stmt():
@@ -116,15 +140,18 @@ def _bulk_load_job_state_basis(
                 started_at=started_at,
                 max_task_failures=max_task_failures,
                 task_state_counts={},
+                total_failures=0,
                 first_task_error=None,
             )
             continue
 
         rows = all_tasks_by_job.get(job_id, ())
         histogram: dict[int, int] = {}
+        total_failures = 0
         first_error: str | None = None
         for row in rows:
             histogram[row.state] = histogram.get(row.state, 0) + 1
+            total_failures += row.failure_count
             if first_error is None and row.error is not None:
                 first_error = row.error
 
@@ -134,6 +161,7 @@ def _bulk_load_job_state_basis(
             started_at=started_at,
             max_task_failures=max_task_failures,
             task_state_counts=histogram,
+            total_failures=total_failures,
             first_task_error=first_error,
         )
     return result
@@ -150,6 +178,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
             tasks_table.c.job_id,
             tasks_table.c.task_index,
             tasks_table.c.state,
+            tasks_table.c.failure_count,
             tasks_table.c.error,
         ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
@@ -161,6 +190,7 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
                 task_id=r.task_id,
                 task_index=int(r.task_index),
                 state=int(r.state),
+                failure_count=int(r.failure_count),
                 error=str(r.error) if r.error is not None else None,
             )
         )

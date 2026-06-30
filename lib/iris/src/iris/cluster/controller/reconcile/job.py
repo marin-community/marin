@@ -34,7 +34,15 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
     now = state.now
     if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
         new_state = job_pb2.JOB_STATE_SUCCEEDED
-    elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > max_task_failures:
+    elif basis.total_failures > max_task_failures:
+        # Cumulative failure budget: every hard task failure (including those
+        # retried back to PENDING and, for coscheduled gangs, the one charged per
+        # crashed round) accrues to ``failure_count``. Failing on the running
+        # total — rather than the instantaneous count of tasks currently in
+        # FAILED — stops a gang from crash-looping forever when each round's
+        # failure lands on a different task and no single task ever exhausts its
+        # per-task retry budget. Preemptions are retried by Iris and never charge
+        # ``failure_count``, so they are excluded.
         new_state = job_pb2.JOB_STATE_FAILED
     elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
         new_state = job_pb2.JOB_STATE_UNSCHEDULABLE
@@ -57,9 +65,9 @@ def recompute_state(state: Overlay, job_id: JobName) -> int | None:
         # and within the max_task_failures threshold: at least one task exhausted
         # its retries and is terminally FAILED. A task that can never succeed
         # fails the whole job. (max_task_failures only controls early abort at the
-        # FAILED-over-threshold branch above; once every task is terminal a lone
-        # tolerated FAILED still fails the job.) Without this branch the job falls
-        # through to the started_at branch and hangs RUNNING forever.
+        # cumulative-failures-over-threshold branch above; once every task is
+        # terminal a lone tolerated FAILED still fails the job.) Without this
+        # branch the job falls through to the started_at branch and hangs RUNNING.
         new_state = job_pb2.JOB_STATE_FAILED
     elif (
         counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0

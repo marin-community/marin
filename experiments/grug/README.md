@@ -6,15 +6,16 @@
 
 - `base/model.py`: model config and model implementation (`init` + `__call__` + loss method).
 - `base/train.py`: train loop, optimizer step, callbacks, eval/checkpoint wiring.
-- `base/launch.py`: experiment config and execution entrypoint (`ExecutorStep` + resources).
+- `base/launch.py`: experiment config and execution entrypoint (builds a lazy `Checkpoint` + resources).
 
 ## Entry-point guide
 
 - Start in `base/launch.py` for normal run edits.
 - `GrugBaseLaunchConfig` is the user-facing knob surface (model/data/optimizer/trainer/eval/run metadata).
-- `versioned(...)` marks config values that should affect executor step version/hash.
-- `this_output_path()` resolves to the current step's output root.
-- `run_grug(...)` in `base/train.py` is the runtime entry point used by the `ExecutorStep`.
+- `grug_base_trial(...)` returns a typed `Checkpoint` handle addressed by `name@version`; its recipe's
+  `build_config` is what the fingerprint is computed from.
+- `ctx.out` (inside `build_config`) resolves to the current step's output root.
+- `run_grug(...)` in `base/train.py` is the runtime entry point the recipe's `fn` (`run_grug_base_trial`) calls.
 - `P` in train/model code is the usual JAX alias for `PartitionSpec`; see the JAX explicit sharding tutorial: [Explicit Sharding (JAX)](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html).
 
 ## How to use it
@@ -27,29 +28,25 @@
 
 ## Variant notes
 
-Variant-specific guidance (including modular-opt notes) lives in `experiments/grug/variants.md`.
+Variant-specific guidance lives in `experiments/grug/variants.md`.
 
 ## Quickstart launch
 
-Run `base/launch.py` in-process (no cluster — uses the `LocalClient`):
+Local run (lowers the trial and runs it through the `StepRunner`):
 
 ```bash
 uv run python experiments/grug/base/launch.py
 ```
 
-Or on the `marin` prod cluster, from a dev box:
+Iris cluster run (from a dev box, on `marin` prod cluster):
 
 ```bash
-WANDB_API_KEY="$WANDB_API_KEY" \
-  uv run python experiments/grug/base/launch.py --cluster=marin
+uv run iris --cluster=marin job run --cpu=1 --memory=2G --extra=cpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.base.launch
 ```
 
-`--cluster` runs the experiment on the cluster instead of your laptop; your
-terminal just streams logs, so a disconnect won't kill the run (reconnect with
-`iris job logs -f <id>`, or `--detach` to return right after submitting).
-`--tpu_type=v4-8` / `--region=...` override the template's resources. See
-[the executor docs](../../docs/explanations/executor.md) for what `--cluster`
-does, and [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for the Iris CLI reference.
+The entrypoint job is CPU-only; the `StepRunner` inside it submits TPU sub-tasks via Fray. See [`lib/iris/OPS.md`](../../lib/iris/OPS.md) for flag reference and troubleshooting.
 
 ## Visual diff for template variants
 
@@ -107,7 +104,7 @@ Useful flags:
 - Checkpoints: `<output_path>/checkpoints`.
 - Profiler traces (if enabled): `<trainer.log_dir>/<run_id>/profiler`.
 - Backward-flow artifacts: `<trainer.log_dir>/<run_id>/artifacts/backward_flow`, plus `backward_flow/dag` as native HTML media in W&B. Base Grug samples every 50 steps by default; set `trainer.backward_flow.interval=0` to disable.
-- Executor step outputs: `this_output_path()` root for the step.
+- Step outputs: the `ctx.out` root for the step.
 
 ## Logged metrics
 
@@ -169,7 +166,6 @@ enforces these minimum interfaces:
 - Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
 - Backward-flow recipe: [`/docs/recipes/add_grug_backward_flow_logging.md`](../../docs/recipes/add_grug_backward_flow_logging.md)
 - HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
-- Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
-- Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
+- Lazy artifact mechanics: [`/docs/explanations/lazy-artifacts.md`](../../docs/explanations/lazy-artifacts.md)
 - TPU debug workflow: [`.agents/skills/reserve-tpu/`](../../.agents/skills/reserve-tpu/SKILL.md)
 - Cluster launch details: [`lib/iris/OPS.md`](../../lib/iris/OPS.md), [`.agents/skills/run-ferries/SKILL.md`](../../.agents/skills/run-ferries/SKILL.md)

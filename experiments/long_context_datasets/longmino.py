@@ -3,31 +3,24 @@
 
 """Longmino (dolma3_longmino_pool) dataset with length-bucket breakdowns."""
 
-from experiments.tokenization import default_download
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-dolma3_longmino_pool_raw = default_download(
-    name="dolma3_longmino_pool",
-    hf_dataset_id="allenai/dolma3_longmino_pool",
-    revision="bb7828777019d4a2a0bfd81412a11395d09f705f",
-    override_output_path="dolma3_longmino_pool",
-)
+from experiments.llama import llama3_tokenizer
 
-
-longmino_by_bucket = {
-    name: dolma3_longmino_pool_raw / f"data/*-{desc}/*.jsonl.zst"
-    for name, desc in {
-        # they use 2eX notation but seem to mean powers of two
-        "8k-16k": "2e13",
-        "16k-32k": "2e14",
-        "32k-64k": "2e15",
-        "64k-128k": "2e16",
-        "128k-256k": "2e17",
-        "256k-512k": "2e18",
-        "512k-1M": "2e19",
-        "1M+": "2e20",
-    }.items()
+# Bucket name to HuggingFace dataset shard suffix. The repo uses 2eX notation (powers of two).
+_LONGMINO_BUCKET_DESCS: dict[str, str] = {
+    # they use 2eX notation but seem to mean powers of two
+    "8k-16k": "2e13",
+    "16k-32k": "2e14",
+    "32k-64k": "2e15",
+    "64k-128k": "2e16",
+    "128k-256k": "2e17",
+    "256k-512k": "2e18",
+    "512k-1M": "2e19",
+    "1M+": "2e20",
 }
-
 
 # longmino has a *ton* of metadata which makes the usual "compressed bytes ≈ tokens" heuristic not great
 # instead, we rely on Olmo 3's token assessments
@@ -42,3 +35,24 @@ longmino_bucket_token_counts = {
     "512k-1M": 21.5e9,
     "1M+": 26.9e9,
 }
+
+
+def longmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """Tokenized Longmino buckets, keyed by length-bucket name."""
+    raw = hf_download(
+        "dolma3_longmino_pool",
+        hf_id="allenai/dolma3_longmino_pool",
+        revision="bb7828777019d4a2a0bfd81412a11395d09f705f",
+        pin="dolma3_longmino_pool",
+        version="2026.06.28",
+    )
+    return {
+        name: tokenized(
+            f"dolma3_longmino/{name}",
+            tokenizer=tokenizer,
+            raw=raw,
+            glob=f"data/*-{desc}/*.jsonl.zst",
+            version="2026.06.28",
+        )
+        for name, desc in _LONGMINO_BUCKET_DESCS.items()
+    }

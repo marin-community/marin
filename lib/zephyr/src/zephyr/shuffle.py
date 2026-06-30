@@ -31,8 +31,6 @@ OOM on skewed or large-item workloads where a row-count limit provides no
 reliable bound.
 """
 
-from __future__ import annotations
-
 import concurrent.futures
 import functools
 import io
@@ -326,7 +324,7 @@ class ScatterReader:
         self.avg_item_bytes = avg_item_bytes
 
     @classmethod
-    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> ScatterReader:
+    def from_sidecars(cls, scatter_paths: list[str], target_shard: int) -> "ScatterReader":
         """Build a ScatterReader by reading per-mapper sidecars directly.
 
         Each reducer reads every mapper's ``.scatter_meta`` sidecar in parallel
@@ -484,8 +482,8 @@ class ScatterWriter:
     """Writes items to a scatter data file with zstd-compressed chunks.
 
     Items are routed to target shards by ``key_fn``, buffered, optionally
-    combined and sorted, then flushed as zstd frames. A JSON sidecar is
-    written on close.
+    combined and sorted, then flushed as zstd frames. A msgpack sidecar
+    (``.scatter_meta``) is written on close.
 
     Flushing is byte-budget-based: when the estimated total bytes across all
     shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.
@@ -674,7 +672,7 @@ class ScatterWriter:
         if self._fs.exists(self._fs_path):
             self._fs.rm(self._fs_path)
 
-    def __enter__(self) -> ScatterWriter:
+    def __enter__(self) -> "ScatterWriter":
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, *exc: Any) -> None:

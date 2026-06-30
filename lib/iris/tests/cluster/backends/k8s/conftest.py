@@ -1,11 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from __future__ import annotations
-
 import pytest
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.backends.k8s.fake import InMemoryK8sService
 from iris.cluster.backends.k8s.tasks import (
     _LABEL_MANAGED,
     _LABEL_RUNTIME,
@@ -13,8 +10,9 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.backends.k8s.types import K8sResource
 from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
@@ -45,15 +43,14 @@ def task_stats_table() -> FakeStatsTable:
 
 
 @pytest.fixture
-def provider(k8s, log_client, task_stats_table):
+def provider(k8s, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_client=log_client,
         task_stats_table=task_stats_table,
-        log_poll_interval=1.0,
+        resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
     )
     yield p

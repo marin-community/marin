@@ -3,8 +3,6 @@
 
 """Tests for ``WorkerAttrsProjection`` — write-through cache over ``worker_attributes``."""
 
-from __future__ import annotations
-
 import threading
 from pathlib import Path
 

@@ -224,11 +224,6 @@ class WorkerHealthTracker:
             state = self._states.get(worker_id)
             return WorkerLiveness() if state is None else dataclasses.replace(state)
 
-    def liveness_many(self, worker_ids: Iterable[WorkerId]) -> dict[WorkerId, WorkerLiveness]:
-        """Return a copy of liveness for each requested worker."""
-        with self._lock:
-            return {wid: dataclasses.replace(self._states.get(wid, WorkerLiveness())) for wid in worker_ids}
-
     def all(self) -> dict[WorkerId, WorkerLiveness]:
         with self._lock:
             return {wid: dataclasses.replace(state) for wid, state in self._states.items()}

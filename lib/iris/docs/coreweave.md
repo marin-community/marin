@@ -261,6 +261,22 @@ Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
 
+The `gpu` extra also pulls the CUDA toolchain wheels (`ptxas`/`nvlink` from
+`nvidia-cuda-nvcc`, `libdevice.10.bc` from `nvidia-nvvm`) into the task venv. A
+GPU job's setup scripts then expose them (see
+`iris.cluster.setup_scripts.cuda_toolchain_setup_script`): the toolchain binaries are
+symlinked into the venv's `bin` (already on `PATH` once the venv is activated),
+and `libdevice.10.bc` is staged into XLA's default CUDA data dir
+(`./cuda_sdk_lib`) and the working directory, where XLA and Mosaic probe.
+JAX/Pallas Mosaic GPU kernels therefore compile without per-job
+`ptxas`/`nvlink`/`libdevice` setup. The staging is a no-op unless the venv
+carries the toolchain, so CPU/TPU jobs and bring-your-own images are untouched.
+
+This staging is appended only to the default setup for a job that requests the
+`gpu` extra. A job that supplies its own `setup_scripts` (run verbatim) or
+installs JAX another way must stage the toolchain itself — call
+`cuda_toolchain_setup_script()` in its setup.
+
 ### Grug MoE Canary Warm-Node Multinode Smoke
 
 For a realistic Grug MoE multinode smoke, use the GPU path in
@@ -507,10 +523,11 @@ CoreWeave instance types follow the pattern `{prefix}-{count}x{model}{networking
 
 **Known-good instance types**:
 
-| Instance Type | GPUs | vCPUs | RAM | Use Case |
-|---------------|------|-------|-----|----------|
-| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | GPU training (primary) |
-| `cd-gp-i64-erapids` | none | 64 | 256 GB | Controller / CPU tasks |
+| Instance Type | GPUs | vCPUs | RAM | Disk | Use Case |
+|---------------|------|-------|-----|------|----------|
+| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | — | GPU training (primary) |
+| `cd-gp-a192-genoa` | none | 192 | 1.5 TB | 7.68 TB | Controller / CPU tasks (US-EAST-02A) |
+| `cd-gp-i64-erapids` | none | 64 | 512 GB | 15.36 TB | Controller / CPU tasks (US-WEST-04A) |
 
 Full list: [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
 
@@ -536,7 +553,7 @@ dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
 Guaranteed QoS instead of BestEffort.
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
-256 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
+512 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
 smaller bare-metal nodes.
 
 ### Bootstrap via Platform.create_slice() with async state model

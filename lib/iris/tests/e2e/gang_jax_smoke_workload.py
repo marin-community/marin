@@ -18,8 +18,6 @@ across every device. The gradient all-reduce is the real inter-host collective
     GANG_SMOKE_PDB    per-device batch (default 8)
 """
 
-from __future__ import annotations
-
 import math
 import os
 

@@ -35,8 +35,6 @@ defaults:
       milliseconds: 60000
     scale_down_delay:
       milliseconds: 300000
-    startup_grace_period:
-      milliseconds: 1200000    # 20 min — nodes are pinned warm so this rarely fires
   task_env:
     MARIN_PREFIX: s3://marin-na/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces.
@@ -52,9 +50,9 @@ scale_groups:
   cpu-erapids:
     num_vms: 1
     resources:
-      cpu: 64
-      ram: 256GB
-      disk: 1TB
+      cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
+      ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
+      disk: 15.36TB  # 15.36 TB local NVMe
       device_type: cpu
       capacity_type: on-demand
     worker:

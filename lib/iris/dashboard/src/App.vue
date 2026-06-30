@@ -4,30 +4,39 @@ import { useRoute, useRouter } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import DashboardLegend from '@/components/shared/DashboardLegend.vue'
 import TabNav, { type Tab } from '@/components/layout/TabNav.vue'
+import BackendScope from '@/components/shared/BackendScope.vue'
 import { useDarkMode } from '@/composables/useDarkMode'
+import { useBackends } from '@/composables/useBackends'
 
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
+const { capabilities, multiBackend, fetchConfig } = useBackends()
 
 const authEnabled = ref(false)
-const capabilities = ref<string[]>([])
 const legendOpen = ref(false)
 
 // Tabs always shown have no `requires`; conditional tabs name the capability
 // the backend must advertise (see backend_descriptor in backend.py).
-const ALL_TABS: (Tab & { requires?: string })[] = [
+// The `requiresMultiBackend` tabs are shown only when the controller has >1 backend.
+const ALL_TABS = computed<(Tab & { requires?: string; requiresMultiBackend?: boolean })[]>(() => [
   { key: 'jobs', label: 'Jobs', to: '/' },
   { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
   { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
   { key: 'cluster', label: 'Cluster', to: '/cluster', requires: 'cluster' },
+  { key: 'backends', label: 'Backends', to: '/backends', requiresMultiBackend: true },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
+  { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
-]
+])
 
 const TABS = computed<Tab[]>(() =>
-  ALL_TABS.filter(t => !t.requires || capabilities.value.includes(t.requires))
+  ALL_TABS.value.filter(t => {
+    if (t.requiresMultiBackend && !multiBackend.value) return false
+    if (t.requires && !capabilities.value.includes(t.requires)) return false
+    return true
+  })
 )
 
 const PATH_TO_TAB: Record<string, string> = {
@@ -35,7 +44,9 @@ const PATH_TO_TAB: Record<string, string> = {
   '/capacity': 'capacity',
   '/fleet': 'fleet',
   '/cluster': 'cluster',
+  '/backends': 'backends',
   '/endpoints': 'endpoints',
+  '/logs': 'logs',
   '/account': 'account',
   '/status': 'status',
 }
@@ -67,23 +78,16 @@ async function logout() {
 onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
-  let hasSession = false
-  let authOptional = false
   try {
-    const resp = await fetch('/auth/config')
-    if (resp.ok) {
-      const config = await resp.json()
-      authEnabled.value = config.auth_enabled ?? false
-      hasSession = config.has_session ?? false
-      authOptional = config.optional ?? false
-      capabilities.value = config.backend?.capabilities ?? []
+    // fetchConfig fetches /auth/config once, populates capabilities + backends,
+    // and returns auth-related fields for login redirection.
+    const { authEnabled: ae, hasSession, authOptional } = await fetchConfig()
+    authEnabled.value = ae
+    if (ae && !authOptional && !hasSession && route.path !== '/login') {
+      router.push('/login')
     }
   } catch {
     // Auth config endpoint unavailable — assume no auth
-  }
-
-  if (authEnabled.value && !authOptional && !hasSession && route.path !== '/login') {
-    router.push('/login')
   }
 })
 
@@ -134,7 +138,10 @@ onUnmounted(() => {
       v-if="!isDetailPage"
       :tabs="TABS"
       :active-tab="activeTab"
-    />
+    >
+      <!-- BackendScope selector: visible only when controller has >1 backend -->
+      <BackendScope v-if="multiBackend" />
+    </TabNav>
     <main class="max-w-7xl mx-auto px-6 py-6">
       <router-view />
     </main>

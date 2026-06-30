@@ -69,6 +69,7 @@ def _build_run_request_fields(
     task_id: str = "",
     attempt_id: int = 0,
     priority: int = 0,
+    container_profile: int = 0,
 ) -> job_pb2.RunTaskRequest:
     """Build a RunTaskRequest carrying the per-job fields shared by the template
     and per-attempt construction paths.
@@ -91,6 +92,7 @@ def _build_run_request_fields(
         task_id=task_id,
         attempt_id=attempt_id,
         priority=priority,
+        container_profile=container_profile,
     )
 
 
@@ -128,6 +130,7 @@ def run_request_template(
         ports_json=job.ports_json,
         constraints_json=job.constraints_json,
         task_image=job.task_image,
+        container_profile=job.container_profile,
     )
     for filename, data in reads.get_workdir_files(snap, job_id).items():
         template.entrypoint.workdir_files[filename] = data
@@ -156,6 +159,7 @@ def build_run_request(
         attempt_id=attempt_id,
         # Priority selects the Kueue WorkloadPriorityClass on the direct path.
         priority=row.priority_band,
+        container_profile=row.container_profile,
     )
     # Load inline workdir files from the job_workdir_files table.
     for filename, data in reads.get_workdir_files(cur, row.job_id).items():
@@ -197,6 +201,7 @@ def drain_for_dispatch(
     *,
     cache: RunTemplateCache,
     max_promotions: int = DISPATCH_PROMOTION_RATE,
+    backend_id: str | None = None,
 ) -> DispatchBatch:
     """Drain pending tasks and snapshot running tasks for a direct provider sync cycle.
 
@@ -222,6 +227,10 @@ def drain_for_dispatch(
     now_ms = Timestamp.now().epoch_ms()
     tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
+    # In a multi-backend cluster, scope the drain to this backend's tasks; a
+    # single backend (``backend_id is None``) drains every pending task.
+    backend_pred = () if backend_id is None else (tasks_table.c.backend_id == backend_id,)
+
     # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
     # promoted rows (which become ASSIGNED+null_worker mid-transaction)
     # don't get dispatched twice.
@@ -229,6 +238,7 @@ def drain_for_dispatch(
         cur,
         tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
         tasks_table.c.current_worker_id.is_(None),
+        *backend_pred,
     )
 
     def _promote(row: PendingDispatchRow) -> None:
@@ -252,6 +262,7 @@ def drain_for_dispatch(
             cur,
             tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
             job_config_table.c.has_coscheduling == True,  # noqa: E712
+            *backend_pred,
             order_by_job_id=True,
         )
         gangs: dict[JobName, list[PendingDispatchRow]] = {}
@@ -282,6 +293,7 @@ def drain_for_dispatch(
                 cur,
                 tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
                 job_config_table.c.has_coscheduling == False,  # noqa: E712
+                *backend_pred,
                 limit=remaining,
             )
             for row in noncosched_pending:
@@ -303,6 +315,7 @@ def drain_for_dispatch(
         TaskScope(null_worker=True),
         states=ACTIVE_TASK_STATES,
         order_by_task_id=True,
+        backend_id=backend_id,
     )
     running_tasks = [
         RunningTaskEntry(

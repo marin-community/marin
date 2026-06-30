@@ -38,8 +38,6 @@ Submit:
 where BASE=gs://marin-eu-west4/datakit/llm-quality-classifier
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

@@ -15,8 +15,6 @@ best-effort telemetry: the runner calls them after logging and swallows their
 failures, so a sink fault never disrupts collection.
 """
 
-from __future__ import annotations
-
 import gzip
 import json
 import logging

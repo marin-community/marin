@@ -30,15 +30,14 @@ from iris.cluster.controller.dashboard import (
     requires_auth,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import (
-    DASHBOARD_ROLE,
-    SESSION_COOKIE,
+from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
+from rigging.server_auth import (
     AuthRequest,
-    ControllerAuthPolicy,
+    RequestAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
     build_request_authenticators,
@@ -83,14 +82,15 @@ def service(state, tmp_path, log_client):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.capabilities = worker_caps
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 
@@ -104,7 +104,7 @@ def authed_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
         auth_provider="gcp",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
     )
     return TestClient(dashboard.app)
 
@@ -362,7 +362,7 @@ def optional_auth_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=True),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -486,7 +486,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     dashboard = ControllerDashboard(
         service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )
     # Inject a @requires_auth route. Walk down to the Starlette router so the
     # new route participates in route matching.
@@ -539,7 +539,7 @@ def _assertion_ctx(method_name: str):
 
 def test_dashboard_interceptor_allows_read_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -556,7 +556,7 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -593,7 +593,7 @@ def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
     # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
     # gated mutation that the read-only dashboard role would be denied.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
         )
     )
@@ -614,7 +614,7 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     # Login handler — `iris login` is never blocked by the dashboard gate. Guards
     # against accidentally moving the role check ahead of that exemption.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}),
             optional=False,
             iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),

@@ -1,49 +1,72 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""StarCoder2 data extras: download and tokenize ir_cpp, ir_python, ir_rust, ir_low_resource, documentation."""
+"""StarCoder2-Extras dataset tokenization as lazy Dataset handles.
 
-from fray import ResourceConfig
-from levanter.data.text.formats import TextLmDatasetFormat
-from marin.datakit.download.starcoder2_extras import (
-    SUBSETS,
-    download_starcoder2_extras_step,
-)
-from marin.datakit.normalize import normalize_step
-from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import TokenizerStep
+Subsets: ir_cpp, ir_python, ir_rust, ir_low_resource, documentation, kaggle.
+Each subset is downloaded separately from bigcode/starcoder2data-extras,
+normalized (reading from the ``content`` column), and tokenized.
+"""
 
-from experiments.marin_models import marin_tokenizer
-from experiments.tokenization import default_tokenize
+from fray.types import ResourceConfig
+from marin.datakit.download.starcoder2_extras import HF_DATASET_ID, HF_REVISION, SUBSETS
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
+
+from experiments.marin_tokenizer import marin_tokenizer
+
+# The documentation subset contains a single 64MB OpenJDK record that peaks at
+# ~9GB RSS during tokenization; pass extra RAM to the tokenize Fray worker.
+_DOC_TOKENIZE_RESOURCES = ResourceConfig(ram="32g", disk="10g")
 
 
-def tokenize_starcoder2_extras(*, tokenizer: str = marin_tokenizer) -> list[TokenizerStep]:
-    """Download, normalize, and tokenize all selected starcoder2data-extras subsets."""
-    steps = []
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+        text_field=cfg["text_field"],
+        id_field=cfg["id_field"],
+        file_extensions=tuple(cfg["file_extensions"]),
+    )
+
+
+def starcoder2_extras_datasets(*, tokenizer: str = marin_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
+    """One tokenized Dataset handle per starcoder2data-extras subset."""
+    datasets = []
     for subset in SUBSETS:
-        download = download_starcoder2_extras_step(subset)
-        normalized = normalize_step(
-            name=f"normalized/starcoder2_extras/{subset}",
-            download=download,
-            text_field="content",
-            file_extensions=(".parquet",),
+        dl = hf_download(
+            f"raw/starcoder2_extras/{subset}",
+            hf_id=HF_DATASET_ID,
+            revision=HF_REVISION,
+            urls_glob=[f"{subset}/*.parquet"],
+            pin=f"raw/starcoder2_extras-{HF_REVISION}/{subset}",
+            version="2026.06.28",
         )
-        # documentation contains a single 64MB OpenJDK record that peaks at ~9GB RSS
-        # during tokenization; bump memory to 32GB for that subset
-        doc_resources = ResourceConfig(ram="32g", disk="10g") if subset == "documentation" else None
-        steps.append(
-            default_tokenize(
-                name=f"starcoder2_extras/{subset}",
-                # Normalize splits main/dup outputs; only tokenize the main branch.
-                dataset=normalized.as_executor_step() / "outputs/main/*.parquet",
+        norm = ArtifactStep(
+            name=f"normalized/starcoder2_extras/{subset}",
+            version="2026.06.28",
+            artifact_type=TokenizedCache,
+            run=_run_normalize,
+            build_config=lambda ctx, _dl=dl: {
+                "input_path": ctx.artifact_path(_dl),
+                "output_path": ctx.output_path,
+                "text_field": "content",
+                "id_field": "id",
+                "file_extensions": [".parquet"],
+            },
+            deps=(dl,),
+        )
+        doc_resources = _DOC_TOKENIZE_RESOURCES if subset == "documentation" else None
+        datasets.append(
+            tokenized(
+                f"starcoder2_extras/{subset}",
                 tokenizer=tokenizer,
-                format=TextLmDatasetFormat(text_key="text"),
-                levanter_batch_size=128,
-                worker_resources=doc_resources,
+                raw=norm,
+                glob="outputs/main/*.parquet",
+                resources=doc_resources,
+                version="2026.06.28",
             )
         )
-    return steps
-
-
-if __name__ == "__main__":
-    executor_main(steps=tokenize_starcoder2_extras())
+    return datasets

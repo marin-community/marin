@@ -2,29 +2,46 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Provides prebuilt "subcaches" of the fineweb-edu dataset for use in Marin experiments. There are currently two subcaches:
+Prebuilt Levanter cache subcaches hosted on HuggingFace, ready for direct use.
 
-1. A 10B token subcache, which is a subset of the original fineweb-edu dataset consisting of approximately 10B tokens.
-2. A 10M token subcache, which is a smaller subset of the original fineweb-edu dataset. (Mostly for testing purposes)
+Two fineweb-edu subcaches are available:
 
+1. A 10B token subcache — a subset of the original fineweb-edu dataset.
+2. A 10M token subcache — a smaller subset for testing.
 
-You can use these subcaches to get started faster by using the prebuilt caches instead of running the full tokenization
-process:
+Example usage::
 
-```
-from experiments.prebuilt_caches import fineweb_edu_subcache_10B
+    from experiments.prebuilt_caches import fineweb_edu_10B_dataset
+    from marin.experiment.data import mixture
 
-my_model = default_train(..., tokenized=fineweb_edu_subcache_10B, ...)
-```
-
+    data = lambda ctx: mixture(ctx, {fineweb_edu_10B_dataset(): 1.0})
 """
 
-from marin.processing.tokenize.download_pretokenized import download_pretokenized_cache
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import pretokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 fineweb_edu_10B_repo_id = "marin-community/fineweb-edu-pretokenized-10B"
-fineweb_edu_subcache_10B = download_pretokenized_cache("fineweb-edu-10B", fineweb_edu_10B_repo_id, marin_tokenizer)
-
 fineweb_edu_10M_repo_id = "marin-community/fineweb-edu-pretokenized-10M"
-fineweb_edu_subcache_10M = download_pretokenized_cache("fineweb-edu-10M", fineweb_edu_10M_repo_id, marin_tokenizer)
+
+
+def fineweb_edu_10B_dataset() -> ArtifactStep[TokenizedCache]:
+    """Pretokenized fineweb-edu 10B-token subcache as a lazy TokenizedCache handle."""
+    return pretokenized(
+        "fineweb-edu-10B",
+        repo_id=fineweb_edu_10B_repo_id,
+        tokenizer=marin_tokenizer,
+        version="2026.06.28",
+    )
+
+
+def fineweb_edu_10M_dataset() -> ArtifactStep[TokenizedCache]:
+    """Pretokenized fineweb-edu 10M-token subcache as a lazy TokenizedCache handle."""
+    return pretokenized(
+        "fineweb-edu-10M",
+        repo_id=fineweb_edu_10M_repo_id,
+        tokenizer=marin_tokenizer,
+        version="2026.06.28",
+    )

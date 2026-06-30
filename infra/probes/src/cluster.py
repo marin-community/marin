@@ -10,8 +10,6 @@ I/O (the iris RPC / SQL call) is separated from the pure ``aggregate_*`` rollups
 so the labelling/windowing is unit-testable without a live controller.
 """
 
-from __future__ import annotations
-
 import json
 from collections import defaultdict
 from collections.abc import Sequence

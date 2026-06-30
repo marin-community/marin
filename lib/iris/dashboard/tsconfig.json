@@ -13,8 +13,7 @@
     "noEmit": true,
     "paths": {
       "@/*": ["./src/*"]
-    },
-    "baseUrl": "."
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "env.d.ts"]
 }

@@ -43,7 +43,7 @@ from typing import Any
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob
@@ -119,7 +119,7 @@ class DolmaQualityOutput(BaseModel):
     version: str = "v1"
     output_dir: str
     model_path: str
-    counters: dict[str, int]
+    counters: dict[str, int | float]
 
 
 def _run_one_source(
@@ -196,8 +196,8 @@ def classify_dolma3_quality_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: _run_one_source(
-            normalized=Artifact.from_path(normalized, NormalizedData),
-            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            normalized=read_artifact(normalized.output_path, NormalizedData),
+            model_path=read_artifact(model_step.output_path, FastTextModel).model_path,
             output_path=output_path,
             source_name=source_name,
             worker_resources=resources,

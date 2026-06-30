@@ -3,8 +3,6 @@
 
 """Deterministic code-interpretation records for supervised PPL evals."""
 
-from __future__ import annotations
-
 import json
 import posixpath
 from collections.abc import Callable
