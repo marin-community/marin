@@ -8,9 +8,10 @@ local clusters. The Iris scheduler assigns task→worker; this backend fans the
 per-worker Reconcile RPC out to the worker daemons, resolves the observations
 into task ``effects`` from its own read snapshot, and folds the per-worker
 liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
-through the single shared liveness tracker. The workers its fold reaps are
-stashed and torn down by ``run_teardown`` after the controller commits the
-effects, so no worker identity crosses the reconcile result boundary.
+through its own liveness tracker (``self.health``, attached by the controller).
+The workers its fold reaps are stashed and torn down by ``run_teardown`` after
+the controller commits the effects, so no worker identity crosses the reconcile
+result boundary.
 """
 
 import asyncio
@@ -246,6 +247,11 @@ class RpcTaskBackend:
     # needs. The backend reads its own workers through this; the controller never
     # hands it a worker snapshot.
     worker_source: WorkerSource | None = None
+    # This backend's liveness tracker, attached by the controller. The backend
+    # folds (reconcile) and forgets (teardown) through it. The controller shares
+    # one tracker across its worker-daemon backends, so this is the same object the
+    # attached worker source reads. The default is a throwaway replaced at attach.
+    health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
     # Static routing metadata the meta-scheduler reads. ``advertised`` expands into
     # routing posting lists; ``allowed_users`` is the allow policy (``*`` = any).
     advertised: dict[str, set[str]] = field(default_factory=dict)
@@ -268,6 +274,10 @@ class RpcTaskBackend:
     def attach_worker_source(self, source: WorkerSource) -> None:
         """Attach this backend's live-worker read surface."""
         self.worker_source = source
+
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        """Attach the liveness tracker this backend folds and reaps through."""
+        self.health = tracker
 
     def attach_transition_reader(self, reader: TransitionReader) -> None:
         raise AssertionError("worker-daemon backend authors effects through its worker source")
@@ -388,7 +398,7 @@ class RpcTaskBackend:
         events = observation.transport_events + [
             WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
         ]
-        self._pending_dead.extend(self.worker_source.health.apply(events, now_ms=now.epoch_ms()))
+        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
 
     def run_teardown(self) -> None:
@@ -415,7 +425,7 @@ class RpcTaskBackend:
         teardown_dead_workers(
             dead_workers,
             db=self.worker_source.db,
-            health=self.worker_source.health,
+            health=self.health,
             endpoints=self.worker_source.endpoints,
             worker_attrs=self.worker_source.worker_attrs,
             autoscale=self.autoscale,

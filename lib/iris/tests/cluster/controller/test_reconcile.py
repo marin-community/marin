@@ -56,6 +56,7 @@ from iris.cluster.controller.worker_health import (
     MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
     WorkerHealthEventKind,
+    WorkerHealthTracker,
 )
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
@@ -1189,6 +1190,9 @@ class _ScriptedProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        self.health = tracker
+
     def profile_task(self, *_args, **_kwargs):
         raise NotImplementedError
 
@@ -1359,6 +1363,9 @@ class _UnreachableProvider:
 
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
+
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        self.health = tracker
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)

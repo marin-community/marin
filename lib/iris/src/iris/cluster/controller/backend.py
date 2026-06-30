@@ -623,6 +623,19 @@ class TaskBackend(Protocol):
         """
         ...
 
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        """Attach the liveness tracker this backend folds and reaps through.
+
+        Called once by the controller for worker-daemon backends. The backend
+        owns its liveness from here: its ``reconcile`` folds into this tracker and
+        its teardown forgets from it. The controller shares one tracker across its
+        worker-daemon backends (each scale-group-scoped source reads that single
+        tracker), so this is the SAME object the controller's Fleet/exec/capacity
+        readers see. Capacity-managing backends (k8s) track no Iris workers and
+        never receive one.
+        """
+        ...
+
     def attach_transition_reader(self, reader: TransitionReader) -> None:
         """Attach the read surface a placement-owning backend authors effects from.
 

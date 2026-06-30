@@ -350,8 +350,11 @@ class Controller:
             self._db = db
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
-        # Worker-death detection is wall-clock, fixed at the grace regardless of
-        # the reconcile cadence (see WorkerHealthTracker).
+        # The single worker-liveness tracker, shared across the worker-daemon
+        # backends (each folds and reaps through it via attach_health) and read by
+        # the controller's Fleet/exec/capacity/prune paths. Worker-death detection
+        # is wall-clock, fixed at the grace regardless of the reconcile cadence
+        # (see WorkerHealthTracker).
         self._health = WorkerHealthTracker(unreachable_grace=config.worker_unreachable_grace)
         self._endpoints = EndpointsProjection(self._db)
         self._worker_attrs = WorkerAttrsProjection(self._db)
@@ -375,12 +378,14 @@ class Controller:
 
         self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
-        # Give each worker-daemon backend its own scale-group-scoped view of the
-        # DB so it sources its own workers (the controller never partitions a
-        # worker snapshot). A placement-owning backend (k8s) has no workers but
-        # still authors its dispatch effects from a controller-DB read snapshot.
+        # Give each worker-daemon backend the shared liveness tracker (it folds and
+        # reaps through it) and its own scale-group-scoped view of the DB so it
+        # sources its own workers (the controller never partitions a worker
+        # snapshot). A placement-owning backend (k8s) has no workers but still
+        # authors its dispatch effects from a controller-DB read snapshot.
         for backend_id, backend in self._backends.items():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
+                backend.attach_health(self._health)
                 backend.attach_worker_source(self._build_worker_source(backend_id))
             elif BackendCapability.CLUSTER_VIEW in backend.capabilities:
                 backend.attach_transition_reader(DbTransitionReader(self._db))

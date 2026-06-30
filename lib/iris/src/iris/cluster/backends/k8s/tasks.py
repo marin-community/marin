@@ -43,6 +43,7 @@ from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.coreweave_topology import CW_LABEL_LEAFGROUP, CW_LABEL_NVLINK_DOMAIN
 from iris.cluster.platforms.k8s.service import K8sService
@@ -1494,6 +1495,10 @@ class K8sTaskProvider:
     def attach_worker_source(self, source: "WorkerSource") -> None:
         """Never called: a cluster backend owns its own placement, with no Iris workers."""
         raise AssertionError("K8sTaskProvider sources its own placement; no worker source should be attached")
+
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        """Never called: a cluster backend tracks no Iris worker liveness."""
+        raise AssertionError("K8sTaskProvider tracks no Iris workers; no liveness tracker should be attached")
 
     def attach_transition_reader(self, reader: TransitionReader) -> None:
         """Attach the controller-DB read surface this backend authors effects from."""

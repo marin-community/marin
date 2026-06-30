@@ -181,6 +181,7 @@ class _FakeProvider:
     def __init__(self) -> None:
         self._scheduler = Scheduler()
         self.worker_source: WorkerSource | None = None
+        self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         self._pending_dead: list[WorkerId] = []
@@ -216,6 +217,9 @@ class _FakeProvider:
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
 
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        self.health = tracker
+
     def set_log_sink(self, *args, **kwargs):
         pass
 
@@ -233,7 +237,7 @@ class _FakeProvider:
         now = Timestamp.now()
         effects = apply_reconcile(self.worker_source, worker_results, now=now)
         events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
-        self._pending_dead.extend(self.worker_source.health.apply(events, now_ms=now.epoch_ms()))
+        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
 
     def run_teardown(self) -> None:
@@ -246,7 +250,7 @@ class _FakeProvider:
         teardown_dead_workers(
             dead_workers,
             db=self.worker_source.db,
-            health=self.worker_source.health,
+            health=self.health,
             endpoints=self.worker_source.endpoints,
             worker_attrs=self.worker_source.worker_attrs,
             autoscale=self.autoscale,

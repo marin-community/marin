@@ -82,7 +82,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
+from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -248,6 +248,9 @@ class FakeProvider:
 
     def attach_worker_source(self, source: WorkerSource) -> None:
         self.worker_source = source
+
+    def attach_health(self, tracker: WorkerHealthTracker) -> None:
+        self.health = tracker
 
     def get_process_status(
         self,
