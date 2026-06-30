@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
+from marin.rl.telemetry import ArtifactRef, TrackerRunRef, TrackerStream
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +53,10 @@ class RLRunState:
         self._status: RunStatus = RunStatus.RUNNING
         self._failure_message: str | None = None
         self._train_step: int = -1
+        self._next_eval_sequence: int = 0
         self._rollout_transfer_counters: dict[int, RolloutTransferCounters] = {}
+        self._tracker_refs: dict[tuple[str, int | None], TrackerRunRef] = {}
+        self._artifact_refs: dict[str, ArtifactRef] = {}
 
     def get_status(self) -> str:
         return self._status.value
@@ -72,6 +77,11 @@ class RLRunState:
 
     def get_train_step(self) -> int:
         return self._train_step
+
+    def next_eval_sequence(self) -> int:
+        sequence = self._next_eval_sequence
+        self._next_eval_sequence += 1
+        return sequence
 
     def get_rollout_transfer_counters(self, worker_index: int) -> RolloutTransferCounters:
         return self._rollout_transfer_counters.get(worker_index, RolloutTransferCounters())
@@ -95,6 +105,27 @@ class RLRunState:
         )
         self._rollout_transfer_counters[worker_index] = updated
         return updated
+
+    def register_tracker_ref(self, tracker_ref: TrackerRunRef) -> TrackerRunRef:
+        key = (tracker_ref.stream.value, tracker_ref.worker_index)
+        self._tracker_refs[key] = tracker_ref
+        return tracker_ref
+
+    def get_tracker_ref(self, stream: TrackerStream, worker_index: int | None = None) -> TrackerRunRef | None:
+        return self._tracker_refs.get((stream.value, worker_index))
+
+    def list_tracker_refs(self) -> list[TrackerRunRef]:
+        return list(self._tracker_refs.values())
+
+    def register_artifact_ref(self, artifact_ref: ArtifactRef) -> ArtifactRef:
+        self._artifact_refs[artifact_ref.name] = artifact_ref
+        return artifact_ref
+
+    def get_artifact_ref(self, name: str) -> ArtifactRef | None:
+        return self._artifact_refs.get(name)
+
+    def list_artifact_refs(self) -> list[ArtifactRef]:
+        return list(self._artifact_refs.values())
 
     def mark_completed(self) -> None:
         if self._status == RunStatus.RUNNING:

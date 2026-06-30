@@ -21,15 +21,57 @@ from marin.rl.rollout_worker import (
     _should_run_micro_eval,
     create_inference_context,
 )
-from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.run_state import RLRunState, RolloutTransferCounters
+from marin.rl.telemetry import ArtifactRef, TelemetryEvent, TrackerRunRef, TrackerStream
+
+
+class _RemoteResult:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
+class _RemoteMethod:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def remote(self, *args, **kwargs):
+        return _RemoteResult(self._fn(*args, **kwargs))
+
+
+class _RunStateHandle:
+    def __init__(self, run_state: RLRunState):
+        self.register_artifact_ref = _RemoteMethod(run_state.register_artifact_ref)
+        self.register_tracker_ref = _RemoteMethod(run_state.register_tracker_ref)
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     captured = {}
+    summary_updates = []
+    artifact_logs = []
 
     class _FakeRun:
         def log(self, _metrics, step=None):
             pass
+
+        def log_artifact(self, artifact_path, name=None, **kwargs):
+            artifact_logs.append((artifact_path, name, kwargs))
+
+        @property
+        def summary(self):
+            class _Summary:
+                def update(self, metrics):
+                    summary_updates.append(metrics)
+
+            return _Summary()
+
+        id = "wandb-rollout-123"
+        name = "iris-rl-e4ms2-500-rollout-0"
+        url = "https://wandb.ai/example/run"
+        entity = "marin"
+        project = "marin_iris_rl_debug"
 
         def finish(self):
             pass
@@ -39,7 +81,7 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
         lambda **kwargs: captured.update(kwargs) or _FakeRun(),
     )
 
-    RolloutTracker(
+    tracker = RolloutTracker(
         RolloutTrackerConfig(project="marin_iris_rl_debug", name="iris-rl-e4ms2-500-rollout-0"),
         run_id="iris-rl-e4ms2-500-rollout-0",
     )
@@ -47,6 +89,19 @@ def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
     assert captured["name"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["id"] == "iris-rl-e4ms2-500-rollout-0"
     assert captured["resume"] == "allow"
+    tracker.log_summary({"metric": 1})
+    tracker.log_artifact("/tmp/trace.json", name="trace", artifact_type="trace")
+    assert summary_updates == [{"metric": 1}]
+    assert artifact_logs == [("/tmp/trace.json", "trace", {"type": "trace"})]
+    assert tracker.as_tracker_ref(stream=TrackerStream.ROLLOUT, worker_index=0) == TrackerRunRef(
+        stream=TrackerStream.ROLLOUT,
+        tracker_run_id="wandb-rollout-123",
+        project="marin_iris_rl_debug",
+        entity="marin",
+        run_name="iris-rl-e4ms2-500-rollout-0",
+        run_url="https://wandb.ai/example/run",
+        worker_index=0,
+    )
 
 
 def test_resume_safe_transfer_metrics_logs_attempt_and_cumulative_values_after_counter_reset():
@@ -190,6 +245,127 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
                 "inference.train_step": 12,
             },
             None,
+        )
+    ]
+
+
+def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(tmp_path):
+    run_state = RLRunState()
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test-rollout-0",
+        root_run_id="rl-test",
+        instance_id="attempt-abc",
+        worker_index=0,
+        eval_owner_worker_index=0,
+    )
+    worker._runtime = SimpleNamespace(run_state=_RunStateHandle(run_state))
+    worker.tracker = SimpleNamespace(
+        as_tracker_ref=lambda *, stream, worker_index=None: TrackerRunRef(
+            stream=stream,
+            tracker_run_id="wandb-rollout-123",
+            project="marin_post_training",
+            run_name="rl-test-rollout-0",
+            worker_index=worker_index,
+        )
+    )
+    worker._event_writer = None
+    worker._eval_event_writer = None
+
+    worker._initialize_telemetry()
+
+    assert worker._event_writer is not None
+    assert worker._eval_event_writer is not None
+    assert run_state.list_artifact_refs() == [
+        ArtifactRef(
+            name="rollout-0-attempt-abc.jsonl",
+            path=worker._event_writer.path,
+            artifact_type="event_shard",
+            stream=TrackerStream.ROLLOUT,
+            worker_index=0,
+        ),
+        ArtifactRef(
+            name="eval-attempt-abc.jsonl",
+            path=worker._eval_event_writer.path,
+            artifact_type="event_shard",
+            stream=TrackerStream.EVAL,
+        ),
+    ]
+    assert run_state.list_tracker_refs() == [
+        TrackerRunRef(
+            stream=TrackerStream.ROLLOUT,
+            tracker_run_id="wandb-rollout-123",
+            project="marin_post_training",
+            run_name="rl-test-rollout-0",
+            worker_index=0,
+        )
+    ]
+
+    fs = fsspec.filesystem("file")
+    with fs.open(worker._event_writer.path) as handle:
+        rollout_events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+    with fs.open(worker._eval_event_writer.path) as handle:
+        eval_events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+
+    assert "/rl-test/events/" in worker._event_writer.path
+    assert "/rl-test/events/" in worker._eval_event_writer.path
+    assert [event.stream for event in rollout_events] == [TrackerStream.ROLLOUT]
+    assert [event.event_type for event in rollout_events] == ["worker_started"]
+    assert [event.run_id for event in rollout_events] == ["rl-test"]
+    assert [event.provenance.worker_index for event in rollout_events] == [0]
+    assert [event.provenance.instance_id for event in rollout_events] == ["attempt-abc"]
+    assert [event.payload for event in rollout_events] == [{"worker_role": "rollout"}]
+    assert [event.stream for event in eval_events] == [TrackerStream.EVAL]
+    assert [event.event_type for event in eval_events] == ["stream_initialized"]
+    assert [event.run_id for event in eval_events] == ["rl-test"]
+    assert [event.provenance.worker_index for event in eval_events] == [0]
+    assert [event.provenance.instance_id for event in eval_events] == ["attempt-abc"]
+    assert [event.payload for event in eval_events] == [{"worker_role": "eval_owner"}]
+
+
+def test_initialize_telemetry_does_not_create_eval_shard_for_non_owner(tmp_path):
+    run_state = RLRunState()
+
+    worker = object.__new__(RolloutWorker)
+    worker.config = SimpleNamespace(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test-rollout-1",
+        root_run_id="rl-test",
+        instance_id="attempt-abc",
+        worker_index=1,
+        eval_owner_worker_index=0,
+    )
+    worker._runtime = SimpleNamespace(run_state=_RunStateHandle(run_state))
+    worker.tracker = SimpleNamespace(
+        as_tracker_ref=lambda *, stream, worker_index=None: TrackerRunRef(
+            stream=stream,
+            tracker_run_id="wandb-rollout-456",
+            worker_index=worker_index,
+        )
+    )
+    worker._event_writer = None
+    worker._eval_event_writer = None
+
+    worker._initialize_telemetry()
+
+    assert worker._event_writer is not None
+    assert worker._eval_event_writer is None
+    assert run_state.list_artifact_refs() == [
+        ArtifactRef(
+            name="rollout-1-attempt-abc.jsonl",
+            path=worker._event_writer.path,
+            artifact_type="event_shard",
+            stream=TrackerStream.ROLLOUT,
+            worker_index=1,
+        )
+    ]
+    assert run_state.list_tracker_refs() == [
+        TrackerRunRef(
+            stream=TrackerStream.ROLLOUT,
+            tracker_run_id="wandb-rollout-456",
+            worker_index=1,
         )
     ]
 

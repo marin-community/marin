@@ -3,9 +3,12 @@
 
 from types import SimpleNamespace
 
+import fsspec
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
+from marin.rl.run_state import RLRunState
+from marin.rl.telemetry import ArtifactRef, StepProvenance, TelemetryEvent, TrackerStream
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
@@ -15,6 +18,27 @@ from marin.rl.train_worker import (
     _training_step_timing_metrics,
 )
 from marin.rl.weight_transfer.base import WeightTransferServerMetrics
+
+
+class _RemoteResult:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
+class _RemoteMethod:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def remote(self, *args, **kwargs):
+        return _RemoteResult(self._fn(*args, **kwargs))
+
+
+class _RunStateHandle:
+    def __init__(self, run_state: RLRunState):
+        self.register_artifact_ref = _RemoteMethod(run_state.register_artifact_ref)
 
 
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
@@ -61,6 +85,49 @@ def test_record_train_step_updates_replay_buffer_and_shared_run_state():
     worker._record_train_step(7)
 
     assert recorded_steps == [7, 7]
+
+
+def test_initialize_telemetry_writes_trainer_event_shard_and_registers_artifact(tmp_path):
+    run_state = RLRunState()
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test",
+        root_run_id="rl-test",
+        instance_id="attempt-abc",
+    )
+    worker._runtime = SimpleNamespace(run_state=_RunStateHandle(run_state))
+    worker._event_writer = None
+
+    worker._initialize_telemetry()
+
+    assert worker._event_writer is not None
+    assert run_state.list_artifact_refs() == [
+        ArtifactRef(
+            name="train-attempt-abc.jsonl",
+            path=worker._event_writer.path,
+            artifact_type="event_shard",
+            stream=TrackerStream.TRAINER,
+        )
+    ]
+
+    fs = fsspec.filesystem("file")
+    assert fs.exists(worker._event_writer.path)
+    with fs.open(worker._event_writer.path) as handle:
+        events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
+
+    assert events == [
+        TelemetryEvent(
+            run_id="rl-test",
+            stream=TrackerStream.TRAINER,
+            event_type="worker_started",
+            provenance=StepProvenance(instance_id="attempt-abc"),
+            payload={"worker_role": "trainer"},
+            event_id=events[0].event_id,
+            created_at=events[0].created_at,
+        )
+    ]
 
 
 def test_initial_rollout_state_uses_bootstrap_weights_for_fresh_run():
