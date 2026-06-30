@@ -57,6 +57,10 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    processes_per_task: int = 1
+    """GPU processes per task. > 1 fans each node into one JAX process per GPU
+    (multi-controller) via the iris.runtime.multigpu supervisor; 1 keeps the
+    single-process-per-node model."""
     checkpointer: CheckpointerConfig | None = None
     """Override the checkpointer. None builds the default (periodic + final saves
     under output_path). Throughput experiments point this at node-local disk so a
@@ -149,6 +153,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,
+        processes_per_task=config.processes_per_task,
     )
     run_grug(run_config)
 

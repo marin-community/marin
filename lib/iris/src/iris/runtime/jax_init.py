@@ -114,6 +114,79 @@ def _poll_for_coordinator(
             time.sleep(interval)
 
 
+# Env vars stamped per child by iris.runtime.multigpu (the in-task GPU
+# supervisor). Their presence switches initialize_jax into supervised mode.
+_SUPERVISED_PROCESS_COUNT_ENV = "JAX_PROCESS_COUNT"
+_SUPERVISED_PROCESS_INDEX_ENV = "JAX_PROCESS_INDEX"
+_SUPERVISED_LOCAL_DEVICE_IDS_ENV = "JAX_LOCAL_DEVICE_IDS"
+
+
+def _parse_local_device_ids(raw: str | None) -> list[int] | None:
+    """Parse a ``JAX_LOCAL_DEVICE_IDS`` value ("0" or "2,3") into a list, or None."""
+    if not raw:
+        return None
+    return [int(part) for part in raw.split(",") if part]
+
+
+def _supervised_coordinator_plan(proc_index: int, task_index: int, num_tasks: int) -> tuple[bool, bool]:
+    """Decide how a supervised rank obtains the coordinator address.
+
+    Returns ``(register, poll)``. Global rank 0 (``proc_index == 0``) owns the
+    coordinator and registers its own address, but only when the job spans
+    multiple hosts (otherwise no peer needs to discover it). Other ranks on
+    host 0 reuse that same advertise_host directly, with no registry round-trip.
+    Ranks on other hosts poll the registry for global rank 0's address.
+    """
+    if proc_index == 0:
+        return (num_tasks > 1, False)
+    if task_index == 0:
+        return (False, False)
+    return (False, True)
+
+
+def _initialize_supervised_jax(jax, job_info, *, port: int, endpoint_name: str) -> None:
+    """Join the JAX mesh for a process launched by ``iris.runtime.multigpu``.
+
+    The supervisor runs N JAX processes inside one Iris task and stamps each
+    child with its global rank (``JAX_PROCESS_INDEX``), the global world size
+    (``JAX_PROCESS_COUNT``), and the device ids it owns (``JAX_LOCAL_DEVICE_IDS``).
+    Coordinator discovery reuses the one-process-per-task endpoint dance, lifted
+    from per-task to per-global-rank so every process across every host joins one
+    mesh.
+    """
+    proc_count = int(os.environ[_SUPERVISED_PROCESS_COUNT_ENV])
+    proc_index = int(os.environ[_SUPERVISED_PROCESS_INDEX_ENV])
+    device_ids = _parse_local_device_ids(os.environ.get(_SUPERVISED_LOCAL_DEVICE_IDS_ENV))
+
+    if proc_count <= 1:
+        jax.distributed.initialize(num_processes=1, process_id=0, local_device_ids=device_ids)
+        return
+
+    num_tasks = job_info.num_tasks if job_info else 1
+    task_index = job_info.task_index if job_info else 0
+    advertise_host = job_info.advertise_host if job_info else "127.0.0.1"
+    bound_port = job_info.ports.get("jax", port) if job_info else port
+    coordinator = f"{advertise_host}:{bound_port}"
+
+    register, poll = _supervised_coordinator_plan(proc_index, task_index, num_tasks)
+    if poll:
+        ctx = iris_ctx()
+        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, 300.0, 2.0)
+    elif register:
+        ctx = iris_ctx()
+        endpoint_id = ctx.registry.register(endpoint_name, coordinator)
+        atexit.register(ctx.registry.unregister, endpoint_id)
+
+    logger.info(
+        "initialize_jax (supervised): process_id=%d/%d local_device_ids=%s coordinator=%s",
+        proc_index,
+        proc_count,
+        device_ids,
+        coordinator,
+    )
+    jax.distributed.initialize(coordinator, proc_count, proc_index, local_device_ids=device_ids)
+
+
 def initialize_jax(
     port: int = 8476,
     endpoint_name: str = "jax_coordinator",
@@ -174,6 +247,16 @@ def initialize_jax(
 
     job_info = get_job_info()
     _log_jax_bootstrap_inputs(job_info, port=port, endpoint_name=endpoint_name)
+
+    # Supervised (multi-process-per-task) mode short-circuits the task-derived
+    # paths: iris.runtime.multigpu has already assigned this process its global
+    # rank, so the single/multi-task branches below (which assume one process
+    # per task) do not apply. This runs even when job_info is None so a local
+    # supervisor smoke can bring up a localhost mesh.
+    if _SUPERVISED_PROCESS_COUNT_ENV in os.environ:
+        _initialize_supervised_jax(jax, job_info, port=port, endpoint_name=endpoint_name)
+        return
+
     if job_info is None:
         return
 

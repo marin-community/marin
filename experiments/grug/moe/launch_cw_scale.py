@@ -18,6 +18,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
+    SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
+                          (default), 8 = one JAX process per GPU (multi-controller)
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
@@ -126,6 +128,9 @@ def build_scale_step() -> ExecutorStep:
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
+    # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
+    # (multi-controller) via the iris.runtime.multigpu supervisor.
+    processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
@@ -196,6 +201,7 @@ def build_scale_step() -> ExecutorStep:
             tracker=tracker,
             optimizer=versioned(SCALE_OPTIMIZER),
             grug_trainer=versioned(grug_trainer),
+            processes_per_task=versioned(processes_per_task),
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,

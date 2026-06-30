@@ -18,6 +18,7 @@ from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.runtime.jax_init import (
     _poll_for_coordinator,
+    _supervised_coordinator_plan,
     configure_jax_compilation_cache,
     initialize_jax,
 )
@@ -212,6 +213,97 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "proc_index,task_index,num_tasks,expected",
+    [
+        (0, 0, 1, (False, False)),  # single-host global rank 0: bind, no registry
+        (0, 0, 4, (True, False)),  # multi-host global rank 0: register its address
+        (3, 0, 1, (False, False)),  # host-0 local rank: reuse advertise_host directly
+        (5, 0, 4, (False, False)),  # host-0 local rank on a multi-host job: same
+        (8, 2, 4, (False, True)),  # other host: poll the registry for rank 0
+    ],
+)
+def test_supervised_coordinator_plan(
+    proc_index: int, task_index: int, num_tasks: int, expected: tuple[bool, bool]
+) -> None:
+    assert _supervised_coordinator_plan(proc_index, task_index, num_tasks) == expected
+
+
+@patch("iris.runtime.jax_init.atexit")
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_single_host(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    mock_atexit: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
+    monkeypatch.setenv("JAX_PROCESS_COUNT", "8")
+    monkeypatch.setenv("JAX_PROCESS_INDEX", "3")
+    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "3")
+
+    initialize_jax()
+
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 8, 3, local_device_ids=[3])
+    mock_iris_ctx.assert_not_called()
+
+
+@patch("iris.runtime.jax_init.atexit")
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_global_rank0_registers(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    mock_atexit: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global rank 0 on a multi-host supervised job registers the coordinator."""
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+    monkeypatch.setenv("JAX_PROCESS_COUNT", "16")
+    monkeypatch.setenv("JAX_PROCESS_INDEX", "0")
+    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "0")
+
+    initialize_jax()
+
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 16, 0, local_device_ids=[0])
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_other_host_polls(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervised rank on host != 0 polls the registry for rank 0's address."""
+    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
+    )
+    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
+    mock_iris_ctx.return_value = fake_ctx
+    monkeypatch.setenv("JAX_PROCESS_COUNT", "16")
+    monkeypatch.setenv("JAX_PROCESS_INDEX", "8")
+    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "0")
+
+    initialize_jax()
+
+    mock_jax_init.assert_called_once_with("10.0.0.9:8476", 16, 8, local_device_ids=[0])
+    assert fake_ctx.registry.registered == []
 
 
 @contextmanager
