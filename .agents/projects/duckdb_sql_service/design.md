@@ -135,12 +135,15 @@ the controller reverse proxy
 (`lib/iris/src/iris/cluster/controller/endpoint_proxy.py:70`). No new proto: the
 browser talks plain JSON to the Starlette routes.
 
-**Single region (us-east5).** The job is pinned to `us-east5` (`--region`,
-`lib/iris/src/iris/cli/job.py:813`), the scratch bucket lives there, and the HMAC
-keys are scoped to same-region buckets. Cross-region reads then simply **fail to
-authenticate** rather than silently incurring egress — the guardrail is operational
-(region + creds pinning), not an in-process SQL pre-parse, which would be brittle
-against views/macros. v1 ships no in-runner cross-region check.
+**Single region (us-east5) + bucket allowlist.** The job is pinned to `us-east5`
+(`--region`, `lib/iris/src/iris/cli/job.py:813`) and the scratch bucket lives there.
+The same-region guardrail is an **in-runner allowlist** (`ALLOWED_BUCKETS`, e.g.
+`gs://marin-us-east5,gs://marin-dna-us-east5,r2://`): before executing, the runner
+extracts literal `gs://`/`s3://`/`r2://` URIs from the SQL and refuses any whose
+bucket isn't allowlisted (`BucketNotAllowedError` → 400). Creds pinning *can't* do
+this — GCS HMAC keys are region-agnostic, so a us-central2 read authenticates fine
+and silently egresses. The allowlist catches literal URIs only (not paths hidden
+behind views/macros); empty allowlist disables enforcement.
 
 ## Testing
 

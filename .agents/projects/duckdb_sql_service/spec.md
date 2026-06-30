@@ -34,7 +34,10 @@ preview as a table plus a stats line; `--format json` prints the raw `/result` J
 @dataclass(frozen=True)
 class DuckyConfig:
     """Resolved once at startup; no env reads after construction."""
-    region: str                  # service region, e.g. "us-east5" (operational pin; not enforced in-runner)
+    region: str                  # service region, e.g. "us-east5" (operational pin)
+    allowed_buckets: tuple[str, ...] = ()  # object-store URI prefixes a query may read; empty = allow all.
+                                 # In-runner same-region guardrail: a query referencing a gs://, s3://, r2://
+                                 # URI outside the allowlist raises BucketNotAllowedError (-> 400) before execution.
     scratch_bucket: str          # gs:// prefix for spilled results, same region. Use the existing
                                  # marin tmp/ttl lifecycle convention, e.g. "gs://marin-us-east5/tmp/ttl=7d";
                                  # the prefix's N days MUST equal result_ttl_days.
@@ -130,15 +133,15 @@ class DuckyError(Exception):
     """Base for ducky errors surfaced to the dashboard as a clean message."""
 
 class QueryError(DuckyError):
-    """DuckDB failed to plan or execute the SQL. Wraps the DuckDB message.
+    """DuckDB failed to plan or execute the SQL. Wraps the DuckDB message."""
 
-    Cross-region reads are not a distinct error type in v1 — they surface here as an
-    httpfs authentication failure because HMAC creds are scoped to same-region buckets.
-    """
+class BucketNotAllowedError(DuckyError):
+    """The SQL references an object-store URI outside config.allowed_buckets. Raised before
+    execution — ducky's same-region guardrail (GCS HMAC keys can't enforce region)."""
 ```
 
-`QueryError` maps to HTTP 400 with `{"error": "<message>"}`. Any other exception
-propagates as 500 (unexpected — let it surface).
+Both `DuckyError` subtypes map to HTTP 400 with `{"error": "<message>"}` (the
+`QueryManager` catches `DuckyError`). Any other exception propagates as 500.
 
 ## HTTP routes (`server.py`)
 

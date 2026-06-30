@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from ducky.config import DuckyConfig
-from ducky.runner import QueryError, QueryRunner, duckdb_resource_settings
+from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris, duckdb_resource_settings
 from iris.env_resources import TaskResources
 
 _SMALL_HOST = TaskResources(memory_bytes=2 * 1024**3, cpu_cores=2, gpu_count=0, tpu_count=0)
@@ -81,6 +81,37 @@ def test_run_query_full_result_not_truncated(make_runner):
     assert result.total_rows == 5
     assert len(result.preview_rows) == 5
     assert result.truncated is False
+
+
+def test_disallowed_uris_flags_only_unlisted_buckets():
+    allowed = ("gs://marin-us-east5", "r2://")
+    sql = (
+        "SELECT * FROM read_parquet('gs://marin-us-central2/a.parquet') "
+        "JOIN read_parquet('gs://marin-us-east5/b.parquet') USING (id) "
+        "JOIN read_parquet('r2://anybucket/c.parquet') USING (id)"
+    )
+    assert disallowed_uris(sql, allowed) == ["gs://marin-us-central2/a.parquet"]
+
+
+def test_disallowed_uris_is_boundary_aware():
+    # gs://marin-us-east5 must not allow a look-alike bucket
+    assert disallowed_uris("read_parquet('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5",))
+
+
+def test_disallowed_uris_empty_allowlist_allows_all():
+    assert disallowed_uris("read_parquet('gs://anywhere/x.parquet')", ()) == []
+
+
+def test_run_query_refuses_bucket_outside_allowlist(make_runner):
+    runner = make_runner(allowed_buckets=("gs://marin-us-east5",))
+    with pytest.raises(BucketNotAllowedError, match="us-central2"):
+        runner.run_query("SELECT * FROM read_parquet('gs://marin-us-central2/x.parquet')", uuid.uuid4().hex)
+
+
+def test_run_query_allowlist_does_not_block_non_object_queries(make_runner):
+    runner = make_runner(allowed_buckets=("gs://marin-us-east5",))
+    result = runner.run_query("SELECT * FROM range(3) t(x)", uuid.uuid4().hex)
+    assert result.total_rows == 3
 
 
 def test_run_query_bad_sql_raises_query_error(make_runner):

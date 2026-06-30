@@ -46,10 +46,17 @@ class DuckyConfig:
     """Resolved ducky configuration. Construct directly, or via :meth:`from_environment`."""
 
     region: str
-    """Service region (e.g. ``us-east5``). Operational pin only; not enforced in the runner."""
+    """Service region (e.g. ``us-east5``). Operational pin; the same-region guardrail is
+    the allowlist below, since GCS HMAC keys are region-agnostic and can't enforce it."""
 
     scratch_bucket: str
     """Prefix where full results spill (``gs://…`` in prod, a local dir for smoke). Carries a lifecycle TTL rule."""
+
+    allowed_buckets: tuple[str, ...] = ()
+    """Object-store URI prefixes a query may read, e.g. ``("gs://marin-us-east5", "r2://")``.
+    A query referencing a ``gs://``/``s3://``/``r2://`` URI outside the allowlist is refused
+    before execution — the same-region guardrail. Empty disables enforcement (allow all).
+    Catches literal URIs in the SQL, not paths hidden behind views/macros."""
 
     # Optional per-backend credentials. A backend is enabled only when its full set is present.
     gcs_hmac_key_id: str | None = None
@@ -124,9 +131,13 @@ class DuckyConfig:
                     f"Backend {backend!r} is partially configured; set all or none of {list(env_map.values())}"
                 )
 
+        allowed = os.environ.get(f"{_ENV_PREFIX}ALLOWED_BUCKETS", "")
+        allowed_buckets = tuple(b.strip() for b in allowed.split(",") if b.strip())
+
         return cls(
             region=region,  # pyrefly: ignore  # non-None after the check above
             scratch_bucket=scratch_bucket,  # pyrefly: ignore  # non-None after the check above
+            allowed_buckets=allowed_buckets,
             preview_row_cap=int(os.environ.get(f"{_ENV_PREFIX}PREVIEW_ROW_CAP", cls.preview_row_cap)),
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),

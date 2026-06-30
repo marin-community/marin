@@ -28,17 +28,48 @@ logger = logging.getLogger(__name__)
 # query_id is interpolated into the result path, so it must be a bare uuid4 hex.
 _QUERY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# Object-store URIs referenced in the SQL (read_parquet('gs://…'), etc.). Stops at the
+# closing quote/paren/whitespace of the SQL literal.
+_OBJECT_URI_RE = re.compile(r"""(?:gs|s3|r2)://[^\s'")]+""", re.IGNORECASE)
+
+
+def _object_uris(sql: str) -> list[str]:
+    """Distinct gs://, s3://, r2:// URIs referenced literally in the SQL (order-preserving)."""
+    return list(dict.fromkeys(_OBJECT_URI_RE.findall(sql)))
+
+
+def _is_allowed(uri: str, allowed: tuple[str, ...]) -> bool:
+    """True if ``uri`` is covered by an allowlist entry (exact, scheme-only, or bucket prefix)."""
+    for entry in allowed:
+        if uri == entry or (entry.endswith("://") and uri.startswith(entry)):
+            return True
+        prefix = entry if entry.endswith("/") else entry + "/"
+        if uri.startswith(prefix):  # boundary-aware: gs://b does not match gs://b-evil
+            return True
+    return False
+
+
+def disallowed_uris(sql: str, allowed: tuple[str, ...]) -> list[str]:
+    """Object-store URIs in ``sql`` not covered by ``allowed``. Empty allowlist allows all."""
+    if not allowed:
+        return []
+    return [uri for uri in _object_uris(sql) if not _is_allowed(uri, allowed)]
+
 
 class DuckyError(Exception):
     """Base for ducky errors surfaced to the dashboard as a clean message."""
 
 
 class QueryError(DuckyError):
-    """DuckDB failed to plan or execute the SQL. Wraps the DuckDB message.
+    """DuckDB failed to plan or execute the SQL. Wraps the DuckDB message."""
 
-    Cross-region reads are not a distinct error in v1 — they surface here as an
-    httpfs authentication failure, because the injected creds are scoped to
-    same-region buckets.
+
+class BucketNotAllowedError(DuckyError):
+    """The query references an object-store URI outside the configured allowlist.
+
+    This is ducky's same-region guardrail: GCS HMAC keys are region-agnostic, so the
+    only way to keep queries in-region (avoiding cross-region egress) is to refuse
+    URIs whose bucket isn't allowlisted. Raised before any execution.
     """
 
 
@@ -146,6 +177,13 @@ class QueryRunner:
         """
         if not _QUERY_ID_RE.match(query_id):
             raise ValueError(f"query_id must be a uuid4 hex, got {query_id!r}")
+
+        blocked = disallowed_uris(sql, self._config.allowed_buckets)
+        if blocked:
+            raise BucketNotAllowedError(
+                f"query references buckets outside the allowlist: {', '.join(blocked)}; "
+                f"allowed prefixes: {', '.join(self._config.allowed_buckets)}"
+            )
 
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
         path_literal = _sql_literal(result_path)
