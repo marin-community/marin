@@ -47,12 +47,13 @@ _validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_vali
 _weighted = {_train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in _train}
 
 
-def trial(*, learning_rate: float, weight_decay: float, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
+def trial(*, learning_rate: float, weight_decay: float, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """One sweep trial: a 30M llama trained on the DCLM mixture, ready to select over.
 
     The swept hyperparameters are literals in the optimizer, so each grid point gets a
     distinct ``name@version`` and fingerprint; the TPU is a runtime arg, excluded from
-    identity.
+    identity. The default ``dev`` version rebuilds each run while iterating on the sweep; pin
+    a calendar version for trials you want cached.
     """
     return train_lm(
         name=f"checkpoints/tutorial-dclm-30m-sweep/lr{learning_rate}-wd{weight_decay}",

@@ -57,11 +57,12 @@ def dataset(name: str) -> ArtifactStep[TokenizedCache]:
     return tokenized(name, tokenizer=marin_tokenizer, source=RAW_SOURCES[name], sample_count=1000, version="2026.06.28")
 
 
-def build(*, device: str, data: str, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
+def build(*, device: str, data: str, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """A tiny Llama trained on ``data`` using ``device``, every decision stated inline.
 
     The 150M model is used for the prebuilt FineWeb-Edu cache; the nano model keeps the
-    raw-text runs fast enough to finish on a laptop CPU.
+    raw-text runs fast enough to finish on a laptop CPU. The default ``dev`` version rebuilds
+    on every run — what you want while iterating; pin a calendar version for a run to keep.
     """
     resources, batch_size = DEVICES[device]
     model = llama_150m if data == "fineweb-edu" else llama_nano

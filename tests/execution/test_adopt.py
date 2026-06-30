@@ -11,11 +11,11 @@ import logging
 
 import pytest
 from marin.execution.artifact import Artifact, read_record
-from marin.execution.lazy import ArtifactStep, adopt, materialized_config, run
+from marin.execution.lazy import ArtifactStep, materialized_config, run
 
 
 def test_adopt_resolves_to_source_not_canonical():
-    art = adopt("datasets/external", "2026.06.28", source="gs://elsewhere/data")
+    art = ArtifactStep.adopt("datasets/external", "2026.06.28", source="gs://elsewhere/data")
     # A consumer resolves to the pre-existing location, not {prefix}/{name}/{version}.
     assert art.path("gs://prefix") == "gs://elsewhere/data"
     assert art.artifact_type is Artifact
@@ -24,7 +24,7 @@ def test_adopt_resolves_to_source_not_canonical():
 def test_adopt_records_pointer_at_canonical_address(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     (tmp_path / "pre_existing").mkdir()
-    run(adopt("datasets/external", "2026.06.28", source="pre_existing"))
+    run(ArtifactStep.adopt("datasets/external", "2026.06.28", source="pre_existing"))
 
     record = read_record(f"{tmp_path}/datasets/external/2026.06.28")
     assert record is not None
@@ -35,19 +35,19 @@ def test_adopt_records_pointer_at_canonical_address(tmp_path, monkeypatch):
 def test_readopt_same_source_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     (tmp_path / "src").mkdir()
-    run(adopt("datasets/x", "2026.06.28", source="src"))
-    run(adopt("datasets/x", "2026.06.28", source="src"))
+    run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="src"))
+    run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="src"))
 
 
 def test_readopt_different_source_warns(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
-    run(adopt("datasets/x", "2026.06.28", source="a"))
+    run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="a"))
 
     # A different source re-fingerprints: advisory warning, not an error.
     with caplog.at_level(logging.WARNING):
-        run(adopt("datasets/x", "2026.06.28", source="b"))
+        run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="b"))
     assert "drift" in "\n".join(r.getMessage() for r in caplog.records)
 
 
@@ -56,7 +56,7 @@ def test_adopting_missing_data_fails(tmp_path, monkeypatch):
     # The adopt step runs in a runner worker thread, so the missing-data error surfaces as
     # the runner's wrapping RuntimeError with the FileNotFoundError as its cause.
     with pytest.raises(RuntimeError) as exc_info:
-        run(adopt("datasets/x", "2026.06.28", source="does_not_exist"))
+        run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="does_not_exist"))
     causes = []
     err: BaseException | None = exc_info.value
     while err is not None:
@@ -67,7 +67,7 @@ def test_adopting_missing_data_fails(tmp_path, monkeypatch):
 
 def test_adopted_artifact_is_a_usable_dependency(tmp_path):
     (tmp_path / "tokens").mkdir()
-    tokens = adopt("datasets/tokens", "2026.06.28", source="tokens")
+    tokens = ArtifactStep.adopt("datasets/tokens", "2026.06.28", source="tokens")
     consumer = ArtifactStep(
         name="checkpoints/model",
         version="2026.06.28",
@@ -96,5 +96,5 @@ def test_adopt_and_pin_are_mutually_exclusive():
 def test_lower_adopted_handle_has_no_deps_guard(tmp_path, monkeypatch):
     """An adopted handle lowers cleanly (its recipe is the no-op adopt recipe)."""
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    spec = adopt("datasets/x", "2026.06.28", source="src").lower()
+    spec = ArtifactStep.adopt("datasets/x", "2026.06.28", source="src").lower()
     assert spec.override_output_path == "datasets/x/2026.06.28"

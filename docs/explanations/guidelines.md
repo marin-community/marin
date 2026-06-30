@@ -127,8 +127,8 @@ Notes:
   Instead, import the corresponding utility or experiment file that produced the
   artifact handle and depend on it directly. This makes the dependency structure
   explicit.
-- After the full experiment runs, use `adopt(name, version, source=...)` to
-  reference heavy completed artifacts as pre-existing data. This keeps them
+- After the full experiment runs, use `ArtifactStep.adopt(name, version, source=...)`
+  to reference heavy completed artifacts as pre-existing data. This keeps them
   visible in the dependency graph while preventing accidental re-execution.
 - When possible, use the standard helpers (e.g., `train_lm`, `default_eval`) if
   the configuration details are orthogonal to the aspect being varied in the

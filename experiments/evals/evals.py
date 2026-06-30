@@ -10,6 +10,7 @@ import re
 from collections.abc import Sequence
 
 from fray.cluster import ResourceConfig
+from marin.evaluation.eval_result import LevanterEvalResult
 from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
 from marin.evaluation.evaluators.harbor_evaluator import HARBOR_EVAL_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.run import evaluate
@@ -21,7 +22,7 @@ from marin.inference.vllm_server import validate_vllm_mode_env
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.evalchemy_results_compiler import compile_evalchemy_results_fn
+from experiments.evals.evalchemy_results_compiler import CompiledEvalResult, compile_evalchemy_results_fn
 from experiments.evals.evalchemy_task_configs import EVALCHEMY_CORE_TASKS
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
@@ -143,9 +144,13 @@ def evaluate_levanter_lm_evaluation_harness(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[LevanterEvalResult]:
     """
     Create an eval artifact for the model using Levanter LM Evaluation Harness.
+
+    The Levanter evaluator writes a single top-level ``results.json``, so the result is a typed
+    :class:`~marin.evaluation.eval_result.LevanterEvalResult` — ``resolve(...).averages()`` reads
+    the cross-task scores without touching the directory layout.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
     deps = _model_deps(model)
@@ -167,7 +172,7 @@ def evaluate_levanter_lm_evaluation_harness(
     return ArtifactStep(
         name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
         version="2026.06.28",
-        artifact_type=Artifact,
+        artifact_type=LevanterEvalResult,
         run=remote(evaluate, resources=resource_config, pip_dependency_groups=EVAL_DEPENDENCY_GROUPS),
         build_config=build_config,
         deps=deps,
@@ -181,7 +186,7 @@ def default_eval(
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
     discover_latest_checkpoint: bool = True,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[LevanterEvalResult]:
     """
     Create an eval artifact for the model using LM Evaluation Harness on a step.
 
@@ -217,7 +222,7 @@ def default_base_eval(
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
     discover_latest_checkpoint: bool = True,
-) -> list[ArtifactStep[Artifact]]:
+) -> list[ArtifactStep]:
     eval_jobs = []
     core_grouped = default_eval(
         step=step,
@@ -274,7 +279,7 @@ def default_sft_eval(
     run_generation_evals: bool = True,
     apply_chat_template: bool = True,
     use_levanter_inference: bool = False,
-) -> list[ArtifactStep[Artifact]]:
+) -> list[ArtifactStep]:
     eval_jobs = []
     leaderboard_grouped = default_eval(
         step=step,
@@ -347,7 +352,7 @@ def default_key_evals(
     model_name: str | None = None,
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
-) -> list[ArtifactStep[Artifact]]:
+) -> list[ArtifactStep]:
     """
     Create a list of eval artifacts for the model using LM Evaluation Harness.
     """
@@ -607,19 +612,18 @@ def compile_evalchemy_results(
     base_eval_run_name: str | None = None,
     model_path: str | None = None,
     task_name: str | None = None,
-) -> ArtifactStep[Artifact]:
+) -> ArtifactStep[CompiledEvalResult]:
     """
     Compile results from multiple Evalchemy evaluation artifacts into aggregated metrics.
 
     Takes a list of Artifacts from evalchemy evaluations and compiles the results into a
-    single DataFrame, then logs averaged results to wandb.
+    single DataFrame, then logs averaged results to wandb. The result is a typed
+    :class:`~experiments.evals.evalchemy_results_compiler.CompiledEvalResult` — ``.compiled()`` reads
+    the per-example records and ``.averaged()`` the cross-seed averages.
 
     Args:
         steps: List of Artifacts from evalchemy evaluations (one per seed).
         seeds: List of seeds used for the evaluations (for wandb config).
-
-    Returns:
-        Artifact that compiles and logs aggregated results.
     """
     if base_eval_run_name:
         step_match = re.search(r"step-(\d+)", model_path or "")
@@ -648,7 +652,7 @@ def compile_evalchemy_results(
     return ArtifactStep(
         name=compile_step_name,
         version="2026.06.28",
-        artifact_type=Artifact,
+        artifact_type=CompiledEvalResult,
         run=compile_evalchemy_results_fn,
         build_config=build_config,
         deps=tuple(steps),
@@ -663,7 +667,7 @@ def build_evalchemy_eval_steps(
     engine_kwargs: dict | None = None,
     apply_chat_template: bool = True,
     discover_latest_checkpoint: bool = False,
-) -> tuple[list[ArtifactStep[Artifact]], list[ArtifactStep[Artifact]]]:
+) -> tuple[list[ArtifactStep[Artifact]], list[ArtifactStep[CompiledEvalResult]]]:
     """Build evaluation and compilation artifacts for an evalchemy experiment.
 
     Creates one evaluation artifact per (checkpoint, task, seed) combination, plus
@@ -685,7 +689,7 @@ def build_evalchemy_eval_steps(
         Tuple of (eval_artifacts, compile_artifacts).
     """
     eval_steps: list[ArtifactStep[Artifact]] = []
-    compile_steps: list[ArtifactStep[Artifact]] = []
+    compile_steps: list[ArtifactStep[CompiledEvalResult]] = []
 
     for base_eval_run_name, checkpoint_paths in checkpoints.items():
         for checkpoint in checkpoint_paths:

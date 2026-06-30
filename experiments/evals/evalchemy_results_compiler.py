@@ -19,10 +19,43 @@ import fsspec
 import pandas as pd
 import wandb
 from marin.evaluation.evaluation_config import WANDB_PROJECT
+from marin.execution.artifact import Artifact
 from rigging.filesystem import filesystem as marin_filesystem
-from rigging.filesystem import open_url
+from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
+
+_COMPILED_FILE = "compiled_results.json"
+_AVERAGED_FILE = "averaged_results.json"
+
+
+def _read_json_records(path: str) -> list[dict]:
+    if not url_to_fs(path, use_listings_cache=False)[0].exists(path):
+        raise FileNotFoundError(path)
+    with open_url(path, "r") as f:
+        return json.load(f)
+
+
+class CompiledEvalResult(Artifact):
+    """The aggregated output of :func:`compile_evalchemy_results_fn`: per-example correctness and,
+    when seeds group cleanly, per-(model, task) averages across seeds.
+
+    Both files use a marin-owned schema this module writes, so the accessors are exact reads.
+    ``averaged_results.json`` is only written when the runs share grouping columns, so
+    :meth:`averaged` raises :class:`FileNotFoundError` when no averages were produced.
+    """
+
+    def compiled(self) -> list[dict]:
+        """Per-example records ``{id, correct, dataset_name, model_name}`` across every seed run."""
+        return _read_json_records(f"{self.path}/{_COMPILED_FILE}")
+
+    def averaged(self) -> list[dict]:
+        """Per-(model, task) records with ``<col>_mean`` / ``<col>_std`` / ``<col>_per_seed`` columns.
+
+        Raises :class:`FileNotFoundError` if the compile step produced no averages (the runs had no
+        common grouping columns).
+        """
+        return _read_json_records(f"{self.path}/{_AVERAGED_FILE}")
 
 
 def _extract_base_model_and_seed(model_name: str) -> tuple[str, int | None]:

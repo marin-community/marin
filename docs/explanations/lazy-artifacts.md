@@ -150,14 +150,14 @@ of the cache entirely and always rebuild.
 
 ## Adopting pre-existing data
 
-`adopt` brings data that already exists on disk into the lazy artifact graph without moving
-or recomputing it:
+`ArtifactStep.adopt` brings data that already exists on disk into the lazy artifact graph
+without moving or recomputing it:
 
 ```python
-from marin.execution.lazy import adopt
+from marin.execution.lazy import ArtifactStep
 from marin.processing.tokenize.tokenize import TokenizedCache
 
-dclm_tokenized = adopt(
+dclm_tokenized = ArtifactStep.adopt(
     "tokenized/dclm-baseline",
     "2026.06.28",
     source="gs://marin-us-central1/tokenized/dclm/...",
@@ -165,14 +165,16 @@ dclm_tokenized = adopt(
 )
 ```
 
+`kind` selects the handle's typed result, so a raw checkpoint path becomes a typed handle a
+consumer can read metrics from — e.g. `ArtifactStep.adopt(name, version, "gs://…", kind=LevanterCheckpoint)`.
 A consumer that depends on `dclm_tokenized` resolves to the source path. Lowering writes
 a provenance record at the canonical `{prefix}/{name}/{version}` path so the advisory drift
 check governs the alias — re-adopting the same `name@version` from a different source logs
 a warning.
 
-Use `adopt` for datasets tokenized outside the current experiment graph, for checkpoints
-produced by a separate run, or for any pre-existing artifact that needs to appear in the
-dependency graph with full provenance tracking.
+Use `ArtifactStep.adopt` for datasets tokenized outside the current experiment graph, for
+checkpoints produced by a separate run, or for any pre-existing artifact that needs to appear
+in the dependency graph with full provenance tracking.
 
 ## Data builders
 

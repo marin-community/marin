@@ -22,7 +22,7 @@ The model:
   *fingerprint* (the config built with dep versions in place of paths and placeholders for
   everything pulled from ``ctx``) is recorded for an advisory drift check, never in the path.
 
-Pre-existing data is brought in with :func:`adopt`. :func:`run` runs handles for their side
+Pre-existing data is brought in with :meth:`ArtifactStep.adopt`. :func:`run` runs handles for their side
 effects; :func:`resolve` runs one and loads its typed artifact. A custom step is
 just a function that constructs and returns an ``ArtifactStep`` (see ``marin.experiment.data`` /
 ``marin.experiment.train`` for the dataset and training builders) — there is no generic wrapper to
@@ -233,7 +233,7 @@ class ArtifactStep(Generic[T]):
     Mutually exclusive with ``adopt_source``."""
     adopt_source: str | None = None
     """Adopt pre-existing data at this location as a managed ``name@version`` (set via
-    :func:`adopt`). Consumers resolve to ``adopt_source``; running it writes a provenance
+    :meth:`ArtifactStep.adopt`). Consumers resolve to ``adopt_source``; running it writes a provenance
     record at the canonical address. Mutually exclusive with ``override_path``."""
     adopt_config: dict | None = None
     """For an adopted artifact, the synthetic ``config`` to record (e.g. a tokenized cache's
@@ -282,37 +282,39 @@ class ArtifactStep(Generic[T]):
         """
         return _lower(self, Provenance.capture())
 
+    @classmethod
+    def adopt(
+        cls,
+        name: str,
+        version: str,
+        source: str,
+        *,
+        kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
+        config: dict | None = None,
+    ) -> "ArtifactStep[T]":
+        """Register pre-existing data at ``source`` as a managed ``name@version`` handle.
+
+        The data is neither moved nor recomputed: a consumer that depends on the returned handle
+        resolves to ``source``. Running it writes a provenance record at the canonical
+        ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
+        ``artifact_type`` for consumer routing (:class:`Artifact` by default), so a raw checkpoint
+        path becomes a typed handle: ``ArtifactStep.adopt(name, version, "gs://…", kind=LevanterCheckpoint)``.
+        ``config`` records synthetic metadata (e.g. a tokenized cache's tokenizer/format) so
+        consumers read it the same way as for a produced artifact.
+        """
+        return cls(
+            name=name,
+            version=version,
+            artifact_type=kind,
+            run=_adopt_noop,
+            build_config=lambda _ctx: None,
+            adopt_source=source,
+            adopt_config=config,
+        )
+
 
 def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
-
-
-def adopt(
-    name: str,
-    version: str,
-    source: str,
-    *,
-    kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
-    config: dict | None = None,
-) -> "ArtifactStep[T]":
-    """Register pre-existing data at ``source`` as a managed ``name@version``.
-
-    The data is neither moved nor recomputed: a consumer that depends on the returned handle
-    resolves to ``source``. Running it writes a provenance record at the canonical
-    ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
-    ``artifact_type`` for consumer routing (:class:`Artifact` by default). ``config`` records
-    synthetic metadata (e.g. a tokenized cache's tokenizer/format) so consumers read it the same
-    way as for a produced artifact.
-    """
-    return ArtifactStep(
-        name=name,
-        version=version,
-        artifact_type=kind,
-        run=_adopt_noop,
-        build_config=lambda _ctx: None,
-        adopt_source=source,
-        adopt_config=config,
-    )
 
 
 def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
