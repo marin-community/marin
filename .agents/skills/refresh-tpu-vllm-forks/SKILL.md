@@ -45,6 +45,16 @@ titled `TPU-vLLM fork refresh blocked: <short reason>`, with current pins,
 selected release, branch names/SHAs if created, attempted fixes, remaining
 failure, artifacts, and the logs Gist.
 
+## Post-Merge Follow-Up
+
+This skill does not run post-merge fork-main promotion. A successful refresh run
+stops after opening the Marin PR; if blocked, it stops after filing or updating
+the blocker issue.
+
+After the Marin PR has merged and Marin `main` contains the new exact fork SHA
+pins, a separate operator may run the post-merge protocol in
+`docs/post-merge-protocol.md`.
+
 ## Workspace Setup
 
 - Marin working copy:
