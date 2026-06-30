@@ -198,18 +198,18 @@ def test_scatter_handles_arbitrary_python_objects(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_scatter_byte_budget_flushes_mid_write(tmp_path):
+def test_scatter_byte_budget_flushes_mid_write(tmp_path, monkeypatch):
     """A tiny byte budget forces flushes during write, not only at close."""
     num_shards = 2
     items = [{"k": i % num_shards, "v": i} for i in range(200)]
     data_path = str(tmp_path / "shard-0000.shuffle")
 
     # Budget of 1 byte forces a flush on every write after the first.
+    monkeypatch.setattr("zephyr.shuffle._default_scatter_write_buffer_bytes", lambda: 1)
     writer = ScatterWriter(
         data_path=data_path,
         key_fn=_key,
         num_output_shards=num_shards,
-        buffer_limit_bytes=1,
     )
     for item in items:
         writer.write(item)
@@ -221,7 +221,7 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
     assert total_chunks > 2, f"expected >2 chunks with 1-byte budget, got {total_chunks}"
 
 
-def test_scatter_estimate_tracks_skewed_items(tmp_path):
+def test_scatter_estimate_tracks_skewed_items(tmp_path, monkeypatch):
     """Write-time EMA sampling catches large late items and triggers mid-write flushes."""
     num_shards = 1
     data_path = str(tmp_path / "shard-0000.shuffle")
@@ -235,11 +235,11 @@ def test_scatter_estimate_tracks_skewed_items(tmp_path):
     # Budget large enough that small items alone never flush, but one large
     # item should push the estimate over threshold quickly.
     budget = 10_000  # 10 KB — well under 10 * 50 KB large items
+    monkeypatch.setattr("zephyr.shuffle._default_scatter_write_buffer_bytes", lambda: budget)
     writer = ScatterWriter(
         data_path=data_path,
         key_fn=_key,
         num_output_shards=num_shards,
-        buffer_limit_bytes=budget,
     )
     for item in small_items + large_items:
         writer.write(item)
@@ -256,7 +256,7 @@ def test_scatter_estimate_tracks_skewed_items(tmp_path):
     assert writer._mid_write_flushes > 0, "expected mid-write flushes for large items"
 
 
-def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
+def test_scatter_estimate_adapts_to_gradual_drift(tmp_path, monkeypatch):
     """Write-time EMA bounds peak buffered rows even when item sizes grow gradually."""
     num_shards = 1
     data_path = str(tmp_path / "shard-0000.shuffle")
@@ -271,11 +271,11 @@ def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
     # all items accumulate. With EMA adaptation the estimate tracks the growing
     # sizes and flushes before peak RSS reaches the budget.
     budget = 500_000
+    monkeypatch.setattr("zephyr.shuffle._default_scatter_write_buffer_bytes", lambda: budget)
     writer = ScatterWriter(
         data_path=data_path,
         key_fn=_key,
         num_output_shards=num_shards,
-        buffer_limit_bytes=budget,
     )
     for item in items:
         writer.write(item)

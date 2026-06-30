@@ -128,7 +128,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
         if finelog_url:
             stats_writer = StatsWriter.connect(finelog_url)
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
 

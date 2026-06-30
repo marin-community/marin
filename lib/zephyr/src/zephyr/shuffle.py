@@ -50,6 +50,7 @@ from rigging.filesystem import is_remote_path, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.shard_keys import composite_sort_key, deterministic_hash
+from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
@@ -124,13 +125,17 @@ _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 
 
 def _default_scatter_write_buffer_bytes() -> int:
-    """Return the scatter write buffer budget based on the cgroup memory limit.
+    """Return the scatter write buffer budget for this task.
 
-    Uses 25% of the container memory limit so the budget scales with the
-    worker size, divided by the number of concurrent workers sharing this
-    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
-    cgroup limit cannot be read.
+    Prefers the per-task memory budget from the worker context (set from
+    ``ShardTask.cost.memory``, which already accounts for concurrent tasks
+    sharing the actor's RAM). Falls back to reading the full cgroup limit when
+    no per-task budget is set (e.g. in tests or when cost is zero), and to
+    256 MB when the cgroup limit cannot be read.
     """
+    task_memory = zephyr_worker_ctx().task_memory_bytes
+    if task_memory > 0:
+        return int(task_memory * _SCATTER_WRITE_BUFFER_FRACTION)
     memory = TaskResources.from_environment().memory_bytes
     if memory > 0:
         return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
@@ -484,8 +489,8 @@ class ScatterWriter:
     written on close.
 
     Flushing is byte-budget-based: when the estimated total bytes across all
-    shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.
-    This bounds peak RSS regardless of item count or output shard count.
+    shard buffers exceeds a configurable byte budget, the largest buffer is
+    flushed. This bounds peak RSS regardless of item count or output shard count.
     """
 
     def __init__(
@@ -496,16 +501,13 @@ class ScatterWriter:
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
-        buffer_limit_bytes: int | None = None,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
         self._num_output_shards = num_output_shards
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._buffer_limit_bytes = (
-            buffer_limit_bytes if buffer_limit_bytes is not None else _default_scatter_write_buffer_bytes()
-        )
+        self._buffer_limit_bytes = _default_scatter_write_buffer_bytes()
 
         self._sort_key = composite_sort_key(key_fn, sort_fn)
 
@@ -694,7 +696,6 @@ def _write_scatter(
     num_output_shards: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
-    buffer_limit_bytes: int | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and append zstd chunks.
 
@@ -711,7 +712,6 @@ def _write_scatter(
         source_shard=source_shard,
         sort_fn=sort_fn,
         combiner_fn=combiner_fn,
-        buffer_limit_bytes=buffer_limit_bytes,
     ) as writer:
         for item in items:
             writer.write(item)

@@ -56,8 +56,8 @@ from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
     StageRunner,
-    TaskResources,
     TaskResult,
+    ZephyrTaskResources,
     ZephyrWorkerError,
     _ensure_picklable_exception,
     _shared_data_path,
@@ -298,8 +298,8 @@ class ZephyrCoordinator:
         self._current_stage: PhysicalStage | None = None
         # Per-task resource cost computed from worker_resources / workers_per_actor.
         # Stored by stage type so _run_worker_stage can bake costs into ShardTasks.
-        self._map_cost: TaskResources = TaskResources()
-        self._reduce_cost: TaskResources = TaskResources()
+        self._map_cost: ZephyrTaskResources = ZephyrTaskResources()
+        self._reduce_cost: ZephyrTaskResources = ZephyrTaskResources()
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
@@ -326,8 +326,8 @@ class ZephyrCoordinator:
         heartbeat_timeout: float = 120.0,
         max_shard_failures: int = MAX_SHARD_FAILURES,
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
-        map_cost: TaskResources = TaskResources(),
-        reduce_cost: TaskResources = TaskResources(),
+        map_cost: ZephyrTaskResources = ZephyrTaskResources(),
+        reduce_cost: ZephyrTaskResources = ZephyrTaskResources(),
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
@@ -372,8 +372,7 @@ class ZephyrCoordinator:
         Handles re-registration from reconstructed workers (e.g. after node
         preemption) by updating the stale handle and resetting worker state.
 
-        Returns the current stage epoch (unused by the new single-pool worker
-        but kept for API compatibility).
+        Returns the current stage epoch.
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -652,7 +651,7 @@ class ZephyrCoordinator:
     def pull_task(
         self,
         worker_id: str,
-        available: TaskResources = TaskResources(),
+        available: ZephyrTaskResources = ZephyrTaskResources(),
     ) -> tuple[PullStatus, tuple[ShardTask, int, dict] | None]:
         """Called by workers to get next task.
 
@@ -1155,23 +1154,17 @@ class ZephyrWorker:
     """Long-lived worker actor with a single poll loop and per-task threads.
 
     The worker registers once with the coordinator, then loops: polls with its
-    current available ``TaskResources``, spins off a thread per dispatched task,
+    current available ``ZephyrTaskResources``, spins off a thread per dispatched task,
     and immediately polls again. The coordinator dispatches when the worker's
     available resources can fit the next task's cost; otherwise it returns
-    NO_WORK_BACKOFF. When a task thread finishes it restores the deducted cost
-    and signals the poll loop (via ``_task_completed_event``) to wake early.
-
-    Concurrency is controlled by ``TaskResources``: each task carries a cost
-    computed by the coordinator from ``worker_resources / workers_per_actor``.
-    The worker deducts the cost on acceptance and restores it on completion,
-    naturally limiting in-flight concurrency without a separate slot counter.
+    NO_WORK_BACKOFF.
     """
 
     def __init__(
         self,
         coordinator_handle: ActorHandle,
         stage_runner_factory: Callable[[], StageRunner] | None = None,
-        total_resources: TaskResources = TaskResources(),
+        total_resources: ZephyrTaskResources = ZephyrTaskResources(),
     ):
         # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
         # the fallback covers callers that construct a worker directly (tests).
@@ -1192,7 +1185,7 @@ class ZephyrWorker:
         # Resource pool: each accepted task deducts its cost and restores it on
         # completion. The coordinator gates dispatch on the available amount,
         # so the pool implicitly limits concurrency.
-        self._available: TaskResources = total_resources
+        self._available: ZephyrTaskResources = total_resources
         self._resources_lock = threading.Lock()
         # Set by task threads on completion so the poll loop wakes early.
         self._task_completed_event = threading.Event()
@@ -1579,15 +1572,15 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     # body raises and the Iris task will be stuck RUNNING.
     try:
         # Compute per-task resource costs from worker spec and concurrency limits.
-        total = TaskResources(
+        total = ZephyrTaskResources(
             cpu=config.worker_resources.cpu,
             memory=int(humanfriendly.parse_size(config.worker_resources.ram, binary=True)),
         )
-        map_cost = TaskResources(
+        map_cost = ZephyrTaskResources(
             cpu=total.cpu / max(1, config.map_workers_per_actor),
             memory=total.memory // max(1, config.map_workers_per_actor),
         )
-        reduce_cost = TaskResources(
+        reduce_cost = ZephyrTaskResources(
             cpu=total.cpu / max(1, config.reduce_workers_per_actor),
             memory=total.memory // max(1, config.reduce_workers_per_actor),
         )
@@ -2007,7 +2000,7 @@ def _compute_tasks_from_shards(
     stage: PhysicalStage,
     stage_name: str,
     aux_per_shard: list[dict[int, Shard]] | None = None,
-    cost: TaskResources = TaskResources(),
+    cost: ZephyrTaskResources = ZephyrTaskResources(),
 ) -> list[ShardTask]:
     """Convert shard references into ShardTasks for the coordinator."""
     total = len(shard_refs)

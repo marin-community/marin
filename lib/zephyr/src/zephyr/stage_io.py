@@ -254,19 +254,19 @@ def _write_stage_output(
 
 
 @dataclass
-class TaskResources:
+class ZephyrTaskResources:
     """CPU and memory budget for a single task or worker resource pool."""
 
     cpu: float = 0.0
     memory: int = 0
 
-    def __add__(self, other: "TaskResources") -> "TaskResources":
-        return TaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
+    def __add__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
 
-    def __sub__(self, other: "TaskResources") -> "TaskResources":
-        return TaskResources(cpu=self.cpu - other.cpu, memory=self.memory - other.memory)
+    def __sub__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
+        return ZephyrTaskResources(cpu=self.cpu - other.cpu, memory=self.memory - other.memory)
 
-    def can_fit(self, cost: "TaskResources") -> bool:
+    def can_fit(self, cost: "ZephyrTaskResources") -> bool:
         return self.cpu >= cost.cpu and (cost.memory == 0 or self.memory >= cost.memory)
 
 
@@ -280,7 +280,7 @@ class ShardTask:
     operations: list[PhysicalOp]
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
-    cost: TaskResources = field(default_factory=TaskResources)
+    cost: ZephyrTaskResources = field(default_factory=ZephyrTaskResources)
 
 
 class StageRunner(Protocol):
