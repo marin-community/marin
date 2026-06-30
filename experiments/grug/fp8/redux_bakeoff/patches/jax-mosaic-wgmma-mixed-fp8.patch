@@ -1,0 +1,92 @@
+# EXTERNAL-DEPENDENCY PATCH (jax) — enable mixed E4M3 x E5M2 wgmma on Hopper
+#
+# Why: the genuine-fp8 grouped GEMM (Mosaic-GPU) is the only in-JAX backend that beats bf16
+# (measured 1.23x fwd+bwd on H100, all-E4M3). The required mixed recipe — E5M2 output-grad x
+# E4M3 weight/act in the backward — is BLOCKED purely by a JAX software gate:
+#   jax/experimental/mosaic/gpu/wgmma.py rejects A.dtype != B.dtype, and hardcodes the PTX
+#   atype to the B-operand's dtype (`.{el_ty}.{el_ty}`).
+# Hopper wgmma DOES support mixed fp8: PTX ISA 9.3 defines `wgmma.mma_async ... .dtype.atype.btype`
+# with independent atype/btype. So this is a ~15-line emitter fix, not a hardware limit.
+# Empirically confirmed on H100: requesting grad_dtype=float8_e5m2 on the mosaic path raises
+# "lhs and rhs must have the same dtype, got float8_e5m2 and float8_e4m3fn".
+#
+# Status: STRUCTURED AGAINST jax 0.10.0 wgmma.py; needs a final H100 compile/numerics check
+# (line numbers approximate — match by context). After this lands, set the haliax mosaic path's
+# grad_dtype=float8_e5m2 (instead of forcing all-E4M3) to get the standard E5M2 backward.
+
+--- a/jax/experimental/mosaic/gpu/wgmma.py
++++ b/jax/experimental/mosaic/gpu/wgmma.py
+@@ -110,6 +110,16 @@
++def _wgmma_ptx_el_ty(element_type: ir.Type) -> str:
++  """PTX operand type string for one wgmma operand (allows A != B for mixed FP8)."""
++  if isinstance(element_type, ir.Float8E5M2Type):
++    return "e5m2"
++  if isinstance(element_type, ir.Float8E4M3FNType):
++    return "e4m3"
++  if isinstance(element_type, ir.IntegerType):
++    return "s8"  # current code always treats 8-bit ints as s8
++  return str(element_type)
++
++
+ def wgmma_m64(
+     acc: np.ndarray,  # of register Values
+     a,
+@@ -125,6 +135,7 @@ def wgmma_m64(
+     n: int,
+     swizzle: int,
+     element_type: ir.Type,
++    a_element_type: ir.Type | None = None,   # A-operand dtype; defaults to element_type (B)
+ ):
+   out_ty = ir.VectorType(acc.flat[0].type).element_type
+   if not _supported_wgmma_types(out_ty, element_type):
+@@ -223,15 +234,10 @@ def wgmma_m64(
+   k_instr = 32 // bytewidth(element_type)
+-  el_ty = str(element_type)
+-  if isinstance(element_type, ir.Float8E5M2Type):
+-    el_ty = "e5m2"
+-  elif isinstance(element_type, ir.Float8E4M3FNType):
+-    el_ty = "e4m3"
+-  elif isinstance(element_type, ir.IntegerType):
+-    # TODO(bchetioui): add u8 support in the future. Currently we always assume
+-    # that 8-bit integers are s8, and we would need to change the signature of
+-    # `wgmma` to indicate whether the input should be treated as signed or not.
+-    el_ty = "s8"
++  # PTX wgmma is `.dtype.atype.btype` with independent atype/btype; emit them
++  # separately so a mixed FP8 pair (e.g. E5M2 grad x E4M3 weight) lowers correctly.
++  b_el_ty = _wgmma_ptx_el_ty(element_type)
++  a_el_ty = _wgmma_ptx_el_ty(a_element_type if a_element_type is not None else element_type)
+
+   out_ty_str = str(out_ty)
+   if out_ty == i32:
+     out_ty_str = "s32"
+
+   wgmma_instr = (
+-      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{el_ty}.{el_ty} "
++      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty_str}.{a_el_ty}.{b_el_ty} "
+       f"{acc_reg_vector}, {a_regs}, {b_desc_reg}, p{imm_regs};"
+   )
+@@ -355,11 +361,17 @@ def wgmma(
+-  if element_type != element_type2:
+-    raise ValueError(
+-        "WGMMA requires A and B to have the same element type, got:"
+-        f" {element_type2} and {element_type}"
+-    )
++  _FP8 = (ir.Float8E5M2Type, ir.Float8E4M3FNType)
++  _both_fp8 = any(isinstance(element_type, t) for t in _FP8) and any(
++      isinstance(element_type2, t) for t in _FP8
++  )
++  if element_type != element_type2 and not _both_fp8:
++    raise ValueError(
++        "WGMMA requires A and B to have the same element type (mixed FP8 E4M3/E5M2"
++        f" excepted — Hopper supports it), got: {element_type2} and {element_type}"
++    )
+
+# ... and at the call site where wgmma() invokes wgmma_m64(...), thread A's dtype through:
+#     wgmma_m64(
+#         acc, a, b_descriptor, ...,
+#         element_type=wgmma_element_type,
+# +       a_element_type=element_type2,
+#     )
+# (element_type2 is A's dtype, already computed above as `(m, k2), element_type2 = ...`.)
+# For FP8 both operands are 1 byte, so all stride/swizzle/k_group math (keyed on
+# bytewidth(element_type)) is unchanged; only the emitted PTX atype differs.
