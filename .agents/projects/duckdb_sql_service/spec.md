@@ -14,11 +14,19 @@ lib/ducky/
     config.py                    # DuckyConfig + constants
     runner.py                    # QueryRunner, QueryResult, errors
     server.py                    # Starlette app + `python -m ducky.server` entrypoint
-    deploy.py                    # `python -m ducky.deploy` — submits the Iris job (ports=["ducky"])
+    deploy.py                    # submit the Iris job (ports=["ducky"])
+    client.py                    # `ducky query` — POST /query + poll /result, print table/json
+    cli.py                       # `ducky` command group: `ducky deploy` + `ducky query`
   tests/
     test_runner.py
     test_server.py
+    test_client.py
 ```
+
+The `ducky query` CLI talks to the service over a base URL (default
+`http://127.0.0.1:10000/proxy/ducky`, the local controller tunnel from
+`iris cluster dashboard`): `ducky query "SELECT …"` submits, polls, and prints the
+preview as a table plus a stats line; `--format json` prints the raw `/result` JSON.
 
 ## Constants / config (`config.py`)
 
