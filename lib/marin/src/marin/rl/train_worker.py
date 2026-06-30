@@ -42,7 +42,7 @@ from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
-from .rl_losses import RLLossModule
+from .rl_losses import DrGRPOLoss, RLLossModule
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_training_batch_from_rollouts
 
@@ -132,6 +132,26 @@ def _training_step_timing_metrics(step_duration: float, batch_prep_timing: Batch
     }
 
 
+def _validate_dr_grpo_train_response_budget(curriculum_config: CurriculumConfig, loss: RLLossModule) -> None:
+    if not isinstance(loss, DrGRPOLoss):
+        return
+
+    mismatched_budgets = {
+        lesson_id: lesson.sampling_params.train_decoding.max_output_tokens
+        for lesson_id, lesson in curriculum_config.lessons.items()
+        if lesson.sampling_params.train_decoding.max_output_tokens != loss.max_output_tokens
+    }
+    if not mismatched_budgets:
+        return
+
+    lesson_summary = ", ".join(f"{lesson_id}={budget}" for lesson_id, budget in sorted(mismatched_budgets.items()))
+    raise ValueError(
+        "DrGRPOLoss requires every lesson's train_decoding.max_output_tokens to match "
+        "DrGRPOLoss.max_output_tokens. "
+        f"DrGRPOLoss.max_output_tokens={loss.max_output_tokens}; mismatched lessons: {lesson_summary}"
+    )
+
+
 @dataclass
 class TrainWorkerConfig:
     """Configuration for Levanter-based RL training worker."""
@@ -156,6 +176,9 @@ class TrainWorkerConfig:
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
+
+    def __post_init__(self):
+        _validate_dr_grpo_train_response_budget(self.curriculum_config, self.loss)
 
 
 class StreamingRolloutLoader:
@@ -183,8 +206,9 @@ class StreamingRolloutLoader:
         self.config = config
         self.timeout = 60.0
 
-        # Get max_seq_len from curriculum (total sequence length for prompt + response)
-        self.max_tokens = self.config.curriculum_config.max_seq_len
+        # Track total sequence length separately from the response budget used by fixed-budget RL losses.
+        self.max_seq_len = self.config.curriculum_config.max_seq_len
+        self.max_output_tokens = self.config.curriculum_config.max_train_output_tokens
 
         is_splash = getattr(self.config.model, "attn_backend", None) == AttentionBackend.SPLASH
         flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
@@ -229,7 +253,11 @@ class StreamingRolloutLoader:
             # Measure batch creation time
             batch_start = time.time()
             batch = create_training_batch_from_rollouts(
-                rollouts, self.max_tokens, self.pad_token_id, self.pad_to_multiple
+                rollouts,
+                self.max_seq_len,
+                self.max_output_tokens,
+                self.pad_token_id,
+                self.pad_to_multiple,
             )
             batch_time = time.time() - batch_start
 

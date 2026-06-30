@@ -5,6 +5,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 import equinox as eqx
@@ -49,6 +50,15 @@ class RLLossModule(Protocol):
         ...
 
 
+class PolicyGradientReducer(StrEnum):
+    """How response-token policy-gradient objectives are reduced to a scalar."""
+
+    PER_SEQUENCE_TOKEN_MEAN = "per_sequence_token_mean"
+    ACTIVE_TOKEN_MEAN = "active_token_mean"
+    CURRENT_BATCH_TOKEN_NORMALIZED = "current_batch_token_normalized"
+    FIXED_RESPONSE_BUDGET = "fixed_response_budget"
+
+
 def compute_metadata_metrics(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
@@ -57,20 +67,24 @@ def compute_metadata_metrics(
 ) -> dict[str, Metric]:
     """Compute metadata metrics for the loss function."""
     batch_size, _ = policy_logprobs_array.shape
+    response_token_counts = jnp.sum(loss_masks_array, axis=1)
+    safe_response_token_counts = jnp.maximum(response_token_counts, 1.0)
+    total_response_tokens = jnp.maximum(jnp.sum(loss_masks_array), 1.0)
 
-    mean_ratio_difference = jnp.sum(
-        (jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array, axis=1
-    ) / jnp.sum(loss_masks_array, axis=1)
+    mean_ratio_difference = (
+        jnp.sum((jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array, axis=1)
+        / safe_response_token_counts
+    )
     mean_ratio_difference = jnp.mean(mean_ratio_difference)
 
     flattened_current_logprobs = current_logprobs.reshape(-1)
     flattened_policy_logprobs = policy_logprobs_array.reshape(-1)
     flattened_loss_masks = loss_masks_array.reshape(-1)
 
-    policy_entropy = -jnp.sum(flattened_policy_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
-    current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
+    policy_entropy = -jnp.sum(flattened_policy_logprobs * flattened_loss_masks) / total_response_tokens
+    current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / total_response_tokens
 
-    mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+    mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / safe_response_token_counts
     mean_advantages = jnp.mean(mean_advantages)
 
     max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
@@ -225,6 +239,8 @@ def compute_ppo_loss_objective(
     *,
     clip_epsilon_low: float,
     clip_epsilon_high: float,
+    reducer: PolicyGradientReducer,
+    fixed_response_budget: int | None = None,
     trainer_inference_importance_sampling_ratio: jax.Array | None = None,
     response_truncated_array: jax.Array | None = None,  # [batch]
 ):
@@ -240,14 +256,23 @@ def compute_ppo_loss_objective(
     if trainer_inference_importance_sampling_ratio is not None:
         loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
 
+    effective_loss_masks = loss_masks
     if response_truncated_array is not None:
         batch_size, _ = loss_objective.shape
-        loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
+        response_truncated_array = jnp.asarray(response_truncated_array, dtype=loss_objective.dtype)
+        response_keep_mask = 1.0 - response_truncated_array.reshape(batch_size, 1)
+        loss_objective = loss_objective * response_keep_mask
+        effective_loss_masks = loss_masks * response_keep_mask
 
-    # Default to DAPO loss (matches original active behavior)
-    loss = compute_dapo_loss(loss_objective, loss_masks)
+    loss = reduce_policy_gradient_loss(
+        loss_objective,
+        effective_loss_masks,
+        reducer,
+        fixed_response_budget=fixed_response_budget,
+    )
 
-    per_batch_loss = jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
+    per_batch_loss_denominator = jnp.maximum(jnp.sum(effective_loss_masks, axis=1), 1.0)
+    per_batch_loss = jnp.sum(loss_objective * effective_loss_masks, axis=1) / per_batch_loss_denominator
     metadata = {
         "loss_max_over_batch": Metric.from_value((-jnp.max(per_batch_loss)).astype(jnp.float32), ReductionType.MAX),
         "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
@@ -255,15 +280,33 @@ def compute_ppo_loss_objective(
     return loss, metadata
 
 
-def compute_dapo_loss(
+def reduce_policy_gradient_loss(
     loss_objective: jax.Array,
     loss_masks: jax.Array,
+    reducer: PolicyGradientReducer,
+    *,
+    fixed_response_budget: int | None = None,
 ) -> jax.Array:
-    """Compute DAPO-like loss (global token normalization).
+    """Reduce a token-level policy-gradient objective to a scalar loss."""
+    per_sequence_objective = jnp.sum(loss_objective * loss_masks, axis=1)
 
-    Divides by total tokens across all examples in the batch, not per-example.
-    """
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    if reducer == PolicyGradientReducer.PER_SEQUENCE_TOKEN_MEAN:
+        return -1 * jnp.mean(per_sequence_objective / jnp.maximum(jnp.sum(loss_masks, axis=1), 1.0))
+
+    if reducer == PolicyGradientReducer.ACTIVE_TOKEN_MEAN:
+        return -1 * jnp.sum(per_sequence_objective) / jnp.maximum(jnp.sum(loss_masks), 1.0)
+
+    if reducer == PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED:
+        return -1 * jnp.mean(per_sequence_objective / jnp.maximum(jnp.sum(loss_masks), 1.0))
+
+    if reducer == PolicyGradientReducer.FIXED_RESPONSE_BUDGET:
+        if fixed_response_budget is None:
+            raise ValueError("fixed_response_budget is required for FIXED_RESPONSE_BUDGET reduction")
+        if fixed_response_budget <= 0:
+            raise ValueError(f"fixed_response_budget must be positive, got {fixed_response_budget}")
+        return -1 * jnp.mean(per_sequence_objective / fixed_response_budget)
+
+    raise ValueError(f"Unknown policy-gradient reducer: {reducer}")
 
 
 def importance_sampling_ratio(
@@ -284,7 +327,7 @@ def importance_sampling_ratio(
     return prob_difference
 
 
-def rloo_loss_with_importance_sampling(
+def policy_gradient_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel | None,
     batch: TrainingBatch,
@@ -298,18 +341,22 @@ def rloo_loss_with_importance_sampling(
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
     log_policy_entropy: bool = False,
+    reducer: PolicyGradientReducer,
+    fixed_response_budget: int | None = None,
     compute_policy_stats_fn: Callable = compute_logprobs_and_entropy,
 ) -> tuple[jax.Array, dict[str, Metric]]:
-    """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
+    """Compute clipped policy-gradient loss with importance sampling for off-policy data.
 
     Args:
         model: The language model
-        batch: Training batch containing rollout data with RLOO advantages
+        batch: Training batch containing rollout data with precomputed advantages
         key: JAX random key for dropout
         kl: KL regularization configuration
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
         log_policy_entropy: Whether to log exact full-vocabulary policy entropy
+        reducer: Reduction rule for the token-level policy-gradient objective
+        fixed_response_budget: Fixed response budget for Dr.GRPO-style reduction
         compute_policy_stats_fn: Function to compute logprobs and optional entropy
 
     Returns:
@@ -318,6 +365,11 @@ def rloo_loss_with_importance_sampling(
     policy_logprobs_array = batch.policy_logprobs.array
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
+    effective_loss_masks_array = loss_masks_array
+    if do_overlong_filtering:
+        batch_size, _ = loss_masks_array.shape
+        truncated_array = jnp.asarray(batch.truncated, dtype=loss_masks_array.dtype)
+        effective_loss_masks_array = loss_masks_array * (1.0 - truncated_array.reshape(batch_size, 1))
 
     # Get logits from current policy
     current_logprobs, current_policy_entropy = compute_policy_stats_fn(
@@ -344,7 +396,8 @@ def rloo_loss_with_importance_sampling(
 
     # Compute fraction of ratios that were clipped
     is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon_high, ratio < 1.0 - clip_epsilon_low)
-    clip_fraction = jnp.mean(jnp.sum(is_clipped * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
+    effective_response_token_counts = jnp.maximum(jnp.sum(effective_loss_masks_array, axis=1), 1.0)
+    clip_fraction = jnp.mean(jnp.sum(is_clipped * effective_loss_masks_array, axis=1) / effective_response_token_counts)
 
     if do_trainer_inference_mismatch_importance_sampling:
         trainer_inference_importance_sampling_ratio = importance_sampling_ratio(
@@ -366,19 +419,18 @@ def rloo_loss_with_importance_sampling(
         loss_masks=loss_masks_array,
         clip_epsilon_low=clip_epsilon_low,
         clip_epsilon_high=clip_epsilon_high,
+        reducer=reducer,
+        fixed_response_budget=fixed_response_budget,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
         response_truncated_array=batch.truncated if do_overlong_filtering else None,
     )
 
-    # RLOO loss with importance sampling
-    # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    # weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
-    # KL regularization
+    # KL regularization is additive to the clipped policy-gradient objective.
 
     log_ratio = jnp.zeros_like(current_logprobs)
     kl_penalty = jnp.zeros_like(current_logprobs)
     kl_loss = jnp.asarray(0.0, dtype=current_logprobs.dtype)
-    kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
+    kl_statistics = kl_statistics_from_log_ratio(log_ratio, effective_loss_masks_array)
     if kl.enabled():
         if reference_model is None:
             raise ValueError("reference_model is required when KL regularization is enabled")
@@ -388,18 +440,20 @@ def rloo_loss_with_importance_sampling(
         reference_logprobs = reference_logprobs * loss_masks_array
         log_ratio = token_log_ratio(current_logprobs, reference_logprobs)
         kl_penalty = kl_penalty_from_log_ratio(log_ratio, kl.mode)
-        kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
-        kl_loss = kl.beta * masked_response_mean(kl_penalty, loss_masks_array)
+        kl_statistics = kl_statistics_from_log_ratio(log_ratio, effective_loss_masks_array)
+        kl_loss = kl.beta * masked_response_mean(kl_penalty, effective_loss_masks_array)
 
     loss = reinforce_loss + kl_loss
 
     trainer_inference_importance_sampling_ratio_mean = jnp.mean(
-        jnp.sum(trainer_inference_importance_sampling_ratio * loss_masks_array, axis=1)
-        / jnp.sum(loss_masks_array, axis=1)
+        jnp.sum(trainer_inference_importance_sampling_ratio * effective_loss_masks_array, axis=1)
+        / effective_response_token_counts
     )
-    ratio_mean_over_responses_only = jnp.mean(jnp.sum(ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
+    ratio_mean_over_responses_only = jnp.mean(
+        jnp.sum(ratio * effective_loss_masks_array, axis=1) / effective_response_token_counts
+    )
     clipped_ratio_mean_over_responses_only = jnp.mean(
-        jnp.sum(clipped_ratio * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+        jnp.sum(clipped_ratio * effective_loss_masks_array, axis=1) / effective_response_token_counts
     )
 
     metrics = {
@@ -419,14 +473,20 @@ def rloo_loss_with_importance_sampling(
         ),
         "temperature": Metric.from_value(jnp.mean(batch.temperature.array).astype(jnp.float32), ReductionType.MEAN),
         "top_k": Metric.from_value(jnp.mean(batch.top_k.array).astype(jnp.float32), ReductionType.MEAN),
-        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
+        **compute_metadata_metrics(
+            current_logprobs, policy_logprobs_array, loss_weights_array, effective_loss_masks_array
+        ),
         **metadata,
     }
+    if do_overlong_filtering:
+        metrics["hard_overlong_filtered_fraction"] = Metric.from_value(
+            jnp.mean(jnp.asarray(batch.truncated, dtype=jnp.float32)), ReductionType.MEAN
+        )
 
     if log_policy_entropy:
         if current_policy_entropy is None:
             raise ValueError("compute_policy_stats_fn must return entropy when log_policy_entropy=True")
-        policy_entropy = masked_response_mean(current_policy_entropy, loss_masks_array)
+        policy_entropy = masked_response_mean(current_policy_entropy, effective_loss_masks_array)
         metrics["current_policy_entropy"] = Metric.from_value(
             jax.lax.stop_gradient(policy_entropy).astype(jnp.float32), ReductionType.MEAN
         )
@@ -436,7 +496,7 @@ def rloo_loss_with_importance_sampling(
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
-    rewards = np.array([r.episode_reward for r in rollouts])
+    rewards = np.asarray([r.episode_reward for r in rollouts], dtype=np.float32)
 
     n = len(rewards)
     if n <= 1:
@@ -446,6 +506,54 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
     return advantages
+
+
+def compute_group_centered_advantages(
+    rollouts: list[Rollout],
+    *,
+    normalize_by_std: bool,
+    epsilon: float = 1e-6,
+) -> np.ndarray:
+    """Compute group-relative advantages for GRPO-style objectives."""
+    rewards = np.asarray([r.episode_reward for r in rollouts], dtype=np.float32)
+    if len(rewards) <= 1:
+        return np.zeros_like(rewards)
+
+    advantages = rewards - np.mean(rewards)
+    if not normalize_by_std:
+        return advantages
+
+    reward_std = np.std(rewards, ddof=1)
+    if reward_std <= 0.0:
+        return np.zeros_like(rewards)
+
+    return advantages / (reward_std + epsilon)
+
+
+def _policy_stats_fn_for_loss(vocab_tile_size: int | None, log_policy_entropy: bool) -> Callable:
+    if log_policy_entropy and vocab_tile_size is not None:
+        raise ValueError(
+            "Exact policy entropy is not supported with vocab_tile_size yet. "
+            "Set vocab_tile_size=None or implement chunked entropy first."
+        )
+
+    if vocab_tile_size is None:
+        return compute_logprobs_and_entropy
+
+    def compute_policy_stats_fn(m, b, k, *, compute_entropy: bool):
+        if compute_entropy:
+            raise ValueError("Exact policy entropy is not supported with vocab_tile_size yet")
+        return chunked_compute_logprobs(m, b, k, vocab_tile_size), None
+
+    return compute_policy_stats_fn
+
+
+def _validate_fixed_response_budget(batch: TrainingBatch, fixed_response_budget: int) -> None:
+    if batch.max_output_tokens != fixed_response_budget:
+        raise ValueError(
+            "DrGRPOLoss.max_output_tokens must match TrainingBatch.max_output_tokens, "
+            f"got {fixed_response_budget} and {batch.max_output_tokens}"
+        )
 
 
 @dataclass
@@ -478,24 +586,10 @@ class RLOOLoss(RLLossModule):
         """Create the loss function for training."""
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when KL regularization is enabled")
-        if self.log_policy_entropy and self.vocab_tile_size is not None:
-            raise ValueError(
-                "Exact policy entropy is not supported with vocab_tile_size yet. "
-                "Set vocab_tile_size=None or implement chunked entropy first."
-            )
+        compute_policy_stats_fn = _policy_stats_fn_for_loss(self.vocab_tile_size, self.log_policy_entropy)
 
         def loss_fn(model, batch, key):
-            if self.vocab_tile_size is not None:
-
-                def compute_policy_stats_fn(m, b, k, *, compute_entropy: bool):
-                    if compute_entropy:
-                        raise ValueError("Exact policy entropy is not supported with vocab_tile_size yet")
-                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size), None
-
-            else:
-                compute_policy_stats_fn = compute_logprobs_and_entropy
-
-            return rloo_loss_with_importance_sampling(
+            return policy_gradient_loss_with_importance_sampling(
                 model,
                 reference_model,
                 batch,
@@ -508,6 +602,197 @@ class RLOOLoss(RLLossModule):
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
                 log_policy_entropy=self.log_policy_entropy,
+                reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
+                compute_policy_stats_fn=compute_policy_stats_fn,
+            )
+
+        return loss_fn
+
+
+@dataclass
+class GRPOLoss(RLLossModule):
+    """GRPO loss with group-centered, optionally std-normalized advantages."""
+
+    kl: KLConfig
+    normalize_by_group_std: bool = True
+    reducer: PolicyGradientReducer = PolicyGradientReducer.PER_SEQUENCE_TOKEN_MEAN
+    clip_epsilon_low: float = 0.2
+    clip_epsilon_high: float = 0.2
+    tis_importance_sampling_ratio_max: float = 2.0
+    synchronous: bool = False
+    do_trainer_inference_mismatch_importance_sampling: bool = False
+    do_overlong_filtering: bool = False
+    vocab_tile_size: int | None = None
+    log_policy_entropy: bool = False
+
+    def __post_init__(self):
+        if self.reducer == PolicyGradientReducer.FIXED_RESPONSE_BUDGET:
+            raise ValueError("Use DrGRPOLoss for fixed response-budget reduction")
+
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
+        """Initialize any learned components (e.g., value heads)."""
+        return self
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
+        """Compute group-centered advantages for a group of rollouts."""
+        return compute_group_centered_advantages(
+            rollout_group,
+            normalize_by_std=self.normalize_by_group_std,
+        )
+
+    def needs_reference_model(self) -> bool:
+        """Return whether KL regularization requires a reference model."""
+        return self.kl.enabled()
+
+    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+        if self.needs_reference_model() and reference_model is None:
+            raise ValueError("reference_model is required when KL regularization is enabled")
+        compute_policy_stats_fn = _policy_stats_fn_for_loss(self.vocab_tile_size, self.log_policy_entropy)
+
+        def loss_fn(model, batch, key):
+            return policy_gradient_loss_with_importance_sampling(
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl=self.kl,
+                clip_epsilon_low=self.clip_epsilon_low,
+                clip_epsilon_high=self.clip_epsilon_high,
+                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
+                synchronous=self.synchronous,
+                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
+                do_overlong_filtering=self.do_overlong_filtering,
+                log_policy_entropy=self.log_policy_entropy,
+                reducer=self.reducer,
+                compute_policy_stats_fn=compute_policy_stats_fn,
+            )
+
+        return loss_fn
+
+
+@dataclass
+class DAPOLoss(RLLossModule):
+    """DAPO loss: GRPO advantages with active-token reduction and clip-higher defaults."""
+
+    kl: KLConfig
+    normalize_by_group_std: bool = True
+    clip_epsilon_low: float = 0.2
+    clip_epsilon_high: float = 0.28
+    tis_importance_sampling_ratio_max: float = 2.0
+    synchronous: bool = False
+    do_trainer_inference_mismatch_importance_sampling: bool = False
+    do_overlong_filtering: bool = True
+    vocab_tile_size: int | None = None
+    log_policy_entropy: bool = False
+
+    def __post_init__(self):
+        if self.clip_epsilon_low < 0.0:
+            raise ValueError(f"clip_epsilon_low must be non-negative, got {self.clip_epsilon_low}")
+        if self.clip_epsilon_high < 0.0:
+            raise ValueError(f"clip_epsilon_high must be non-negative, got {self.clip_epsilon_high}")
+        if self.clip_epsilon_high < self.clip_epsilon_low:
+            raise ValueError(
+                "DAPOLoss.clip_epsilon_high must be greater than or equal to "
+                f"clip_epsilon_low, got {self.clip_epsilon_high} and {self.clip_epsilon_low}"
+            )
+
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
+        """Initialize any learned components (e.g., value heads)."""
+        return self
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
+        """Compute DAPO group-centered advantages for a group of rollouts."""
+        return compute_group_centered_advantages(
+            rollout_group,
+            normalize_by_std=self.normalize_by_group_std,
+        )
+
+    def needs_reference_model(self) -> bool:
+        """Return whether KL regularization requires a reference model."""
+        return self.kl.enabled()
+
+    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+        if self.needs_reference_model() and reference_model is None:
+            raise ValueError("reference_model is required when KL regularization is enabled")
+        compute_policy_stats_fn = _policy_stats_fn_for_loss(self.vocab_tile_size, self.log_policy_entropy)
+
+        def loss_fn(model, batch, key):
+            return policy_gradient_loss_with_importance_sampling(
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl=self.kl,
+                clip_epsilon_low=self.clip_epsilon_low,
+                clip_epsilon_high=self.clip_epsilon_high,
+                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
+                synchronous=self.synchronous,
+                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
+                do_overlong_filtering=self.do_overlong_filtering,
+                log_policy_entropy=self.log_policy_entropy,
+                reducer=PolicyGradientReducer.ACTIVE_TOKEN_MEAN,
+                compute_policy_stats_fn=compute_policy_stats_fn,
+            )
+
+        return loss_fn
+
+
+@dataclass
+class DrGRPOLoss(RLLossModule):
+    """Dr.GRPO loss with mean-centered advantages and fixed response-budget reduction."""
+
+    max_output_tokens: int
+    kl: KLConfig
+    clip_epsilon_low: float = 0.2
+    clip_epsilon_high: float = 0.2
+    tis_importance_sampling_ratio_max: float = 2.0
+    synchronous: bool = False
+    do_trainer_inference_mismatch_importance_sampling: bool = False
+    do_overlong_filtering: bool = False
+    vocab_tile_size: int | None = None
+    log_policy_entropy: bool = False
+
+    def __post_init__(self):
+        if self.max_output_tokens <= 0:
+            raise ValueError(f"max_output_tokens must be positive, got {self.max_output_tokens}")
+
+    def build(self, reference_model: eqx.Module) -> RLLossModule:
+        """Initialize any learned components (e.g., value heads)."""
+        return self
+
+    def compute_advantages(self, rollout_group: list[Rollout]) -> np.ndarray:
+        """Compute mean-centered advantages for a group of rollouts."""
+        return compute_group_centered_advantages(rollout_group, normalize_by_std=False)
+
+    def needs_reference_model(self) -> bool:
+        """Return whether KL regularization requires a reference model."""
+        return self.kl.enabled()
+
+    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+        """Create the loss function for training."""
+        if self.needs_reference_model() and reference_model is None:
+            raise ValueError("reference_model is required when KL regularization is enabled")
+        compute_policy_stats_fn = _policy_stats_fn_for_loss(self.vocab_tile_size, self.log_policy_entropy)
+
+        def loss_fn(model, batch, key):
+            _validate_fixed_response_budget(batch, self.max_output_tokens)
+            return policy_gradient_loss_with_importance_sampling(
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl=self.kl,
+                clip_epsilon_low=self.clip_epsilon_low,
+                clip_epsilon_high=self.clip_epsilon_high,
+                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
+                synchronous=self.synchronous,
+                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
+                do_overlong_filtering=self.do_overlong_filtering,
+                log_policy_entropy=self.log_policy_entropy,
+                reducer=PolicyGradientReducer.FIXED_RESPONSE_BUDGET,
+                fixed_response_budget=self.max_output_tokens,
                 compute_policy_stats_fn=compute_policy_stats_fn,
             )
 

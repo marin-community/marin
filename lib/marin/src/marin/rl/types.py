@@ -114,6 +114,7 @@ class TrainingBatch(eqx.Module):
     temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
     top_k: ht.Int[NamedArray, "batch"]  # noqa: F821
     truncated: jax.Array  # [batch] # Make this haxtyped array?
+    max_seq_len: int
     max_output_tokens: int
 
     def __len__(self) -> int:

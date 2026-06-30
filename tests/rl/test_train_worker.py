@@ -2,19 +2,108 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from marin.rl.curriculum import CurriculumConfig, LessonConfig
+from marin.rl.decoding import DecodingConfig, SamplingParams
+from marin.rl.environments.base import EnvConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
-from marin.rl.rl_losses import RLOOLoss
+from marin.rl.rl_losses import DrGRPOLoss, RLOOLoss
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
+    StreamingRolloutLoader,
     TrainWorker,
+    TrainWorkerConfig,
     _initial_rollout_state,
     _resume_safe_weight_transfer_metrics,
     _training_step_timing_metrics,
 )
 from marin.rl.weight_transfer.base import WeightTransferServerMetrics
+
+
+def _test_env_config(seed: int = 0) -> EnvConfig:
+    return EnvConfig(
+        env_class="marin.rl.environments.mock_env.MockEnv",
+        env_args={"task_type": "cats", "seed": seed},
+    )
+
+
+def _curriculum_with_response_budgets(
+    train_budgets: dict[str, int],
+    *,
+    eval_budget: int | None = None,
+) -> CurriculumConfig:
+    lessons = {}
+    for index, (lesson_id, train_budget) in enumerate(train_budgets.items()):
+        train_decoding = DecodingConfig(max_output_tokens=train_budget)
+        eval_decoding = None
+        if eval_budget is not None:
+            eval_decoding = DecodingConfig(max_output_tokens=eval_budget)
+        lessons[lesson_id] = LessonConfig(
+            lesson_id=lesson_id,
+            env_config=_test_env_config(seed=index),
+            sampling_params=SamplingParams(train_decoding=train_decoding, eval_decoding=eval_decoding),
+        )
+
+    return CurriculumConfig(max_seq_len=1024, lessons=lessons)
+
+
+def _train_worker_config(curriculum: CurriculumConfig, loss: Any) -> TrainWorkerConfig:
+    return TrainWorkerConfig(
+        rollout_storage=cast(Any, object()),
+        model=cast(Any, object()),
+        trainer=cast(Any, object()),
+        optimizer=cast(Any, object()),
+        replay_buffer=cast(Any, object()),
+        weight_transfer=cast(Any, object()),
+        curriculum_config=curriculum,
+        loss=loss,
+        tokenizer=cast(Any, object()),
+        run_id="test-run",
+    )
+
+
+def test_train_worker_config_allows_dr_grpo_with_uniform_train_response_budget():
+    curriculum = _curriculum_with_response_budgets(
+        {"lesson_a": 64, "lesson_b": 64},
+        eval_budget=128,
+    )
+
+    config = _train_worker_config(
+        curriculum,
+        DrGRPOLoss(max_output_tokens=64, kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+    )
+
+    assert config.curriculum_config.max_train_output_tokens == 64
+    assert config.curriculum_config.max_output_tokens == 128
+
+
+def test_train_worker_config_rejects_dr_grpo_with_mixed_train_response_budgets():
+    curriculum = _curriculum_with_response_budgets({"short": 32, "long": 64})
+
+    with pytest.raises(ValueError, match="short=32"):
+        _train_worker_config(
+            curriculum,
+            DrGRPOLoss(max_output_tokens=64, kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        )
+
+
+def test_streaming_rollout_loader_uses_train_response_budget_not_eval_budget():
+    curriculum = _curriculum_with_response_budgets(
+        {"lesson_a": 32, "lesson_b": 32},
+        eval_budget=128,
+    )
+    config = SimpleNamespace(
+        curriculum_config=curriculum,
+        model=SimpleNamespace(attn_backend=None, flash_attention_block_size=None),
+        tokenizer=SimpleNamespace(pad_token_id=0, eos_token_id=1),
+    )
+
+    loader = StreamingRolloutLoader(data_loader=cast(Any, object()), config=cast(Any, config))
+
+    assert loader.max_output_tokens == 32
 
 
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
