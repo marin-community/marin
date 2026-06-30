@@ -29,6 +29,7 @@ from ._src.fp8 import fp8_scaled_dot_general
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
+from .nn.ragged_dot import fp8_scaled_ragged_dot
 
 T = TypeVar("T")
 
@@ -222,6 +223,91 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             dimension_numbers,
             precision=precision,
             preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
+        )
+
+
+class Fp8RaggedDotOp(OverwriteWithGradient):
+    """Delayed-scaling FP8 op for [haliax.nn.ragged_dot][].
+
+    Forward operands are quantized to E4M3 by default, output gradients are
+    quantized to E5M2 in the custom VJP, and all scale/amax history fields are
+    threaded through [partition_for_grad_overwrite][] / [apply_updates][] as
+    overwrite state.
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
+    block_m: int | None = eqx.field(static=True)
+    block_n: int | None = eqx.field(static=True)
+    block_k: int | None = eqx.field(static=True)
+
+    @classmethod
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
+        block_m: int | None = None,
+        block_n: int | None = None,
+        block_k: int | None = None,
+    ):
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
+            block_m=block_m,
+            block_n=block_n,
+            block_k=block_k,
+        )
+
+    def __call__(
+        self,
+        lhs,
+        rhs,
+        group_sizes,
+        *,
+        implementation: str = "auto",
+        max_group_size: int | None = None,
+    ):
+        if self.compute_dtype is None:
+            comp_dtype = rhs.dtype
+        else:
+            comp_dtype = self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+
+        return fp8_scaled_ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            implementation=implementation,
+            preferred_element_type=comp_dtype,
+            max_group_size=max_group_size,
+            block_m=self.block_m,
+            block_n=self.block_n,
+            block_k=self.block_k,
             lhs_scale=self.input_scale,
             rhs_scale=self.kernel_scale,
             grad_scale=self.output_grad_scale,

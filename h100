@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Run a command on this worktree's dedicated H100 dev pod.
+#   ./h100 python bench_fp8_ragged_dot.py
+#   ./h100 python -c "import jax; print(jax.devices())"
+#   ./h100 nvidia-smi
+# Syncs this worktree's editable source (lib/haliax + root *.py/*.sh) onto the pod's
+# /app workspace, then runs the command in the pod's GPU virtualenv on the H100.
+set -euo pipefail
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/coreweave-iris-gpu}"
+SESSION="bakecodex"
+NS=iris
+STATE="$HOME/.cache/marin/dev_gpu_iris/${SESSION}.json"
+POD="$(python3 -c "import json; print(json.load(open('$STATE'))['pod']['pod_name'])" 2>/dev/null || true)"
+if [ -z "${POD:-}" ]; then
+  echo "h100: no active pod for session '$SESSION' — ask the coordinator to (re)allocate." >&2
+  exit 2
+fi
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# 1. Overlay editable source onto /app (haliax is an editable workspace install in the pod venv).
+tar -C "$HERE" --exclude=__pycache__ --exclude=.git --exclude=.venv -czf - \
+  lib/haliax \
+  $(cd "$HERE" && find . -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) -printf '%P\n') \
+  2>/dev/null | kubectl -n "$NS" exec -i "$POD" -c task -- tar -C /app -xzf -
+# 2. Run in the GPU venv on the H100 (sourcing the CUDA/mosaic toolchain env if present).
+REMOTE_CMD="$(printf '%q ' "$@")"; [ -z "${REMOTE_CMD// /}" ] && REMOTE_CMD=true
+kubectl -n "$NS" exec "$POD" -c task -- bash -lc \
+  "cd /app && source .venv/bin/activate 2>/dev/null || true; source /app/.cuda_env 2>/dev/null || true; ${REMOTE_CMD}"
