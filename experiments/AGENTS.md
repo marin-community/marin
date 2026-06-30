@@ -15,11 +15,13 @@ dataset (or dataset family), built with the lazy data builders in
 - Mixture weights are policy, not catalog: keep them in a separate
   `<NAME>_MIXTURE_WEIGHTS` constant keyed the same way, and let the experiment pick
   weights and assemble them with `mixture()`.
-- Each module is runnable: end it with
+- A module that builds tokenized-cache handles is runnable: end it with
   `if __name__ == "__main__": dataset_main(<family-dict>)`. `python -m
   experiments.datasets.<name>` prints the build plan; `--run` (optionally `--only
-  <keys>`) builds it. Never change a handle's `name=`/`version=`/`pin=`/path strings
-  — those are artifact identities.
+  <keys>`) builds it. Modules of a different shape — `eval` (builds `EvalDataset`s)
+  and the `instruction`/`preference` HF-id registries — are exceptions with no CLI.
+  Never change a handle's `name=`/`version=`/`pin=`/path strings — those are
+  artifact identities.
 - `__init__.py` stays docstring-only (no re-exports); import catalogs directly, e.g.
   `from experiments.datasets.nemotron import nemotron_datasets`.
 

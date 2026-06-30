@@ -95,4 +95,10 @@ def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Art
 
 
 if __name__ == "__main__":
-    dataset_main({**finepdfs_datasets(), **finepdfs_edu_datasets()})
+    # Both families key on the language code (eng_Latn), so namespace them when merging.
+    dataset_main(
+        {
+            **{f"finepdfs/{lang}": handle for lang, handle in finepdfs_datasets().items()},
+            **{f"finepdfs_edu/{lang}": handle for lang, handle in finepdfs_edu_datasets().items()},
+        }
+    )
