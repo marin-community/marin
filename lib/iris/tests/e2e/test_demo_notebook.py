@@ -3,34 +3,42 @@
 
 """E2E tests verifying the demo notebook submission patterns work end-to-end."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
 from iris.client import IrisClient
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
-from iris.cluster.types import Entrypoint, ResourceSpec
-from iris.rpc import config_pb2
+from iris.cluster.config import (
+    IrisClusterConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    make_local_config,
+)
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, ResourceSpec
 
 pytestmark = pytest.mark.requires_cluster
 
 
-def _make_demo_config() -> config_pb2.IrisClusterConfig:
-    config = config_pb2.IrisClusterConfig()
-    cpu_sg = config.scale_groups["cpu"]
-    cpu_sg.name = "cpu"
-    cpu_sg.buffer_slices = 0
-    cpu_sg.max_slices = 1
-    cpu_sg.num_vms = 1
-    cpu_sg.resources.cpu_millicores = 1000
-    cpu_sg.resources.memory_bytes = 1024**3
-    cpu_sg.resources.disk_bytes = 0
-    cpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
-    cpu_sg.resources.device_count = 0
-    cpu_sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
-    return IrisConfig(config).as_local().proto
+def _make_demo_config() -> IrisClusterConfig:
+    config = IrisClusterConfig(
+        scale_groups={
+            "cpu": ScaleGroupConfig(
+                name="cpu",
+                buffer_slices=0,
+                max_slices=1,
+                num_vms=1,
+                resources=ScaleGroupResources(
+                    cpu_millicores=1000,
+                    memory_bytes=1024**3,
+                    disk_bytes=0,
+                    device_type=AcceleratorType.CPU,
+                    device_count=0,
+                    capacity_type=CapacityType.ON_DEMAND,
+                ),
+            )
+        }
+    )
+    return make_local_config(config)
 
 
 @pytest.fixture(scope="module")

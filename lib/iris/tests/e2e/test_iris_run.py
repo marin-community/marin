@@ -3,8 +3,6 @@
 
 """E2E integration tests for iris job CLI helpers that boot a real local cluster."""
 
-from __future__ import annotations
-
 import sys
 from pathlib import Path
 

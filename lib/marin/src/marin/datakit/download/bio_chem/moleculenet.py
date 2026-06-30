@@ -14,8 +14,6 @@ modelling. To add more MoleculeNet tasks, append more ``NotationSliceSpec``
 entries pointing at the deepchem CSV/CSV.gz URLs.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

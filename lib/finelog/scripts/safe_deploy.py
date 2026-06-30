@@ -18,18 +18,17 @@ Usage:
     uv run python lib/finelog/scripts/safe_deploy.py status marin-dev
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
-from finelog.deploy._gcp import _resolve_image_digest, _ssh_args, _wait_health_via_ssh
+from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh
 from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
+from finelog.deploy.image import resolve_image_digest
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
 
@@ -160,7 +159,7 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
     else:
         click.echo(f"captured running digest: {old_digest}")
 
-    new_digest = _resolve_image_digest(cfg.image)
+    new_digest = resolve_image_digest(cfg.image)
     if "@sha256:" not in new_digest:
         raise click.ClickException(f"Could not pin {cfg.image} to a content digest; refusing to deploy a mutable tag.")
     click.echo(f"new pinned digest:       {new_digest}")

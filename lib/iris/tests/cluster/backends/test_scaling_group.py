@@ -18,7 +18,14 @@ from iris.cluster.backends.types import (
     QuotaExhaustedError,
     SliceStatus,
 )
-from iris.cluster.config import _derive_slice_config_from_resources, load_config
+from iris.cluster.config import (
+    CoreweaveSliceConfig,
+    GcpSliceConfig,
+    ScaleGroupConfig,
+    ScaleGroupResources,
+    SliceConfig,
+    load_config,
+)
 from iris.cluster.constraints import DeviceType
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth, SliceFate
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -30,10 +37,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     prepare_slice_config,
     slice_state_to_proto,
 )
-from iris.cluster.types import WorkerStatus, WorkerUsability
-from iris.rpc import config_pb2, vm_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatus, WorkerUsability
+from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.backends.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,
@@ -41,22 +47,29 @@ from tests.cluster.backends.conftest import (
     make_mock_platform,
 )
 
-DEFAULT_RESOURCES = config_pb2.ScaleGroupResources(
+DEFAULT_RESOURCES = ScaleGroupResources(
     cpu_millicores=64000,
     memory_bytes=64 * 1024**3,
     disk_bytes=100 * 1024**3,
-    device_type=config_pb2.ACCELERATOR_TYPE_TPU,
+    device_type=AcceleratorType.TPU,
     device_variant="v5p-8",
     device_count=8,
 )
 
 
-def _with_resources(config: config_pb2.ScaleGroupConfig, *, num_vms: int = 1) -> config_pb2.ScaleGroupConfig:
-    if not config.HasField("resources"):
-        config.resources.CopyFrom(DEFAULT_RESOURCES)
-    if not config.HasField("num_vms"):
+def _with_resources(config: ScaleGroupConfig, *, num_vms: int = 1) -> ScaleGroupConfig:
+    """Attach default resources/num_vms and re-derive slice_template fields.
+
+    Re-running model_validate triggers ScaleGroupConfig's after-validator, which
+    copies device_type/variant/gpu_count from resources onto the slice template.
+    """
+    if config.resources is None:
+        config.resources = DEFAULT_RESOURCES.model_copy(deep=True)
+    if config.num_vms is None:
         config.num_vms = num_vms
-    return config
+    # exclude_none mirrors how configs are actually serialized (config_to_dict);
+    # an unselected oneof arm is absent rather than a None that reads as a pick.
+    return ScaleGroupConfig.model_validate(config.model_dump(exclude_none=True))
 
 
 def _mark_discovered_ready(
@@ -99,35 +112,33 @@ def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, *
 
 
 @pytest.fixture
-def scale_group_config() -> config_pb2.ScaleGroupConfig:
+def scale_group_config() -> ScaleGroupConfig:
     """A standard scale group configuration for tests."""
-    config = config_pb2.ScaleGroupConfig(
+    config = ScaleGroupConfig(
         name="test-group",
         buffer_slices=1,
         max_slices=5,
+        slice_template=SliceConfig(gcp=GcpSliceConfig(runtime_version="v2-alpha-tpuv5", zone="us-central1-a")),
     )
-    config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zone = "us-central1-a"
     return _with_resources(config)
 
 
 @pytest.fixture
-def unbounded_config() -> config_pb2.ScaleGroupConfig:
+def unbounded_config() -> ScaleGroupConfig:
     """A scale group with no min/max constraints."""
-    config = config_pb2.ScaleGroupConfig(
+    config = ScaleGroupConfig(
         name="unbounded-group",
         buffer_slices=0,
         max_slices=100,
+        slice_template=SliceConfig(gcp=GcpSliceConfig(runtime_version="v2-alpha-tpuv5", zone="us-central1-a")),
     )
-    config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zone = "us-central1-a"
     return _with_resources(config)
 
 
 class TestScalingGroupVmGroupOwnership:
     """Tests for VM group ownership and lifecycle."""
 
-    def test_reconcile_adopts_discovered_vm_groups(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_reconcile_adopts_discovered_vm_groups(self, scale_group_config: ScaleGroupConfig):
         """reconcile() populates VM groups from the Platform."""
         discovered = [
             make_fake_slice_handle("slice-001"),
@@ -142,7 +153,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.get_slice("slice-001") is not None
         assert group.get_slice("slice-002") is not None
 
-    def test_reconcile_skips_manual_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_reconcile_skips_manual_slices(self, scale_group_config: ScaleGroupConfig):
         """Slices tagged iris_manual=true are never adopted by a ScalingGroup."""
         labels = Labels("iris")
         auto = make_fake_slice_handle("slice-auto")
@@ -157,7 +168,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.get_slice("slice-auto") is not None
         assert group.get_slice("slice-manual") is None
 
-    def test_scale_up_creates_and_tracks_vm_group(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scale_up_creates_and_tracks_vm_group(self, scale_group_config: ScaleGroupConfig):
         """Full lifecycle (begin + scale_up + complete) creates and tracks a slice."""
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
@@ -168,7 +179,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.slice_count() == 1
         assert new_handle in group.slice_handles()
 
-    def test_scale_up_passes_tags_as_labels(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_scale_up_passes_tags_as_labels(self, scale_group_config: ScaleGroupConfig):
         """scale_up() passes tags as labels in the slice config."""
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
@@ -180,7 +191,7 @@ class TestScalingGroupVmGroupOwnership:
         assert slice_config.labels["env"] == "prod"
         assert slice_config.labels["team"] == "ml"
 
-    def test_drain_slice_marks_draining_and_returns_handle(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_drain_slice_marks_draining_and_returns_handle(self, scale_group_config: ScaleGroupConfig):
         """drain_slice() marks the slice DRAINING (still tracked) and returns its handle.
 
         The handle comes back so the caller issues the terminate; the slice is
@@ -200,7 +211,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.slice_count() == 1
         assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
 
-    def test_drain_slice_nonexistent_is_noop(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_drain_slice_nonexistent_is_noop(self, scale_group_config: ScaleGroupConfig):
         """drain_slice() on a nonexistent slice returns None and does nothing."""
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
@@ -208,9 +219,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.drain_slice("nonexistent-slice") is None
         assert group.slice_count() == 0
 
-    def test_detach_slice_removes_and_terminate_handle_swallows_errors(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_detach_slice_removes_and_terminate_handle_swallows_errors(self, scale_group_config: ScaleGroupConfig):
         """detach_slice() drops tracking; terminate_slice_handle() swallows a terminate() error.
 
         Together they reap a slice whose cloud resource is already gone (e.g.
@@ -234,7 +243,7 @@ class TestScalingGroupVmGroupOwnership:
         group.terminate_slice_handle(handle, context="test")
         assert handle.terminated
 
-    def test_terminate_all_continues_on_individual_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_terminate_all_continues_on_individual_failure(self, scale_group_config: ScaleGroupConfig):
         """terminate_all() terminates remaining slices even if one fails."""
         handles = [
             make_fake_slice_handle("slice-001"),
@@ -254,7 +263,7 @@ class TestScalingGroupVmGroupOwnership:
             assert h.terminated
         assert group.slice_count() == 0
 
-    def test_ready_slice_count(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_ready_slice_count(self, scale_group_config: ScaleGroupConfig):
         """ready_slice_count() only counts VM groups where all VMs are ready."""
         discovered = [
             make_fake_slice_handle("slice-001", all_ready=True),
@@ -269,9 +278,7 @@ class TestScalingGroupVmGroupOwnership:
         assert group.slice_count() == 3
         assert group.ready_slice_count() == 2
 
-    def test_slices_needing_describe_includes_ready_without_workers(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_slices_needing_describe_includes_ready_without_workers(self, scale_group_config: ScaleGroupConfig):
         """A READY slice with no tracked workers is re-described, not left DEGRADED.
 
         An adopted slice can come back READY with empty worker_ids; without
@@ -296,14 +303,14 @@ class TestScalingGroupVmGroupOwnership:
 class TestScalingGroupScalingPolicy:
     """Tests for scaling policy decisions (can_scale_up, rate limiting)."""
 
-    def test_can_scale_up_when_below_max(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_can_scale_up_when_below_max(self, scale_group_config: ScaleGroupConfig):
         """can_scale_up() returns True when below max_slices."""
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
 
         assert group.can_scale_up()
 
-    def test_cannot_scale_up_at_max_slices(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_cannot_scale_up_at_max_slices(self, scale_group_config: ScaleGroupConfig):
         """can_scale_up() returns False when at max_slices."""
         discovered = [make_fake_slice_handle(f"slice-{i}") for i in range(5)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -313,7 +320,7 @@ class TestScalingGroupScalingPolicy:
         assert group.slice_count() == 5  # max_slices
         assert not group.can_scale_up()
 
-    def test_hostile_throttles_bucket_to_probe_floor(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_hostile_throttles_bucket_to_probe_floor(self, unbounded_config: ScaleGroupConfig):
         """At 100% churn, the bucket refills at the probe floor and acquires
         succeed only after waiting one floor-tokens' worth of time.
 
@@ -338,7 +345,7 @@ class TestScalingGroupScalingPolicy:
         assert group.try_acquire_scale_up(timestamp=much_later)
         assert group.detector.health_label(much_later) == GroupHealth.HOSTILE
 
-    def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""
         platform = make_mock_platform()
         group = ScalingGroup(
@@ -365,7 +372,7 @@ class TestScalingGroupChurnDetector:
     that ScalingGroup wires the detector correctly into its scale-up gating.
     """
 
-    def test_create_failures_drive_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_create_failures_drive_detector_hostile(self, unbounded_config: ScaleGroupConfig):
         """Enough create-failures push the detector label to HOSTILE.
 
         Under failure-counting control HOSTILE is a label only — scale-up keeps
@@ -383,7 +390,7 @@ class TestScalingGroupChurnDetector:
         # Hard block is quota-only; failures throttle the bucket but never gate it.
         assert group.can_scale_up(timestamp=now)
 
-    def test_long_lived_preemption_does_not_block_scale_up(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_long_lived_preemption_does_not_block_scale_up(self, unbounded_config: ScaleGroupConfig):
         """A slice preempted past short_lived threshold is a positive sample."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -404,7 +411,7 @@ class TestScalingGroupChurnDetector:
 class TestScalingGroupDemandTracking:
     """Tests for demand tracking."""
 
-    def test_update_demand_tracks_peak(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_update_demand_tracks_peak(self, unbounded_config: ScaleGroupConfig):
         """update_demand() tracks peak demand."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -420,7 +427,7 @@ class TestScalingGroupDemandTracking:
 class TestScalingGroupIdleTracking:
     """Tests for per-slice idle tracking and scale-down eligibility."""
 
-    def test_slice_not_eligible_until_workers_observed_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_slice_not_eligible_until_workers_observed_idle(self, unbounded_config: ScaleGroupConfig):
         """Slice with quiet_since=None (no idle observation yet) is not eligible.
 
         Under the new model, eligibility requires an active→idle transition to
@@ -435,7 +442,7 @@ class TestScalingGroupIdleTracking:
         # Never had activity observed -> not eligible.
         assert not group.is_slice_eligible_for_scaledown(slice_id, Timestamp.from_ms(1000))
 
-    def test_slice_not_eligible_when_recently_active(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_slice_not_eligible_when_recently_active(self, unbounded_config: ScaleGroupConfig):
         """Recently active slice is not eligible for scaledown."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -456,7 +463,7 @@ class TestScalingGroupIdleTracking:
         # Not enough time passed (30s < 60s threshold)
         assert not group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(30_000))
 
-    def test_slice_eligible_after_idle_threshold(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_slice_eligible_after_idle_threshold(self, unbounded_config: ScaleGroupConfig):
         """Slice is eligible after idle_threshold has elapsed since the workers went idle."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -473,7 +480,7 @@ class TestScalingGroupIdleTracking:
         # After threshold (61s > 60s) -> eligible
         assert group.is_slice_eligible_for_scaledown("slice-001", Timestamp.from_ms(61_001))
 
-    def test_get_idle_slices_returns_longest_idle_first(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_get_idle_slices_returns_longest_idle_first(self, unbounded_config: ScaleGroupConfig):
         """get_idle_slices returns slices sorted by idle time (longest first)."""
         discovered = [
             make_fake_slice_handle("slice-001", all_ready=True),
@@ -507,7 +514,7 @@ class TestScalingGroupIdleTracking:
         assert len(idle_slices) == 2
         assert idle_slices[0].handle.slice_id == "slice-001"
 
-    def test_update_slice_activity_tracks_active_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_update_slice_activity_tracks_active_slices(self, unbounded_config: ScaleGroupConfig):
         """Active slice stays alive; idle slice becomes eligible after threshold."""
         discovered = [
             make_fake_slice_handle("slice-001", all_ready=True),
@@ -537,7 +544,7 @@ class TestScalingGroupIdleTracking:
         assert not group.is_slice_eligible_for_scaledown("slice-001", check_ts)
         assert group.is_slice_eligible_for_scaledown("slice-002", check_ts)
 
-    def test_continuous_activity_keeps_quiet_since_none(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_continuous_activity_keeps_quiet_since_none(self, unbounded_config: ScaleGroupConfig):
         """Regression: a continuously-active slice never accrues quiet time.
 
         The previous implementation persisted ``last_active_ms`` to the DB on a
@@ -565,7 +572,7 @@ class TestScalingGroupIdleTracking:
         with group._slices_lock:
             assert group._slices["slice-001"].quiet_since is None
 
-    def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
         discovered = [
             make_fake_slice_handle("slice-001", all_ready=True),
@@ -597,7 +604,7 @@ class TestScalingGroupIdleTracking:
         assert scaled_down[0].terminated  # the drain issued the VM delete
         assert group.ready_slice_count() == 1  # one slice drained, one stays READY
 
-    def test_scale_down_retains_degraded_idle_slice(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_retains_degraded_idle_slice(self, unbounded_config: ScaleGroupConfig):
         """A slice whose worker is idle but DEGRADED is NOT reclaimed as spare.
 
         Regression for the autoscaler/scheduler disagreement: a degraded worker
@@ -634,7 +641,7 @@ class TestScalingGroupIdleTracking:
         assert [h.slice_id for h in scaled_down] == ["slice-001"]
         assert group.get_slice("slice-002") is not None
 
-    def test_scale_down_retains_all_degraded_idle_slices(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_retains_all_degraded_idle_slices(self, unbounded_config: ScaleGroupConfig):
         """When every idle slice over target is DEGRADED, nothing is reclaimed."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -651,7 +658,7 @@ class TestScalingGroupIdleTracking:
         assert scaled_down == []
         assert group.get_slice("slice-001") is not None
 
-    def test_scale_down_if_idle_respects_target_capacity(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_scale_down_if_idle_respects_target_capacity(self, unbounded_config: ScaleGroupConfig):
         """scale_down_if_idle does nothing when at or below target capacity."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -668,7 +675,7 @@ class TestScalingGroupIdleTracking:
         assert len(scaled_down) == 0
         assert group.slice_count() == 1
 
-    def test_drain_slice_removes_from_idle_candidates(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_drain_slice_removes_from_idle_candidates(self, unbounded_config: ScaleGroupConfig):
         """A drained slice is DRAINING and no longer offered as an idle scale-down candidate."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
@@ -690,7 +697,7 @@ class TestScalingGroupIdleTracking:
         assert group.get_idle_slices(Timestamp.from_ms(2000)) == []
 
 
-def test_scale_down_no_misleading_rate_limit_log(unbounded_config: config_pb2.ScaleGroupConfig, caplog):
+def test_scale_down_no_misleading_rate_limit_log(unbounded_config: ScaleGroupConfig, caplog):
     """When the token bucket is empty and no terminations occur, no rate-limit log is emitted."""
     discovered = [
         make_fake_slice_handle("slice-001", all_ready=True),
@@ -742,7 +749,7 @@ class TestScalingGroupVmGroupStateCounts:
     )
     def test_counts_vm_groups_by_state(
         self,
-        scale_group_config: config_pb2.ScaleGroupConfig,
+        scale_group_config: ScaleGroupConfig,
         vm_state: vm_pb2.VmState,
         expected_state: SliceLifecycleState,
     ):
@@ -764,7 +771,7 @@ class TestScalingGroupVmGroupStateCounts:
             if state != expected_state:
                 assert counts[state] == 0
 
-    def test_failed_takes_precedence(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_failed_takes_precedence(self, scale_group_config: ScaleGroupConfig):
         """A VM group with any failed VM is counted as failed."""
         discovered = [
             make_fake_slice_handle(
@@ -782,7 +789,7 @@ class TestScalingGroupVmGroupStateCounts:
         assert counts[SliceLifecycleState.FAILED] == 1
         assert counts[SliceLifecycleState.READY] == 0
 
-    def test_unobserved_slices_counted_as_booting(self, scale_group_config: config_pb2.ScaleGroupConfig):
+    def test_unobserved_slices_counted_as_booting(self, scale_group_config: ScaleGroupConfig):
         """Slices that haven't been marked ready or failed are counted as BOOTING."""
         discovered = [
             make_fake_slice_handle("slice-001", vm_states=[vm_pb2.VM_STATE_TERMINATED]),
@@ -802,7 +809,7 @@ class TestScalingGroupVmGroupStateCounts:
 class TestScalingGroupAvailability:
     """Tests for availability state computation and waterfall routing support."""
 
-    def test_available_when_no_constraints(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_available_when_no_constraints(self, unbounded_config: ScaleGroupConfig):
         """Group is AVAILABLE when not in backoff, quota ok, and under capacity."""
 
         platform = make_mock_platform()
@@ -815,7 +822,7 @@ class TestScalingGroupAvailability:
         """Group is AT_MAX_SLICES when at max_slices with all slices READY."""
 
         config = _with_resources(
-            config_pb2.ScaleGroupConfig(
+            ScaleGroupConfig(
                 name="test-group",
                 buffer_slices=0,
                 max_slices=2,
@@ -832,7 +839,7 @@ class TestScalingGroupAvailability:
         state = group.availability()
         assert state.status == GroupAvailability.AT_MAX_SLICES
 
-    def test_backoff_when_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_backoff_when_detector_hostile(self, unbounded_config: ScaleGroupConfig):
         """Group is in BACKOFF when the churn detector is HOSTILE."""
 
         platform = make_mock_platform()
@@ -844,7 +851,7 @@ class TestScalingGroupAvailability:
         state = group.availability(Timestamp.from_ms(1001000))
         assert state.status == GroupAvailability.BACKOFF
 
-    def test_can_accept_demand_true_when_available(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_can_accept_demand_true_when_available(self, unbounded_config: ScaleGroupConfig):
         """can_accept_demand() returns True when AVAILABLE."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -854,7 +861,7 @@ class TestScalingGroupAvailability:
     def test_at_max_slices_rejects_demand(self):
         """AT_MAX_SLICES groups reject demand so it falls through to lower-priority groups."""
         config = _with_resources(
-            config_pb2.ScaleGroupConfig(
+            ScaleGroupConfig(
                 name="test-group",
                 buffer_slices=0,
                 max_slices=1,
@@ -870,7 +877,7 @@ class TestScalingGroupAvailability:
 
         assert group.can_accept_demand() is False
 
-    def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_quota_exceeded_blocks_demand_until_timeout(self, unbounded_config: ScaleGroupConfig):
         """Quota exceeded state auto-expires after timeout."""
 
         platform = make_mock_platform()
@@ -893,7 +900,7 @@ class TestScalingGroupAvailability:
         # After timeout (1000 + 60_000 = 61_000)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(70_000))
 
-    def test_successful_scale_up_clears_quota_state(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_successful_scale_up_clears_quota_state(self, unbounded_config: ScaleGroupConfig):
         """Successful scale-up via complete_scale_up clears any quota exceeded state."""
 
         platform = make_mock_platform()
@@ -919,7 +926,7 @@ class TestScalingGroupAvailability:
         group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
-    def test_quota_exceeded_takes_precedence_over_churn_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_quota_exceeded_takes_precedence_over_churn_backoff(self, unbounded_config: ScaleGroupConfig):
         """Quota exceeded reports as QUOTA_EXCEEDED even if churn is HOSTILE."""
 
         platform = make_mock_platform()
@@ -937,13 +944,13 @@ class TestScalingGroupAvailability:
         """After complete_scale_up, the group is AVAILABLE (no cooldown gate)."""
 
         config = _with_resources(
-            config_pb2.ScaleGroupConfig(
+            ScaleGroupConfig(
                 name="test-group",
                 buffer_slices=0,
                 max_slices=10,
+                slice_template=SliceConfig(gcp=GcpSliceConfig(zone="us-central1-a")),
             ),
         )
-        config.slice_template.gcp.zone = "us-central1-a"
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
 
@@ -959,13 +966,13 @@ class TestScalingGroupAvailability:
         """At max_slices but with in-flight booting capacity → COOLDOWN (accepts demand)."""
 
         config = _with_resources(
-            config_pb2.ScaleGroupConfig(
+            ScaleGroupConfig(
                 name="test-group",
                 buffer_slices=0,
                 max_slices=1,
+                slice_template=SliceConfig(gcp=GcpSliceConfig(zone="us-central1-a")),
             ),
         )
-        config.slice_template.gcp.zone = "us-central1-a"
         platform = make_mock_platform()
         group = ScalingGroup(config, platform)
 
@@ -984,9 +991,7 @@ class TestScalingGroupAvailability:
         state = group.availability(Timestamp.from_ms(1_003_000))
         assert state.status == GroupAvailability.AT_MAX_SLICES
 
-    def test_matches_device_requirement_filters_by_type_and_variant(
-        self, scale_group_config: config_pb2.ScaleGroupConfig
-    ):
+    def test_matches_device_requirement_filters_by_type_and_variant(self, scale_group_config: ScaleGroupConfig):
         """matches_device_requirement filters groups by device type and variant."""
 
         platform = make_mock_platform()
@@ -1013,7 +1018,7 @@ class TestScalingGroupAvailability:
 class TestVerifySliceIdle:
     """Tests for _verify_slice_idle behavior with unknown workers."""
 
-    def test_unknown_workers_do_not_count_as_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_unknown_workers_do_not_count_as_idle(self, unbounded_config: ScaleGroupConfig):
         """A slice with no workers in the status map is NOT idle (we don't know yet)."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1024,7 +1029,7 @@ class TestVerifySliceIdle:
         # Empty status map -- no workers known
         assert not group._verify_slice_idle(state, {})
 
-    def test_known_idle_workers_are_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_known_idle_workers_are_idle(self, unbounded_config: ScaleGroupConfig):
         """A slice where all known workers are idle IS idle."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1039,7 +1044,7 @@ class TestVerifySliceIdle:
         status_map = {worker_id: WorkerStatus(worker_id="", running_task_ids=frozenset())}
         assert group._verify_slice_idle(state, status_map)
 
-    def test_known_busy_worker_blocks_idle(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_known_busy_worker_blocks_idle(self, unbounded_config: ScaleGroupConfig):
         """A slice with a known busy worker is NOT idle."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1056,25 +1061,25 @@ class TestZonesFromConfig:
     """Tests for _zones_from_config fail-fast behavior."""
 
     def test_gcp_with_zone_returns_list(self):
-        config = config_pb2.ScaleGroupConfig(name="g")
-        config.slice_template.gcp.zone = "us-central1-a"
+        config = ScaleGroupConfig(name="g", slice_template=SliceConfig(gcp=GcpSliceConfig(zone="us-central1-a")))
         assert _zones_from_config(config) == ["us-central1-a"]
 
     def test_gcp_with_no_zone_raises(self):
-        config = config_pb2.ScaleGroupConfig(name="g")
-        config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
+        config = ScaleGroupConfig(
+            name="g", slice_template=SliceConfig(gcp=GcpSliceConfig(runtime_version="v2-alpha-tpuv5"))
+        )
         with pytest.raises(ValueError, match="no zone configured"):
             _zones_from_config(config)
 
     def test_non_gcp_returns_empty(self):
-        config = config_pb2.ScaleGroupConfig(name="g")
+        config = ScaleGroupConfig(name="g")
         assert _zones_from_config(config) == []
 
 
 class TestCanScaleUpQuotaExhausted:
     """can_scale_up must respect quota_exceeded state."""
 
-    def test_cannot_scale_up_during_quota_exhaustion(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_cannot_scale_up_during_quota_exhaustion(self, unbounded_config: ScaleGroupConfig):
         """can_scale_up() returns False while quota_exceeded deadline is active."""
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("no quota")
@@ -1100,50 +1105,49 @@ class TestPrepareSliceConfigPreemptible:
     def test_preemptible_set_on_slice_template_is_preserved(self):
         """preemptible=True on slice_template is preserved through prepare_slice_config."""
 
-        parent = config_pb2.ScaleGroupConfig(
+        parent = ScaleGroupConfig(
             name="test-group",
+            slice_template=SliceConfig(
+                capacity_type=CapacityType.PREEMPTIBLE,
+                gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="v2-alpha-tpuv5"),
+            ),
         )
-        parent.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
-        parent.slice_template.gcp.zone = "us-central1-a"
-        parent.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
-        assert result.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        assert result.capacity_type == CapacityType.PREEMPTIBLE
 
     def test_preemptible_false_by_default(self):
-        """capacity_type defaults to CAPACITY_TYPE_UNSPECIFIED when not set on template."""
+        """capacity_type defaults to None (unset) when not set on the template."""
 
-        parent = config_pb2.ScaleGroupConfig(
+        parent = ScaleGroupConfig(
             name="test-group",
+            slice_template=SliceConfig(gcp=GcpSliceConfig(zone="us-central1-a", runtime_version="v2-alpha-tpuv5")),
         )
-        parent.slice_template.gcp.zone = "us-central1-a"
-        parent.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
-        assert result.capacity_type == config_pb2.CAPACITY_TYPE_UNSPECIFIED
+        assert result.capacity_type is None
 
 
 class TestPrepareSliceConfigGpuCount:
     """prepare_slice_config propagates gpu_count from parent resources."""
 
     def test_gpu_count_propagated_from_resources(self):
-        parent = config_pb2.ScaleGroupConfig(name="gpu-group")
-        parent.resources.CopyFrom(
-            config_pb2.ScaleGroupResources(device_count=8, device_type=config_pb2.ACCELERATOR_TYPE_GPU)
+        # Construction runs ScaleGroupConfig's after-validator, deriving
+        # slice_template.gpu_count from resources (device_type=gpu, device_count=8).
+        parent = ScaleGroupConfig(
+            name="gpu-group",
+            resources=ScaleGroupResources(device_count=8, device_type=AcceleratorType.GPU),
+            slice_template=SliceConfig(coreweave=CoreweaveSliceConfig(instance_type="gd-8xh100ib-i128")),
         )
-        parent.slice_template.coreweave.instance_type = "gd-8xh100ib-i128"
-        # Simulate config loading: derive slice_template fields from resources
-        wrapper = config_pb2.IrisClusterConfig()
-        wrapper.scale_groups["gpu-group"].CopyFrom(parent)
-        _derive_slice_config_from_resources(wrapper)
-        parent = wrapper.scale_groups["gpu-group"]
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
         assert result.gpu_count == 8
 
     def test_gpu_count_zero_when_no_resources(self):
-        parent = config_pb2.ScaleGroupConfig(name="cpu-group")
-        parent.slice_template.coreweave.instance_type = "cd-gp-i64-erapids"
+        parent = ScaleGroupConfig(
+            name="cpu-group",
+            slice_template=SliceConfig(coreweave=CoreweaveSliceConfig(instance_type="cd-gp-i64-erapids")),
+        )
 
         result = prepare_slice_config(parent.slice_template, parent, "iris")
         assert result.gpu_count == 0
@@ -1166,7 +1170,7 @@ class TestPrepareSliceConfigGpuCount:
 class TestMarkSliceLockDiscipline:
     """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
 
-    def test_mark_slice_ready_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_mark_slice_ready_atomic(self, unbounded_config: ScaleGroupConfig):
         """lifecycle and worker_ids are set while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1186,7 +1190,7 @@ class TestMarkSliceLockDiscipline:
             assert state.lifecycle == SliceLifecycleState.READY
             assert state.worker_ids == addresses
 
-    def test_mark_slice_failed_atomic(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_mark_slice_failed_atomic(self, unbounded_config: ScaleGroupConfig):
         """lifecycle is set to FAILED while holding the lock."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1198,13 +1202,13 @@ class TestMarkSliceLockDiscipline:
             state = group._slices[handle.slice_id]
             assert state.lifecycle == SliceLifecycleState.FAILED
 
-    def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: ScaleGroupConfig):
         """mark_slice_ready on a nonexistent slice does not raise."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         group.mark_slice_ready("nonexistent", ["10.0.0.1"])
 
-    def test_mark_slice_failed_nonexistent_is_noop(self, unbounded_config: config_pb2.ScaleGroupConfig):
+    def test_mark_slice_failed_nonexistent_is_noop(self, unbounded_config: ScaleGroupConfig):
         """mark_slice_failed on a nonexistent slice does not raise."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
@@ -1257,15 +1261,14 @@ def _make_slice_handle(
     )
 
 
-def _make_multi_vm_config(num_vms: int = 4) -> config_pb2.ScaleGroupConfig:
-    config = config_pb2.ScaleGroupConfig(
+def _make_multi_vm_config(num_vms: int = 4) -> ScaleGroupConfig:
+    config = ScaleGroupConfig(
         name="multi-vm-group",
         buffer_slices=0,
         max_slices=10,
         num_vms=num_vms,
+        slice_template=SliceConfig(gcp=GcpSliceConfig(runtime_version="v2-alpha-tpuv5", zone="us-central1-a")),
     )
-    config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zone = "us-central1-a"
     return _with_resources(config, num_vms=num_vms)
 
 

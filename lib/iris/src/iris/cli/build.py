@@ -4,11 +4,21 @@
 """Image build commands."""
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import click
+from rigging.provenance import Provenance
+
+from iris.cluster.provenance import provenance_to_env
 
 GHCR_DEFAULT_ORG = "marin-community"
+
+# Compression for pushed images and their registry cache. The two must match: a
+# mismatch forces BuildKit to recompress every layer when exporting the cache
+# (the dominant cost of "exporting cache to registry"), whereas aligned settings
+# let it reuse the already-built blobs and let GHCR cross-repo blob-mount them.
+PUSH_COMPRESSION = "compression=zstd,compression-level=3"
 
 
 def _is_verbose(ctx: click.Context) -> bool:
@@ -21,27 +31,17 @@ def _is_verbose(ctx: click.Context) -> bool:
 
 
 def get_git_sha() -> str:
-    """Short hash of the current working tree content.
+    """Short hash of the current working tree content (the image dedup key).
 
-    Returns the tree hash (``^{tree}``) of HEAD plus any staged/unstaged
-    changes. This is deterministic: the same tree content always produces
-    the same hash, so ``iris build`` and a later ``worker-restart
-    --skip-current-hash`` see matching values without having to be invoked
-    back-to-back. A commit hash would not be stable because ``git stash
-    create`` mints a new commit with the current timestamp on every call.
+    Returns the tree hash of HEAD plus any staged/unstaged changes. This is
+    deterministic: the same tree content always produces the same hash, so
+    ``iris build`` and a later ``worker-restart --skip-current-hash`` see
+    matching values without having to be invoked back-to-back.
     """
-    # `git stash create` captures dirty state as a transient commit object;
-    # we then deref to its tree to drop the timestamp.
-    stash = subprocess.run(["git", "stash", "create"], capture_output=True, text=True)
-    ref = stash.stdout.strip() or "HEAD"
-    result = subprocess.run(
-        ["git", "rev-parse", "--short", f"{ref}^{{tree}}"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise click.ClickException("Failed to get git SHA. Are you in a git repository?")
-    return result.stdout.strip()
+    try:
+        return Provenance.from_git().dedup_key
+    except RuntimeError as e:
+        raise click.ClickException(f"Failed to get git SHA. Are you in a git repository? ({e})") from e
 
 
 def _versioned_tag(image_base: str, git_sha: str) -> str:
@@ -222,7 +222,11 @@ def build_image(
 
     cmd = ["docker", "buildx", "build", "--platform", platform]
     cmd.extend(["--target", image_type])
-    cmd.extend(["--build-arg", f"IRIS_GIT_HASH={git_sha}"])
+    # tree_hash is pinned to the rollout's git_sha (which the tags also use) so a
+    # mid-build edit can't make a worker report a hash that disagrees with its tag.
+    provenance = replace(Provenance.from_git(), tree_hash=git_sha)
+    for key, value in provenance_to_env(provenance).items():
+        cmd.extend(["--build-arg", f"{key}={value}"])
     for t in all_tags:
         cmd.extend(["-t", t])
     cmd.extend(["-f", str(dockerfile_path)])
@@ -231,8 +235,16 @@ def build_image(
     cmd.extend(["--cache-from", f"type=registry,ref={cache_ref}"])
 
     if push:
-        cmd.extend(["--cache-to", f"type=registry,ref={cache_ref},mode=max"])
-        cmd.extend(["--output", "type=image,compression=zstd,compression-level=3,push=true"])
+        # oci-mediatypes/image-manifest store the cache as a single OCI image,
+        # required for non-gzip (zstd) cache on registries. See PUSH_COMPRESSION
+        # for why the cache and image compression are kept in lockstep.
+        cmd.extend(
+            [
+                "--cache-to",
+                f"type=registry,ref={cache_ref},mode=max,{PUSH_COMPRESSION},oci-mediatypes=true,image-manifest=true",
+            ]
+        )
+        cmd.extend(["--output", f"type=image,{PUSH_COMPRESSION},push=true"])
         cmd.append("--provenance=false")
     else:
         cmd.extend(["--output", f"type=docker,compression=zstd,compression-level=1,name={tag}"])

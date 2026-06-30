@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import tempfile
 
 import chex
@@ -120,6 +121,30 @@ def test_llama_param_counts_dont_change_with_seqlen():
     model = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=32), key=random.PRNGKey(0))
     model2 = LlamaLMHeadModel.init(hax.Axis("v", 512), _get_llama_config(seq_len=64), key=random.PRNGKey(0))
     assert parameter_count(model) == parameter_count(model2)
+
+
+def test_llama_resize_vocab_grows_embeddings_and_head():
+    # untied: both the input embeddings and the lm_head must be resized to the new vocab
+    Vocab = hax.Axis("vocab", 50)
+    model = LlamaLMHeadModel.init(Vocab, _get_llama_config(), key=random.PRNGKey(0))
+    assert model.lm_head is not None
+
+    resized = model.resize_vocab(64, key=random.PRNGKey(1))
+    assert resized.Vocab.size == 64
+    assert resized.embeddings.Vocab.size == 64
+    assert resized.lm_head.Out.size == 64
+    # the rows for the original tokens are preserved
+    chex.assert_trees_all_close(resized.lm_head.weight["vocab", : Vocab.size].array, model.lm_head.weight.array)
+
+    # tied: there is no separate lm_head, so only the embeddings are resized
+    tied_config = dataclasses.replace(_get_llama_config(), tie_word_embeddings=True)
+    tied = LlamaLMHeadModel.init(Vocab, tied_config, key=random.PRNGKey(0))
+    assert tied.lm_head is None
+
+    resized_tied = tied.resize_vocab(40, key=random.PRNGKey(1))
+    assert resized_tied.lm_head is None
+    assert resized_tied.Vocab.size == 40
+    assert resized_tied.embeddings.Vocab.size == 40
 
 
 @skip_if_no_torch

@@ -31,14 +31,13 @@ from urllib.parse import urlparse
 import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
-from finelog.rpc.finelog_stats_connect import (
-    StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
+from rigging.server_auth import (
+    NullAuthInterceptor,
+    RequestAuthPolicy,
+    extract_bearer_token,
+    identity_scope,
 )
-from finelog.rpc.logging_connect import LogServiceASGIApplication
-from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
-from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Match, Mount, Route
@@ -47,6 +46,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller import endpoint_proxy
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
     _AUTH_POLICY_ATTR,
@@ -57,20 +57,14 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import (
-    SESSION_COOKIE,
-    ControllerAuthPolicy,
-    NullAuthInterceptor,
-    authorize_method,
-    extract_bearer_token,
-    identity_scope,
-)
+from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceASGIApplication
+from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
-from iris.rpc.stats_connect import StatsServiceWSGIApplication
+from iris.rpc.stats_connect import StatsServiceASGIApplication
 from iris.rpc.stats_service import RpcStatsService
 
 logger = logging.getLogger(__name__)
@@ -98,7 +92,7 @@ async def _enforce_http_auth(
     scope: Scope,
     receive: Receive,
     send: Send,
-    policy: ControllerAuthPolicy,
+    policy: RequestAuthPolicy,
 ) -> bool:
     """Resolve auth for an ASGI scope; on failure send a 401 and return False.
 
@@ -108,7 +102,7 @@ async def _enforce_http_auth(
     (which intercepts before any route can match).
     """
     headers = _scope_headers(scope)
-    token = extract_bearer_token(headers)
+    token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
     try:
         identity = policy.resolve(
             token,
@@ -136,7 +130,7 @@ class _RouteAuthMiddleware:
     so HTTP and gRPC layers agree on allow/deny for every token state.
     """
 
-    def __init__(self, app: Starlette, policy: ControllerAuthPolicy):
+    def __init__(self, app: Starlette, policy: RequestAuthPolicy):
         self._app = app
         self._policy = policy
         self._router = app.router
@@ -240,15 +234,15 @@ class _DashboardAuthInterceptor:
     - no token + required → rejected
     """
 
-    def __init__(self, policy: ControllerAuthPolicy):
+    def __init__(self, policy: RequestAuthPolicy):
         self._policy = policy
-        self._null = NullAuthInterceptor(verifier=policy.verifier)
+        self._null = NullAuthInterceptor(verifier=policy.verifier, cookie_name=SESSION_COOKIE)
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
 
         headers = ctx.request_headers()
-        token = extract_bearer_token(headers)
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
         try:
             identity = self._policy.resolve(
                 token,
@@ -295,6 +289,15 @@ class _DashboardAuthInterceptor:
 # ``iris.oa.dev``, or any other public host.
 PROXY_HOST_LABEL = "proxy"
 
+# Backward-compat for finelog clients built before logs moved behind the generic
+# endpoint proxy: they resolve /system/log-server to the bare controller URL and
+# POST to /finelog.logging.LogService/<method> directly. We forward those to the
+# log server through the same EndpointProxy the dashboard uses, so no typed
+# LogService forwarding mount is needed on the controller. The encoded name is
+# the endpoint's wire name with the leading slash dropped and "/" -> ".".
+_LOG_SERVICE_RPC_PREFIX = "finelog.logging.LogService"
+_LOG_SERVER_PROXY_NAME = LOG_SERVER_ENDPOINT_NAME.strip("/").replace("/", ".")
+
 
 def _extract_proxy_subdomain(host: str) -> str | None:
     """Return the encoded endpoint name from a Host header, or None.
@@ -338,7 +341,7 @@ class _SubdomainProxyMiddleware:
         app: ASGIApp,
         *,
         endpoint_proxy: EndpointProxy,
-        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
+        auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
@@ -379,26 +382,6 @@ class _SubdomainProxyMiddleware:
         return headers.get("x-forwarded-host") or headers.get("host", "")
 
 
-_LEGACY_FETCH_LOGS_PATH = "/iris.cluster.ControllerService/FetchLogs"
-_CANONICAL_FETCH_LOGS_PATH = "/finelog.logging.LogService/FetchLogs"
-_CANONICAL_PUSH_LOGS_PATH = "/finelog.logging.LogService/PushLogs"
-
-
-class _LegacyFetchLogsRedirect:
-    """Rewrites the legacy ControllerService/FetchLogs path to the canonical
-    LogService path so old workers reach the LogService mount, where the
-    full auth + timing + concurrency interceptor chain handles the request.
-    """
-
-    def __init__(self, app: ASGIApp):
-        self._app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope.get("type") == "http" and scope.get("path") == _LEGACY_FETCH_LOGS_PATH:
-            scope = {**scope, "path": _CANONICAL_FETCH_LOGS_PATH}
-        await self._app(scope, receive, send)
-
-
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -411,16 +394,17 @@ class ControllerDashboard:
     def __init__(
         self,
         service: ControllerServiceImpl,
-        log_service: LogServiceProxy,
+        *,
+        endpoint_service: EndpointServiceImpl | None = None,
         host: str = "0.0.0.0",
         port: int = 8080,
         auth_provider: str | None = None,
-        finelog_stats_service: StatsServiceProxy | None = None,
-        auth_policy: ControllerAuthPolicy = ControllerAuthPolicy(),
+        auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._service = service
-        self._log_service = log_service
-        self._finelog_stats_service = finelog_stats_service
+        # Defaults to the service's own backend; the two must share one instance
+        # so a system endpoint registered on one is resolvable through the other.
+        self._endpoint_service = endpoint_service or service.endpoint_service
         self._host = host
         self._port = port
         self._auth_provider = auth_provider
@@ -440,20 +424,16 @@ class ControllerDashboard:
         return self._app
 
     def _create_app(self) -> ASGIApp:
-        # Two timing interceptors: only the controller chain feeds the stats
-        # collector, so the panel stays a clean view of ControllerService
-        # traffic. The log server runs in a subprocess and will gain its own
-        # collector separately; the controller-side LogService mount is a
-        # legacy proxy whose forwarded calls would just add noise here.
+        # Only the controller RPC chain feeds the stats collector. Finelog RPCs
+        # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
-        log_timing = RequestTimingInterceptor(include_traceback=include_tb)
         if self._auth_provider is not None and self._auth_policy.request_auth_enabled:
             auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
             # when present but treat everything as anonymous/admin.
-            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier)
+            auth_interceptor = NullAuthInterceptor(verifier=self._auth_policy.verifier, cookie_name=SESSION_COOKIE)
         controller_interceptors = [auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
@@ -463,43 +443,26 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
+        # Leased service-discovery registry on its own wire surface. The legacy
+        # ControllerService.{Register,Unregister,List}Endpoint RPCs forward into
+        # the same backend in-process (see ControllerServiceImpl); new clients
+        # call this service directly to learn their lease and renew.
+        endpoint_rpc_app = EndpointServiceASGIApplication(
+            service=AsyncServiceAdapter(self._endpoint_service),
+            interceptors=controller_interceptors,
+            compressions=IRIS_RPC_COMPRESSIONS,
+        )
+
         # StatsService: reuses the auth interceptor (so non-admins can't read
         # sampled request previews) but skips RequestTimingInterceptor so the
         # stats endpoint itself doesn't pollute the numbers it reports.
-        stats_wsgi_app = StatsServiceWSGIApplication(
-            service=RpcStatsService(self._stats_collector),
+        stats_app = StatsServiceASGIApplication(
+            service=AsyncServiceAdapter(RpcStatsService(self._stats_collector)),
             interceptors=[auth_interceptor],
             compressions=IRIS_RPC_COMPRESSIONS,
         )
-        stats_app = WSGIMiddleware(stats_wsgi_app)
 
-        # PushLogs is kept on the controller as a forwarding proxy: older workers
-        # cached /system/log-server -> controller URL, so we must accept their
-        # pushes and forward them to the real log server. Forwarding happens
-        # transparently because self._log_service is a LogServiceProxy whose
-        # push_logs() calls the remote LogService over RPC.
-        # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
-        # parallel log-segment scans against the finelog store.
-        log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
-        log_app = LogServiceASGIApplication(
-            service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
-        )
-
-        # Backward-compat: clients/workers built before the finelog lift call
-        # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
-        # to /finelog.logging.LogService/*, so mount the same ASGI app at the
-        # legacy prefix and register relative-path aliases.
-        # connectrpc dispatch (_server_async.py) first looks up scope["path"]
-        # directly; under the Starlette Mount the legacy prefix is stripped to
-        # a relative path. Adding relative keys lets that first lookup succeed
-        # regardless of which mount handled the request. We pre-resolve so the
-        # aliased dict survives lifespan/lazy resolution.
-        log_app._resolved_endpoints = dict(log_app._resolve_endpoints(self._log_service))
-        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_CANONICAL_FETCH_LOGS_PATH]
-        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_CANONICAL_PUSH_LOGS_PATH]
-        _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
-
-        self._endpoint_proxy = EndpointProxy(self._service.resolve_endpoint)
+        self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
@@ -524,6 +487,18 @@ class ControllerDashboard:
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
+        @requires_auth
+        async def _legacy_log_service(request: Request) -> Response:
+            # Forward pre-proxy clients' bare LogService calls to the log server
+            # through the generic endpoint proxy (see _LOG_SERVER_PROXY_NAME).
+            method = request.path_params["method"]
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=_LOG_SERVER_PROXY_NAME,
+                sub_path=f"{_LOG_SERVICE_RPC_PREFIX}/{method}",
+                proxy_prefix="",
+            )
+
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
@@ -546,18 +521,15 @@ class ControllerDashboard:
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
-            Mount(log_app.path, app=log_app),
-            Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
+            Route(
+                f"/{_LOG_SERVICE_RPC_PREFIX}/{{method}}",
+                _legacy_log_service,
+                methods=["POST"],
+            ),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
-            Mount(stats_wsgi_app.path, app=stats_app),
+            Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
+            Mount(stats_app.path, app=stats_app),
         ]
-        if self._finelog_stats_service is not None:
-            finelog_stats_asgi_app = FinelogStatsServiceASGIApplication(
-                service=self._finelog_stats_service,
-                interceptors=[auth_interceptor],
-                compressions=IRIS_RPC_COMPRESSIONS,
-            )
-            routes.append(Mount(finelog_stats_asgi_app.path, app=finelog_stats_asgi_app))
         routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
@@ -577,9 +549,6 @@ class ControllerDashboard:
         wrapped: ASGIApp = app
         if self._auth_policy.request_auth_enabled and self._auth_provider is not None:
             wrapped = _RouteAuthMiddleware(app, self._auth_policy)
-        # Wrap auth so the legacy FetchLogs rewrite happens before route
-        # matching: auth and routing both see the canonical path.
-        wrapped = _LegacyFetchLogsRedirect(wrapped)
         # Subdomain dispatch wraps everything: subdomain requests don't match
         # any Starlette route, so _RouteAuthMiddleware would default-allow
         # them. This middleware enforces auth itself before forwarding.
@@ -613,15 +582,23 @@ class ControllerDashboard:
     def _auth_config(self, request: Request) -> JSONResponse:
         """Unauthenticated endpoint telling the frontend whether auth is required."""
         has_session = SESSION_COOKIE in request.cookies
-        descriptor = backend_descriptor(self._service.provider)
+        descriptors = {bid: backend_descriptor(b) for bid, b in self._service.backends.items()}
+        union_capabilities = sorted({cap for d in descriptors.values() for cap in d.capabilities})
+        representative = backend_descriptor(self._service.provider)
         return JSONResponse(
             {
                 "auth_enabled": self._auth_provider is not None,
                 "provider": self._auth_provider,
                 "has_session": has_session,
+                # Union of every backend's capabilities gates which tabs the dashboard shows.
+                "capabilities": union_capabilities,
+                "backends": [
+                    {"id": bid, "name": d.name, "capabilities": d.capabilities} for bid, d in descriptors.items()
+                ],
+                # Representative backend for the single-backend frontend path.
                 "backend": {
-                    "name": descriptor.name,
-                    "capabilities": descriptor.capabilities,
+                    "name": representative.name,
+                    "capabilities": representative.capabilities,
                 },
                 "optional": self._auth_policy.optional,
             }
@@ -735,11 +712,6 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
-                methods=["POST"],
-            ),
-            Route(
-                "/finelog.logging.LogService/{method}",
-                functools.partial(self._proxy_rpc_post, service="finelog.logging.LogService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(endpoint_proxy.ALLOWED_METHODS)),

@@ -28,14 +28,13 @@ from iris.cluster.controller.scheduling.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import jobs_table, worker_attributes_table
-from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import AcceleratorType, CapacityType, JobName, UserBudgetDefaults, WorkerId
 from iris.cluster.worker.env_probe import _build_worker_attributes
-from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.conftest import eq_constraint, in_constraint
 from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -2243,19 +2242,19 @@ def _register_worker_with_probed_attributes(state, worker_id, address, metadata)
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.
     if metadata.device.HasField("tpu"):
-        accel_type = config_pb2.ACCELERATOR_TYPE_TPU
+        accel_type = AcceleratorType.TPU
         accel_variant = metadata.device.tpu.variant
     elif metadata.device.HasField("gpu"):
-        accel_type = config_pb2.ACCELERATOR_TYPE_GPU
+        accel_type = AcceleratorType.GPU
         accel_variant = metadata.device.gpu.variant
     else:
-        accel_type = config_pb2.ACCELERATOR_TYPE_CPU
+        accel_type = AcceleratorType.CPU
         accel_variant = ""
 
     attrs = _build_worker_attributes(
         accelerator_type=accel_type,
         accelerator_variant=accel_variant,
-        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+        capacity_type=CapacityType.ON_DEMAND,
         tpu_name=metadata.tpu_name,
         tpu_worker_id=str(0),
         device=metadata.device,

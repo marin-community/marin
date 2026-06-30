@@ -36,6 +36,10 @@
 
 !lib/rigging/
 
+# Repo-root cluster YAMLs. marin-rigging's wheel force-includes config/ as
+# rigging/clusters, so its editable build in the deps stage needs them present.
+!config/
+
 # marin-finelog (pure-Python client) builds editable from source; the deps stage
 # copies its pyproject + the src/ and config/ inputs its wheel build needs.
 !lib/finelog/pyproject.toml

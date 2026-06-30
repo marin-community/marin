@@ -12,30 +12,27 @@ from fray.cluster import ResourceConfig
 from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
 
-from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, resolve_grug_run_config
+from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, build_grug_run_config
 
 _DUMMY_DATA: Any = object()
 _GRUG_LAUNCHERS = [
     Path("experiments/grug/base/launch.py"),
     Path("experiments/grug/moe/launch.py"),
-    Path("experiments/grug/modular_opt/launch.py"),
 ]
 
 
-def test_resolve_grug_run_config_sets_temporary_checkpoint_base_path():
-    """``resolve_grug_run_config`` wires the checkpointer's ``base_path`` and
-    ``temporary_base_path`` to paths derived from the resolved output_path,
-    so callers that pin ``override_output_path`` get stable, predictable
-    checkpoint locations. The resolution runs under the *current* region's
-    ``marin_prefix()``, which is what makes cross-region preemption work.
+def test_build_grug_run_config_sets_temporary_checkpoint_base_path():
+    """``build_grug_run_config`` wires the checkpointer's ``base_path`` and
+    ``temporary_base_path`` to paths derived from the launch config's ``output_path``,
+    so a run gets stable, predictable checkpoint locations under the region its output
+    path lives in.
     """
     output_path = "gs://marin-us-east5/experiments/grug/base-trial"
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
-        run_config = resolve_grug_run_config(
-            "grug-temp-path-test",
+        run_config = build_grug_run_config(
             GrugBaseLaunchConfig(
                 model=GRUG_130M_MODEL,
                 data=_DUMMY_DATA,
@@ -48,9 +45,8 @@ def test_resolve_grug_run_config_sets_temporary_checkpoint_base_path():
                 mp="params=float32,compute=bfloat16,output=bfloat16",
                 tracker=NoopConfig(),
                 optimizer=AdamConfig(),
-                eval=None,
+                eval_batch_size=None,
             ),
-            override_output_path=output_path,
         )
 
     checkpointer = run_config.trainer.trainer.checkpointer

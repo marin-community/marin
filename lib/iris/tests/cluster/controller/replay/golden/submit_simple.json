@@ -1,9 +1,20 @@
 {
+  "backends": [
+    {
+      "allow_policy_json": "{}",
+      "attributes_json": "{}",
+      "backend_id": "default",
+      "kind": "",
+      "last_seen_ms": null,
+      "status": 0
+    }
+  ],
   "endpoints": [],
   "job_config": [
     {
       "bundle_id": "",
       "constraints_json": null,
+      "container_profile": 0,
       "coscheduling_group_by": "",
       "entrypoint_json": "{\"run_command\": {\"argv\": [\"python\", \"-c\", \"pass\"]}}",
       "environment_json": "{}",
@@ -31,6 +42,7 @@
   "job_workdir_files": [],
   "jobs": [
     {
+      "backend_id": "",
       "depth": 1,
       "error": null,
       "exit_code": null,
@@ -59,6 +71,7 @@
   "task_attempts": [],
   "tasks": [
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": -1,
       "current_worker_address": null,

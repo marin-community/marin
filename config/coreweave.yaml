@@ -1,0 +1,6 @@
+iris: coreweave
+data:
+  scheme: s3
+  region_buckets: { na: marin-na }
+  temp: { path: tmp, ttl_days: [1, 2, 3, 7] }
+  root: s3://marin-na/marin

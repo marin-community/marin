@@ -1,23 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""DOLMA 1.7 dataset definitions and tokenization."""
+"""DOLMA 1.7 dataset as lazy ``Dataset`` handles (the flat dataset catalog).
 
-import os.path
+One handle per quality split, tokenizing each split's glob from the fixed raw
+path. The llama3-tokenized splits are pinned to their existing caches so
+referencing them never re-tokenizes the multi-TiB corpus. This is the catalog
+only — handles, no weights; the mixture weights are policy and live in the
+experiment that chooses them.
+"""
 
-from marin.datakit.download.dolma import DOLMA_DATASETS, download_dolma_step
-from marin.execution.types import ExecutorStep, InputName, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
+from marin.datakit.download.dolma import DOLMA_DATASETS
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
 
-_dolma_download = download_dolma_step().as_executor_step()
+# Dolma 1.7 is stored at a fixed path that predates the versioning system.
+_DOLMA_V1_7 = "raw/dolma/v1.7"
 
-# Backward compat — some consumers import this
-downloads = {"dolma": _dolma_download}
-
-# Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
+# Sampling proportions from https://huggingface.co/datasets/allenai/dolma
 DOLMA_OLMO_MIXTURE_WEIGHTS = {
     "dolma/algebraic-stack": 12.6,
     "dolma/arxiv": 28.0,
@@ -36,10 +39,7 @@ DOLMA_OLMO_MIXTURE_WEIGHTS = {
     "dolma/wiki": 7.4,
 }
 
-# For dolma 1.7, we hardcode the path since it was added before versioning
-_DOLMA_V1_7_PATH = InputName.hardcoded("raw/dolma/v1.7")
-
-# NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
+# NB: hashes predate a hashing change; never recompute these caches.
 DOLMA_LLAMA3_OVERRIDES = {
     "c4": "tokenized/dolma/c4-e0e5ec",
     "cc": "tokenized/dolma/cc-74b017",
@@ -59,26 +59,15 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
-    """Generate tokenization steps for all Dolma 1.7 dataset splits."""
-    if tokenizer is None:
-        tokenizer = llama3_tokenizer
-
-    dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset, files in DOLMA_DATASETS.items():
-        step = ExecutorStep(
-            name=os.path.join("tokenized", "dolma", dataset),
-            fn=tokenize,
-            config=TokenizeConfig(
-                train_paths=[_DOLMA_V1_7_PATH / file for file in files],
-                validation_paths=versioned([]),
-                cache_path=this_output_path(),
-                tokenizer=versioned(tokenizer),
-            ),
+def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """One :class:`Dataset` handle per Dolma 1.7 split, keyed by ``dolma/<split>``."""
+    return {
+        f"dolma/{dataset}": tokenized(
+            f"dolma/{dataset}",
+            tokenizer=tokenizer,
+            paths=[f"{_DOLMA_V1_7}/{file}" for file in files],
+            pin=DOLMA_LLAMA3_OVERRIDES.get(dataset) if tokenizer == llama3_tokenizer else None,
+            version="2026.06.28",
         )
-
-        if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
-            step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
-        dolma_steps[os.path.join("dolma", dataset)] = step
-
-    return dolma_steps
+        for dataset, files in DOLMA_DATASETS.items()
+    }

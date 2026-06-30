@@ -3,8 +3,6 @@
 
 """Generate Grug variant comparison reports for newly added variants in a PR."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import subprocess

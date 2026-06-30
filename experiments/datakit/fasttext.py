@@ -38,8 +38,6 @@ score. Individual classifiers wire their own input discovery, output
 naming, hash_attrs, projection, and downstream artifact shape.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile
@@ -239,8 +237,8 @@ def _predict_batch(
     to score).
     """
     model = model_load_fn(model_path_str)
-    counters.increment(name="classify/batches_in")
-    counters.increment("classify/docs_in", len(batch))
+    counters.pipeline.update_counter("classify/batches_in", 1)
+    counters.pipeline.update_counter("classify/docs_in", len(batch))
 
     texts: list[str] = []
     records_to_predict: list[dict[str, Any]] = []
@@ -259,13 +257,13 @@ def _predict_batch(
             truncated += 1
         texts.append(normalized)
         records_to_predict.append(record)
-    counters.increment("classify/bytes_in", bytes_in)
-    counters.increment("classify/empty_text", len(batch) - len(texts))
+    counters.pipeline.update_counter("classify/bytes_in", bytes_in)
+    counters.pipeline.update_counter("classify/empty_text", len(batch) - len(texts))
     if truncated:
-        counters.increment("classify/docs_truncated", truncated)
+        counters.pipeline.update_counter("classify/docs_truncated", truncated)
 
     if not texts:
-        counters.increment("classify/batches_skipped_empty")
+        counters.pipeline.update_counter("classify/batches_skipped_empty", 1)
         return
 
     # IMPORTANT: per-text predict, NOT batch predict.
@@ -285,7 +283,7 @@ def _predict_batch(
     for record, text in zip(records_to_predict, texts, strict=True):
         labels, probs = model.predict(text, k=k, threshold=threshold)
         stripped = [_strip_label_prefix(label) for label in labels]
-        counters.increment("classify/predicted")
+        counters.pipeline.update_counter("classify/predicted", 1)
         yield {**record, output_field_name: _value_from_prediction(stripped, probs, score_target_label)}
 
 

@@ -205,6 +205,19 @@ def insert_job(
     )
 
 
+@writes_to(jobs_table, tasks_table)
+def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
+    """Stamp ``backend_id`` on each job and all of its tasks.
+
+    ``pins`` is a list of ``(job_id, backend_id)`` produced by the task->backend
+    meta-scheduler. Recording the pin lets later ticks skip routing the job; the
+    same id propagates to the job's tasks.
+    """
+    for job_id, backend_id in pins:
+        tx.execute(update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id=backend_id))
+        tx.execute(update(tasks_table).where(tasks_table.c.job_id == job_id).values(backend_id=backend_id))
+
+
 @writes_to(job_config_table)
 def insert_job_config(
     tx: Tx,
@@ -231,6 +244,7 @@ def insert_job_config(
     existing_job_policy: int,
     priority_band: int,
     task_image: str,
+    container_profile: int = 0,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
 ) -> None:
@@ -259,6 +273,7 @@ def insert_job_config(
             existing_job_policy=existing_job_policy,
             priority_band=priority_band,
             task_image=task_image,
+            container_profile=container_profile,
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
             fail_if_exists=fail_if_exists,
         )

@@ -2,44 +2,6 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
-## Inventory
-
-| File | Workflow Name | Trigger | Gate Type | Owner Domain | Local Reproduction |
-| --- | --- | --- | --- | --- | --- |
-| `dupekit-release-wheels.yaml` | Dupekit - Release Wheels | PR + push to main + workflow_dispatch | release | dupekit | see job steps |
-| `dupekit-unit.yaml` | Dupekit - Unit | PR + push to main | unit | dupekit | `cd lib/dupekit && uv run --frozen --group test pytest tests/ -v` |
-| `fray-unit.yaml` | Fray - Unit | PR + push to main | unit | fray | `cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/` |
-| `haliax-unit.yaml` | Haliax - Unit | PR + push to main | unit | haliax | `JAX_NUM_CPU_DEVICES=8 uv run --package marin-haliax pytest -c pyproject.toml tests` |
-| `iris-dev-restart.yaml` | Iris - Dev Restart | schedule (daily) + workflow_dispatch | ops | iris | see job steps |
-| `iris-release-iap-proxy.yaml` | Iris - Release IAP Proxy | PR + push to main | release | iris | see job steps |
-| `iris-smoke-coreweave.yaml` | Iris - Smoke - CoreWeave | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-smoke-gcp.yaml` | Iris - Smoke - GCP | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/` |
-| `levanter-dev-launch-small-fast.yaml` | Levanter - Dev - Launch Small Fast | workflow_dispatch | dev | levanter | see job steps |
-| `levanter-integration-gpt2-small.yaml` | Levanter - Integration - GPT-2 Small | workflow_dispatch | integration | levanter | see job steps |
-| `levanter-unit.yaml` | Levanter - Unit | PR + push to main | unit | levanter | `uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not slow and not torch"` |
-| `marin-canary-datakit-nemotron.yaml` | Marin - Canary - Datakit Nemotron | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-canary-ferry-coreweave.yaml` | Marin - Canary Ferry - CoreWeave | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-canary-ferry.yaml` | Marin - Canary Ferry | schedule + workflow_dispatch | canary | marin | see job steps |
-| `marin-docs.yaml` | Marin - Docs | PR + push to main | docs | marin | `uv run python infra/check_docs_source_links.py` |
-| `marin-integration.yaml` | Marin - Integration | PR + push to main + workflow_dispatch | integration | marin | `uv run pytest tests/integration/iris/` |
-| `marin-lint.yaml` | Marin - Lint | PR + push to main | lint | marin | `./infra/pre-commit.py --all-files` |
-| `marin-release-libs-wheels.yaml` | Marin - Release Libs Wheels | PR + tag push + schedule + workflow_dispatch | release | marin | see job steps |
-| `marin-smoke-datakit.yaml` | Marin - Smoke - Datakit | schedule + workflow_dispatch | smoke | marin | see job steps |
-| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin-core --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
-| `ops-claude-review.yaml` | Ops - Claude Review | PR + issue_comment | ops | claude | see job steps |
-| `ops-claude.yaml` | Ops - Claude | issue_comment + issues | ops | claude | see job steps |
-| `ops-codeql.yaml` | Ops - CodeQL | PR + push to main + schedule | ops | ops | see job steps |
-| `ops-docker-images.yaml` | Ops - Docker Images | schedule (weekly) + workflow_dispatch | ops | ops | see job steps |
-| `ops-grug-variant-diff.yaml` | Ops - Grug Variant Diff | PR | ops | ops | see job steps |
-| `ops-infra-dashboard.yaml` | Ops - Infra Dashboard | PR + push to main | ops | ops | see job steps |
-| `ops-nightshift-ci-tests.yaml` | Ops - Nightshift CI Tests | schedule + workflow_dispatch | integration | ops | see job steps |
-| `ops-nightshift-cleanup.yaml` | Ops - Nightshift Cleanup | schedule + workflow_dispatch | ops | ops | see job steps |
-| `ops-nightshift-doc-drift.yaml` | Ops - Nightshift Doc Drift | schedule + workflow_dispatch | docs | ops | see job steps |
-| `ops-stale.yaml` | Ops - Stale | schedule + workflow_dispatch | ops | ops | see job steps |
-| `zephyr-integration-shuffle.yaml` | Zephyr - Integration - Shuffle | workflow_dispatch | integration | zephyr | see job steps |
-| `zephyr-unit.yaml` | Zephyr - Unit | PR + push to main | unit | zephyr | `uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/` |
-
 ## Canonical recipe: open or update a bot PR with `git + gh`
 
 This recipe replaces `peter-evans/create-pull-request@v7`. It creates the PR if missing, updates it (force-with-lease) if present, reconciles labels, and writes `pr_url` and `pr_created` to `$GITHUB_OUTPUT`.
@@ -97,11 +59,15 @@ echo "pr_url=$PR_URL" >>"$GITHUB_OUTPUT"
 echo "pr_created=true" >>"$GITHUB_OUTPUT"
 ```
 
+
+
 ### Three details that bit v1
 
 - **URL capture.** `gh pr create` writes a human banner before the URL on non-TTY runners; capture from `gh pr view --json url` (or `gh pr list --json url`) instead of parsing `gh pr create` stdout.
-- **Stale branch + `--force-with-lease`.** `git checkout -B` against `HEAD` with no knowledge of `origin/$BRANCH` yields an empty lease, and the push will be rejected. Always `git fetch` the branch first and reset onto it when present, then re-apply the build-step edits before staging.
+- **Stale branch +** `--force-with-lease`**.** `git checkout -B` against `HEAD` with no knowledge of `origin/$BRANCH` yields an empty lease, and the push will be rejected. Always `git fetch` the branch first and reset onto it when present, then re-apply the build-step edits before staging.
 - **Label semantics.** `gh pr edit --add-label` accumulates; peter-evans `labels:` replaced. The reconcile loop above expresses replace-semantics explicitly. If callers want accumulate-only, they should set `DESIRED_LABELS` to the union and skip the second loop.
+
+
 
 ### `gh` token and permissions notes
 

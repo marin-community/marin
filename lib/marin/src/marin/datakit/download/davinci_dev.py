@@ -87,7 +87,7 @@ def ctx_row_to_doc(row: dict) -> list[dict]:
     repo_name = row.get("repo_name") or ""
     title = row.get("title") or ""
     if not repo_name or not title:
-        counters.increment("davinci_dev/ctx/dropped")
+        counters.pipeline.update_counter("davinci_dev/ctx/dropped", 1)
         return []
 
     sections = [
@@ -100,10 +100,10 @@ def ctx_row_to_doc(row: dict) -> list[dict]:
     ]
     text = "\n\n".join(s for s in sections if s).strip()
     if not text:
-        counters.increment("davinci_dev/ctx/dropped")
+        counters.pipeline.update_counter("davinci_dev/ctx/dropped", 1)
         return []
 
-    counters.increment("davinci_dev/ctx/kept")
+    counters.pipeline.update_counter("davinci_dev/ctx/kept", 1)
     return [text_document(text, "GAIR/daVinci-Dev/ctx-native")]
 
 
@@ -197,13 +197,13 @@ def _success_to_tag(success: bool | None) -> str | None:
 def env_row_to_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
     if not messages:
-        counters.increment("davinci_dev/env/dropped")
+        counters.pipeline.update_counter("davinci_dev/env/dropped", 1)
         return []
     tag = _success_to_tag(row.get("success") if "success" in row else None)
     rendered = "\n\n".join(_render_env_message(m) for m in messages)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
-    counters.increment("davinci_dev/env/kept")
+    counters.pipeline.update_counter("davinci_dev/env/kept", 1)
     return [text_document(text, "GAIR/daVinci-Dev/env-native")]
 
 

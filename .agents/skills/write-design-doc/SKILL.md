@@ -43,18 +43,18 @@ Once you have a framing paragraph, proceed directly to research. Don't batch a l
 
 ## 2. Research
 
-Spawn an `Explore` subagent (do not search yourself — keep the digest out of main context). Brief it with the framing paragraph and ask for:
+Use the `background-research` skill in design-doc mode. Prefer an isolated
+Explore subagent when available so the detailed digest stays out of main
+context. Use `low` or `medium` effort by default.
 
-- Relevant files with line numbers (the doc must reference real code).
-- Related designs in `.agents/projects/` — read them, note overlap.
-- Related GitHub issues/PRs via `gh` if the user named any, plus a quick `gh issue list --search` on the topic.
-- Existing utilities or abstractions the proposal might reuse (per `AGENTS.md` "Code Reuse").
+The research output must cover in-repo findings, prior-art shape when relevant,
+what surprised you, and what remains unclear. Ask whether the framing should
+shift before drafting.
 
-**For proposals that reinvent a category of system** (logger, stats store, queue, scheduler, KV, service-discovery layer, workflow engine, etc.), also do a **prior-art pass via web search** — in parallel with the in-repo Explore. Spawn a `general-purpose` agent (has WebSearch/WebFetch) with a focused brief: *what is the established shape of this kind of system, 2–4 representative implementations (OSS or well-known), and what design choices do they converge or disagree on?* Cap to ~5 results, ask for a bulleted digest under 200 words. The point is to surface obvious patterns we'd reinvent badly and give reviewers reference points — not a literature review. Skip for in-repo refactors, internal API tweaks, or anything where the category is novel to the world.
-
-Return a bulleted digest combining both passes: *"in-repo findings, prior-art shape, what surprised me, what's still unclear."* Ask whether the framing should shift before drafting.
-
-**Persist the research.** Save the full digest (in-repo findings with file:line refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to `.agents/projects/<slug>/research.md`. The design doc gets a short `## Background` section (3–5 sentences) linking to `research.md`.
+**Persist the research.** Save the full digest (in-repo findings with file:line
+refs, prior-art digest, anything load-bearing that won't fit the 1-pager) to
+`.agents/projects/<slug>/research.md`. The design doc gets a short
+`## Background` section (3-5 sentences) linking to `research.md`.
 
 ## 3. Interrogate
 

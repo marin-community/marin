@@ -10,6 +10,7 @@ constraint into one synthetic accelerator scale-up, so the cluster can DISCOVER
 whether that variant can actually be obtained in some region.
 """
 
+from iris.cluster.config import GcpSliceConfig, ScaleGroupConfig, ScaleGroupResources, SliceConfig
 from iris.cluster.constraints import (
     ConstraintOp,
     WellKnownAttribute,
@@ -23,9 +24,9 @@ from iris.cluster.controller.autoscaler.routing import (
     empirical_zone_capabilities,
 )
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.rpc import config_pb2, job_pb2
+from iris.cluster.types import AcceleratorType
+from iris.rpc import job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 TS = Timestamp.from_ms(1_000_000)
@@ -36,25 +37,26 @@ def _group(
     zone: str,
     *,
     variant: str = "v5p-8",
-    device_type: config_pb2.AcceleratorType = config_pb2.ACCELERATOR_TYPE_TPU,
+    device_type: AcceleratorType = AcceleratorType.TPU,
     device_count: int = 8,
     ready: int = 0,
 ) -> ScalingGroup:
     """A ScalingGroup in ``zone`` for ``variant``, optionally with ``ready`` READY slices."""
-    config = config_pb2.ScaleGroupConfig(name=name, buffer_slices=0, max_slices=10)
-    config.slice_template.gcp.runtime_version = "v2-alpha-tpuv5"
-    config.slice_template.gcp.zone = zone
-    config.resources.CopyFrom(
-        config_pb2.ScaleGroupResources(
+    config = ScaleGroupConfig(
+        name=name,
+        buffer_slices=0,
+        max_slices=10,
+        num_vms=1,
+        slice_template=SliceConfig(gcp=GcpSliceConfig(runtime_version="v2-alpha-tpuv5", zone=zone)),
+        resources=ScaleGroupResources(
             cpu_millicores=64_000,
             memory_bytes=64 * 1024**3,
             disk_bytes=100 * 1024**3,
             device_type=device_type,
             device_variant=variant,
             device_count=device_count,
-        )
+        ),
     )
-    config.num_vms = 1
     discovered = [make_fake_slice_handle(f"{name}-{i}", scale_group=name, all_ready=True) for i in range(ready)]
     platform = make_mock_platform(slices_to_discover=discovered)
     group = ScalingGroup(config, platform)
@@ -157,7 +159,7 @@ class TestAvailabilityProbeEntries:
         assert len(probes) == 1
 
     def test_gpu_probe_uses_gpu_device(self):
-        groups = [_group("g", "us-east5-b", variant="h100", device_type=config_pb2.ACCELERATOR_TYPE_GPU)]
+        groups = [_group("g", "us-east5-b", variant="h100", device_type=AcceleratorType.GPU)]
         demand = [_demand([availability_constraint("h100")])]
         probes = availability_probe_entries(groups, demand, available_variants=frozenset())
 

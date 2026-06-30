@@ -20,7 +20,6 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2, vm_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 from .conftest import make_scale_group_config

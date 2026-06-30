@@ -29,17 +29,17 @@ def row_to_doc(row: dict) -> list[dict]:
     prompt = row.get("input") or ""
     response = row.get("output") or ""
     if not prompt or not response:
-        counters.increment("superior_reasoning/dropped")
+        counters.pipeline.update_counter("superior_reasoning/dropped", 1)
         return []
 
     response = strip_think_tags(response)
     if not response:
-        counters.increment("superior_reasoning/dropped")
+        counters.pipeline.update_counter("superior_reasoning/dropped", 1)
         return []
 
     text = f"<user>\n{prompt}\n</user>\n\n<assistant>\n{response}\n</assistant>"
 
-    counters.increment("superior_reasoning/kept")
+    counters.pipeline.update_counter("superior_reasoning/kept", 1)
     return [text_document(text, "Alibaba-Apsara/Superior-Reasoning-SFT-gpt-oss-120b")]
 
 

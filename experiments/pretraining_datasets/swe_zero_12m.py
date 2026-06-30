@@ -1,41 +1,51 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SWE-ZERO-12M-trajectories pre-training dataset tokenization.
+"""SWE-ZERO-12M-trajectories pre-training dataset as a lazy Dataset handle.
 
-Download/normalize definitions live in marin.datakit.download.swe_zero_12m.
-This file wires the normalized output into a tokenize step for experiment
-pipelines.
+12.29M execution-free agentic-coding trajectories from
+AlienKevin/SWE-ZERO-12M-trajectories, rendered via the mini-swe-agent v1 format,
+normalized, and tokenized.
 """
 
-import os.path
+from marin.datakit.download.swe_zero_12m import HF_DATASET_ID, HF_REVISION, transform
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import hf_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-from marin.datakit.download.swe_zero_12m import swe_zero_12m_normalize_steps
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
-
-from experiments.marin_models import marin_tokenizer
-
-_download_spec, _normalize_spec = swe_zero_12m_normalize_steps()
-
-download: ExecutorStep = _download_spec.as_executor_step()
-normalized: ExecutorStep = _normalize_spec.as_executor_step()
+from experiments.marin_tokenizer import marin_tokenizer
 
 
-def tokenize_swe_zero_12m(*, tokenizer: str = marin_tokenizer) -> TokenizerStep:
-    return ExecutorStep(
-        name=os.path.join("tokenized", "swe-zero-12m"),
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[normalized / "outputs/main/*.parquet"],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-        ),
+def _run_transform(cfg: dict) -> None:
+    transform(input_path=cfg["input_path"], output_path=cfg["output_path"])
+
+
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(input_path=cfg["input_path"], output_path=cfg["output_path"])
+
+
+def swe_zero_12m_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """SWE-ZERO-12M-trajectories as a tokenized Dataset handle."""
+    dl = hf_download("raw/swe-zero-12m-trajectories", hf_id=HF_DATASET_ID, revision=HF_REVISION, version="2026.06.28")
+    processed = ArtifactStep(
+        name="processed/swe-zero-12m-trajectories",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_transform,
+        build_config=lambda ctx: {
+            "input_path": ctx.artifact_path(dl),
+            "output_path": ctx.output_path,
+            "schema_version": "v1",
+        },
+        deps=(dl,),
     )
-
-
-if __name__ == "__main__":
-    executor_main(steps=[tokenize_swe_zero_12m()])
+    norm = ArtifactStep(
+        name="normalized/swe-zero-12m",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_normalize,
+        build_config=lambda ctx: {"input_path": ctx.artifact_path(processed), "output_path": ctx.output_path},
+        deps=(processed,),
+    )
+    return tokenized("swe-zero-12m", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28")

@@ -24,12 +24,13 @@ from haliax.nn.scan import BlockFoldable, BlockSeq, ScanCheckpointPolicy, Stacke
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.compat.hf_config import hf_config_from_kwargs, hf_rope_config
 from levanter.layers import RmsNormConfig
 from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaMlp
 from levanter.models.olmo import Olmo2Embedding
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
@@ -101,8 +102,8 @@ class Olmo3Config(HFCompatConfig):
 
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "Olmo3Config":  # type: ignore[override]
-        rope_theta = getattr(hf_config, "rope_theta", 10000.0)
-        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        rope_theta, rope_scaling = hf_rope_config(hf_config)
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
         return Olmo3Config(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -127,7 +128,8 @@ class Olmo3Config(HFCompatConfig):
 
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
-        return HfOlmo3Config(
+        return hf_config_from_kwargs(
+            HfOlmo3Config,
             max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
@@ -207,22 +209,12 @@ class Olmo3Config(HFCompatConfig):
         )
 
     def attention_config_for_layer(self, layer_idx: int) -> AttentionConfig:
-        """Build attention config for a specific layer.
-
-        OLMo3 uses different RoPE configurations per layer type:
-        - sliding_attention: uses "default" (vanilla) RoPE + sliding window
-        - full_attention: uses the model's rope config (e.g., YARN)
-
-        This matches HuggingFace's implementation which creates separate rotary
-        embedding modules for each attention type.
-        """
+        """Build attention config for a specific layer."""
         attn_config = self.attention_config()
         layer_types = self.get_layer_types()
         attention_type = layer_types[layer_idx]
         if attention_type == "sliding_attention":
-            # Sliding attention uses vanilla RoPE (not YARN) + sliding window
-            vanilla_rope = DefaultRotaryEmbeddingsConfig(theta=self.rope.theta)
-            return dataclasses.replace(attn_config, sliding_window=self.sliding_window, rope=vanilla_rope)
+            return dataclasses.replace(attn_config, sliding_window=self.sliding_window)
         return attn_config
 
     def init_attention(self, layer_idx: int, *, key) -> Attention:
@@ -408,12 +400,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
             return self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[Olmo3Config]":
-        new_Vocab = self.Vocab.resize(new_size)
-        k1, k2 = maybe_rng_split(key, 2)
-        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
-        if self.lm_head is not None:
-            new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
-            new_lm_head = dataclasses.replace(self.lm_head, Out=new_Vocab, weight=new_lm_matrix)
-            return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
-        else:
-            return dataclasses.replace(self, embeddings=new_embeddings)
+        new_embeddings, new_lm_head = resize_embeddings_and_lm_head(
+            self.Vocab, self.embeddings, self.lm_head, new_size, key
+        )
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)

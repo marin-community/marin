@@ -245,6 +245,49 @@ def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), out.array, rtol=1e-4, atol=1e-4)
 
 
+@skip_if_no_torch
+def test_olmo3_sliding_attention_yarn_vs_hf():
+    """Regression: TF5 OLMo3 applies the model RoPE config to sliding layers too."""
+    import torch  # noqa: PLC0415  # optional dep: torch
+    from transformers.models.olmo3 import modeling_olmo3  # noqa: PLC0415  # optional dep: torch
+
+    rope_config = YarnRotaryEmbeddingsConfig(
+        theta=500000.0,
+        factor=8.0,
+        original_max_position_embeddings=32,
+        beta_fast=32.0,
+        beta_slow=1.0,
+    )
+    config = dataclasses.replace(_get_olmo3_config(num_kv_heads=2, seq_len=256), rope=rope_config)
+    layer_idx = 0
+
+    attention = _get_olmo3_attention(config, layer_idx=layer_idx, key=random.PRNGKey(0))
+    state = hax.state_dict.to_torch_compatible_state_dict(attention)
+    state = {k: torch.from_numpy(np.array(v)) for k, v in state.items()}
+
+    hf_config = config.to_hf_config(32000)
+    hf_rotary_emb = modeling_olmo3.Olmo3RotaryEmbedding(config=hf_config)
+    hf_attention = modeling_olmo3.Olmo3Attention(hf_config, layer_idx=layer_idx)
+    hf_attention.load_state_dict(state, strict=True)
+
+    x, mask = _get_random_inputs(config)
+    x_torch = torch.from_numpy(np.array(x.array))
+    batch_size = x_torch.shape[0]
+    mask_for_hf = mask.with_sliding_window(config.sliding_window)
+    explicit_mask = torch.from_numpy(np.array(mask_for_hf.materialize(config.max_Pos, config.KeyPos).array))
+    mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
+    mask_torch = (mask_torch == 0).float() * -1e9
+
+    out = attention(x, mask)
+    position_ids = torch.arange(config.max_Pos.size).unsqueeze(0)
+    cos, sin = hf_rotary_emb(x_torch, position_ids)
+    hf_out = hf_attention(
+        x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
+    )
+
+    chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), out.array, rtol=1e-4, atol=1e-4)
+
+
 @pytest.mark.parametrize("layer_idx", [0, 3])  # 0 = sliding, 3 = full
 def test_olmo3_attention_layer_type_detection(layer_idx):
     """Test that attention correctly detects its layer type."""

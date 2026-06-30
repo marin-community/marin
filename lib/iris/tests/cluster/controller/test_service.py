@@ -11,18 +11,26 @@ import concurrent.futures
 import logging
 import time
 from datetime import date, timedelta
+from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key, device_variant_constraint
+from iris.cluster.constraints import (
+    BACKEND_CONSTRAINT_KEY,
+    Constraint,
+    ConstraintOp,
+    WellKnownAttribute,
+    availability_key,
+    device_variant_constraint,
+)
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment, finalize
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile import dispatch
@@ -38,15 +46,13 @@ from iris.cluster.controller.service import (
     _job_status_counts,
     _live_user_stats,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-from iris.cluster.types import JobName, WorkerId, tpu_device
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.auth import VerifiedIdentity, _verified_identity
+from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -155,6 +161,96 @@ def test_launch_job_returns_job_id(service):
     )
     assert status_response.job.job_id == JobName.root("test-user", "test-job").to_wire()
     assert status_response.job.state == job_pb2.JOB_STATE_PENDING
+
+
+class _FeasibilityAutoscaler:
+    """Autoscaler stub whose job_feasibility returns a fixed verdict."""
+
+    def __init__(self, error: str | None):
+        self._error = error
+
+    def job_feasibility(self, constraints, replicas=None, resources=None) -> str | None:
+        return self._error
+
+
+def test_launch_job_feasible_on_non_first_backend(service):
+    """A job the first backend's autoscaler rejects still launches when a later
+    backend can host it — feasibility is the OR across every backend."""
+    rejecting = Mock()
+    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    admitting = Mock()
+    admitting.autoscaler = _FeasibilityAutoscaler(None)
+    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+
+    response = service.launch_job(make_job_request("multi-backend-ok"), None)
+
+    assert response.job_id == JobName.root("test-user", "multi-backend-ok").to_wire()
+
+
+def test_launch_job_rejected_when_all_backends_infeasible(service):
+    """Submit fails fast only when every backend's autoscaler rejects the shape."""
+    gcp = Mock()
+    gcp.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    cw = Mock()
+    cw.autoscaler = _FeasibilityAutoscaler("region us-east5 has no h100 pool")
+    service._controller.backends = {"gcp": gcp, "cw": cw}
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(make_job_request("multi-backend-bad"), None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_launch_job_pinned_backend_checks_only_that_backend(service):
+    """A job pinned with --backend is checked only against the pinned backend: it
+    fails fast when that backend rejects, even if another backend is feasible."""
+    rejecting = Mock()
+    rejecting.autoscaler = _FeasibilityAutoscaler("no scaling group matches gpu:h100")
+    admitting = Mock()
+    admitting.autoscaler = _FeasibilityAutoscaler(None)
+    service._controller.backends = {"gcp": rejecting, "cw": admitting}
+
+    request = make_job_request("pinned-bad")
+    request.constraints.append(Constraint.create(key=BACKEND_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="gcp").to_proto())
+
+    with pytest.raises(ConnectError) as exc_info:
+        service.launch_job(request, None)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+
+
+def test_profile_worker_routes_to_worker_backend(service, state):
+    """ProfileTask on /system/worker/<id> dispatches to the worker's backend
+    (resolved from its scale group), not the representative backend."""
+    with state._db.transaction() as cur:
+        ops.worker.register(
+            cur,
+            worker_id=WorkerId("w-cw"),
+            address="w-cw:8080",
+            metadata=make_worker_metadata(),
+            ts=Timestamp.now(),
+            health=state._health,
+            worker_attrs=state._worker_attrs,
+            scale_group="cw-h100",
+        )
+    cw = Mock()
+    cw.profile_task.return_value = job_pb2.ProfileTaskResponse(profile_data=b"cw-profile")
+    # This mock backend only routes the profile dispatch; the worker's liveness is
+    # registered into the default backend's tracker above, so cw owns no tracker.
+    cw.health = None
+    service._controller.backends = {DEFAULT_BACKEND_ID: service._controller.provider, "cw": cw}
+    service._controller.scale_group_to_backend = {"cw-h100": "cw"}
+
+    resp = service.profile_task(
+        job_pb2.ProfileTaskRequest(
+            target="/system/worker/w-cw",
+            duration_seconds=1,
+            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile()),
+        ),
+        None,
+    )
+
+    # The profile bytes could only have come from the cw backend's provider.
+    assert resp.profile_data == b"cw-profile"
+    service._controller.provider.profile_task.assert_not_called()
 
 
 def test_get_job_status_reports_parent_job_id(service):
@@ -876,10 +972,10 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path, 
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     auth_service.launch_job(make_job_request("/alice/my-job"), None)
@@ -905,10 +1001,10 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     auth_service.launch_job(make_job_request("/alice/parent-job"), None)
@@ -1545,10 +1641,10 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -1580,10 +1676,10 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
@@ -1826,6 +1922,86 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     assert proto.state == job_pb2.TASK_STATE_RUNNING
     # current attempt is loaded -> started_at on the proto is populated
     assert proto.started_at.epoch_ms > 0
-    # exactly one attempt entry — the current one — even if more existed
+    # Only the current attempt is attached: this task has no failed attempts in
+    # its history, so the failure-surfacing path contributes nothing.
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+def test_list_tasks_surfaces_latest_failed_attempt_after_retry(service, state):
+    """The latest failed attempt stays visible after a retry, but history is bounded.
+
+    The dashboard's "failed tasks" callout reads ``ListTasks``. Before the fix
+    the listing attached only the current attempt, so a task that failed and was
+    then retried (current attempt running) showed no failure at all. The listing
+    now also attaches the *most recent* failed attempt — only the latest, so a
+    task stuck in a long retry loop doesn't ship thousands of rows — and carries
+    the authoritative ``failure_count`` for the count badge.
+    """
+    request = make_job_request("list-tasks-failed-history")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-failed-history")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-failed-history")
+    _register_worker(state, worker_id)
+    # Attempt 0 fails; a second failure (attempt 1) follows; the task is then
+    # retried into a running attempt 2. Only the latest failure should surface.
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_FAILED, error="boom: first")
+
+    now = Timestamp.now()
+    with state._db.transaction() as cur:
+        cur.execute(
+            task_attempts_table.insert().values(
+                task_id=task_id,
+                attempt_id=1,
+                worker_id=worker_id,
+                state=job_pb2.TASK_STATE_FAILED,
+                created_at_ms=now,
+                started_at_ms=now,
+                finished_at_ms=now,
+                error="boom: second",
+                attempt_uid="b" * 16,
+            )
+        )
+        cur.execute(
+            task_attempts_table.insert().values(
+                task_id=task_id,
+                attempt_id=2,
+                worker_id=worker_id,
+                state=job_pb2.TASK_STATE_RUNNING,
+                created_at_ms=now,
+                started_at_ms=now,
+                attempt_uid="c" * 16,
+            )
+        )
+        cur.execute(
+            sa_update(tasks_table)
+            .where(tasks_table.c.task_id == task_id)
+            .values(
+                state=job_pb2.TASK_STATE_RUNNING,
+                current_attempt_id=2,
+                failure_count=2,
+                error=None,
+                exit_code=None,
+            )
+        )
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    proto = response.tasks[0]
+    # The task reads as running, but its latest failure is still surfaced.
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    assert proto.current_attempt_id == 2
+    assert proto.failure_count == 2
+    by_id = {a.attempt_id: a for a in proto.attempts}
+    # Only the latest failed attempt (1) plus the current attempt (2): the older
+    # failure (0) is dropped so a long retry loop stays bounded.
+    assert set(by_id) == {1, 2}
+    assert by_id[1].state == job_pb2.TASK_STATE_FAILED
+    assert by_id[1].error == "boom: second"
+    assert by_id[2].state == job_pb2.TASK_STATE_RUNNING
+    # Current attempt stays last so _current_attempt() resolves correctly.
+    assert proto.attempts[-1].attempt_id == proto.current_attempt_id

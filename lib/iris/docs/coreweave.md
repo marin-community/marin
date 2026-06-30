@@ -184,7 +184,9 @@ operator reference (any `--cluster=NAME`) and the lifecycle details behind it.
 - Controller extras: `uv pip install 'marin-iris[controller]'`
 
 For S3 storage, export `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`;
-`iris cluster start` turns them into the `iris-s3-credentials` Secret.
+`iris cluster start` folds them — plus the derived endpoint/region/`FSSPEC_S3`
+config — into the `iris-task-env` Secret, projected into the controller and task
+pods via `envFrom`.
 
 > **Note**: CoreWeave AI Object Storage (`cwobject.com`, `cwlota.com`) uses
 > virtual-hosted-style S3 addressing, which is auto-detected and configured but
@@ -258,6 +260,22 @@ prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
 Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
+
+The `gpu` extra also pulls the CUDA toolchain wheels (`ptxas`/`nvlink` from
+`nvidia-cuda-nvcc`, `libdevice.10.bc` from `nvidia-nvvm`) into the task venv. A
+GPU job's setup scripts then expose them (see
+`iris.cluster.setup_scripts.cuda_toolchain_setup_script`): the toolchain binaries are
+symlinked into the venv's `bin` (already on `PATH` once the venv is activated),
+and `libdevice.10.bc` is staged into XLA's default CUDA data dir
+(`./cuda_sdk_lib`) and the working directory, where XLA and Mosaic probe.
+JAX/Pallas Mosaic GPU kernels therefore compile without per-job
+`ptxas`/`nvlink`/`libdevice` setup. The staging is a no-op unless the venv
+carries the toolchain, so CPU/TPU jobs and bring-your-own images are untouched.
+
+This staging is appended only to the default setup for a job that requests the
+`gpu` extra. A job that supplies its own `setup_scripts` (run verbatim) or
+installs JAX another way must stage the toolchain itself — call
+`cuda_toolchain_setup_script()` in its setup.
 
 ### Grug MoE Canary Warm-Node Multinode Smoke
 
@@ -505,10 +523,11 @@ CoreWeave instance types follow the pattern `{prefix}-{count}x{model}{networking
 
 **Known-good instance types**:
 
-| Instance Type | GPUs | vCPUs | RAM | Use Case |
-|---------------|------|-------|-----|----------|
-| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | GPU training (primary) |
-| `cd-gp-i64-erapids` | none | 64 | 256 GB | Controller / CPU tasks |
+| Instance Type | GPUs | vCPUs | RAM | Disk | Use Case |
+|---------------|------|-------|-----|------|----------|
+| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | — | GPU training (primary) |
+| `cd-gp-a192-genoa` | none | 192 | 1.5 TB | 7.68 TB | Controller / CPU tasks (US-EAST-02A) |
+| `cd-gp-i64-erapids` | none | 64 | 512 GB | 15.36 TB | Controller / CPU tasks (US-WEST-04A) |
 
 Full list: [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
 
@@ -534,7 +553,7 @@ dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
 Guaranteed QoS instead of BestEffort.
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
-256 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
+512 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
 smaller bare-metal nodes.
 
 ### Bootstrap via Platform.create_slice() with async state model
@@ -600,11 +619,11 @@ The platform detects fatal errors before the full timeout expires:
 | `IRIS_POD_NAME` | Downward API (`metadata.name`) | Pod's name |
 | `IRIS_POD_UID` | Downward API (`metadata.uid`) | Pod's UID |
 | `IRIS_SERVICE_ACCOUNT_NAME` | Platform | ServiceAccount for task Pods (set when `runtime: kubernetes`) |
-| `IRIS_S3_SECRET_NAME` | Platform | K8s Secret name for S3 credentials |
-| `AWS_ACCESS_KEY_ID` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_SECRET_ACCESS_KEY` | Secret ref | From `iris-s3-credentials` Secret |
-| `AWS_ENDPOINT_URL` | Config | S3 endpoint URL |
-| `FSSPEC_S3` | Platform | JSON-encoded fsspec S3 config (includes endpoint and addressing style) |
+| `AWS_ACCESS_KEY_ID` | `envFrom` | From the `iris-task-env` Secret |
+| `AWS_SECRET_ACCESS_KEY` | `envFrom` | From the `iris-task-env` Secret |
+| `AWS_ENDPOINT_URL` | `envFrom` | From `iris-task-env`; derived from `object_storage_endpoint` |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | `envFrom` | From `iris-task-env`; `auto` for R2 / CoreWeave endpoints |
+| `FSSPEC_S3` | `envFrom` | From `iris-task-env`; JSON-encoded fsspec S3 config (endpoint + addressing style) |
 
 ## 11. Timeouts
 
@@ -651,8 +670,8 @@ See `lib/iris/src/iris/providers/k8s/coreweave.py`.
 Worker Pod runs `iris.cluster.worker.main serve --runtime=kubernetes`. It:
 1. Reads config from ConfigMap mount (`/etc/iris/config.json`)
 2. Discovers controller via `iris-controller-svc.iris.svc.cluster.local:10000`
-3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME`,
-   `IRIS_S3_SECRET_NAME` from environment)
+3. Creates `KubernetesRuntime` (reads `IRIS_SERVICE_ACCOUNT_NAME` from
+   environment; S3 credentials arrive via `envFrom` on the `iris-task-env` Secret)
 4. Registers with controller, enters heartbeat loop
 
 ### Task execution
@@ -754,7 +773,7 @@ by polling.
 | Resource | Purpose | Created By |
 |----------|---------|------------|
 | `iris` Namespace + RBAC | K8s API auth and permissions | `start_controller()` via `ensure_rbac()` |
-| `iris-s3-credentials` Secret | S3 object storage auth | `start_controller()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` env vars |
+| `iris-task-env` Secret | S3 object storage auth + operator-injected env (`defaults.inject_env`) | `start_controller()` via `ensure_task_env_secret()`, from `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` + the configured `object_storage_endpoint` |
 | `iris-cluster-config` ConfigMap | Cluster config for controller and workers | `start_controller()` |
 | In-cluster ServiceAccount token | kubectl calls from controller Pod | Auto-mounted by Kubernetes |
 

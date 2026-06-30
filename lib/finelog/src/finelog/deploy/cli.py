@@ -11,8 +11,6 @@ config schema, mirroring how `iris cluster start` decides backend from
 cluster yaml.
 """
 
-from __future__ import annotations
-
 import csv
 import json
 import logging
@@ -29,48 +27,29 @@ import fsspec
 import pyarrow as pa
 from rigging.auth import IapLoginRequired
 from rigging.connect import IapAuth, connect, disconnect
-from rigging.iap_login import provider_for
+from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
-from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
+from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
 from finelog.deploy.build import build_image as build_finelog_image
-from finelog.deploy.config import FinelogConfig, load_finelog_config
+from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
-
-
-def _tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
-    """Translate a finelog deployment block into a rigging tunnel target.
-
-    The GCP path forwards ``deployment.gcp.service_account`` as the SSH
-    impersonation principal — matching the deploy CLI's own SSH calls
-    (see ``_gcp._ssh_args``), so this command works wherever
-    ``finelog deploy status`` does.
-    """
-    if cfg.deployment.gcp is not None:
-        gcp = cfg.deployment.gcp
-        return GcpSshForwardTarget(
-            project=gcp.project,
-            zone=gcp.zone,
-            instance=cfg.name,
-            port=cfg.port,
-            impersonate_service_account=gcp.service_account,
-        )
-    assert cfg.deployment.k8s is not None
-    k8s = cfg.deployment.k8s
-    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
 
 
 @contextmanager
 def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generator[LogClient, None, None]:
     """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
     if cfg.client_url:
+        provider = iap_edge_provider(name)
+        if provider is None:
+            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
         client = connect(
             cfg.client_url,
             lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),
-            auth=IapAuth(provider_for(name)),
+            auth=IapAuth(provider),
             connect_timeout=tunnel_timeout,
         )
         try:
@@ -79,7 +58,7 @@ def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generat
             client.close()
             disconnect(client)
     else:
-        target = _tunnel_target(cfg)
+        target = tunnel_target_for(cfg)
         with open_tunnel(target, timeout=tunnel_timeout) as url:
             client = LogClient.connect(url)
             try:

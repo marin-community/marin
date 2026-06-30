@@ -22,3 +22,6 @@ Distributed execution abstraction layer. Start with the shared instructions in `
 - Always use the `Client` protocol, not concrete backend implementations.
 - Actor resources: set `num_cpus=0` on actors to avoid head-node resource contention.
 - Testing: use `LocalClient` for unit tests. Only use the Iris backend for integration tests.
+- Task setup: `EnvironmentConfig(setup_scripts=...)` controls how the worker prepares
+  the env — `None` for the default uv-sync, `[]` to skip (bring-your-own image), or a
+  verbatim list; iris always appends its runtime-deps step. See `lib/iris/AGENTS.md`.

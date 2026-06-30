@@ -48,7 +48,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -64,5 +64,4 @@ jobs:
 
       - name: Test with pytest
         run: |
-          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          uv run --package marin-zephyr --frozen pytest --durations=5 --tb=short -v lib/zephyr/tests/

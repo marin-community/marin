@@ -9,7 +9,6 @@ import pytest
 import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client.proxy import LogServiceProxy
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
@@ -26,21 +25,19 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.dashboard import (
     ControllerDashboard,
     _DashboardAuthInterceptor,
-    _LegacyFetchLogsRedirect,
     _RouteAuthMiddleware,
     _SubdomainProxyMiddleware,
     requires_auth,
 )
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.rpc.auth import (
-    DASHBOARD_ROLE,
-    SESSION_COOKIE,
+from iris.cluster.types import DEFAULT_BACKEND_ID
+from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
+from rigging.server_auth import (
     AuthRequest,
-    ControllerAuthPolicy,
+    RequestAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
     build_request_authenticators,
@@ -52,7 +49,6 @@ from sqlalchemy import text
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
-
 from tests.cluster.controller._test_support import ControllerTestState
 
 _TEST_TOKEN = "valid-test-token"
@@ -77,11 +73,6 @@ def state(db, tmp_path):
 
 
 @pytest.fixture
-def log_service(embedded_log_server) -> LogServiceProxy:
-    return LogServiceProxy(embedded_log_server.address)
-
-
-@pytest.fixture
 def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
@@ -90,14 +81,15 @@ def service(state, tmp_path, log_client):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.capabilities = worker_caps
+    controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     return ControllerServiceImpl(
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
+        endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
+        endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
 
@@ -107,19 +99,18 @@ def verifier():
 
 
 @pytest.fixture
-def authed_client(service, log_service, verifier):
+def authed_client(service, verifier):
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="gcp",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier),
     )
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def noauth_client(service, log_service):
-    dashboard = ControllerDashboard(service, log_service=log_service)
+def noauth_client(service):
+    dashboard = ControllerDashboard(service)
     return TestClient(dashboard.app)
 
 
@@ -365,13 +356,12 @@ def test_revoke_login_keys(db: ControllerDB):
 
 
 @pytest.fixture
-def optional_auth_client(service, log_service, verifier):
+def optional_auth_client(service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=True),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=True),
     )
     return TestClient(dashboard.app)
 
@@ -481,7 +471,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
         "invalid-optional",
     ],
 )
-def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier, token, optional, should_allow):
+def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
     """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
 
     We build a dashboard with a @requires_auth route injected and verify it
@@ -494,16 +484,13 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
 
     dashboard = ControllerDashboard(
         service,
-        log_service=log_service,
         auth_provider="static",
-        auth_policy=ControllerAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
+        auth_policy=RequestAuthPolicy.from_verifiers(verifier=verifier, optional=optional),
     )
-    # Inject a @requires_auth route. The app is wrapped in
-    # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
-    # → Starlette; walk down to the Starlette router so the new route
-    # participates in route matching.
+    # Inject a @requires_auth route. Walk down to the Starlette router so the
+    # new route participates in route matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | _LegacyFetchLogsRedirect | _RouteAuthMiddleware):
+    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
 
@@ -551,7 +538,7 @@ def _assertion_ctx(method_name: str):
 
 def test_dashboard_interceptor_allows_read_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -568,7 +555,7 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_StubAssertionVerifier()
         )
     )
@@ -605,7 +592,7 @@ def test_dashboard_interceptor_allows_mutation_for_provisioned_iap_admin():
     # admin behind IAP (no Iris JWT) resolves to the admin role and so reaches a
     # gated mutation that the read-only dashboard role would be denied.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}), optional=False, iap_assertion_verifier=_RoleAssertionVerifier("admin")
         )
     )
@@ -626,7 +613,7 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
     # Login handler — `iris login` is never blocked by the dashboard gate. Guards
     # against accidentally moving the role check ahead of that exemption.
     interceptor = _DashboardAuthInterceptor(
-        ControllerAuthPolicy.from_verifiers(
+        RequestAuthPolicy.from_verifiers(
             verifier=StaticTokenVerifier({}),
             optional=False,
             iap_assertion_verifier=_RoleAssertionVerifier(DASHBOARD_ROLE),

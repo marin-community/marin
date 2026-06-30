@@ -26,8 +26,10 @@ hook), so the header rides on every RPC shape — unary and streaming alike — 
 both sync and async clients.
 """
 
+import json
 import os
 import time
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 import google.auth
@@ -66,8 +68,8 @@ class IapLoginRequired(RuntimeError):
 
     Raised when nothing is cached yet, or when the cached refresh token has
     expired or been revoked so the silent ID-token re-mint failed. The message is
-    self-contained — it includes the ``marin-login`` command to run — so a CLI can
-    surface ``str(exc)`` directly instead of synthesising its own remedy.
+    self-contained — it names the remedy (log in again) — so a
+    CLI can surface ``str(exc)`` directly instead of synthesising its own remedy.
     """
 
 
@@ -180,6 +182,36 @@ class IapRefreshTokenProvider:
                     message = f"{message}; {self._login_hint}"
                 raise IapLoginRequired(message) from exc
         return self._creds.id_token
+
+
+@dataclass(frozen=True)
+class OAuthClient:
+    """A Google OAuth client identity (client id + secret)."""
+
+    client_id: str
+    client_secret: str
+
+
+# The Marin desktop ("installed") OAuth client that drives the IAP browser-login
+# flow. For an installed app the "client secret" is not confidential — it is part
+# of the app's public identity, not a credential (RFC 8252 §8.5) — so it ships in
+# source: a login needs no Console download, and the same refresh token is usable
+# from any tool. It only names the app to Google's OAuth endpoint; IAP still
+# authorizes each user individually against its per-backend allowlist. A cluster
+# that fronts a different desktop client overrides this via config.
+MARIN_DESKTOP_OAUTH_CLIENT = OAuthClient(
+    client_id="748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com",
+    client_secret="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",
+)
+
+
+def read_desktop_client(path: str) -> OAuthClient:
+    """Read a Google *desktop* ('installed') OAuth client secret JSON from ``path``."""
+    with open(path) as f:
+        installed = json.load(f).get("installed")
+    if installed is None:
+        raise ValueError(f"{path}: expected a desktop ('installed') OAuth client secret")
+    return OAuthClient(installed["client_id"], installed["client_secret"])
 
 
 def run_iap_desktop_login(

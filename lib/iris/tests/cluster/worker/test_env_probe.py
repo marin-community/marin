@@ -8,6 +8,7 @@ import sys
 import iris.cluster.worker.env_probe as env_probe
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.types import AcceleratorType, CapacityType
 from iris.cluster.worker import worker as worker_mod
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
@@ -19,7 +20,6 @@ from iris.cluster.worker.env_probe import (
     construct_worker_id,
 )
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import config_pb2
 
 
 def _make_hardware(**overrides) -> HardwareProbe:
@@ -127,10 +127,10 @@ def test_gpu_worker_attributes_from_config():
 
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_type=AcceleratorType.GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        capacity_type=CapacityType.PREEMPTIBLE,
     )
 
     # Device config for capacity accounting
@@ -157,9 +157,9 @@ def test_tpu_worker_attributes_from_config():
 
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_type=AcceleratorType.TPU,
         accelerator_variant="v5litepod-16",
-        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
+        capacity_type=CapacityType.PREEMPTIBLE,
     )
 
     attrs = metadata.attributes
@@ -188,8 +188,8 @@ def test_cpu_worker_attributes_from_config():
 
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+        accelerator_type=AcceleratorType.CPU,
+        capacity_type=CapacityType.ON_DEMAND,
     )
 
     attrs = metadata.attributes
@@ -233,7 +233,7 @@ def test_custom_worker_attributes_merged():
 
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_type=AcceleratorType.GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
         worker_attributes={"pool": "large-jobs", "custom-key": "custom-value"},
@@ -254,10 +254,10 @@ def test_preemptible_not_from_gcp_metadata():
     # the attribute should reflect config
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_type=AcceleratorType.GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
+        capacity_type=CapacityType.ON_DEMAND,
     )
 
     assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
@@ -269,7 +269,7 @@ def test_build_worker_metadata_gpu_diagnostic_fields():
 
     metadata = build_worker_metadata(
         hardware=hardware,
-        accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
+        accelerator_type=AcceleratorType.GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
     )

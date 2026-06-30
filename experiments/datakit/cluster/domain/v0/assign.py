@@ -18,8 +18,6 @@ cache valid across Zephyr tasks.
 Counters: ``assign/docs_in``, ``assign/shards_in``.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import tempfile
@@ -29,7 +27,7 @@ from typing import Any
 import numpy as np
 import pyarrow as pa
 from fray import ResourceConfig
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import write_artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import open_url
@@ -50,7 +48,7 @@ class AssignmentAttrData(BaseModel):
     embedding_output_dir: str
     k_train: int
     k_views: list[int]
-    counters: dict[str, int] = {}
+    counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
         return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
@@ -131,8 +129,8 @@ def _assign_shard(
                 rec[f"cluster_{k}"] = int(coarser[k][i])
             yield rec
 
-    counters.increment("assign/docs_in", n_docs)
-    counters.increment("assign/shards_in", 1)
+    counters.pipeline.update_counter("assign/docs_in", n_docs)
+    counters.pipeline.update_counter("assign/shards_in", 1)
     logger.info(
         "shard %d/%d: %d docs assigned (K=%d centroids, %d coarser views)",
         shard.shard_idx,
@@ -226,5 +224,5 @@ def assign_source(
         k_views=k_views,
         counters=dict(outcome.counters),
     )
-    Artifact.save(artifact, output_path)
+    write_artifact(artifact, output_path)
     return artifact

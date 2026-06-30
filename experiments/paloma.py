@@ -1,33 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Paloma perplexity-eval subsets as lazy validation ``Dataset`` handles.
+
+The Paloma HF download is already pinned (``raw/paloma-fc6827``), so each subset
+tokenizes its ``val`` split straight from that location into a fresh explicit cache
+— no re-download.
 """
-The Paloma eval sets, downloaded and tokenized
 
-https://huggingface.co/datasets/allenai/paloma
-"""
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-import os.path
+from experiments.llama import llama3_tokenizer
 
-from marin.datakit.download.huggingface import DownloadConfig as HfDownloadConfig
-from marin.datakit.download.huggingface import download_hf
-from marin.evaluation.perplexity_gap import raw_text_dataset
+# Pinned Paloma download.
+_PALOMA_RAW = "raw/paloma-fc6827/65cd6fc"
 
-# cyclic dependency
-# from experiments.llama import llama3_tokenizer
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig
-from marin.processing.tokenize.data_configs import TokenizerStep
-
-from experiments.tokenization import default_tokenize
-
-llama3_tokenizer = "meta-llama/Meta-Llama-3.1-8B"
-
-
-# The datasets in the Paloma eval set and their paths within the HF dataset
-# https://huggingface.co/datasets/allenai/paloma
-PALOMA_DATASETS_TO_DIR = {
+# The Paloma eval subsets and their directories within the HF dataset
+# (https://huggingface.co/datasets/allenai/paloma). The subset name keys the handle;
+# the directory locates its shards.
+_PALOMA_SUBSETS = {
     "4chan": "4chan_meta_sep",
     "c4_100_domains": "c4_100_domains",
     "c4_en": "c4_en",
@@ -46,49 +39,16 @@ PALOMA_DATASETS_TO_DIR = {
     "wikitext_103": "wikitext_103",
 }
 
-paloma = (
-    ExecutorStep(
-        name="raw/paloma",
-        fn=download_hf,
-        config=HfDownloadConfig(
-            hf_dataset_id=versioned("allenai/paloma"),
-            revision=versioned("65cd6fc"),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-            append_sha_to_path=True,
-        ),
-    )
-    .with_output_path("raw/paloma-fc6827")
-    .cd("65cd6fc")
-)
 
-
-def paloma_tokenized(
-    *, base_path="tokenized/", tokenizer: str = llama3_tokenizer, paloma_raw: ExecutorStep = paloma
-) -> dict[str, TokenizerStep]:
-    """
-    Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
-    """
-    # avoid cyclic dependency
-
-    paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
-    for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
-        paloma_steps[os.path.join("paloma", dataset)] = default_tokenize(
-            name=os.path.join("paloma", dataset),
-            dataset=paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"),
+def paloma_validation(*, tokenizer: str = llama3_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
+    """One validation ``TokenizedCache`` handle per Paloma subset, keyed by ``paloma/<subset>-llama3``."""
+    return [
+        tokenized(
+            f"paloma/{subset}-llama3",
             tokenizer=tokenizer,
-            is_validation=True,
+            version="2026.06.28",
+            paths=[f"{_PALOMA_RAW}/{directory}/val/val*.jsonl.gz"],
+            validation=True,
         )
-
-    return paloma_steps
-
-
-def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
-    return {
-        os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))
-        for dataset, path_part in PALOMA_DATASETS_TO_DIR.items()
-    }
-
-
-if __name__ == "__main__":
-    executor_main(steps=[paloma, *paloma_tokenized().values()])
+        for subset, directory in _PALOMA_SUBSETS.items()
+    ]

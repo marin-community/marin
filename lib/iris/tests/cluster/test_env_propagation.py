@@ -7,10 +7,8 @@ Env inheritance uses JobInfo.env (populated from IRIS_JOB_ENV) which contains
 only the explicit vars from the parent's EnvironmentConfig — not infrastructure
 vars like TPU_NAME or PATH that happen to be in os.environ.
 
-Extras and pip_packages are inherited via IRIS_JOB_EXTRAS and IRIS_JOB_PIP_PACKAGES.
+The parent's resolved setup is inherited via IRIS_JOB_SETUP_SCRIPTS.
 """
-
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from unittest.mock import patch

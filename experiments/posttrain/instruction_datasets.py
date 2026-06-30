@@ -47,8 +47,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
@@ -60,7 +62,6 @@ from marin.transform.conversation.transform_conversation import (
 )
 
 from experiments.llama import llama3_tokenizer
-from experiments.tokenization import default_tokenize
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",
@@ -603,8 +604,8 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
-    """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ArtifactStep[TokenizedCache]:
+    """ArtifactStep handle that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(output_name)
@@ -631,30 +632,31 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
-    transform_step = ExecutorStep(
+    pin = f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}"
+
+    return ArtifactStep(
         name=f"documents/{output_name}",
-        fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(
-            source=versioned(dataset_cfg.hf_dataset_id),
-            revision=versioned(dataset_cfg.revision),
-            output_path=this_output_path(),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            adapter=versioned(adapter),
-            subsets=versioned(dataset_cfg.subsets),
-            splits=versioned(dataset_cfg.splits),
-            max_parallelism=dataset_cfg.max_parallelism,
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=transform_hf_dataset,
+        build_config=lambda ctx, _cfg=dataset_cfg, _adapter=adapter: TransformSFTDatasetConfig(
+            source=_cfg.hf_dataset_id,
+            revision=_cfg.revision,
+            output_path=ctx.output_path,
+            metadata_columns=_cfg.metadata_columns,
+            adapter=_adapter,
+            subsets=_cfg.subsets,
+            splits=_cfg.splits,
+            max_parallelism=_cfg.max_parallelism,
         ),
-        override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
+        override_path=pin,
     )
 
-    return transform_step
 
-
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
-    # Check that config exists
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ArtifactStep[TokenizedCache]:
+    """ArtifactStep handle for an instruction dataset by HF id, optionally overriding splits."""
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
-    # Create a new configuration instance with the desired split.
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
     if splits is None:
         splits = original_config.splits
@@ -665,30 +667,52 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = N
     return transform_dataset_step(config)
 
 
-tulu_3_in_dolma = ExecutorStep(
-    name="dolma/tulu_3_in_dolma",
-    fn=convert_conversation_to_dolma,
-    config=ConversationToDolmaConfig(output_path_of(get_instruction_dataset("allenai/tulu-3-sft-mixture"))),
-)
+def tulu_3_in_dolma() -> ArtifactStep[Artifact]:
+    """Tulu-3 SFT mixture converted to Dolma flat-text format."""
+    tulu3 = get_instruction_dataset("allenai/tulu-3-sft-mixture")
+    return ArtifactStep(
+        name="dolma/tulu_3_in_dolma",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=convert_conversation_to_dolma,
+        build_config=lambda ctx, _tulu3=tulu3: ConversationToDolmaConfig(
+            input_path=ctx.artifact_path(_tulu3),
+            output_path=ctx.output_path,
+        ),
+        deps=(tulu3,),
+    )
 
 
-# levanter treats validation and  training as separate so we tokenize twice. Not ideal, but fine here.
-tulu3_flat_llama_tokenized_as_validation = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=True
-).with_output_path("tokenized/tulu_sft-1bb7d4")
-"""
-"flat" here means that we interpolated all the chat messages into a single string per doc
-"""
+# levanter treats validation and training as separate so we tokenize twice.
+def tulu3_flat_llama_tokenized_as_validation(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """Tulu-3 Dolma corpus tokenized as a validation split.
 
-tulu3_flat_llama_tokenized_as_train = default_tokenize(
-    "tulu_sft", tulu_3_in_dolma, tokenizer=llama3_tokenizer, is_validation=False
-).with_output_path("tokenized/tulu_sft-349fb7/")
+    "flat" means all chat messages are interpolated into a single string per doc.
+    """
+    dolma = tulu_3_in_dolma()
+    return tokenized(
+        "tulu_sft",
+        tokenizer=tokenizer,
+        raw=dolma,
+        glob="**/*.jsonl.gz",
+        validation=True,
+        pin="tokenized/tulu_sft-1bb7d4" if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
+    )
 
 
-if __name__ == "__main__":
-    all_steps = []
-    for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        transformed_dataset = transform_dataset_step(config)
-        all_steps.append(transformed_dataset)
+def tulu3_flat_llama_tokenized_as_train(*, tokenizer: str = llama3_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """Tulu-3 Dolma corpus tokenized as a training split.
 
-    executor_main(steps=all_steps)
+    "flat" means all chat messages are interpolated into a single string per doc.
+    """
+    dolma = tulu_3_in_dolma()
+    return tokenized(
+        "tulu_sft",
+        tokenizer=tokenizer,
+        raw=dolma,
+        glob="**/*.jsonl.gz",
+        validation=False,
+        pin="tokenized/tulu_sft-349fb7/" if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
+    )

@@ -25,8 +25,8 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Development
 
 ```bash
-# Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not requires_cluster' tests/
+# Unit tests
+uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
@@ -100,6 +100,18 @@ Key behaviors:
 - The CLI also loads env vars from `.marin.yaml`'s `env:` section.
 
 See https://github.com/marin-community/marin/issues/3859 for context.
+
+## Task Setup
+
+Before the command runs, the worker executes a list of setup scripts (default: a
+`uv sync`) to prepare the environment. The worker is pure mechanism; the list is
+resolved client-side from `EnvironmentSpec.setup_scripts` — `None` for the default,
+`[]` to skip setup (bring-your-own image), or a verbatim list — and iris always
+appends its own runtime-deps step. The script builders, the `IRIS_*` env scripts
+parameterize against (notably `$IRIS_VENV`, the venv the run phase activates), child
+inheritance, and the Docker gotcha (setup runs in a separate container, so `export`
+does not reach the command — use `env_vars`) all live in `iris.cluster.setup_scripts`. See
+https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
 

@@ -41,7 +41,7 @@ import pyarrow.parquet as pq
 from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from pyarrow import fs
 from rigging.filesystem import marin_prefix
 
@@ -106,7 +106,7 @@ def _file_ngram_stats(path: str) -> EvalStats:
 def count_corpus_source(name: str, normalized_step) -> tuple[str, int | None, str]:
     """Return (name, total_rows or None, status). None = unresolved."""
     try:
-        nd: NormalizedData = Artifact.from_path(normalized_step, NormalizedData)
+        nd: NormalizedData = read_artifact(normalized_step.output_path, NormalizedData)
     except FileNotFoundError:
         return (name, None, "unresolved (no .artifact at output_path)")
     except Exception as e:

@@ -31,14 +31,14 @@ def resolved_to_tag(resolved: int | None) -> str | None:
 def row_to_doc(row: dict) -> list[dict]:
     trajectory = row.get("trajectory")
     if not trajectory:
-        counters.increment("swe_rebench_openhands/dropped")
+        counters.pipeline.update_counter("swe_rebench_openhands/dropped", 1)
         return []
 
     tag = resolved_to_tag(row.get("resolved"))
     rendered = "\n\n".join(render_role_message(m) for m in trajectory)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
-    counters.increment("swe_rebench_openhands/kept")
+    counters.pipeline.update_counter("swe_rebench_openhands/kept", 1)
     return [text_document(text, "nebius/SWE-rebench-openhands-trajectories")]
 
 

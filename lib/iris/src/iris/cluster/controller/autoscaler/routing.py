@@ -7,7 +7,7 @@ import difflib
 import math
 import re
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
@@ -36,8 +36,8 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.cluster.types import gpu_device, tpu_device
-from iris.rpc import config_pb2, job_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, gpu_device, tpu_device
+from iris.rpc import job_pb2
 
 # Synthetic task id stem for an availability probe (see availability_probe_entries).
 _AVAILABILITY_PROBE_TASK = "__availability_probe__"
@@ -128,7 +128,7 @@ def availability_probe_entries(
 def _availability_probe_entry(variant: str, group: ScalingGroup) -> DemandEntry:
     """One non-coscheduled demand entry shaped to scale a single slice of ``group``."""
     resources = group.resources
-    if resources is not None and resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU:
+    if resources is not None and resources.device_type == AcceleratorType.GPU:
         device = gpu_device(resources.device_variant, resources.device_count or 1)
     else:
         # tpu_device infers the per-VM chip count, which matches the group's per-VM
@@ -318,6 +318,34 @@ def _looks_like_zone(value: str) -> bool:
     return bool(_ZONE_PATTERN.fullmatch(value))
 
 
+def _diagnose_locality(
+    kind: str,
+    other_kind: str,
+    requested: frozenset[str],
+    available_same: set[str],
+    available_other: set[str],
+    confused_with_other: Callable[[str], bool],
+) -> str:
+    """Explain why no group matches a zone or region constraint.
+
+    `confused_with_other(value)` returns True when `value` looks like it
+    belongs to `other_kind` rather than `kind` (e.g. a region string passed as
+    a zone). When the value is also a known `other_kind`, the message suggests
+    switching constraint types; otherwise it offers a fuzzy-match hint against
+    the available values of the same kind.
+    """
+    requested_sorted = sorted(requested)
+    parts = [f"no groups in {kind} {', '.join(requested_sorted)}"]
+    for value in requested_sorted:
+        if confused_with_other(value) and value in available_other:
+            parts.append(f"'{value}' looks like a {other_kind}, not a {kind}; use a {other_kind} constraint instead")
+        else:
+            close = difflib.get_close_matches(value, available_same, n=1, cutoff=0.7)
+            if close:
+                parts.append(f"did you mean {close[0]}?")
+    return "; ".join(parts)
+
+
 def _diagnose(
     placement: PlacementRequirements,
     groups: Sequence[ScalingGroup],
@@ -340,40 +368,36 @@ def _diagnose(
         preempt_matches = [
             g
             for g in device_matches
-            if (g.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == placement.preemptible
+            if (g.config.resources is not None and g.config.resources.capacity_type == CapacityType.PREEMPTIBLE)
+            == placement.preemptible
         ]
         if not preempt_matches:
             want = "preemptible" if placement.preemptible else "non-preemptible"
             return f"no {want} group provides device {device_type.value}:{variants_str}"
         device_matches = preempt_matches
 
+    available_zones = {g.zone for g in device_matches} - {None}
+    available_regions = {g.region for g in device_matches} - {None}
+
     if placement.required_zones:
-        available_zones = {g.zone for g in device_matches} - {None}
-        available_regions = {g.region for g in device_matches} - {None}
-        requested = sorted(placement.required_zones)
-        parts = [f"no groups in zone {', '.join(requested)}"]
-        for z in requested:
-            if not _looks_like_zone(z) and z in available_regions:
-                parts.append(f"'{z}' looks like a region, not a zone; use a region constraint instead")
-            else:
-                close = difflib.get_close_matches(z, available_zones, n=1, cutoff=0.7)
-                if close:
-                    parts.append(f"did you mean {close[0]}?")
-        return "; ".join(parts)
+        return _diagnose_locality(
+            kind="zone",
+            other_kind="region",
+            requested=placement.required_zones,
+            available_same=available_zones,
+            available_other=available_regions,
+            confused_with_other=lambda value: not _looks_like_zone(value),
+        )
 
     if placement.required_regions:
-        available_regions = {g.region for g in device_matches} - {None}
-        available_zones = {g.zone for g in device_matches} - {None}
-        requested = sorted(placement.required_regions)
-        parts = [f"no groups in region {', '.join(requested)}"]
-        for r in requested:
-            if _looks_like_zone(r) and r in available_zones:
-                parts.append(f"'{r}' looks like a zone, not a region; use a zone constraint instead")
-            else:
-                close = difflib.get_close_matches(r, available_regions, n=1, cutoff=0.7)
-                if close:
-                    parts.append(f"did you mean {close[0]}?")
-        return "; ".join(parts)
+        return _diagnose_locality(
+            kind="region",
+            other_kind="zone",
+            requested=placement.required_regions,
+            available_same=available_regions,
+            available_other=available_zones,
+            confused_with_other=_looks_like_zone,
+        )
 
     available = ", ".join(g.name for g in groups)
     return f"no scaling group matches constraints (available: {available})"
@@ -419,6 +443,7 @@ def job_feasibility(
     groups: Sequence[ScalingGroup],
     constraints: Sequence[Constraint],
     replicas: int | None = None,
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> GroupFeasibility:
     """Answer: can any scaling group ever host this job shape?
 
@@ -431,12 +456,20 @@ def job_feasibility(
     constraint is ANDed with the job's other routing constraints, so an availability
     job with an incompatible region/zone still fails fast.
 
+    When ``resources`` is given, a matching group must also have enough per-VM
+    capacity for the request's additive dimensions (cpu, memory, disk, device
+    count). This catches over-requests like 300GB disk on a pool that advertises
+    100GB, which would otherwise route to no group and sit pending forever.
+
     Args:
         groups: scaling groups to consider.
         constraints: the job's hard + soft routing constraints.
         replicas: for coscheduled jobs, the required replica count; None for
             non-coscheduled jobs. When set, groups must also have num_vms that
             divides replicas evenly.
+        resources: the job's per-task resource spec. When set, groups whose
+            advertised per-VM capacity can't hold it are dropped from the
+            feasible set.
     """
     groups_list = list(groups)
     if not groups_list:
@@ -463,6 +496,17 @@ def job_feasibility(
             )
             return GroupFeasibility(feasible=[], reason=reason)
         matching = compatible
+
+    if resources is not None:
+        fit_reasons = {g.name: g.check_resource_fit(resources) for g in matching}
+        fitting = [g for g in matching if fit_reasons[g.name] is None]
+        if not fitting:
+            details = "; ".join(f"{name} ({reason})" for name, reason in fit_reasons.items() if reason)
+            return GroupFeasibility(
+                feasible=[],
+                reason=f"no matching scaling group has enough per-VM capacity: {details}",
+            )
+        matching = fitting
 
     return GroupFeasibility(feasible=matching, reason=None)
 

@@ -7,8 +7,6 @@ Unit tests cover the pure helpers (``attach_id``, ``IdPreservingPreprocessor``).
 The slow integration test exercises the A→B pipeline end-to-end against the
 legacy ``tokenize()`` path on a tiny local parquet fixture.
 """
-from __future__ import annotations
-
 import json
 import os
 

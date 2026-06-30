@@ -1,5 +1,6 @@
 import type { CommitState, CommitStatus } from "../api";
 import { useBuilds } from "../hooks/useBuilds";
+import { formatRelative } from "./chartUtils";
 
 // Mirrors the status dot in GitHub's commits view: green = all checks
 // passed, rose = something failed/errored, amber = still running,
@@ -36,19 +37,6 @@ function stateLabel(state: CommitState): string {
     case "NONE":
       return "no checks";
   }
-}
-
-function formatRelative(iso: string): string {
-  const delta = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(delta)) return iso;
-  const seconds = Math.round(delta / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }
 
 // Simple SVG crown rendered as an absolutely-positioned overlay on top

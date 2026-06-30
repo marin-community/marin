@@ -3,8 +3,6 @@
 
 """Tests for the actor-based execution engine (ZephyrContext)."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -88,21 +86,15 @@ def test_filter(zephyr_ctx):
 
 
 def test_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside a shard flow back to the coordinator.
-
-    Each task runs in the worker's own process; ``counters.increment`` writes
-    into the per-task ``_InProcessWorkerContext``. This test verifies the
-    worker forwards the final counter dict to the coordinator via
-    ``report_result``, otherwise the coordinator's ``get_counters`` would
-    silently report 0.
+    """User counters incremented inside a shard are visible in the execution result.
 
     Uses a direct logging handler attachment (rather than ``caplog``) so the
     test works whether or not pytest's logging plugin is enabled.
     """
 
     def increment_per_item(x: int) -> int:
-        counters.increment("docs", 1)
-        counters.increment("doubled_sum", x * 2)
+        counters.pipeline.update_counter("docs", 1)
+        counters.pipeline.update_counter("doubled_sum", x * 2)
         return x
 
     captured: list[str] = []

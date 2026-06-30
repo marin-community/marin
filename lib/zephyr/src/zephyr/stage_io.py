@@ -9,8 +9,6 @@ work (``ShardTask``), its result (``TaskResult``), the strategy that executes it
 disk (pickle chunks for map stages, scattered shuffle files for reduce stages).
 """
 
-from __future__ import annotations
-
 import itertools
 import logging
 import pickle
@@ -24,7 +22,7 @@ from rigging.filesystem import open_url, unique_temp_path
 
 from zephyr.plan import PhysicalOp, Scatter, Shard
 from zephyr.shuffle import ListShard, _write_scatter
-from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY, per_second
 from zephyr.worker_context import CounterEntry
 from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir
 
@@ -75,7 +73,7 @@ class PickleDiskChunk:
         return iter(self.read())
 
     @classmethod
-    def write(cls, path: str, data: list) -> PickleDiskChunk:
+    def write(cls, path: str, data: list) -> "PickleDiskChunk":
         """Write *data* to a UUID-unique path derived from *path*.
 
         The UUID suffix avoids collisions when multiple workers race on
@@ -172,8 +170,8 @@ def _stage_throughput(
         return None
     items = int(counters.get(ZEPHYR_STAGE_ITEM_COUNT_KEY, 0))
     bytes_processed = int(counters.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY, 0))
-    item_rate = items / elapsed if elapsed > 0 else 0.0
-    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+    item_rate = per_second(items, elapsed)
+    byte_rate = per_second(bytes_processed, elapsed)
     return StageThroughput(
         items=items,
         bytes_processed=bytes_processed,

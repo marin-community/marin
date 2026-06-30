@@ -9,8 +9,6 @@ exceptions) does not transitively import fray.iris_backend or
 fray.local_backend, which would form a circular dependency.
 """
 
-from __future__ import annotations
-
 import contextlib
 import contextvars
 import logging

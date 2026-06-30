@@ -27,6 +27,7 @@ dependencies = [
     "jax>=0.9.2,<0.11",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
+    "transformers>=5.5.3,<6.0",
     "markdownify>=0.14.1",
     "mcp>=1.25.0",
     "numpy",
@@ -49,6 +50,7 @@ file = "../../LICENSE"
 
 [project.scripts]
 marin-mcp-babysitter = "marin.mcp.babysitter:main"
+marin-serve = "marin.inference.quick_serve_cli:main"
 
 [dependency-groups]
 test = [
@@ -98,10 +100,6 @@ conflicts = [
     ],
     [
         { extra = "gpu" },
-        { extra = "cpu" },
-    ],
-    [
-        { extra = "vllm" },
         { extra = "cpu" },
     ],
     [

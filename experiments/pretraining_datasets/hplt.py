@@ -8,46 +8,64 @@ with register-based quality filtering. This avoids redundancy with Nemotron CC w
 adding ~612.7B unique tokens from European web crawls.
 """
 
-import os.path
+from fray.types import ResourceConfig
+from marin.datakit.download.hplt import HPLT_BASE_URL, download_hplt_v3
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import raw_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
-from fray import ResourceConfig
-from marin.datakit.download.hplt import download_hplt_v3_step, normalize_hplt_v3_step
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
-from marin.processing.tokenize.data_configs import TokenizerStep
-
-from experiments.marin_models import marin_tokenizer
+from experiments.marin_tokenizer import marin_tokenizer
 
 HPLT_DATASETS = {
     "all": ["*.parquet"],
 }
 
-_hplt_v3_download_spec = download_hplt_v3_step()
-hplt_v3_download = _hplt_v3_download_spec.as_executor_step()
-hplt_v3_normalized = normalize_hplt_v3_step(_hplt_v3_download_spec).as_executor_step()
+
+def _run_hplt_download(cfg: dict) -> None:
+    download_hplt_v3(output_path=cfg["output_path"])
 
 
-def tokenize_hplt_v3(
-    *,
-    tokenizer: str | None = None,
-    max_workers: int = 4096,
-) -> dict[str, TokenizerStep]:
-    """Generate tokenization steps for the HPLT v3 dataset."""
-    if tokenizer is None:
-        tokenizer = marin_tokenizer
-
-    output_path = os.path.join("tokenized", "hplt_v3", "all")
-    step = ExecutorStep(
-        name=output_path,
-        fn=tokenize,
-        config=TokenizeConfig(
-            train_paths=[output_path_of(hplt_v3_normalized, "outputs/main/*.parquet")],
-            validation_paths=versioned([]),
-            cache_path=this_output_path(),
-            tokenizer=versioned(tokenizer),
-            max_workers=max_workers,
-            worker_resources=ResourceConfig(ram="20g", disk="5g"),
-        ),
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+        text_field=cfg["text_field"],
+        id_field=cfg["id_field"],
+        file_extensions=tuple(cfg["file_extensions"]),
     )
 
-    return {"hplt_v3/all": step}
+
+def hplt_datasets(*, tokenizer: str = marin_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """One tokenized Dataset handle per HPLT v3.0 split, keyed by split name."""
+    dl = raw_download(
+        "raw/hplt_v3",
+        fn=_run_hplt_download,
+        build_config=lambda ctx: {"base_url": HPLT_BASE_URL, "output_path": ctx.output_path},
+        version="2026.06.28",
+    )
+    norm = ArtifactStep(
+        name="normalized/hplt_v3",
+        version="2026.06.28",
+        artifact_type=Artifact,
+        run=_run_normalize,
+        build_config=lambda ctx: {
+            "input_path": ctx.artifact_path(dl),
+            "output_path": ctx.output_path,
+            "text_field": "text",
+            "id_field": "id",
+            "file_extensions": [".parquet"],
+        },
+        deps=(dl,),
+    )
+    return {
+        "hplt_v3/all": tokenized(
+            "hplt_v3/all",
+            tokenizer=tokenizer,
+            raw=norm,
+            glob="outputs/main/*.parquet",
+            resources=ResourceConfig(ram="20g", disk="5g"),
+            version="2026.06.28",
+        )
+    }

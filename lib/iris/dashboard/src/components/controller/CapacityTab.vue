@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
+import { useBackends } from '@/composables/useBackends'
 import { SLICE_STATUS_STYLES, SLICE_STATUS_SUMMARY_ORDER, DIVERGING_COLORS, type SliceStatusStyle } from '@/types/status'
 import type {
   GetAutoscalerStatusResponse,
@@ -24,6 +25,7 @@ import type {
 import { timestampMs, formatRelativeTime, bandDisplayName, bandColor } from '@/utils/formatting'
 import { buildSliceView, type SliceJob, type SliceStatus, type SliceView } from '@/utils/slices'
 import SliceList from '@/components/controller/SliceList.vue'
+import FleetOverview from '@/components/controller/FleetOverview.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
@@ -38,8 +40,29 @@ import MetricCard from '@/components/shared/MetricCard.vue'
 // paginated/searchable ListJobs query, so it's fetched imperatively.
 // ===========================================================================
 
+const route = useRoute()
+const router = useRouter()
+const { multiBackend, currentBackend, listBackends } = useBackends()
+
+const backendId = computed(() => currentBackend(route))
+
+// Unroutable job count from ListBackends (distinct from "no capacity").
+const unroutableJobCount = ref(0)
+
+async function fetchBackendSummaries() {
+  if (!multiBackend.value) return
+  try {
+    const resp = await listBackends()
+    unroutableJobCount.value = resp.unroutableJobCount ?? 0
+  } catch {
+    // Non-fatal — the unroutable card simply stays at 0
+  }
+}
+
 const { data: autoscalerData, loading: autoscalerLoading, error: autoscalerError, refresh: refreshAutoscaler } =
-  useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus')
+  useControllerRpc<GetAutoscalerStatusResponse>('GetAutoscalerStatus', () =>
+    backendId.value ? { backendId: backendId.value } : {}
+  )
 const { data: schedulerData, error: schedulerError, refresh: refreshScheduler } =
   useControllerRpc<GetSchedulerStateResponse>('GetSchedulerState')
 const { data: usersData, error: usersError, refresh: refreshUsers } =
@@ -49,11 +72,14 @@ const { data: usersData, error: usersError, refresh: refreshUsers } =
 const nowMs = ref(Date.now())
 
 async function refreshAll() {
-  await Promise.all([refreshAutoscaler(), refreshScheduler(), refreshUsers(), fetchPendingJobs()])
+  await Promise.all([refreshAutoscaler(), refreshScheduler(), refreshUsers(), fetchPendingJobs(), fetchBackendSummaries()])
   nowMs.value = Date.now()
 }
 useAutoRefresh(refreshAll, DEFAULT_REFRESH_MS)
 onMounted(refreshAll)
+
+// Re-fetch when the backend scope changes.
+watch(backendId, refreshAll)
 
 // ===========================================================================
 // Pending jobs query (searchable / paginated)
@@ -79,6 +105,7 @@ async function fetchPendingJobs() {
       limit: PENDING_PAGE_SIZE,
       sortField: 'JOB_SORT_FIELD_DATE',
       sortDirection: 'SORT_DIRECTION_DESC',
+      backendId: backendId.value || undefined,
     }
     if (pendingSearch.value.trim()) {
       query.nameFilter = pendingSearch.value.trim()
@@ -120,18 +147,49 @@ const error = computed(() => autoscalerError.value || schedulerError.value || us
 const autoscaler = computed<AutoscalerStatus | null>(() => autoscalerData.value?.status ?? null)
 const groups = computed(() => autoscaler.value?.groups ?? [])
 const routing = computed(() => autoscaler.value?.lastRoutingDecision ?? null)
+
+// When multiBackend and unscoped, group scale groups by their backend_id so
+// FleetOverview can render once per backend.
+const groupsByBackend = computed<Map<string, ScaleGroupStatus[]>>(() => {
+  const map = new Map<string, ScaleGroupStatus[]>()
+  for (const g of groups.value) {
+    const bid = g.backendId ?? ''
+    if (!map.has(bid)) map.set(bid, [])
+    map.get(bid)!.push(g)
+  }
+  return map
+})
+
+// True when we should render per-backend FleetOverview sections.
+const showPerBackendFleet = computed(() => multiBackend.value && !backendId.value && groupsByBackend.value.size > 1)
+
+// Show the Backend column on Pending/Unmet tables in All mode only.
+const showBackendColumn = computed(() => multiBackend.value && !backendId.value)
 const unmetEntries = computed(() => routing.value?.unmetEntries ?? [])
 const actions = computed(() => (autoscaler.value?.recentActions ?? []).slice().reverse())
 
-// SliceList wants a worker_id → jobs map; the pool-keyed view has no per-host job
-// join (it lived in the dropped Fleet Overview), so pass empty. Status
-// classification does not use it.
-const NO_WORKER_JOBS: Map<string, SliceJob[]> = new Map()
+// worker_id → jobs running on that host, from the scheduler running buckets the
+// users table already fetches. SliceList renders these as per-job links in the
+// expanded slice rows; status classification does not depend on it.
+const sliceWorkerJobs = computed<Map<string, SliceJob[]>>(() => {
+  const map = new Map<string, SliceJob[]>()
+  for (const bucket of (schedulerData.value?.runningBuckets ?? []) as RunningTaskBucket[]) {
+    if (!bucket.workerId || !bucket.jobId) continue
+    if (!map.has(bucket.workerId)) map.set(bucket.workerId, [])
+    map.get(bucket.workerId)!.push({
+      jobId: bucket.jobId,
+      userId: bucket.userId,
+      taskCount: bucket.count,
+      hostCount: 1,
+    })
+  }
+  return map
+})
 
 // One view-model per slice, shared by the summary strip, the per-group badges, and
 // the expanded list — so the row summary can never disagree with the detail.
 const allSliceViews = computed<SliceView[]>(() =>
-  groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value)))
+  groups.value.flatMap(g => (g.slices ?? []).map(s => buildSliceView(s, sliceWorkerJobs.value, nowMs.value)))
 )
 function countSliceStatus(views: SliceView[], status: SliceStatus): number {
   return views.reduce((n, v) => n + (v.status === status ? 1 : 0), 0)
@@ -203,15 +261,21 @@ function formatSliceSummary(totals: Record<string, number>): string {
 // ===========================================================================
 
 const expandedSlices = ref<Set<string>>(new Set())
-const collapsedPools = ref<Set<string>>(new Set())
+// Explicit per-pool open/closed intent (set on user click). Every pool defaults to
+// collapsed — just its one-line state summary — since an operator usually cares about
+// one slice type and expands it. An override recorded here wins over that default.
+const poolOverrides = ref<Map<string, boolean>>(new Map())
+// Pools whose idle (zero-slice, idle-decision) tiers have been revealed. By default an
+// expanded pool shows only its active tiers plus a "+N idle sizes" toggle.
+const expandedIdleSizes = ref<Set<string>>(new Set())
 
 function toggleSet(set: Set<string>, key: string): Set<string> {
   const next = new Set(set)
   next.has(key) ? next.delete(key) : next.add(key)
   return next
 }
-function togglePool(pool: string) { collapsedPools.value = toggleSet(collapsedPools.value, pool) }
 function toggleSlices(name: string) { expandedSlices.value = toggleSet(expandedSlices.value, name) }
+function toggleIdleSizes(pool: string) { expandedIdleSizes.value = toggleSet(expandedIdleSizes.value, pool) }
 
 const sortedGroupStatuses = computed<GroupRoutingStatus[]>(() => {
   const statuses = routing.value?.groupStatuses ?? []
@@ -234,7 +298,7 @@ const poolSections = computed<PoolSection[]>(() => {
   const unpooled: GroupRoutingStatus[] = []
 
   for (const gs of sortedGroupStatuses.value) {
-    const pool = groupIndex.value[gs.group]?.config?.quotaPool
+    const pool = groupIndex.value[gs.group]?.quotaPool
     if (pool) {
       if (!poolMap.has(pool)) poolMap.set(pool, [])
       poolMap.get(pool)!.push(gs)
@@ -246,8 +310,8 @@ const poolSections = computed<PoolSection[]>(() => {
   const sections: PoolSection[] = []
   for (const [pool, poolGroups] of poolMap) {
     poolGroups.sort((a, b) => {
-      const ta = groupIndex.value[a.group]?.config?.allocationTier ?? 0
-      const tb = groupIndex.value[b.group]?.config?.allocationTier ?? 0
+      const ta = groupIndex.value[a.group]?.allocationTier ?? 0
+      const tb = groupIndex.value[b.group]?.allocationTier ?? 0
       return ta - tb
     })
 
@@ -255,7 +319,7 @@ const poolSections = computed<PoolSection[]>(() => {
     for (const gs of poolGroups) {
       const group = groupIndex.value[gs.group]
       if (!group) continue
-      const tier = group.config?.allocationTier ?? 0
+      const tier = group.allocationTier ?? 0
       const status = group.availabilityStatus
       if (tier > 0 && (status === 'quota_exceeded' || status === 'backoff')) {
         if (blockedAtTier === null || tier < blockedAtTier) blockedAtTier = tier
@@ -272,12 +336,12 @@ const poolSections = computed<PoolSection[]>(() => {
 
 function isTierBlocked(gs: GroupRoutingStatus, section: PoolSection): boolean {
   if (!section.blockedAtTier) return false
-  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  const tier = groupIndex.value[gs.group]?.allocationTier ?? 0
   return tier > section.blockedAtTier
 }
 
 function tierLabel(gs: GroupRoutingStatus): string {
-  const tier = groupIndex.value[gs.group]?.config?.allocationTier ?? 0
+  const tier = groupIndex.value[gs.group]?.allocationTier ?? 0
   return tier > 0 ? `T${tier}` : ''
 }
 
@@ -299,7 +363,7 @@ function groupDemand(name: string): number { return group(name)?.currentDemand ?
 // Per-group slice view-models, built from the same buildSliceView the expanded
 // list uses, so the row summary and the detail rows can never disagree.
 function groupSliceViews(name: string): SliceView[] {
-  return groupSlices(name).map(s => buildSliceView(s, NO_WORKER_JOBS, nowMs.value))
+  return groupSlices(name).map(s => buildSliceView(s, sliceWorkerJobs.value, nowMs.value))
 }
 
 interface SliceStatusCount { status: SliceStatus; count: number; style: SliceStatusStyle }
@@ -328,6 +392,12 @@ function groupStatusSummary(name: string): SliceStatusCount[] {
     .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
 }
 
+// Total slices the group holds, from the same status rollup the chips use (real ready
+// slices + in-flight lifecycle counts), so the tier ladder agrees with the chips.
+function groupSliceCountTotal(name: string): number {
+  return groupStatusSummary(name).reduce((n, c) => n + c.count, 0)
+}
+
 // Free = healthy slices that can take work now (available + idle). Both counts
 // are slice-granular — a fully-booked healthy slice is `in_use`, not free.
 function groupFreeSlices(name: string): number {
@@ -338,6 +408,65 @@ function groupFreeSlices(name: string): number {
 }
 function groupDegradedSliceCount(name: string): number {
   return countSliceStatus(groupSliceViews(name), 'degraded')
+}
+
+// -- Pool-level rollups (the one-line state summary on each pool header) --
+
+// Aggregate the slice-status chips across every group in a pool, in canonical order,
+// so a collapsed pool still says what it holds (e.g. "52 in use · 3 booting").
+function poolStatusSummary(section: PoolSection): SliceStatusCount[] {
+  const counts = new Map<SliceStatus, number>()
+  for (const gs of section.groups) {
+    for (const c of groupStatusSummary(gs.group)) {
+      counts.set(c.status, (counts.get(c.status) ?? 0) + c.count)
+    }
+  }
+  return SLICE_STATUS_SUMMARY_ORDER
+    .filter(s => (counts.get(s) ?? 0) > 0)
+    .map(s => ({ status: s, count: counts.get(s)!, style: SLICE_STATUS_STYLES[s] }))
+}
+function poolDemand(section: PoolSection): number {
+  return section.groups.reduce((n, gs) => n + groupDemand(gs.group), 0)
+}
+function poolLaunch(section: PoolSection): number {
+  return section.groups.reduce((n, gs) => n + (gs.launch ?? 0), 0)
+}
+
+// A group needs attention when its availability is constrained even if it holds no
+// slices yet — these stay visible rather than collapse into the idle remainder.
+function groupNeedsAttention(name: string): boolean {
+  const status = group(name)?.availabilityStatus
+  return status === 'quota_exceeded' || status === 'backoff' || status === 'at_capacity' || status === 'requesting'
+}
+function groupIsActive(gs: GroupRoutingStatus): boolean {
+  const decision = gs.decision ?? 'idle'
+  return (decision !== 'idle' && decision !== '') || groupNeedsAttention(gs.group)
+}
+
+// Every pool defaults to collapsed; only an explicit user toggle opens one.
+function isPoolCollapsed(section: PoolSection): boolean {
+  return poolOverrides.value.get(section.pool) ?? true
+}
+function togglePool(section: PoolSection) {
+  const next = new Map(poolOverrides.value)
+  next.set(section.pool, !isPoolCollapsed(section))
+  poolOverrides.value = next
+}
+
+// Tiers worth showing by default: any with slices, demand, a non-idle decision, or
+// constrained availability. The fully-idle remainder hides behind a "show N idle sizes"
+// toggle (but never hide all of a pool's tiers — keep them if none are active).
+function activeGroups(section: PoolSection): GroupRoutingStatus[] {
+  return section.groups.filter(gs => !isInactiveRow(gs) || groupIsActive(gs))
+}
+function visibleGroups(section: PoolSection): GroupRoutingStatus[] {
+  if (expandedIdleSizes.value.has(section.pool)) return section.groups
+  const active = activeGroups(section)
+  return active.length > 0 ? active : section.groups
+}
+function idleSizeCount(section: PoolSection): number {
+  const active = activeGroups(section)
+  return active.length > 0 ? section.groups.length - active.length : 0
 }
 
 // Shared layout/typography for the slice-status chips; each chip adds its own
@@ -355,7 +484,7 @@ function groupAvailabilityBadge(g: ScaleGroupStatus, section?: PoolSection): Ava
   const now = Date.now()
 
   if (section?.blockedAtTier) {
-    const tier = g.config?.allocationTier ?? 0
+    const tier = g.allocationTier ?? 0
     if (tier > section.blockedAtTier) {
       return { label: 'tier-blocked', classes: 'bg-status-danger-bg text-status-danger border-status-danger-border opacity-60' }
     }
@@ -658,29 +787,57 @@ function sliceIdShort(sliceId?: string): string {
     <!-- ===== Capacity summary strip ===== -->
     <section>
       <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        <MetricCard :value="`${onlineGroups} / ${groups.length}`" label="Pools online" />
-        <MetricCard :value="totalSlices" label="Slices" :detail="formatSliceSummary(sliceTotals)" />
+        <MetricCard size="sm" :value="`${onlineGroups} / ${groups.length}`" label="Pools online" />
+        <MetricCard size="sm" :value="totalSlices" label="Slices" :detail="formatSliceSummary(sliceTotals)" />
         <MetricCard
+          size="sm"
           :value="totalIdle"
           label="Idle spare"
           :variant="totalIdle > 0 ? 'warning' : 'default'"
         />
         <MetricCard
+          size="sm"
           :value="totalDegradedSlices"
           label="Degraded slices"
           :variant="totalDegradedSlices > 0 ? 'orange' : 'default'"
           :detail="totalDegradedSlices > 0 ? 'unschedulable' : undefined"
         />
-        <MetricCard :value="totalDemand" label="Demand" :variant="totalDemand > 0 ? 'accent' : 'default'" />
-        <MetricCard :value="launchPlanned" label="Launch planned" :variant="launchPlanned > 0 ? 'accent' : 'default'" />
+        <MetricCard size="sm" :value="totalDemand" label="Demand" :variant="totalDemand > 0 ? 'accent' : 'default'" />
+        <MetricCard size="sm" :value="launchPlanned" label="Launch planned" :variant="launchPlanned > 0 ? 'accent' : 'default'" />
         <MetricCard
+          size="sm"
           :value="aggregatedUnmet.length"
           label="Unmet jobs"
           :variant="aggregatedUnmet.length > 0 ? 'danger' : 'default'"
         />
-        <MetricCard :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
+        <MetricCard
+          v-if="multiBackend"
+          size="sm"
+          :value="unroutableJobCount"
+          label="Unroutable"
+          :variant="unroutableJobCount > 0 ? 'danger' : 'default'"
+          detail="no backend matches"
+        />
+        <MetricCard size="sm" :value="formatRelativeTime(lastEvalMs)" label="Last evaluation" />
       </div>
     </section>
+
+    <!-- ===== Fleet overview — what we have, where ===== -->
+    <!-- In multi-backend All mode: one section per backend. Otherwise: one combined view. -->
+    <template v-if="showPerBackendFleet">
+      <FleetOverview
+        v-for="[bid, bGroups] in groupsByBackend"
+        :key="bid"
+        :groups="bGroups"
+        :running-buckets="schedulerData?.runningBuckets ?? []"
+        :backend-label="bid"
+      />
+    </template>
+    <FleetOverview
+      v-else
+      :groups="groups"
+      :running-buckets="schedulerData?.runningBuckets ?? []"
+    />
 
     <!-- ===== Pools — capacity & routing ===== -->
     <section>
@@ -708,59 +865,94 @@ function sliceIdShort(sliceId?: string): string {
           </thead>
           <tbody>
             <template v-for="section in poolSections" :key="section.pool || '__unpooled'">
-              <!-- Pool header row -->
+              <!-- Pool header row: toggle + name + tier chain on the left, an
+                   always-visible one-line state summary (slice chips + demand) on
+                   the right so a collapsed pool still tells its story. -->
               <tr class="bg-surface border-b border-surface-border hover:bg-surface-raised">
                 <td colspan="8" class="px-3 py-1.5">
-                  <div class="flex items-center gap-2">
-                    <button
-                      type="button"
-                      class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
-                      :aria-expanded="!collapsedPools.has(section.pool)"
-                      :aria-label="(collapsedPools.has(section.pool) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
-                      @click="togglePool(section.pool)"
-                    >
-                      <span class="text-[10px] text-text-muted">
-                        {{ collapsedPools.has(section.pool) ? '▶' : '▼' }}
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <button
+                        type="button"
+                        class="inline-flex items-center gap-2 text-left cursor-pointer hover:opacity-80"
+                        :aria-expanded="!isPoolCollapsed(section)"
+                        :aria-label="(isPoolCollapsed(section) ? 'Expand ' : 'Collapse ') + (section.pool === '__unpooled' ? 'unpooled groups' : 'pool ' + section.pool)"
+                        @click="togglePool(section)"
+                      >
+                        <span class="text-[10px] text-text-muted">
+                          {{ isPoolCollapsed(section) ? '▶' : '▼' }}
+                        </span>
+                        <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary whitespace-nowrap">
+                          {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                        </span>
+                      </button>
+                      <span
+                        v-if="section.blockedAtTier"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
+                               bg-status-danger-bg text-status-danger border-status-danger-border"
+                      >
+                        blocked at tier {{ section.blockedAtTier }}+
                       </span>
-                      <span class="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                        {{ section.pool === '__unpooled' ? 'Unpooled' : `Pool: ${section.pool}` }}
+                      <!-- Tier ladder: slice count at each fallback tier (left = first
+                           tried). Position encodes the tier; the number is how many
+                           slices sit there. Hover for the tier label and group. -->
+                      <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
+                        <template v-for="(gs, idx) in section.groups" :key="gs.group">
+                          <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                          <span
+                            :title="`${tierLabel(gs) || 'tier'} · ${gs.group} · ${groupSliceCountTotal(gs.group)} slice${groupSliceCountTotal(gs.group) === 1 ? '' : 's'}`"
+                            :class="[
+                              'px-1 py-0.5 rounded border text-[11px] font-mono tabular-nums',
+                              isTierBlocked(gs, section)
+                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
+                                : group(gs.group)?.availabilityStatus === 'quota_exceeded'
+                                  ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
+                                  : group(gs.group)?.availabilityStatus === 'backoff'
+                                    ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
+                                    : groupSliceCountTotal(gs.group) > 0
+                                      ? 'bg-surface border-surface-border text-text-secondary'
+                                      : 'bg-surface border-surface-border text-text-muted',
+                            ]"
+                          >
+                            {{ groupSliceCountTotal(gs.group) }}
+                          </span>
+                        </template>
                       </span>
-                    </button>
-                    <span
-                      v-if="section.blockedAtTier"
-                      class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border
-                             bg-status-danger-bg text-status-danger border-status-danger-border"
-                    >
-                      blocked at tier {{ section.blockedAtTier }}+
-                    </span>
-                    <!-- Tier chain visualization (not shown for unpooled groups) -->
-                    <span v-if="section.pool !== '__unpooled'" class="flex items-center gap-0.5 text-xs text-text-muted ml-2">
-                      <template v-for="(gs, idx) in section.groups" :key="gs.group">
-                        <span v-if="idx > 0" class="text-text-muted mx-0.5">&rarr;</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 flex-shrink-0">
+                      <template v-if="poolStatusSummary(section).length">
                         <span
-                          :class="[
-                            'px-1 py-0.5 rounded border text-[11px] font-mono',
-                            isTierBlocked(gs, section)
-                              ? 'bg-status-danger-bg text-status-danger border-status-danger-border line-through'
-                              : group(gs.group)?.availabilityStatus === 'quota_exceeded'
-                                ? 'bg-status-danger-bg text-status-danger border-status-danger-border'
-                                : group(gs.group)?.availabilityStatus === 'backoff'
-                                  ? 'bg-status-orange-bg text-status-orange border-status-orange-border'
-                                  : 'bg-surface border-surface-border text-text-secondary',
-                          ]"
+                          v-for="b in poolStatusSummary(section)"
+                          :key="b.status"
+                          :class="[BADGE_BASE, b.style.bg, b.style.text, b.style.border]"
+                          :title="`${b.count} ${b.style.label} slice${b.count > 1 ? 's' : ''} — ${b.style.description}`"
                         >
-                          {{ tierLabel(gs) }}
+                          <span class="w-1.5 h-1.5 rounded-full" :class="b.style.dot" />
+                          {{ b.count }} {{ b.style.label }}
                         </span>
                       </template>
-                    </span>
+                      <span v-else class="text-xs text-text-muted">no slices</span>
+                      <span
+                        v-if="poolDemand(section) > 0"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border bg-accent-subtle text-accent border-accent-border"
+                      >
+                        demand {{ poolDemand(section) }}
+                      </span>
+                      <span
+                        v-if="poolLaunch(section) > 0"
+                        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs border bg-accent-subtle text-accent border-accent-border"
+                      >
+                        launch {{ poolLaunch(section) }}
+                      </span>
+                    </div>
                   </div>
                 </td>
               </tr>
 
-              <template v-for="gs in section.groups" :key="gs.group">
+              <template v-for="gs in visibleGroups(section)" :key="gs.group">
                 <!-- Main row -->
                 <tr
-                  v-if="!collapsedPools.has(section.pool)"
+                  v-if="!isPoolCollapsed(section)"
                   :class="[
                     'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
                     isInactiveRow(gs) ? 'opacity-50' : '',
@@ -862,12 +1054,27 @@ function sliceIdShort(sliceId?: string): string {
                 </tr>
 
                 <!-- Slice detail (expanded) -->
-                <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !collapsedPools.has(section.pool)" class="bg-surface-sunken">
+                <tr v-if="expandedSlices.has(gs.group) && groupHasSlices(gs.group) && !isPoolCollapsed(section)" class="bg-surface-sunken">
                   <td colspan="8" class="px-6 py-3">
-                    <SliceList :slices="groupSlices(gs.group)" :worker-jobs="NO_WORKER_JOBS" :now="nowMs" />
+                    <SliceList :slices="groupSlices(gs.group)" :worker-jobs="sliceWorkerJobs" :now="nowMs" />
                   </td>
                 </tr>
               </template>
+
+              <!-- Idle-tier toggle: an active pool hides its fully-idle sizes here. -->
+              <tr v-if="!isPoolCollapsed(section) && idleSizeCount(section) > 0" class="border-b border-surface-border-subtle">
+                <td colspan="8" class="px-3 py-1">
+                  <button
+                    type="button"
+                    class="ml-6 text-xs text-text-muted hover:text-text-secondary cursor-pointer"
+                    @click="toggleIdleSizes(section.pool)"
+                  >
+                    {{ expandedIdleSizes.has(section.pool)
+                      ? `hide ${idleSizeCount(section)} idle size${idleSizeCount(section) > 1 ? 's' : ''}`
+                      : `show ${idleSizeCount(section)} idle size${idleSizeCount(section) > 1 ? 's' : ''}` }}
+                  </button>
+                </td>
+              </tr>
             </template>
           </tbody>
         </table>
@@ -963,6 +1170,13 @@ function sliceIdShort(sliceId?: string): string {
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">User</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">State</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Band</th>
+              <th
+                v-if="showBackendColumn"
+                scope="col"
+                class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+              >
+                Backend
+              </th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Pending Reason</th>
               <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Submitted</th>
             </tr>
@@ -987,6 +1201,16 @@ function sliceIdShort(sliceId?: string): string {
                   {{ bandDisplayName(pendingJobBand.get(job.jobId)) }}
                 </span>
                 <span v-else class="text-text-muted">-</span>
+              </td>
+              <td v-if="showBackendColumn" class="px-3 py-2 text-[13px]">
+                <button
+                  v-if="job.backendId"
+                  class="text-accent hover:underline font-mono text-xs"
+                  @click="router.replace({ query: { ...route.query, backend: job.backendId } })"
+                >
+                  {{ job.backendId }}
+                </button>
+                <span v-else class="text-text-muted">—</span>
               </td>
               <td class="px-3 py-2 text-[13px] text-status-warning max-w-md truncate" :title="job.pendingReason ?? ''">
                 {{ job.pendingReason || '-' }}

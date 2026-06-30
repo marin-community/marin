@@ -18,6 +18,8 @@ Env knobs (all optional; defaults give the full 90B run on 256 H100):
     SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
+    SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
+                          (default), 8 = one JAX process per GPU (multi-controller)
     SCALE_BATCH         global batch in sequences (default 256)
     SCALE_SEQ_LEN       sequence length (default 2048)
     SCALE_STEPS         training steps (default 50)
@@ -46,13 +48,16 @@ from typing import cast
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import BlockShuffleConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
+from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_data
+from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
 from experiments.grug.moe.model import GrugModelConfig, RematMode
 from experiments.grug.moe.train import GrugTrainerConfig
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -84,6 +89,9 @@ SCALE_TRAINER_DEFAULTS = dict(z_loss_weight=1e-4, ema_beta=None, log_every=1)
 # Subdirectory of MARIN_PREFIX these scale runs write their per-run output dirs
 # into, so they stay grouped instead of cluttering the prefix root.
 OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+
+# SlimPajama block-shuffle: a small, R2-local corpus for the scale/throughput run.
+_SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
 
 def build_scale_model() -> GrugModelConfig:
@@ -118,7 +126,8 @@ def build_scale_model() -> GrugModelConfig:
     )
 
 
-def build_scale_step() -> ExecutorStep:
+def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble the CoreWeave scale run as a lazy :class:`LevanterCheckpoint` from SCALE_* env."""
     run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("%Y%m%d-%H%M%S")
 
     replicas = env_int("SCALE_GPU_REPLICAS", 32)
@@ -126,6 +135,9 @@ def build_scale_step() -> ExecutorStep:
     replica_axis = env_int("SCALE_REPLICA_AXIS", 1)
     batch_size = env_int("SCALE_BATCH", DEFAULT_BATCH)
     steps = env_int("SCALE_STEPS", 50)
+    # 1 = one process per node (8 local GPUs). 8 = one JAX process per GPU
+    # (multi-controller) via the iris.runtime.multigpu supervisor.
+    processes_per_task = env_int("SCALE_PROCESSES_PER_TASK", 1)
     # SCALE_PROFILER_STEPS > 0 captures a jax_profile window of that many steps
     # (uploaded via the tracker, so pair with SCALE_TRACKER=wandb to retrieve it).
     profiler_steps = env_int("SCALE_PROFILER_STEPS", 0)
@@ -161,17 +173,10 @@ def build_scale_step() -> ExecutorStep:
 
     resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
 
-    if os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb":
-        tracker = WandbConfig(
-            entity=os.environ.get("WANDB_ENTITY") or None,
-            project=os.environ.get("WANDB_PROJECT", "marin_moe"),
-            tags=["grug", "moe", "cw", "h100", "scale"],
-            group="grug-moe-cw-scale",
-            name=None,
-            replicate_path=this_output_path(),
-        )
-    else:
-        tracker = JsonLoggerConfig(logger_name=os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics"))
+    use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
+    json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")
+    wandb_entity = os.environ.get("WANDB_ENTITY") or None
+    wandb_project = os.environ.get("WANDB_PROJECT", "marin_moe")
 
     grug_trainer = GrugTrainerConfig(
         expert_axis_size=expert_axis,
@@ -179,36 +184,51 @@ def build_scale_step() -> ExecutorStep:
         **SCALE_TRAINER_DEFAULTS,
     )
 
+    mp = os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")
     name = f"grug-moe-cw-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}"
-    return ExecutorStep(
-        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
-        fn=run_grug_moe_trial,
-        config=GrugMoeLaunchConfig(
-            model=versioned(model),
-            data=slimpajama_6b_data(),
-            output_path=this_output_path(),
+    slim = slimpajama_6b_dataset()
+
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
+        if use_wandb:
+            tracker = WandbConfig(
+                entity=wandb_entity,
+                project=wandb_project,
+                tags=["grug", "moe", "cw", "h100", "scale"],
+                group="grug-moe-cw-scale",
+                name=None,
+                replicate_path=ctx.output_path,
+            )
+        else:
+            tracker = JsonLoggerConfig(logger_name=json_logger_name)
+        return GrugMoeLaunchConfig(
+            model=model,
+            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=versioned(resources),
-            steps=versioned(steps),
-            batch_size=versioned(batch_size),
-            seed=versioned(0),
-            mp=versioned(os.environ.get("SCALE_MP", "params=float32,compute=bfloat16,output=bfloat16")),
+            resources=ctx.runtime_arg("train_resources"),
+            steps=steps,
+            batch_size=batch_size,
+            seed=0,
+            mp=mp,
             tracker=tracker,
-            optimizer=versioned(SCALE_OPTIMIZER),
-            grug_trainer=versioned(grug_trainer),
+            optimizer=SCALE_OPTIMIZER,
+            grug_trainer=grug_trainer,
+            processes_per_task=processes_per_task,
             eval=None,
             profiler=profiler,
             checkpointer=checkpointer,
-        ),
+        )
+
+    return ArtifactStep(
+        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(slim,),
+        runtime_args={"train_resources": resources},
     )
 
 
-scale_moe_step = build_scale_step()
-
-
-def main():
-    executor_main(steps=[scale_moe_step])
-
-
 if __name__ == "__main__":
-    main()
+    StepRunner().run([build_scale_checkpoint().lower()])

@@ -12,10 +12,12 @@ from pathlib import Path
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler, Table
+from rigging.auth import BearerTokenInjector, StaticTokenProvider
 from rigging.timing import Deadline, Duration, ExponentialBackoff, RateLimiter
 
 from iris.chaos import chaos
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import WorkerConfig as WorkerWireConfig
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import DockerRuntime
@@ -27,7 +29,7 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import AttemptUid, JobName
+from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -54,8 +56,7 @@ from iris.cluster.worker.stats import (
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
-from iris.rpc import config_pb2, controller_pb2, job_pb2, worker_pb2
-from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
@@ -80,61 +81,53 @@ class WorkerConfig:
     resolve_image: Callable[[str], str] = field(default_factory=lambda: lambda image: image)
     poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     heartbeat_timeout: Duration = field(default_factory=lambda: Duration.from_seconds(600.0))
-    accelerator_type: int = 0
+    accelerator_type: AcceleratorType | None = None
     accelerator_variant: str = ""
     gpu_count: int = 0
-    capacity_type: int = 0
+    capacity_type: CapacityType | None = None
     cpu_millicores: int = 0
     storage_prefix: str = ""
     auth_token: str = ""
 
 
-def worker_config_from_proto(
-    proto: config_pb2.WorkerConfig,
+def worker_config_from_wire(
+    wire: WorkerWireConfig,
     resolve_image: Callable[[str], str] | None = None,
 ) -> WorkerConfig:
-    """Create internal WorkerConfig from WorkerConfig proto.
+    """Create the internal WorkerConfig from the wire (bootstrap) WorkerConfig.
 
-    Translates the proto representation into the internal dataclass,
-    applying defaults where proto fields are unset.
+    Translates the parsed config model into the internal dataclass, applying
+    defaults where fields are unset.
     """
     port_start, port_end = 30000, 40000
-    if proto.port_range:
-        port_start, port_end = map(int, proto.port_range.split("-"))
+    if wire.port_range:
+        port_start, port_end = map(int, wire.port_range.split("-"))
 
-    controller_address = proto.controller_address
+    controller_address = wire.controller_address
     if controller_address and not controller_address.startswith("http"):
         controller_address = f"http://{controller_address}"
 
     return WorkerConfig(
-        host=proto.host or "0.0.0.0",
-        port=proto.port or 8080,
-        cache_dir=Path(proto.cache_dir) if proto.cache_dir else None,
+        host=wire.host or "0.0.0.0",
+        port=wire.port or 8080,
+        cache_dir=Path(wire.cache_dir) if wire.cache_dir else None,
         port_range=(port_start, port_end),
         controller_address=controller_address or None,
-        worker_id=proto.worker_id or None,
-        slice_id=proto.slice_id or None,
-        worker_attributes=dict(proto.worker_attributes),
-        task_env=dict(proto.task_env),
-        default_task_image=proto.default_task_image or None,
+        worker_id=wire.worker_id or None,
+        slice_id=wire.slice_id or None,
+        worker_attributes=dict(wire.worker_attributes),
+        task_env=dict(wire.task_env),
+        default_task_image=wire.default_task_image or None,
         resolve_image=resolve_image or (lambda image: image),
-        poll_interval=(
-            Duration.from_ms(proto.poll_interval.milliseconds)
-            if proto.HasField("poll_interval")
-            else Duration.from_seconds(5.0)
-        ),
-        heartbeat_timeout=(
-            Duration.from_ms(proto.heartbeat_timeout.milliseconds)
-            if proto.HasField("heartbeat_timeout")
-            else Duration.from_seconds(600.0)
-        ),
-        accelerator_type=proto.accelerator_type,
-        accelerator_variant=proto.accelerator_variant,
-        gpu_count=proto.gpu_count,
-        capacity_type=proto.capacity_type,
-        cpu_millicores=proto.cpu_millicores,
-        storage_prefix=proto.storage_prefix,
-        auth_token=proto.auth_token,
+        poll_interval=wire.poll_interval if wire.poll_interval is not None else Duration.from_seconds(5.0),
+        heartbeat_timeout=wire.heartbeat_timeout if wire.heartbeat_timeout is not None else Duration.from_seconds(600.0),
+        accelerator_type=wire.accelerator_type,
+        accelerator_variant=wire.accelerator_variant,
+        gpu_count=wire.gpu_count,
+        capacity_type=wire.capacity_type,
+        cpu_millicores=wire.cpu_millicores,
+        storage_prefix=wire.storage_prefix,
+        auth_token=wire.auth_token,
     )
 
 
@@ -259,9 +252,9 @@ class Worker:
         #   3. The uvicorn server must be up before we register with the
         #      controller, so the controller's first ping lands on a ready
         #      worker. Lifecycle thread is spawned last for that reason.
-        interceptors: tuple[AuthTokenInjector, ...] = ()
+        interceptors: tuple[BearerTokenInjector, ...] = ()
         if self._config.controller_address and self._config.auth_token:
-            interceptors = (AuthTokenInjector(StaticTokenProvider(self._config.auth_token)),)
+            interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
 
         if self._config.controller_address:
             self._log_client = LogClient.connect(

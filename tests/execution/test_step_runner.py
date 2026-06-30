@@ -5,23 +5,16 @@ import contextvars
 import json
 import os
 import threading
-from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
-from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
-from iris.cluster.types import JobName
-from marin.execution.artifact import Artifact, PathMetadata
-from marin.execution.executor import Executor, _dag_tpu_regions, resolve_executor_step
+from marin.execution.artifact import Artifact, read_artifact, write_artifact
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from marin.execution.types import ExecutorStep
 from pydantic import BaseModel
-from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 # ---------------------------------------------------------------------------
 # Artifact types
@@ -38,12 +31,6 @@ class TrainMetadata(BaseModel):
     checkpoint_path: str
 
 
-@dataclass
-class NestedMetadata:
-    path: str
-    resources: ResourceConfig
-
-
 # ---------------------------------------------------------------------------
 # Pipeline functions: download → tokenize → train
 #
@@ -52,7 +39,7 @@ class NestedMetadata:
 # ---------------------------------------------------------------------------
 
 
-def download_raw_data(output_path: str, source_url: str) -> PathMetadata:
+def download_raw_data(output_path: str, source_url: str) -> Artifact:
     """Download raw data shards to output_path."""
     data_dir = os.path.join(output_path, "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -61,10 +48,10 @@ def download_raw_data(output_path: str, source_url: str) -> PathMetadata:
             for i in range(10):
                 json.dump({"id": shard * 10 + i, "text": f"doc {shard * 10 + i}", "src": source_url}, f)
                 f.write("\n")
-    return PathMetadata(path=data_dir)
+    return Artifact(path=data_dir)
 
 
-def tokenize_data(output_path: str, raw_data: PathMetadata, tokenizer: str) -> TokenizeMetadata:
+def tokenize_data(output_path: str, raw_data: Artifact, tokenizer: str) -> TokenizeMetadata:
     """Tokenize documents from the raw data artifact."""
     data_dir = os.path.join(output_path, "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -105,88 +92,15 @@ def train_on_tokenized_data(output_path: str, tokenized: TokenizeMetadata) -> Tr
 
 
 # ---------------------------------------------------------------------------
-# Artifact tests
+# Manual save/load API
 # ---------------------------------------------------------------------------
 
 
-def test_artifact_save_and_load_typed(tmp_path: Path):
-    artifact = PathMetadata(path="/data/shards")
-    Artifact.save(artifact, tmp_path.as_posix())
+def test_write_then_read_artifact_typed(tmp_path: Path):
+    write_artifact(Artifact(path="/data/shards"), tmp_path.as_posix())
 
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
-    assert loaded == artifact
+    loaded = read_artifact(tmp_path.as_posix(), Artifact)
     assert loaded.path == "/data/shards"
-
-
-def test_artifact_load_relative_path_resolves_against_marin_prefix(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("MARIN_PREFIX", tmp_path.as_posix())
-    artifact = PathMetadata(path="/data/shards")
-    Artifact.save(artifact, (tmp_path / "step_out").as_posix())
-
-    loaded = Artifact.from_path("step_out", PathMetadata)
-    assert loaded == artifact
-
-
-def test_artifact_from_executor_status_success_untyped(tmp_path: Path):
-    """No artifact file, but .executor_status=SUCCESS: synthesize PathMetadata."""
-    (tmp_path / ".executor_status").write_text("SUCCESS")
-
-    loaded = Artifact.from_path(tmp_path.as_posix())
-    assert isinstance(loaded, PathMetadata)
-    assert loaded.path == tmp_path.as_posix()
-
-
-def test_artifact_from_executor_status_success_typed_pathmetadata(tmp_path: Path):
-    """No artifact file, but .executor_status=SUCCESS and caller asks for PathMetadata."""
-    (tmp_path / ".executor_status").write_text("SUCCESS")
-
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
-    assert loaded == PathMetadata(path=tmp_path.as_posix())
-
-
-def test_artifact_from_executor_status_success_typed_other_raises(tmp_path: Path):
-    """No artifact file, .executor_status=SUCCESS, but caller asks for a different type."""
-    (tmp_path / ".executor_status").write_text("SUCCESS")
-
-    with pytest.raises(FileNotFoundError, match="cannot synthesize"):
-        Artifact.from_path(tmp_path.as_posix(), TokenizeMetadata)
-
-
-def test_artifact_from_executor_status_non_success_raises(tmp_path: Path):
-    """No artifact file, .executor_status present but not SUCCESS."""
-    (tmp_path / ".executor_status").write_text("RUNNING")
-
-    with pytest.raises(FileNotFoundError, match="not 'SUCCESS'"):
-        Artifact.from_path(tmp_path.as_posix())
-
-
-def test_artifact_load_legacy_dotfile(tmp_path: Path):
-    """Historical outputs wrote `.artifact`; from_path should still load them."""
-    (tmp_path / ".artifact").write_text(json.dumps({"path": "/legacy"}))
-
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
-    assert loaded == PathMetadata(path="/legacy")
-
-
-def test_artifact_save_and_load_untyped(tmp_path: Path):
-    artifact = TokenizeMetadata(path="/tokenized", num_tokens=42)
-    Artifact.save(artifact, tmp_path.as_posix())
-
-    loaded = Artifact.from_path(tmp_path.as_posix())
-    assert isinstance(loaded, dict)
-    assert loaded["path"] == "/tokenized"
-    assert loaded["num_tokens"] == 42
-
-
-def test_artifact_save_nested_dataclass(tmp_path: Path):
-    artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
-    Artifact.save(artifact, tmp_path.as_posix())
-
-    loaded = Artifact.from_path(tmp_path.as_posix())
-    assert isinstance(loaded, dict)
-    assert loaded["path"] == "/nested"
-    assert loaded["resources"]["cpu"] == 2
-    assert loaded["resources"]["ram"] == "4g"
 
 
 def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
@@ -196,42 +110,24 @@ def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
 
     # Step 1: download
     raw = download_raw_data(step1_out, "http://example.com")
-    Artifact.save(raw, step1_out)
+    write_artifact(raw, step1_out)
 
     # Step 2: tokenize — load upstream artifact, run, save
-    loaded_raw = Artifact.from_path(step1_out, PathMetadata)
+    loaded_raw = read_artifact(step1_out, Artifact)
     tokenized = tokenize_data(step2_out, loaded_raw, "word")
-    Artifact.save(tokenized, step2_out)
+    write_artifact(tokenized, step2_out)
 
     assert isinstance(tokenized, TokenizeMetadata)
     assert tokenized.num_tokens == 60  # 30 docs * 2 words each
 
     # Both artifacts are loadable from their respective output paths
-    assert Artifact.from_path(step1_out, PathMetadata) == raw
-    assert Artifact.from_path(step2_out, TokenizeMetadata) == tokenized
+    assert read_artifact(step1_out, Artifact).path == raw.path
+    assert read_artifact(step2_out, TokenizeMetadata) == tokenized
 
 
 # ---------------------------------------------------------------------------
-# resolve_executor_step tests
+# StepSpec identity tests
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_executor_step_binds_config():
-    """resolve_executor_step should produce a zero-arg callable with config bound."""
-    received = {}
-
-    def my_fn(config):
-        received["config"] = config
-
-    step = ExecutorStep(name="download", fn=my_fn, config=None)
-    resolved = resolve_executor_step(step, config={"url": "http://example.com"}, output_path="/out/download-abc123")
-
-    assert resolved.output_path == "/out/download-abc123"
-    assert resolved.deps == []
-
-    # Call the resolved fn — it should invoke my_fn with the config
-    resolved.fn("/tmp/foobar")
-    assert received["config"] == {"url": "http://example.com"}
 
 
 def test_runner_saves_artifact_automatically(tmp_path):
@@ -241,93 +137,14 @@ def test_runner_saves_artifact_automatically(tmp_path):
     step = StepSpec(
         name="test_save",
         override_output_path=out,
-        fn=lambda output_path: PathMetadata(path=output_path),
+        fn=lambda output_path: Artifact(path=output_path),
     )
 
     runner = StepRunner()
     runner.run([step])
 
-    loaded = Artifact.from_path(out, PathMetadata)
+    loaded = read_artifact(out, Artifact)
     assert loaded.path == out
-
-
-def test_resolve_executor_step_preserves_deps():
-    step = ExecutorStep(name="train", fn=lambda c: None, config=None)
-    dep1 = StepSpec(name="download", override_output_path="/out/download-abc123")
-    dep2 = StepSpec(name="tokenize", override_output_path="/out/tokenize-def456")
-    resolved = resolve_executor_step(
-        step,
-        config={},
-        output_path="/out/train-abc123",
-        deps=[dep1, dep2],
-    )
-    assert resolved.dep_paths == ["/out/download-abc123", "/out/tokenize-def456"]
-
-
-def test_resolved_executor_step_resources_dispatch_via_fray(tmp_path: Path, fray_client):
-    """Old-style ExecutorStep resources should survive resolution and trigger Fray dispatch."""
-
-    spy = _SubmitSpy(fray_client)
-    resources = ResourceConfig.with_cpu(cpu=1, ram="8g")
-
-    def report_step(config: dict[str, str]) -> PathMetadata:
-        return PathMetadata(path=config["expected_path"])
-
-    step = ExecutorStep(name="report", fn=report_step, config=None, resources=resources)
-    resolved = resolve_executor_step(
-        step,
-        config={"expected_path": tmp_path.as_posix()},
-        output_path=tmp_path.as_posix(),
-    )
-
-    assert resolved.resources == resources
-    with set_current_client(spy):
-        StepRunner().run([resolved])
-
-    assert len(spy.requests) == 1
-    assert spy.requests[0].resources == resources
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
-    assert loaded.path == tmp_path.as_posix()
-
-
-def test_step_spec_as_executor_step_round_trip():
-    """StepSpec -> ExecutorStep -> StepSpec should preserve identity."""
-    prefix = "gs://test-bucket"
-    dep = StepSpec(
-        name="download",
-        output_path_prefix=prefix,
-        hash_attrs={"source": "web"},
-        fn=lambda output_path: output_path,
-    )
-    step = StepSpec(
-        name="tokenize",
-        output_path_prefix=prefix,
-        hash_attrs={"tokenizer": "llama3"},
-        deps=[dep],
-        fn=lambda output_path: output_path,
-        resources=ResourceConfig.with_cpu(cpu=2, ram="8g"),
-    )
-
-    executor_step = step.as_executor_step()
-    # override_output_path should be the computed path (prefix/name_hash)
-    assert executor_step.override_output_path == step.output_path
-    assert step.output_path.startswith(f"{prefix}/tokenize_")
-
-    dep_spec = StepSpec(name="download", override_output_path=dep.output_path)
-    resolved = resolve_executor_step(
-        executor_step,
-        config={},
-        output_path=step.output_path,
-        deps=[dep_spec],
-    )
-
-    assert resolved.name == step.name
-    assert resolved.hash_attrs == step.hash_attrs
-    assert resolved.fn is step.fn
-    assert resolved.output_path == step.output_path
-    assert resolved.output_path_prefix == prefix
-    assert resolved.dep_paths == [dep.output_path]
-    assert resolved.resources == step.resources
 
 
 def _build_three_level_dag(prefix: str) -> tuple[StepSpec, StepSpec, StepSpec]:
@@ -407,9 +224,9 @@ def test_step_spec_hash_id_via_marin_prefix_env(monkeypatch):
 def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
     """Build download → tokenize → train as StepSpecs.
 
-    Each step function returns an artifact.  The runner auto-saves any
-    BaseModel result to the step's output_path.  Inter-step data flows
-    through ``Artifact.from_path`` — deferred to execution time via lambdas.
+    Each step function returns an artifact. The runner auto-saves any result via
+    ``write_artifact``. Inter-step data flows through ``read_artifact`` — deferred
+    to execution time via lambdas.
     """
 
     tmp_path_posix = tmp_path.as_posix()
@@ -422,7 +239,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         fn=lambda output_path: download_raw_data(output_path, source_url),
     )
 
-    # Artifact.from_path must be deferred to execution time (upstream hasn't run yet)
+    # read_artifact must be deferred to execution time (upstream hasn't run yet)
     tokenizer = "word"
     tokenize_step = StepSpec(
         name="tokenize",
@@ -431,7 +248,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         deps=[download_step],
         fn=lambda output_path: tokenize_data(
             output_path,
-            Artifact.from_path(download_step.output_path, PathMetadata),
+            read_artifact(download_step.output_path, Artifact),
             tokenizer,
         ),
     )
@@ -440,7 +257,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         output_path_prefix=tmp_path_posix,
         deps=[tokenize_step],
         fn=lambda output_path: train_on_tokenized_data(
-            output_path, Artifact.from_path(tokenize_step.output_path, TokenizeMetadata)
+            output_path, read_artifact(tokenize_step.output_path, TokenizeMetadata)
         ),
     )
     return [download_step, tokenize_step, train_step]
@@ -457,16 +274,16 @@ def test_runner_executes_pipeline(tmp_path: Path):
     train_path = steps[2].output_path
 
     # Download produced shards
-    raw_artifact = Artifact.from_path(download_path, PathMetadata)
+    raw_artifact = read_artifact(download_path, Artifact)
     assert os.path.isdir(raw_artifact.path)
     assert len(os.listdir(raw_artifact.path)) == 3
 
     # Tokenize produced output with correct token count
-    tokenize_artifact = Artifact.from_path(tokenize_path, TokenizeMetadata)
+    tokenize_artifact = read_artifact(tokenize_path, TokenizeMetadata)
     assert tokenize_artifact.num_tokens == 60  # 30 docs * 2 words each
 
     # Train produced a checkpoint
-    train_artifact = Artifact.from_path(train_path, TrainMetadata)
+    train_artifact = read_artifact(train_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
     assert os.path.exists(train_artifact.checkpoint_path)
 
@@ -479,7 +296,7 @@ def test_runner_skips_completed_steps(tmp_path: Path):
     runner1.run(steps)
 
     # Record modification times
-    tokenize_artifact_path = os.path.join(steps[1].output_path, ".artifact.json")
+    tokenize_artifact_path = os.path.join(steps[1].output_path, "artifact.json")
     mtime_before = os.path.getmtime(tokenize_artifact_path)
 
     # Re-run — all steps should be skipped
@@ -509,7 +326,7 @@ def test_runner_respects_dependency_order(tmp_path: Path):
     runner = StepRunner()
     runner.run(reversed_steps)
 
-    train_artifact = Artifact.from_path(steps[2].output_path, TrainMetadata)
+    train_artifact = read_artifact(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
 
 
@@ -519,7 +336,7 @@ def test_runner_max_concurrent(tmp_path: Path):
     runner = StepRunner()
     runner.run(steps, max_concurrent=1)
 
-    train_artifact = Artifact.from_path(steps[2].output_path, TrainMetadata)
+    train_artifact = read_artifact(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
 
 
@@ -528,9 +345,9 @@ def test_runner_walks_transitive_deps(tmp_path: Path):
     executed: list[str] = []
 
     def record(name: str):
-        def _fn(output_path: str) -> PathMetadata:
+        def _fn(output_path: str) -> Artifact:
             executed.append(name)
-            return PathMetadata(path=output_path)
+            return Artifact(path=output_path)
 
         return _fn
 
@@ -562,13 +379,13 @@ def test_runner_walks_transitive_deps_with_cache_hit(tmp_path: Path):
     dep = StepSpec(
         name="dep",
         override_output_path=(tmp_path / "dep").as_posix(),
-        fn=lambda output_path: PathMetadata(path=output_path),
+        fn=lambda output_path: Artifact(path=output_path),
     )
     downstream_ran: list[str] = []
 
-    def run_downstream(output_path: str) -> PathMetadata:
+    def run_downstream(output_path: str) -> Artifact:
         downstream_ran.append(output_path)
-        return PathMetadata(path=output_path)
+        return Artifact(path=output_path)
 
     downstream = StepSpec(
         name="downstream",
@@ -601,7 +418,7 @@ def test_runner_consumes_unbounded_iterator(tmp_path: Path):
     n_terminals = 3
 
     def on_execute(name: str):
-        def _fn(output_path: str) -> PathMetadata:
+        def _fn(output_path: str) -> Artifact:
             with lock:
                 executed.append(name)
                 # Count terminals executed; signal the generator to stop once
@@ -609,7 +426,7 @@ def test_runner_consumes_unbounded_iterator(tmp_path: Path):
                 terminal_count = sum(1 for e in executed if e.startswith("t_"))
             if terminal_count >= n_terminals:
                 stop.set()
-            return PathMetadata(path=output_path)
+            return Artifact(path=output_path)
 
         return _fn
 
@@ -642,9 +459,9 @@ def test_runner_dedups_shared_deps(tmp_path: Path):
     """A dep shared by multiple terminals must be executed exactly once."""
     dep_runs: list[str] = []
 
-    def run_dep(output_path: str) -> PathMetadata:
+    def run_dep(output_path: str) -> Artifact:
         dep_runs.append(output_path)
-        return PathMetadata(path=output_path)
+        return Artifact(path=output_path)
 
     dep = StepSpec(
         name="shared_dep",
@@ -655,13 +472,13 @@ def test_runner_dedups_shared_deps(tmp_path: Path):
         name="a",
         override_output_path=(tmp_path / "a").as_posix(),
         deps=[dep],
-        fn=lambda output_path: PathMetadata(path=output_path),
+        fn=lambda output_path: Artifact(path=output_path),
     )
     b = StepSpec(
         name="b",
         override_output_path=(tmp_path / "b").as_posix(),
         deps=[dep],
-        fn=lambda output_path: PathMetadata(path=output_path),
+        fn=lambda output_path: Artifact(path=output_path),
     )
 
     StepRunner().run([a, b])
@@ -702,7 +519,7 @@ def test_step_with_remote_fn_uses_fray(tmp_path: Path):
 
     @remote
     def my_step(output_path):
-        return PathMetadata(path=output_path)
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="fray_step",
@@ -713,7 +530,7 @@ def test_step_with_remote_fn_uses_fray(tmp_path: Path):
     runner = StepRunner()
     runner.run([step])
 
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
+    loaded = read_artifact(tmp_path.as_posix(), Artifact)
     assert loaded.path == tmp_path.as_posix()
 
 
@@ -768,8 +585,8 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     custom = ResourceConfig.with_cpu(cpu=2, ram="8g")
 
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="resourced_step",
@@ -783,15 +600,15 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     assert len(spy.requests) == 1
     assert spy.requests[0].resources == custom
-    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
+    loaded = read_artifact(tmp_path.as_posix(), Artifact)
     assert loaded.path == tmp_path.as_posix()
 
 
 def test_step_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client):
     resources = ResourceConfig.with_gpu("H100", count=8)
 
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="gpu_resourced_step",
@@ -807,8 +624,8 @@ def test_remote_resources_dispatch_uses_device_extra(tmp_path: Path, fray_client
     resources = ResourceConfig.with_gpu("H100", count=8)
 
     @remote(resources=resources)
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="remote_gpu_step",
@@ -823,8 +640,8 @@ def test_remote_dependency_groups_can_override_device_extra(tmp_path: Path, fray
     resources = ResourceConfig.with_gpu("H100", count=8)
 
     @remote(resources=resources, pip_dependency_groups=[])
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="remote_gpu_step_without_extras",
@@ -839,8 +656,8 @@ def test_remote_vllm_tpu_dependency_group_sets_target_device(tmp_path: Path, fra
     resources = ResourceConfig.with_tpu("v6e-4")
 
     @remote(resources=resources, pip_dependency_groups=["eval", "vllm"])
-    def my_step(output_path: str) -> PathMetadata:
-        return PathMetadata(path=output_path)
+    def my_step(output_path: str) -> Artifact:
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="remote_vllm_tpu_step",
@@ -904,383 +721,6 @@ def test_remote_decorator_with_custom_resources():
     assert my_fn.resources == custom
 
 
-def test_resolve_executor_step_picks_up_remote_decorator():
-    """resolve_executor_step should propagate @remote resources to the resolved fn."""
-
-    @remote
-    def my_fn(config):
-        pass
-
-    step = ExecutorStep(name="test", fn=my_fn, config=None)
-    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == ResourceConfig.with_cpu()
-
-
-def test_remote_decorator_resources_are_preserved():
-    """@remote decorator resources should be preserved through resolve_executor_step."""
-    custom = ResourceConfig.with_cpu(cpu=8, ram="32g")
-
-    @remote(resources=custom)
-    def my_fn(config):
-        pass
-
-    step = ExecutorStep(name="test", fn=my_fn, config=None)
-    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources == custom
-
-
-@pytest.fixture
-def iris_active():
-    """Pretend the iris backend is active so region inference fires."""
-    with patch("marin.execution.executor._iris_backend_is_active", return_value=True):
-        yield
-
-
-@pytest.fixture
-def remote_step():
-    """A vanilla ExecutorStep wrapping a @remote-decorated noop callable."""
-
-    @remote
-    def my_fn(config):
-        pass
-
-    return ExecutorStep(name="test", fn=my_fn, config=None)
-
-
-@pytest.fixture
-def current_iris_job():
-    previous_job_info = get_job_info()
-    set_job_info(JobInfo(task_id=JobName.from_wire("/agent/test/0")))
-    yield
-    set_job_info(previous_job_info)
-
-
-def test_resolve_executor_step_ignores_current_iris_job_info_without_worker_region(
-    iris_active, current_iris_job, remote_step
-):
-    resolved = resolve_executor_step(
-        remote_step,
-        config={"input_path": "gs://marin-us-central2/data/input"},
-        output_path="/out/test-abc",
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2"]
-
-
-def test_resolve_executor_step_infers_region_for_iris_without_pin(iris_active, remote_step):
-    resolved = resolve_executor_step(
-        remote_step,
-        config={"input_path": "gs://marin-us-central2/data/input"},
-        output_path="/out/test-abc",
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2"]
-
-
-def test_resolve_executor_step_preserves_explicit_empty_regions(iris_active):
-    @remote(resources=ResourceConfig.with_cpu(regions=[]))
-    def my_fn(config):
-        pass
-
-    step = ExecutorStep(name="test", fn=my_fn, config=None)
-    resolved = resolve_executor_step(
-        step,
-        config={"input_path": "gs://marin-us-central2/data/input"},
-        output_path="/out/test-abc",
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == []
-
-
-def test_resolve_executor_step_infers_region_from_dependencies(iris_active, remote_step):
-    dep = StepSpec(name="dep", override_output_path="gs://marin-us-east1/dependency/output")
-    resolved = resolve_executor_step(
-        remote_step,
-        config={"local_only": "/tmp/foo"},
-        output_path="/out/test-abc",
-        deps=[dep],
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-east1"]
-
-
-@pytest.mark.parametrize("set_override_env", [False, True], ids=["no_override", "with_override"])
-def test_resolve_executor_step_raises_on_cross_region_inputs(iris_active, remote_step, monkeypatch, set_override_env):
-    """Cross-region GCS deps must fail regardless of the override env var —
-    the override only loosens local-only constraints, not cross-region writes."""
-    if set_override_env:
-        monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
-    with pytest.raises(ValueError, match="cross-region GCS dependencies"):
-        resolve_executor_step(
-            remote_step,
-            config={"input_path": "gs://marin-us-central2/data/input"},
-            output_path="gs://marin-us-east1/data/output",
-        )
-
-
-def test_resolve_executor_step_uses_dag_tpu_regions_without_gcs_inputs(iris_active, remote_step):
-    resolved = resolve_executor_step(
-        remote_step,
-        config={"local_only": "/tmp/foo"},
-        output_path="/out/test-abc",
-        dag_tpu_regions=["us-west4", "us-central2"],
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2", "us-west4"]
-
-
-def test_resolve_executor_step_intersects_gcs_and_dag_tpu_regions(iris_active, remote_step):
-    resolved = resolve_executor_step(
-        remote_step,
-        config={"input_path": "gs://marin-us-central2/data/input"},
-        output_path="/out/test-abc",
-        dag_tpu_regions=["us-west4", "us-central2"],
-    )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions == ["us-central2"]
-
-
-@pytest.mark.parametrize("set_override_env", [False, True], ids=["no_override", "with_override"])
-def test_resolve_executor_step_raises_on_disjoint_gcs_and_dag_tpu_regions(
-    iris_active, remote_step, monkeypatch, set_override_env
-):
-    if set_override_env:
-        monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
-    with pytest.raises(ValueError, match="no overlap between GCS regions"):
-        resolve_executor_step(
-            remote_step,
-            config={"input_path": "gs://marin-us-east1/data/input"},
-            output_path="/out/test-abc",
-            dag_tpu_regions=["us-central2"],
-        )
-
-
-def test_resolve_executor_step_raises_for_dual_region_bucket_location(iris_active, remote_step):
-    with patch("marin.execution.executor.get_bucket_location", return_value="NAM4"):
-        with pytest.raises(ValueError, match="non-regional bucket location"):
-            resolve_executor_step(
-                remote_step,
-                config={"input_path": "gs://external-bucket/path/to/data"},
-                output_path="/out/test-abc",
-            )
-
-
-def test_resolve_executor_step_skips_bucket_location_permission_failures(iris_active, remote_step):
-    class Forbidden(Exception):
-        pass
-
-    with patch(
-        "marin.execution.executor.get_bucket_location",
-        side_effect=Forbidden("no bucket metadata access"),
-    ):
-        resolved = resolve_executor_step(
-            remote_step,
-            config={"input_path": "gs://external-bucket/path/to/data"},
-            output_path="/out/test-abc",
-        )
-
-    assert isinstance(resolved.fn, RemoteCallable)
-    assert resolved.fn.resources.regions is None
-
-
-def _make_executor_for_steps(
-    steps_configs: dict[ExecutorStep, dict],
-    dependencies: dict[ExecutorStep, list[ExecutorStep]],
-    output_paths: dict[ExecutorStep, str],
-) -> Executor:
-    executor = Executor(prefix="/tmp/executor", executor_info_base_path="/tmp/executor-info")
-    executor.configs = steps_configs
-    executor.dependencies = dependencies
-    executor.output_paths = output_paths
-    return executor
-
-
-def test_executor_resolve_steps_infers_region_from_dependency_output_path(iris_active):
-    @remote
-    def dep_fn(_config):
-        pass
-
-    @remote
-    def my_fn(_config):
-        pass
-
-    dep = ExecutorStep(name="dep", fn=dep_fn, config=None)
-    step = ExecutorStep(name="test", fn=my_fn, config=None)
-    executor = _make_executor_for_steps(
-        {dep: {}, step: {"local_only": "/tmp/foo"}},
-        {dep: [], step: [dep]},
-        {dep: "gs://marin-us-east1/dependency/output", step: "/tmp/test-output"},
-    )
-
-    resolved_dep, resolved_step = executor._resolve_steps([dep, step])
-
-    assert isinstance(resolved_dep.fn, RemoteCallable)
-    assert isinstance(resolved_step.fn, RemoteCallable)
-    assert resolved_step.fn.resources.regions == ["us-east1"]
-
-
-@pytest.mark.parametrize(
-    "train_regions, prep_input, expected_region",
-    [
-        # Single-region TPU step pins both upstream & downstream to that region.
-        pytest.param(["us-central2"], "/tmp/foo", "us-central2", id="single_region_tpu"),
-        # Multi-region TPU with no GCS hints — picks the first region (sorted).
-        pytest.param(["us-west4", "us-central2"], "/tmp/foo", "us-central2", id="multi_region_tpu_no_gcs"),
-        # Multi-region TPU narrowed by an upstream GCS-region hint.
-        pytest.param(
-            ["us-west4", "us-central2"],
-            "gs://marin-us-west4/data/input",
-            "us-west4",
-            id="multi_region_tpu_pinned_by_gcs",
-        ),
-    ],
-)
-def test_executor_resolve_steps_uses_downstream_tpu_regions(iris_active, train_regions, prep_input, expected_region):
-    @remote
-    def prep_fn(_config):
-        pass
-
-    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=train_regions))
-    def train_fn(_config):
-        pass
-
-    prep = ExecutorStep(name="prep", fn=prep_fn, config=None)
-    train = ExecutorStep(name="train", fn=train_fn, config=None)
-    executor = _make_executor_for_steps(
-        {
-            prep: {"input_path": prep_input} if prep_input.startswith("gs://") else {"local_only": prep_input},
-            train: {"local_only": "/tmp/bar"},
-        },
-        {prep: [], train: [prep]},
-        {prep: "/tmp/prep-output", train: "/tmp/train-output"},
-    )
-
-    resolved_prep, resolved_train = executor._resolve_steps([prep, train])
-
-    assert isinstance(resolved_prep.fn, RemoteCallable)
-    assert isinstance(resolved_train.fn, RemoteCallable)
-    assert resolved_prep.fn.resources.regions == [expected_region]
-    assert resolved_train.fn.resources.regions == [expected_region]
-
-
-def test_executor_resolve_steps_does_not_apply_unrelated_tpu_regions(iris_active):
-    """A TPU step with no edge to a CPU step should not force its region on it."""
-
-    @remote
-    def cpu_fn(_config):
-        pass
-
-    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=["us-central2"]))
-    def tpu_fn(_config):
-        pass
-
-    cpu_step = ExecutorStep(name="cpu", fn=cpu_fn, config=None)
-    tpu_step = ExecutorStep(name="tpu", fn=tpu_fn, config=None)
-    executor = _make_executor_for_steps(
-        {cpu_step: {"input_path": "gs://marin-us-east1/data/input"}, tpu_step: {"local_only": "/tmp/bar"}},
-        {cpu_step: [], tpu_step: []},
-        {cpu_step: "/tmp/cpu-output", tpu_step: "/tmp/tpu-output"},
-    )
-
-    resolved_cpu, resolved_tpu = executor._resolve_steps([cpu_step, tpu_step])
-
-    assert isinstance(resolved_cpu.fn, RemoteCallable)
-    assert isinstance(resolved_tpu.fn, RemoteCallable)
-    assert resolved_cpu.fn.resources.regions == ["us-east1"]
-    assert resolved_tpu.fn.resources.regions == ["us-central2"]
-
-
-def _two_tpu_steps(first_regions: list[str], second_regions: list[str]) -> list[ExecutorStep]:
-    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=first_regions))
-    def first(_config):
-        pass
-
-    @remote(resources=ResourceConfig.with_tpu("v5p-8", regions=second_regions))
-    def second(_config):
-        pass
-
-    return [
-        ExecutorStep(name="first", fn=first, config=None),
-        ExecutorStep(name="second", fn=second, config=None),
-    ]
-
-
-def test_dag_tpu_regions_intersects_explicit_regions():
-    steps = _two_tpu_steps(["us-central2", "us-west4"], ["us-central2", "us-east1"])
-    assert _dag_tpu_regions(steps) == ["us-central2"]
-
-
-@pytest.mark.parametrize("set_override_env", [False, True], ids=["no_override", "with_override"])
-def test_dag_tpu_regions_raises_on_disjoint_explicit_regions(monkeypatch, set_override_env):
-    """Disjoint TPU pin sets must fail regardless of the override env var —
-    cross-region overrides do not silently broaden TPU placement."""
-    if set_override_env:
-        monkeypatch.setenv(MARIN_CROSS_REGION_OVERRIDE_ENV, "1")
-    steps = _two_tpu_steps(["us-west4"], ["us-central2"])
-    with pytest.raises(ValueError, match="No common region satisfies all TPU steps"):
-        _dag_tpu_regions(steps)
-
-
-def test_dag_tpu_regions_uses_iris_variant_regions_when_not_pinned():
-    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
-    def first(_config):
-        pass
-
-    @remote(resources=ResourceConfig.with_tpu("v5p-8"))
-    def second(_config):
-        pass
-
-    steps = [
-        ExecutorStep(name="first", fn=first, config=None),
-        ExecutorStep(name="second", fn=second, config=None),
-    ]
-
-    with patch(
-        "marin.execution.executor._regions_for_tpu_variant_from_iris",
-        return_value={"us-central2", "us-west4"},
-    ):
-        assert _dag_tpu_regions(steps) == ["us-central2", "us-west4"]
-
-
-def test_dag_tpu_regions_unions_device_alternative_regions():
-    @remote(resources=ResourceConfig.with_tpu(["v5p-8", "v6e-4"]))
-    def first(_config):
-        pass
-
-    step = ExecutorStep(name="first", fn=first, config=None)
-
-    with patch(
-        "marin.execution.executor._regions_for_tpu_variant_from_iris",
-        side_effect=lambda variant: {
-            "v5p-8": {"us-central2", "us-west4"},
-            "v6e-4": {"us-east1"},
-        }[variant],
-    ):
-        assert _dag_tpu_regions([step]) == ["us-central2", "us-east1", "us-west4"]
-
-
-def test_step_without_remote_is_plain_fn():
-    """A plain function with no @remote should not be RemoteCallable."""
-
-    def my_fn(config):
-        pass
-
-    step = ExecutorStep(name="test", fn=my_fn, config=None)
-    resolved = resolve_executor_step(step, config={}, output_path="/out/test-abc")
-
-    assert not isinstance(resolved.fn, RemoteCallable)
-
-
 def test_runner_propagates_context_vars(tmp_path):
     """StepRunner must propagate contextvars to worker threads.
 
@@ -1294,7 +734,7 @@ def test_runner_propagates_context_vars(tmp_path):
 
     def capture_ctx(output_path: str):
         observed.append(test_var.get())
-        return PathMetadata(path=output_path)
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="ctx_check",
@@ -1326,7 +766,7 @@ def test_runner_propagates_fray_client(tmp_path):
     def check_client(output_path: str):
         client = current_client()
         observed_clients.append(type(client))
-        return PathMetadata(path=output_path)
+        return Artifact(path=output_path)
 
     step = StepSpec(
         name="fray_check",

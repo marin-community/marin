@@ -16,8 +16,6 @@ schema is registered lazily on first ``report_task_status_text`` call so a
 CLI that never touches status text doesn't open a finelog connection.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum

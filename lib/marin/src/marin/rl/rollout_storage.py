@@ -147,6 +147,10 @@ class RolloutWriter(ABC):
         """
         pass
 
+    def get_metrics(self) -> dict[str, float]:
+        """Return writer metrics for logging. Subclasses may override."""
+        return {}
+
 
 class FileRolloutReader(RolloutReader):
     """File-based rollout reader using fsspec for various storage backends."""

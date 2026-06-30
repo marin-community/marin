@@ -15,8 +15,6 @@ with ``requests`` — same pattern as ``nemotron_v1.py`` — and extract one
 ``{locale}.jsonl`` per locale into the staging dir.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os

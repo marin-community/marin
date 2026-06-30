@@ -7,11 +7,9 @@ Covers validation, scheduling, resource tracking, and protocol behavior
 that matters to K8sTaskProvider and CoreWeave controller consumers.
 """
 
-from __future__ import annotations
-
 import pytest
-from iris.cluster.backends.k8s.fake import FakeNodeResources, InMemoryK8sService
-from iris.cluster.backends.k8s.types import K8sResource, KubectlError
+from iris.cluster.platforms.k8s.fake import FakeNodeResources, InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource, KubectlError
 
 
 def _get_pod_phase(svc: InMemoryK8sService, name: str) -> str:

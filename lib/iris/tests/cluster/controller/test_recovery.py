@@ -5,6 +5,7 @@
 
 import pytest
 from iris.cluster.backends.types import CloudSliceState, ListedSlice
+from iris.cluster.config import ScaleGroupConfig
 from iris.cluster.controller.autoscaler.recovery import AutoscalerCheckpoint, restore_autoscaler_state
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
@@ -13,9 +14,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     SliceSnapshot,
 )
 from iris.cluster.types import WorkerStatus
-from iris.rpc import config_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.backends.conftest import make_fake_slice_handle, make_mock_platform
 
 from .conftest import make_autoscaler, mark_discovered_ready
@@ -24,7 +23,7 @@ from .conftest import make_autoscaler, mark_discovered_ready
 def _draining_group(platform) -> ScalingGroup:
     """A scale-to-zero group as factory.create_autoscaler builds it (idle_threshold sped up)."""
     return ScalingGroup(
-        config_pb2.ScaleGroupConfig(name="retired-group", max_slices=0),
+        ScaleGroupConfig(name="retired-group", max_slices=0),
         platform,
         idle_threshold=Duration.from_ms(0),
     )
@@ -35,7 +34,7 @@ def _draining_group_builder(platform):
 
     def make(name: str) -> ScalingGroup:
         return ScalingGroup(
-            config=config_pb2.ScaleGroupConfig(name=name, max_slices=0),
+            config=ScaleGroupConfig(name=name, max_slices=0),
             platform=platform,
             idle_threshold=Duration.from_seconds(60),
         )
@@ -113,7 +112,7 @@ def test_configured_group_not_replaced_by_drain():
     """The drain pass must skip configured groups even when they have live cloud slices."""
     handle = make_fake_slice_handle("slice-cfg", scale_group="cfg-group", all_ready=True)
     platform = _platform_listing(handle)
-    configured = ScalingGroup(config=config_pb2.ScaleGroupConfig(name="cfg-group", max_slices=4), platform=platform)
+    configured = ScalingGroup(config=ScaleGroupConfig(name="cfg-group", max_slices=4), platform=platform)
     groups = {"cfg-group": configured}
     checkpoint = AutoscalerCheckpoint(group_snapshots={}, tracked_worker_rows=[])
 

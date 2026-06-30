@@ -10,8 +10,6 @@ distributed locking, heartbeats, and status writes are handled explicitly in
 easy to follow and debug.
 """
 
-from __future__ import annotations
-
 import contextvars
 import json
 import logging
@@ -29,11 +27,14 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import check_drift, write_artifact
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.step_spec import StepSpec
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import (
+from marin.execution.step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -43,8 +44,6 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
-from marin.execution.remote import RemoteCallable, _sanitize_job_name
-from marin.execution.step_spec import StepSpec
 from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -142,6 +141,11 @@ class StepRunner:
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
         """
+        # Make step progress visible by default. Idempotent and non-clobbering:
+        # skipped when the driver (or a wrapping app) already installed handlers.
+        if not logging.getLogger().handlers:
+            configure_logging(level=logging.INFO)
+
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
@@ -268,9 +272,12 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
+        # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+        mutable = check_drift(step)
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
-        if status == STATUS_SUCCESS:
+        if status == STATUS_SUCCESS and not mutable:
             logger.info(f"Skip {step_name}: already succeeded")
             return None
 
@@ -317,21 +324,24 @@ def check_cache(output_path: str) -> bool:
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
-    For inline steps the result is saved via ``Artifact.save``. For
-    ``RemoteCallable`` steps (or any step with explicit ``resources``), the
-    raw function + artifact save are submitted as a Fray job; the runner
-    process only manages the lock and status file.
+    An inline step that does not write its own record (``writes_record=False``) has its
+    return saved via :func:`~marin.execution.artifact.write_artifact`. For ``RemoteCallable``
+    steps (or any step with explicit ``resources``), the raw function + artifact save are
+    submitted as a Fray job; the runner process only manages the lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
 
+    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+    mutable = check_drift(step)
+
     # 1. Cache check
-    if check_cache(output_path):
+    if not mutable and check_cache(output_path):
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     try:
-        with step_lock(output_path, step_label) as status_file:
+        with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
             # 3. Run the function
             try:
                 t0 = time.monotonic()
@@ -341,7 +351,9 @@ def run_step(step: StepSpec) -> None:
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    Artifact.save(result, output_path)
+                    # A lazy step writes its own full record; a plain step's return is saved.
+                    if not step.writes_record:
+                        write_artifact(result, output_path)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -366,13 +378,13 @@ def _submit_iris_job(
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
     ``raw_fn`` is wrapped to also persist its return value via
-    :func:`Artifact.save` inside the submitted job, since Fray jobs cannot
-    return values back to the caller.
+    :func:`~marin.execution.artifact.write_artifact` inside the submitted job, since Fray
+    jobs cannot return values back to the caller.
     """
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        Artifact.save(result, output_path)
+        write_artifact(result, output_path)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

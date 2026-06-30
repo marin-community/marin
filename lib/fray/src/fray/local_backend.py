@@ -3,8 +3,6 @@
 
 """LocalClient: in-process fray backend for development and testing."""
 
-from __future__ import annotations
-
 import contextvars
 import logging
 import subprocess
@@ -172,7 +170,7 @@ class LocalClient:
         resources: ResourceConfig = ResourceConfig(),
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
-    ) -> LocalActorHandle:
+    ) -> "LocalActorHandle":
         """Create an in-process actor, returning a handle immediately."""
         group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
         return group.wait_ready()[0]  # type: ignore[return-value]
@@ -240,7 +238,7 @@ class LocalActorHandle:
             raise RuntimeError(f"Actor not found in registry: {self._endpoint}")
         return instance
 
-    def __getattr__(self, method_name: str) -> LocalActorMethod:
+    def __getattr__(self, method_name: str) -> "LocalActorMethod":
         if method_name.startswith("_"):
             raise AttributeError(method_name)
         instance = self._resolve()

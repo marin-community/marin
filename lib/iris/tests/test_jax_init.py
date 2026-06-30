@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from unittest.mock import MagicMock, patch
 
@@ -10,10 +12,17 @@ import pytest
 
 pytest.importorskip("jax")
 
+import jax
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import _poll_for_coordinator, initialize_jax
+from iris.runtime.jax_init import (
+    _poll_for_coordinator,
+    configure_jax_compilation_cache,
+    initialize_jax,
+)
 
 
 @dataclass
@@ -205,6 +214,161 @@ def test_initialize_jax_poll_timeout(
         initialize_jax(poll_timeout=0.1, poll_interval=0.01)
 
     mock_jax_init.assert_not_called()
+
+
+@patch("iris.runtime.jax_init.atexit")
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_single_host(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    mock_atexit: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
+
+    initialize_jax()
+
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 8, 3, local_device_ids=[3])
+    mock_iris_ctx.assert_not_called()
+
+
+@patch("iris.runtime.jax_init.atexit")
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_global_rank0_registers(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    mock_atexit: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global rank 0 on a multi-host supervised job registers the coordinator."""
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+
+    initialize_jax()
+
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 16, 0, local_device_ids=[0])
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_other_host_polls(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supervised rank on host != 0 polls the registry for rank 0's address."""
+    mock_get_job_info.return_value = _make_job_info(task_index=1, num_tasks=2)
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
+    )
+    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
+    mock_iris_ctx.return_value = fake_ctx
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+
+    initialize_jax()
+
+    mock_jax_init.assert_called_once_with("10.0.0.9:8476", 16, 8, local_device_ids=[0])
+    assert fake_ctx.registry.registered == []
+
+
+# NOT_FOUND is the proper Connect "name absent"; UNIMPLEMENTED is what an older
+# controller's bare HTTP 404 decodes to for the same condition. Both must retry.
+@pytest.mark.parametrize("pending_code", [Code.NOT_FOUND, Code.UNIMPLEMENTED])
+def test_poll_for_coordinator_retries_until_registered(pending_code: Code) -> None:
+    """The lookup reports the name absent until rank 0 registers; the poller retries, not crashes."""
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
+    )
+
+    class NotYetRegisteredResolver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def resolve(self, name: str) -> ResolveResult:
+            self.calls += 1
+            if self.calls < 3:
+                raise ConnectError(pending_code, f"{name} not registered")
+            return found
+
+    resolver = NotYetRegisteredResolver()
+    url = _poll_for_coordinator(resolver, "jax_coordinator", timeout=5.0, poll_interval=0.001)
+    assert url == "10.0.0.9:8476"
+    assert resolver.calls == 3
+
+
+def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
+    """A Connect error outside the pending set (e.g. PERMISSION_DENIED) is real and propagates."""
+
+    class DeniedResolver:
+        def resolve(self, name: str) -> ResolveResult:
+            raise ConnectError(Code.PERMISSION_DENIED, "not allowed")
+
+    with pytest.raises(ConnectError):
+        _poll_for_coordinator(DeniedResolver(), "jax_coordinator", timeout=5.0, poll_interval=0.001)
+
+
+@contextmanager
+def _isolated_jax_cache_config():
+    """Restore ``jax.config`` and a clean ``JAX_COMPILATION_CACHE_DIR`` around a test."""
+    original = jax.config.jax_compilation_cache_dir
+    jax.config.update("jax_compilation_cache_dir", None)
+    try:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
+            yield
+    finally:
+        jax.config.update("jax_compilation_cache_dir", original)
+
+
+def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
+    """With nothing set, the cache dir is ``marin_prefix()`` + subdir, written to env and jax.config."""
+    with _isolated_jax_cache_config():
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="gs://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://marin-eu/marin/compilation-cache"
+        assert jax.config.jax_compilation_cache_dir == "gs://marin-eu/marin/compilation-cache"
+
+
+@pytest.mark.parametrize("source", ["env", "jax_config"])
+def test_configure_compilation_cache_keeps_explicit_dir(source: str) -> None:
+    """An explicit cache dir (env var or jax.config) is preserved; the prefix default is not derived."""
+    with _isolated_jax_cache_config():
+        if source == "env":
+            os.environ["JAX_COMPILATION_CACHE_DIR"] = "gs://explicit/cache"
+        else:
+            jax.config.update("jax_compilation_cache_dir", "gs://explicit/cache")
+
+        with patch("iris.runtime.jax_init.marin_prefix") as mock_prefix:
+            configure_jax_compilation_cache()
+
+        mock_prefix.assert_not_called()
+        if source == "env":
+            assert os.environ["JAX_COMPILATION_CACHE_DIR"] == "gs://explicit/cache"
+        else:
+            assert jax.config.jax_compilation_cache_dir == "gs://explicit/cache"
+            assert "JAX_COMPILATION_CACHE_DIR" not in os.environ
 
 
 def test_poll_for_coordinator_default_interval() -> None:
