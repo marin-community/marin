@@ -23,7 +23,7 @@ from typing import ClassVar, Protocol
 from sqlalchemy import select
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db
+from iris.cluster.controller import db, reads
 from iris.cluster.controller.codec import WorkerAttributeRow, attribute_value_from_row
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
@@ -57,17 +57,20 @@ def _decode_value(row: WorkerAttributeRow) -> AttributeValue:
 class WorkerAttrsProjection:
     """Process-local write-through cache over the ``worker_attributes`` table.
 
-    Reads serve the latest committed snapshot from an in-memory dict guarded
-    by a ``threading.Lock``. Writes register a post-commit hook that
-    updates the dict atomically with the surrounding SQL commit; the hook
-    fires under the DB write lock so concurrent readers cannot observe
-    torn state.
+    Scoped to one backend: holds attributes only for workers whose scale group
+    ``owns_scale_group`` claims, mirroring how :class:`WorkerHealthTracker` is
+    constructed per backend. Reads serve the latest committed snapshot from an
+    in-memory dict guarded by a ``threading.Lock``. Writes register a
+    post-commit hook that updates the dict atomically with the surrounding SQL
+    commit; the hook fires under the DB write lock so concurrent readers
+    cannot observe torn state.
     """
 
     sources: ClassVar = (worker_attributes_table,)
 
-    def __init__(self, db: ControllerDB) -> None:
+    def __init__(self, db: ControllerDB, *, owns_scale_group: Callable[[str], bool]) -> None:
         self._db = db
+        self._owns_scale_group = owns_scale_group
         self._lock = threading.Lock()
         self._cache: dict[WorkerId, dict[str, AttributeValue]] = {}
         PROJECTIONS.append(self)
@@ -78,7 +81,7 @@ class WorkerAttrsProjection:
     # -- Loading --------------------------------------------------------------
 
     def rehydrate(self) -> None:
-        """Reload the cache from SQL via the SA read engine.
+        """Reload the cache from SQL via the SA read engine, scoped to owned workers.
 
         Called once at construction and again after ``ControllerDB.replace_from``
         has swapped the underlying database file. ``WorkerIdType`` on
@@ -87,7 +90,10 @@ class WorkerAttrsProjection:
         """
         decoded: dict[WorkerId, dict[str, AttributeValue]] = {}
         with db.read_snapshot(self._db.sa_read_engine) as tx:
+            owned = reads.owned_worker_ids(tx, self._owns_scale_group)
             for row in tx.execute(select(worker_attributes_table)).all():
+                if row.worker_id not in owned:
+                    continue
                 decoded.setdefault(row.worker_id, {})[row.key] = _decode_value(row)
         with self._lock:
             self._cache.clear()

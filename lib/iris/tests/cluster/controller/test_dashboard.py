@@ -198,9 +198,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     controller_mock.provider = Mock(capabilities=worker_caps)
     controller_mock.provider.name = "worker"
     controller_mock.provider.autoscaler = autoscaler
-    # The single backend owns the liveness tracker; the service reads liveness
-    # through the controller's union over the backends' trackers.
+    # The single backend owns the liveness tracker and attrs projection; the service
+    # reads liveness through the controller's union over the backends' trackers.
     controller_mock.provider.health = state._health
+    controller_mock.provider.worker_attrs = state._worker_attrs
     controller_mock.capabilities = worker_caps
     controller_mock.backends = {DEFAULT_BACKEND_ID: controller_mock.provider}
     controller_mock.backend_id_for_scale_group = Mock(return_value=DEFAULT_BACKEND_ID)
@@ -220,7 +221,6 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(
             db=state._db,
             endpoints=state._endpoints,
@@ -244,7 +244,6 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
@@ -1444,7 +1443,6 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
@@ -1480,7 +1478,6 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     dashboard = ControllerDashboard(svc)
@@ -1678,7 +1675,6 @@ def _multi_backend_client(state, scheduler, tmp_path, log_client, backends):
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     return TestClient(ControllerDashboard(svc).app)
@@ -1823,7 +1819,6 @@ def test_list_workers_stamps_backend_id_and_scale_group(state, scheduler, tmp_pa
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
@@ -1847,7 +1842,6 @@ def test_worker_backend_id_propagated_to_get_worker_status(state, scheduler, tmp
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
@@ -1869,7 +1863,6 @@ def test_list_workers_filters_by_backend_id(state, scheduler, tmp_path, log_clie
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)
@@ -1905,7 +1898,6 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
     client = TestClient(ControllerDashboard(svc).app)

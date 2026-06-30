@@ -445,8 +445,6 @@ class BackendRuntime:
     """The worker-endpoint projection."""
     run_template_cache: RunTemplateCache
     """Per-job ``RunTaskRequest`` template cache."""
-    worker_attrs: WorkerAttrsProjection
-    """The worker-attributes projection."""
     owns_scale_group: Callable[[str], bool]
     """Whether a scale group belongs to this backend (the default backend also claims
     scale groups mapped to no backend)."""
@@ -486,6 +484,14 @@ class TaskBackend(Protocol):
         workers (k8s). The backend folds and reaps through it; the controller reaches
         worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
         prune readers and to seed/register a worker into its owning backend."""
+        ...
+
+    @property
+    def worker_attrs(self) -> WorkerAttrsProjection | None:
+        """The worker-attributes projection this backend constructs and owns, holding
+        only the workers in its scale groups, or None for a backend that tracks no
+        Iris workers (k8s). The controller reaches it (routed by scale group) to
+        register a worker's attributes into its owning backend."""
         ...
 
     allowed_users: frozenset[str]

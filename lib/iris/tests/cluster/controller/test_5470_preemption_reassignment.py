@@ -430,7 +430,7 @@ class TestPreemptionReassignment:
             ctrl._db,
             health=ctrl.provider.health,
             endpoints=ctrl._endpoints,
-            worker_attrs=ctrl._worker_attrs,
+            worker_attrs=ctrl.provider.worker_attrs,
             run_template_cache=ctrl._run_template_cache,
         )
 

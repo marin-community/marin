@@ -44,6 +44,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
@@ -200,6 +201,11 @@ class RpcTaskBackend:
     # Fleet/exec/capacity/prune paths and routes a registering worker's liveness to
     # it by scale group.
     health: WorkerHealthTracker = field(init=False, repr=False)
+    # This backend's worker-attributes projection, constructed in ``bind_runtime``
+    # (it needs ``runtime.db``/``owns_scale_group``, unavailable at construction)
+    # and holding only the workers in this backend's scale groups. The controller
+    # routes a registering worker's attributes to it by scale group.
+    worker_attrs: WorkerAttrsProjection | None = field(default=None, init=False, repr=False)
     # One shared scheduler instance reused across cycles; per-tick worker state
     # comes from ``_store``.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
@@ -212,13 +218,14 @@ class RpcTaskBackend:
         self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        """Build this backend's worker store from ``runtime`` and the backend's own
-        liveness tracker and ``autoscale`` callback."""
+        """Build this backend's worker-attributes projection and worker store from
+        ``runtime`` and the backend's own liveness tracker and ``autoscale`` callback."""
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            worker_attrs=runtime.worker_attrs,
+            worker_attrs=self.worker_attrs,
             endpoints=runtime.endpoints,
             run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
