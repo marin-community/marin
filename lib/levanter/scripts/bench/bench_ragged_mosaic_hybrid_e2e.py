@@ -14,9 +14,10 @@ the loop on the ~1.3x fwd+bwd projection from the per-GEMM bench (GFP8-024).
     gate, up = split(h);  g = silu(gate) * up
     out      = ragged_dot(g[T,F], w2[E,F,D])      -> [T, D]
 
-The mosaic path REQUIRES grad_dtype=e4m3: Mosaic's wgmma emits a single element type for both
-operands and rejects mixed e4m3 x e5m2 (the dgrad would be e5m2-grad x e4m3-rhs), so the only
-f8 dgrad that lowers is same-type e4m3 — i.e. the all-E4M3 M0 recipe. This is enforced below.
+The mosaic path historically REQUIRED grad_dtype=e4m3: stock Mosaic wgmma emitted a single element
+type for both operands and rejected mixed e4m3 x e5m2 (the dgrad is e5m2-grad x e4m3-rhs). With a
+jaxlib carrying the mixed-fp8-wgmma patch (mcwitt/jax), grad_dtype=e5m2 lowers — both backward GEMMs
+run as genuine mixed E4M3/E5M2 wgmma — so the TE-style hybrid recipe runs on the fast f8 path.
 
 Mosaic-GPU is H100-only and needs the cluster CUDA-toolchain bootstrap (see
 mosaic-gpu-cluster-toolchain memory / bench_ragged_mosaic_fp8_fwdbwd.py). Self-contained (no
@@ -156,9 +157,10 @@ def main():
     ap.add_argument("--forward-only", action="store_true")
     args = ap.parse_args()
 
-    # The mosaic dgrad is same-type f8 wgmma; mixed e4m3 x e5m2 does not lower in Mosaic.
-    if args.path == "mosaic" and args.grad_dtype != "e4m3":
-        raise SystemExit("mosaic path requires --grad-dtype e4m3 (Mosaic rejects mixed e4m3 x e5m2 wgmma)")
+    # With a jaxlib whose Mosaic wgmma verifier allows mixed E4M3/E5M2 operands
+    # (mcwitt/jax mixed-fp8-wgmma), grad_dtype=e5m2 lowers: both backward GEMMs become
+    # mixed (dlhs = e5m2-grad x e4m3-rhs, wgrad = e4m3-act x e5m2-grad). On a stock jaxlib
+    # this raises in the Mosaic kernels — run e5m2+mosaic only on the patched build.
 
     dtype = jnp.dtype(args.dtype)
     grad_dtype = _GRAD_DTYPES[args.grad_dtype]

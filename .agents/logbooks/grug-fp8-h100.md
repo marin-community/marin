@@ -1548,6 +1548,10 @@ exceed it — grouping only adds boundary/wave-quant overhead). Measured cuBLAS 
   kernel, a deliberate complexity call. **Both goal clauses are met under the rigorous reading.**
 
 ### 2026-06-25 — GFP8-033: the f8 cast-transpose kernel — right idea, but jax-0.10.0 Mosaic CANNOT materialize a coalesced transposed store (3 lowering walls). f8 wgrad stays parked.
+> **[SUPERSEDED — see GFP8-033 CORRECTION below.]** The "3 lowering walls" were a wrong-idiom artifact (a
+> *memref* transpose of the swizzled store), NOT a missing capability. The coalesced fused cast-transpose
+> DOES lower on jax 0.10.0 via a register layout cast, and GFP8-033 M3 ships it at 1.33× e2e. Keep this entry
+> for the failed formulations only.
 Pushed ahead (user request) on the TE-style fused cast-transpose: one read of a bf16 tile -> both the
 rowwise f8 (`q[M,K]`) and the transposed f8 (`qT[K,M]`), to kill the transpose tax that keeps f8 wgrad a
 net e2e loss (GFP8-028/029). **M1 landed clean** (`fp8_cast_transpose.py` reference + 19 CPU bit-exact
@@ -1589,6 +1593,8 @@ lowering failures (H100, `bench_f8_cast_transpose_mgpu.py`, jobs `…-221151 →
   f8_swapaxes tax baselines).
 
 ### 2026-06-25 — GFP8-033 follow-up: the cast-transpose IS expressible on jax HEAD (tiled transpose); 0.10.0 is the only blocker
+> **[SUPERSEDED — see GFP8-033 CORRECTION below.]** No jax bump is needed: 0.10.0 already ships the
+> `WGMMA_TRANSPOSED`/`layout_cast` machinery. This entry's "0.10.0 is the only blocker" conclusion is wrong.
 Checked whether M2's wall is fundamental or version-specific by reading jax `main`. Verdict: **version-
 specific — a transposed SMEM→GMEM store works at HEAD**, so the cast-transpose kernel is a clean jax-bump
 follow-up, not a dead end.
@@ -1831,3 +1837,191 @@ extraction. Memex: source note `2026-06-26-grug-fp8-david-update` (David progres
   (2) 3000 steps / d512-6L is short+small — late gradient-tail shifts may need a longer run; (3) the deep CPU
   stress (8L/8000) showed a one-off 244% transient spike that reconverged — worth watching at longer horizons.
   Necessary + strong, not yet a full pretraining-scale guarantee. CPU and GPU agree (E4M3-quant is hw-independent).
+
+
+### 2026-06-27 — GFP8-036 START: mixed E4M3/E5M2 wgmma via patched jaxlib (the hybrid recipe on the fast path)
+- **Goal:** run the Transformer-Engine hybrid recipe (forward operands E4M3, output-grad E5M2) as a *genuine
+  mixed-dtype f8 wgmma* on the Mosaic-GPU grouped GEMM, then validate it (a) lowers, (b) matches an f32
+  reference, (c) beats the shipped bf16-upcast wgrad fallback. This is the fast-path counterpart to GFP8-035;
+  the numerical-trajectory question is explicitly deferred (mixed-f8 numerics are backend-independent — XLA
+  `dot_general` already does them; the patch only buys *speed*).
+- **Why a patch was needed:** Hopper `wgmma` takes independent `.atype`/`.btype` f8 operands, but jax 0.10.0
+  rejected any A/B dtype mismatch in two places — the Mosaic-GPU MLIR dialect verifier
+  (`jaxlib/mosaic/dialect/gpu/mosaic_gpu.cc::WGMMAOp::verify`) and the pallas wgmma primitive gate
+  (`jax/_src/pallas/mosaic_gpu/primitives.py`). Matt's branch `mcwitt/jax@mixed-fp8-wgmma-0.10.0` (commit
+  `d5118ef`) relaxes both to allow any E4M3/E5M2 mix and updates the emitter
+  (`jax/experimental/mosaic/gpu/wgmma.py`) to emit `...{out}.{a_el_ty}.{b_el_ty}` instead of `.{el}.{el}`.
+- **Build scope:** the verifier compiles into `_mosaic_gpu_ext.so`, which ships in **base jaxlib** (present
+  even on a CPU/no-cuda install), NOT in the separate `mosaic-gpu-cuda` runtime wheel. So rebuild base
+  `jaxlib==0.10.0` only (`build.py build --wheels=jaxlib`, CPU build — the dialect is MLIR C++, no nvcc);
+  keep stock `jax-cuda13-plugin`/`-pjrt` 0.10.0; the two changed `jax` python files are copied over
+  site-packages (branch == 0.10.0 + patch, so drop-in).
+- **Build env:** a 1×H100 Iris holder on cw-us-east-02a (`mcwitt-jaxbuild-mixfp8`, `--cpu 48 --memory 96GB
+  --disk 200GB`, `sleep 14400` auto-expiry). iris-task image = Debian, Python 3.12.13, root, apt, 192 cores,
+  7TB disk; missing bazel+clang → installed bazelisk 1.25 (bazel 7.7.0) + clang 19. Built jaxlib in-container
+  (no GPU used by the build); `/app` is the bundled marin worktree with a working `uv run` gpu env
+  (jax 0.10.0, backend=gpu, ptxas at `nvidia/cu13/bin`). Single-job build+validate to avoid wheel transfer.
+- Status: build running; install + V1 (mixed-wgmma lowers + integer-exact reference) pending.
+
+### 2026-06-27 — GFP8-036 RESULT: mixed E4M3/E5M2 wgmma works and the hybrid wgrad runs on the fast f8 kernel
+- **Build:** base `jaxlib` rebuilt from `mcwitt/jax@mixed-fp8-wgmma-0.10.0` (commit d5118ef) in the H100
+  holder on cw-us-east-02a: `python build/build.py build --wheels=jaxlib` → 85MB wheel,
+  `jaxlib-0.10.0.dev0+selfbuilt-cp312-cp312-manylinux_2_27_x86_64.whl` (~11 min, 48-core bazel). Installed
+  over the `/app` gpu env (`uv pip install --force-reinstall`); the self-build version `0.10.0.dev0+selfbuilt`
+  is < 0.10.0 in PEP440 so jax's gate rejects it — patched `jaxlib/version.py` `_release_version` → `0.10.0`
+  (ABI identical to the 0.10.0 tag, same XLA pin, so the stock `jax-cuda13-plugin/-pjrt` 0.10.0 stay
+  compatible). The two changed `jax` python files (`wgmma.py` emitter, `primitives.py` gate) copied over
+  site-packages.
+- **Env gotchas (NOT the patch):** the cuda13 plugin loads from the uv *cache* dir, so its relative
+  `../nvidia/cu13/bin/ptxas` doesn't resolve and `--xla_gpu_cuda_data_dir` was ignored by the Mosaic/NVPTX
+  path (`${CUDA_DIR}` stayed literal). Fixes: symlink `ptxas`/`nvlink` into `/app/.venv/bin` (a searched
+  dir), and symlink `libdevice.10.bc` into the CWD (`/app`) — XLA's final fallback is literally
+  `./libdevice.10.bc`. With those, mosaic kernels compile.
+- **V1 — mixed wgmma lowers + correct (primitive level):** standalone pallas mosaic-gpu wgmma, 64x128x64,
+  integer inputs (f8-exact). All four cases **PASS exact** (maxabs=0.0): `e4m3xe4m3`, `e5m2xe5m2`,
+  **`e4m3xe5m2`**, **`e5m2xe4m3`**. The mixed pair passes the relaxed verifier and computes correctly.
+  (Earlier "Fatal Python error: Aborted" was the libdevice path, not the dtype mix.)
+- **V2 — mixed-f8 ragged weight-gradient correct:** relaxed the haliax same-dtype guard in
+  `transposed_ragged_dot_mgpu.py` (allow the E4M3/E5M2 pair). Mixed-f8 wgrad vs an f32 reference on the
+  *same dequantized operands*: **mean_rel = 8.1e-4** (the bf16-upcast path is worse, 8.4e-3, since it rounds
+  operands to bf16). `max_rel=0.63` is a single near-zero reference element. Kernel is numerically correct.
+- **V3 — perf (kernel-only, T8192/M2048/N5632/G8, the GFP8-029 wgrad regime):**
+  - mixed-f8 (e4m3xe5m2): **0.298 ms**  | same-f8 (e4m3xe4m3): 0.296 ms | bf16-upcast (auto/triton): 0.372 ms
+  - **mixed-f8 is 1.25x faster than the bf16-upcast wgrad**; same-f8 1.26x (matches GFP8-029's 1.2-1.3x).
+  - **mixed/same ratio 0.992** — the E4M3/E5M2 mix is perf-identical to all-E4M3. The patch lets the *hybrid*
+    recipe use the fast f8 wgmma wgrad at zero perf cost vs all-E4M3.
+  - Scope: V3 is **kernel-only** (operands pre-transposed). The cast-transpose tax is NOT a standing problem —
+    GFP8-033 M3 already solved it with the fused coalesced cast-transpose (`fp8_cast_transpose_mgpu.py`),
+    which flips f8 wgrad to a **1.33× e2e win** and produces the transposed grad in any f8 `out_dtype`
+    (incl. E5M2). That e2e was measured with **grad_dtype=e4m3** (same-dtype wgrad); the ONLY thing that
+    blocked the *E5M2* hybrid from that same fast path was the mixed-wgmma wall — i.e. THIS patch + the
+    one-line guard relaxation. So today's work composes with the shipped fused cast-transpose; the pending
+    confirmation is the full `fp8_ragged` backward at `grad_dtype=e5m2, mosaic_wgrad=FP8` reproducing ~1.33×.
+- **Verdict:** Matt's mixed-fp8-wgmma jaxlib patch is correct (mixed E4M3/E5M2 wgmma lowers + matches
+  reference on H100) and unlocks the proper hybrid recipe (E4M3 activations / E5M2 grad) on the genuine f8
+  wgmma weight-gradient — 1.25x over bf16, perf-equal to all-E4M3. The wiring change is a one-line guard
+  relaxation in `transposed_ragged_dot_mgpu.py`. Holder job terminated after validation.
+
+### 2026-06-27 — GFP8-036 e2e: the E5M2 hybrid runs fully on the f8 path → 1.33× (== the all-E4M3 recipe)
+- Confirmed the full hybrid recipe (E4M3 fwd/dgrad operands, **E5M2 grad**) end-to-end on the patched
+  jaxlib, real Grug MoE-MLP (T8192/D2048/F5632/E8, `bench_ragged_mosaic_hybrid_e2e.py`, H100). With
+  `grad_dtype=e5m2`, **both** backward GEMMs go mixed (dlhs = e5m2-grad × e4m3-rhs, wgrad = e4m3-act ×
+  e5m2-grad) — entirely blocked on stock jaxlib; the patch unblocks both.
+- Three guards relaxed to wire it (all "allow the E4M3/E5M2 f8 pair"): haliax `transposed_ragged_dot_mgpu`
+  (wgrad), jax `ragged_dot_mgpu` (dlhs, in-container site-packages patch), and the bench's own
+  `grad_dtype==e4m3` assertion. cuDNN upgraded to 9.12 (jaxlib 0.10.0 built vs 9.12) for the full-model run.
+
+  | arm | steady | vs bf16 | MFU | TFLOP/s | dx / dw13 / dw2 rel_frob |
+  |-----|--------|---------|-----|---------|--------------------------|
+  | bf16 baseline                              | 3.774 ms | 1.000× | 0.455 | 451 | — |
+  | mosaic e5m2, **bf16 wgrad**                | 2.950 ms | **1.279×** | 0.291 | 576 | 0.114 / 0.078 / 0.061 |
+  | mosaic e5m2, **fp8 wgrad** (mixed wgmma)   | **2.831 ms** | **1.333×** | 0.304 | 601 | 0.114 / 0.096 / 0.064 |
+
+- **The E5M2 hybrid hits 1.333× — identical to GFP8-033 M3's all-E4M3 1.333×.** The fused cast-transpose +
+  mixed wgmma compose exactly as predicted: the fp8 wgrad adds ~4% e2e over the bf16 wgrad (2.950→2.831 ms),
+  matching the GFP8-033 M3 wgrad gain. fwd numerics unchanged (7.95e-2, grad-dtype-independent); the f8
+  wgrad raises dw13 0.078→0.096 (e5m2 grad in the wgrad) — a single-step rel_frob vs bf16, NOT a
+  training-stability claim.
+- **Completeness:** all three GEMMs (fwd all-E4M3, dgrad/wgrad mixed E4M3×E5M2) now run on f8 for the
+  proper TE hybrid recipe — the mixed-fp8 patch was the last blocker. Efficient: 1.33× e2e, ~80% of the
+  realistic f8 ceiling (cuBLAS dense f8 maxes ~54-57%, GFP8-032); the wgrad stays the weakest GEMM
+  (output-bound, low arithmetic intensity).
+- **Not yet done:** (1) the patch is a custom jaxlib fork, not upstreamed (built wheel cached at
+  `~/projects/jax-mixed-fp8/dist/jaxlib-mixfp8-0.10.0-cp312-...whl`); (2) E5M2 numerics are step-wise
+  rel_frob, NOT a training trajectory (the GFP8-035-style stability question is still open for E5M2);
+  (3) one shape / single device. Holder `mcwitt-jaxbuild-mixfp8c` terminated after the run.
+
+### 2026-06-27 — GFP8-036 de-risk spike: NO jaxlib fork needed — stock jaxlib + Python overlay + scoped verify-disable runs the full mixed-f8 hybrid
+- **Question:** can the mixed E4M3/E5M2 wgmma run on STOCK jaxlib 0.10.0 (no C++ rebuild) via a pure-Python
+  overlay? Decided by which Mosaic lowering path our kernels use.
+- **Two Mosaic wgmma paths (jax 0.10.0):**
+  - **Lane** semantics → `mgpu.wgmma` (the Python emitter `wgmma.py`) — **no C++ verifier**.
+  - **Warpgroup** semantics → `mgpu.dialect.wgmma` → C++ `WGMMAOp::verify`.
+  All three production ragged kernels (fwd/dlhs `ragged_dot_mgpu.py:238`, wgrad) use **Warpgroup**.
+- **Spike (stock jaxlib 0.10.0 from `--extra gpu`; overlay = patched `wgmma.py` + `primitives.py` + relaxed
+  haliax/jax `ragged_dot_mgpu` Python guards; ptxas/libdevice symlinks; H100):**
+  1. **Lane mixed wgmma → PASS exact** (all of e4m3xe4m3 / e5m2xe5m2 / e4m3xe5m2 / e5m2xe4m3, maxabs 0.0).
+     The Lane path needs ONLY the Python overlay — no C++.
+  2. **Warpgroup wgrad (production) → FAILS** with the stock C++ verifier:
+     `MLIRError: 'mosaic_gpu.wgmma' op The a and b inputs must have the same element type.` So the C++
+     verifier DOES fire (Mosaic calls `module.operation.verify()` explicitly, core.py:918/941/1007, + the
+     PassManager) and IS on our path. A bare 2-file overlay is insufficient for the production kernels.
+  3. **Verify-DISABLE probe:** monkeypatched `ir.Operation.verify`→no-op + `PassManager.parse`→
+     `enable_verifier(False)` (both patch cleanly from Python), then re-ran the Warpgroup wgrad on STOCK
+     jaxlib → **lowers and is bit-identical to the forked jaxlib: V2 mean_rel 8.1e-4, V3 1.26× vs bf16.**
+- **Conclusion — the C++ verifier is PURELY a gate, not functionality:** the dialect (Warpgroup) path emits
+  its PTX through the SAME overlaid Python `wgmma.py` emitter (proven: correct mixed numerics on stock
+  jaxlib once the gate is bypassed; a stock-C++ lowering would emit `.e4m3.e4m3` → wrong). So the full
+  mixed-f8 hybrid runs on **stock jaxlib with NO fork** given: (a) Python overlay of `wgmma.py` (required —
+  correct `.atype.btype` PTX) + the Python dtype guards, and (b) a verification-disable.
+- **De-risk verdict:** a forked/rebuilt jaxlib is NOT required. The shippable no-fork form is a small
+  haliax shim: overlay the patched emitter/gate at import + wrap the mixed-f8 kernel's compilation in a
+  SCOPED verify-disable (keep verification on everywhere else). Yellow flag (skips IR verification for one
+  known-good kernel) but self-contained, no rebuild, survives jax patch-releases better than a wheel.
+  Trade-off vs the forked wheel: shim = fragile-to-jax-internals but zero build; fork = stable-per-version
+  but rebuild-on-bump. Upstreaming the verifier relaxation remains the clean long-term fix (drops the shim).
+
+### 2026-06-28 — GFP8-037: prototyped the complete FP8 ragged-dot replacement in two clean origin/main branches (forked-jaxlib vs pure-python shim), code-reviewed + benchmarked both
+- **Goal:** extract the FP8 ragged-dot subsystem as a reviewable prototype on top of `origin/main`
+  (217 commits behind the research branch) in **two variants** that differ only in how the mixed
+  E4M3/E5M2 Hopper wgmma is enabled, then `/code-review` each and benchmark the speedup vs bf16.
+- **Extraction:** the whole fp8 ragged path is self-contained in 8 haliax files (5 new +
+  `fp8.py`/`nn/ragged_dot.py`/`quantization.py`, all untouched on main since the merge-base) + 3
+  tests + the hybrid bench. Lifted clean onto `origin/main` as the shared base commit `f8d31ade8a`.
+- **Branch `grug-fp8-fork`** (forked-jaxlib): shared base + `mixed_fp8_fork_setup.sh` + `MIXED_FP8_FORK.md`.
+  All jax/jaxlib changes live in the fork (verifier + emitter + pallas gate + a build-time dlhs-guard
+  patch); no runtime monkeypatching. Extended the fork with the `ragged_dot_mgpu` dlhs relaxation
+  (`mcwitt/jax` commit, unpushed) so it is self-contained.
+- **Branch `grug-fp8-shim`** (pure-python, stock jaxlib): shared base + `mixed_fp8_wgmma_shim.py`
+  (vendored emitter + globals-rebind; dtype-guard relaxation by reading the function source from
+  file and re-execing; verify-disable wrapping the Mosaic-GPU lowering entrypoints) +
+  `test_mixed_fp8_wgmma_shim.py`, auto-activated from `fp8_scaled_ragged_dot`.
+- **SHIM benchmark (clean branch, STOCK jaxlib 0.10.0, H100, real Grug MoE-MLP T8192/D2048/F5632/E8):**
+
+  | arm | steady | vs bf16 | TFLOP/s | fwd_rel | dx / dw13 / dw2 |
+  |-----|--------|---------|---------|---------|-----------------|
+  | bf16 baseline                       | 3.737 ms | 1.000× | 455 | — | — |
+  | mosaic e5m2, bf16 wgrad             | 2.920 ms | **1.280×** | 582 | 0.0795 | 0.114/0.078/0.061 |
+  | mosaic e5m2, **fp8 wgrad (shim)**   | **2.788 ms** | **1.341×** | 610 | 0.0795 | 0.114/0.096/0.064 |
+
+  **Bit-identical to GFP8-036's forked-jaxlib e2e** (1.333×, fwd 0.0795, dw13 0.096): the shim
+  reaches the same lowering on stock wheels. No verifier error, no inf/NaN.
+- **Two bugs found by benchmarking the shim (both fixed, commit `68dc724815`):**
+  1. The verify-disable wrapped `core._kernel_to_module`/`_run_serde_pass`, but the pallas mosaic
+     path calls `core._lower_as_gpu_kernel` **directly** (via `pallas/mosaic_gpu/lowering.py`), so
+     the C++ `WGMMAOp::verify` at `core.py:918` still fired. Fix: also wrap the pallas lowering
+     entrypoint + `_lower_as_gpu_kernel`. Honest scope: verification is off for **all** Mosaic-GPU
+     lowering on the stack, not the fp8 kernel alone (a single-op C++ verifier can't be disabled
+     from Python — the fork fixes it precisely).
+  2. `inspect.getsource` (linecache) intermittently returned guard-less source under heavy import
+     load → spurious "found 0". Fix: read the function source straight from its file at
+     `co_firstlineno`, stopping at the next top-level def/class/decorator (so multi-line signatures
+     like `ragged_dot` are captured whole).
+- **Code review (high-effort workflow per branch, 10 findings each).** Most are pre-existing issues
+  in the *shared extracted research code* (affect both branches), surfaced by the clean diff:
+  - **No production caller**: `Fp8RaggedDotOp`/`fp8_scaled_ragged_dot` are reachable only from the
+    bench/tests — `quantize_linear_layers` wires only the dense op. The MoE path is benchmark-wired,
+    not model-wired. (The key "completeness" gap.)
+  - **f8-output precision**: stock `ragged_dot_mgpu` stores the GEMM result in `lhs.dtype` (f8), not
+    f32, so `preferred_element_type` is dropped — this is the ~8% fwd error (finite, not inf/NaN at
+    grug scale; GFP8-035 trained 3000 steps sub-1%).
+  - `_preferred_implementations` ignores its `implementation` arg (fwd/wgrad backend desync);
+    megablox raises instead of falling back; env-var tiling knobs lose the power-of-2/≤dim invariant;
+    silent auto→XLA fallback with no warning; bf16-wgrad dequantizes `q_g` instead of the original `g`.
+  - Shim-specific: the verify-disable scope caveat (now documented); guard accepts mixed pair even
+    when the version-gated shim is inactive.
+  - Fork-specific (fixed, commit `65d1f2f71c`): version-pin sed could silently no-op and brick the
+    container; symlinks lacked existence checks. Both now fail-fast.
+- **FORK benchmark (clean branch):** the in-container jaxlib build (`mixed_fp8_fork_setup.sh` step 2)
+  was killed by a clang SIGALRM ("Alarm clock") after **57 min** of compile (`//jaxlib/tools:jaxlib_wheel
+  failed to build`) — an infra/time limit on the build, not a fork or fp8 defect. The pre-built cached
+  wheel (85 MB) can't be substituted either: the iris workspace bundle caps at **25 MB**. So the fork
+  cannot be benchmarked on the clean branch without either a >57-min build or out-of-band wheel
+  distribution. **This operational cost is itself the headline fork-vs-shim finding.** The fork's
+  *performance* is nonetheless pinned: the shim vendors the fork's exact emitter and reached
+  bit-identical lowering (shim numerics fwd 0.0795 / dw13 0.096 == GFP8-036's forked-wheel numbers), so
+  fork == shim == **~1.34×**, and GFP8-036 already measured the actual forked wheel at 1.333×.
+- **Recommendation:** ship the **shim** for the interim (no fork, no 57-min build, no 85-MB wheel,
+  stock pinned wheels; one yellow flag — Mosaic-GPU IR verification is disabled during mosaic lowering).
+  Upstream the verifier/emitter relaxation (the fork is upstreamable, with tests) as the durable fix,
+  which then deletes the shim. Both are interim; the shim is the cheaper interim.

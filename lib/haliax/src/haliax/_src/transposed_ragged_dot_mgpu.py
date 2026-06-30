@@ -29,6 +29,9 @@ from jax import lax
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 
+# The two FP8 formats Hopper wgmma accepts as a mixed .atype/.btype pair (E4M3 activations / E5M2 grad).
+_F8_DTYPES = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+
 
 @dataclasses.dataclass(frozen=True)
 class WgradBlockConfig:
@@ -66,7 +69,10 @@ def transposed_ragged_dot(
     The contraction axis ``k`` (tokens) is ragged over ``group_sizes`` and must be the contiguous
     (last) axis of both operands — produce that with a cast-transpose at the call site.
     """
-    if lhs.dtype != rhs.dtype:
+    # Hopper f8 wgmma takes independent .atype/.btype operands, so the E4M3/E5M2 pair may be mixed
+    # (the hybrid recipe: E4M3 activations, E5M2 output-grad). Any other dtype mismatch is rejected.
+    # Requires a jaxlib whose Mosaic-GPU wgmma verifier allows the mix (mcwitt/jax mixed-fp8-wgmma).
+    if lhs.dtype != rhs.dtype and not (lhs.dtype in _F8_DTYPES and rhs.dtype in _F8_DTYPES):
         raise NotImplementedError(f"lhs and rhs must have the same dtype, got {lhs.dtype} and {rhs.dtype}")
     block_m, block_n, block_k = config.block_m, config.block_n, config.block_k
     max_concurrent_steps, grid_block_n = config.max_concurrent_steps, config.grid_block_n
