@@ -102,8 +102,24 @@ class GrugModelConfig:
     num_layers: int = 6
     num_heads: int = 4
     head_dim: int | None = None
+    """Per-head no-rope Q/K width (the additive-rope ``qk_nope`` dim). Also the V
+    width unless ``v_head_dim`` is set. None defaults to ``hidden_dim // num_heads``."""
+    v_head_dim: int | None = None
+    """Per-head V width. None defaults to ``head_dim`` (V tied to QK-nope, the
+    legacy behaviour). Set it to decouple the value width from the QK-nope width
+    (e.g. wider V than Q/K). Additive-rope path only. V is up-projected from the
+    same ``c_kv`` latent, so widening it does not change the KV cache size."""
     kv_compression_dim: int | None = None
     """MLA KV-latent dim ``d_c``. None defaults to ``hidden_dim // 4``."""
+    q_compression_dim: int | None = None
+    """MLA Q-latent dim ``q_c`` (DeepSeek-V2 ``q_lora_rank``). When set, Q is
+    low-rank: ``x -> c_q (q_c) -> q (NH*(head_dim+rope))`` via ``w_dq``/``w_uq``
+    instead of the single ``w_q``. None keeps the direct full-rank Q projection.
+    Additive-rope path only."""
+    q_norm_learnable: bool = False
+    """When True (and ``q_compression_dim`` is set), apply a learnable per-channel
+    RMSNorm to the Q latent ``c_q`` (DeepSeek-V2's ``q_a_layernorm``). When False
+    the latent is passed through unnormalized. Adds ``(q_c,)`` params per layer."""
     mla_norm_compressed: bool = False
     """When True, apply RMSNorm to the compressed KV latent ``c_kv`` (DeepSeek-V2
     recipe) and skip the post-up-projection norm on ``k_nr``. When False, apply
@@ -117,8 +133,8 @@ class GrugModelConfig:
     channels of Q and to the shared rope-bearing K (also head_dim//2 wide).
     When set, switch to DeepSeek-V2 additive-rope: per head Q and K have
     ``head_dim + qk_rope_head_dim`` channels total (no-rope = head_dim,
-    additional rope = qk_rope_head_dim shared across heads); V stays at
-    head_dim. Activating this flag also switches normalisation to the
+    additional rope = qk_rope_head_dim shared across heads); V is ``v_head_dim``
+    wide (defaults to head_dim). Activating this flag also switches normalisation to the
     DeepSeek-strict scheme: ``rms_norm(c_kv)`` only, no QK norm on q/k/v."""
     mla_norm_compressed_learnable: bool = False
     """When True, the RMSNorm applied to ``c_kv`` uses a learnable per-channel
@@ -194,6 +210,10 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.inferred_kv_compression_dim <= 0:
             raise ValueError("kv_compression_dim must be positive")
+        if self.qk_rope_head_dim is None and (self.v_head_dim is not None or self.q_compression_dim is not None):
+            raise ValueError("v_head_dim and q_compression_dim are only supported on the additive-rope path")
+        if self.q_compression_dim is not None and self.q_compression_dim <= 0:
+            raise ValueError(f"q_compression_dim must be positive when set; got {self.q_compression_dim}")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -209,6 +229,10 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
+
+    @property
+    def inferred_v_head_dim(self) -> int:
+        return self.v_head_dim if self.v_head_dim is not None else self.inferred_head_dim
 
 
 def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
@@ -255,14 +279,17 @@ class CausalSelfAttention(eqx.Module):
     Per-token KV state factorises as ``c_kv (d_c)`` + ``k_r (rope width)``.
     """
 
-    w_q: jax.Array  # legacy (D, NH*HD); additive (D, NH * (HD + rope))
+    w_q: jax.Array | None  # full-rank Q (D, NH*(HD+rope)); None when q_compression_dim set
+    w_dq: jax.Array | None  # Q down-proj (D, q_c); None unless q_compression_dim set
+    w_uq: jax.Array | None  # Q up-proj (q_c, NH*(HD+rope)); None unless q_compression_dim set
     w_dkv: jax.Array  # (D, d_c)
     w_uk_nr: jax.Array  # legacy (d_c, NH*half); additive (d_c, NH*HD)  -- no-rope K up-proj
-    w_uv: jax.Array  # (d_c, NH * HD)
+    w_uv: jax.Array  # (d_c, NH * v_HD)
     w_kr: jax.Array  # legacy (D, half); additive (D, rope)
-    w_o: jax.Array  # (NH * HD, D)
+    w_o: jax.Array  # (NH * v_HD, D)
     w_attn_gate: jax.Array | None  # (D, NH) when cfg.attn_gate else None
     c_kv_norm: RMSNorm | None  # learnable per-channel RMSNorm on c_kv (DeepSeek's kv_a_layernorm)
+    c_q_norm: RMSNorm | None  # learnable per-channel RMSNorm on c_q (DeepSeek's q_a_layernorm)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -271,6 +298,7 @@ class CausalSelfAttention(eqx.Module):
         d = cfg.hidden_dim
         n = cfg.num_heads
         hd = cfg.inferred_head_dim
+        v_hd = cfg.inferred_v_head_dim
         d_c = cfg.inferred_kv_compression_dim
 
         if cfg.qk_rope_head_dim is None:
@@ -286,6 +314,21 @@ class CausalSelfAttention(eqx.Module):
             w_uk_nr_cols = n * hd
             w_kr_cols = rope_dim
 
+        # Q projection: full-rank (w_q) or low-rank via a q_c latent (w_dq -> w_uq).
+        q_c = cfg.q_compression_dim
+        if q_c is None:
+            w_q = reshard(_init_weight(k_q, (d, w_q_cols), cfg.initializer_std), P("data", "model"))
+            w_dq = None
+            w_uq = None
+            c_q_norm = None
+        else:
+            k_dq, k_uq = random.split(k_q, 2)
+            w_q = None
+            w_dq = reshard(_init_weight(k_dq, (d, q_c), cfg.initializer_std), P("data", None))
+            w_uq = reshard(_init_weight(k_uq, (q_c, w_q_cols), cfg.initializer_std), P(None, "model"))
+            # Learnable RMSNorm on c_q (DeepSeek's q_a_layernorm), gated by q_norm_learnable.
+            c_q_norm = RMSNorm.init(q_c, cfg.layer_norm_eps) if cfg.q_norm_learnable else None
+
         # Per-head sigmoid attention gate. Zero-init -> sigmoid(0)*2 = 1.0 pass-through
         # at step 0, so the model is identical to the no-gate baseline before any training.
         w_attn_gate = reshard(jnp.zeros((d, n)), P(None, None)) if cfg.attn_gate else None
@@ -300,14 +343,17 @@ class CausalSelfAttention(eqx.Module):
         )
 
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, w_q_cols), cfg.initializer_std), P("data", "model")),
+            w_q=w_q,
+            w_dq=w_dq,
+            w_uq=w_uq,
             w_dkv=reshard(_init_weight(k_dkv, (d, d_c), cfg.initializer_std), P("data", None)),
             w_uk_nr=reshard(_init_weight(k_uk, (d_c, w_uk_nr_cols), cfg.initializer_std), P(None, "model")),
-            w_uv=reshard(_init_weight(k_uv, (d_c, n * hd), cfg.initializer_std), P(None, "model")),
+            w_uv=reshard(_init_weight(k_uv, (d_c, n * v_hd), cfg.initializer_std), P(None, "model")),
             w_kr=reshard(_init_weight(k_kr, (d, w_kr_cols), cfg.initializer_std), P("data", None)),
-            w_o=reshard(_init_weight(k_o, (n * hd, d), cfg.initializer_std), P("model", "data")),
+            w_o=reshard(_init_weight(k_o, (n * v_hd, d), cfg.initializer_std), P("model", "data")),
             w_attn_gate=w_attn_gate,
             c_kv_norm=c_kv_norm,
+            c_q_norm=c_q_norm,
             cfg=cfg,
         )
 
@@ -320,6 +366,7 @@ class CausalSelfAttention(eqx.Module):
         use_xsa: bool = False,
     ) -> Float[Array, "B S D"]:
         hd = self.cfg.inferred_head_dim
+        v_hd = self.cfg.inferred_v_head_dim
         nh = self.cfg.num_heads
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
@@ -327,8 +374,16 @@ class CausalSelfAttention(eqx.Module):
         is_additive = rope_dim is not None
 
         # Q projection. Legacy: per-head HD. Additive: per-head (HD + rope_dim).
+        # Full-rank via w_q, or low-rank via a normalized q_c latent (w_dq -> w_uq).
         q_per_head = hd + rope_dim if is_additive else hd
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=q_per_head)
+        if self.w_dq is not None:
+            c_q = jnp.einsum("bsh,hc->bsc", x, self.w_dq)
+            if self.c_q_norm is not None:
+                c_q = self.c_q_norm(c_q)
+            q_flat = jnp.einsum("bsc,cd->bsd", c_q, self.w_uq)
+        else:
+            q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
+        q = rearrange(q_flat, "... (n d) -> ... n d", d=q_per_head)
 
         # Compressed KV latent.
         c_kv = jnp.einsum("bsh,hc->bsc", x, self.w_dkv)
@@ -400,11 +455,11 @@ class CausalSelfAttention(eqx.Module):
                 "... (n d) -> ... n d",
                 d=k_nr_per_head,
             )
-        # V (per head) up-projected from the unshifted c_kv.
+        # V (per head, width v_hd) up-projected from the unshifted c_kv.
         v = rearrange(
             jnp.einsum("bsc,cd->bsd", c_kv, self.w_uv),
             "... (n d) -> ... n d",
-            d=hd,
+            d=v_hd,
         )
         # Rope-bearing K (shared across heads): width is half (legacy) or rope_dim (additive).
         # Broadcast to (B, S, NH, rope_width). w_kr is P("data", None) so its output lacks
