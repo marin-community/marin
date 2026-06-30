@@ -147,7 +147,7 @@ def microbatched(
             grads = jax.tree_util.tree_map(lambda x: x / num_micro_steps, grads)
             acc = ((loss, metrics), grads)
 
-        return acc
+        return cast(R, acc)
 
     return wrapped_fn
 
