@@ -170,6 +170,15 @@
       fillList("project-list", (await jget("api/projects?" + qs({ entity: e }))).projects || []);
     }
 
+    // Fuller author list for the user filter — scans more runs than the picker so
+    // contributors with only older runs still appear. Best-effort, in background.
+    async function loadUsers() {
+      const e = $("entity").value.trim(), p = $("project").value.trim();
+      if (!e || !p) return;
+      const users = (await jget("api/users?" + qs({ entity: e, project: p }))).users;
+      if (users && users.length) fillList("user-list", users);
+    }
+
     let searchTimer;
 
     // Runs are filtered server-side (user + name search) so any run is findable
@@ -195,7 +204,7 @@
       if (p.get("user")) $("user").value = p.get("user");
       loadEntities();
       await loadProjects();
-      if ($("project").value) await fetchRuns();
+      if ($("project").value) { await fetchRuns(); loadUsers(); }
       if (p.get("run")) { $("run").value = p.get("run"); load(); }
     }
 
@@ -436,8 +445,8 @@
       }, { displayModeBar: false, responsive: true });
     }
 
-    $("entity").addEventListener("change", () => { loadProjects(); fetchRuns(); });
-    $("project").addEventListener("change", fetchRuns);
+    $("entity").addEventListener("change", () => { loadProjects(); fetchRuns(); loadUsers(); });
+    $("project").addEventListener("change", () => { fetchRuns(); loadUsers(); });
     $("user").addEventListener("change", () => fetchRuns());
     // Search server-side as the run name is typed (debounced); selecting an option loads it.
     $("run").addEventListener("input", () => {

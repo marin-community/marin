@@ -97,6 +97,34 @@ async def list_projects(request: Request) -> JSONResponse:
     return JSONResponse({"projects": await asyncio.to_thread(_fetch)})
 
 
+async def list_users(request: Request) -> JSONResponse:
+    """Distinct run authors in a project, for the user filter dropdown.
+
+    Scans a bounded window of recent runs (the recent-N run list alone misses
+    authors whose latest run is older). The field is free-text regardless, so an
+    unlisted user can still be typed.
+    """
+    entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
+    project = request.query_params.get("project", "")
+    limit = int(request.query_params.get("limit", "300"))
+    if not project:
+        return JSONResponse({"error": "project required"}, status_code=400)
+
+    def _fetch() -> list[str]:
+        runs = wandb.Api().runs(f"{entity}/{project}", per_page=200, order="-created_at")
+        users: set[str] = set()
+        for i, run in enumerate(runs):
+            author = getattr(run, "user", None)
+            name = getattr(author, "username", None) or getattr(author, "name", None)
+            if name:
+                users.add(name)
+            if i + 1 >= limit:
+                break
+        return sorted(users)
+
+    return JSONResponse({"users": await asyncio.to_thread(_fetch)})
+
+
 async def list_runs(request: Request) -> JSONResponse:
     entity = request.query_params.get("entity", request.app.state.cfg.default_entity)
     project = request.query_params.get("project", "")
@@ -306,6 +334,7 @@ def build_app(cfg: BuoyConfig) -> Starlette:
             Route("/api/defaults", defaults),
             Route("/api/entities", list_entities),
             Route("/api/projects", list_projects),
+            Route("/api/users", list_users),
             Route("/api/runs", list_runs),
             Route("/api/mirror", start_mirror, methods=["POST"]),
             Route("/api/mirror_status", mirror_status),
