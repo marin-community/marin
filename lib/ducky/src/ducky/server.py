@@ -168,7 +168,8 @@ const editor = CodeMirror.fromTextArea(document.getElementById("sql"), {
   mode: "text/x-sql",
   lineNumbers: true,
   lineWrapping: true,
-  placeholder: "-- write DuckDB SQL, then \\u2318/Ctrl-Enter to run\\nSELECT *\\nFROM read_parquet('gs://marin-us-east5/<path>/*.parquet')\\nLIMIT 100",
+  placeholder: "-- write DuckDB SQL, then \\u2318/Ctrl-Enter to run\\n"
+    + "SELECT *\\nFROM read_parquet('gs://marin-us-east5/<path>/*.parquet')\\nLIMIT 100",
   extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
 });
 
