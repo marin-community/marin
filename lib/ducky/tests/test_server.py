@@ -87,8 +87,34 @@ def test_query_result_delivered_via_polling():
         "total_rows": 5,
         "truncated": True,
         "result_path": "gs://marin-ducky-us-east5/ducky/abc.parquet",
+        "cached": False,
     }
     assert fake.received_query_id == query_id
+
+
+def test_identical_sql_served_from_cache():
+    """A second run of the same SQL is served from cache without re-executing."""
+
+    class _CountingRunner(_FakeRunner):
+        def __init__(self, result):
+            super().__init__(result=result)
+            self.calls = 0
+
+        def run_query(self, sql, query_id):
+            self.calls += 1
+            return super().run_query(sql, query_id)
+
+    result = QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet")
+    runner = _CountingRunner(result)
+    client = TestClient(create_app(runner, _CONFIG))
+
+    first = _poll(client, client.post("/query", json={"sql": "SELECT 1"}).json()["query_id"])
+    second = _poll(client, client.post("/query", json={"sql": "SELECT 1"}).json()["query_id"])
+
+    assert runner.calls == 1  # executed once, second served from cache
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert second["result_path"] == "gs://b/ducky/first.parquet"  # reuses the spilled file
 
 
 def test_query_error_surfaces_in_result():

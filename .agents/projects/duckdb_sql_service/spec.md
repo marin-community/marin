@@ -43,6 +43,8 @@ class DuckyConfig:
     memory_fraction: float = 0.8  # DuckDB memory_limit = this * host RAM; headroom for Python/Arrow/OS
     result_ttl_days: int = 7      # informational; enforced by the bucket's lifecycle rule, not by ducky
     port_name: str = "ducky"      # Iris named port; bound via ctx.get_port(port_name)
+    endpoint_name: str = "/ducky" # registry name; leading slash = cluster-global, so the
+                                  # dashboard is at /proxy/ducky/ (not a per-job namespaced path)
 
     @classmethod
     def from_environment(cls) -> "DuckyConfig":
@@ -154,12 +156,15 @@ while the query runs for as long as it needs.
 - 200 `{"status": "error", "error": "<message>"}` — `QueryError` (or an unexpected
   error) raised while running.
 - 200 `{"status": "done", "columns": [...], "rows": [[...]], "total_rows": N,
-  "truncated": bool, "result_path": "<gs://…>"}` — `rows` is `QueryResult.preview_rows`.
+  "truncated": bool, "result_path": "<gs://…>", "cached": bool}` — `rows` is
+  `QueryResult.preview_rows`; `result_path` is the spilled full result's GCS
+  location; `cached` is true when the result was served from the in-memory
+  result cache (identical SQL) rather than re-executed.
 - 404 `{"error": "unknown query_id"}` — no such (or expired) query.
 
-The page polls `/result/{query_id}` every second; on `done` it renders `rows` and,
-when `truncated`, shows "showing N of M rows — full result at `result_path`
-(expires in {result_ttl_days}d)".
+The page (a CodeMirror SQL-highlighted editor) polls `/result/{query_id}` every
+second; on `done` it renders `rows` plus a status line with the row count, a
+cached/computed badge, and the `result_path` (expires in {result_ttl_days}d).
 
 **Query manager (`server.py`)**
 ```python
@@ -184,8 +189,10 @@ class QueryManager:
 `DuckyConfig.from_environment()`, construct `QueryRunner`, bind
 `port = iris_ctx().get_port(config.port_name)` (the named Iris port; **not** a
 hardcoded port), start uvicorn on `0.0.0.0:port`, then register
-`endpoint_id = ctx.registry.register("ducky", f"http://{job_info.advertise_host}:{port}",
-{"job_id": ctx.job_id.to_wire()})` (`lib/iris/src/iris/client/worker_pool.py:156-165`).
+`endpoint_id = ctx.registry.register(config.endpoint_name, f"http://{job_info.advertise_host}:{port}",
+{"job_id": ctx.job_id.to_wire()})` (`lib/iris/src/iris/client/worker_pool.py:156-165`). The
+leading-slash `endpoint_name` (`/ducky`) registers a cluster-global endpoint, so the
+proxy resolves `/proxy/ducky/` (`endpoint_proxy.py` decode: `.`→`/`, tries `/ducky`).
 On shutdown (Starlette `on_shutdown`), `ctx.registry.unregister(endpoint_id)` and
 `app.state.query_manager.shutdown()`.
 

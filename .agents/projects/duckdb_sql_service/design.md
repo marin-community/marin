@@ -88,18 +88,24 @@ every forwarded request at 30 s (`endpoint_proxy.py:71`,
 `PROXY_TIMEOUT_SECONDS = 30.0`). A synchronous `POST /query` that blocks on a
 minutes-long DuckDB scan — the whole point of running on a big host — would be
 killed by the proxy. So:
-- `GET /` — HTML page: a `<textarea>` for SQL, a Run button, a result area.
+- `GET /` — HTML page: a CodeMirror SQL-highlighted editor, a Run button, a result
+  area that shows the row count, a **cached/computed** badge, and the result's GCS
+  location.
 - `POST /query` — body `{sql}`; a `QueryManager` submits the SQL to a single-worker
   executor (one DuckDB query at a time) and returns `{query_id}` immediately (202).
-  The query runs in the background; the spilled parquet is written as before.
+  Identical SQL is served from an in-memory result cache (reusing the prior spilled
+  parquet); otherwise the query runs in the background and spills as before.
 - `GET /result/{query_id}` — returns `{status: "running"}`, `{status: "error", error}`,
-  or `{status: "done", columns, rows, total_rows, truncated, result_path}`. The page
-  polls this every second; each poll returns well under the 30 s proxy window while
-  the query itself may run for minutes.
+  or `{status: "done", columns, rows, total_rows, truncated, result_path, cached}`.
+  `result_path` is the spilled full result's GCS location; `cached` says whether it
+  came from the cache. The page polls every second; each poll returns well under the
+  30 s proxy window while the query itself may run for minutes.
 - `GET /health` — liveness for Iris.
 
-Query state lives in memory for the process lifetime; ducky is stateless and
-restartable, so a restart simply drops in-flight/finished state.
+The endpoint registers under the cluster-global name `/ducky` (leading slash bypasses
+job-namespacing), so the dashboard is reachable at a clean `/proxy/ducky/`. Query
+state and the result cache live in memory for the process lifetime; ducky is
+stateless and restartable, so a restart drops both.
 
 **3. Deploy** — ducky runs as a long-running Iris job that blocks on `uvicorn`.
 Because a routable service needs a *named* Iris port and `iris job run` has no

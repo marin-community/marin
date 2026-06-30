@@ -50,6 +50,7 @@ class QueryState:
     status: QueryStatus
     result: QueryResult | None = None
     error: str | None = None
+    cached: bool = False
 
 
 class QueryManager:
@@ -57,19 +58,26 @@ class QueryManager:
 
     A single-worker executor serializes execution (one DuckDB query at a time, per
     design); ``submit`` returns immediately so the HTTP request never blocks on the
-    query. State is kept in memory for the process lifetime — ducky is a stateless,
-    restartable service, so a restart simply drops in-flight/finished query state.
+    query. Identical SQL is served from an in-memory result cache keyed on the exact
+    query text — a cache hit reuses the prior spilled parquet and returns instantly
+    with ``cached=True``. State and cache are process-local; ducky is stateless and
+    restartable, so a restart drops both.
     """
 
     def __init__(self, runner: QueryRunner) -> None:
         self._runner = runner
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ducky-query")
         self._states: dict[str, QueryState] = {}
+        self._cache: dict[str, QueryResult] = {}
         self._lock = threading.Lock()
 
     def submit(self, sql: str) -> str:
         query_id = uuid.uuid4().hex
         with self._lock:
+            cached = self._cache.get(sql)
+            if cached is not None:
+                self._states[query_id] = QueryState(QueryStatus.DONE, result=cached, cached=True)
+                return query_id
             self._states[query_id] = QueryState(QueryStatus.RUNNING)
         self._executor.submit(self._run, sql, query_id)
         return query_id
@@ -80,14 +88,19 @@ class QueryManager:
 
     def _run(self, sql: str, query_id: str) -> None:
         try:
-            state = QueryState(QueryStatus.DONE, result=self._runner.run_query(sql, query_id))
+            result = self._runner.run_query(sql, query_id)
         except DuckyError as e:
-            state = QueryState(QueryStatus.ERROR, error=str(e))
+            with self._lock:
+                self._states[query_id] = QueryState(QueryStatus.ERROR, error=str(e))
+            return
         except Exception as e:  # background task: record instead of hanging in RUNNING forever
             logger.exception("Unexpected error running query %s", query_id)
-            state = QueryState(QueryStatus.ERROR, error=f"internal error: {e}")
+            with self._lock:
+                self._states[query_id] = QueryState(QueryStatus.ERROR, error=f"internal error: {e}")
+            return
         with self._lock:
-            self._states[query_id] = state
+            self._cache[sql] = result
+            self._states[query_id] = QueryState(QueryStatus.DONE, result=result, cached=False)
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
@@ -107,119 +120,136 @@ def _result_payload(state: QueryState) -> dict:
         "total_rows": result.total_rows,
         "truncated": result.truncated,
         "result_path": result.result_path,
+        "cached": state.cached,
     }
 
 
-def _index_html(ttl_days: int) -> str:
-    return f"""\
+# CodeMirror 5 (SQL mode) gives DuckDB-flavored SQL highlighting from a CDN — loaded
+# by the browser, so no server-side egress. __TTL_DAYS__ is substituted per config.
+_INDEX_HTML = """\
 <!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>ducky</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
 <style>
-  body {{ font-family: system-ui, sans-serif; margin: 2rem; }}
-  textarea {{ width: 100%; height: 12rem; font-family: monospace; font-size: 13px; }}
-  button {{ margin-top: .5rem; padding: .4rem 1rem; font-size: 14px; }}
-  #status {{ margin: .5rem 0; color: #555; }}
-  table {{ border-collapse: collapse; margin-top: 1rem; font-size: 13px; }}
-  th, td {{ border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }}
-  th {{ background: #f0f0f0; }}
-  .error {{ color: #b00; white-space: pre-wrap; font-family: monospace; }}
+  body { font-family: system-ui, sans-serif; margin: 2rem; }
+  .CodeMirror { border: 1px solid #ccc; height: 12rem; font-size: 13px; }
+  button { margin-top: .5rem; padding: .4rem 1rem; font-size: 14px; }
+  #status { margin: .6rem 0; color: #555; }
+  #status .cached { color: #2a7; font-weight: 600; }
+  #status .computed { color: #888; }
+  #status .loc { font-family: monospace; }
+  table { border-collapse: collapse; margin-top: 1rem; font-size: 13px; }
+  th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
+  th { background: #f0f0f0; }
+  .error { color: #b00; white-space: pre-wrap; font-family: monospace; }
 </style>
 </head>
 <body>
 <h1>🦆 ducky</h1>
 <textarea id="sql" placeholder="SELECT * FROM read_parquet('gs://bucket/path/*.parquet') LIMIT 100"></textarea>
-<div><button id="run">Run</button></div>
+<div><button id="run">Run</button> <span style="color:#888;font-size:12px">(⌘/Ctrl-Enter)</span></div>
 <div id="status"></div>
 <div id="result"></div>
 <script>
-const TTL_DAYS = {ttl_days};
+const TTL_DAYS = __TTL_DAYS__;
 const POLL_MS = 1000;
 const runBtn = document.getElementById("run");
-const sqlEl = document.getElementById("sql");
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 
-function showError(msg) {{
+const editor = CodeMirror.fromTextArea(document.getElementById("sql"), {
+  mode: "text/x-sql",
+  lineNumbers: true,
+  lineWrapping: true,
+  extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
+});
+
+function showError(msg) {
   statusEl.textContent = "";
   resultEl.innerHTML = '<div class="error"></div>';
   resultEl.firstChild.textContent = msg;
-}}
+}
 
-async function run() {{
-  const sql = sqlEl.value.trim();
+async function run() {
+  const sql = editor.getValue().trim();
   if (!sql) return;
   runBtn.disabled = true;
   statusEl.textContent = "Submitting…";
   resultEl.innerHTML = "";
-  try {{
-    const resp = await fetch("query", {{
+  try {
+    const resp = await fetch("query", {
       method: "POST",
-      headers: {{ "Content-Type": "application/json" }},
-      body: JSON.stringify({{ sql }}),
-    }});
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
     const data = await resp.json();
-    if (!resp.ok) {{ showError(data.error || ("HTTP " + resp.status)); return; }}
+    if (!resp.ok) { showError(data.error || ("HTTP " + resp.status)); runBtn.disabled = false; return; }
     poll(data.query_id);
-  }} catch (e) {{
+  } catch (e) {
     showError(String(e));
     runBtn.disabled = false;
-  }}
-}}
+  }
+}
 
-async function poll(queryId) {{
+async function poll(queryId) {
   statusEl.textContent = "Running…";
-  try {{
+  try {
     const resp = await fetch("result/" + queryId);
     const data = await resp.json();
-    if (!resp.ok) {{ showError(data.error || ("HTTP " + resp.status)); runBtn.disabled = false; return; }}
-    if (data.status === "running") {{ setTimeout(() => poll(queryId), POLL_MS); return; }}
-    if (data.status === "error") {{ showError(data.error); runBtn.disabled = false; return; }}
-    renderTable(data);
-  }} catch (e) {{
+    if (!resp.ok) { showError(data.error || ("HTTP " + resp.status)); runBtn.disabled = false; return; }
+    if (data.status === "running") { setTimeout(() => poll(queryId), POLL_MS); return; }
+    if (data.status === "error") { showError(data.error); runBtn.disabled = false; return; }
+    renderResult(data);
+  } catch (e) {
     showError(String(e));
-  }} finally {{
-    if (statusEl.textContent !== "Running…") runBtn.disabled = false;
-  }}
-}}
+    runBtn.disabled = false;
+  }
+}
 
-function renderTable(data) {{
+function renderResult(data) {
   const shown = data.rows.length;
-  let msg = shown + " row" + (shown === 1 ? "" : "s");
-  if (data.truncated) {{
-    msg = "showing " + shown + " of " + data.total_rows
-        + " rows — full result at " + data.result_path + " (expires in " + TTL_DAYS + "d)";
-  }}
-  statusEl.textContent = msg;
-  const thead = "<tr>" + data.columns.map(c => "<th></th>").join("") + "</tr>";
+  const rowsLabel = data.truncated
+    ? "showing " + shown + " of " + data.total_rows + " rows"
+    : shown + " row" + (shown === 1 ? "" : "s");
+  const cacheBadge = data.cached
+    ? '<span class="cached">cached ✓</span>'
+    : '<span class="computed">computed</span>';
+  statusEl.innerHTML = rowsLabel + " · " + cacheBadge
+    + ' · output: <span class="loc"></span> <span style="color:#888">(expires in ' + TTL_DAYS + "d)</span>";
+  statusEl.querySelector(".loc").textContent = data.result_path;
+
   const table = document.createElement("table");
-  table.innerHTML = "<thead>" + thead + "</thead><tbody></tbody>";
+  table.innerHTML = "<thead><tr>" + data.columns.map(() => "<th></th>").join("") + "</tr></thead><tbody></tbody>";
   table.querySelectorAll("th").forEach((th, i) => th.textContent = data.columns[i]);
   const tbody = table.querySelector("tbody");
-  for (const row of data.rows) {{
+  for (const row of data.rows) {
     const tr = document.createElement("tr");
-    for (const cell of row) {{
+    for (const cell of row) {
       const td = document.createElement("td");
       td.textContent = cell === null ? "NULL" : String(cell);
       tr.appendChild(td);
-    }}
+    }
     tbody.appendChild(tr);
-  }}
+  }
   resultEl.innerHTML = "";
   resultEl.appendChild(table);
   runBtn.disabled = false;
-}}
+}
 
 runBtn.addEventListener("click", run);
-sqlEl.addEventListener("keydown", e => {{
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run();
-}});
 </script>
 </body>
 </html>
 """
+
+
+def _index_html(ttl_days: int) -> str:
+    return _INDEX_HTML.replace("__TTL_DAYS__", str(ttl_days))
 
 
 def create_app(runner: QueryRunner, config: DuckyConfig) -> Starlette:
@@ -275,8 +305,8 @@ def main() -> None:
     port = ctx.get_port(config.port_name)
     address = f"http://{job_info.advertise_host}:{port}"
 
-    endpoint_id = ctx.registry.register(config.port_name, address, {"job_id": ctx.job_id.to_wire()})
-    logger.info("ducky registered as %s at %s", config.port_name, address)
+    endpoint_id = ctx.registry.register(config.endpoint_name, address, {"job_id": ctx.job_id.to_wire()})
+    logger.info("ducky registered as %s at %s", config.endpoint_name, address)
 
     async def _on_shutdown() -> None:
         ctx.registry.unregister(endpoint_id)

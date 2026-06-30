@@ -73,6 +73,10 @@ class DuckyConfig:
     port_name: str = "ducky"
     """Iris named port, bound via ``ctx.get_port(port_name)``."""
 
+    endpoint_name: str = "/ducky"
+    """Endpoint registry name. A leading slash registers a cluster-global (non-namespaced)
+    endpoint so the dashboard is reachable at ``/proxy/ducky/`` instead of a per-job path."""
+
     @property
     def gcs_enabled(self) -> bool:
         return bool(self.gcs_hmac_key_id and self.gcs_hmac_secret)
@@ -122,5 +126,6 @@ class DuckyConfig:
             preview_row_cap=int(os.environ.get(f"{_ENV_PREFIX}PREVIEW_ROW_CAP", cls.preview_row_cap)),
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
+            endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
             **creds,
         )
