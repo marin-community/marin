@@ -5,6 +5,8 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
+from levanter.adaptor.lora import LoraConfig
+from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
 from marin.execution.types import ExecutorStep, output_path_of
@@ -14,6 +16,7 @@ from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
     RLExperimentConfig,
+    RLJob,
     RLStepConfig,
     _build_rl_job_config,
     _run_rl_experiment_step,
@@ -57,6 +60,13 @@ def _test_config(
     *,
     train_tpu_type: str,
     inference_tpu_type: str,
+    train_ram: str | None = None,
+    inference_ram: str | None = None,
+    zone: str | None = None,
+    keep_last_temporary_checkpoints: int = 5,
+    checkpoint_debug: CheckpointDebugConfig | None = None,
+    lora: LoraConfig | None = None,
+    rollout_policy_format: str = "merged",
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
         model_config=ModelConfig(
@@ -76,8 +86,15 @@ def _test_config(
             vocab_tile_size=32064,
         ),
         experiment_name_suffix="test",
+        lora=lora,
+        rollout_policy_format=rollout_policy_format,
         train_tpu_type=train_tpu_type,
         inference_tpu_type=inference_tpu_type,
+        train_ram=train_ram,
+        inference_ram=inference_ram,
+        zone=zone,
+        keep_last_temporary_checkpoints=keep_last_temporary_checkpoints,
+        checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
 
 
@@ -181,6 +198,7 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
 
     assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
+    assert job_config.run_manifest_path == "gs://marin-us-central1/rl_testing/rl-test/rl_run_manifest.json"
     assert job_config.inference_config.engine.load_format == "runai_streamer"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
 
@@ -229,6 +247,190 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.engine.load_format == "dummy"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_propagates_ram_overrides(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            train_ram="300g",
+            inference_ram="300g",
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.run_config.train_ram == "300g"
+    assert job_config.run_config.inference_ram == "300g"
+
+
+def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            zone="us-central1-b",
+            keep_last_temporary_checkpoints=0,
+            checkpoint_debug=CheckpointDebugConfig(
+                enabled=True,
+                log_interval=15.0,
+                dump_stacks_after=45.0,
+            ),
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+        instance_id="rl-test-instance",
+    )
+
+    assert job_config.instance_id == "rl-test-instance"
+    assert job_config.run_config.zone == "us-central1-b"
+    assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
+    assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
+    assert job_config.trainer.checkpointer.keep_last_temporary_checkpoints == 0
+    assert job_config.trainer.checkpointer.debug.enabled
+    assert job_config.trainer.checkpointer.debug.log_interval == 15.0
+    assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
+
+
+def test_build_rl_job_config_skips_default_adapter_export_for_non_hf_base(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.is_hf_checkpoint", lambda _path: False)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            lora=LoraConfig(r=16, alpha=32.0, target_modules=["q_proj"]),
+        ),
+        curriculum=_test_curriculum(),
+        model_path="/tmp/checkpoints/run/step-10",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.adapter_artifacts_path is None
+    assert job_config.merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
+
+
+def test_lora_job_config_reaches_worker_with_safe_export_paths(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.is_hf_checkpoint", lambda _path: True)
+    monkeypatch.setattr("marin.rl.job_config.make_tokenizer", lambda _tokenizer: SimpleNamespace(vocab_size=32000))
+
+    lora_config = LoraConfig(r=8, alpha=16.0, target_modules=["q_proj"])
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            lora=lora_config,
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    train_worker_config, rollout_worker_config = RLJob(job_config).to_worker_configs()
+    adapter_artifacts_path = train_worker_config.adapter_artifacts_path
+    merged_hf_export_path = train_worker_config.merged_hf_export_path
+    checkpointer_path = train_worker_config.trainer.checkpointer.base_path
+
+    assert train_worker_config.lora == lora_config
+    assert train_worker_config.rollout_policy_format == "merged"
+    assert train_worker_config.run_manifest_path == "gs://marin-us-central1/rl_testing/rl-test/rl_run_manifest.json"
+    assert adapter_artifacts_path == "gs://marin-us-central1/rl_testing/rl-test/adapter_artifacts"
+    assert merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
+    assert train_worker_config.inference_type == "vllm"
+    assert rollout_worker_config.rollout_policy_format == "merged"
+    assert adapter_artifacts_path != checkpointer_path
+    assert merged_hf_export_path != checkpointer_path
+    assert not adapter_artifacts_path.startswith(f"{checkpointer_path}/")
+    assert not merged_hf_export_path.startswith(f"{checkpointer_path}/")
+
+
+def test_default_run_manifest_paths_are_scoped_to_train_run_ids(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+    monkeypatch.setattr("marin.rl.job_config.make_tokenizer", lambda _tokenizer: SimpleNamespace(vocab_size=32000))
+
+    base_job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+    first_job_config = dataclasses.replace(base_job_config, run_id="first-run", run_manifest_path=None)
+    second_job_config = dataclasses.replace(base_job_config, run_id="second-run", run_manifest_path=None)
+
+    first_train_config, _ = RLJob(first_job_config).to_worker_configs()
+    second_train_config, _ = RLJob(second_job_config).to_worker_configs()
+
+    assert first_train_config.run_manifest_path == (
+        "gs://marin-us-central1/rl_testing/rl-test/checkpoints/first-run-train/rl_run_manifest.json"
+    )
+    assert second_train_config.run_manifest_path == (
+        "gs://marin-us-central1/rl_testing/rl-test/checkpoints/second-run-train/rl_run_manifest.json"
+    )
+    assert first_train_config.run_manifest_path != second_train_config.run_manifest_path
+
+
+def test_to_worker_configs_rejects_unimplemented_adapter_rollout_format(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+    monkeypatch.setattr("marin.rl.job_config.make_tokenizer", lambda _tokenizer: SimpleNamespace(vocab_size=32000))
+
+    job_config = dataclasses.replace(
+        _build_rl_job_config(
+            name="rl-test",
+            config=_test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+            curriculum=_test_curriculum(),
+            model_path=MODEL_NAME,
+            output_path="gs://marin-us-central1/rl_testing/rl-test",
+        ),
+        tokenizer=SimpleNamespace(vocab_size=32000),
+        rollout_policy_format="adapter",
+    )
+
+    with pytest.raises(ValueError, match="rollout_policy_format='adapter' is not implemented yet"):
+        RLJob(job_config).to_worker_configs()
 
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
