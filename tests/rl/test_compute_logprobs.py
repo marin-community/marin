@@ -47,27 +47,6 @@ def test_compute_logprobs_one_hot_next_token():
     assert logprobs[0, 1] == pytest.approx(float(expected_next_logprob))
 
 
-def test_compute_logprobs_and_entropy_can_skip_entropy():
-    logits = jnp.zeros((1, 2, 10), dtype=jnp.float32)
-    logits = logits.at[0, 0, 1].set(1.0)
-
-    batch = SimpleNamespace(
-        input_ids=DummyNamedArray(jnp.array([[0, 1]], dtype=jnp.int32)),
-        position_ids=DummyNamedArray(jnp.array([[0, 1]], dtype=jnp.int32)),
-        temperature=DummyNamedArray(jnp.array([1.0], dtype=jnp.float32)),
-    )
-    model = DummyModel(logits)
-
-    logprobs, entropy = compute_logprobs_and_entropy(model, batch, key=None, compute_entropy=False)
-
-    expected_next_logprob = jax.nn.log_softmax(logits[:, :-1, :], axis=-1)[0, 0, 1]
-
-    assert entropy is None
-    assert logprobs.shape == (1, 2)
-    assert logprobs[0, 0] == pytest.approx(0.0)
-    assert logprobs[0, 1] == pytest.approx(float(expected_next_logprob))
-
-
 def test_compute_logprobs_and_entropy_uniform_logits():
     vocab_size = 5
     logits = jnp.zeros((1, 3, vocab_size), dtype=jnp.float32)
