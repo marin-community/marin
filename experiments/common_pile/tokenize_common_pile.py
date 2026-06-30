@@ -3,14 +3,14 @@
 
 """Common Pile v0.1 filtered splits as lazy ``Dataset`` handles (the dataset catalog).
 
-One handle per Common Pile split: each tokenizes from a pinned ``download_hf`` of the
-filtered HuggingFace split, reusing the existing ``raw/common_pile/<name>-<revision>``
-download instead of re-fetching it. This is the catalog only — handles plus the
-published mixture weights; assembling a mixture from ``{handle: weight}`` is the
-experiment's job (via :func:`marin.experiment.data.mixture`).
+:func:`common_pile_slice` builds one split's tokenized handle from its name, pinned download
+revision, and (optionally) an existing llama3 cache to reuse — call it directly for a single
+split, or :func:`common_pile_datasets` for the whole catalog. Each slice tokenizes from a pinned
+``download_hf`` of the filtered HuggingFace split, reusing the existing
+``raw/common_pile/<name>_filtered-<revision>`` download instead of re-fetching it. This is the
+catalog only — handles plus the published mixture weights; assembling a mixture from
+``{handle: weight}`` is the experiment's job (via :func:`marin.experiment.data.mixture`).
 """
-
-from dataclasses import dataclass
 
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep
@@ -30,61 +30,73 @@ _TOKENIZE_GLOB = "**/*.{json.gz,json.zst,json.zstd,jsonl.gz,jsonl.zst,jsonl.zstd
 _TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="10g")
 
 
-@dataclass(frozen=True)
-class CommonPileSource:
-    """A Common Pile split's HuggingFace id and pinned download revision."""
-
-    hf_id: str
-    revision: str
-
-    @property
-    def _basename(self) -> str:
-        return self.hf_id.split("/", 1)[1]
-
-    @property
-    def download_name(self) -> str:
-        """The raw download step's name, ``raw/common_pile/<hf-basename>``."""
-        return f"{_RAW_PREFIX}/{self._basename}"
-
-    @property
-    def raw_path(self) -> str:
-        """The pinned download location, ``raw/common_pile/<hf-basename>-<revision>``."""
-        return f"{_RAW_PREFIX}/{self._basename}-{self.revision}"
+def _common_pile_download(name: str, revision: str) -> ArtifactStep[TokenizedCache]:
+    """Pinned raw download of the filtered split ``common-pile/<name>_filtered`` at ``revision``."""
+    basename = f"{name}_filtered"
+    return hf_download(
+        f"{_RAW_PREFIX}/{basename}",
+        hf_id=f"common-pile/{basename}",
+        revision=revision,
+        pin=f"{_RAW_PREFIX}/{basename}-{revision}",
+        version="2026.06.28",
+    )
 
 
-# HF id + pinned commit revision per Common Pile split, keyed by the short split name.
-COMMON_PILE_SOURCES: dict[str, CommonPileSource] = {
-    "arxiv_abstracts": CommonPileSource("common-pile/arxiv_abstracts_filtered", "f1d7a9a"),
-    "arxiv_papers": CommonPileSource("common-pile/arxiv_papers_filtered", "033cf7f"),
-    "biodiversity_heritage_library": CommonPileSource("common-pile/biodiversity_heritage_library_filtered", "0486ed6"),
-    "caselaw_access_project": CommonPileSource("common-pile/caselaw_access_project_filtered", "50e1961"),
-    "cccc": CommonPileSource("common-pile/cccc_filtered", "03a3de5"),
-    "data_provenance_initiative": CommonPileSource("common-pile/data_provenance_initiative_filtered", "8f5afcf"),
-    "doab": CommonPileSource("common-pile/doab_filtered", "defb24c"),
-    "foodista": CommonPileSource("common-pile/foodista_filtered", "bf2c7aa"),
-    "github_archive": CommonPileSource("common-pile/github_archive_filtered", "52282fe"),
-    "library_of_congress": CommonPileSource("common-pile/library_of_congress_filtered", "56725c7"),
-    "libretexts": CommonPileSource("common-pile/libretexts_filtered", "70388bc"),
-    "news": CommonPileSource("common-pile/news_filtered", "59aaa8f"),
-    "oercommons": CommonPileSource("common-pile/oercommons_filtered", "506b615"),
-    "peS2o": CommonPileSource("common-pile/peS2o_filtered", "2977475"),
-    "pre_1929_books": CommonPileSource("common-pile/pre_1929_books_filtered", "23f9d96"),
-    "pressbooks": CommonPileSource("common-pile/pressbooks_filtered", "1a1d3b5"),
-    "project_gutenberg": CommonPileSource("common-pile/project_gutenberg_filtered", "3cdf687"),
-    "public_domain_review": CommonPileSource("common-pile/public_domain_review_filtered", "efc7f21"),
-    "pubmed": CommonPileSource("common-pile/pubmed_filtered", "c156f05"),
-    "python_enhancement_proposals": CommonPileSource("common-pile/python_enhancement_proposals_filtered", "5821709"),
-    "regulations": CommonPileSource("common-pile/regulations_filtered", "3327364"),
-    "stackexchange": CommonPileSource("common-pile/stackexchange_filtered", "c0ac737"),
-    "stackv2_edu": CommonPileSource("common-pile/stackv2_edu_filtered", "c354dbe"),
-    "stackv2_html": CommonPileSource("common-pile/stackv2_html_filtered", "92c9fa8"),
-    "ubuntu_irc": CommonPileSource("common-pile/ubuntu_irc_filtered", "84f88c9"),
-    "uk_hansard": CommonPileSource("common-pile/uk_hansard_filtered", "c88adc4"),
-    "usgpo": CommonPileSource("common-pile/usgpo_filtered", "b150cc2"),
-    "uspto": CommonPileSource("common-pile/uspto_filtered", "13894c5"),
-    "wikimedia": CommonPileSource("common-pile/wikimedia_filtered", "0641bb8"),
-    "wikiteam": CommonPileSource("common-pile/wikiteam_filtered", "f4ed055"),
-    "youtube": CommonPileSource("common-pile/youtube_filtered", "dff8c8a"),
+def common_pile_slice(
+    name: str, revision: str, pin: str | None = None, *, tokenizer: str = llama3_tokenizer
+) -> ArtifactStep[TokenizedCache]:
+    """One Common Pile split as a tokenized handle, keyed ``common_pile/<name>``.
+
+    Downloads the filtered HuggingFace split ``common-pile/<name>_filtered`` at ``revision`` (reusing
+    the existing raw download) and tokenizes it. With the llama3 tokenizer and ``pin`` set, resolves
+    to that marin-executor cache instead of re-tokenizing; any other tokenizer tokenizes fresh.
+    """
+    return tokenized(
+        f"common_pile/{name}",
+        tokenizer=tokenizer,
+        raw=_common_pile_download(name, revision),
+        glob=_TOKENIZE_GLOB,
+        resources=_TOKENIZE_RESOURCES,
+        pin=pin if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
+    )
+
+
+# split -> (pinned download revision, existing llama3 tokenized cache). The pin reuses the
+# marin-executor llama3 cache so a llama3 run resolves to it instead of re-tokenizing these
+# multi-billion-token corpora.
+COMMON_PILE_SLICES: dict[str, tuple[str, str]] = {
+    "arxiv_abstracts": ("f1d7a9a", "tokenized/common_pile/arxiv_abstracts-fa99b2"),
+    "arxiv_papers": ("033cf7f", "tokenized/common_pile/arxiv_papers-75f8c0"),
+    "biodiversity_heritage_library": ("0486ed6", "tokenized/common_pile/biodiversity_heritage_library-c141ed"),
+    "caselaw_access_project": ("50e1961", "tokenized/common_pile/caselaw_access_project-ba2bc9"),
+    "cccc": ("03a3de5", "tokenized/common_pile/cccc-fd5797"),
+    "data_provenance_initiative": ("8f5afcf", "tokenized/common_pile/data_provenance_initiative-f0f8e6"),
+    "doab": ("defb24c", "tokenized/common_pile/doab-cab67a"),
+    "foodista": ("bf2c7aa", "tokenized/common_pile/foodista-904225"),
+    "github_archive": ("52282fe", "tokenized/common_pile/github_archive-ed0971"),
+    "library_of_congress": ("56725c7", "tokenized/common_pile/library_of_congress-8cd324"),
+    "libretexts": ("70388bc", "tokenized/common_pile/libretexts-46297d"),
+    "news": ("59aaa8f", "tokenized/common_pile/news-8f5d41"),
+    "oercommons": ("506b615", "tokenized/common_pile/oercommons-728289"),
+    "peS2o": ("2977475", "tokenized/common_pile/peS2o-2e6500"),
+    "pre_1929_books": ("23f9d96", "tokenized/common_pile/pre_1929_books-c33f75"),
+    "pressbooks": ("1a1d3b5", "tokenized/common_pile/pressbooks-6d36ee"),
+    "project_gutenberg": ("3cdf687", "tokenized/common_pile/project_gutenberg-4ae24e"),
+    "public_domain_review": ("efc7f21", "tokenized/common_pile/public_domain_review-e73382"),
+    "pubmed": ("c156f05", "tokenized/common_pile/pubmed-7986e4"),
+    "python_enhancement_proposals": ("5821709", "tokenized/common_pile/python_enhancement_proposals-cfa465"),
+    "regulations": ("3327364", "tokenized/common_pile/regulations-9d6cae"),
+    "stackexchange": ("c0ac737", "tokenized/common_pile/stackexchange-1ba844"),
+    "stackv2_edu": ("c354dbe", "tokenized/common_pile/stackv2_edu-fdc0ad"),
+    "stackv2_html": ("92c9fa8", "tokenized/common_pile/stackv2_html-2b653d"),
+    "ubuntu_irc": ("84f88c9", "tokenized/common_pile/ubuntu_irc-ffc7af"),
+    "uk_hansard": ("c88adc4", "tokenized/common_pile/uk_hansard-67e776"),
+    "usgpo": ("b150cc2", "tokenized/common_pile/usgpo-86324c"),
+    "uspto": ("13894c5", "tokenized/common_pile/uspto-674f8f"),
+    "wikimedia": ("0641bb8", "tokenized/common_pile/wikimedia-53a667"),
+    "wikiteam": ("f4ed055", "tokenized/common_pile/wikiteam-174e57"),
+    "youtube": ("dff8c8a", "tokenized/common_pile/youtube-6fb6c3"),
 }
 
 # Effective token counts for the main training stage (in teratokens).
@@ -144,36 +156,14 @@ COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
 }
 
 
-def _download_handle(source: CommonPileSource) -> ArtifactStep[TokenizedCache]:
-    """A HuggingFace-download handle for ``source``, pinned to its existing raw download."""
-    return hf_download(
-        source.download_name,
-        hf_id=source.hf_id,
-        revision=source.revision,
-        pin=source.raw_path,
-        version="2026.06.28",
-    )
-
-
 def stackv2_edu_filtered_download() -> ArtifactStep[TokenizedCache]:
     """Raw download handle for the Common Pile stackv2_edu filtered split."""
-    return _download_handle(COMMON_PILE_SOURCES["stackv2_edu"])
+    return _common_pile_download("stackv2_edu", COMMON_PILE_SLICES["stackv2_edu"][0])
 
 
 def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
-    """One tokenized :class:`Dataset` handle per Common Pile split, keyed ``common_pile/<name>``.
-
-    Each handle tokenizes from a pinned ``download_hf`` of the filtered HuggingFace split, so
-    referencing it reuses the existing raw download rather than re-fetching the corpus.
-    """
+    """One tokenized :class:`Dataset` handle per Common Pile split, keyed ``common_pile/<name>``."""
     return {
-        f"common_pile/{name}": tokenized(
-            f"common_pile/{name}",
-            tokenizer=tokenizer,
-            raw=_download_handle(source),
-            glob=_TOKENIZE_GLOB,
-            resources=_TOKENIZE_RESOURCES,
-            version="2026.06.28",
-        )
-        for name, source in COMMON_PILE_SOURCES.items()
+        f"common_pile/{name}": common_pile_slice(name, revision, pin, tokenizer=tokenizer)
+        for name, (revision, pin) in COMMON_PILE_SLICES.items()
     }

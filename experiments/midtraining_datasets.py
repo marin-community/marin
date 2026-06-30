@@ -77,9 +77,9 @@ def stackv2_edu_python_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[st
     }
 
 
-def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
-    """Tokenized MegaMath splits, one handle per source partition."""
-    megamath_download = hf_download(
+def _megamath_download() -> ArtifactStep[TokenizedCache]:
+    """Pinned raw download of the full MegaMath HF repo (all partitions share it)."""
+    return hf_download(
         "raw/llm360/megamath",
         hf_id="llm360/MegaMath",
         revision="3cbc64616594d6bc8759abaa0b2a71858f880f0d",
@@ -87,17 +87,39 @@ def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifac
         pin="raw/llm360/megamath",
         version="2026.06.28",
     )
-    _split_globs = {
-        "megamath/qa": "megamath-qa/**/*.parquet",
-        "megamath/text_code_block": "megamath-text-code-block/*.parquet",
-        "megamath/translated_code": "megamath-translated-code/*.parquet",
-        "megamath/web_pro": "megamath-web-pro/*.parquet",
-        "megamath/web": "megamath-web/*/*.parquet",
-    }
-    return {
-        name: tokenized(name, tokenizer=tokenizer, raw=megamath_download, glob=glob, version="2026.06.28")
-        for name, glob in _split_globs.items()
-    }
+
+
+def megamath_slice(
+    name: str, glob: str, pin: str | None = None, *, tokenizer: str = llama3_tokenizer
+) -> ArtifactStep[TokenizedCache]:
+    """One MegaMath partition (the parquet under ``glob`` of the pinned download) as a tokenized handle.
+
+    With the llama3 tokenizer and ``pin`` set, resolves to that marin-executor cache instead of
+    re-tokenizing; any other tokenizer tokenizes fresh.
+    """
+    return tokenized(
+        name,
+        tokenizer=tokenizer,
+        raw=_megamath_download(),
+        glob=glob,
+        pin=pin if tokenizer == llama3_tokenizer else None,
+        version="2026.06.28",
+    )
+
+
+# split -> (source glob under the pinned megamath download, existing llama3 tokenized cache).
+MEGAMATH_SLICES: dict[str, tuple[str, str]] = {
+    "megamath/qa": ("megamath-qa/**/*.parquet", "tokenized/megamath/qa-851f70"),
+    "megamath/text_code_block": ("megamath-text-code-block/*.parquet", "tokenized/megamath/text_code_block-4df313"),
+    "megamath/translated_code": ("megamath-translated-code/*.parquet", "tokenized/megamath/translated_code-358b52"),
+    "megamath/web_pro": ("megamath-web-pro/*.parquet", "tokenized/megamath/web_pro-d2b548"),
+    "megamath/web": ("megamath-web/*/*.parquet", "tokenized/megamath/web-2e2440"),
+}
+
+
+def megamath_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """Tokenized MegaMath splits, one handle per source partition."""
+    return {name: megamath_slice(name, glob, pin, tokenizer=tokenizer) for name, (glob, pin) in MEGAMATH_SLICES.items()}
 
 
 def pile_validation_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
