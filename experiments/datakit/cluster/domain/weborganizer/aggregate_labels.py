@@ -30,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import pyarrow.parquet as pq
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
@@ -158,7 +158,7 @@ def aggregate_label_counts_step(*, classify_steps: list[StepSpec]) -> StepSpec:
         hash_attrs=hash_attrs,
         fn=lambda output_path: aggregate_label_counts(
             output_path=output_path,
-            sources={n: Artifact.from_path(p, WeborgTopicOutput) for n, p in source_paths.items()},
+            sources={n: read_artifact(p, WeborgTopicOutput) for n, p in source_paths.items()},
         ),
     )
 

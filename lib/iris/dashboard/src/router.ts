@@ -11,6 +11,10 @@ const routes = [
     component: () => import('./components/controller/JobsTab.vue'),
   },
   {
+    path: '/backends',
+    component: () => import('./components/controller/BackendsTab.vue'),
+  },
+  {
     path: '/fleet',
     component: () => import('./components/controller/FleetTab.vue'),
   },

@@ -14,12 +14,15 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 import LoadingSpinner from '@/components/shared/LoadingSpinner.vue'
 import UsersOverview from '@/components/controller/UsersOverview.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
+import { useBackends } from '@/composables/useBackends'
 
 // Tailwind's `sm` breakpoint is 640px. Below that we render mobile cards;
 // at/above we render the desktop table. Switched via v-if so only one
 // variant is in the DOM at a time (otherwise duplicate text trips Playwright
 // locator's `.first` matcher in CI).
 const isMobile = useMediaQuery('(max-width: 639px)')
+
+const { multiBackend, currentBackend } = useBackends()
 
 const PAGE_SIZE = 50
 
@@ -66,7 +69,11 @@ function queryStr(v: LocationQueryValue | LocationQueryValue[] | undefined): str
 
 const selectedUser = computed(() => queryStr(route.query.user))
 const showAll = computed(() => queryStr(route.query.all) === '1')
-const inJobList = computed(() => !!selectedUser.value || showAll.value)
+const backendId = computed(() => currentBackend(route))
+// Scoping to one backend drills straight into the (server-side backend-filtered)
+// job list: the cross-fleet UsersOverview is an all-backends aggregate and has no
+// per-backend filter, so it stays the "All backends" landing view.
+const inJobList = computed(() => !!selectedUser.value || showAll.value || !!backendId.value)
 
 function parseSort(v: string): SortField {
   return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
@@ -97,6 +104,10 @@ const JOB_STATES: JobState[] = [
 // names of the form `/<user>/<job>`, so the prefix is `/<user>/`.
 const jobIdPrefix = computed(() => (selectedUser.value ? `/${selectedUser.value}/` : undefined))
 
+// Show the Backend column only in "All backends" mode (no scope selected) and
+// only when the controller has more than one backend.
+const showBackendColumn = computed(() => multiBackend.value && !backendId.value)
+
 const {
   data: listResponse,
   loading,
@@ -112,6 +123,7 @@ const {
     nameFilter: nameFilter.value || undefined,
     stateFilter: stateFilter.value || undefined,
     jobIdPrefix: jobIdPrefix.value,
+    backendId: backendId.value || undefined,
   } satisfies JobQuery,
 }))
 
@@ -176,7 +188,7 @@ onMounted(fetchAll)
 useAutoRefresh(fetchAll, DEFAULT_REFRESH_MS)
 
 // Re-fetch from scratch whenever the scope or any query knob changes.
-watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll], () => {
+watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll, backendId], () => {
   childJobsByParent.value = new Map()
   expandedJobs.value = new Set()
   saveExpandedJobs()
@@ -185,7 +197,7 @@ watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll]
 
 // A different owner (or the all-jobs view) is a different result set — start at
 // the first page so a stale offset can't land out of range.
-watch([stateFilter, selectedUser, showAll], () => {
+watch([stateFilter, selectedUser, showAll, backendId], () => {
   page.value = 0
 })
 
@@ -519,6 +531,13 @@ function sortIndicator(field: SortField): string {
               </span>
             </span>
           </th>
+          <th
+            v-if="showBackendColumn"
+            scope="col"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+          >
+            Backend
+          </th>
           <th scope="col" class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Tasks
           </th>
@@ -579,6 +598,7 @@ function sortIndicator(field: SortField): string {
           </td>
 
           <!-- Date -->
+
           <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] text-text-secondary font-mono">
             {{ jobDuration(node.job) }}
           </td>
@@ -599,6 +619,21 @@ function sortIndicator(field: SortField): string {
           <!-- Preemptions -->
           <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] text-right tabular-nums">
             {{ node.job.preemptionCount ?? 0 }}
+          </td>
+
+          <!-- Backend (multi-backend All mode only) -->
+          <td
+            v-if="showBackendColumn"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]"
+          >
+            <button
+              v-if="node.job.backendId"
+              class="text-accent hover:underline font-mono text-xs"
+              @click="router.replace({ query: { ...route.query, backend: node.job.backendId } })"
+            >
+              {{ node.job.backendId }}
+            </button>
+            <span v-else class="text-text-muted">—</span>
           </td>
 
           <!-- Tasks progress bar -->

@@ -45,6 +45,16 @@ titled `TPU-vLLM fork refresh blocked: <short reason>`, with current pins,
 selected release, branch names/SHAs if created, attempted fixes, remaining
 failure, artifacts, and the logs Gist.
 
+## Post-Merge Follow-Up
+
+This skill does not run post-merge fork-main promotion. A successful refresh run
+stops after opening the Marin PR; if blocked, it stops after filing or updating
+the blocker issue.
+
+After the Marin PR has merged and Marin `main` contains the new exact fork SHA
+pins, a separate operator may run the post-merge protocol in
+`docs/post-merge-protocol.md`.
+
 ## Workspace Setup
 
 - Marin working copy:
@@ -169,6 +179,15 @@ Also make only fork-stack update changes needed in Marin:
 
 - remove any old `vllm-tpu==0.19.0` path;
 - make `marin-core[vllm]` own the TPU-vLLM runtime stack;
+- keep shared Marin workspace dependencies aligned by default. When the refresh
+  requires a new version of packages shared with training/test stacks
+  (`jax`, `jaxlib`, `libtpu`, `transformers`, `torch`, etc.), first update all
+  relevant Marin workspace consumers together, including `marin-core`,
+  `marin-levanter`, and `marin-fray`, then validate the unified graph;
+- do not add resolver conflicts or package splits that isolate serving from
+  training/test profiles unless the unified monorepo update has been attempted,
+  the failure is understood, and the PR or blocker issue explains why the split
+  is necessary and how it should be removed later;
 - preserve worker/eval paths that intentionally combine `tpu` and `vllm`
   extras, unless refreshed-stack validation proves they must change;
 - set `VLLM_TARGET_DEVICE=tpu` for TPU source-build workers.

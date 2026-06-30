@@ -65,6 +65,12 @@ const matchScope = ref<MatchScope>('EXACT')
 const presetMs = ref(0)
 const customSince = ref('')
 
+// Timezone for rendering log timestamps and interpreting the date picker.
+// Stored timestamps are UTC epoch ms regardless; 'local' shows the browser's
+// zone (default), 'utc' lines the prefix up with the UTC timestamps processes
+// embed in their raw log lines.
+const timeZone = ref<'local' | 'utc'>('local')
+
 const entries = ref<LogEntry[]>([])
 const loading = ref(false)
 const errorMsg = ref<string | null>(null)
@@ -104,12 +110,24 @@ function applyDefaults() {
   resetAndFetch()
 }
 
+// A `datetime-local` value (e.g. "2026-06-30T02:08") carries no timezone, so
+// interpret it in the panel's selected zone. This keeps the lower bound aligned
+// with the timestamps the panel renders instead of silently assuming local.
+function parseDateTimeLocal(value: string): number {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (!m) return NaN
+  const [year, month, day, hour, minute, second] = m.slice(1).map((p) => Number(p ?? 0))
+  return timeZone.value === 'utc'
+    ? Date.UTC(year, month - 1, day, hour, minute, second)
+    : new Date(year, month - 1, day, hour, minute, second).getTime()
+}
+
 // Resolve the lower time bound at request time. A relative preset must be
 // recomputed on every fetch (including auto-refresh polls) so the window stays
 // anchored to "now", not to when the preset was first selected.
 function computeSinceMs(): number | undefined {
   if (customSince.value) {
-    const ms = Date.parse(customSince.value)
+    const ms = parseDateTimeLocal(customSince.value)
     return Number.isNaN(ms) ? undefined : ms
   }
   return presetMs.value > 0 ? Date.now() - presetMs.value : undefined
@@ -138,10 +156,13 @@ async function fetchTail() {
   loading.value = true
   errorMsg.value = null
   try {
+    // An explicit start date means "read forward from here": fetch the first
+    // maxLines entries at/after sinceMs (oldest-first). Relative presets and the
+    // default view stay anchored to now, so they tail the newest maxLines.
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
       ...baseRequest(),
       maxLines: tailLines.value || undefined,
-      tail: true,
+      tail: !customSince.value,
     })
     if (gen !== generation) return
     entries.value = resp.entries ?? []
@@ -215,6 +236,11 @@ watch(selectedAttemptId, applyDefaults)
 watch(tailLines, resetAndFetch)
 watch(level, resetAndFetch)
 watch([presetMs, customSince], resetAndFetch)
+// Changing the zone only alters the query when an absolute date is in effect
+// (it reinterprets the picker); otherwise it just re-renders timestamps.
+watch(timeZone, () => {
+  if (customSince.value) resetAndFetch()
+})
 
 function selectPreset(ms: number) {
   // The synthetic "Custom" option (-1) only appears while an absolute time is
@@ -381,6 +407,14 @@ defineExpose({ selectedAttemptId })
         class="px-2 py-1.5 border border-surface-border rounded text-sm"
       />
       <select
+        v-model="timeZone"
+        title="Timezone for displayed timestamps and the date picker"
+        class="px-2 py-1.5 border border-surface-border rounded text-sm"
+      >
+        <option value="local">Local</option>
+        <option value="utc">UTC</option>
+      </select>
+      <select
         v-model.number="tailLines"
         class="px-2 py-1.5 border border-surface-border rounded text-sm"
       >
@@ -440,7 +474,7 @@ defineExpose({ selectedAttemptId })
         >
           T{{ row.taskRef.taskIndex }}
         </RouterLink>
-        <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(row.entry.timestamp)) }}</span>
+        <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(row.entry.timestamp), timeZone === 'utc') }}</span>
         <span class="whitespace-pre-wrap break-all"><template
           v-for="(seg, j) in row.segments"
           :key="j"

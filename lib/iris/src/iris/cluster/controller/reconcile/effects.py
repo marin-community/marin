@@ -132,3 +132,12 @@ class ControllerEffects:
     endpoint_deletions: list[EndpointDeletion] = field(default_factory=list)
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
     log_events: list[LogEvent] = field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this batch records no committable writes.
+
+        ``health.build_failed`` is excluded: it is folded into the liveness
+        tracker by the backend, never persisted by ``commit_effects``.
+        """
+        return not (self.tasks or self.attempts or self.jobs or self.endpoint_deletions or self.log_events)

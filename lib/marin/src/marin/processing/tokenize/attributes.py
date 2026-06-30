@@ -35,7 +35,7 @@ from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
 
 from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import tokenize_pipeline
 from marin.utils import fsspec_glob
@@ -279,9 +279,9 @@ def tokenize_attributes_step(
             "max_workers": max_workers,
         }
         if train_normalize is not None:
-            kwargs["train_source"] = Artifact.from_path(train_normalize, NormalizedData)
+            kwargs["train_source"] = read_artifact(train_normalize.output_path, NormalizedData)
         if validation_normalize is not None:
-            kwargs["validation_source"] = Artifact.from_path(validation_normalize, NormalizedData)
+            kwargs["validation_source"] = read_artifact(validation_normalize.output_path, NormalizedData)
         if worker_resources is not None:
             kwargs["worker_resources"] = worker_resources
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))

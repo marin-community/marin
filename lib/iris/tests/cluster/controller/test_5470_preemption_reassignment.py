@@ -429,7 +429,7 @@ class TestPreemptionReassignment:
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ControllerTestState(
             ctrl._db,
-            health=ctrl._health,
+            health=ctrl.provider.health,
             endpoints=ctrl._endpoints,
             worker_attrs=ctrl._worker_attrs,
             run_template_cache=ctrl._run_template_cache,
@@ -478,7 +478,7 @@ class TestPreemptionReassignment:
             apply_task_observations(
                 cur,
                 [fail_request],
-                health=ctrl._health,
+                health=ctrl.provider.health,
                 endpoints=ctrl._endpoints,
                 now=Timestamp.now(),
             )

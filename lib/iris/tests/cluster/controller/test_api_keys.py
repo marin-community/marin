@@ -26,7 +26,6 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import job_pb2
 from rigging.server_auth import IapIdTokenVerifier, VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
@@ -41,7 +40,6 @@ def db(tmp_path):
 
 def _make_service(db, log_client, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
     worker_attrs = WorkerAttrsProjection(db)
 
@@ -58,7 +56,6 @@ def _make_service(db, log_client, auth=None):
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
         log_client=log_client,
         db=db,
-        health=health,
         endpoints=endpoints,
         worker_attrs=worker_attrs,
         auth=auth or ControllerAuth(),

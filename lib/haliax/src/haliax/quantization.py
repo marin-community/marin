@@ -25,7 +25,7 @@ import haliax.nn as hnn
 from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
-from ._src.fp8 import dot_general_with_precision, in_qdq, out_qdq
+from ._src.fp8 import fp8_scaled_dot_general
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
@@ -152,6 +152,23 @@ class DefaultDotGeneralOp(eqx.Module):
 
 
 class Fp8DotGeneralOp(OverwriteWithGradient):
+    """Direct-quantization FP8 ``dot_general`` op for [haliax.nn.Linear][].
+
+    Casts both operands to FP8 and contracts them, then dequantizes the result,
+    so FP8 tensor cores are used directly instead of relying on XLA's
+    GemmRewriter to recover an FP8 kernel from a quantize/dequantize pattern.
+    Output gradients are quantized to FP8 in the custom VJP of
+    [fp8_scaled_dot_general][], which also carries the delayed-scaling state
+    (per-tensor scale + amax history for the input, kernel and output gradient)
+    updated as an [OverwriteWithGradient][].
+
+    The forward-operand (``fwd_dtype``) and output-gradient (``rev_dtype``)
+    quantization dtypes default to E4M3 and E5M2.
+
+    Faithfully vendored from Flax's ``Fp8DirectDotGeneralOp``
+    (``flax/linen/fp8_ops.py``; see https://github.com/google/flax/pull/3922).
+    """
+
     input_scale: jnp.ndarray
     output_grad_scale: jnp.ndarray
     kernel_scale: jnp.ndarray
@@ -159,9 +176,17 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
     output_grad_amax_history: jnp.ndarray
     kernel_amax_history: jnp.ndarray
     compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
 
     @classmethod
-    def init(cls, amax_history_length: int = 1024, compute_dtype: DTypeLike | None = None):
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
+    ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),
@@ -170,9 +195,10 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
             output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
             compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
         )
 
-    # copied from flax
     def __call__(
         self,
         lhs,
@@ -182,22 +208,30 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
         preferred_element_type: DTypeLike | None = None,
         **kwargs,
     ):
-        # Use the `k.dtype` since it aligns with the `dtype` of its layers,
-        # namely, the computation data type.
+        # Use the kernel (`rhs`) dtype as the compute dtype since it aligns with
+        # the layer's dtype, matching Flax.
         if self.compute_dtype is None:
             comp_dtype = rhs.dtype
         else:
             comp_dtype = self.compute_dtype
         lhs = jnp.asarray(lhs, comp_dtype)
 
-        x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
-        k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
-        y_qdq = dot_general_with_precision(
-            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
+        return fp8_scaled_dot_general(
+            lhs,
+            rhs,
+            dimension_numbers,
+            precision=precision,
+            preferred_element_type=comp_dtype,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
         )
-        y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
-
-        return y
 
 
 class Int8DotGeneralOp(OverwriteWithGradient):

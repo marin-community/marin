@@ -482,8 +482,8 @@ class ScatterWriter:
     """Writes items to a scatter data file with zstd-compressed chunks.
 
     Items are routed to target shards by ``key_fn``, buffered, optionally
-    combined and sorted, then flushed as zstd frames. A JSON sidecar is
-    written on close.
+    combined and sorted, then flushed as zstd frames. A msgpack sidecar
+    (``.scatter_meta``) is written on close.
 
     Flushing is byte-budget-based: when the estimated total bytes across all
     shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.

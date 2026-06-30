@@ -92,6 +92,9 @@ class GrugRunConfig:
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
+    # via the iris.runtime.multigpu supervisor instead of one process per node.
+    processes_per_task: int = 1
 
 
 def build_train_dataset(
@@ -568,6 +571,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        processes_per_task=config.processes_per_task,
     )
 
 

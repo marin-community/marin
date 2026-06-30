@@ -95,7 +95,7 @@ from marin.datakit.decon import (
 )
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
@@ -285,7 +285,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
         fn=remote(
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
-                normalized=Artifact.from_path(np, NormalizedData),
+                normalized=read_artifact(np, NormalizedData),
                 batch_size=scale.embed_batch_size,
                 worker_resources=scale.embed_worker_resources,
                 max_workers=scale.embed_max_workers_per_source,
@@ -325,7 +325,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
         fn=remote(
             lambda output_path, es={n: s.output_path for n, s in embed_steps.items()}: sample_centroid_inputs(
                 output_path=output_path,
-                embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in es.items()},
+                embeddings={n: read_artifact(p, EmbeddingAttrData) for n, p in es.items()},
                 n_per_source=scale.n_per_source_for_sample,
                 worker_resources=scale.sample_worker_resources,
                 max_workers=scale.sample_max_workers,
@@ -423,7 +423,7 @@ def reference_datakit_steps(
         sources: ``{name: normalize_step}``. Each step must produce a
             :class:`marin.datakit.normalize.NormalizedData` artifact;
             misuse fails loudly the first time a downstream step tries
-            ``Artifact.from_path(step, NormalizedData)``.
+            ``read_artifact(step.output_path, NormalizedData)``.
         domain_centroids: A GCS directory holding ``centroids_<k_train>.npy``
             and ``lookup_<k_train>_to_<k>.npy`` for each ``k`` in
             ``scale.cluster.k_views``; a StepSpec whose ``output_path`` will
@@ -492,7 +492,7 @@ def reference_datakit_steps(
             fn=remote(
                 lambda output_path, ep=embed.output_path: assign_source(
                     output_path=output_path,
-                    embedding=Artifact.from_path(ep, EmbeddingAttrData),
+                    embedding=read_artifact(ep, EmbeddingAttrData),
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
                     window_size=scale.assign_batch_size,
@@ -526,7 +526,7 @@ def reference_datakit_steps(
             name=f"datakit/minhash/{name}",
             deps=[normalize_step],
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
-                source=Artifact.from_path(n, NormalizedData),
+                source=read_artifact(n.output_path, NormalizedData),
                 output_path=op,
                 worker_resources=scale.minhash_worker_resources,
             ),
@@ -547,7 +547,7 @@ def reference_datakit_steps(
         name="datakit/dedup",
         deps=minhash_steps,
         fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
+            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
@@ -559,11 +559,13 @@ def reference_datakit_steps(
     # ---- Final store: 5-way join + per-bucket Levanter cache ------------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
         return build_clustered_store(
-            tokenize={n: Artifact.from_path(s["tokenize"], TokenizedAttrData) for n, s in per_source.items()},
-            decontam={n: Artifact.from_path(s["decontam"], DeconAttributes) for n, s in per_source.items()},
-            cluster_assign={n: Artifact.from_path(s["assign"], AssignmentAttrData) for n, s in per_source.items()},
-            quality={n: Artifact.from_path(s["quality"], LlmQualityOutput) for n, s in per_source.items()},
-            dedup=Artifact.from_path(dedup, FuzzyDupsAttrData),
+            tokenize={n: read_artifact(s["tokenize"].output_path, TokenizedAttrData) for n, s in per_source.items()},
+            decontam={n: read_artifact(s["decontam"].output_path, DeconAttributes) for n, s in per_source.items()},
+            cluster_assign={
+                n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
+            },
+            quality={n: read_artifact(s["quality"].output_path, LlmQualityOutput) for n, s in per_source.items()},
+            dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,

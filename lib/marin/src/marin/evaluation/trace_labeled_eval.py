@@ -32,12 +32,7 @@ from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.tokenizers import load_tokenizer as load_marin_tokenizer
-from levanter.tracker.json_file import JsonFileTrackerConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-
-from marin.execution import ExecutorStep, InputName, this_output_path
-from marin.utilities.executor_utils import ckpt_path_to_step_name
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +111,7 @@ class TraceLabeledEvalConfig:
 
 @dataclass(frozen=True)
 class TraceLabeledEvalOutput:
-    """Executor artifact produced by a completed trace-labeled evaluation step."""
+    """Output produced by a completed trace-labeled evaluation run."""
 
     results_path: str
 
@@ -654,56 +649,4 @@ def run_trace_labeled_eval_on_pod(config: TraceLabeledEvalOnPodConfig) -> TraceL
     job.wait(raise_on_failure=True)
     return TraceLabeledEvalOutput(
         results_path=os.path.join(config.trace_labeled_eval_config.output_path, RESULTS_FILENAME),
-    )
-
-
-def trace_labeled_eval_step(
-    *,
-    checkpoint: str | InputName,
-    model: LmConfig,
-    tokenizer: str,
-    datasets: dict[str, TraceLabeledEvalDatasetConfig],
-    resource_config: ResourceConfig,
-    checkpoint_is_hf: bool,
-    per_device_batch_size: int = 1,
-    max_eval_length: int = 4096,
-    name: str | None = None,
-    wandb_project: str = DEFAULT_TRACE_LABELED_EVAL_WANDB_PROJECT,
-    wandb_tags: Sequence[str] = DEFAULT_TRACE_LABELED_EVAL_WANDB_TAGS,
-    wandb_group: str | None = None,
-) -> ExecutorStep:
-    """Create an ExecutorStep that evaluates labeled agent trace spans."""
-
-    if not name:
-        name = ckpt_path_to_step_name(checkpoint)
-
-    return ExecutorStep(
-        name=f"analysis/trace_labeled_eval/{name}",
-        fn=run_trace_labeled_eval_on_pod,
-        config=TraceLabeledEvalOnPodConfig(
-            trace_labeled_eval_config=TraceLabeledEvalConfig(
-                name=name,
-                checkpoint_path=checkpoint,  # type: ignore[arg-type]
-                checkpoint_is_hf=checkpoint_is_hf,
-                tokenizer=tokenizer,
-                model=model,
-                datasets=datasets,
-                trainer=TrainerConfig(
-                    tracker=(
-                        WandbConfig(
-                            project=wandb_project,
-                            name=name,
-                            tags=list(wandb_tags),
-                            group=wandb_group,
-                        ),
-                        JsonFileTrackerConfig(output_path=this_output_path()),
-                    ),
-                    per_device_eval_parallelism=per_device_batch_size,
-                    mp=jmp.get_policy("c=bf16"),
-                ),
-                max_eval_length=max_eval_length,
-                output_path=this_output_path(),
-            ),
-            resources=resource_config,
-        ),
     )

@@ -551,6 +551,7 @@ def run_iris_job(
     wait: bool = True,
     job_name: str | None = None,
     replicas: int | None = None,
+    processes_per_task: int = 1,
     max_retries: int = 0,
     timeout: int = 0,
     extras: list[str] | None = None,
@@ -669,6 +670,7 @@ def run_iris_job(
         terminate_on_exit=terminate_on_exit,
         constraints=constraints or None,
         coscheduling=coscheduling,
+        processes_per_task=processes_per_task,
         user=user,
         priority_band=priority_band,
         container_profile=profile,
@@ -695,6 +697,7 @@ def _submit_and_wait_job(
     terminate_on_exit: bool = True,
     constraints: list[Constraint] | None = None,
     coscheduling: CoschedulingConfig | None = None,
+    processes_per_task: int = 1,
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
@@ -721,6 +724,7 @@ def _submit_and_wait_job(
         constraints=constraints,
         coscheduling=coscheduling,
         replicas=replicas,
+        processes_per_task=processes_per_task,
         max_retries_failure=max_retries,
         max_task_failures=max_retries,
         timeout=Duration.from_seconds(timeout) if timeout else None,
@@ -837,6 +841,12 @@ Examples:
 @click.option(
     "--replicas", type=int, default=None, help="Number of tasks for gang scheduling (auto-detected for multinode TPUs)"
 )
+@click.option(
+    "--processes-per-task",
+    type=int,
+    default=1,
+    help="GPU processes to run inside each task (default 1). >1 fans each task into N JAX processes per GPU group.",
+)
 @click.option("--max-retries", type=int, default=0, help="Max retries on failure (default: 0)")
 @click.option("--timeout", type=int, default=0, show_default=True, help="Job timeout in seconds (0 = no timeout)")
 @click.option("--region", multiple=True, help="Restrict to region(s) (e.g., --region us-central2). Can be repeated.")
@@ -920,6 +930,7 @@ def run(
     job_name: str | None,
     user: str | None,
     replicas: int | None,
+    processes_per_task: int,
     max_retries: int,
     timeout: int,
     region: tuple[str, ...],
@@ -977,6 +988,7 @@ def run(
             job_name=job_name,
             user=user,
             replicas=replicas,
+            processes_per_task=processes_per_task,
             max_retries=max_retries,
             timeout=timeout,
             extras=list(extra),

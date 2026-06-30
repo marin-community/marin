@@ -1,36 +1,78 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MASSIVE → function-calling dataset tokenization.
+"""MASSIVE → function-calling dataset tokenization."""
 
-Mirrors the ``nsf_awards.py`` pattern: take the terminal normalize StepSpec,
-adapt it to an ExecutorStep, then wire a tokenize ExecutorStep that reads its
-``outputs/main/*.parquet`` shards through the standard Marin tokenizer.
-"""
-
-from marin.datakit.download.massive import massive_normalize_steps
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.datakit.download.massive import (
+    MASSIVE_TARBALL_URL,
+    MASSIVE_VERSION,
+    stage_massive_raw,
+    transform_staged_massive,
+)
+from marin.datakit.normalize import normalize_to_parquet
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.data import raw_download, tokenized
+from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
 
-# massive_normalize_steps returns (stage, transform, normalize); the terminal
-# normalize step is what consumers tokenize off.
-*_, _massive_normalized_step = massive_normalize_steps()
-massive_function_calling_download = _massive_normalized_step.as_executor_step()
 
-massive_function_calling_tokenized = ExecutorStep(
-    name="tokenized/massive_function_calling",
-    fn=tokenize,
-    config=TokenizeConfig(
-        train_paths=[output_path_of(massive_function_calling_download, "outputs/main/*.parquet")],
-        validation_paths=versioned([]),
-        cache_path=this_output_path(),
-        tokenizer=versioned(marin_tokenizer),
-    ),
-)
+def _run_stage(cfg: dict) -> None:
+    stage_massive_raw(output_path=cfg["output_path"])
 
 
-if __name__ == "__main__":
-    executor_main(steps=[massive_function_calling_tokenized])
+def _run_transform(cfg: dict) -> None:
+    transform_staged_massive(input_path=cfg["input_path"], output_path=cfg["output_path"])
+
+
+def _run_normalize(cfg: dict) -> None:
+    normalize_to_parquet(
+        input_path=cfg["input_path"],
+        output_path=cfg["output_path"],
+        text_field=cfg["text_field"],
+        id_field=cfg["id_field"],
+        file_extensions=tuple(cfg["file_extensions"]),
+    )
+
+
+def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+    """MASSIVE function-calling corpus as a tokenized Dataset handle."""
+    staged = raw_download(
+        "raw/massive",
+        fn=_run_stage,
+        build_config=lambda ctx: {
+            "tarball_url": MASSIVE_TARBALL_URL,
+            "version": MASSIVE_VERSION,
+            "output_path": ctx.output_path,
+        },
+        version="2026.06.28",
+    )
+    transformed = ArtifactStep(
+        name="processed/massive_function_calling",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_transform,
+        build_config=lambda ctx: {
+            "input_path": ctx.artifact_path(staged),
+            "output_path": ctx.output_path,
+            "schema_version": "v1",
+        },
+        deps=(staged,),
+    )
+    norm = ArtifactStep(
+        name="normalized/massive_function_calling",
+        version="2026.06.28",
+        artifact_type=TokenizedCache,
+        run=_run_normalize,
+        build_config=lambda ctx: {
+            "input_path": ctx.artifact_path(transformed),
+            "output_path": ctx.output_path,
+            "text_field": "text",
+            "id_field": "id",
+            "file_extensions": [".parquet"],
+        },
+        deps=(transformed,),
+    )
+    return tokenized(
+        "massive_function_calling", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28"
+    )
