@@ -15,7 +15,7 @@ Three layers, exercised in order:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 from iris.cluster.backends.rpc.backend import (
@@ -28,6 +28,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
@@ -86,6 +87,7 @@ from .conftest import (
     run_worker_daemon_schedule,
     run_worker_daemon_teardown,
     submit_job,
+    worker_source_from_runtime,
 )
 
 _W1 = "worker-1"
@@ -589,7 +591,7 @@ class _StubWorkerSource:
 
 
 def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> FleetObservation:
-    provider.attach_worker_source(_StubWorkerSource(_reconcile_snapshot(worker_addresses)))
+    provider.worker_source = cast(WorkerSource, _StubWorkerSource(_reconcile_snapshot(worker_addresses)))
     return provider._observe_fleet()
 
 
@@ -1185,11 +1187,8 @@ class _ScriptedProvider:
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        self.autoscaler = autoscaler
-
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        self.worker_source = source
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_source = worker_source_from_runtime(runtime, self.health)
 
     def seed_liveness(self) -> None:
         assert self.worker_source is not None
@@ -1366,8 +1365,8 @@ class _UnreachableProvider:
         self.advertised = advertised
         self.allowed_users = allowed_users
 
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        self.worker_source = source
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_source = worker_source_from_runtime(runtime, self.health)
 
     def seed_liveness(self) -> None:
         assert self.worker_source is not None
@@ -1425,9 +1424,6 @@ class _UnreachableProvider:
         for dead in request.dead_workers:
             removed.extend(WorkerId(sib) for sib in self.siblings.get(str(dead), []))
         return AutoscaleResult(removed_workers=removed)
-
-    def attach_autoscaler(self, autoscaler) -> None:
-        self.autoscaler = autoscaler
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError

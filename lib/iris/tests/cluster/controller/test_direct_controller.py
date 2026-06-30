@@ -9,13 +9,13 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    WorkerSource,
 )
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -78,17 +78,11 @@ class FakeDirectProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        raise AssertionError("cluster-view backend manages its own capacity")
-
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        raise AssertionError("cluster-view backend sources its own placement")
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        """No-op: a cluster-view backend tracks no Iris workers, so it builds no worker source."""
 
     def seed_liveness(self) -> None:
         """No-op: a cluster-view backend tracks no Iris worker liveness."""
-
-    def attach_transition_reader(self, reader) -> None:
-        self.transition_reader = reader
 
     def get_process_status(self, target: TaskTarget, request):
         raise ProviderUnsupportedError("fake k8s")

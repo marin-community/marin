@@ -61,6 +61,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
@@ -115,6 +116,7 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
+from iris.cluster.controller.worker_source import DbWorkerSource
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
@@ -211,11 +213,16 @@ class _FakeProvider:
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        pass
-
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        self.worker_source = source
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_source = DbWorkerSource(
+            db=runtime.db,
+            owns_scale_group=runtime.owns_scale_group,
+            health=self.health,
+            worker_attrs=runtime.worker_attrs,
+            endpoints=runtime.endpoints,
+            run_template_cache=runtime.run_template_cache,
+            defaults=runtime.budget_defaults,
+        )
 
     def seed_liveness(self) -> None:
         assert self.worker_source is not None
@@ -2771,7 +2778,7 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     # (measured above) and hands it back through a stub source so the RPC fan-out
     # is what t2..t3 times. The stub implements only the fan-out read surface (it
     # never folds liveness or tears down), so it is cast to the full WorkerSource.
-    provider.attach_worker_source(cast(WorkerSource, _PrebuiltWorkerSource(snapshot)))
+    provider.worker_source = cast(WorkerSource, _PrebuiltWorkerSource(snapshot))
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()

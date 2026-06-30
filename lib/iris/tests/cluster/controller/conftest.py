@@ -52,6 +52,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
@@ -88,6 +89,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
+from iris.cluster.controller.worker_source import DbWorkerSource
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -190,6 +192,20 @@ def run_worker_daemon_teardown(
     )
 
 
+def worker_source_from_runtime(runtime: BackendRuntime, health: WorkerHealthTracker) -> DbWorkerSource:
+    """Build a fake's worker source from the controller runtime + its own tracker —
+    the worker-daemon fakes' shared mirror of ``RpcTaskBackend.bind_runtime``."""
+    return DbWorkerSource(
+        db=runtime.db,
+        owns_scale_group=runtime.owns_scale_group,
+        health=health,
+        worker_attrs=runtime.worker_attrs,
+        endpoints=runtime.endpoints,
+        run_template_cache=runtime.run_template_cache,
+        defaults=runtime.budget_defaults,
+    )
+
+
 class FakeProvider:
     """Minimal worker-daemon TaskBackend for tests exercising transitions, not RPCs."""
 
@@ -251,11 +267,8 @@ class FakeProvider:
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         run_worker_daemon_teardown(self.worker_source, dead_workers, self.autoscale, reason=reason)
 
-    def attach_autoscaler(self, autoscaler) -> None:
-        self.autoscaler = autoscaler
-
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        self.worker_source = source
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_source = worker_source_from_runtime(runtime, self.health)
 
     def seed_liveness(self) -> None:
         assert self.worker_source is not None, "FakeProvider.seed_liveness called before worker source attached"

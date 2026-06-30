@@ -31,6 +31,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ProviderError,
     ReconcileRequest,
     ReconcileResult,
@@ -49,7 +50,6 @@ from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.ops.worker import fail as fail_workers
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
 from iris.cluster.controller.worker_health import (
@@ -58,6 +58,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
+from iris.cluster.controller.worker_source import DbWorkerSource
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -242,15 +243,15 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
-    # The Iris autoscaler that provisions capacity for this backend, attached by
-    # the composer after it builds the autoscaler from the provider bundle; None
-    # for clusters with no scale groups, where capacity calls are no-ops.
+    # The Iris autoscaler that provisions capacity for this backend, passed by the
+    # composer at construction after it builds the autoscaler from the provider
+    # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
-    # This backend's live-worker read surface, attached by the controller once it
-    # owns the health tracker / worker attributes / run-template cache the source
-    # needs. The backend reads its own workers through this; the controller never
+    # This backend's live-worker read surface, built in ``bind_runtime`` from the
+    # controller-owned ``BackendRuntime`` joined with this backend's own health
+    # tracker. The backend reads its own workers through this; the controller never
     # hands it a worker snapshot.
-    worker_source: WorkerSource | None = None
+    worker_source: WorkerSource | None = field(default=None, init=False, repr=False)
     # Wall-clock window a worker may stay continuously unreachable before this
     # backend's tracker reaps it; configures the WorkerHealthTracker built below.
     unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
@@ -278,13 +279,21 @@ class RpcTaskBackend:
     def __post_init__(self) -> None:
         self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
 
-    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
-        """Attach the Iris autoscaler that provisions capacity for this backend."""
-        self.autoscaler = autoscaler
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        """Build this backend's worker source from the controller-owned runtime.
 
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        """Attach this backend's live-worker read surface."""
-        self.worker_source = source
+        Joins ``runtime`` with this backend's own liveness tracker (``self.health``)
+        to build the scale-group-scoped read surface it sources its workers through.
+        """
+        self.worker_source = DbWorkerSource(
+            db=runtime.db,
+            owns_scale_group=runtime.owns_scale_group,
+            health=self.health,
+            worker_attrs=runtime.worker_attrs,
+            endpoints=runtime.endpoints,
+            run_template_cache=runtime.run_template_cache,
+            defaults=runtime.budget_defaults,
+        )
 
     def seed_liveness(self) -> None:
         """Seed this backend's persisted workers as healthy so the scheduler sees them.
@@ -297,9 +306,6 @@ class RpcTaskBackend:
         worker_ids = self.worker_source.owned_worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
-
-    def attach_transition_reader(self, reader: TransitionReader) -> None:
-        raise AssertionError("worker-daemon backend authors effects through its worker source")
 
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised

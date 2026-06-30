@@ -26,7 +26,7 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
@@ -48,6 +48,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     build_reconcile_plans,
 )
+from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.decision import apply_preemptions, compute_diagnostics
 from iris.cluster.controller.scheduling.policy import (
     GatedCandidates,
@@ -439,22 +440,30 @@ class WorkerSource(TransitionReader, Protocol):
     scale-group-scoped read of the controller DB.
     """
 
-    health: WorkerHealthTracker
-    """The owning backend's liveness tracker (the SAME object the backend folds and
-    reaps through). It holds only this backend's workers, so the source's reads
-    project liveness over exactly the workers it owns."""
+    @property
+    def health(self) -> WorkerHealthTracker:
+        """The owning backend's liveness tracker (the SAME object the backend folds and
+        reaps through). It holds only this backend's workers, so the source's reads
+        project liveness over exactly the workers it owns."""
+        ...
 
-    db: ControllerDB
-    """The controller database. The backend's teardown opens its own chunked
-    failure transactions against this (``ops.worker.fail``)."""
+    @property
+    def db(self) -> ControllerDB:
+        """The controller database. The backend's teardown opens its own chunked
+        failure transactions against this (``ops.worker.fail``)."""
+        ...
 
-    endpoints: EndpointsProjection
-    """Endpoint projection the teardown's ``commit_effects`` drains task
-    deregistrations into."""
+    @property
+    def endpoints(self) -> EndpointsProjection:
+        """Endpoint projection the teardown's ``commit_effects`` drains task
+        deregistrations into."""
+        ...
 
-    worker_attrs: WorkerAttrsProjection
-    """Worker-attributes projection the teardown's ``remove_worker`` evicts the
-    failed workers' cached attributes from."""
+    @property
+    def worker_attrs(self) -> WorkerAttrsProjection:
+        """Worker-attributes projection the teardown's ``remove_worker`` evicts the
+        failed workers' cached attributes from."""
+        ...
 
     def owned_worker_ids(self) -> set[WorkerId]:
         """The persisted workers this backend owns by scale group (a fresh read)."""
@@ -471,6 +480,33 @@ class WorkerSource(TransitionReader, Protocol):
     def worker_status(self) -> WorkerStatusMap:
         """This backend's per-worker idle/running status for the autoscaler refresh."""
         ...
+
+
+@dataclass(frozen=True)
+class BackendRuntime:
+    """The controller-owned ingredients a worker-daemon backend builds its
+    :class:`WorkerSource` from.
+
+    The controller hands this to :meth:`TaskBackend.bind_runtime` once at startup;
+    the backend joins it with its OWN liveness tracker (built in its constructor)
+    to build the scale-group-scoped :class:`WorkerSource` it reads through. The
+    worker source can't be a finished constructor arg because it closes over the
+    backend's tracker, so the controller supplies the rest as data here.
+    """
+
+    db: ControllerDB
+    """The controller database the source reads its workers/placement through."""
+    endpoints: EndpointsProjection
+    """Endpoint projection the teardown's ``commit_effects`` drains into."""
+    run_template_cache: RunTemplateCache
+    """Per-job ``RunTaskRequest`` template cache the reconcile snapshot reads from."""
+    worker_attrs: WorkerAttrsProjection
+    """Worker-attributes projection the teardown evicts failed workers from."""
+    owns_scale_group: Callable[[str], bool]
+    """The backend's worker-ownership test by scale group (the default backend also
+    claims workers whose scale group is unmapped)."""
+    budget_defaults: UserBudgetDefaults
+    """Per-user budget defaults the scheduling context falls back to."""
 
 
 class TaskBackend(Protocol):
@@ -590,22 +626,13 @@ class TaskBackend(Protocol):
         """
         ...
 
-    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
-        """Attach the Iris autoscaler that provisions capacity for this backend.
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        """Build this backend's live-worker read surface from controller-owned deps.
 
-        Called once by the composer after it builds the autoscaler from the
-        provider bundle. Only invoked on backends carrying
-        :attr:`BackendCapability.IRIS_AUTOSCALER`; capacity-managing backends
-        (k8s) never receive one.
-        """
-        ...
-
-    def attach_worker_source(self, source: WorkerSource) -> None:
-        """Attach this backend's live-worker read surface.
-
-        Called once by the controller after it builds the health tracker, worker
-        attributes and run-template cache the source needs. Only meaningful for
-        worker-daemon backends; capacity-managing backends (k8s) ignore it.
+        Called once by the controller for worker-daemon backends. The backend joins
+        ``runtime`` with its own liveness tracker to build the scale-group-scoped
+        :class:`WorkerSource` it reads through; capacity-managing backends (k8s)
+        track no Iris workers and no-op.
         """
         ...
 
@@ -616,16 +643,6 @@ class TaskBackend(Protocol):
         restore), only on worker-daemon backends. The backend reads its own
         scale-group-scoped workers and heartbeats them into the tracker it owns.
         Capacity-managing backends (k8s) track no liveness and no-op.
-        """
-        ...
-
-    def attach_transition_reader(self, reader: TransitionReader) -> None:
-        """Attach the read surface a placement-owning backend authors effects from.
-
-        Called once by the controller for ``CLUSTER_VIEW`` backends, which have no
-        :class:`WorkerSource` but still resolve their dispatch drain into task
-        ``effects`` from a controller-DB read snapshot. Worker-daemon backends
-        author through their :class:`WorkerSource` instead and never receive one.
         """
         ...
 

@@ -460,8 +460,8 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         default_image="iris:test",
         controller_address="http://localhost:0",
         cluster_scan_interval=0.0,
+        transition_reader=DbTransitionReader(db),
     )
-    k8s_provider.attach_transition_reader(DbTransitionReader(db))
 
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})

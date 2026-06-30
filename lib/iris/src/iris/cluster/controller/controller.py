@@ -33,6 +33,7 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
@@ -80,7 +81,6 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
-from iris.cluster.controller.worker_source import DbTransitionReader, DbWorkerSource
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -372,15 +372,14 @@ class Controller:
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker
-        # snapshot). Each such backend constructs and owns its liveness tracker; the
-        # controller reaches it through the backend, routed by scale group. A
-        # placement-owning backend (k8s) has no workers but still authors its
-        # dispatch effects from a controller-DB read snapshot.
+        # snapshot). Each such backend constructs and owns its liveness tracker, then
+        # builds its worker source from the runtime it is bound here; the controller
+        # reaches it through the backend, routed by scale group. A placement-owning
+        # backend (k8s) has no workers and reads its dispatch effects through the
+        # transition reader it received at construction.
         for backend_id, backend in self._backends.items():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
-                backend.attach_worker_source(self._build_worker_source(backend_id))
-            elif BackendCapability.CLUSTER_VIEW in backend.capabilities:
-                backend.attach_transition_reader(DbTransitionReader(self._db))
+                backend.bind_runtime(self._build_runtime(backend_id))
 
         # Seed each backend's liveness from its persisted workers so the scheduler
         # sees them at startup, and reseed after a DB reopen (checkpoint restore).
@@ -916,28 +915,25 @@ class Controller:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
 
-    def _build_worker_source(self, backend_id: str) -> DbWorkerSource:
-        """Build a backend's DB-backed worker source, scoped to its scale groups.
+    def _build_runtime(self, backend_id: str) -> BackendRuntime:
+        """Assemble the controller-owned deps a backend builds its worker source from.
 
-        The source reads liveness through the backend's own tracker, so its
-        scale-group-scoped projection covers exactly the workers that backend owns.
-        The default backend also owns workers whose scale group is unmapped,
-        matching the scale-group→backend resolution used everywhere else.
+        The backend joins this with its own liveness tracker to build a worker source
+        scoped to its scale groups, covering exactly the workers that backend owns.
+        The default backend also owns workers whose scale group is unmapped, matching
+        the scale-group→backend resolution used everywhere else.
         """
 
         def owns_scale_group(scale_group: str) -> bool:
             return self.backend_id_for_scale_group(scale_group) == backend_id
 
-        health = self._backends[backend_id].health
-        assert health is not None, f"worker-daemon backend {backend_id!r} has no liveness tracker"
-        return DbWorkerSource(
+        return BackendRuntime(
             db=self._db,
-            owns_scale_group=owns_scale_group,
-            health=health,
-            worker_attrs=self._worker_attrs,
             endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
-            defaults=self._config.user_budget_defaults,
+            worker_attrs=self._worker_attrs,
+            owns_scale_group=owns_scale_group,
+            budget_defaults=self._config.user_budget_defaults,
         )
 
     def _worker_to_backend_map(self, snap: Tx) -> dict[WorkerId, str]:

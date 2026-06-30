@@ -247,8 +247,8 @@ class LocalCluster:
         provider = RpcTaskBackend(
             stub_factory=RpcWorkerStubFactory(),
             unreachable_grace=controller_config.worker_unreachable_grace,
+            autoscaler=self._autoscaler,
         )
-        provider.attach_autoscaler(self._autoscaler)
 
         self._controller = Controller(
             config=controller_config,

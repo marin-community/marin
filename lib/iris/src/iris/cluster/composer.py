@@ -30,10 +30,13 @@ from iris.cluster.config import (
     resolve_backends,
 )
 from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
-from iris.cluster.controller.backend import BackendCapability, TaskBackend
+from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import LogStack
+from iris.cluster.controller.reconcile.loader import TransitionReader
+from iris.cluster.controller.worker_source import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.service import CloudK8sService
@@ -56,6 +59,8 @@ def make_task_backend(
     unreachable_grace: Duration,
     task_stats_table: Table | None = None,
     profile_table: Table | None = None,
+    autoscaler: Autoscaler | None = None,
+    transition_reader: TransitionReader | None = None,
 ) -> TaskBackend:
     """Create a TaskBackend from cluster configuration.
 
@@ -64,7 +69,9 @@ def make_task_backend(
     tables are passed to the K8s backend (which writes per-pod resource/profile
     samples directly); the RPC backend ignores them — its worker daemons write
     their own rows. ``unreachable_grace`` sizes the liveness tracker the
-    worker-daemon backend constructs and owns.
+    worker-daemon backend constructs and owns. ``transition_reader`` is the K8s
+    backend's controller-DB read surface; ``autoscaler`` provisions capacity for
+    the worker-daemon backend (None for clusters with no scale groups).
     """
     which = config.provider_kind()
     if which == "kubernetes_provider":
@@ -119,9 +126,14 @@ def make_task_backend(
             priority_class_names=pod_priority_classes,
             task_stats_table=task_stats_table,
             profile_table=profile_table,
+            transition_reader=transition_reader,
         )
     if which == "worker_provider":
-        return RpcTaskBackend(stub_factory=RpcWorkerStubFactory(), unreachable_grace=unreachable_grace)
+        return RpcTaskBackend(
+            stub_factory=RpcWorkerStubFactory(),
+            unreachable_grace=unreachable_grace,
+            autoscaler=autoscaler,
+        )
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
         "  worker_provider: {}\n"
@@ -174,59 +186,79 @@ def make_backend(
     log_stack: LogStack,
     unreachable_grace: Duration,
 ) -> TaskBackend:
-    """Create the TaskBackend and, for Iris-provisioned backends, build, restore,
-    and attach the autoscaler.
+    """Create the TaskBackend and, for Iris-provisioned backends, build and restore
+    the autoscaler that drives it.
 
     The finelog tables from ``log_stack`` are threaded into the backend and
     autoscaler at construction. Capacity-managing backends (k8s) provision their
-    own pods, so no autoscaler is attached. In dry-run both the autoscaler and the
-    provider bundle are skipped (bundle creation needs platform credentials
-    unavailable on a dev machine).
+    own pods, so no autoscaler is built; they read their dispatch drain through a
+    controller-DB :class:`DbTransitionReader`. The autoscaler is built BEFORE the
+    worker-daemon backend so it can be passed to its constructor. In dry-run both
+    the autoscaler and the provider bundle are skipped (bundle creation needs
+    platform credentials unavailable on a dev machine).
     """
+    which = config.provider_kind()
+    if which == "kubernetes_provider":
+        provider = make_task_backend(
+            config,
+            unreachable_grace=unreachable_grace,
+            task_stats_table=log_stack.task_stats_table,
+            profile_table=log_stack.profile_table,
+            transition_reader=DbTransitionReader(db),
+        )
+        logger.info("Backend created: %s", type(provider).__name__)
+        return provider
+
+    if which != "worker_provider":
+        # Neither provider configured: defer to make_task_backend's guidance error.
+        return make_task_backend(
+            config,
+            unreachable_grace=unreachable_grace,
+            task_stats_table=log_stack.task_stats_table,
+            profile_table=log_stack.profile_table,
+        )
+
+    autoscaler = None
+    if dry_run:
+        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
+    else:
+        bundle = provider_bundle(config)
+        workers = bundle.workers
+        logger.info("Provider bundle created")
+
+        base_worker_config = None
+        if config.defaults.worker.docker_image:
+            controller_address = config.defaults.worker.controller_address
+            if not controller_address:
+                controller_address = bundle.controller.discover_controller(config.controller)
+            base_worker_config = build_base_worker_config(
+                config,
+                controller_address=controller_address,
+                storage_prefix=remote_state_dir,
+                auth_token=auth.worker_token or "",
+            )
+
+        autoscaler = create_autoscaler(
+            platform=workers,
+            autoscaler_config=config.defaults.autoscaler,
+            scale_groups=config.scale_groups,
+            label_prefix=config.platform.label_prefix or "iris",
+            base_worker_config=base_worker_config,
+            provisioning_table=log_stack.provisioning_table,
+        )
+        logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
+
+        autoscaler.restore_from_db(db, workers)
+        logger.info("Autoscaler state restored from DB")
+
     provider = make_task_backend(
         config,
         unreachable_grace=unreachable_grace,
         task_stats_table=log_stack.task_stats_table,
         profile_table=log_stack.profile_table,
+        autoscaler=autoscaler,
     )
     logger.info("Backend created: %s", type(provider).__name__)
-
-    if dry_run:
-        logger.info("Dry-run mode: skipping autoscaler and provider bundle creation")
-        return provider
-    if BackendCapability.IRIS_AUTOSCALER not in provider.capabilities:
-        return provider
-
-    bundle = provider_bundle(config)
-    workers = bundle.workers
-    logger.info("Provider bundle created")
-
-    base_worker_config = None
-    if config.defaults.worker.docker_image:
-        controller_address = config.defaults.worker.controller_address
-        if not controller_address:
-            controller_address = bundle.controller.discover_controller(config.controller)
-        base_worker_config = build_base_worker_config(
-            config,
-            controller_address=controller_address,
-            storage_prefix=remote_state_dir,
-            auth_token=auth.worker_token or "",
-        )
-
-    autoscaler = create_autoscaler(
-        platform=workers,
-        autoscaler_config=config.defaults.autoscaler,
-        scale_groups=config.scale_groups,
-        label_prefix=config.platform.label_prefix or "iris",
-        base_worker_config=base_worker_config,
-        provisioning_table=log_stack.provisioning_table,
-    )
-    logger.info("Autoscaler created with %d scale groups", len(autoscaler.groups))
-
-    autoscaler.restore_from_db(db, workers)
-    logger.info("Autoscaler state restored from DB")
-
-    provider.attach_autoscaler(autoscaler)
     return provider
 
 

@@ -30,13 +30,13 @@ from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    WorkerSource,
     user_admitted,
 )
 from iris.cluster.controller.ops.task import apply_dispatch_updates
@@ -1450,8 +1450,9 @@ class K8sTaskProvider:
     # skips a None tracker, and no worker registers into a k8s scale group.
     health: WorkerHealthTracker | None = field(default=None, init=False, repr=False)
     # The controller-DB read surface this backend authors its dispatch effects
-    # from, attached by the controller once (a cluster backend has no WorkerSource).
-    transition_reader: TransitionReader | None = field(default=None, init=False, repr=False)
+    # from, passed by the composer at construction (a cluster backend has no
+    # WorkerSource, so it reads its dispatch drain through this).
+    transition_reader: TransitionReader | None = field(default=None, repr=False)
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
     _resource_collector: ResourceCollector | None = field(default=None, init=False, repr=False)
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
@@ -1491,20 +1492,11 @@ class K8sTaskProvider:
         Iris-managed slices to tear down."""
         return AutoscaleResult()
 
-    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
-        """Never called: K8s provisions its own capacity, so no autoscaler is attached."""
-        raise AssertionError("K8sTaskProvider manages its own capacity; no autoscaler should be attached")
-
-    def attach_worker_source(self, source: "WorkerSource") -> None:
-        """Never called: a cluster backend owns its own placement, with no Iris workers."""
-        raise AssertionError("K8sTaskProvider sources its own placement; no worker source should be attached")
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        """No-op: a cluster backend tracks no Iris workers, so it builds no worker source."""
 
     def seed_liveness(self) -> None:
         """No-op: a cluster backend tracks no Iris worker liveness to seed."""
-
-    def attach_transition_reader(self, reader: TransitionReader) -> None:
-        """Attach the controller-DB read surface this backend authors effects from."""
-        self.transition_reader = reader
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         """Author the pod projection: sync task state, then resolve it into effects.
