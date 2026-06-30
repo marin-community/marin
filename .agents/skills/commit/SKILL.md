@@ -171,12 +171,15 @@ Fixes #1234
 (auto-closes on merge) or `Part of #NNNN` (partial work). Do not invent an issue
 just to satisfy this — omit the link when none exists.
 
-**Specifications (>500 LOC).** Large PRs must carry a spec.
-This may be in the linked issue, or part of the PR description.
-If a design doc exists, may also link to it instead.
-Specs cover: **Problem** (what is broken/missing, with file/line refs), **Approach**
-(which modules change, what is added/removed), and **Key code** (10–30 line
-snippets for non-obvious logic).
+**Specifications (>500 LOC only).** A *genuinely large* PR must carry a spec —
+in the linked issue, the PR description, or a linked design doc. A spec still
+obeys every rule above: it leads with what the change does and is not a template.
+It just covers more ground — what was broken or missing (with file/line refs),
+which modules change and what is added/removed, and 10–30 line snippets for
+non-obvious logic. Cover those points in whatever prose and headings genuinely
+help a reviewer; they are not a required `Problem`/`Approach` section scaffold,
+and a large PR still never gets a "Verification" section. This applies to large
+PRs; a small change gets a short prose body, never a spec template.
 
 **Create it.** Unless the user says otherwise and permissions allow, push to a
 branch on the main repository and open the PR from it (use a fork only when

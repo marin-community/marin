@@ -51,10 +51,34 @@ uv run pyrefly
 ## Communication & Commits
 
 - NEVER SAY "You're absolutely right!"
-- NEVER credit yourself in commits.
+- NEVER credit yourself, in commit messages or in PR/issue bodies. No
+  `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
+  even if a tool default suggests one.
 - When an agent creates a PR or issue, add the `agent-generated` label.
-- Agent comments on PRs/issues must begin with `🤖` unless the exact text was explicitly approved by the user.
+- Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
+  explicitly approved by the user. This applies to comments only — never put a
+  `🤖` marker in a commit message or a PR/issue body.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
+
+### PR and commit descriptions
+
+A PR description is the squash-merge commit message — write it the way you'd
+write a commit message a reviewer reads in `git log`. The `commit` skill
+(`.agents/skills/commit/SKILL.md`) is the full procedure; invoke it when
+committing, pushing, or opening/updating a PR. The load-bearing rules, repeated
+here because they apply every time:
+
+- **Lead with what the change does**, in plain language, then the motivation.
+  The body must stand on its own for a reader who never saw the diff.
+- **Do not impose a template.** No fixed `Problem` / `Fix` / `Summary` /
+  `Changes` scaffold. Most PRs are a paragraph or two with no headings. Markdown
+  (a short list, a table, a mermaid diagram) earns its place only when it makes
+  the change *clearer* for a human — never as boilerplate section-filling.
+- **No "Testing" / "Verification" / "Test plan" section** and no "how I verified
+  it" narration. If a test result is the very thing that justifies the change,
+  fold that one fact into the *why*; otherwise leave it out.
+- No filler openers ("This PR…", "I noticed…"), no checkboxes, no emoji. Keep it
+  under ~500 words; a one-line change gets a one-line body.
 
 ## Code Style
 
