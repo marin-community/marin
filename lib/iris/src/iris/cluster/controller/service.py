@@ -2111,7 +2111,7 @@ class ControllerServiceImpl:
         if request.backend_id:
             for bid, backend in cluster_view_backends:
                 if bid == request.backend_id:
-                    return backend.get_cluster_status()  # type: ignore[union-attr]
+                    return backend.status().kubernetes
             raise ConnectError(
                 Code.INVALID_ARGUMENT,
                 f"Backend {request.backend_id!r} does not exist or has no cluster view",
@@ -2125,7 +2125,7 @@ class ControllerServiceImpl:
             )
 
         if cluster_view_backends:
-            return cluster_view_backends[0][1].get_cluster_status()  # type: ignore[union-attr]
+            return cluster_view_backends[0][1].status().kubernetes
 
         return controller_pb2.Controller.GetKubernetesClusterStatusResponse()
 
@@ -2874,6 +2874,18 @@ class ControllerServiceImpl:
             bid = self._controller.backend_id_for_scale_group(str(row.scale_group or ""))
             worker_count_by_backend[bid] = worker_count_by_backend.get(bid, 0) + int(row.cnt)
 
+        # Healthy-worker counts per backend: a DB-derived liveness verdict the
+        # DB-less backends cannot author, overlaid onto the worker status variant
+        # below. Mirrors get_autoscaler_status's roster + liveness pass.
+        healthy_by_backend: dict[str, int] = {bid: 0 for bid in backends}
+        roster = _worker_roster(self._db)
+        if roster:
+            all_liveness = self._controller.all_liveness()
+            for w, _attrs in roster:
+                if all_liveness.get(w.worker_id, WorkerLiveness()).healthy:
+                    bid = self._controller.backend_id_for_scale_group(str(w.scale_group or ""))
+                    healthy_by_backend[bid] = healthy_by_backend.get(bid, 0) + 1
+
         summaries: list[controller_pb2.Controller.BackendSummary] = []
         for backend_id, backend in sorted(backends.items()):
             allowed_users = backend.allowed_users
@@ -2914,6 +2926,22 @@ class ControllerServiceImpl:
             # each entry's repeated field in place.
             for key, values in adv.items():
                 summary.advertised_attributes[key].values.extend(sorted(values))
+
+            # Each backend authors its own expanded status variant; the worker
+            # variant gets its DB-derived health counts overlaid here (the backend
+            # is DB-less). The Backends tab's detail panel renders whichever
+            # variant the backend's capability selected.
+            backend_status = backend.status()
+            variant = backend_status.WhichOneof("detail")
+            if variant == "kubernetes":
+                summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
+            elif variant == "worker":
+                summary.detail.worker.CopyFrom(backend_status.worker)
+                summary.detail.worker.total_worker_count = worker_count_by_backend.get(backend_id, 0)
+                summary.detail.worker.healthy_worker_count = healthy_by_backend.get(backend_id, 0)
+                for group in summary.detail.worker.autoscaler.groups:
+                    group.backend_id = backend_id
+
             summaries.append(summary)
 
         unroutable = self._controller.last_unroutable_jobs
