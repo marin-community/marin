@@ -835,7 +835,7 @@ def run_stage(
                 fs = url_to_fs(output_path)[0]
                 if fs.exists(output_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
-                    counters.increment("zephyr/partitions_skipped")
+                    counters.pipeline.update_counter("zephyr/partitions_skipped", 1)
                     yield output_path
                     return
 

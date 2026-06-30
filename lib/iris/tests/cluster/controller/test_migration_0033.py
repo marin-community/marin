@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for migration ``0032_backend_id``.
+"""Tests for migration ``0033_backend_id``.
 
 Builds a pre-migration DB (jobs/tasks/task_attempts without ``backend_id`` and no
 ``backends`` table), seeds rows, and asserts the migration: adds the columns,
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from iris.cluster.types import DEFAULT_BACKEND_ID, BackendStatus
 
-_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0032_backend_id.py"
+_MIGRATION = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0033_backend_id.py"
 
 _OLD_SCHEMA = """
 CREATE TABLE jobs (job_id VARCHAR PRIMARY KEY, state INTEGER NOT NULL, name VARCHAR NOT NULL DEFAULT '');
@@ -32,7 +32,7 @@ CREATE TABLE task_attempts (
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("m0032", _MIGRATION)
+    spec = importlib.util.spec_from_file_location("m0033", _MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -53,7 +53,7 @@ def _indexes(conn: sqlite3.Connection) -> set[str]:
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
 
 
-def test_migration_0032_backfills_and_is_idempotent():
+def test_migration_0033_backfills_and_is_idempotent():
     conn = sqlite3.connect(":memory:")
     _seed(conn)
 

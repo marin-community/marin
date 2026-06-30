@@ -34,7 +34,7 @@ def row_to_doc(row: dict) -> list[dict]:
     thinking = row.get("assistant_thinking") or ""
     response = row.get("assistant_content") or ""
     if not user or not response:
-        counters.increment("gpt_oss_rollouts/dropped")
+        counters.pipeline.update_counter("gpt_oss_rollouts/dropped", 1)
         return []
 
     parts = [f"<user>\n{user}\n</user>"]
@@ -44,7 +44,7 @@ def row_to_doc(row: dict) -> list[dict]:
 
     text = "\n\n".join(parts)
 
-    counters.increment("gpt_oss_rollouts/kept")
+    counters.pipeline.update_counter("gpt_oss_rollouts/kept", 1)
     return [text_document(text, "andyrdt/gpt-oss-20b-rollouts")]
 
 

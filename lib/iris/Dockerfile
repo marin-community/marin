@@ -120,6 +120,8 @@ RUN mkdir -p /var/cache/iris
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
 
 # ── Stage: docker-cli ────────────────────────────────────────────────
@@ -208,5 +210,7 @@ ARG PYTHONDONTWRITEBYTECODE=1
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+ARG IRIS_PROVENANCE={}
+ENV IRIS_PROVENANCE=${IRIS_PROVENANCE}
 
 WORKDIR /app

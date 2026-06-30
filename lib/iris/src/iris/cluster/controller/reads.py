@@ -1239,8 +1239,8 @@ WORKER_DETAIL_COLS = (
     workers_table.c.md_gpu_memory_mb,
     workers_table.c.md_gce_instance_name,
     workers_table.c.md_gce_zone,
-    workers_table.c.md_git_hash,
     workers_table.c.md_device_json,
+    workers_table.c.md_provenance_json,
     workers_table.c.scale_group,
 )
 

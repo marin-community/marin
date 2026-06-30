@@ -22,7 +22,7 @@ def row_to_doc(row: dict) -> list[dict]:
     problem = row.get("problem_statement", "")
     answer = row.get("answer", "")
     if not problem or not answer:
-        counters.increment("principia/dropped")
+        counters.pipeline.update_counter("principia/dropped", 1)
         return []
 
     topic = row.get("topic", "")
@@ -39,7 +39,7 @@ def row_to_doc(row: dict) -> list[dict]:
 
     text = "\n\n".join(parts)
 
-    counters.increment("principia/kept")
+    counters.pipeline.update_counter("principia/kept", 1)
     return [text_document(text, "facebook/principia-collection")]
 
 

@@ -22,15 +22,15 @@ from levanter.grug._moe.common import (
 
 
 def _moe_mlp_local_scatter(
-    x: Float[Array, "T D"],
+    x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-    moe_w13: Float[Array, "E D I2"],
-    moe_w2: Float[Array, "E I D"],
+    moe_w13: Float[Array, "E H I2"],
+    moe_w2: Float[Array, "E I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
-) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,

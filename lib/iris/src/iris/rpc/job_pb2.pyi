@@ -309,8 +309,22 @@ class ProfileTaskResponse(_message.Message):
     error: str
     def __init__(self, profile_data: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
 
+class Provenance(_message.Message):
+    __slots__ = ("tree_hash", "base_commit", "dirty", "branch", "built_by")
+    TREE_HASH_FIELD_NUMBER: _ClassVar[int]
+    BASE_COMMIT_FIELD_NUMBER: _ClassVar[int]
+    DIRTY_FIELD_NUMBER: _ClassVar[int]
+    BRANCH_FIELD_NUMBER: _ClassVar[int]
+    BUILT_BY_FIELD_NUMBER: _ClassVar[int]
+    tree_hash: str
+    base_commit: str
+    dirty: bool
+    branch: str
+    built_by: str
+    def __init__(self, tree_hash: _Optional[str] = ..., base_commit: _Optional[str] = ..., dirty: _Optional[bool] = ..., branch: _Optional[str] = ..., built_by: _Optional[str] = ...) -> None: ...
+
 class ProcessInfo(_message.Message):
-    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "git_hash", "cpu_millicores")
+    __slots__ = ("hostname", "pid", "python_version", "uptime_ms", "memory_rss_bytes", "memory_vms_bytes", "thread_count", "open_fd_count", "memory_total_bytes", "cpu_count", "cpu_millicores", "provenance")
     HOSTNAME_FIELD_NUMBER: _ClassVar[int]
     PID_FIELD_NUMBER: _ClassVar[int]
     PYTHON_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -321,8 +335,8 @@ class ProcessInfo(_message.Message):
     OPEN_FD_COUNT_FIELD_NUMBER: _ClassVar[int]
     MEMORY_TOTAL_BYTES_FIELD_NUMBER: _ClassVar[int]
     CPU_COUNT_FIELD_NUMBER: _ClassVar[int]
-    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
     CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     pid: int
     python_version: str
@@ -333,9 +347,9 @@ class ProcessInfo(_message.Message):
     open_fd_count: int
     memory_total_bytes: int
     cpu_count: int
-    git_hash: str
     cpu_millicores: int
-    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., git_hash: _Optional[str] = ..., cpu_millicores: _Optional[int] = ...) -> None: ...
+    provenance: Provenance
+    def __init__(self, hostname: _Optional[str] = ..., pid: _Optional[int] = ..., python_version: _Optional[str] = ..., uptime_ms: _Optional[int] = ..., memory_rss_bytes: _Optional[int] = ..., memory_vms_bytes: _Optional[int] = ..., thread_count: _Optional[int] = ..., open_fd_count: _Optional[int] = ..., memory_total_bytes: _Optional[int] = ..., cpu_count: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class GetProcessStatusRequest(_message.Message):
     __slots__ = ("max_log_lines", "log_substring", "min_log_level", "target")
@@ -682,7 +696,7 @@ class CoschedulingConfig(_message.Message):
     def __init__(self, group_by: _Optional[str] = ...) -> None: ...
 
 class WorkerMetadata(_message.Message):
-    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "git_hash")
+    __slots__ = ("hostname", "ip_address", "cpu_count", "memory_bytes", "disk_bytes", "device", "tpu_name", "tpu_worker_hostnames", "tpu_worker_id", "tpu_chips_per_host_bounds", "gpu_count", "gpu_name", "gpu_memory_mb", "gce_instance_name", "gce_zone", "attributes", "provenance")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -706,7 +720,7 @@ class WorkerMetadata(_message.Message):
     GCE_INSTANCE_NAME_FIELD_NUMBER: _ClassVar[int]
     GCE_ZONE_FIELD_NUMBER: _ClassVar[int]
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
-    GIT_HASH_FIELD_NUMBER: _ClassVar[int]
+    PROVENANCE_FIELD_NUMBER: _ClassVar[int]
     hostname: str
     ip_address: str
     cpu_count: int
@@ -723,8 +737,8 @@ class WorkerMetadata(_message.Message):
     gce_instance_name: str
     gce_zone: str
     attributes: _containers.MessageMap[str, AttributeValue]
-    git_hash: str
-    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., git_hash: _Optional[str] = ...) -> None: ...
+    provenance: Provenance
+    def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class RunTaskRequest(_message.Message):
     __slots__ = ("task_id", "num_tasks", "entrypoint", "environment", "bundle_id", "resources", "timeout", "ports", "attempt_id", "constraints", "task_image", "attempt_uid", "coscheduling", "priority", "container_profile")

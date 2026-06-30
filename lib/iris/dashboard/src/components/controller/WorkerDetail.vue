@@ -12,6 +12,7 @@ import type {
   FetchLogsResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatDuration, formatRelativeTime, formatRate, logLevelClass, formatLogTime, formatWorkerDevice } from '@/utils/formatting'
+import { formatProvenance } from '@/utils/provenance'
 import { decodeArrowIpc } from '@/utils/arrow'
 
 import PageShell from '@/components/layout/PageShell.vue'
@@ -414,8 +415,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           <InfoRow v-if="multiBackend && worker?.backendId" label="Backend">
             <span class="font-mono">{{ worker!.backendId }}</span>
           </InfoRow>
-          <InfoRow v-if="worker?.metadata?.gitHash" label="Git Hash">
-            <span class="font-mono text-xs">{{ worker.metadata.gitHash }}</span>
+          <InfoRow v-if="worker?.metadata?.provenance" label="Version">
+            <span class="font-mono text-xs">{{ formatProvenance(worker.metadata.provenance) }}</span>
           </InfoRow>
         </InfoCard>
 
