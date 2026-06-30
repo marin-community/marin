@@ -157,17 +157,18 @@ def username_segment() -> str:
     """The current user as a path-safe segment, for per-user artifact namespacing.
 
     Resolves the same OS login that stamps provenance ``built_by`` and reduces it to a clean
-    segment: an email-like login keeps its local name's first token (``russell.power@host`` →
-    ``russell``), and the result is lowercased with any remaining character collapsed to ``-``.
-    Raises ``RuntimeError`` if no username resolves — per-user namespacing must never silently
-    fall back to a shared bucket.
+    segment: an email-like login drops its domain but keeps the whole local name
+    (``russell.power@host`` → ``russell-power``), and the result is lowercased with any
+    remaining character collapsed to ``-``. The full local name is kept so distinct users stay
+    distinct. Raises ``RuntimeError`` if no username resolves — per-user namespacing must never
+    silently fall back to a shared bucket.
     """
     raw = _getuser()
     if not raw:
         raise RuntimeError("cannot resolve a username for per-user namespacing (getpass.getuser found none)")
     name = raw.strip()
     if "@" in name:
-        name = name.split("@", 1)[0].split(".", 1)[0]
+        name = name.split("@", 1)[0]
     segment = _USER_SEGMENT_RE.sub("-", name.lower()).strip("-")
     if not segment:
         raise RuntimeError(f"username {raw!r} did not sanitize to a usable path segment")

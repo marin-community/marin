@@ -22,6 +22,12 @@ def test_fixed_version_keeps_shared_name(fixed_user, version):
     assert user_namespaced_name("grug/baseline", version) == "grug/baseline"
 
 
+def test_namespacing_is_idempotent(fixed_user):
+    # The policy is applied at several entry points; re-applying it must not stack users/.
+    once = user_namespaced_name("grug/baseline", "dev")
+    assert user_namespaced_name(once, "dev") == once
+
+
 def test_dev_version_requires_a_resolvable_user(monkeypatch):
     # Per-user isolation must fail loudly, never land everyone in a shared users/unknown/ bucket.
     monkeypatch.setattr("rigging.provenance._getuser", lambda: None)
