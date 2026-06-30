@@ -955,6 +955,8 @@ class ControllerProtocol(Protocol):
 
     def backend_id_for_scale_group(self, scale_group: str) -> str: ...
 
+    def queue_recycled_evictions(self, stale_worker_ids: list[WorkerId]) -> None: ...
+
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
 
     def liveness_for_worker(self, worker_id: WorkerId) -> WorkerLiveness: ...
@@ -1848,7 +1850,9 @@ class ControllerServiceImpl:
 
         # Route the worker into the backend that owns its scale group; the backend
         # persists it (seeding liveness in its own tracker) and reports any stale
-        # prior owner of the address — a recycled internal IP — to evict.
+        # prior owner of the address — a recycled internal IP. Address reuse can
+        # cross backends, so the controller routes each stale worker to its owning
+        # backend to reap, rather than the backend that just registered.
         backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
         outcome = backend.register_worker(
             WorkerRegistration(
@@ -1859,15 +1863,15 @@ class ControllerServiceImpl:
                 metadata=request.metadata,
             )
         )
-        if outcome.queued_eviction:
+        if outcome.recycled_address_workers:
             logger.warning(
                 "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
                 worker_id,
                 request.address,
-                len(outcome.queued_eviction),
-                [str(wid) for wid in outcome.queued_eviction],
+                len(outcome.recycled_address_workers),
+                [str(wid) for wid in outcome.recycled_address_workers],
             )
-            self._controller.wake()
+            self._controller.queue_recycled_evictions(outcome.recycled_address_workers)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),

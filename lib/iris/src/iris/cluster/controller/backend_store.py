@@ -81,15 +81,22 @@ class BackendWorkerStore(TransitionReader, Protocol):
         ...
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """Persist a registering worker; queue any recycled-address eviction.
+        """Persist a registering worker and report any recycled-address collision.
 
-        Safe to call off the control thread. A stale prior owner of the worker's
-        address (a recycled IP) is not reaped here but queued for
-        :meth:`drain_pending_evictions` and returned in the outcome."""
+        Safe to call off the control thread. Returns the stale prior owners of the
+        worker's address (a recycled IP) so the controller can route each to its
+        owning backend; this store does not reap them itself."""
+        ...
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Queue workers this backend owns for reaping on the next control tick.
+
+        Safe to call off the control thread; the controller routes a recycled-address
+        collision here after resolving each stale worker's owning backend."""
         ...
 
     def drain_pending_evictions(self) -> list[WorkerId]:
-        """Reap the recycled-address workers queued by :meth:`register_worker`.
+        """Reap the workers queued by :meth:`queue_evictions`.
 
         Runs on the control thread once per tick. Returns every worker removed."""
         ...
@@ -117,7 +124,7 @@ class DbBackendWorkerStore:
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
-    # Stale recycled-address owners queued by register_worker (RPC thread) for
+    # Workers queued by queue_evictions (RPC thread, controller-routed) for
     # drain_pending_evictions (control thread); guarded by its lock.
     _pending_evictions: set[WorkerId] = field(default_factory=set)
     _pending_evictions_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -138,13 +145,14 @@ class DbBackendWorkerStore:
             )
         with self.db.read_snapshot() as snap:
             stale = reads.worker_ids_at_address(snap, registration.address, exclude=registration.worker_id)
-        if stale:
-            with self._pending_evictions_lock:
-                self._pending_evictions.update(stale)
-        return RegisterOutcome(queued_eviction=stale)
+        return RegisterOutcome(recycled_address_workers=stale)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
 
     def drain_pending_evictions(self) -> list[WorkerId]:
-        """Reap the recycled-address workers queued by :meth:`register_worker`."""
+        """Reap the workers queued by :meth:`queue_evictions`."""
         with self._pending_evictions_lock:
             if not self._pending_evictions:
                 return []

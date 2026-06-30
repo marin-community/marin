@@ -17,7 +17,7 @@ effects, so no worker identity crosses the reconcile result boundary.
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
@@ -356,12 +356,17 @@ class RpcTaskBackend:
         return ReconcileResult(effects=effects)
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """Persist a registering worker and queue any recycled-address eviction."""
+        """Persist a registering worker and report any recycled-address collision."""
         assert self._store is not None, "RpcTaskBackend.register_worker called before worker store attached"
         return self._store.register_worker(registration)
 
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Queue controller-routed recycled-address workers for the next tick's drain."""
+        assert self._store is not None, "RpcTaskBackend.queue_evictions called before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
     def drain_pending_evictions(self) -> list[WorkerId]:
-        """Reap the recycled-address workers queued by registration this tick."""
+        """Reap the workers queued by :meth:`queue_evictions` this tick."""
         assert self._store is not None, "RpcTaskBackend.drain_pending_evictions called before worker store attached"
         return self._store.drain_pending_evictions()
 

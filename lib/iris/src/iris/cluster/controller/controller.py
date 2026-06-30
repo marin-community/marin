@@ -59,6 +59,7 @@ from iris.cluster.controller.ops.task import (
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
+from iris.cluster.controller.reads import worker_scale_groups
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
@@ -1492,6 +1493,26 @@ class Controller:
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""
         return self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    def queue_recycled_evictions(self, stale_worker_ids: list[WorkerId]) -> None:
+        """Route recycled-address prior owners to their owning backends for eviction.
+
+        Called on the Register RPC thread when a new worker claims an address a stale
+        row still holds. Address reuse can cross backends, so each stale worker is
+        routed to the backend that owns its scale group -- where its liveness lives --
+        and reaped there on the next control tick.
+        """
+        if not stale_worker_ids:
+            return
+        with self._db.read_snapshot() as snap:
+            scale_groups = worker_scale_groups(snap)
+        by_backend: dict[str, list[WorkerId]] = {}
+        for worker_id in stale_worker_ids:
+            owner = self.backend_id_for_scale_group(scale_groups.get(worker_id, ""))
+            by_backend.setdefault(owner, []).append(worker_id)
+        for backend_id, worker_ids in by_backend.items():
+            self._backends[backend_id].queue_evictions(worker_ids)
+        self.wake()
 
     @property
     def scale_group_to_backend(self) -> dict[str, str]:

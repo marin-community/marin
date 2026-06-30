@@ -3,6 +3,8 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
+from collections.abc import Iterable
+
 from finelog.rpc import logging_pb2
 from iris.cluster.controller import ops
 from iris.cluster.controller.backend import (
@@ -70,6 +72,9 @@ class FakeDirectProvider:
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
         raise ProviderUnsupportedError("fake k8s does not register Iris workers")
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        raise ProviderUnsupportedError("fake k8s tracks no Iris workers to evict")
 
     def drain_pending_evictions(self) -> list[WorkerId]:
         """No-op: a cluster-view backend queues no recycled-address evictions."""

@@ -27,7 +27,7 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 """
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import ClassVar, Protocol
@@ -449,11 +449,12 @@ class WorkerRegistration:
 class RegisterOutcome:
     """The result of registering a worker.
 
-    ``queued_eviction`` holds any stale prior owners of the worker's address (a
-    recycled IP), queued for the next control tick to reap.
+    ``recycled_address_workers`` holds any stale prior owners of the worker's
+    address (a recycled IP); the controller routes each to its owning backend to
+    reap on the next control tick.
     """
 
-    queued_eviction: list[WorkerId]
+    recycled_address_workers: list[WorkerId]
 
 
 @dataclass(frozen=True)
@@ -562,17 +563,26 @@ class TaskBackend(Protocol):
         ...
 
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """Persist a registering worker and queue any recycled-address eviction.
+        """Persist a registering worker and report any recycled-address collision.
 
         Runs on the Register RPC thread. Writes the worker row, seeds its liveness,
-        and detects a prior owner of the same address (a recycled IP), queuing that
-        stale owner for the next control tick to reap. A backend that tracks no Iris
+        and returns any stale prior owner of the same address (a recycled IP) for the
+        controller to route to its owning backend. A backend that tracks no Iris
         workers never receives a registration.
         """
         ...
 
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Queue workers this backend owns for reaping on the next control tick.
+
+        The controller calls this after a registration reports a recycled-address
+        collision, routing each stale worker to the backend that owns it. A backend
+        that tracks no Iris workers never owns one.
+        """
+        ...
+
     def drain_pending_evictions(self) -> list[WorkerId]:
-        """Reap the recycled-address workers queued by :meth:`register_worker`.
+        """Reap the workers queued by :meth:`queue_evictions`.
 
         Runs on the control thread once per tick. Fails the queued workers,
         terminates their slices and healthy siblings, and forgets them. Returns

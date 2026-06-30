@@ -15,7 +15,7 @@ import re
 import shlex
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -1516,6 +1516,10 @@ class K8sTaskProvider:
     def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
         """Unsupported: a worker never registers into a k8s scale group."""
         raise ProviderUnsupportedError("K8s backend does not register Iris workers")
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Unsupported: a k8s scale group owns no Iris workers to evict."""
+        raise ProviderUnsupportedError("K8s backend tracks no Iris workers to evict")
 
     def drain_pending_evictions(self) -> list[WorkerId]:
         """No-op: a cluster backend queues no recycled-address evictions."""

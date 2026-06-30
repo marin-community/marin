@@ -5,7 +5,7 @@
 
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace as _replace
@@ -246,6 +246,10 @@ class FakeProvider:
         assert self._store is not None, "FakeProvider.register_worker called before worker store attached"
         return self._store.register_worker(registration)
 
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        assert self._store is not None, "FakeProvider.queue_evictions called before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
     def drain_pending_evictions(self) -> list[WorkerId]:
         assert self._store is not None, "FakeProvider.drain_pending_evictions called before worker store attached"
         return self._store.drain_pending_evictions()
@@ -315,6 +319,13 @@ class MockController:
 
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
+
+    def queue_recycled_evictions(self, stale_worker_ids: list[WorkerId]) -> None:
+        # Single-backend mock: route every stale worker to the default backend's
+        # eviction queue, mirroring the controller's scale-group routing + wake.
+        if stale_worker_ids:
+            self.backends[DEFAULT_BACKEND_ID].queue_evictions(stale_worker_ids)
+            self.wake()
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
         merged: dict[WorkerId, WorkerLiveness] = {}
