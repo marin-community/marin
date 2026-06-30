@@ -99,6 +99,14 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    moe_latent_dim: int | None = None
+    """LatentMoE: when set, the routed experts operate in this compressed dim ``l``.
+    Tokens are down-projected ``D -> l`` before dispatch and up-projected ``l -> D``
+    after combine (both projections shared across all experts), so the expert-parallel
+    all-to-all dispatch/combine traffic carries ``l``-dim vectors instead of ``D`` --
+    cheaper communication at large EP scale. The router (on full ``D``) and the shared
+    expert are unchanged; only the routed-expert path is compressed. Each routed expert
+    is then ``l -> intermediate_dim -> l``."""
     num_layers: int = 6
     num_heads: int = 4
     head_dim: int | None = None
@@ -214,6 +222,8 @@ class GrugModelConfig:
             raise ValueError("v_head_dim and q_compression_dim are only supported on the additive-rope path")
         if self.q_compression_dim is not None and self.q_compression_dim <= 0:
             raise ValueError(f"q_compression_dim must be positive when set; got {self.q_compression_dim}")
+        if self.moe_latent_dim is not None and self.moe_latent_dim <= 0:
+            raise ValueError(f"moe_latent_dim must be positive when set; got {self.moe_latent_dim}")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -680,11 +690,18 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    moe_down: jax.Array | None  # (D, l) shared down-proj; None unless moe_latent_dim set
+    moe_up: jax.Array | None  # (l, D) shared up-proj; None unless moe_latent_dim set
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        # Keep the no-latent RNG stream identical to before so existing configs are unchanged.
+        if cfg.moe_latent_dim is None:
+            k_router, k_expert = random.split(key, 2)
+            k_down = k_up = None
+        else:
+            k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -692,12 +709,24 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # LatentMoE: routed experts (and their all-to-all) run in the compressed dim l.
+        expert_hidden = cfg.moe_latent_dim if cfg.moe_latent_dim is not None else d
+        moe_down = (
+            reshard(_init_weight(k_down, (d, cfg.moe_latent_dim), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
+        moe_up = (
+            reshard(_init_weight(k_up, (cfg.moe_latent_dim, d), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_hidden,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -706,6 +735,8 @@ class MoEMLP(eqx.Module):
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
                 split_w_gate_up=True,  # store w_gate / w_up separately so MuonH NS sees each half as its own leaf
             ),
+            moe_down=moe_down,
+            moe_up=moe_up,
             cfg=cfg,
         )
 
@@ -759,14 +790,24 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        # LatentMoE: compress tokens D -> l before dispatch so the expert-parallel
+        # all-to-all carries l-dim vectors. Router (above) still ran on full D.
+        expert_in = x_flat
+        if self.moe_down is not None:
+            expert_in = reshard(jnp.einsum("td,dl->tl", x_flat, self.moe_down), P(_BATCH_AXES, None))
+
         routed_flat, dropped_assignments = self.expert_mlp(
-            x_flat,
+            expert_in,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+
+        # Up-project the combined expert output l -> D back into the residual stream.
+        if self.moe_up is not None:
+            routed_flat = reshard(jnp.einsum("tl,ld->td", routed_flat, self.moe_up), P(_BATCH_AXES, None))
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
