@@ -12,6 +12,7 @@ from rigging.filesystem import (
     data_config,
     load_cluster_config,
     marin_prefix,
+    marin_temp_bucket,
     reset_data_config_cache,
     use_data_config,
 )
@@ -139,3 +140,35 @@ def test_resolved_root_local_fallback(monkeypatch):
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: None)
     assert DataConfig(region_buckets={}).resolved_root() == "/tmp/marin"
+
+
+# --- temp-bucket routing ----------------------------------------------------
+
+
+def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
+    """A CoreWeave source prefix yields a TTL temp path at the CW bucket root.
+
+    The CW bucket is recognized (CW_DATA_BUCKETS) so it gets a managed
+    ``tmp/ttl=Nd/`` prefix, and the ``marin/`` data subdir is stripped.
+    """
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(3, "store/x", source_prefix="s3://marin-us-east-02a/marin")
+    assert path == "s3://marin-us-east-02a/tmp/ttl=3d/store/x"
+
+
+def test_marin_temp_bucket_routes_r2_to_bucket_root():
+    """An R2 source prefix yields a TTL temp path at the R2 bucket root (unchanged)."""
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(1, source_prefix="s3://marin-na/marin")
+    assert path == "s3://marin-na/tmp/ttl=1d"
+
+
+def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
+    """An unrecognized S3 bucket has no lifecycle rules, so it gets the flat non-TTL path."""
+    monkeypatch.setenv("MARIN_PREFIX", "s3://random-bucket/marin")
+    cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
+    with use_data_config(cfg):
+        path = marin_temp_bucket(3, source_prefix="s3://random-bucket/marin")
+    assert path == "s3://random-bucket/marin/tmp"

@@ -46,6 +46,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import Any, cast
 
 import fsspec
@@ -276,6 +277,19 @@ def marin_prefix() -> str:
 # explicit here.
 R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
 
+# CoreWeave AI Object Storage buckets (S3-compatible, ``s3://`` scheme, served
+# virtual-host-only from cwobject.com/cwlota.com). Each maps to its CoreWeave
+# region, used both to route temp paths here (alongside R2, see
+# :func:`_s3_bucket_from_prefix`) and to sign lifecycle requests in
+# ``infra/configure_buckets.py``. Like R2, this is cross-cluster S3 detection
+# that does not belong to any single cluster's profile.
+CW_DATA_BUCKETS: Mapping[str, str] = MappingProxyType(
+    {
+        "marin-us-east-02a": "US-EAST-02A",
+        "marin-us-west-04a": "US-WEST-04A",
+    }
+)
+
 # Finite botocore timeouts/retries for every S3/R2 filesystem we build.
 # s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
 # R2 connection wedges ``upload_part`` forever (#6487): the blocked socket never
@@ -295,15 +309,16 @@ _S3_RETRY_MAX_ATTEMPTS = 5
 def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
 
-    Only recognizes buckets in :data:`R2_DATA_BUCKETS`, so unknown S3 buckets
-    (which have no lifecycle rules configured) fall through to the flat
-    non-TTL fallback instead of getting a ``tmp/ttl=Nd/`` path that would
+    Only recognizes buckets in :data:`R2_DATA_BUCKETS` or :data:`CW_DATA_BUCKETS`
+    (the S3-compatible backends with lifecycle rules configured by
+    ``infra/configure_buckets.py``), so unknown S3 buckets fall through to the
+    flat non-TTL fallback instead of getting a ``tmp/ttl=Nd/`` path that would
     never be cleaned up.
     """
     if not prefix or not prefix.startswith("s3://"):
         return None
     bucket = prefix[len("s3://") :].split("/", 1)[0]
-    return bucket if bucket in R2_DATA_BUCKETS else None
+    return bucket if bucket in R2_DATA_BUCKETS or bucket in CW_DATA_BUCKETS else None
 
 
 # ---------------------------------------------------------------------------
@@ -347,17 +362,19 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
-    For a Cloudflare R2 prefix on a known bucket (:data:`R2_DATA_BUCKETS`),
+    For a known S3-compatible prefix — a Cloudflare R2 bucket
+    (:data:`R2_DATA_BUCKETS`) or a CoreWeave bucket (:data:`CW_DATA_BUCKETS`) —
     returns a path at the bucket root::
 
         s3://marin-na/tmp/ttl={N}d/{prefix}
+        s3://marin-us-east-02a/tmp/ttl={N}d/{prefix}
 
     Otherwise falls back to a flat path under the marin prefix::
 
         {marin_prefix}/tmp/{prefix}
 
-    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2 data
-    bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
+    Lifecycle rules on each ``marin-{region}`` GCS bucket and each R2/CoreWeave
+    data bucket — managed by ``infra/configure_buckets.py`` — auto-delete objects
     under ``tmp/ttl=Nd/`` after *N* days.
 
     Args:
@@ -393,10 +410,11 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
             path = f"gs://{bucket}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
-    # R2 is single-bucket and non-regional. Place temp at the bucket root so the
-    # `tmp/ttl=Nd/` lifecycle prefix configured by infra/configure_buckets.py
-    # applies — note the runtime marin prefix on R2 is `s3://marin-na/marin`,
-    # so we deliberately strip the `marin/` data subdir here.
+    # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
+    # lifecycle prefix configured by infra/configure_buckets.py applies. The
+    # bucket already pins the region (R2 is non-regional; CoreWeave encodes it in
+    # the name, e.g. marin-us-east-02a), and the runtime marin prefix carries a
+    # `marin/` data subdir (e.g. `s3://marin-na/marin`) that we deliberately strip.
     if s3_bucket:
         path = f"s3://{s3_bucket}/{cfg.temp_path}/ttl={ttl_days}d"
         return _append_path_prefix(path, prefix)

@@ -2,14 +2,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Configure TTL lifecycle rules on each marin data bucket (GCS and R2).
+"""Configure TTL lifecycle rules on each marin data bucket (GCS, R2, CoreWeave).
 
 This script owns the lifecycle rules that delete objects under ``tmp/ttl=Nd/``
 after ``N`` days, for every ``N`` in `config/marin.yaml`.
 Rules it does not recognize as its own are preserved untouched, so it is safe to
 re-run alongside hand-curated lifecycle rules.
 
-Two backends are configured:
+Three backends are configured:
 
 * **GCS** ``marin-{region}`` buckets, via ``gcloud storage``. The owned rules are
   ``Delete`` rules whose ``matchesPrefix`` is exactly ``["tmp/ttl=Nd/"]``. This
@@ -19,18 +19,30 @@ Two backends are configured:
 * **Cloudflare R2** buckets (:data:`rigging.filesystem.R2_DATA_BUCKETS`), via the
   S3 lifecycle API (botocore). The owned rules are ``Expiration`` rules whose
   ``ID`` starts with ``marin-ttl-``. R2 has no soft-delete to manage.
+* **CoreWeave AI Object Storage** buckets
+  (:data:`rigging.filesystem.CW_DATA_BUCKETS`), via the same S3 lifecycle API.
+  CoreWeave AOS is virtual-host only, served from :data:`CW_ENDPOINT_URL`, and
+  signs with each bucket's CoreWeave region. Owned-rule shape is identical to R2.
 
 R2 access needs credentials (``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY``,
 or their ``AWS_*`` equivalents) and an endpoint (``AWS_ENDPOINT_URL_S3`` /
 ``AWS_ENDPOINT_URL`` / ``R2_ENDPOINT_URL``, defaulting to
-:data:`R2_ENDPOINT_URL`). Target a specific GCS bucket with ``--bucket`` to
-configure GCS without R2 credentials on hand.
+:data:`R2_ENDPOINT_URL`). CoreWeave access uses the standard
+``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` env vars (set them to your
+CoreWeave object-storage key). Target a specific GCS bucket with ``--bucket`` to
+configure GCS without S3 credentials on hand.
+
+CoreWeave is not part of the default all-buckets run — its ``AWS_*`` credentials
+would collide with R2's in the same invocation — so reach it with ``--coreweave``
+(all CoreWeave buckets) or ``--bucket <cw-bucket>`` (one of them).
 
 Usage:
-    uv run infra/configure_buckets.py                  # apply to all buckets
+    uv run infra/configure_buckets.py                  # GCS + R2 (all buckets)
     uv run infra/configure_buckets.py --dry-run        # preview without applying
     uv run infra/configure_buckets.py --bucket marin-us-central2
-    uv run infra/configure_buckets.py --bucket marin-na  # R2 only
+    uv run infra/configure_buckets.py --bucket marin-na             # R2 only
+    uv run infra/configure_buckets.py --coreweave                   # all CoreWeave buckets
+    uv run infra/configure_buckets.py --bucket marin-us-east-02a    # one CoreWeave bucket
 """
 
 import json
@@ -46,7 +58,7 @@ import botocore.config
 import botocore.session
 import click
 from botocore.exceptions import ClientError
-from rigging.filesystem import R2_DATA_BUCKETS, load_cluster_config
+from rigging.filesystem import CW_DATA_BUCKETS, R2_DATA_BUCKETS, load_cluster_config
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +75,14 @@ PROJECT = "hai-gcp-models"
 # / R2_ENDPOINT_URL env vars.
 R2_ENDPOINT_URL = "https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
 
-# Lifecycle rules this script owns on R2 buckets carry an ``ID`` with this
-# prefix; everything else is treated as a foreign rule and left alone.
-R2_RULE_ID_PREFIX = "marin-ttl-"
+# CoreWeave AI Object Storage S3 API endpoint (account-level VIP). CoreWeave AOS
+# is virtual-host only and signs with each bucket's CoreWeave region.
+CW_ENDPOINT_URL = "https://cwobject.com"
+
+# Lifecycle rules this script owns on S3-compatible buckets (R2 and CoreWeave)
+# carry an ``ID`` with this prefix; everything else is treated as a foreign rule
+# and left alone.
+S3_RULE_ID_PREFIX = "marin-ttl-"
 
 
 def run(argv: list[str], *, raise_on_error: bool = True) -> subprocess.CompletedProcess[str]:
@@ -238,7 +255,7 @@ def configure_gcs_bucket(bucket: str, region: str, owned: list[dict], dry_run: b
 
 
 # ---------------------------------------------------------------------------
-# R2 backend (S3 lifecycle API via botocore)
+# S3-compatible backend (R2 and CoreWeave, via the S3 lifecycle API / botocore)
 # ---------------------------------------------------------------------------
 
 
@@ -276,11 +293,38 @@ def make_r2_client() -> botocore.client.BaseClient:
     )
 
 
-def build_r2_ttl_rules() -> list[dict]:
+def make_cw_client(region: str) -> botocore.client.BaseClient:
+    """Build a botocore S3 client for CoreWeave AI Object Storage in *region*.
+
+    CoreWeave AOS is S3-compatible but virtual-host only, served from
+    :data:`CW_ENDPOINT_URL`, and signs with the bucket's CoreWeave region (e.g.
+    ``US-EAST-02A``). Credentials come from the standard ``AWS_ACCESS_KEY_ID`` /
+    ``AWS_SECRET_ACCESS_KEY`` env vars — set them to your CoreWeave
+    object-storage key.
+    """
+    key = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if not key or not secret:
+        raise click.ClickException(
+            "CoreWeave object-storage credentials are required to configure CoreWeave buckets. "
+            "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to your CoreWeave object-storage key."
+        )
+    session = botocore.session.get_session()
+    return session.create_client(
+        "s3",
+        endpoint_url=CW_ENDPOINT_URL,
+        region_name=region,
+        aws_access_key_id=key,
+        aws_secret_access_key=secret,
+        config=botocore.config.Config(s3={"addressing_style": "virtual"}),
+    )
+
+
+def build_s3_ttl_rules() -> list[dict]:
     """Return S3 Expiration rules for every TTL value, scoped to ``tmp/ttl=Nd/``."""
     return [
         {
-            "ID": f"{R2_RULE_ID_PREFIX}{n}d",
+            "ID": f"{S3_RULE_ID_PREFIX}{n}d",
             "Filter": {"Prefix": _ttl_prefix(n)},
             "Expiration": {"Days": n},
             "Status": "Enabled",
@@ -289,12 +333,12 @@ def build_r2_ttl_rules() -> list[dict]:
     ]
 
 
-def _is_marin_r2_ttl_rule(rule: dict) -> bool:
+def _is_marin_s3_ttl_rule(rule: dict) -> bool:
     """Return True iff *rule* is one this script owns (``ID`` starts with ``marin-ttl-``)."""
-    return str(rule.get("ID", "")).startswith(R2_RULE_ID_PREFIX)
+    return str(rule.get("ID", "")).startswith(S3_RULE_ID_PREFIX)
 
 
-def get_r2_lifecycle_rules(client: botocore.client.BaseClient, bucket: str) -> list[dict]:
+def get_s3_lifecycle_rules(client: botocore.client.BaseClient, bucket: str) -> list[dict]:
     """Return the bucket's existing lifecycle rules, or ``[]`` if none are set."""
     try:
         resp = client.get_bucket_lifecycle_configuration(Bucket=bucket)
@@ -305,23 +349,29 @@ def get_r2_lifecycle_rules(client: botocore.client.BaseClient, bucket: str) -> l
     return resp.get("Rules", [])
 
 
-def apply_r2_lifecycle(client: botocore.client.BaseClient, bucket: str, rules: list[dict]) -> None:
+def apply_s3_lifecycle(client: botocore.client.BaseClient, bucket: str, rules: list[dict]) -> None:
     client.put_bucket_lifecycle_configuration(Bucket=bucket, LifecycleConfiguration={"Rules": rules})
 
 
-def configure_r2_bucket(client: botocore.client.BaseClient, bucket: str, owned: list[dict], dry_run: bool) -> None:
-    """Apply the owned TTL rules to one R2 bucket (R2 has no soft-delete to manage)."""
-    logger.info("=== %s (R2) ===", bucket)
+def configure_s3_bucket(
+    client: botocore.client.BaseClient, bucket: str, owned: list[dict], dry_run: bool, *, label: str
+) -> None:
+    """Apply the owned TTL rules to one S3-compatible bucket (R2 or CoreWeave).
 
-    existing_rules = get_r2_lifecycle_rules(client, bucket)
-    merged = merge_lifecycle_rules(existing_rules, owned, _is_marin_r2_ttl_rule)
+    Neither backend has soft-delete to manage. *label* names the backend in the
+    log header (e.g. ``"R2"`` or ``"CoreWeave US-EAST-02A"``).
+    """
+    logger.info("=== %s (%s) ===", bucket, label)
+
+    existing_rules = get_s3_lifecycle_rules(client, bucket)
+    merged = merge_lifecycle_rules(existing_rules, owned, _is_marin_s3_ttl_rule)
 
     _apply_or_preview_lifecycle(
         merged,
         owned,
         dry_run,
         preview_doc={"Rules": merged},
-        apply=lambda: apply_r2_lifecycle(client, bucket, merged),
+        apply=lambda: apply_s3_lifecycle(client, bucket, merged),
     )
 
 
@@ -331,20 +381,41 @@ def configure_r2_bucket(client: botocore.client.BaseClient, bucket: str, owned: 
     "--bucket",
     type=str,
     default=None,
-    help=("Only configure this bucket (a GCS bucket in config/marin.yaml " "or an R2 bucket in R2_DATA_BUCKETS)."),
+    help=(
+        "Only configure this bucket (a GCS bucket in config/marin.yaml, an R2 "
+        "bucket in R2_DATA_BUCKETS, or a CoreWeave bucket in CW_DATA_BUCKETS)."
+    ),
 )
-def main(dry_run: bool, bucket: str | None) -> None:
+@click.option(
+    "--coreweave",
+    is_flag=True,
+    help=(
+        "Configure all CoreWeave object-storage buckets (CW_DATA_BUCKETS) and skip GCS/R2. "
+        "Uses AWS_* credentials against cwobject.com. Kept out of the default run because its "
+        "AWS_* credentials would collide with R2's."
+    ),
+)
+def main(dry_run: bool, bucket: str | None, coreweave: bool) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    gcs_targets = BUCKETS
-    r2_targets = R2_DATA_BUCKETS
-    if bucket is not None:
+    if coreweave and bucket is not None:
+        raise click.UsageError("--coreweave and --bucket are mutually exclusive.")
+
+    # Default run is GCS + R2; CoreWeave is opt-in (see --coreweave help).
+    gcs_targets: dict[str, str] = BUCKETS
+    r2_targets: frozenset[str] = R2_DATA_BUCKETS
+    cw_targets: dict[str, str] = {}
+    if coreweave:
+        gcs_targets, r2_targets, cw_targets = {}, frozenset(), dict(CW_DATA_BUCKETS)
+    elif bucket is not None:
         if bucket in BUCKETS:
             gcs_targets, r2_targets = {bucket: BUCKETS[bucket]}, frozenset()
         elif bucket in R2_DATA_BUCKETS:
             gcs_targets, r2_targets = {}, frozenset({bucket})
+        elif bucket in CW_DATA_BUCKETS:
+            gcs_targets, r2_targets, cw_targets = {}, frozenset(), {bucket: CW_DATA_BUCKETS[bucket]}
         else:
-            known = ", ".join(sorted([*BUCKETS, *R2_DATA_BUCKETS]))
+            known = ", ".join(sorted([*BUCKETS, *R2_DATA_BUCKETS, *CW_DATA_BUCKETS]))
             logger.error("Unknown bucket %r. Known buckets: %s", bucket, known)
             sys.exit(1)
 
@@ -353,11 +424,16 @@ def main(dry_run: bool, bucket: str | None) -> None:
         for name, region in sorted(gcs_targets.items()):
             configure_gcs_bucket(name, region, owned_gcs, dry_run)
 
+    owned_s3 = build_s3_ttl_rules()
+
     if r2_targets:
         client = make_r2_client()
-        owned_r2 = build_r2_ttl_rules()
         for name in sorted(r2_targets):
-            configure_r2_bucket(client, name, owned_r2, dry_run)
+            configure_s3_bucket(client, name, owned_s3, dry_run, label="R2")
+
+    for name, region in sorted(cw_targets.items()):
+        client = make_cw_client(region)
+        configure_s3_bucket(client, name, owned_s3, dry_run, label=f"CoreWeave {region}")
 
     logger.info("Done.")
 
