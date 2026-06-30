@@ -18,7 +18,7 @@ from rigging.server_auth import (
     resolve_auth,
 )
 
-from .conftest import _make_controller_only_config
+from tests.conftest import _make_controller_only_config
 
 _AUTH_TOKEN = "e2e-test-token"
 _AUTH_USER = "test-user"

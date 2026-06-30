@@ -23,11 +23,12 @@ dependencies = [
 iap = ["google-auth-oauthlib>=1.0.0"]
 
 [dependency-groups]
-dev = [
+test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
     "pytest-timeout",
 ]
+dev = [{ include-group = "test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rigging"]

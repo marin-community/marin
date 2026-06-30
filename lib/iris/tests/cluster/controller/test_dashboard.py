@@ -50,7 +50,6 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 

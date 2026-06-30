@@ -25,7 +25,6 @@ from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKin
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import (
     CursorTransitionReader,
