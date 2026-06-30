@@ -16,18 +16,14 @@ from rigging.provenance import username_segment
 
 from marin.execution.artifact import is_mutable_version
 
-_USER_NAMESPACE = "users/"
-
 
 def user_namespaced_name(name: str, version: str) -> str:
     """Return ``users/{username}/{name}`` for a mutable version, ``name`` unchanged otherwise.
 
     A fixed (calendar) ``version`` stays in the shared namespace; a mutable
-    ``dev``/``<label>-dev`` version is isolated per user. Idempotent: an already-namespaced name
-    passes through, so applying this at several entry points never stacks ``users/x/users/x/``.
-    Raises if no username resolves, so a dev run never silently lands in a shared
-    ``users/unknown/`` bucket.
+    ``dev``/``<label>-dev`` version is isolated per user. Raises if no username resolves, so a
+    dev run never silently lands in a shared ``users/unknown/`` bucket.
     """
-    if not is_mutable_version(version) or name.startswith(_USER_NAMESPACE):
+    if not is_mutable_version(version):
         return name
-    return f"{_USER_NAMESPACE}{username_segment()}/{name}"
+    return f"users/{username_segment()}/{name}"

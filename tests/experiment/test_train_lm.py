@@ -156,23 +156,32 @@ def test_lowers_to_a_runnable_graph():
     assert any(dep.name == "corpus" for dep in spec.deps)
 
 
-def test_dev_version_namespaces_checkpoint_per_user(tmp_path, monkeypatch):
-    monkeypatch.setattr("rigging.provenance._getuser", lambda: "alice")
-    train = train_lm(
-        name="checkpoints/unit",
-        model=_MODEL,
-        optimizer=_OPTIMIZER,
-        datasets={_corpus(): 1.0},
-        batch_size=8,
-        seq_len=128,
-        num_train_steps=50,
-        z_loss_weight=1e-4,
-        evals=None,
-        resources=_RESOURCES,
-        version="dev",
-    )
-    # The mutable dev checkpoint is isolated under the launching user; the shared dataset dep is not.
-    assert train.name == "users/alice/checkpoints/unit"
-    assert {dep.name for dep in train.deps} == {"corpus"}
-    pod = _assemble(train, str(tmp_path))
-    assert pod.output_path == f"{tmp_path}/users/alice/checkpoints/unit/dev"
+def test_dev_checkpoints_are_per_user_while_datasets_stay_shared(tmp_path, monkeypatch):
+    def build_as(user: str):
+        monkeypatch.setattr("rigging.provenance._getuser", lambda: user)
+        return train_lm(
+            name="checkpoints/unit",
+            model=_MODEL,
+            optimizer=_OPTIMIZER,
+            datasets={_corpus(): 1.0},
+            batch_size=8,
+            seq_len=128,
+            num_train_steps=50,
+            z_loss_weight=1e-4,
+            evals=None,
+            resources=_RESOURCES,
+            version="dev",
+        )
+
+    alice = build_as("alice")
+    bob = build_as("bob")
+
+    # Two people running the same dev experiment write to distinct, per-user checkpoint paths
+    # instead of clobbering each other.
+    assert alice.path(str(tmp_path)) == f"{tmp_path}/users/alice/checkpoints/unit/dev"
+    assert bob.path(str(tmp_path)) == f"{tmp_path}/users/bob/checkpoints/unit/dev"
+
+    # The shared dataset keeps its un-namespaced name in the assembled data config, so its cache
+    # is reused across users rather than re-tokenized per person.
+    tc = _assemble(alice, str(tmp_path)).train_config
+    assert tc.data.train_weights == {"corpus": 1.0}

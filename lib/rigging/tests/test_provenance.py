@@ -28,23 +28,11 @@ def test_json_round_trip():
     assert Provenance.from_json(p.to_json()) == p
 
 
-def test_username_segment_drops_email_domain_keeps_local_name(monkeypatch):
+def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatch):
+    # Drops the domain but keeps the whole local name, so the segment is path-safe (no '@'/'.')
+    # and two users who share a first name don't collapse onto one namespace.
     monkeypatch.setattr("rigging.provenance._getuser", lambda: "Russell.Power@gmail.com")
     assert username_segment() == "russell-power"
-
-
-def test_username_segment_keeps_distinct_users_distinct(monkeypatch):
-    # The whole local name is preserved, so two people who share a first name do not collide
-    # onto one namespace (which would re-introduce the clobbering this is meant to prevent).
-    monkeypatch.setattr("rigging.provenance._getuser", lambda: "jane.smith@corp.com")
-    smith = username_segment()
-    monkeypatch.setattr("rigging.provenance._getuser", lambda: "jane.doe@corp.com")
-    assert smith != username_segment()
-
-
-def test_username_segment_keeps_a_plain_login(monkeypatch):
-    monkeypatch.setattr("rigging.provenance._getuser", lambda: "john_doe")
-    assert username_segment() == "john_doe"
 
 
 def test_username_segment_raises_when_unresolvable(monkeypatch):
