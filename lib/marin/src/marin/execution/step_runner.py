@@ -29,7 +29,7 @@ from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environmen
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from marin.execution.artifact import check_drift, write_artifact
+from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, check_drift, is_mutable_version, write_artifact
 from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 
@@ -86,14 +86,39 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
+def _is_built(step: StepSpec) -> bool:
+    """True when the runner will serve ``step`` from cache rather than rebuild it.
+
+    A non-mutable step whose output already has a ``SUCCESS`` status. This is the
+    same condition the launcher uses to skip a step, evaluated here at scheduling
+    time so an already-built node's dependencies are pruned from the schedule
+    instead of rebuilt; the launcher re-checks authoritatively before serving the
+    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    """
+    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
+        return False
+    return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
+
+
+def _expand_unseen(
+    step: StepSpec,
+    seen: set[str],
+    is_built: Callable[[StepSpec], bool] = lambda _s: False,
+    pruned: set[str] | None = None,
+) -> list[StepSpec]:
     """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
     ``seen`` is mutated in place to include every returned step, so subsequent
     calls skip nodes already scheduled by an earlier terminal. Cycles within
     this expansion raise ``ValueError`` — by DAG construction they shouldn't
     exist, but the check guards against silent hangs.
+
+    When ``is_built(node)`` holds, ``node``'s output is already cached: the walk
+    records its ``output_path`` in ``pruned`` and does not descend into its deps,
+    so they are neither scheduled nor rebuilt. ``node`` itself is still returned (as
+    a cache-only leaf the caller confirms). The default ``is_built`` prunes nothing.
     """
+    recorded = pruned if pruned is not None else set()
     in_stack: set[str] = set()
     ordered: list[StepSpec] = []
 
@@ -104,8 +129,11 @@ def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
         in_stack.add(path)
-        for dep in s.deps:
-            visit(dep)
+        if is_built(s):
+            recorded.add(path)
+        else:
+            for dep in s.deps:
+                visit(dep)
         in_stack.remove(path)
         seen.add(path)
         ordered.append(s)
@@ -167,6 +195,11 @@ class StepRunner:
         failures: list[Exception] = []
         # output_path → name_with_hash, for human-readable logging
         path_to_name: dict[str, str] = {}
+        # Outputs already cached: their deps are pruned from the schedule and they are
+        # confirmed from cache rather than run. Disabled under dry_run, which stays
+        # I/O-free and lists the full static graph.
+        pruned: set[str] = set()
+        is_built = (lambda _s: False) if dry_run else _is_built
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
@@ -229,16 +262,40 @@ class StepRunner:
             else:
                 completed.add(path)
 
+        def _confirm_pruned(step: StepSpec) -> None:
+            """Mark a pruned cache-only leaf complete without running it.
+
+            Its dependencies were dropped from the schedule, so the step must not run.
+            If its cached output is no longer a clean success, record a failure (which
+            cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
+            """
+            path = step.output_path
+            mutable = check_drift(step)
+            status = StatusFile(path, worker_id="check").status
+            if status == STATUS_SUCCESS and not mutable:
+                logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
+                completed.add(path)
+            else:
+                failed.add(path)
+                failures.append(
+                    RuntimeError(
+                        f"Step {step.name_with_hash}: cached output disappeared after its inputs were "
+                        f"pruned (status={status}); rerun to rebuild it and its inputs."
+                    )
+                )
+
         scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled):
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()
                 _flush_waiting()
 
                 path = step.output_path
-                if any(d in failed for d in step.dep_paths):
+                if path in pruned:
+                    _confirm_pruned(step)
+                elif any(d in failed for d in step.dep_paths):
                     failed.add(path)
                 elif all(d in completed for d in step.dep_paths):
                     _do_launch(step)
