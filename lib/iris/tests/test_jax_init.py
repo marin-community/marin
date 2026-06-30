@@ -13,6 +13,8 @@ import pytest
 pytest.importorskip("jax")
 
 import jax
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
@@ -304,6 +306,43 @@ def test_initialize_jax_supervised_other_host_polls(
 
     mock_jax_init.assert_called_once_with("10.0.0.9:8476", 16, 8, local_device_ids=[0])
     assert fake_ctx.registry.registered == []
+
+
+# NOT_FOUND is the proper Connect "name absent"; UNIMPLEMENTED is what an older
+# controller's bare HTTP 404 decodes to for the same condition. Both must retry.
+@pytest.mark.parametrize("pending_code", [Code.NOT_FOUND, Code.UNIMPLEMENTED])
+def test_poll_for_coordinator_retries_until_registered(pending_code: Code) -> None:
+    """The lookup reports the name absent until rank 0 registers; the poller retries, not crashes."""
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.9:8476", actor_id="ep-1")],
+    )
+
+    class NotYetRegisteredResolver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def resolve(self, name: str) -> ResolveResult:
+            self.calls += 1
+            if self.calls < 3:
+                raise ConnectError(pending_code, f"{name} not registered")
+            return found
+
+    resolver = NotYetRegisteredResolver()
+    url = _poll_for_coordinator(resolver, "jax_coordinator", timeout=5.0, poll_interval=0.001)
+    assert url == "10.0.0.9:8476"
+    assert resolver.calls == 3
+
+
+def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
+    """A Connect error outside the pending set (e.g. PERMISSION_DENIED) is real and propagates."""
+
+    class DeniedResolver:
+        def resolve(self, name: str) -> ResolveResult:
+            raise ConnectError(Code.PERMISSION_DENIED, "not allowed")
+
+    with pytest.raises(ConnectError):
+        _poll_for_coordinator(DeniedResolver(), "jax_coordinator", timeout=5.0, poll_interval=0.001)
 
 
 @contextmanager

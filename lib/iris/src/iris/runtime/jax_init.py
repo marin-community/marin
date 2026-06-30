@@ -14,6 +14,8 @@ import logging
 import os
 import time
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from rigging.filesystem import marin_prefix
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
@@ -81,6 +83,15 @@ def configure_jax_compilation_cache() -> None:
     logger.info("JAX compilation cache: %s", cache_dir)
 
 
+# An endpoint name that has not been registered yet surfaces differently across
+# controller versions: an empty result, a Connect NOT_FOUND, or — on controllers
+# that answer the lookup with a bare HTTP 404 — a Connect UNIMPLEMENTED. A
+# coordinator that has not come up is the expected state while polling, as is a
+# transiently unreachable controller (UNAVAILABLE), so all are retried. Other
+# Connect errors are genuine and propagate.
+_COORDINATOR_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code.UNAVAILABLE})
+
+
 def _poll_for_coordinator(
     resolver: Resolver,
     endpoint_name: str,
@@ -104,9 +115,13 @@ def _poll_for_coordinator(
     backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     deadline = Deadline.from_now(Duration.from_seconds(timeout))
     while True:
-        resolved = resolver.resolve(endpoint_name)
-        if not resolved.is_empty:
-            return resolved.first().url
+        try:
+            resolved = resolver.resolve(endpoint_name)
+            if not resolved.is_empty:
+                return resolved.first().url
+        except ConnectError as e:
+            if e.code not in _COORDINATOR_PENDING_CODES:
+                raise
         if deadline.expired():
             raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
         interval = min(backoff.next_interval(), deadline.remaining_seconds())
