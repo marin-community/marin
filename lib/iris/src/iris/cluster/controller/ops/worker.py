@@ -111,8 +111,8 @@ def register(
             "md_gpu_memory_mb": metadata.gpu_memory_mb,
             "md_gce_instance_name": metadata.gce_instance_name,
             "md_gce_zone": metadata.gce_zone,
-            "md_git_hash": metadata.git_hash,
             "md_device_json": proto_to_json(metadata.device),
+            "md_provenance_json": proto_to_json(metadata.provenance),
         },
     )
     cur.register(lambda: health.register(worker_id, now_ms=now_ms))

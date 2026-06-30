@@ -11,7 +11,6 @@ serve`` subcommand in the main CLI.
 
 import datetime
 import logging
-import os
 import shutil
 import signal
 import threading
@@ -31,6 +30,7 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
+from iris.cluster.provenance import provenance_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ def run_controller_serve(
     This is the shared implementation used by both the standalone daemon
     entrypoint and the ``iris cluster controller serve`` CLI command.
     """
-    logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
+    logger.info("Initializing Iris controller (%s)", provenance_from_env())
 
     remote_state_dir = cluster_config.storage.remote_state_dir
     if not remote_state_dir:
