@@ -6517,3 +6517,89 @@ Historical entries from 2026-06-28 are archived in `.agents/logbooks/6597-moe-mg
   - No #6597 issue update.
 - Next action:
   - Run changed-file pre-commit, commit, push, and monitor PR CI again.
+
+### 2026-06-29 21:55 - MOE-MGPU-382 PR CI green after reruns
+- Hypothesis: after the TPU timeout adjustment and `shard_map` shape assertion
+  fix, PR #6767 should be CI-clean apart from transient infrastructure flakes.
+- Commit Hash: `d9d86354c`.
+- Commands:
+  - `uv run scripts/ci/wait_for.py --timeout 1h "github.ci 6767" "github.pr_comment 6767" "github.review 6767" 'poll test "$(gh pr view 6767 --json state --jq .state)" != OPEN'`
+  - `gh run rerun 28419994423 --failed`
+  - `gh run rerun 28419994460 --failed`
+  - `gh pr checks 6767 --json name,state,bucket,startedAt,completedAt,link,workflow --watch=false`
+- Result:
+  - `levanter-tpu-tests` passed on the `d9d86354c` head after the shape fix:
+    job `84210915311`, completed 2026-06-30T04:34:25Z.
+  - `levanter-unit` initially failed on unrelated
+    `tests/test_checkpoint.py::test_ocdbt_merges_files` file-count flake, then
+    passed on failed-only rerun job `84212786716`.
+  - `cloud-smoke-test` initially failed on unrelated
+    `tests/e2e/test_smoke.py::test_exec_in_container` RPC timeout, then passed
+    on failed-only rerun job `84212912546`.
+  - `cw-ci-test` passed on job `84210903852`.
+  - Final PR wait helper result for #6767: `conclusion="success"`, `failing=[]`,
+    `pending=[]`, `observed_checks=33`.
+  - Additional local log copies saved under
+    `.agents/artifacts/6597-dalton-logs/`:
+    - `levanter-unit-d9d86354c-28419994423-job-84210915325.log`
+    - `cloud-smoke-d9d86354c-28419994460-job-84210929716.log`
+    - `cloud-smoke-diagnostics-28419994460/logs/`
+- Interpretation:
+  - The draft PR is green on the current pushed head. Remaining merge blockers
+    are normal draft/review state, not CI or merge conflicts.
+  - No #6597 issue update.
+- Next action:
+  - Leave the green PR head undisturbed; continue monitoring for comments,
+    reviews, or closure.
+
+### 2026-06-29 22:00 - MOE-MGPU-383 PR marked ready for review
+- Hypothesis: after PR #6767 reached a green pushed head with no comments or
+  reviews, the remaining draft-state blocker should be removed so the required
+  review can proceed without changing code or restarting the full CI set.
+- Commit Hash: `d9d86354c`.
+- Commands:
+  - `gh pr ready 6767 --repo marin-community/marin`
+  - `gh pr view 6767 --repo marin-community/marin --json isDraft,reviewDecision,mergeStateStatus,comments,reviews,headRefOid,statusCheckRollup`
+- Result:
+  - PR #6767 is now ready for review (`isDraft=false`).
+  - Head remains `d9d86354c`.
+  - Existing CI checks from the pushed head remain green.
+  - GitHub reports `reviewDecision="REVIEW_REQUIRED"` and
+    `mergeStateStatus="BLOCKED"`.
+  - Marking the PR ready started the repo's `Ops - Claude Review` workflow:
+    `review` queued and `lint-review` in progress at the time of this entry.
+- Interpretation:
+  - The active blocker is now review completion/approval, not draft status, code
+    CI, or mergeability.
+  - No #6597 issue update.
+- Next action:
+  - Monitor PR #6767 for Claude Review results, human review/comments, and
+    closure; act on actionable findings without posting routine noise to #6597.
+
+### 2026-06-29 22:09 - MOE-MGPU-384 automated PR review capacity-factor fix
+- Hypothesis: Codex's automated PR review found a real checkpoint/config
+  round-trip bug: non-default `moe_capacity_factor` values from
+  `SCALE_MOE_CAPACITY_FACTOR` were not preserved through the Grug MoE HF config
+  converter.
+- Commit Hash: `d9d86354c` before the fix.
+- Commands:
+  - `gh api repos/marin-community/marin/pulls/6767/comments --paginate ...`
+  - `uv run pytest tests/test_grug_variant_contracts.py -q -k 'hf_config_roundtrips_moe_capacity_factor' -o addopts=`
+  - `uv run pytest tests/test_grug_variant_contracts.py -q -o addopts=`
+  - `./infra/pre-commit.py --changed-files --fix`
+- Result:
+  - Added `moe_capacity_factor` to `GrugModelConfig.to_hf_config()`.
+  - Added `moe_capacity_factor` loading to `GrugModelConfig.from_hf_config()`,
+    falling back to `_DEFAULT_EP_CAPACITY_FACTOR` for older configs.
+  - Added regression coverage in
+    `tests/test_grug_variant_contracts.py::test_grug_moe_hf_config_roundtrips_moe_capacity_factor`.
+  - Validation:
+    - Narrow regression: `1 passed, 12 deselected in 1.20s`.
+    - Full Grug variant contract file: `13 passed, 1 warning in 13.08s`.
+    - Changed-file pre-commit: OK after Black reformatted the new line.
+- Interpretation:
+  - The review comment was useful and the fix keeps non-default Pallas MGPU
+    capacity settings stable across HF export/reload paths.
+  - No #6597 issue update.
+- Next action:
+  - Commit and push the review fix, then monitor PR #6767 CI/review state again.

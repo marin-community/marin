@@ -240,6 +240,18 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
     assert "ragged_all_to_all" in str(closed_jaxpr)
 
 
+def test_grug_moe_hf_config_roundtrips_moe_capacity_factor():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    cfg = _small_model_config(model_module.GrugModelConfig, vocab_size=1024, seq_len=4)
+    cfg = dataclasses.replace(cfg, moe_capacity_factor=1.125)
+
+    hf_config = cfg.to_hf_config(vocab_size=cfg.vocab_size)
+    restored = model_module.GrugModelConfig.from_hf_config(hf_config)
+
+    assert hf_config.moe_capacity_factor == 1.125
+    assert restored.moe_capacity_factor == 1.125
+
+
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     """Regression: build_train_loader / build_tagged_evaluator must work when the
     compact mesh's expert axis has size 1 (canary configuration).

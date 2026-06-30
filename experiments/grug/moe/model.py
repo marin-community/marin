@@ -209,6 +209,7 @@ class GrugModelConfig:
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
+            moe_capacity_factor=float(_hf_config_attr(hf_config, ("moe_capacity_factor",), _DEFAULT_EP_CAPACITY_FACTOR)),
             rope=rope,
         )
 
@@ -242,6 +243,7 @@ class GrugModelConfig:
             "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
             "qk_mult": self.qk_mult,
+            "moe_capacity_factor": self.moe_capacity_factor,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
             "rope_theta": self.rope.theta,
