@@ -295,8 +295,8 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     implementation: Implementation = eqx.field(static=True, default="auto")
     # Backward output-grad format: E5M2 (Transformer-Engine hybrid, default) or E4M3 (all-E4M3).
     grad_dtype: DTypeLike = eqx.field(static=True, default=jnp.float8_e5m2)
-    # Weight-gradient strategy on the mosaic backend: bf16 (default) or the f8 cast-transpose wgrad.
-    mosaic_wgrad: MosaicWgradMode = eqx.field(static=True, default=MosaicWgradMode.BF16)
+    # Weight-gradient strategy on the mosaic backend: the f8 cast-transpose wgrad (default) or bf16.
+    mosaic_wgrad: MosaicWgradMode = eqx.field(static=True, default=MosaicWgradMode.FP8)
 
     @classmethod
     def init(
@@ -305,7 +305,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         compute_dtype: DTypeLike | None = None,
         implementation: Implementation = "auto",
         grad_dtype: DTypeLike = jnp.float8_e5m2,
-        mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.BF16,
+        mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.FP8,
     ):
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),

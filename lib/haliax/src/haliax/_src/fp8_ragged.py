@@ -21,7 +21,8 @@ import jax.numpy as jnp
 from jax import custom_vjp
 
 from haliax._src.fp8 import _new_scale_and_history, dequantize, in_q, out_dq, quantize
-from haliax._src.fp8_cast_transpose import cast_transpose, in_q_transpose
+from haliax._src.fp8_cast_transpose import cast_transpose, in_q_transpose, in_q_transpose_3d
+from haliax._src.fp8_ragged_guards import Fp8Contraction, assert_fp8_contraction
 from haliax.nn.ragged_dot import (
     _AUTO_FALLBACK_EXCEPTIONS,
     _DEFAULT_DIM_NUMS,
@@ -48,11 +49,13 @@ class MosaicWgradMode(StrEnum):
     token-contiguous f8 operands. The two ways to get the weight gradient:
     """
 
-    BF16 = "bf16"  # dequantize the f8 operands and run the wgrad in bf16 (default; simpler, ~1.27× e2e)
-    FP8 = "fp8"  # fused cast-transpose -> genuine f8 wgmma weight-gradient (~1.33× e2e; GFP8-033 M3)
+    BF16 = "bf16"  # dequantize the f8 operands, run the wgrad in bf16 (simpler; only wins below ~512 tok/expert)
+    FP8 = "fp8"  # fused cast-transpose -> genuine mixed E4M3×E5M2 f8 wgrad (default; wins at ≥1024 tok/expert, GFP8-OPT-P04)
 
 
-def _f8_wgrad_active(implementation: Implementation, mosaic_wgrad: MosaicWgradMode) -> bool:
+def _f8_wgrad_active(
+    implementation: Implementation, mosaic_wgrad: MosaicWgradMode
+) -> bool:
     """The f8 cast-transpose weight-gradient runs only on the mosaic backend in FP8 mode."""
     return implementation == "mosaic" and mosaic_wgrad == MosaicWgradMode.FP8
 
@@ -64,10 +67,15 @@ def _ragged_dot_layout(
     dimension_numbers: jax.lax.RaggedDotDimensionNumbers,
     preferred_element_type: jnp.dtype,
     implementation: Implementation,
+    rhs_pretransposed: jax.Array | None = None,
 ) -> jax.Array:
     """Single grouped matmul for one ragged-dot layout (forward/dlhs/drhs), backend-dispatched
     like ``ragged_dot`` but with an explicit output dtype so the f8 operands accumulate into
-    ``preferred_element_type`` rather than being truncated back to f8 on store."""
+    ``preferred_element_type`` rather than being truncated back to f8 on store.
+
+    ``rhs_pretransposed`` is the K-contiguous f8 weights (from the fused cast-transpose) for the mosaic
+    forward layout; when given, the mosaic kernel skips the XLA ``swapaxes`` (GFP8-OPT-R4). Ignored by
+    the triton/xla backends, which consume the natural ``rhs`` layout."""
     last_exc: Exception | None = None
     for impl in _preferred_implementations(implementation):
         try:
@@ -78,6 +86,7 @@ def _ragged_dot_layout(
                     group_sizes,
                     dimension_numbers,
                     out_dtype=preferred_element_type,
+                    rhs_pretransposed=rhs_pretransposed,
                 )
             if impl == "triton":
                 return _triton_pallas_call(
@@ -95,16 +104,20 @@ def _ragged_dot_layout(
                     ragged_dot_dimension_numbers=dimension_numbers,
                     preferred_element_type=preferred_element_type,
                 )
-            raise NotImplementedError(f"FP8 ragged dot does not support implementation {impl!r}")
+            raise NotImplementedError(
+                f"FP8 ragged dot does not support implementation {impl!r}"
+            )
         except _AUTO_FALLBACK_EXCEPTIONS as exc:
             if implementation == "auto" and impl != "xla":
                 last_exc = exc
                 continue
             raise
-    raise RuntimeError(f"No ragged_dot implementation selected (last error: {last_exc})")
+    raise RuntimeError(
+        f"No ragged_dot implementation selected (last error: {last_exc})"
+    )
 
 
-@partial(custom_vjp, nondiff_argnums=(10, 11, 12, 13))
+@partial(custom_vjp, nondiff_argnums=(11, 12, 13, 14))
 def quantized_ragged_dot(
     lhs,
     q_lhs,
@@ -112,6 +125,7 @@ def quantized_ragged_dot(
     lhs_scale,
     rhs,
     q_rhs,
+    q_rhs_t,
     rhs_scale,
     out_grad_scale,
     out_grad_amax_history,
@@ -125,11 +139,16 @@ def quantized_ragged_dot(
     ``grad_dtype`` output-grad backward. Full-precision ``lhs``/``rhs`` are passed only to route
     their gradients (the forward consumes the quantized operands). ``q_lhs_t`` is the cast-transposed
     (token-contiguous) f8 activations the f8 weight-gradient consumes; it is unused on the bf16-wgrad
-    / triton / xla backward (where the caller passes ``q_lhs`` as a placeholder).
+    / triton / xla backward (where the caller passes ``q_lhs`` as a placeholder). ``q_rhs_t`` is the
+    cast-transposed (K-contiguous) f8 weights the mosaic forward consumes in place of an XLA swapaxes
+    (GFP8-OPT-R4); on the triton/xla forward it is a placeholder (the caller passes ``q_rhs``).
 
     ``grad_dtype`` selects the backward gradient format: E5M2 (the Transformer-Engine hybrid
     recipe, default) or E4M3 (the all-E4M3 recipe; with coarse per-tensor scaling this is the
     DeepSeek-style format *without* its fine-grained scaling — see logbook GFP8-023)."""
+    assert_fp8_contraction(
+        q_lhs, q_rhs, contraction=Fp8Contraction.FORWARD, grad_dtype=grad_dtype
+    )
     return _ragged_dot_layout(
         q_lhs,
         q_rhs,
@@ -137,6 +156,7 @@ def quantized_ragged_dot(
         _DEFAULT_DIM_NUMS,
         preferred_element_type,
         implementation,
+        rhs_pretransposed=q_rhs_t if implementation == "mosaic" else None,
     )
 
 
@@ -147,6 +167,7 @@ def quantized_ragged_dot_fwd(
     lhs_scale,
     rhs,
     q_rhs,
+    q_rhs_t,
     rhs_scale,
     out_grad_scale,
     out_grad_amax_history,
@@ -156,6 +177,9 @@ def quantized_ragged_dot_fwd(
     grad_dtype,
     mosaic_wgrad,
 ):
+    assert_fp8_contraction(
+        q_lhs, q_rhs, contraction=Fp8Contraction.FORWARD, grad_dtype=grad_dtype
+    )
     out = _ragged_dot_layout(
         q_lhs,
         q_rhs,
@@ -163,6 +187,7 @@ def quantized_ragged_dot_fwd(
         _DEFAULT_DIM_NUMS,
         preferred_element_type,
         implementation,
+        rhs_pretransposed=q_rhs_t if implementation == "mosaic" else None,
     )
     res = (
         q_lhs,
@@ -177,7 +202,9 @@ def quantized_ragged_dot_fwd(
     return out, res
 
 
-def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype, mosaic_wgrad, res, g):
+def quantized_ragged_dot_bwd(
+    preferred_element_type, implementation, grad_dtype, mosaic_wgrad, res, g
+):
     (
         q_lhs,
         q_lhs_t,
@@ -197,43 +224,77 @@ def quantized_ragged_dot_bwd(preferred_element_type, implementation, grad_dtype,
     if f8_wgrad:
         # Cast-transpose the output grad once -> rowwise q_g (for dlhs) + token-contiguous q_g_t (for
         # the f8 wgrad), no separate XLA transpose (GFP8-033 M3).
-        q_g, q_g_t = cast_transpose(g, new_out_grad_scale, out_dtype=grad_dtype, compute_dtype=preferred_element_type)
+        q_g, q_g_t = cast_transpose(
+            g,
+            new_out_grad_scale,
+            out_dtype=grad_dtype,
+            compute_dtype=preferred_element_type,
+        )
     else:
         q_g = quantize(g, grad_dtype, new_out_grad_scale, preferred_element_type)
 
     # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (f8 operands, dequantized by the rhs and grad scales)
-    grad_lhs = _ragged_dot_layout(q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation)
-    grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
+    assert_fp8_contraction(
+        q_g, q_rhs, contraction=Fp8Contraction.DLHS, grad_dtype=grad_dtype
+    )
+    grad_lhs = _ragged_dot_layout(
+        q_g, q_rhs, group_sizes, _DLHS_DIM_NUMS, preferred_element_type, implementation
+    )
+    grad_lhs = dequantize(
+        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
+    )
 
     # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N], contracting the ragged token axis.
     if f8_wgrad:
         # mosaic f8 wgrad: both operands already cast-transposed (token-contiguous) -> the wgrad kernel
         # directly, no XLA `swapaxes` (the GFP8-033 win). Then dequantize by the lhs and grad scales.
-        grad_rhs = _mosaic_wgrad_transposed(q_lhs_t, q_g_t, group_sizes, out_dtype=preferred_element_type)
-        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
+        assert_fp8_contraction(
+            q_lhs_t, q_g_t, contraction=Fp8Contraction.DRHS, grad_dtype=grad_dtype
+        )
+        grad_rhs = _mosaic_wgrad_transposed(
+            q_lhs_t, q_g_t, group_sizes, out_dtype=preferred_element_type
+        )
+        grad_rhs = dequantize(
+            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
+        )
     elif implementation == "mosaic":
         # mosaic, f8 wgrad off: bf16 fallback (the shipped ~1.27× hybrid). Hopper f8 wgmma can't
         # transpose the token axis in-kernel, so run the GEMM in bf16 on the dequantized f8 operands.
         # Dequantizing folds in lhs_scale/grad_scale, so the result is already in real units.
         lhs_b = dequantize(q_lhs, _WGRAD_FALLBACK_DTYPE, lhs_scale)
         g_b = dequantize(q_g, _WGRAD_FALLBACK_DTYPE, new_out_grad_scale)
-        grad_rhs = _ragged_dot_layout(lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto")
+        grad_rhs = _ragged_dot_layout(
+            lhs_b, g_b, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, "auto"
+        )
     else:
         # triton / xla: f8 wgrad via the standard layout dispatch (these backends transpose internally).
-        grad_rhs = _ragged_dot_layout(q_lhs, q_g, group_sizes, _DRHS_DIM_NUMS, preferred_element_type, implementation)
-        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
+        assert_fp8_contraction(
+            q_lhs, q_g, contraction=Fp8Contraction.DRHS, grad_dtype=grad_dtype
+        )
+        grad_rhs = _ragged_dot_layout(
+            q_lhs,
+            q_g,
+            group_sizes,
+            _DRHS_DIM_NUMS,
+            preferred_element_type,
+            implementation,
+        )
+        grad_rhs = dequantize(
+            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
+        )
 
     return (
         grad_lhs,
-        None,
-        None,
-        None,
+        None,  # q_lhs
+        None,  # q_lhs_t
+        None,  # lhs_scale
         grad_rhs,
-        None,
-        None,
+        None,  # q_rhs
+        None,  # q_rhs_t
+        None,  # rhs_scale
         new_out_grad_scale,
         new_out_grad_amax_history,
-        None,
+        None,  # group_sizes
     )
 
 
@@ -255,7 +316,7 @@ def fp8_scaled_ragged_dot(
     quantize_compute_type,
     grad_dtype=jnp.float8_e5m2,
     implementation: Implementation = "auto",
-    mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.BF16,
+    mosaic_wgrad: MosaicWgradMode = MosaicWgradMode.FP8,
 ):
     """``ragged_dot`` drop-in for per-tensor delayed-scaling FP8 (direct quantization).
 
@@ -271,9 +332,10 @@ def fp8_scaled_ragged_dot(
         grad_dtype: backward output-grad format — ``float8_e5m2`` (hybrid recipe, default) or
             ``float8_e4m3fn`` (all-E4M3 recipe).
         implementation: ragged-dot backend (see :func:`haliax.nn.ragged_dot.ragged_dot`).
-        mosaic_wgrad: weight-gradient strategy for the ``mosaic`` backend — ``BF16`` (default; the
-            wgrad runs in bf16 on the dequantized operands) or ``FP8`` (fused cast-transpose f8 wgrad,
-            ~1.33× e2e; requires ``grad_dtype=float8_e4m3fn`` so both wgrad operands share one f8 type).
+        mosaic_wgrad: weight-gradient strategy for the ``mosaic`` backend — ``FP8`` (default; fused
+            cast-transpose -> genuine mixed E4M3×E5M2 f8 wgrad, the same dtype pair as the forward; wins
+            at ≥1024 tok/expert) or ``BF16`` (wgrad runs in bf16 on the dequantized operands; simpler,
+            faster only below ~512 tok/expert). See GFP8-OPT-P04.
 
     Returns:
         ``[tokens, out]`` activations. Scale/amax state is returned as gradients of the
@@ -287,11 +349,25 @@ def fp8_scaled_ragged_dot(
     if _f8_wgrad_active(implementation, mosaic_wgrad):
         # One read of the activations -> rowwise q_lhs (forward GEMM) + token-contiguous q_lhs_t
         # (f8 weight-gradient), no separate XLA transpose (GFP8-033 M3).
-        q_lhs, q_lhs_t, new_lhs_scale = in_q_transpose(quantize_compute_type, lhs, lhs_scale, lhs_amax_history)
+        q_lhs, q_lhs_t, new_lhs_scale = in_q_transpose(
+            quantize_compute_type, lhs, lhs_scale, lhs_amax_history
+        )
     else:
-        q_lhs, new_lhs_scale = in_q(quantize_compute_type, lhs, lhs_scale, lhs_amax_history)
-        q_lhs_t = q_lhs  # placeholder; the bf16-wgrad / triton / xla backward never reads it
-    q_rhs, new_rhs_scale = in_q(quantize_compute_type, rhs, rhs_scale, rhs_amax_history)
+        q_lhs, new_lhs_scale = in_q(
+            quantize_compute_type, lhs, lhs_scale, lhs_amax_history
+        )
+        q_lhs_t = (
+            q_lhs  # placeholder; the bf16-wgrad / triton / xla backward never reads it
+        )
+    if implementation == "mosaic":
+        # Fused cast-transpose of the weights -> rowwise q_rhs (dlhs backward) + K-contiguous q_rhs_t
+        # (forward), replacing the per-step XLA swapaxes in the mosaic forward (GFP8-OPT-R4).
+        q_rhs, q_rhs_t, new_rhs_scale = in_q_transpose_3d(
+            quantize_compute_type, rhs, rhs_scale, rhs_amax_history
+        )
+    else:
+        q_rhs, new_rhs_scale = in_q(quantize_compute_type, rhs, rhs_scale, rhs_amax_history)
+        q_rhs_t = q_rhs  # placeholder; the triton/xla forward consumes the natural rhs layout
     y = quantized_ragged_dot(
         lhs,
         q_lhs,
@@ -299,6 +375,7 @@ def fp8_scaled_ragged_dot(
         new_lhs_scale,
         rhs,
         q_rhs,
+        q_rhs_t,
         new_rhs_scale,
         grad_scale,
         grad_amax_history,
