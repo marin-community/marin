@@ -611,6 +611,9 @@ class JobRequest:
         resources: Resource requirements per replica
         environment: Environment configuration (dependencies, env vars)
         replicas: Gang-scheduled replicas (e.g. TPU slices for multislice training)
+        processes_per_task: GPU processes to run inside each task (default 1). When
+            > 1, each task fans out into that many JAX processes (one per GPU group)
+            via the iris.runtime.multigpu supervisor. ``1`` is a no-op.
         max_retries_failure: Max retries on failure
         max_retries_preemption: Max retries on preemption
         max_task_failures: Cumulative failed task attempts the job tolerates before it
@@ -624,6 +627,7 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
     replicas: int | None = None
+    processes_per_task: int = 1
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
     max_task_failures: int = 0
