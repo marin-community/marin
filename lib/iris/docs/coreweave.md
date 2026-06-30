@@ -523,10 +523,11 @@ CoreWeave instance types follow the pattern `{prefix}-{count}x{model}{networking
 
 **Known-good instance types**:
 
-| Instance Type | GPUs | vCPUs | RAM | Use Case |
-|---------------|------|-------|-----|----------|
-| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | GPU training (primary) |
-| `cd-gp-i64-erapids` | none | 64 | 256 GB | Controller / CPU tasks |
+| Instance Type | GPUs | vCPUs | RAM | Disk | Use Case |
+|---------------|------|-------|-----|------|----------|
+| `gd-8xh100ib-i128` | 8x H100 | 128 | 2 TB | — | GPU training (primary) |
+| `cd-gp-a192-genoa` | none | 192 | 1.5 TB | 7.68 TB | Controller / CPU tasks (US-EAST-02A) |
+| `cd-gp-i64-erapids` | none | 64 | 512 GB | 15.36 TB | Controller / CPU tasks (US-WEST-04A) |
 
 Full list: [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
 
@@ -552,7 +553,7 @@ dedicated `cpu: 2` and `memory: 4Gi` (with matching limits) so it runs with
 Guaranteed QoS instead of BestEffort.
 
 Cost note: the smallest CoreWeave CPU instance (`cd-gp-i64-erapids`, 64 vCPU,
-256 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
+512 GB RAM) is overprovisioned for the controller. CoreWeave does not offer
 smaller bare-metal nodes.
 
 ### Bootstrap via Platform.create_slice() with async state model

@@ -70,9 +70,9 @@ scale_groups:
     # provisions it up front; _set_target_nodes leaves it alone (GPU pools only).
     num_vms: 1
     resources:
-      cpu: 64
-      ram: 256GB
-      disk: 1TB
+      cpu: 64        # cd-gp-i64-erapids: 64 vCPUs (32 physical Emerald Rapids 8562Y+ cores)
+      ram: 512GB     # 512 GB on-node RAM (8 GB per vCPU)
+      disk: 15.36TB  # 15.36 TB local NVMe
       device_type: cpu
       capacity_type: on-demand
     buffer_slices: 1
