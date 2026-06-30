@@ -26,8 +26,11 @@ def provenance_to_env(provenance: Provenance) -> dict[str, str]:
 
 
 def provenance_from_env(environ: Mapping[str, str] = os.environ) -> Provenance:
+    # "{}" is the Dockerfile's default ARG: an image built without the CLI's
+    # --build-arg carries it, so treat it (like an absent var) as no provenance
+    # and fall back to the bare tree hash.
     raw = environ.get(PROVENANCE_ENV)
-    if raw:
+    if raw and raw != "{}":
         return Provenance.from_json(raw)
     git_hash = environ.get(GIT_HASH_ENV, "unknown")
     return Provenance(tree_hash=git_hash, base_commit=git_hash, dirty=False, branch=None, built_by=None)
