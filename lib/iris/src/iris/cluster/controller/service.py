@@ -140,6 +140,24 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 _UNROUTABLE_SAMPLE_SIZE = 10
 
 
+def _accumulate_routing_decision(merged: vm_pb2.RoutingDecision, sub: vm_pb2.RoutingDecision) -> None:
+    """Fold one backend's routing decision into the merged decision.
+
+    Scale groups partition disjointly across backends (the single
+    scale-group->backend key space), so the group-keyed maps never collide and the
+    per-group lists concatenate. With a single backend this reproduces that
+    backend's decision exactly.
+    """
+    for group, launch in sub.group_to_launch.items():
+        merged.group_to_launch[group] = launch
+    for group, reason in sub.group_reasons.items():
+        merged.group_reasons[group] = reason
+    for group, entries in sub.routed_entries.items():
+        merged.routed_entries[group].CopyFrom(entries)
+    merged.unmet_entries.extend(sub.unmet_entries)
+    merged.group_statuses.extend(sub.group_statuses)
+
+
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
 # upgrade after a new marin-iris release is cut.
@@ -2044,8 +2062,9 @@ class ControllerServiceImpl:
         a single backend's autoscaler. Each backend owns a disjoint set of scale
         groups (the single scale-group->backend key space), so group-keyed fields
         (``current_demand``, ``recent_actions``) need no further disambiguation.
-        ``recent_actions`` are re-sorted newest-first and capped; ``last_routing_decision``
-        (one snapshot per autoscaler) is left unset in the merged view.
+        ``recent_actions`` are re-sorted newest-first and capped; each backend's
+        ``last_routing_decision`` folds into one merged decision (disjoint groups,
+        so the per-group fields concatenate).
         """
         merged = vm_pb2.AutoscalerStatus()
         last_evaluation = 0
@@ -2063,6 +2082,8 @@ class ControllerServiceImpl:
                 merged.current_demand[key] = value
             merged.recent_actions.extend(sub.recent_actions)
             last_evaluation = max(last_evaluation, sub.last_evaluation.epoch_ms)
+            if sub.HasField("last_routing_decision"):
+                _accumulate_routing_decision(merged.last_routing_decision, sub.last_routing_decision)
         merged.recent_actions.sort(key=lambda action: action.timestamp.epoch_ms, reverse=True)
         del merged.recent_actions[_MERGED_AUTOSCALER_ACTIONS:]
         if last_evaluation:

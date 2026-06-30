@@ -1691,6 +1691,9 @@ def _status_autoscaler(group_name):
         groups=[vm_pb2.ScaleGroupStatus(name=group_name)],
         current_demand={group_name: 1},
         last_evaluation=timestamp_to_proto(Timestamp.from_ms(5)),
+        last_routing_decision=vm_pb2.RoutingDecision(
+            group_statuses=[vm_pb2.GroupRoutingStatus(group=group_name, decision="hold")],
+        ),
     )
     return autoscaler
 
@@ -1730,10 +1733,14 @@ def test_get_autoscaler_status_merges_all_backends(state, scheduler, tmp_path, l
     )
     status = rpc_post(client, "GetAutoscalerStatus")["status"]
     assert {g["name"]: g.get("backendId", "") for g in status["groups"]} == {"gcp-v5e": "gcp", "cw-h100": "cw"}
+    # Each backend's routing decision folds into the merged decision (disjoint
+    # groups), so the dashboard's pools table sees every backend's pools.
+    assert {s["group"] for s in status["lastRoutingDecision"]["groupStatuses"]} == {"gcp-v5e", "cw-h100"}
 
     # backend_id drill-down restricts the merged view to one backend.
     scoped = rpc_post(client, "GetAutoscalerStatus", {"backendId": "gcp"})["status"]
     assert [g["name"] for g in scoped["groups"]] == ["gcp-v5e"]
+    assert [s["group"] for s in scoped["lastRoutingDecision"]["groupStatuses"]] == ["gcp-v5e"]
 
 
 def test_get_kubernetes_cluster_status_finds_non_representative_backend(state, scheduler, tmp_path, log_client):
