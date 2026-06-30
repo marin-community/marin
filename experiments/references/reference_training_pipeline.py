@@ -23,6 +23,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.evals.uncheatable import uncheatable_validation
@@ -91,7 +92,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name="references/reference-pipeline",
+        name=user_namespaced_name("references/reference-pipeline", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,

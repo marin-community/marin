@@ -21,6 +21,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
+from marin.experiment.namespacing import user_namespaced_name
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
@@ -411,7 +412,7 @@ def make_rl_step(
         )
 
     return ArtifactStep(
-        name=f"rl_testing/{name}",
+        name=user_namespaced_name(f"rl_testing/{name}", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=_dispatch_rl_experiment_step,
