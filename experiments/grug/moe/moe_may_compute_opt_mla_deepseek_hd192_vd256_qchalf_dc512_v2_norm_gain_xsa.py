@@ -13,7 +13,7 @@ widens the per-head value/QK dims and adds DeepSeek-style Q compression:
 - q_compression_dim = D // 2 (DeepSeek q_lora_rank): Q is low-rank
   ``x -> c_q (D/2) -> q (NH*256)``
 - d_c = 512 fixed (DeepSeek kv_lora_rank)
-- num_heads = D // 64 (8, 12, 16 at d=512, d=768, d=1024)
+- num_heads = D // 128 (4, 6, 8 at d=512, d=768, d=1024)
 - mla_norm_compressed_learnable = True (learned-gain RMSNorm on c_kv, kv_a_layernorm)
 - q_norm_learnable = True (learned-gain RMSNorm on c_q, q_a_layernorm)
 - xsa = True (on every layer)
@@ -55,7 +55,7 @@ _KV_COMPRESSION_DIM: int = 512
 _QK_ROPE_HEAD_DIM: int = 64
 _HEAD_DIM: int = 192
 _V_HEAD_DIM: int = 256
-_HIDDEN_HEAD_RATIO: int = 64
+_HIDDEN_HEAD_RATIO: int = 128
 
 # Compute-optimal cells from the README V2 baseline (iso-token with the MLA family).
 _POINTS: tuple[tuple[int, int, int], ...] = (
