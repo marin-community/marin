@@ -5,12 +5,13 @@
 
 DuckDB's ``httpfs`` cannot consume GCP application-default credentials, so GCS is
 reached through the S3-compatible interop API with HMAC keys. R2 and CoreWeave are
-native S3 providers; ducky keys each backend to a distinct URL scheme so a single
-DuckDB ``SECRET`` per backend disambiguates without bucket-level scoping:
+both addressed as ``s3://`` with different endpoints; ducky creates one DuckDB
+``SECRET`` per backend, each S3 secret ``SCOPE``-d to its bucket prefix so DuckDB
+picks the right endpoint per URI:
 
-- ``gs://`` → GCS (HMAC interop key/secret)
-- ``r2://`` → R2 (account id + S3 key/secret)
-- ``s3://`` → CoreWeave object store (endpoint + S3 key/secret)
+- ``gs://``            → GCS (HMAC interop key/secret)
+- ``s3://<r2-bucket>`` → R2 (S3 secret: endpoint + key/secret, scoped)
+- ``s3://<cw-bucket>`` → CoreWeave (S3 secret: endpoint + key/secret, scoped, virtual-host)
 
 Each backend is optional: it is enabled only when its full credential set is
 present, which lets a cred-free smoke deploy query DuckDB built-ins and spill to a
@@ -29,7 +30,7 @@ _ENV_PREFIX = "DUCKY_"
 _BACKEND_ENV = {
     "gcs": {"gcs_hmac_key_id": "DUCKY_GCS_HMAC_KEY_ID", "gcs_hmac_secret": "DUCKY_GCS_HMAC_SECRET"},
     "r2": {
-        "r2_account_id": "DUCKY_R2_ACCOUNT_ID",
+        "r2_endpoint": "DUCKY_R2_ENDPOINT",
         "r2_access_key": "DUCKY_R2_ACCESS_KEY",
         "r2_secret_key": "DUCKY_R2_SECRET_KEY",
     },
@@ -61,16 +62,23 @@ class DuckyConfig:
     # Optional per-backend credentials. A backend is enabled only when its full set is present.
     gcs_hmac_key_id: str | None = None
     gcs_hmac_secret: str | None = None
-    r2_account_id: str | None = None
+    # R2 and CoreWeave are S3-compatible, addressed as s3:// with their own endpoint; the
+    # secret is SCOPE-d to the bucket so DuckDB routes each s3:// URI to the right endpoint.
+    r2_endpoint: str | None = None
     r2_access_key: str | None = None
     r2_secret_key: str | None = None
     cw_endpoint: str | None = None
     cw_access_key: str | None = None
     cw_secret_key: str | None = None
 
+    r2_scope: str = "s3://marin-na"
+    """DuckDB SECRET scope for the R2 backend (the s3:// bucket prefix it serves)."""
+    r2_url_style: str = "path"
+    """S3 addressing for R2: ``path`` (R2 account endpoint serves the bucket in the path)."""
+    cw_scope: str = "s3://marin-us-east-02a"
+    """DuckDB SECRET scope for the CoreWeave backend."""
     cw_url_style: str = "vhost"
-    """S3 addressing for CoreWeave: ``vhost`` (bucket in host) or ``path``. CoreWeave's
-    endpoints reject path-style, so default to virtual-hosted."""
+    """S3 addressing for CoreWeave: ``vhost``. CoreWeave endpoints reject path-style."""
 
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
@@ -94,7 +102,7 @@ class DuckyConfig:
 
     @property
     def r2_enabled(self) -> bool:
-        return bool(self.r2_account_id and self.r2_access_key and self.r2_secret_key)
+        return bool(self.r2_endpoint and self.r2_access_key and self.r2_secret_key)
 
     @property
     def cw_enabled(self) -> bool:
@@ -142,6 +150,9 @@ class DuckyConfig:
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
+            r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
+            r2_url_style=os.environ.get(f"{_ENV_PREFIX}R2_URL_STYLE", cls.r2_url_style),
+            cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
             cw_url_style=os.environ.get(f"{_ENV_PREFIX}CW_URL_STYLE", cls.cw_url_style),
             **creds,
         )

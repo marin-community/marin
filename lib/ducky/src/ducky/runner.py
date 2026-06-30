@@ -39,14 +39,13 @@ def _object_uris(sql: str) -> list[str]:
 
 
 def _is_allowed(uri: str, allowed: tuple[str, ...]) -> bool:
-    """True if ``uri`` is covered by an allowlist entry (exact, scheme-only, or bucket prefix)."""
-    for entry in allowed:
-        if uri == entry or (entry.endswith("://") and uri.startswith(entry)):
-            return True
-        prefix = entry if entry.endswith("/") else entry + "/"
-        if uri.startswith(prefix):  # boundary-aware: gs://b does not match gs://b-evil
-            return True
-    return False
+    """True if ``uri`` starts with any allowlist entry.
+
+    Entries are URI prefixes: ``gs://marin-`` allows every ``gs://marin-*`` bucket,
+    ``r2://`` allows all of R2, and a trailing slash (``gs://marin-us-east5/``) bounds
+    a match to one bucket's contents.
+    """
+    return any(uri.startswith(entry) for entry in allowed)
 
 
 def disallowed_uris(sql: str, allowed: tuple[str, ...]) -> list[str]:
@@ -155,18 +154,29 @@ class QueryRunner:
                 f"CREATE OR REPLACE SECRET ducky_gcs "
                 f"(TYPE GCS, KEY_ID {_sql_literal(cfg.gcs_hmac_key_id)}, SECRET {_sql_literal(cfg.gcs_hmac_secret)})"
             )
+        # R2 and CoreWeave are both s3://, so each S3 secret is SCOPE-d to its bucket prefix;
+        # DuckDB routes an s3:// URI to the secret with the longest matching scope.
         if cfg.r2_enabled:
             self._con.execute(
-                f"CREATE OR REPLACE SECRET ducky_r2 "
-                f"(TYPE R2, ACCOUNT_ID {_sql_literal(cfg.r2_account_id)}, "
-                f"KEY_ID {_sql_literal(cfg.r2_access_key)}, SECRET {_sql_literal(cfg.r2_secret_key)})"
+                self._s3_secret(
+                    "ducky_r2", cfg.r2_endpoint, cfg.r2_url_style, cfg.r2_scope, cfg.r2_access_key, cfg.r2_secret_key
+                )
             )
         if cfg.cw_enabled:
             self._con.execute(
-                f"CREATE OR REPLACE SECRET ducky_cw "
-                f"(TYPE S3, ENDPOINT {_sql_literal(cfg.cw_endpoint)}, URL_STYLE {_sql_literal(cfg.cw_url_style)}, "
-                f"KEY_ID {_sql_literal(cfg.cw_access_key)}, SECRET {_sql_literal(cfg.cw_secret_key)})"
+                self._s3_secret(
+                    "ducky_cw", cfg.cw_endpoint, cfg.cw_url_style, cfg.cw_scope, cfg.cw_access_key, cfg.cw_secret_key
+                )
             )
+
+    @staticmethod
+    def _s3_secret(name: str, endpoint: str, url_style: str, scope: str, key_id: str, secret: str) -> str:
+        # REGION 'auto' keeps DuckDB from signing with a real AWS region for these custom endpoints.
+        return (
+            f"CREATE OR REPLACE SECRET {name} (TYPE S3, "
+            f"ENDPOINT {_sql_literal(endpoint)}, URL_STYLE {_sql_literal(url_style)}, REGION 'auto', "
+            f"SCOPE {_sql_literal(scope)}, KEY_ID {_sql_literal(key_id)}, SECRET {_sql_literal(secret)})"
+        )
 
     def run_query(self, sql: str, query_id: str) -> QueryResult:
         """Run ``sql`` once, spill the full result to parquet, and return a capped preview.

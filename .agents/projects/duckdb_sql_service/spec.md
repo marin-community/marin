@@ -41,18 +41,21 @@ class DuckyConfig:
     scratch_bucket: str          # gs:// prefix for spilled results, same region. Use the existing
                                  # marin tmp/ttl lifecycle convention, e.g. "gs://marin-us-east5/tmp/ttl=7d";
                                  # the prefix's N days MUST equal result_ttl_days.
-    # one secret set per backend, keyed by URL scheme so a single SECRET each
-    # disambiguates: gs:// -> GCS, r2:// -> R2, s3:// -> CoreWeave. DuckDB httpfs
-    # cannot use GCP ADC, so GCS needs HMAC interop keys.
+    # GCS via HMAC interop (DuckDB httpfs can't use GCP ADC). R2 and CoreWeave are both
+    # s3://, so each is a TYPE S3 secret SCOPE-d to its bucket prefix — DuckDB routes an
+    # s3:// URI to the secret with the longest matching scope (different endpoints).
     gcs_hmac_key_id: str         # GCS interop HMAC key id   -> CREATE SECRET ... TYPE GCS  (gs://)
-    gcs_hmac_secret: str         # GCS interop HMAC secret
-    r2_account_id: str           # R2 account id             -> CREATE SECRET ... TYPE R2   (r2://)
+    gcs_hmac_secret: str
+    r2_endpoint: str             # R2 account endpoint host  -> TYPE S3, SCOPE s3://marin-na, URL_STYLE path
     r2_access_key: str
     r2_secret_key: str
-    cw_endpoint: str             # CoreWeave S3 endpoint     -> CREATE SECRET ... TYPE S3   (s3://)
+    r2_scope: str = "s3://marin-na"
+    r2_url_style: str = "path"
+    cw_endpoint: str             # CoreWeave endpoint host   -> TYPE S3, SCOPE s3://marin-us-east-02a, URL_STYLE vhost
     cw_access_key: str
     cw_secret_key: str
-    cw_url_style: str = "vhost"  # CoreWeave rejects path-style addressing; default virtual-hosted
+    cw_scope: str = "s3://marin-us-east-02a"
+    cw_url_style: str = "vhost"  # CoreWeave rejects path-style addressing; virtual-hosted only
     preview_row_cap: int = 10_000 # max rows returned inline to the browser
     memory_fraction: float = 0.8  # DuckDB memory_limit = this * host RAM; headroom for Python/Arrow/OS
     result_ttl_days: int = 7      # informational; enforced by the bucket's lifecycle rule, not by ducky

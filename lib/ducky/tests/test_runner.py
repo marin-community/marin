@@ -19,10 +19,10 @@ def _make_config(scratch_bucket: str, **overrides) -> DuckyConfig:
         scratch_bucket=scratch_bucket,
         gcs_hmac_key_id="key",
         gcs_hmac_secret="secret",
-        r2_account_id="account",
+        r2_endpoint="acct.r2.cloudflarestorage.com",
         r2_access_key="r2key",
         r2_secret_key="r2secret",
-        cw_endpoint="cwobject.example.com",
+        cw_endpoint="cwobject.com",
         cw_access_key="cwkey",
         cw_secret_key="cwsecret",
     )
@@ -93,9 +93,18 @@ def test_disallowed_uris_flags_only_unlisted_buckets():
     assert disallowed_uris(sql, allowed) == ["gs://marin-us-central2/a.parquet"]
 
 
-def test_disallowed_uris_is_boundary_aware():
-    # gs://marin-us-east5 must not allow a look-alike bucket
-    assert disallowed_uris("read_parquet('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5",))
+def test_disallowed_uris_prefix_semantics():
+    # entries are prefixes: 'gs://marin-' allows every marin-* bucket
+    allowed = ("gs://marin-", "s3://marin-na")
+    assert disallowed_uris("read('gs://marin-us-east5/x') read('gs://marin-us-central2/y')", allowed) == []
+    assert disallowed_uris("read('s3://marin-na/z')", allowed) == []
+    assert disallowed_uris("read('gs://other-bucket/x')", allowed) == ["gs://other-bucket/x"]
+
+
+def test_disallowed_uris_trailing_slash_bounds_to_bucket():
+    # a bare prefix is loose; a trailing slash bounds the match to one bucket
+    assert disallowed_uris("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5",)) == []
+    assert disallowed_uris("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5/",))
 
 
 def test_disallowed_uris_empty_allowlist_allows_all():
