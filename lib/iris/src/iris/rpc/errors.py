@@ -130,6 +130,17 @@ def is_retryable_error(exc: Exception) -> bool:
     - ConnectError with Code.DEADLINE_EXCEEDED (client-side httpx read timeout)
     - ConnectError with Code.RESOURCE_EXHAUSTED (server-side load shed; safe to
       retry because the handler did not run)
+    - ConnectError with Code.UNIMPLEMENTED. A *handler* never returns this — our
+      services raise NOT_FOUND/FAILED_PRECONDITION for application errors — so in
+      practice UNIMPLEMENTED only comes from the wire: ``connectrpc`` maps a bare
+      HTTP 404 (or 501) from an intermediary to UNIMPLEMENTED (see
+      ``ConnectWireError.from_http_status``). That happens when the request never
+      reaches the mounted route: a controller mid-restart, a load balancer ahead
+      of a not-yet-ready backend, or version skew where the worker's job bundle
+      calls a route (e.g. the EndpointService split out in #6728) that the
+      running controller binary does not yet serve. All of those are transient,
+      so retry rather than crash the caller. A genuine "task not found" is a
+      Connect NOT_FOUND with a JSON body and stays non-retryable.
 
     Does not retry on:
     - Application errors (NOT_FOUND, INVALID_ARGUMENT, ALREADY_EXISTS, etc.)
@@ -141,6 +152,7 @@ def is_retryable_error(exc: Exception) -> bool:
             Code.INTERNAL,
             Code.DEADLINE_EXCEEDED,
             Code.RESOURCE_EXHAUSTED,
+            Code.UNIMPLEMENTED,
         )
     return False
 

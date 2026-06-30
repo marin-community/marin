@@ -3,6 +3,7 @@
 
 
 import pytest
+from connectrpc._protocol import ConnectWireError
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.rpc.errors import (
@@ -119,6 +120,36 @@ def test_call_with_retry_retries_on_resource_exhausted() -> None:
         return "success"
 
     result = call_with_retry("test_op", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001))
+    assert result == "success"
+    assert call_count == 3
+
+
+def test_call_with_retry_retries_on_wire_http_404() -> None:
+    """A bare HTTP 404 from an intermediary is retryable, not a fatal error.
+
+    When the request never reaches the mounted Connect route (controller
+    mid-restart, load balancer ahead of a not-yet-ready backend, or version skew
+    where the job bundle calls a route the running controller binary does not yet
+    serve), connectrpc maps the raw HTTP status to a ConnectError via
+    ``ConnectWireError.from_http_status``. A 404 becomes Code.UNIMPLEMENTED. This
+    is the failure that killed a zephyr download coordinator on register_endpoint
+    (issue #6771); it must be retried so the caller rides out the transient blip.
+    """
+    wire_error = ConnectWireError.from_http_status(404).to_exception()
+    assert wire_error.code == Code.UNIMPLEMENTED
+
+    call_count = 0
+
+    def retry_then_succeed():
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise ConnectWireError.from_http_status(404).to_exception()
+        return "success"
+
+    result = call_with_retry(
+        "register_endpoint", retry_then_succeed, backoff=ExponentialBackoff(initial=0.001, maximum=0.001)
+    )
     assert result == "success"
     assert call_count == 3
 
