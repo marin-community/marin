@@ -23,7 +23,11 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.runtime.multigpu import JAX_LOCAL_DEVICE_IDS_ENV, JAX_PROCESS_COUNT_ENV, JAX_PROCESS_INDEX_ENV
+from iris.runtime.multigpu import (
+    IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
+    IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+    IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +37,11 @@ _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
     "IRIS_NUM_TASKS",
     "IRIS_PORT_jax",
+    IRIS_MULTIGPU_PROCESS_COUNT_ENV,
+    IRIS_MULTIGPU_PROCESS_INDEX_ENV,
+    IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     "JAX_COORDINATOR_ADDRESS",
     "JAX_COORDINATOR_BIND_ADDRESS",
-    "JAX_LOCAL_DEVICE_IDS",
-    "JAX_PROCESS_COUNT",
-    "JAX_PROCESS_INDEX",
 )
 
 
@@ -132,7 +136,7 @@ def _poll_for_coordinator(
 
 
 def _parse_local_device_ids(raw: str | None) -> list[int] | None:
-    """Parse a ``JAX_LOCAL_DEVICE_IDS`` value ("0" or "2,3") into a list, or None."""
+    """Parse an ``IRIS_MULTIGPU_LOCAL_DEVICE_IDS`` value ("0" or "2,3") into a list, or None."""
     if not raw:
         return None
     return [int(part) for part in raw.split(",") if part]
@@ -167,15 +171,15 @@ def _initialize_supervised_jax(
     """Join the JAX mesh for a process launched by ``iris.runtime.multigpu``.
 
     The supervisor runs N JAX processes inside one Iris task and stamps each
-    child with its global rank (``JAX_PROCESS_INDEX``), the global world size
-    (``JAX_PROCESS_COUNT``), and the device ids it owns (``JAX_LOCAL_DEVICE_IDS``).
-    Coordinator discovery reuses the one-process-per-task endpoint dance, lifted
-    from per-task to per-global-rank so every process across every host joins one
-    mesh.
+    child with its global rank (``IRIS_MULTIGPU_PROCESS_INDEX``), the global world
+    size (``IRIS_MULTIGPU_PROCESS_COUNT``), and the device ids it owns
+    (``IRIS_MULTIGPU_LOCAL_DEVICE_IDS``). Coordinator discovery reuses the
+    one-process-per-task endpoint dance, lifted from per-task to per-global-rank
+    so every process across every host joins one mesh.
     """
-    proc_count = int(os.environ[JAX_PROCESS_COUNT_ENV])
-    proc_index = int(os.environ[JAX_PROCESS_INDEX_ENV])
-    device_ids = _parse_local_device_ids(os.environ.get(JAX_LOCAL_DEVICE_IDS_ENV))
+    proc_count = int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV])
+    proc_index = int(os.environ[IRIS_MULTIGPU_PROCESS_INDEX_ENV])
+    device_ids = _parse_local_device_ids(os.environ.get(IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV))
 
     if proc_count <= 1:
         jax.distributed.initialize(num_processes=1, process_id=0, local_device_ids=device_ids)
@@ -272,7 +276,7 @@ def initialize_jax(
     # rank, so the single/multi-task branches below (which assume one process
     # per task) do not apply. This runs even when job_info is None so a local
     # supervisor smoke can bring up a localhost mesh.
-    if JAX_PROCESS_COUNT_ENV in os.environ:
+    if IRIS_MULTIGPU_PROCESS_COUNT_ENV in os.environ:
         _initialize_supervised_jax(
             jax,
             job_info,

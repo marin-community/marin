@@ -247,9 +247,9 @@ def test_initialize_jax_supervised_single_host(
 ) -> None:
     """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
-    monkeypatch.setenv("JAX_PROCESS_COUNT", "8")
-    monkeypatch.setenv("JAX_PROCESS_INDEX", "3")
-    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "3")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
 
     initialize_jax()
 
@@ -272,9 +272,9 @@ def test_initialize_jax_supervised_global_rank0_registers(
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
-    monkeypatch.setenv("JAX_PROCESS_COUNT", "16")
-    monkeypatch.setenv("JAX_PROCESS_INDEX", "0")
-    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
 
     initialize_jax()
 
@@ -299,9 +299,9 @@ def test_initialize_jax_supervised_other_host_polls(
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
     mock_iris_ctx.return_value = fake_ctx
-    monkeypatch.setenv("JAX_PROCESS_COUNT", "16")
-    monkeypatch.setenv("JAX_PROCESS_INDEX", "8")
-    monkeypatch.setenv("JAX_LOCAL_DEVICE_IDS", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "8")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
 
     initialize_jax()
 

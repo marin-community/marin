@@ -6,11 +6,13 @@ client-side entrypoint wrapping that drives it. None of this imports jax."""
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import pytest
 from iris.client.client import _wrap_entrypoint_for_multiprocess
 from iris.cluster.types import Entrypoint, ResourceSpec, gpu_device
+from iris.runtime import multigpu
 from iris.runtime.multigpu import _child_rank_env, run
 
 
@@ -24,35 +26,71 @@ def test_child_rank_env_global_rank_and_device_slice() -> None:
     # global rank = 1*4 + 2 = 6; world = 3*4 = 12; devices = [2*2, 2*2+1] = 4,5
     env = _child_rank_env(local_rank=2, nproc=4, devices_per_proc=2, task_index=1, num_tasks=3)
     assert env == {
-        "JAX_PROCESS_COUNT": "12",
-        "JAX_PROCESS_INDEX": "6",
-        "JAX_LOCAL_DEVICE_IDS": "4,5",
+        "IRIS_MULTIGPU_PROCESS_COUNT": "12",
+        "IRIS_MULTIGPU_PROCESS_INDEX": "6",
+        "IRIS_MULTIGPU_LOCAL_DEVICE_IDS": "4,5",
     }
 
 
 def test_child_rank_env_one_device_per_proc() -> None:
     env = _child_rank_env(local_rank=0, nproc=8, devices_per_proc=1, task_index=0, num_tasks=1)
-    assert env["JAX_PROCESS_COUNT"] == "8"
-    assert env["JAX_PROCESS_INDEX"] == "0"
-    assert env["JAX_LOCAL_DEVICE_IDS"] == "0"
+    assert env["IRIS_MULTIGPU_PROCESS_COUNT"] == "8"
+    assert env["IRIS_MULTIGPU_PROCESS_INDEX"] == "0"
+    assert env["IRIS_MULTIGPU_LOCAL_DEVICE_IDS"] == "0"
 
 
 def test_run_all_children_succeed_returns_zero() -> None:
-    check = _py("import os; assert os.environ['JAX_PROCESS_COUNT'] == '3'")
+    check = _py("import os; assert os.environ['IRIS_MULTIGPU_PROCESS_COUNT'] == '3'")
     assert run(nproc=3, devices_per_proc=1, child_argv=check) == 0
 
 
 def test_run_propagates_first_child_failure() -> None:
     # The rank-1 child exits 7; siblings exit 0. The supervisor surfaces 7.
-    code = "import os,sys; sys.exit(7 if os.environ['JAX_PROCESS_INDEX']=='1' else 0)"
+    code = "import os,sys; sys.exit(7 if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='1' else 0)"
     assert run(nproc=3, devices_per_proc=1, child_argv=_py(code)) == 7
 
 
 def test_run_terminates_peers_when_one_fails() -> None:
     # Rank 0 fails immediately; the peers would otherwise sleep 30s. The
     # supervisor must tear them down and return promptly with the failure code.
-    code = "import os,sys,time; sys.exit(3) if os.environ['JAX_PROCESS_INDEX']=='0' else time.sleep(30)"
+    code = "import os,sys,time; sys.exit(3) if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0' else time.sleep(30)"
     assert run(nproc=3, devices_per_proc=1, child_argv=_py(code)) == 3
+
+
+def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
+    # the supervisor SIGKILLs it after the grace period and still returns 3.
+    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", 0.5)
+    code = (
+        "import os,sys,signal,time\n"
+        "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(30)\n"
+    )
+    assert run(nproc=2, devices_per_proc=1, child_argv=_py(code)) == 3
+
+
+def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Rank 0 spawns; rank 1's Popen raises. The started rank-0 child must be
+    # killed (not orphaned) before the error propagates.
+    real_popen = subprocess.Popen
+    started: list[subprocess.Popen] = []
+    calls = {"n": 0}
+
+    def flaky_popen(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated spawn failure")
+        proc = real_popen(*args, **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(multigpu.subprocess, "Popen", flaky_popen)
+    with pytest.raises(OSError, match="simulated spawn failure"):
+        run(nproc=3, devices_per_proc=1, child_argv=_py("import time; time.sleep(30)"))
+    assert len(started) == 1
+    # Killed by SIGKILL → returncode is the negative signal number, never 0.
+    assert started[0].returncode is not None and started[0].returncode < 0
 
 
 def test_run_rejects_empty_command() -> None:
