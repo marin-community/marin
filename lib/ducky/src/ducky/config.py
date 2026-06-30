@@ -61,6 +61,10 @@ class DuckyConfig:
     cw_access_key: str | None = None
     cw_secret_key: str | None = None
 
+    cw_url_style: str = "vhost"
+    """S3 addressing for CoreWeave: ``vhost`` (bucket in host) or ``path``. CoreWeave's
+    endpoints reject path-style, so default to virtual-hosted."""
+
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
 
@@ -127,5 +131,6 @@ class DuckyConfig:
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
+            cw_url_style=os.environ.get(f"{_ENV_PREFIX}CW_URL_STYLE", cls.cw_url_style),
             **creds,
         )

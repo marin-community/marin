@@ -97,6 +97,9 @@ def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memor
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
+    # The task requires DUCKY_REGION; default it from --region so deploys don't need a
+    # separate export (an explicit DUCKY_REGION export still wins).
+    env_vars.setdefault("DUCKY_REGION", region)
 
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 import os
 import re
 import time
@@ -82,10 +83,13 @@ def _coerce_cell(value: object) -> object:
     """Coerce a DuckDB/Arrow cell to a JSON-serializable scalar.
 
     Native scalars pass through; everything else (timestamp, decimal, interval,
-    blob, list, struct) becomes its string form for the preview.
+    blob, list, struct) becomes its string form for the preview. Non-finite floats
+    (``NaN``/``inf``) also become strings — Starlette's ``JSONResponse`` rejects them.
     """
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or isinstance(value, (bool, int, str)):
         return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
     return str(value)
 
 
@@ -129,7 +133,7 @@ class QueryRunner:
         if cfg.cw_enabled:
             self._con.execute(
                 f"CREATE OR REPLACE SECRET ducky_cw "
-                f"(TYPE S3, ENDPOINT {_sql_literal(cfg.cw_endpoint)}, URL_STYLE 'path', "
+                f"(TYPE S3, ENDPOINT {_sql_literal(cfg.cw_endpoint)}, URL_STYLE {_sql_literal(cfg.cw_url_style)}, "
                 f"KEY_ID {_sql_literal(cfg.cw_access_key)}, SECRET {_sql_literal(cfg.cw_secret_key)})"
             )
 
@@ -146,12 +150,18 @@ class QueryRunner:
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
         path_literal = _sql_literal(result_path)
 
+        # Strip a trailing `;` (else it lands mid-`COPY (...)` and is a syntax error), and
+        # wrap the user SQL on its own lines so a trailing `-- comment` can't eat the
+        # generated `)`.
+        normalized_sql = sql.strip().rstrip(";").rstrip()
+        copy_stmt = f"COPY (\n{normalized_sql}\n) TO {path_literal} (FORMAT parquet)"
+
         # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
         # DuckDB would otherwise read back as a phantom `ttl` partition column.
         readback = f"read_parquet({path_literal}, hive_partitioning=false)"
         start = time.monotonic()
         try:
-            self._con.execute(f"COPY ({sql}) TO {path_literal} (FORMAT parquet)")
+            self._con.execute(copy_stmt)
             count_row = self._con.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])

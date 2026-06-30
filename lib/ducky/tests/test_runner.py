@@ -104,6 +104,26 @@ def test_run_query_coerces_non_scalar_cells_to_str(make_runner):
     assert "2020-01-01" in cell
 
 
+def test_run_query_strips_trailing_semicolon(make_runner):
+    runner = make_runner()
+    result = runner.run_query("SELECT 1 AS a;", uuid.uuid4().hex)
+    assert result.columns == ["a"]
+    assert result.preview_rows == [[1]]
+
+
+def test_run_query_handles_trailing_line_comment(make_runner):
+    runner = make_runner()
+    result = runner.run_query("SELECT 1 AS a -- trailing comment", uuid.uuid4().hex)
+    assert result.preview_rows == [[1]]
+
+
+def test_run_query_coerces_non_finite_floats_to_str(make_runner):
+    runner = make_runner()
+    result = runner.run_query("SELECT 'nan'::DOUBLE AS x, 'inf'::DOUBLE AS y", uuid.uuid4().hex)
+    nan_cell, inf_cell = result.preview_rows[0]
+    assert isinstance(nan_cell, str) and isinstance(inf_cell, str)
+
+
 def test_run_query_ignores_hive_partition_in_scratch_path(tmp_path):
     """A `ttl=Nd` segment in the scratch path must not leak a phantom partition column."""
     scratch = tmp_path / "tmp" / "ttl=7d"

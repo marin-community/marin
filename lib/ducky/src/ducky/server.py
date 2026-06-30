@@ -22,7 +22,7 @@ import enum
 import logging
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor, ThreadPoolExecutor
 
 import uvicorn
 from iris.client.client import iris_ctx
@@ -64,9 +64,9 @@ class QueryManager:
     restartable, so a restart drops both.
     """
 
-    def __init__(self, runner: QueryRunner) -> None:
+    def __init__(self, runner: QueryRunner, executor: Executor | None = None) -> None:
         self._runner = runner
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ducky-query")
+        self._executor = executor or ThreadPoolExecutor(max_workers=1, thread_name_prefix="ducky-query")
         self._states: dict[str, QueryState] = {}
         self._cache: dict[str, QueryResult] = {}
         self._lock = threading.Lock()
@@ -272,10 +272,13 @@ def _index_html(ttl_days: int) -> str:
     return _INDEX_HTML.replace("__TTL_DAYS__", str(ttl_days))
 
 
-def create_app(runner: QueryRunner, config: DuckyConfig) -> Starlette:
-    """Build the ducky Starlette app over a query runner. No Iris context required."""
+def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | None = None) -> Starlette:
+    """Build the ducky Starlette app over a query runner. No Iris context required.
+
+    ``executor`` overrides the query executor (tests inject a synchronous one).
+    """
     index_html = _index_html(config.result_ttl_days)
-    manager = QueryManager(runner)
+    manager = QueryManager(runner, executor=executor)
 
     @requires_auth
     async def index(_request: Request) -> HTMLResponse:

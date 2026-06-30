@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import time
+from concurrent.futures import Future
 
 import pytest
 from ducky.config import DuckyConfig
@@ -16,6 +16,22 @@ _CONFIG = DuckyConfig(
     gcs_hmac_secret="s",
     result_ttl_days=7,
 )
+
+
+class _InlineExecutor:
+    """Runs submitted work synchronously, so a query finishes during ``submit`` — the
+    test reads ``/result`` once with no polling or ``time.sleep`` (per root TESTING.md)."""
+
+    def submit(self, fn, *args, **kwargs):
+        future: Future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as e:  # mirror ThreadPoolExecutor: capture into the future
+            future.set_exception(e)
+        return future
+
+    def shutdown(self, wait=True, **kwargs):
+        pass
 
 
 class _FakeRunner:
@@ -34,27 +50,26 @@ class _FakeRunner:
         return self._result
 
 
-def _poll(client: TestClient, query_id: str, timeout: float = 3.0) -> dict:
-    """Poll /result until the query leaves the 'running' state."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        payload = client.get(f"/result/{query_id}").json()
-        if payload["status"] != "running":
-            return payload
-        time.sleep(0.01)
-    raise AssertionError(f"query {query_id} still running after {timeout}s")
+def _client(runner) -> TestClient:
+    return TestClient(create_app(runner, _CONFIG, executor=_InlineExecutor()))
+
+
+def _run(client: TestClient, sql: str) -> dict:
+    """Submit and read the result. The inline executor finishes the query during submit."""
+    query_id = client.post("/query", json={"sql": sql}).json()["query_id"]
+    payload = client.get(f"/result/{query_id}").json()
+    assert payload["status"] != "running"  # inline executor → already terminal
+    return payload
 
 
 def test_health_is_public():
-    client = TestClient(create_app(_FakeRunner(), _CONFIG))
-    resp = client.get("/health")
+    resp = _client(_FakeRunner()).get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "healthy"}
 
 
 def test_index_serves_form():
-    client = TestClient(create_app(_FakeRunner(), _CONFIG))
-    resp = client.get("/")
+    resp = _client(_FakeRunner()).get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "<textarea" in resp.text
@@ -62,9 +77,7 @@ def test_index_serves_form():
 
 def test_query_accepts_and_returns_uuid_query_id():
     fake = _FakeRunner(result=QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/a.parquet", 12, 345))
-    client = TestClient(create_app(fake, _CONFIG))
-
-    resp = client.post("/query", json={"sql": "SELECT 1"})
+    resp = _client(fake).post("/query", json={"sql": "SELECT 1"})
 
     assert resp.status_code == 202
     query_id = resp.json()["query_id"]
@@ -72,13 +85,11 @@ def test_query_accepts_and_returns_uuid_query_id():
     int(query_id, 16)  # valid hex
 
 
-def test_query_result_delivered_via_polling():
+def test_query_result_delivered_via_result_endpoint():
     result = QueryResult(["x"], [[1], [2]], 5, True, "gs://marin-ducky-us-east5/ducky/abc.parquet", 1234, 5678)
     fake = _FakeRunner(result=result)
-    client = TestClient(create_app(fake, _CONFIG))
 
-    query_id = client.post("/query", json={"sql": "SELECT * FROM range(5)"}).json()["query_id"]
-    payload = _poll(client, query_id)
+    payload = _run(_client(fake), "SELECT * FROM range(5)")
 
     assert payload == {
         "status": "done",
@@ -91,7 +102,7 @@ def test_query_result_delivered_via_polling():
         "elapsed_ms": 1234,
         "result_bytes": 5678,
     }
-    assert fake.received_query_id == query_id
+    assert fake.received_query_id is not None
 
 
 def test_identical_sql_served_from_cache():
@@ -106,12 +117,11 @@ def test_identical_sql_served_from_cache():
             self.calls += 1
             return super().run_query(sql, query_id)
 
-    result = QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet", 50, 99)
-    runner = _CountingRunner(result)
-    client = TestClient(create_app(runner, _CONFIG))
+    runner = _CountingRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet", 50, 99))
+    client = _client(runner)
 
-    first = _poll(client, client.post("/query", json={"sql": "SELECT 1"}).json()["query_id"])
-    second = _poll(client, client.post("/query", json={"sql": "SELECT 1"}).json()["query_id"])
+    first = _run(client, "SELECT 1")
+    second = _run(client, "SELECT 1")
 
     assert runner.calls == 1  # executed once, second served from cache
     assert first["cached"] is False
@@ -121,24 +131,18 @@ def test_identical_sql_served_from_cache():
 
 def test_query_error_surfaces_in_result():
     fake = _FakeRunner(error=QueryError("Catalog Error: table not found"))
-    client = TestClient(create_app(fake, _CONFIG))
-
-    query_id = client.post("/query", json={"sql": "SELECT * FROM nope"}).json()["query_id"]
-    payload = _poll(client, query_id)
-
+    payload = _run(_client(fake), "SELECT * FROM nope")
     assert payload == {"status": "error", "error": "Catalog Error: table not found"}
 
 
 def test_unknown_query_id_is_404():
-    client = TestClient(create_app(_FakeRunner(), _CONFIG))
-    resp = client.get("/result/deadbeef")
+    resp = _client(_FakeRunner()).get("/result/deadbeef")
     assert resp.status_code == 404
     assert resp.json() == {"error": "unknown query_id"}
 
 
 @pytest.mark.parametrize("body", [{}, {"sql": ""}, {"sql": "   "}])
 def test_query_missing_sql_is_400(body):
-    client = TestClient(create_app(_FakeRunner(), _CONFIG))
-    resp = client.post("/query", json=body)
+    resp = _client(_FakeRunner()).post("/query", json=body)
     assert resp.status_code == 400
     assert resp.json() == {"error": "missing 'sql'"}

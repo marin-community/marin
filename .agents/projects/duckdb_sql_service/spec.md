@@ -41,6 +41,7 @@ class DuckyConfig:
     cw_endpoint: str             # CoreWeave S3 endpoint     -> CREATE SECRET ... TYPE S3   (s3://)
     cw_access_key: str
     cw_secret_key: str
+    cw_url_style: str = "vhost"  # CoreWeave rejects path-style addressing; default virtual-hosted
     preview_row_cap: int = 10_000 # max rows returned inline to the browser
     memory_fraction: float = 0.8  # DuckDB memory_limit = this * host RAM; headroom for Python/Arrow/OS
     result_ttl_days: int = 7      # informational; enforced by the bucket's lifecycle rule, not by ducky
