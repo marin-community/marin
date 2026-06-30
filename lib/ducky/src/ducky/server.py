@@ -135,9 +135,11 @@ _INDEX_HTML = """\
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/display/placeholder.min.js"></script>
 <style>
   body { font-family: system-ui, sans-serif; margin: 2rem; }
   .CodeMirror { border: 1px solid #ccc; height: 12rem; font-size: 13px; }
+  .CodeMirror-placeholder { color: #aaa !important; font-style: italic; }
   button { margin-top: .5rem; padding: .4rem 1rem; font-size: 14px; }
   #status { margin: .6rem 0; color: #555; }
   #status .cached { color: #2a7; font-weight: 600; }
@@ -166,6 +168,7 @@ const editor = CodeMirror.fromTextArea(document.getElementById("sql"), {
   mode: "text/x-sql",
   lineNumbers: true,
   lineWrapping: true,
+  placeholder: "-- write DuckDB SQL, then \\u2318/Ctrl-Enter to run\\nSELECT *\\nFROM read_parquet('gs://marin-us-east5/<path>/*.parquet')\\nLIMIT 100",
   extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
 });
 
