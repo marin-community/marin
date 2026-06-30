@@ -100,3 +100,17 @@ def test_run_query_coerces_non_scalar_cells_to_str(make_runner):
     (cell,) = result.preview_rows[0]
     assert isinstance(cell, str)
     assert "2020-01-01" in cell
+
+
+def test_run_query_ignores_hive_partition_in_scratch_path(tmp_path):
+    """A `ttl=Nd` segment in the scratch path must not leak a phantom partition column."""
+    scratch = tmp_path / "tmp" / "ttl=7d"
+    (scratch / "ducky").mkdir(parents=True)
+    runner = QueryRunner(_make_config(str(scratch)), resources=_SMALL_HOST)
+    try:
+        result = runner.run_query("SELECT 1 AS a, 2 AS b", uuid.uuid4().hex)
+    finally:
+        runner.close()
+
+    assert result.columns == ["a", "b"]  # no "ttl"
+    assert result.preview_rows == [[1, 2]]

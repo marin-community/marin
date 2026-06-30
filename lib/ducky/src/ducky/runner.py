@@ -143,13 +143,16 @@ class QueryRunner:
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"
         path_literal = _sql_literal(result_path)
 
+        # hive_partitioning=false: the scratch path embeds a `tmp/ttl=Nd/` segment, which
+        # DuckDB would otherwise read back as a phantom `ttl` partition column.
+        readback = f"read_parquet({path_literal}, hive_partitioning=false)"
         try:
             self._con.execute(f"COPY ({sql}) TO {path_literal} (FORMAT parquet)")
-            count_row = self._con.execute(f"SELECT count(*) FROM read_parquet({path_literal})").fetchone()
+            count_row = self._con.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
             preview = self._con.execute(
-                f"SELECT * FROM read_parquet({path_literal}) LIMIT {self._config.preview_row_cap}"
+                f"SELECT * FROM {readback} LIMIT {self._config.preview_row_cap}"
             ).fetch_arrow_table()
         except duckdb.Error as e:
             raise QueryError(str(e)) from e
