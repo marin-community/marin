@@ -27,7 +27,9 @@ lib/ducky/
 class DuckyConfig:
     """Resolved once at startup; no env reads after construction."""
     region: str                  # service region, e.g. "us-east5" (operational pin; not enforced in-runner)
-    scratch_bucket: str          # gs:// prefix for spilled results, same region; e.g. "gs://marin-ducky-us-east5"
+    scratch_bucket: str          # gs:// prefix for spilled results, same region. Use the existing
+                                 # marin tmp/ttl lifecycle convention, e.g. "gs://marin-us-east5/tmp/ttl=7d";
+                                 # the prefix's N days MUST equal result_ttl_days.
     # one secret set per backend, keyed by URL scheme so a single SECRET each
     # disambiguates: gs:// -> GCS, r2:// -> R2, s3:// -> CoreWeave. DuckDB httpfs
     # cannot use GCP ADC, so GCS needs HMAC interop keys.
@@ -200,7 +202,9 @@ On shutdown (Starlette `on_shutdown`), `ctx.registry.unregister(endpoint_id)` an
 
 - **Spilled result:** parquet at `{scratch_bucket}/ducky/{query_id}.parquet`, one
   file per query, written by DuckDB `COPY (…) TO … (FORMAT parquet)`. No partitioning.
-- **Retention:** GCS object-lifecycle rule on `scratch_bucket`, `age = result_ttl_days`,
+- **Retention:** the marin `tmp/ttl=Nd/` lifecycle convention auto-deletes after N
+  days; pick the `scratch_bucket` prefix whose N matches `result_ttl_days`. ducky
+  only writes. (Equivalently, a dedicated bucket with `age = result_ttl_days`.)
   configured at deploy time (not by ducky). ducky only writes.
 - No other persisted state — ducky is stateless across restarts.
 

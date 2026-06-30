@@ -75,8 +75,9 @@ of host RAM — leaving room for Python/Arrow/OS) from
 `TaskResources.from_environment()`. `run_query(sql, query_id)` runs the user SQL
 **once** via `COPY (<sql>) TO 'gs://<scratch>/ducky/<query_id>.parquet' (FORMAT
 parquet)`, then reads that parquet back for `total_rows` and the first
-`PREVIEW_ROW_CAP` (default 10k) rows. The scratch bucket carries an object
-lifecycle rule (TTL = `RESULT_TTL_DAYS`, default 7) so spilled results auto-expire
+`PREVIEW_ROW_CAP` (default 10k) rows. The scratch prefix uses marin's existing
+`tmp/ttl=Nd/` lifecycle convention (e.g. `gs://marin-us-east5/tmp/ttl=7d`, with N =
+`RESULT_TTL_DAYS`, default 7) so spilled results auto-expire
 — the service never deletes, it only writes. Returns
 `QueryResult(columns, preview_rows, total_rows, truncated, result_path)`.
 
@@ -163,9 +164,10 @@ against views/macros. v1 ships no in-runner cross-region check.
   guardrail?
 - **Host envelope.** What are the real `ct6e-standard-8t` vCPU/RAM numbers to put in
   the `ResourceSpec` request so the job both schedules and gets the whole host?
-- **Scratch bucket & TTL.** Which `us-east5` bucket, and is 7 days the right default?
-  Should the result path be a signed URL / clickable download, or just a `gs://`
-  path the user fetches themselves?
+- **Scratch bucket & TTL.** Settled to `gs://marin-us-east5/tmp/ttl=7d` (existing
+  lifecycle convention; N must equal `RESULT_TTL_DAYS`). Open: should the result
+  path be a signed URL / clickable download, or just the `gs://` path the user
+  fetches themselves?
 - **Concurrency UX.** v1 is single-query-at-a-time (one DuckDB connection, a
   single-worker executor). A second `POST /query` queues behind the running one
   (FIFO). Is that enough, or do we want a visible queue depth / "busy" signal?
