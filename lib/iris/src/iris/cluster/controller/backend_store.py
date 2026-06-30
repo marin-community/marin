@@ -8,13 +8,15 @@ schedules and reconciles from, resolve a worker's address, and reap dead workers
 :class:`DbBackendWorkerStore` implements the interface against the controller database.
 """
 
+import threading
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
@@ -45,6 +47,19 @@ from iris.rpc import job_pb2
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
 
 
+def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> WorkerId | None:
+    """Return one tracker-known worker that is DEAD with a heartbeat older than ``before_ms``.
+
+    Every persisted ``workers`` row has a tracker entry by construction (seeded at
+    boot/restore, registered on commit of ``upsert``, removed on commit of
+    ``remove``), so scanning the tracker is sufficient.
+    """
+    for worker_id, liveness in health.all().items():
+        if liveness.usability is WorkerUsability.DEAD and liveness.last_heartbeat_ms < before_ms:
+            return worker_id
+    return None
+
+
 class BackendWorkerStore(TransitionReader, Protocol):
     """The worker-state operations a worker-daemon backend depends on."""
 
@@ -71,6 +86,14 @@ class BackendWorkerStore(TransitionReader, Protocol):
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
         them. Returns every worker removed (the failed workers plus reaped siblings)."""
+        ...
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Delete this backend's DEAD workers whose last heartbeat predates ``cutoff_ms``.
+
+        Removes one worker (and its attributes) per transaction, sleeping ``pause``
+        between deletes so heartbeat and scheduling traffic interleave. Returns the
+        number of workers removed; stops early once ``stop_event`` is set."""
         ...
 
 
@@ -206,6 +229,25 @@ class DbBackendWorkerStore:
             )
         self.health.forget_many(removed_set | set(siblings))
         return removed_ids + siblings
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Delete this backend's DEAD workers whose last heartbeat predates ``cutoff_ms``.
+
+        Removes one worker (and its attributes) per transaction, sleeping ``pause``
+        between deletes so heartbeat and scheduling traffic interleave. Returns the
+        number of workers removed; stops early once ``stop_event`` is set.
+        """
+        deleted = 0
+        while stop_event is None or not stop_event.is_set():
+            worker_id = _find_prunable_worker(self.health, cutoff_ms)
+            if worker_id is None:
+                break
+            with self.db.transaction() as cur:
+                writes.remove_worker(cur, worker_id, health=self.health, worker_attrs=self.worker_attrs)
+            log_event("worker_pruned", str(worker_id))
+            deleted += 1
+            time.sleep(pause)
+        return deleted
 
     def _owned_worker_ids(self, snap: Tx) -> set[WorkerId]:
         """The workers this backend owns, by scale group, in the read ``snap``."""

@@ -14,6 +14,7 @@ Three layers, exercised in order:
    tick's reconcile phase (``reconcile_once``).
 """
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, cast
 
@@ -1224,6 +1225,10 @@ class _ScriptedProvider:
         assert self._store is not None, "_ScriptedProvider.teardown called before worker store attached"
         self._store.reap_workers(dead_workers, reason=reason)
 
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        assert self._store is not None, "_ScriptedProvider.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
+
     def close(self):
         pass
 
@@ -1417,6 +1422,10 @@ class _UnreachableProvider:
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
         assert self._store is not None, "_UnreachableProvider.teardown called before worker store attached"
         self._store.reap_workers(dead_workers, reason=reason)
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        assert self._store is not None, "_UnreachableProvider.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         self.autoscale_calls.append(list(request.dead_workers))
