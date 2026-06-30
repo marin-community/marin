@@ -3,7 +3,7 @@
 
 # nodryrun because vLLM is not installed by default
 
-"""Regression probe: executor + small GPU-only RL launch.
+"""Regression probe: lazy artifact + small GPU-only RL launch.
 
 Example:
     uv run python experiments/exp_iris_rl_regression_executor_gcs_small_gpu.py --region us-central1
@@ -15,7 +15,7 @@ import logging
 import os
 
 from levanter.models.qwen import Qwen3Config
-from marin.execution.executor import executor_main
+from marin.execution.step_runner import StepRunner
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_experiment_utils import (
     ModelArtifact,
@@ -23,7 +23,6 @@ from marin.rl.rl_experiment_utils import (
     RLExperimentConfig,
     config_class_path,
     default_train_decoding_for_experiment,
-    executor_main_config_for_rl_experiment,
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
@@ -35,6 +34,7 @@ from experiments.iris_rl_gpu_smoke import (
     DEFAULT_GPU_TYPE,
     DEFAULT_NUM_TRAIN_STEPS,
     gpu_smoke_curriculum,
+    gpu_smoke_prefix,
     gpu_smoke_resources,
     gpu_smoke_rollout_count,
     gpu_smoke_train_batch_size,
@@ -78,14 +78,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-path",
         default=None,
-        help="Model artifact path or Hugging Face model id. Defaults to the executor-managed canonical artifact.",
+        help="Model artifact path or Hugging Face model id. Defaults to the managed canonical artifact.",
     )
     parser.add_argument(
         "--executor-prefix",
         default=None,
-        help="Output prefix for executor-managed artifacts. Defaults to the Marin bucket for --region.",
+        help="Output prefix for lazy artifacts. Defaults to the Marin bucket for --region.",
     )
     return parser.parse_args()
+
+
+def gpu_smoke_output_prefix(*, region: str, executor_prefix: str | None) -> str:
+    """Return the storage prefix used by the lazy runner for smoke-run artifacts."""
+    return executor_prefix or gpu_smoke_prefix(region)
 
 
 def build_model_config(model_artifact: ModelArtifact) -> ModelConfig:
@@ -105,7 +110,6 @@ def build_debug_config(
     gpu_type: str,
     gpu_count: int,
     model_path: str | None,
-    executor_prefix: str | None = None,
 ) -> RLExperimentConfig:
     model_artifact = resolve_gpu_smoke_model_artifact(region=region, model_path=model_path)
     tags = ["rl", "iris-debug", "regression", "gpu", experiment_name_suffix]
@@ -139,7 +143,6 @@ def build_debug_config(
         weight_transfer_sync_interval_steps=1,
         max_weight_transfer_wait_time=300,
         inflight_weight_updates=False,
-        executor_prefix=executor_prefix,
     )
 
 
@@ -149,6 +152,7 @@ def main() -> None:
         return
 
     args = parse_args()
+    os.environ["MARIN_PREFIX"] = gpu_smoke_output_prefix(region=args.region, executor_prefix=args.executor_prefix)
     debug_config = build_debug_config(
         experiment_name_suffix=args.experiment_name_suffix,
         num_train_steps=args.num_train_steps,
@@ -156,7 +160,6 @@ def main() -> None:
         gpu_type=args.gpu_type,
         gpu_count=args.gpu_count,
         model_path=args.model_path,
-        executor_prefix=args.executor_prefix,
     )
 
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -171,13 +174,10 @@ def main() -> None:
         name=name,
         config=debug_config,
         curriculum=curriculum,
+        version="dev",
     )
 
-    executor_main(
-        executor_main_config_for_rl_experiment(debug_config),
-        steps=[step],
-        description=(f"Iris RL regression probe: executor + small GPU-only ({args.num_train_steps} training steps)"),
-    )
+    StepRunner().run([step.lower()])
 
 
 if __name__ == "__main__":

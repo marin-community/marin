@@ -7,10 +7,10 @@ from marin.rl.decoding import DecodingConfig
 from marin.rl.rl_experiment_utils import (
     config_class_path,
     default_train_decoding_for_experiment,
-    executor_main_config_for_rl_experiment,
 )
+from rigging.filesystem import DataConfig, use_data_config
 
-from experiments.exp_iris_rl_regression_executor_gcs_small_gpu import build_debug_config
+from experiments.exp_iris_rl_regression_executor_gcs_small_gpu import build_debug_config, gpu_smoke_output_prefix
 from experiments.iris_rl_gpu_smoke import (
     CANONICAL_MODEL_NAME,
     DEFAULT_MODEL_ARTIFACT,
@@ -18,6 +18,10 @@ from experiments.iris_rl_gpu_smoke import (
     gpu_smoke_model_path,
     resolve_gpu_smoke_model_artifact,
 )
+
+
+def _test_data_config() -> DataConfig:
+    return DataConfig(region_buckets={"us-central1": "marin-us-central1", "us-east5": "marin-us-east5"})
 
 
 def test_gpu_smoke_debug_config_builds_small_qwen_rloo_curriculum():
@@ -80,25 +84,22 @@ def test_gpu_smoke_curriculum_uses_decoding_config():
     assert curriculum.max_seq_len == 192
 
 
-def test_build_debug_config_allows_non_gcp_executor_prefix():
-    config = build_debug_config(
-        experiment_name_suffix="test",
-        num_train_steps=1,
-        region="ORD1",
-        gpu_type="H100",
-        gpu_count=1,
-        model_path=None,
-        executor_prefix="s3://marin-coreweave/rl-smoke",
+def test_gpu_smoke_output_prefix_allows_non_gcp_override():
+    assert (
+        gpu_smoke_output_prefix(region="ORD1", executor_prefix="s3://marin-coreweave/rl-smoke")
+        == "s3://marin-coreweave/rl-smoke"
     )
 
-    assert config.model_config.artifact is DEFAULT_MODEL_ARTIFACT
-    assert config.executor_prefix == "s3://marin-coreweave/rl-smoke"
-    assert executor_main_config_for_rl_experiment(config).prefix == "s3://marin-coreweave/rl-smoke"
+
+def test_gpu_smoke_output_prefix_uses_region_bucket():
+    with use_data_config(_test_data_config()):
+        assert gpu_smoke_output_prefix(region="us-east5", executor_prefix=None) == "gs://marin-us-east5"
 
 
 def test_gpu_smoke_model_path_rejects_cross_region_gcs_path():
-    with pytest.raises(ValueError, match="launcher region"):
-        resolve_gpu_smoke_model_artifact(region="us-east5", model_path=gpu_smoke_model_path("us-central1"))
+    with use_data_config(_test_data_config()):
+        with pytest.raises(ValueError, match="launcher region"):
+            resolve_gpu_smoke_model_artifact(region="us-east5", model_path=gpu_smoke_model_path("us-central1"))
 
 
 @pytest.mark.parametrize(
@@ -112,4 +113,5 @@ def test_gpu_smoke_model_path_rejects_cross_region_gcs_path():
     ],
 )
 def test_gpu_smoke_model_path_allows_non_cross_region_sources(model_path):
-    assert resolve_gpu_smoke_model_artifact(region="us-east5", model_path=model_path) == model_path
+    with use_data_config(_test_data_config()):
+        assert resolve_gpu_smoke_model_artifact(region="us-east5", model_path=model_path) == model_path

@@ -6,12 +6,13 @@
 from urllib.parse import urlparse
 
 from fray.types import ResourceConfig
-from marin.execution.executor import ExecutorStep
+from marin.execution.lazy import ArtifactStep
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.placement import marin_prefix_for_region
-from rigging.filesystem import REGION_TO_DATA_BUCKET
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem import data_config
 
 from experiments.models import qwen3_0_6b
 
@@ -31,7 +32,10 @@ DEFAULT_GPU_MEMORY_UTILIZATION = 0.90
 GPU_WORKER_CPU = 32
 GPU_WORKER_RAM = "240g"
 GPU_WORKER_DISK = "128g"
-_DATA_BUCKET_TO_REGION = {bucket: bucket_region for bucket_region, bucket in REGION_TO_DATA_BUCKET.items()}
+
+
+def _data_bucket_to_region() -> dict[str, str]:
+    return {bucket: bucket_region for bucket_region, bucket in data_config().region_buckets.items()}
 
 
 def gpu_smoke_resources(*, region: str, gpu_type: str, gpu_count: int) -> ResourceConfig:
@@ -101,7 +105,7 @@ def gpu_smoke_prefix(region: str) -> str:
 
 def gpu_smoke_model_path(region: str) -> str:
     """Return the canonical region-local GCS model artifact path."""
-    return f"{gpu_smoke_prefix(region)}/{DEFAULT_MODEL_ARTIFACT.name}"
+    return DEFAULT_MODEL_ARTIFACT.path(gpu_smoke_prefix(region))
 
 
 def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
@@ -110,8 +114,8 @@ def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
     if parsed.scheme != "gs":
         return
 
-    expected_bucket = REGION_TO_DATA_BUCKET.get(region.lower())
-    model_bucket_region = _DATA_BUCKET_TO_REGION.get(parsed.netloc)
+    expected_bucket = data_config().region_buckets.get(region.lower())
+    model_bucket_region = _data_bucket_to_region().get(parsed.netloc)
     if model_bucket_region is None or parsed.netloc == expected_bucket:
         return
 
@@ -123,8 +127,8 @@ def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
     )
 
 
-def resolve_gpu_smoke_model_artifact(*, region: str, model_path: str | None) -> ExecutorStep | str:
-    """Return the executor-managed default artifact or a validated explicit override."""
+def resolve_gpu_smoke_model_artifact(*, region: str, model_path: str | None) -> ArtifactStep[LevanterCheckpoint] | str:
+    """Return the managed default artifact or a validated explicit override."""
     if model_path is None:
         return DEFAULT_MODEL_ARTIFACT
     validate_gpu_smoke_model_path(region=region, model_path=model_path)
