@@ -35,8 +35,8 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
+from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_source import load_transition_snapshot
 from iris.cluster.types import (
     AttemptUid,
     JobName,
@@ -180,14 +180,11 @@ class DbBackendWorkerStore:
             return reads.bulk_get_worker_addresses(snap, [worker_id]).get(worker_id)
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
-        """Serialize worker failure, tear down slices + siblings, forget the lot.
+        """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
+        them from the liveness tracker. Returns the full removed set.
 
-        Fail the dead workers (``ops.worker.fail``), then hand the removed set to this
-        backend's ``autoscale``, which terminates their slices AND healthy siblings and
-        returns the full ``removed_workers`` set; fail those siblings, persist the
-        autoscaler state, and forget every removed worker from the tracker. The only
-        health-driven write is removal. Reads run over fresh DB snapshots, so attempts a
-        just-committed reconcile already finalized are seen terminal and skipped.
+        The only health-driven write is removal; reads run over fresh DB snapshots, so an
+        attempt a just-committed reconcile already finalized is seen terminal and skipped.
         """
         if not worker_ids:
             return []
