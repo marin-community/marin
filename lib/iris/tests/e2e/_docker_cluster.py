@@ -36,7 +36,15 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.runtime.docker import DockerRuntime
-from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.cluster.types import (
+    DEFAULT_BACKEND_ID,
+    AcceleratorType,
+    CapacityType,
+    Entrypoint,
+    EnvironmentSpec,
+    JobName,
+    ResourceSpec,
+)
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import controller_pb2, job_pb2
@@ -171,7 +179,7 @@ class E2ECluster:
         )
         self._controller = Controller(
             config=controller_config,
-            provider=RpcTaskBackend(stub_factory=RpcWorkerStubFactory()),
+            backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
             log_stack=log_stack,
         )
         self._controller.start()

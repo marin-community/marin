@@ -4,6 +4,7 @@
 """Snapshot loader: produces TransitionSnapshot instances for the kernel."""
 
 from collections.abc import Iterable
+from typing import Protocol
 
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
@@ -31,6 +32,29 @@ from iris.cluster.types import (
     JobName,
     WorkerId,
 )
+
+
+class TransitionReader(Protocol):
+    """A read surface that yields a closed :class:`TransitionSnapshot` for the kernel.
+
+    Lets a backend author its task-state projection from a point-in-time snapshot
+    without reading the controller database directly. Implementations seed by
+    whichever entities their reconcile path starts from (workers + observation
+    uids for the worker path, tasks + attempt keys for the direct path); the
+    snapshot closes over everything the kernel may touch.
+    """
+
+    def transition_snapshot(
+        self,
+        *,
+        now: Timestamp,
+        seed_worker_ids: Iterable[WorkerId] = (),
+        observation_uids: Iterable[AttemptUid] = (),
+        seed_task_ids: Iterable[JobName] = (),
+        extra_attempt_keys: Iterable[tuple[JobName, int]] = (),
+    ) -> TransitionSnapshot:
+        """Load a closed snapshot stamped with ``now``, seeded by the given entities."""
+        ...
 
 
 def _build_multi_root_descendants_stmt():

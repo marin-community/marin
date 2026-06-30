@@ -19,7 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any, NewType
 
@@ -53,6 +53,23 @@ class GcpSliceMode(StrEnum):
 
     TPU = "tpu"
     VM = "vm"
+
+
+DEFAULT_BACKEND_ID = "default"
+"""Backend id of the implicit single backend synthesized from top-level config.
+
+Shared by the runtime config synthesis (``iris.cluster.config.resolve_backends``)
+and the ``0032_backend_id`` migration backfill — the migration has only a raw DB
+connection (no config object), so both must agree on this exact literal.
+"""
+
+
+class BackendStatus(IntEnum):
+    """Lifecycle state of a task backend, stored as an INTEGER in ``backends``."""
+
+    ACTIVE = 0
+    DRAINING = 1
+    REMOVED = 2
 
 
 class WellKnownAttribute(StrEnum):
@@ -377,6 +394,7 @@ class PendingTask:
 
     task_id: JobName
     job_id: JobName
+    backend_id: str
     state: int
     current_attempt_id: int
     failure_count: int

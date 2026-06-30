@@ -16,6 +16,7 @@ see :func:`_prune_orphan_slices`.
 import logging
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
@@ -85,23 +86,29 @@ def _prune_terminal_jobs(
 
 def _prune_dead_workers(
     db: ControllerDB,
-    health: WorkerHealthTracker,
+    healths: Sequence[WorkerHealthTracker],
     worker_attrs: WorkerAttrsProjection,
     cutoff_ms: int,
     stop_event: threading.Event | None,
     pause: float,
 ) -> int:
-    """Delete DEAD workers whose last heartbeat predates ``cutoff_ms``, one CASCADE (attributes) at a time."""
+    """Delete DEAD workers whose last heartbeat predates ``cutoff_ms``, one CASCADE (attributes) at a time.
+
+    Each backend owns its own tracker, so a worker is reaped from the tracker that
+    holds it (the trackers are disjoint); scanning each in turn finds every
+    prunable worker.
+    """
     deleted = 0
-    while not _stopped(stop_event):
-        worker_id = _find_prunable_worker(health, cutoff_ms)
-        if worker_id is None:
-            break
-        with db.transaction() as cur:
-            writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
-        log_event("worker_pruned", str(worker_id))
-        deleted += 1
-        time.sleep(pause)
+    for health in healths:
+        while not _stopped(stop_event):
+            worker_id = _find_prunable_worker(health, cutoff_ms)
+            if worker_id is None:
+                break
+            with db.transaction() as cur:
+                writes.remove_worker(cur, worker_id, health=health, worker_attrs=worker_attrs)
+            log_event("worker_pruned", str(worker_id))
+            deleted += 1
+            time.sleep(pause)
     return deleted
 
 
@@ -144,7 +151,7 @@ def _sweep_expired_endpoints(db: ControllerDB, endpoints: EndpointsProjection, n
 
 def prune_old_data(
     db: ControllerDB,
-    health: WorkerHealthTracker,
+    healths: Sequence[WorkerHealthTracker],
     endpoints: EndpointsProjection,
     worker_attrs: WorkerAttrsProjection,
     *,
@@ -162,7 +169,7 @@ def prune_old_data(
 
     Args:
         db: Controller database handle.
-        health: Worker health tracker used to find stale workers.
+        healths: Each backend's worker health tracker, scanned in turn for stale workers.
         endpoints: Endpoints projection invalidated before each job CASCADE.
         worker_attrs: Worker attributes projection invalidated on worker removal.
         job_retention: Delete terminal jobs whose finished_at is older than this.
@@ -176,7 +183,7 @@ def prune_old_data(
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, endpoints, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
         workers_deleted=_prune_dead_workers(
-            db, health, worker_attrs, now_ms - worker_retention.to_ms(), stop_event, pause_between_s
+            db, healths, worker_attrs, now_ms - worker_retention.to_ms(), stop_event, pause_between_s
         ),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, endpoints, now),

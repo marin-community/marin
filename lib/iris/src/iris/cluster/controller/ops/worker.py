@@ -17,7 +17,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.loader import load_closed_snapshot
+from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -44,10 +44,10 @@ def _attribute_value_cols(value: str | int | float) -> dict:
 class WorkerFailureBatchResult:
     """Narrow result for :func:`fail`: just the worker rows removed.
 
-    The controller's ``_fail_and_teardown`` forwards these IDs to
-    ``backend.autoscale`` for slice-sibling teardown. Per-task kill targets and
-    log events are already applied by ``commit_effects`` inside the batch, so
-    they don't need to surface in the return value.
+    A worker-daemon backend's teardown forwards these IDs to ``backend.autoscale``
+    for slice-sibling teardown. Per-task kill targets and log events are already
+    applied by ``commit_effects`` inside the batch, so they don't need to surface
+    in the return value.
     """
 
     removed_workers: list[tuple[WorkerId, str | None]]
@@ -233,17 +233,19 @@ def _apply_worker_failures_chunk(
 
 
 def apply_reconcile(
-    cur: Tx,
+    source: TransitionReader,
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
-    endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Load ONE snapshot covering every (plan, result) pair, then apply once.
+    """Author reconcile effects from the backend's read snapshot (no commit).
 
-    The pure :meth:`ReconcileState.reconcile` shares one ``Overlay`` across
-    all pairs so cascade kills triggered by earlier workers are visible to
-    later ones.
+    Loads ONE snapshot covering every (plan, result) pair through the backend's
+    own read surface, then runs the reconcile kernel once: the pure
+    :meth:`ReconcileState.reconcile` shares one ``Overlay`` across all pairs so
+    cascade kills triggered by earlier workers are visible to later ones. The
+    caller (the backend) folds the returned ``effects.health`` and the controller
+    commits the ``effects`` via ``commit_effects``.
     """
     all_task_ids: list[JobName] = []
     all_attempt_keys: list[tuple[JobName, int]] = []
@@ -269,14 +271,11 @@ def apply_reconcile(
                 if obs.attempt_uid and obs.attempt_uid in plan_uids:
                     all_attempt_uids.append(AttemptUid(obs.attempt_uid))
 
-    snapshot = load_closed_snapshot(
-        cur,
+    snapshot = source.transition_snapshot(
         now=now,
         seed_worker_ids=all_worker_ids,
         observation_uids=all_attempt_uids,
         seed_task_ids=all_task_ids,
         extra_attempt_keys=all_attempt_keys,
     )
-    effects = ReconcileState.open(snapshot).reconcile(plan_results, now)
-    commit_effects(cur, effects, endpoints=endpoints)
-    return effects
+    return ReconcileState.open(snapshot).reconcile(plan_results, now)

@@ -22,7 +22,6 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, _verified_identity
@@ -51,7 +50,6 @@ def _make_service(state, tmp_path, log_client, auth: ControllerAuth) -> Controll
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
-        health=WorkerHealthTracker(),
         endpoints=state._endpoints,
         worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,

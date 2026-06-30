@@ -12,6 +12,8 @@ import { CATEGORICAL_COLORS } from '@/types/status'
 const props = defineProps<{
   groups: ScaleGroupStatus[]
   runningBuckets: RunningTaskBucket[]
+  /** Optional backend label rendered as the section heading in multi-backend mode. */
+  backendLabel?: string
 }>()
 
 interface RegionCount {
@@ -248,7 +250,7 @@ function formatUptimeShort(ms: number | null): string {
     <!-- Heading + one shared region legend; per-card bars reuse these colors. -->
     <div class="flex items-baseline justify-between gap-x-4 gap-y-1 flex-wrap mb-2">
       <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">
-        Fleet Overview
+        {{ backendLabel ? `Fleet Overview · ${backendLabel}` : 'Fleet Overview' }}
       </h3>
       <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-text-muted" style="font-size: clamp(8px, 0.6vw, 11px)">
         <span v-for="r in legendRegions" :key="r.region" class="flex items-center gap-1 whitespace-nowrap">

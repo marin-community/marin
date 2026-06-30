@@ -55,7 +55,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap, WorkerUsability
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -267,6 +267,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_memory_bytes,
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
+    jobs_table.c.backend_id,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -281,6 +282,7 @@ def _apply_job_filters(
     state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
+    backend_id_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -297,6 +299,8 @@ def _apply_job_filters(
     if job_id_prefix:
         escaped = job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
+    if backend_id_filter:
+        stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
     return stmt
 
 
@@ -354,6 +358,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     if needs_task_agg:
@@ -368,6 +373,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     offset = max(query.offset, 0)
@@ -503,6 +509,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.name,
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
+            jobs_table.c.backend_id,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -757,6 +764,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
 PENDING_TASK_COLS = (
     tasks_table.c.task_id,
     tasks_table.c.job_id,
+    tasks_table.c.backend_id,
     tasks_table.c.state,
     tasks_table.c.current_attempt_id,
     tasks_table.c.failure_count,
@@ -775,6 +783,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         failure_count=int(row.failure_count),
@@ -1010,6 +1019,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.backend_id,
 )
 
 
@@ -1072,11 +1082,12 @@ def list_active_tasks(
     exclude_task_id: JobName | None = None,
     order_by_task_id: bool = False,
     limit: int | None = None,
+    backend_id: str | None = None,
 ) -> list[ActiveTaskRow]:
     """Return :class:`ActiveTaskRow` rows matching ``scope`` and ``states``.
 
     Exactly one scope field must be set. State filter is applied as an IN
-    predicate.
+    predicate. ``backend_id`` narrows to one backend's tasks (omit for all).
     """
     scope_set = sum(
         1 for x in (scope.job_id, scope.job_subtree, scope.worker_id, scope.worker_ids, scope.task_ids) if x is not None
@@ -1117,6 +1128,9 @@ def list_active_tasks(
 
     if exclude_task_id is not None:
         stmt = stmt.where(tasks_table.c.task_id != exclude_task_id)
+
+    if backend_id is not None:
+        stmt = stmt.where(tasks_table.c.backend_id == backend_id)
 
     stmt = stmt.where(tasks_table.c.state.in_(bindparam("active_states", expanding=True)))
     params["active_states"] = list(states_tuple)
@@ -1227,6 +1241,7 @@ WORKER_DETAIL_COLS = (
     workers_table.c.md_gce_zone,
     workers_table.c.md_device_json,
     workers_table.c.md_provenance_json,
+    workers_table.c.scale_group,
 )
 
 
@@ -1464,10 +1479,14 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-def all_worker_ids(tx: Tx) -> list[WorkerId]:
-    """Return every persisted worker id."""
-    rows = tx.execute(select(workers_table.c.worker_id)).all()
-    return [WorkerId(str(row.worker_id)) for row in rows]
+def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
+    """Return ``{worker_id: scale_group}`` for every persisted worker.
+
+    The controller maps each worker's scale group to its owning backend to
+    partition the per-tick snapshot. Workers with no scale group map to ``""``.
+    """
+    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
+    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
 
 
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
@@ -1576,8 +1595,6 @@ class ControlSnapshot:
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
       rows, so a worker-daemon backend can build its per-worker reconcile plans.
-    * ``worker_status_map`` — per-worker idle/running state for the autoscale
-      phase (built only on the autoscaler tick).
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
@@ -1591,7 +1608,6 @@ class ControlSnapshot:
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
-    worker_status_map: WorkerStatusMap = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 

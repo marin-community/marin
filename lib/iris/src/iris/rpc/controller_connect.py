@@ -115,6 +115,9 @@ class ControllerService(Protocol):
     async def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -440,6 +443,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.get_scheduler_state,
+                ),
+                "/iris.cluster.ControllerService/ListBackends": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListBackends",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ListBackendsRequest,
+                        output=controller__pb2.Controller.ListBackendsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_backends,
                 ),
             },
             interceptors=interceptors,
@@ -1094,6 +1107,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def list_backends(
+        self,
+        request: controller__pb2.Controller.ListBackendsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListBackendsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListBackends",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ListBackendsRequest,
+                output=controller__pb2.Controller.ListBackendsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class EndpointService(Protocol):
@@ -1280,6 +1313,8 @@ class ControllerServiceSync(Protocol):
     def list_user_budgets(self, request: controller__pb2.Controller.ListUserBudgetsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListUserBudgetsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_scheduler_state(self, request: controller__pb2.Controller.GetSchedulerStateRequest, ctx: RequestContext) -> controller__pb2.Controller.GetSchedulerStateResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1606,6 +1641,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.get_scheduler_state,
+                ),
+                "/iris.cluster.ControllerService/ListBackends": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListBackends",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ListBackendsRequest,
+                        output=controller__pb2.Controller.ListBackendsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_backends,
                 ),
             },
             interceptors=interceptors,
@@ -2254,6 +2299,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.GetSchedulerStateRequest,
                 output=controller__pb2.Controller.GetSchedulerStateResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_backends(
+        self,
+        request: controller__pb2.Controller.ListBackendsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ListBackendsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListBackends",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ListBackendsRequest,
+                output=controller__pb2.Controller.ListBackendsResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

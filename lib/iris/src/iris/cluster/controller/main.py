@@ -21,8 +21,8 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.composer import make_backend
-from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.composer import make_backends
+from iris.cluster.config import IrisClusterConfig, load_config, resolve_backends
 from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
@@ -152,27 +152,9 @@ def run_controller_serve(
         host=host,
         worker_token=auth.worker_token if auth.worker_token else None,
     )
-    provider = make_backend(
-        cluster_config,
-        db=db,
-        auth=auth,
-        remote_state_dir=remote_state_dir,
-        dry_run=dry_run,
-        log_stack=log_stack,
-    )
-
     if checkpoint_interval is None:
         checkpoint_interval = HOURLY_CHECKPOINT_SECONDS
         logger.info("Defaulting to hourly checkpointing")
-
-    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
-
-    # Reconcile per-user budget tiers from the cluster config into the DB.
-    # Runs after migrations have cleared user_budgets (see migration 0037).
-    # Unlisted users are left without a row and fall through to
-    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
-    if cluster_config.user_budgets:
-        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
     config = ControllerConfig(
         host=host,
@@ -188,11 +170,33 @@ def run_controller_serve(
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
     )
 
+    # Each worker-daemon backend constructs and owns its liveness tracker, sized by
+    # the controller config's worker-unreachable grace.
+    backends = make_backends(
+        cluster_config,
+        db=db,
+        auth=auth,
+        remote_state_dir=remote_state_dir,
+        dry_run=dry_run,
+        log_stack=log_stack,
+        unreachable_grace=config.worker_unreachable_grace,
+    )
+
+    logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)
+
+    # Reconcile per-user budget tiers from the cluster config into the DB.
+    # Runs after migrations have cleared user_budgets (see migration 0037).
+    # Unlisted users are left without a row and fall through to
+    # UserBudgetDefaults when the scheduler and launch-job guard look them up.
+    if cluster_config.user_budgets:
+        reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
+
     controller = Controller(
         config=config,
-        provider=provider,
+        backends=backends,
         log_stack=log_stack,
         db=db,
+        backend_configs=resolve_backends(cluster_config),
     )
     logger.info("Controller instance created")
 

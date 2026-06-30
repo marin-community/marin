@@ -1,4 +1,14 @@
 {
+  "backends": [
+    {
+      "allow_policy_json": "{}",
+      "attributes_json": "{}",
+      "backend_id": "default",
+      "kind": "",
+      "last_seen_ms": null,
+      "status": 0
+    }
+  ],
   "endpoints": [],
   "job_config": [
     {
@@ -32,6 +42,7 @@
   "job_workdir_files": [],
   "jobs": [
     {
+      "backend_id": "",
       "depth": 1,
       "error": "boom",
       "exit_code": null,
@@ -61,6 +72,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-0>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": 0,
@@ -73,6 +85,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-1>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": 0,
@@ -85,6 +98,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-2>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "boom",
       "exit_code": null,
@@ -97,6 +111,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-3>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": 0,
@@ -109,6 +124,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-4>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": null,
       "exit_code": 0,
@@ -121,6 +137,7 @@
   ],
   "tasks": [
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -144,6 +161,7 @@
       "task_index": 0
     },
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -167,6 +185,7 @@
       "task_index": 1
     },
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -190,6 +209,7 @@
       "task_index": 2
     },
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -213,6 +233,7 @@
       "task_index": 3
     },
     {
+      "backend_id": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
