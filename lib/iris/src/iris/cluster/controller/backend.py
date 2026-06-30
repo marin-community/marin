@@ -16,18 +16,6 @@ never flow controller→backend: a backend sources its own workers through a
 backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
 read or write the controller database directly.
 
-The controller calls all three methods uniformly and never branches on backend
-type: a backend no-ops where a phase doesn't apply (the worker-daemon backend's
-``schedule`` runs the Iris scheduler while a cluster backend returns empty; the
-cluster backend's ``reconcile`` reconciles pods while it owns its own capacity,
-so its ``autoscale`` returns empty). Every backend authors its own per-tick
-projection (task status + placement) and returns it uniformly: ``reconcile``
-yields a :class:`ReconcileResult` carrying the committable task ``effects``, and
-the controller just stores them. A backend that tracks Iris workers also folds
-the liveness it observed during reconcile and tears the workers its fold reaped
-down itself: the controller calls :meth:`TaskBackend.run_teardown` post-commit
-without learning any worker identities.
-
 :attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
 and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
 exception gates the per-tick path: a ``CLUSTER_VIEW`` backend owns placement, so
