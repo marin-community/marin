@@ -8,9 +8,7 @@ scale-group-scoped read of the controller database, so the backend reads its own
 workers, placement and worker-status without the controller partitioning a global
 snapshot. The ``owns_scale_group`` predicate is the backend's worker-ownership
 test (the default backend also claims workers whose scale group is unmapped,
-matching the controller's scale-group→backend resolution). When live worker and
-placement state move into the backend's own store, only this class is replaced —
-the backend contract does not change.
+matching the controller's scale-group→backend resolution).
 """
 
 from collections.abc import Callable, Iterable, Sequence
@@ -53,10 +51,9 @@ def load_transition_snapshot(
 ) -> TransitionSnapshot:
     """Open a control read snapshot and close it over the seeded entities.
 
-    The DB-backed read surface a backend authors its task projection through: it
-    runs the same loader the commit-side glue runs, but against a read-only
-    snapshot rather than the tick's write transaction, so the backend never
-    touches the controller database directly.
+    The read-only surface a backend authors its task projection through: a closed
+    snapshot rather than the tick's write transaction, so the backend never touches
+    the controller database directly.
     """
     with db.control_read_snapshot() as snap:
         return load_closed_snapshot(

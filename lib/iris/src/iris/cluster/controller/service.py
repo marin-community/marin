@@ -2071,11 +2071,9 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.GetKubernetesClusterStatusResponse:
         """Get Kubernetes cluster status: node counts, capacity, and recent pod statuses.
 
-        Locates the backend that owns the cluster view by capability. When
-        ``request.backend_id`` is set, uses that specific backend; otherwise,
-        if exactly one ``CLUSTER_VIEW`` backend exists it is used automatically.
-        With multiple ``CLUSTER_VIEW`` backends and no ``backend_id`` specified,
-        raises ``INVALID_ARGUMENT`` so the caller can disambiguate.
+        Routes to the ``CLUSTER_VIEW`` backend named by ``request.backend_id``, or
+        the sole such backend if there is exactly one; raises ``INVALID_ARGUMENT``
+        when the choice is ambiguous.
         """
         cluster_view_backends = [
             (bid, backend)
@@ -2809,10 +2807,8 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListBackendsResponse:
         """List all backends with aggregate task/worker statistics.
 
-        Performs three grouped SQL queries (pending counts, running counts, worker
-        counts by scale_group) rather than per-backend queries, then joins the
-        results in Python. Autoscaler capacity health is read from the in-memory
-        autoscaler snapshot rather than the DB.
+        Counts come from grouped SQL queries joined in Python; capacity health is
+        read from the in-memory autoscaler snapshot, not the DB.
         """
         require_identity()
 

@@ -231,8 +231,7 @@ def _backend_subconfig(config: IrisClusterConfig, backend: BackendConfig) -> Iri
     ``make_backend`` reads the provider/scale-group/platform fields off the
     top-level config. A multi-backend cluster carries those per backend, so this
     rebuilds the implicit single-backend view for one entry while sharing the
-    cluster-wide ``defaults``/``controller``/auth. The synthesized single
-    backend round-trips to exactly the original config.
+    cluster-wide ``defaults``/``controller``/auth.
     """
     sub = config.model_copy(deep=True)
     sub.backends = None
@@ -255,9 +254,8 @@ def make_backends(
     """Build the controller's ``{backend_id: TaskBackend}`` collection.
 
     Iterates the resolved ``backends:`` map (or the implicit single entry keyed
-    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each backend
-    through the existing single-backend path, tagging it with its backend id.
-    Every entry is in-process for now.
+    :data:`~iris.cluster.types.DEFAULT_BACKEND_ID`) and builds each through the
+    single-backend path, tagging it with its backend id.
     """
     backends: dict[str, TaskBackend] = {}
     for backend_id, backend_cfg in resolve_backends(config).items():

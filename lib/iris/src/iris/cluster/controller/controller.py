@@ -282,8 +282,8 @@ class Controller:
         backends: The ``{backend_id: TaskBackend}`` collection the controller
             drives. Each control-tick phase runs per backend over a snapshot
             filtered to that backend's workers/tasks; a single-backend mapping
-            keyed :data:`DEFAULT_BACKEND_ID` reproduces the legacy single-backend
-            behavior exactly.
+            keyed :data:`DEFAULT_BACKEND_ID` reproduces the single-backend behavior
+            exactly.
         backend_configs: Per-backend ``BackendConfig`` map used to route tasks to
             backends (the meta-scheduler index + allow policies) and to map each
             worker's scale group to its owning backend. Defaults to one implicit
@@ -640,8 +640,8 @@ class Controller:
             self._checkpoint_thread.join(timeout=join_timeout)
 
         self._threads.stop()
-        # Each backend owns its autoscaler now; close() shuts it down (terminates
-        # VMs, stops the platform) and releases the backend's own resources.
+        # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
+        # stops the platform) and releases the backend's own resources.
         for backend in self._backends.values():
             backend.close()
 
@@ -762,8 +762,8 @@ class Controller:
         budget; each backend sources its own workers and runs its
         ``schedule``/``reconcile``/``autoscale`` over them, and the per-backend
         results merge into one end-of-tick write transaction. With a single backend
-        every job routes to it, so behavior matches the legacy single-backend path
-        exactly. A wake runs a schedule-only mini-tick; autoscale always pairs with
+        every job routes to it, so behavior matches the single-backend path exactly.
+        A wake runs a schedule-only mini-tick; autoscale always pairs with
         a fresh schedule so it provisions against this tick's residual demand.
         Execution-timeout finalization and health-driven teardown stay global.
         """
@@ -844,11 +844,10 @@ class Controller:
                 self._force_reconcile = True
                 self._tick_wake.set()
 
-        # Each backend already folded the liveness it observed during reconcile and
-        # stashed the workers its fold reaped. Drain those stashes AFTER the
-        # reconcile effects are committed, so each backend's teardown reads a FRESH
-        # snapshot where the just-finalized terminal attempts are already terminal
-        # and skipped. No worker identity passes through the controller.
+        # Drain each backend's reaped-worker stash (folded during reconcile) AFTER
+        # the reconcile effects are committed, so its teardown reads a fresh snapshot
+        # where the just-finalized terminal attempts are already terminal and skipped.
+        # No worker identity passes through the controller.
         if run_reconcile:
             for backend_id in self._backend_ids:
                 self._backends[backend_id].run_teardown()
@@ -887,7 +886,7 @@ class Controller:
             if run_schedule:
                 inputs.routing = build_routing_inputs(snap, self._config.user_budget_defaults)
             # Execution-timeout finalization is controller-owned and global; it
-            # runs alongside the worker-daemon reconcile, matching prior behavior.
+            # runs alongside the worker-daemon reconcile.
             if run_reconcile and scan_timeouts and worker_daemon_backends:
                 inputs.timeout_rows = reads.scan_execution_timeout_rows(snap)
         return inputs
@@ -916,7 +915,7 @@ class Controller:
         """Map each persisted worker to its owning backend via its scale group.
 
         Used only to route a failed worker's slice teardown to its owning backend;
-        scheduling and reconcile no longer partition workers in the controller.
+        scheduling and reconcile do not partition workers in the controller.
         """
         return {
             wid: self._scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
@@ -1028,8 +1027,8 @@ class Controller:
     ) -> None:
         """Add each non-BATCH assignment's resource value to the in-tick spend tally.
 
-        Mirrors :func:`compute_user_spend` (which excludes BATCH) so a later
-        backend in this tick sees the budget the earlier ones already committed.
+        Excludes BATCH (matching ``compute_user_spend``) so a later backend in this
+        tick sees the budget the earlier ones already committed.
         """
         if not assignments:
             return
@@ -1362,7 +1361,7 @@ class Controller:
         itself). It runs in its own write transaction, so a cluster backend's tick
         commits twice (drain + end-of-tick) rather than once. With multiple
         backends the drain is scoped to ``backend_id``'s tasks; a lone backend
-        drains every pending task (the legacy behavior).
+        drains every pending task.
         """
         max_promotions = self._promotion_bucket.available
         backend_filter = None if len(self._backends) == 1 else backend_id

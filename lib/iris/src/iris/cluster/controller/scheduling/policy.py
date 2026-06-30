@@ -704,8 +704,7 @@ class RoutingInputs:
 
     Carries no worker data — the controller routes and budgets from this, then
     each backend sources its own workers and assembles its full scheduling
-    context from this plus its worker view. This is the worker-free counterpart
-    to :class:`SchedulingContext`.
+    context from this plus its worker view.
     """
 
     pending_task_rows: list[PendingTask]
@@ -716,11 +715,7 @@ class RoutingInputs:
 
 
 def build_routing_inputs(snap: Tx, defaults: UserBudgetDefaults) -> RoutingInputs:
-    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads).
-
-    The meta-scheduler and per-user budget threading run off this; workers are
-    read by each backend, not here.
-    """
+    """Read the controller-owned scheduling inputs from ``snap`` (no worker reads)."""
     pending = reads.pending_tasks_with_jobs(snap)
     requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
     return RoutingInputs(

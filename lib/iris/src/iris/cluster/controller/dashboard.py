@@ -595,7 +595,7 @@ class ControllerDashboard:
                 "backends": [
                     {"id": bid, "name": d.name, "capabilities": d.capabilities} for bid, d in descriptors.items()
                 ],
-                # Representative backend retained for the single-backend frontend path.
+                # Representative backend for the single-backend frontend path.
                 "backend": {
                     "name": representative.name,
                     "capabilities": representative.capabilities,

@@ -172,9 +172,8 @@ class FleetObservation:
     """One reconcile fan-out's raw outcome.
 
     The per-worker results paired with their plans, and the transport liveness
-    each yielded (REACHED / UNREACHABLE). :meth:`RpcTaskBackend.reconcile`
-    resolves the results into effects and folds the liveness; the split is a seam
-    the dispatch-layer tests target.
+    each yielded (REACHED / UNREACHABLE). :meth:`RpcTaskBackend.reconcile` resolves
+    the results into effects and folds the liveness.
     """
 
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
@@ -259,8 +258,8 @@ class RpcTaskBackend:
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
-    # One shared scheduler instance reused across cycles (mirrors the autoscaler's
-    # own Scheduler); per-tick worker state comes from ``worker_source``.
+    # One shared scheduler instance reused across cycles; per-tick worker state
+    # comes from ``worker_source``.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
     # Workers this backend's reconcile fold reaped, awaiting teardown. ``reconcile``
     # appends; ``run_teardown`` drains post-commit. Kept off the reconcile result so
@@ -332,8 +331,8 @@ class RpcTaskBackend:
           UNREACHABLE so the worker is eventually reaped, but the connection is
           fine so the stub is kept.
 
-        Pure observation: the raw per-worker results and their transport signals,
-        which :meth:`reconcile` then resolves into effects and folds into liveness.
+        Pure observation — it never decides a worker dead; :meth:`reconcile` folds
+        these signals into liveness.
         """
         assert self.worker_source is not None, "RpcTaskBackend.reconcile called before worker source attached"
         snapshot = self.worker_source.reconcile_snapshot()
@@ -377,22 +376,19 @@ class RpcTaskBackend:
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         """Observe the fleet, resolve its observations into effects, fold liveness.
 
-        ``request`` (the cluster-view dispatch drain) is unused here — a
-        worker-daemon backend sources its own placement. :meth:`_observe_fleet`
-        fans the Reconcile RPC out and classifies transport liveness; this resolves
-        the observations into task ``effects`` against the backend's own read
-        snapshot and folds the liveness it observed — the transport signals plus
-        the kernel-derived BUILD_FAILED — through the single shared
-        ``WorkerHealthTracker.apply``. The workers the fold reaped are stashed for
-        :meth:`run_teardown`; only the committable ``effects`` are returned.
+        ``request`` (the cluster-view dispatch drain) is unused — a worker-daemon
+        backend sources its own placement. :meth:`_observe_fleet` fans the Reconcile
+        RPC out; this resolves the observations into task ``effects`` and folds the
+        liveness it observed (transport signals plus kernel-derived BUILD_FAILED)
+        through the shared ``WorkerHealthTracker``. The reaped workers are stashed
+        for :meth:`run_teardown`; only the committable ``effects`` are returned.
         """
         assert self.worker_source is not None, "RpcTaskBackend.reconcile called before worker source attached"
         observation = self._observe_fleet()
 
-        # Resolve observations into effects, then fold liveness. The order matches
-        # the controller's prior fold: transport events first, then the kernel's
-        # BUILD_FAILED; both go through the SAME shared tracker reached via the
-        # worker source, so the startup seed and reopen hook are preserved.
+        # Fold transport events first, then the kernel's BUILD_FAILED; both go
+        # through the SAME shared tracker reached via the worker source, so the
+        # startup seed and reopen hook are preserved.
         now = Timestamp.now()
         effects = apply_reconcile(self.worker_source, observation.worker_results, now=now)
         events = observation.transport_events + [

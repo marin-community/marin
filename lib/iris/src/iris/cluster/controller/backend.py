@@ -192,19 +192,14 @@ class ScheduleResult:
 
 @dataclass(frozen=True)
 class ReconcileResult:
-    """The projection :meth:`TaskBackend.reconcile` authored this tick.
+    """The committable projection :meth:`TaskBackend.reconcile` authored this tick.
 
-    Uniform across backend kinds: the backend converges its execution substrate
-    and resolves what it observed into task-state ``effects`` for the controller
-    to commit. A backend that tracks Iris workers also folds the liveness it
-    observed and stashes the workers its fold reaped for its own
-    :meth:`TaskBackend.run_teardown`; that set never crosses this boundary, so the
-    controller commits ``effects`` without learning any worker identities.
+    Carries only ``effects``: a backend that tracks Iris workers folds and tears
+    down its own reaped workers, so no worker identity crosses this boundary.
     """
 
     effects: ControllerEffects = field(default_factory=ControllerEffects)
-    """The committable task/attempt/job projection this backend authored from its
-    own read snapshot (``commit_effects`` drains it into the tick transaction)."""
+    """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
 
 
 @dataclass(frozen=True)
@@ -300,10 +295,9 @@ def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
 def assemble_scheduling_context(inputs: BackendSchedulingInputs, request: ScheduleRequest) -> SchedulingContext:
     """Join a backend's own worker-side inputs with the controller-owned request.
 
-    The canonical worker-daemon backend operation: the backend sources its live
-    workers (``inputs``) and the controller routes it the pending tasks + budget
-    state (``request``); together they form the :class:`SchedulingContext` the
-    Iris pipeline decides over.
+    The backend sources its live workers (``inputs``); the controller routes the
+    pending tasks + budget state (``request``). Together they form the
+    :class:`SchedulingContext` the Iris pipeline decides over.
     """
     return SchedulingContext(
         workers=inputs.workers,
@@ -438,16 +432,11 @@ def apply_placements(
 class WorkerSource(TransitionReader, Protocol):
     """A worker-daemon backend's controller-DB surface (reads + teardown writes).
 
-    The backend reads its own workers, placement and worker-status through this,
-    authors its task projection through the inherited
-    :meth:`~TransitionReader.transition_snapshot`, folds the liveness it observed
-    through the shared :attr:`health` tracker, and tears down the workers its fold
-    reaped through the failure-write collaborators (:attr:`db`, :attr:`endpoints`,
-    :attr:`worker_attrs`); the controller never partitions a worker snapshot for
-    it. In-process backends back this with a scale-group-scoped read of the
-    controller DB. When live worker state moves into the backend's own store, only
-    the implementation behind this interface changes — the :class:`TaskBackend`
-    contract does not.
+    The backend reads its own workers, placement and worker-status through this
+    and authors its task projection through the inherited
+    :meth:`~TransitionReader.transition_snapshot`; the controller never partitions
+    a worker snapshot for it. In-process backends back this with a
+    scale-group-scoped read of the controller DB.
     """
 
     health: WorkerHealthTracker
@@ -484,11 +473,10 @@ class TaskBackend(Protocol):
     """Drives task execution + capacity reporting for a single cluster backend.
 
     The controller routes pending *tasks* to a backend and threads the per-user
-    budget; the backend sources its own *workers* and decides placement. Worker
-    and placement state never flow controller→backend — that boundary is what
-    lets a backend own (and later durably store) its own worker inventory.
-    Implementations dispatch backend-specific I/O and return plain data; they
-    never touch the controller database directly.
+    budget; the backend sources its own *workers* and decides placement — worker
+    and placement state never flow controller→backend. Implementations dispatch
+    backend-specific I/O and return plain data; they never touch the controller
+    database directly.
     """
 
     name: str
@@ -550,21 +538,18 @@ class TaskBackend(Protocol):
         ``effects``, and fold the per-worker liveness they observed — stashing the
         workers their fold reaped for the matching :meth:`run_teardown`; cluster
         backends apply/poll the pods in ``request`` and resolve those into
-        ``effects`` (they track no Iris workers). Either way the backend authors
-        its own projection from its own read snapshot; the controller only commits
-        ``effects`` and never learns which workers were reaped.
+        ``effects`` (they track no Iris workers).
         """
         ...
 
     def run_teardown(self) -> None:
         """Tear down the workers this backend's reconcile fold reaped this tick.
 
-        Bounded I/O. Called once per backend by the controller AFTER the tick's
-        reconcile effects are committed (so the just-finalized terminal attempts
-        are already terminal and skipped), with no arguments: the backend drains
-        its own stash of reaped workers, fails them, terminates their slices and
-        healthy siblings, and forgets them from its liveness tracker. A backend
-        that tracks no Iris workers (cluster) is a no-op.
+        Bounded I/O. The controller calls this AFTER the tick's reconcile effects
+        are committed, so the just-finalized terminal attempts read as terminal and
+        are skipped. The backend drains its stash of reaped workers, fails them,
+        terminates their slices and healthy siblings, and forgets them from its
+        liveness tracker. A cluster backend tracks no Iris workers and no-ops.
         """
         ...
 
@@ -614,13 +599,10 @@ class TaskBackend(Protocol):
     def attach_health(self, tracker: WorkerHealthTracker) -> None:
         """Attach the liveness tracker this backend folds and reaps through.
 
-        Called once by the controller for worker-daemon backends. The backend
-        owns its liveness from here: its ``reconcile`` folds into this tracker and
-        its teardown forgets from it. The controller shares one tracker across its
-        worker-daemon backends (each scale-group-scoped source reads that single
-        tracker), so this is the SAME object the controller's Fleet/exec/capacity
-        readers see. Capacity-managing backends (k8s) track no Iris workers and
-        never receive one.
+        Called once by the controller for worker-daemon backends. The controller
+        shares one tracker across its worker-daemon backends, so this is the SAME
+        object its Fleet/exec/capacity readers and each scale-group-scoped worker
+        source see. Capacity-managing backends (k8s) never receive one.
         """
         ...
 
