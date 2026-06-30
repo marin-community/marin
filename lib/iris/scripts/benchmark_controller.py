@@ -53,7 +53,6 @@ from iris.cluster.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
     RpcTaskBackend,
     RpcWorkerStubFactory,
-    teardown_dead_workers,
 )
 from iris.cluster.controller import db as db_mod
 from iris.cluster.controller import ops, reads
@@ -68,11 +67,11 @@ from iris.cluster.controller.backend import (
     ScheduleRequest,
     ScheduleResult,
     TaskBackend,
-    WorkerSource,
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
+from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     Controller,
@@ -116,7 +115,6 @@ from iris.cluster.controller.service import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind, WorkerHealthTracker
-from iris.cluster.controller.worker_source import DbWorkerSource
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
@@ -182,7 +180,7 @@ class _FakeProvider:
 
     def __init__(self) -> None:
         self._scheduler = Scheduler()
-        self.worker_source: WorkerSource | None = None
+        self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
@@ -199,8 +197,8 @@ class _FakeProvider:
         self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        assert self.worker_source is not None
-        context = assemble_scheduling_context(self.worker_source.scheduling_inputs(), request)
+        assert self._store is not None
+        context = assemble_scheduling_context(self._store.scheduling_inputs(), request)
         return run_scheduling_decision(
             self._scheduler,
             ScheduleInput(
@@ -214,7 +212,7 @@ class _FakeProvider:
         raise RuntimeError("fake provider")
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_source = DbWorkerSource(
+        self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
@@ -222,11 +220,12 @@ class _FakeProvider:
             endpoints=runtime.endpoints,
             run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,
+            autoscale=self.autoscale,
         )
 
     def seed_liveness(self) -> None:
-        assert self.worker_source is not None
-        worker_ids = self.worker_source.owned_worker_ids()
+        assert self._store is not None
+        worker_ids = self._store.owned_worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -239,13 +238,13 @@ class _FakeProvider:
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Same projection the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        assert self.worker_source is not None
-        snapshot = self.worker_source.reconcile_snapshot()
+        assert self._store is not None
+        snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         now = Timestamp.now()
-        effects = apply_reconcile(self.worker_source, worker_results, now=now)
+        effects = apply_reconcile(self._store, worker_results, now=now)
         events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
@@ -256,16 +255,8 @@ class _FakeProvider:
         self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self.worker_source is not None
-        teardown_dead_workers(
-            dead_workers,
-            db=self.worker_source.db,
-            health=self.health,
-            endpoints=self.worker_source.endpoints,
-            worker_attrs=self.worker_source.worker_attrs,
-            autoscale=self.autoscale,
-            reason=reason,
-        )
+        assert self._store is not None
+        self._store.reap_workers(dead_workers, reason=reason)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
@@ -2746,7 +2737,7 @@ class _PrebuiltWorkerSource:
 
     snapshot: ControlSnapshot
     # The benchmark times only the RPC fan-out (``_observe_fleet``), which never
-    # folds liveness; the tracker is present solely to satisfy ``WorkerSource``.
+    # folds liveness; the tracker is present solely to satisfy ``BackendWorkerStore``.
     health: WorkerHealthTracker = dataclasses.field(default_factory=WorkerHealthTracker)
 
     def reconcile_snapshot(self) -> ControlSnapshot:
@@ -2775,10 +2766,10 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     )
     t2 = time.perf_counter()
     # The backend sources its own reconcile snapshot; the benchmark prebuilds it
-    # (measured above) and hands it back through a stub source so the RPC fan-out
+    # (measured above) and hands it back through a stub store so the RPC fan-out
     # is what t2..t3 times. The stub implements only the fan-out read surface (it
-    # never folds liveness or tears down), so it is cast to the full WorkerSource.
-    provider.worker_source = cast(WorkerSource, _PrebuiltWorkerSource(snapshot))
+    # never folds liveness or tears down), so it is cast to the full BackendWorkerStore.
+    provider._store = cast(BackendWorkerStore, _PrebuiltWorkerSource(snapshot))
     worker_results = provider._observe_fleet().worker_results
     t3 = time.perf_counter()
     now = Timestamp.now()

@@ -12,7 +12,8 @@ three uniform methods — :meth:`TaskBackend.schedule`, :meth:`TaskBackend.recon
 and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). Worker and placement state
 never flow controller→backend: a backend sources its own workers through a
-:class:`WorkerSource` and decides placement itself. Backends perform
+:class:`~iris.cluster.controller.backend_store.BackendWorkerStore` and decides
+placement itself. Backends perform
 backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
 read or write the controller database directly.
 
@@ -40,7 +41,6 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile import ControllerEffects
-from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -70,7 +70,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId, WorkerStatusMap
+from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
@@ -430,68 +430,16 @@ def apply_placements(
     return all_assignments, context, gated.jobs
 
 
-class WorkerSource(TransitionReader, Protocol):
-    """A worker-daemon backend's controller-DB surface (reads + teardown writes).
-
-    The backend reads its own workers, placement and worker-status through this
-    and authors its task projection through the inherited
-    :meth:`~TransitionReader.transition_snapshot`; the controller never partitions
-    a worker snapshot for it. In-process backends back this with a
-    scale-group-scoped read of the controller DB.
-    """
-
-    @property
-    def health(self) -> WorkerHealthTracker:
-        """The owning backend's liveness tracker (the SAME object the backend folds and
-        reaps through). It holds only this backend's workers, so the source's reads
-        project liveness over exactly the workers it owns."""
-        ...
-
-    @property
-    def db(self) -> ControllerDB:
-        """The controller database. The backend's teardown opens its own chunked
-        failure transactions against this (``ops.worker.fail``)."""
-        ...
-
-    @property
-    def endpoints(self) -> EndpointsProjection:
-        """Endpoint projection the teardown's ``commit_effects`` drains task
-        deregistrations into."""
-        ...
-
-    @property
-    def worker_attrs(self) -> WorkerAttrsProjection:
-        """Worker-attributes projection the teardown's ``remove_worker`` evicts the
-        failed workers' cached attributes from."""
-        ...
-
-    def owned_worker_ids(self) -> set[WorkerId]:
-        """The persisted workers this backend owns by scale group (a fresh read)."""
-        ...
-
-    def scheduling_inputs(self) -> BackendSchedulingInputs:
-        """This backend's live workers, their building counts, and running attempts."""
-        ...
-
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        """This backend's worker addresses + reconcile rows + job specs to converge."""
-        ...
-
-    def worker_status(self) -> WorkerStatusMap:
-        """This backend's per-worker idle/running status for the autoscaler refresh."""
-        ...
-
-
 @dataclass(frozen=True)
 class BackendRuntime:
     """The controller-owned ingredients a worker-daemon backend builds its
-    :class:`WorkerSource` from.
+    :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` from.
 
     The controller hands this to :meth:`TaskBackend.bind_runtime` once at startup;
     the backend joins it with its OWN liveness tracker (built in its constructor)
-    to build the scale-group-scoped :class:`WorkerSource` it reads through. The
-    worker source can't be a finished constructor arg because it closes over the
-    backend's tracker, so the controller supplies the rest as data here.
+    to build the scale-group-scoped store it reads and reaps through. The store
+    can't be a finished constructor arg because it closes over the backend's tracker
+    (and its ``autoscale``), so the controller supplies the rest as data here.
     """
 
     db: ControllerDB
@@ -572,8 +520,8 @@ class TaskBackend(Protocol):
         """Decide task→worker placement for the routed tasks (pure decision).
 
         The request carries only the routed pending tasks + budget state; the
-        backend sources its own workers (its :class:`WorkerSource`) and assembles
-        the scheduling context internally. Worker-daemon backends run the full
+        backend sources its own workers (its worker store) and assembles the
+        scheduling context internally. Worker-daemon backends run the full
         Iris scheduling pipeline; cluster backends (Kueue, slurmctld) return an
         empty result — they place tasks themselves.
         """
@@ -631,8 +579,8 @@ class TaskBackend(Protocol):
 
         Called once by the controller for worker-daemon backends. The backend joins
         ``runtime`` with its own liveness tracker to build the scale-group-scoped
-        :class:`WorkerSource` it reads through; capacity-managing backends (k8s)
-        track no Iris workers and no-op.
+        :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` it reads
+        through; capacity-managing backends (k8s) track no Iris workers and no-op.
         """
         ...
 
