@@ -272,6 +272,10 @@ message TaskStatus {
   // clusters, the routed id once pinned, empty ONLY while a job is genuinely
   // unrouted. Never an overloaded sentinel; the UI hides the column via multiBackend.
   string backend_id = 24;
+
+  // Federation discriminator, orthogonal to backend_id: "" == owned by this
+  // cluster, "<peer>" == handed off to that peer cluster (backend_id then "").
+  string child_cluster = 25;
 }
 
 // Record of a single task execution attempt
@@ -376,6 +380,9 @@ message JobStatus {
 
   // Literal owning backend id. See TaskStatus.backend_id.
   string backend_id = 34;
+
+  // Federation discriminator. See TaskStatus.child_cluster.
+  string child_cluster = 35;
 }
 
 // ============================================================================
