@@ -79,7 +79,7 @@ function sampleTable(rows,cols){
 function loading(node){node.innerHTML='<p class="spin">running query…</p>';}
 function fail(node,e){node.innerHTML=`<p style="color:#b00">error: ${esc(e.message)}</p>`;}
 
-const TABS=[['overview','Overview'],['normalized','Normalized'],['decontam','Decontamination'],['dedup','Deduplication'],['quality','Classifier'],['store','Store']];
+const TABS=[['overview','Overview'],['sources','Sources'],['normalized','Normalized'],['decontam','Decontamination'],['dedup','Deduplication'],['quality','Classifier'],['store','Store']];
 function renderTabs(){
   document.getElementById('tabs').innerHTML=TABS.map(([k,l])=>`<div class="tab ${k===TAB?'active':''}" data-k="${k}">${l}</div>`).join('');
   document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{TAB=t.dataset.k;renderTabs();render();});
@@ -88,6 +88,7 @@ function renderTabs(){
 function render(){
   const m=document.getElementById('main');
   if(TAB==='overview')return renderOverview(m);
+  if(TAB==='sources')return renderSources(m);
   if(TAB==='normalized')return renderStageSource(m,'normalized');
   if(TAB==='decontam')return renderStageSource(m,'decontam');
   if(TAB==='quality')return renderStageSource(m,'quality');
@@ -115,6 +116,28 @@ function renderOverview(m){
      <tr><td>quality</td><td>${cov('quality')} ${OV.resolved.quality.length?'':'<span class="muted">(ambiguous — set DATAVIZ_QUALITY_MODEL + DATAVIZ_DOMAIN_CENTROIDS)</span>'}</td></tr>
      <tr><td>dedup</td><td>${OV.dedup?esc(OV.dedup):'<span class="muted">unresolved</span>'}</td></tr>
     </tbody></table></div>`;
+}
+
+let SORT={key:'drop_rate',dir:-1};
+function renderSources(m){
+  const rows=OV.source_summary||[];
+  if(!rows.length){m.innerHTML='<div class="card"><p class="muted">no source summary baked in (set DATAVIZ_SOURCE_SUMMARY)</p></div>';return;}
+  const cols=[['source','source'],['docs_est','docs'],['q_avg','quality avg'],['q_sd','q sd'],['q_zero','frac score≈0'],['drop_rate','dedup drop'],['dup_largest','largest dup'],['decon_pct','contam %']];
+  rows.sort((a,b)=>{const k=SORT.key,x=a[k],y=b[k];if(x==null)return 1;if(y==null)return -1;return (x>y?1:x<y?-1:0)*SORT.dir;});
+  const warn=(k,v)=>{if(v==null)return '';
+    if(k==='drop_rate'&&v>0.5)return 'background:#fdecea';
+    if(k==='q_avg'&&v<0.05)return 'background:#fdecea';
+    if(k==='q_zero'&&v>0.3)return 'background:#fff4e5';
+    if(k==='q_sd'&&v<0.05)return 'background:#fff4e5';
+    if(k==='decon_pct'&&v>1)return 'background:#fdecea';return '';};
+  const head=cols.map(([k,l])=>`<th style="cursor:pointer" data-k="${k}">${l}${SORT.key===k?(SORT.dir>0?' ▲':' ▼'):''}</th>`).join('');
+  const body=rows.map(r=>'<tr>'+cols.map(([k])=>{
+    let v=r[k];const disp=(k==='docs_est')?fmt(v):(v==null?'—':v);
+    return `<td style="${warn(k,v)}">${esc(disp)}</td>`;}).join('')+'</tr>').join('');
+  m.innerHTML=`<div class="card"><h3>Per-source pipeline summary <span class="muted">(sampled; click a header to sort)</span></h3>
+    <p class="muted">red = dedup drop &gt;50% or quality avg &lt;0.05 or contamination &gt;1%; orange = frac≈0 &gt;0.3 or quality sd &lt;0.05 (no discrimination)</p>
+    <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  m.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k;SORT=(SORT.key===k)?{key:k,dir:-SORT.dir}:{key:k,dir:(k==='source'?1:-1)};render();});
 }
 
 function renderStageSource(m,stage){

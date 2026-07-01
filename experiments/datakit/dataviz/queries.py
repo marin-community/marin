@@ -34,9 +34,12 @@ def _sql_str(value: str) -> str:
 class Dataviz:
     """Query facade bound to one resolved store lineage + a ducky client."""
 
-    def __init__(self, lineage: StoreLineage, ducky: DuckyClient):
+    def __init__(self, lineage: StoreLineage, ducky: DuckyClient, source_docs: dict[str, int] | None = None):
         self.lineage = lineage
         self.ducky = ducky
+        # Estimated docs per source (from the baked summary), used to sample the
+        # store from cheap small sources first rather than scanning huge ones.
+        self.source_docs = source_docs or {}
 
     # -- glob helpers -------------------------------------------------------
     def _normalize_glob(self, source: str) -> str:
@@ -143,6 +146,9 @@ class Dataviz:
         """
         view = self.lineage.cluster_view
         both = [s for s in self.lineage.source_names if s in self.lineage.cluster_assign and s in self.lineage.normalize]
+        # Smallest sources first: a per-source join scans that source's whole
+        # normalize parquet, so cheap sources return samples fastest.
+        both.sort(key=lambda s: self.source_docs.get(s, 1 << 62))
         out: list[dict] = []
         for source in both[:max_sources]:
             remaining = n - len(out)

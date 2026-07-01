@@ -83,6 +83,10 @@ class _QueryState:
     error: str | None = None
 
 
+def _source_docs(source_summary: list[dict] | None) -> dict[str, int]:
+    return {r["source"]: r["docs_est"] for r in source_summary or [] if r.get("docs_est")}
+
+
 def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
     return {
@@ -137,8 +141,13 @@ class QueryManager:
             return self._states.get(query_id)
 
 
-def build_app(lineage: StoreLineage, payload: ClusteredStoreData, ducky: DuckyClient) -> Starlette:
-    manager = QueryManager(_build_views(Dataviz(lineage, ducky)))
+def build_app(
+    lineage: StoreLineage,
+    payload: ClusteredStoreData,
+    ducky: DuckyClient,
+    source_summary: list[dict] | None = None,
+) -> Starlette:
+    manager = QueryManager(_build_views(Dataviz(lineage, ducky, _source_docs(source_summary))))
 
     def overview() -> dict:
         buckets = [
@@ -169,6 +178,7 @@ def build_app(lineage: StoreLineage, payload: ClusteredStoreData, ducky: DuckyCl
             "dedup": lineage.dedup,
             "counters": payload.counters,
             "buckets": buckets,
+            "source_summary": source_summary or [],
         }
 
     async def index(_request: Request) -> FileResponse:
@@ -265,7 +275,17 @@ def main() -> None:
 
     ducky = _build_ducky(args.ducky_url)
     lineage, payload = _load(args.store, ducky, args.lineage_cache)
-    app = build_app(lineage, payload, ducky)
+    source_summary = None
+    summary_path = os.environ.get("DATAVIZ_SOURCE_SUMMARY")
+    if summary_path:
+        import json  # noqa: PLC0415 — only needed on this optional path
+
+        from rigging.filesystem import open_url  # noqa: PLC0415
+
+        with open_url(summary_path, "r") as f:
+            source_summary = json.load(f)
+        logger.info("loaded source summary (%d rows) from %s", len(source_summary), summary_path)
+    app = build_app(lineage, payload, ducky, source_summary)
     logger.info(
         "dataviz for %s: %d sources, %d buckets",
         lineage.store_path,
