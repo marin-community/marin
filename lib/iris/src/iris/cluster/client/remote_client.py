@@ -550,14 +550,14 @@ class RemoteClusterClient:
 
         return call_with_retry(f"fetch_logs({source})", _call)
 
-    def get_cluster_capabilities(self) -> list[str]:
-        """Fetch the availability markers this controller advertises to peers."""
-        request = controller_pb2.Controller.GetClusterCapabilitiesRequest()
-        # Single attempt, no retry (unlike the sibling calls): a failed probe marks
-        # the peer unreachable until the next heartbeat, so retrying here would only
-        # delay that signal.
-        response = self._client.get_cluster_capabilities(request)
-        return list(response.capabilities)
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        """Fetch this controller's backends: their topology and current state."""
+        request = controller_pb2.Controller.ListBackendsRequest()
+        # Single attempt, no retry (unlike the sibling calls): a failed federation
+        # heartbeat marks the peer unreachable until the next one, so retrying here
+        # would only delay that signal.
+        response = self._client.list_backends(request)
+        return list(response.backends)
 
     def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

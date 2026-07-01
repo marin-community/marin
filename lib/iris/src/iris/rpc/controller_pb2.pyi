@@ -731,7 +731,7 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PeerSummary(_message.Message):
-        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_sync_ms", "active_federated_jobs", "aggregate_spend_micros", "advertised_capabilities")
+        __slots__ = ("peer_id", "controller_address", "dashboard_url", "reachable", "last_sync_ms", "active_federated_jobs", "aggregate_spend_micros", "backends")
         PEER_ID_FIELD_NUMBER: _ClassVar[int]
         CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
         DASHBOARD_URL_FIELD_NUMBER: _ClassVar[int]
@@ -739,7 +739,7 @@ class Controller(_message.Message):
         LAST_SYNC_MS_FIELD_NUMBER: _ClassVar[int]
         ACTIVE_FEDERATED_JOBS_FIELD_NUMBER: _ClassVar[int]
         AGGREGATE_SPEND_MICROS_FIELD_NUMBER: _ClassVar[int]
-        ADVERTISED_CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+        BACKENDS_FIELD_NUMBER: _ClassVar[int]
         peer_id: str
         controller_address: str
         dashboard_url: str
@@ -747,21 +747,13 @@ class Controller(_message.Message):
         last_sync_ms: int
         active_federated_jobs: int
         aggregate_spend_micros: int
-        advertised_capabilities: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_sync_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., advertised_capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
+        backends: _containers.RepeatedCompositeFieldContainer[Controller.BackendSummary]
+        def __init__(self, peer_id: _Optional[str] = ..., controller_address: _Optional[str] = ..., dashboard_url: _Optional[str] = ..., reachable: _Optional[bool] = ..., last_sync_ms: _Optional[int] = ..., active_federated_jobs: _Optional[int] = ..., aggregate_spend_micros: _Optional[int] = ..., backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ...) -> None: ...
     class ListPeersResponse(_message.Message):
         __slots__ = ("peers",)
         PEERS_FIELD_NUMBER: _ClassVar[int]
         peers: _containers.RepeatedCompositeFieldContainer[Controller.PeerSummary]
         def __init__(self, peers: _Optional[_Iterable[_Union[Controller.PeerSummary, _Mapping]]] = ...) -> None: ...
-    class GetClusterCapabilitiesRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
-    class GetClusterCapabilitiesResponse(_message.Message):
-        __slots__ = ("capabilities",)
-        CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
-        capabilities: _containers.RepeatedScalarFieldContainer[str]
-        def __init__(self, capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

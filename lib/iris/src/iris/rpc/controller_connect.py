@@ -121,9 +121,6 @@ class ControllerService(Protocol):
     async def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_cluster_capabilities(self, request: controller__pb2.Controller.GetClusterCapabilitiesRequest, ctx: RequestContext) -> controller__pb2.Controller.GetClusterCapabilitiesResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -469,16 +466,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_peers,
-                ),
-                "/iris.cluster.ControllerService/GetClusterCapabilities": Endpoint.unary(
-                    method=MethodInfo(
-                        name="GetClusterCapabilities",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetClusterCapabilitiesRequest,
-                        output=controller__pb2.Controller.GetClusterCapabilitiesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_cluster_capabilities,
                 ),
             },
             interceptors=interceptors,
@@ -1173,26 +1160,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_cluster_capabilities(
-        self,
-        request: controller__pb2.Controller.GetClusterCapabilitiesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetClusterCapabilitiesResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetClusterCapabilities",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetClusterCapabilitiesRequest,
-                output=controller__pb2.Controller.GetClusterCapabilitiesResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
 
 
 class EndpointService(Protocol):
@@ -1383,8 +1350,6 @@ class ControllerServiceSync(Protocol):
     def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def get_cluster_capabilities(self, request: controller__pb2.Controller.GetClusterCapabilitiesRequest, ctx: RequestContext) -> controller__pb2.Controller.GetClusterCapabilitiesResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1731,16 +1696,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_peers,
-                ),
-                "/iris.cluster.ControllerService/GetClusterCapabilities": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="GetClusterCapabilities",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.GetClusterCapabilitiesRequest,
-                        output=controller__pb2.Controller.GetClusterCapabilitiesResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_cluster_capabilities,
                 ),
             },
             interceptors=interceptors,
@@ -2429,26 +2384,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListPeersRequest,
                 output=controller__pb2.Controller.ListPeersResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def get_cluster_capabilities(
-        self,
-        request: controller__pb2.Controller.GetClusterCapabilitiesRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.GetClusterCapabilitiesResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetClusterCapabilities",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.GetClusterCapabilitiesRequest,
-                output=controller__pb2.Controller.GetClusterCapabilitiesResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

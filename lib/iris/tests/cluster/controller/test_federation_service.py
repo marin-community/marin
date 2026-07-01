@@ -3,10 +3,10 @@
 
 """Federation is observable through the RPC service, but not targetable.
 
-``ListPeers`` returns the configured peers with their live heartbeat
-capabilities, ``GetClusterCapabilities`` reports this controller's own markers,
-and — the load-bearing invariant — a job submitted while a reachable peer is
-configured still materializes local tasks. Nothing is handed off.
+``ListPeers`` returns the configured peers with the backends each forwarded on
+its last heartbeat, and — the load-bearing invariant — a job submitted while a
+reachable peer is configured still materializes local tasks. Nothing is handed
+off.
 """
 
 from iris.cluster.config import PeerConfig
@@ -23,48 +23,53 @@ from .conftest import make_job_request
 
 _IDENTITY = VerifiedIdentity(user_id="alice", role="user")
 
+_PEER_BACKEND = controller_pb2.Controller.BackendSummary(
+    backend_id="tpu-fleet",
+    kind="worker-daemon",
+    worker_count=3,
+    advertised_attributes={"device-type": controller_pb2.StringList(values=["tpu"])},
+)
+
 
 class _StubPeerConnection:
-    def __init__(self, capabilities: tuple[str, ...]):
-        self._capabilities = capabilities
+    def __init__(self, backends: tuple[controller_pb2.Controller.BackendSummary, ...]):
+        self._backends = backends
 
-    def get_cluster_capabilities(self) -> list[str]:
-        return list(self._capabilities)
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        return list(self._backends)
 
     def shutdown(self) -> None:
         pass
 
 
-def _attach_peer(mock_controller, capabilities: tuple[str, ...] = ("available:tpu",)) -> FederationPeer:
+def _attach_peer(
+    mock_controller,
+    backends: tuple[controller_pb2.Controller.BackendSummary, ...] = (_PEER_BACKEND,),
+) -> FederationPeer:
     """Give the controller one reachable peer (already heartbeated once)."""
     peer = FederationPeer(
         "cw-east",
         PeerConfig(controller_address="http://cw:10000", dashboard_url="https://cw.dev"),
-        _StubPeerConnection(capabilities),
+        _StubPeerConnection(backends),
     )
     peer.probe()
     mock_controller.federation = FederationManager([peer], threads=get_thread_container())
     return peer
 
 
-def test_list_peers_returns_configured_peer_with_heartbeat_capabilities(controller_service, mock_controller):
-    _attach_peer(mock_controller, capabilities=("available:tpu", "available:v5e-4"))
+def test_list_peers_forwards_the_peer_backends_from_its_heartbeat(controller_service, mock_controller):
+    _attach_peer(mock_controller)
     with identity_scope(_IDENTITY):
         response = controller_service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
     (peer,) = response.peers
     assert peer.peer_id == "cw-east"
     assert peer.reachable is True
-    assert list(peer.advertised_capabilities) == ["available:tpu", "available:v5e-4"]
     assert peer.dashboard_url == "https://cw.dev"
-
-
-def test_get_cluster_capabilities_reports_backend_devices(controller_service, mock_controller):
-    mock_controller.provider.advertised_attributes.return_value = {"device-type": {"tpu"}, "device-variant": {"v5e-4"}}
-    with identity_scope(_IDENTITY):
-        response = controller_service.get_cluster_capabilities(
-            controller_pb2.Controller.GetClusterCapabilitiesRequest(), None
-        )
-    assert list(response.capabilities) == ["available:tpu", "available:v5e-4"]
+    (backend,) = peer.backends
+    assert backend.backend_id == "tpu-fleet"
+    assert backend.kind == "worker-daemon"
+    assert backend.worker_count == 3
+    assert list(backend.advertised_attributes["device-type"].values) == ["tpu"]
 
 
 def test_launch_job_stays_local_when_a_peer_is_configured(controller_service, mock_controller, state):

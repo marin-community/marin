@@ -5,10 +5,10 @@
 
 ``RemoteClusterClient`` already encapsulates "one connection to one controller";
 :class:`FederationPeer` holds one per peer (keyed by peer id) and caches the
-capabilities that peer last advertised. The connection is authenticated with the
-credentials this controller presents to the peer, resolved from the peer's
-cluster manifest via the shared ``credentials_for`` path — no second credential
-system.
+backends that peer last advertised — its static topology and current state. The
+connection is authenticated with the credentials this controller presents to the
+peer, resolved from the peer's cluster manifest via the shared ``credentials_for``
+path — no second credential system.
 """
 
 import logging
@@ -24,6 +24,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.config import PeerConfig
+from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 class PeerConnection(Protocol):
     """The narrow peer-controller surface the federation heartbeat drives."""
 
-    def get_cluster_capabilities(self) -> list[str]: ...
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
 
     def shutdown(self) -> None: ...
 
@@ -44,7 +45,7 @@ class PeerHeartbeat:
     """The latest capability-heartbeat observation for one peer."""
 
     reachable: bool = False
-    capabilities: tuple[str, ...] = ()
+    backends: tuple[controller_pb2.Controller.BackendSummary, ...] = ()
     last_contact_ms: int = 0
 
 
@@ -85,14 +86,14 @@ class FederationPeer:
         self._heartbeat = PeerHeartbeat()
 
     def probe(self) -> None:
-        """Refresh the peer's advertised capabilities via one heartbeat RPC.
+        """Refresh the peer's advertised backends via one heartbeat RPC.
 
-        On success, records the peer's markers, marks it reachable, and stamps the
+        On success, records the peer's backends, marks it reachable, and stamps the
         contact time. On failure, marks it unreachable and keeps the last-known
-        markers — staleness is signalled by ``reachable``.
+        backends — staleness is signalled by ``reachable``.
         """
         try:
-            capabilities = self._connection.get_cluster_capabilities()
+            backends = self._connection.list_backends()
         except (ConnectError, ConnectionError, OSError) as exc:
             logger.warning("Federation heartbeat to peer %s failed: %s", self.peer_id, exc)
             with self._lock:
@@ -101,7 +102,7 @@ class FederationPeer:
         with self._lock:
             self._heartbeat = PeerHeartbeat(
                 reachable=True,
-                capabilities=tuple(capabilities),
+                backends=tuple(backends),
                 last_contact_ms=Timestamp.now().epoch_ms(),
             )
 

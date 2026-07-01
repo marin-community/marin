@@ -75,7 +75,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.federation.capabilities import cluster_capability_markers
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -3000,22 +2999,8 @@ class ControllerServiceImpl:
         """List federation peers this controller may delegate whole jobs to.
 
         Each summary carries the peer's identity, controller/dashboard addresses,
-        and its last capability-heartbeat result (reachability + advertised
-        markers).
+        and its last capability-heartbeat result: reachability plus the peer's
+        forwarded backends.
         """
         require_identity()
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
-
-    def get_cluster_capabilities(
-        self,
-        request: controller_pb2.Controller.GetClusterCapabilitiesRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.GetClusterCapabilitiesResponse:
-        """Report the availability markers this controller advertises to peers.
-
-        Markers name the device types this cluster's backends can currently
-        schedule (e.g. ``available:H100``).
-        """
-        require_identity()
-        capabilities = cluster_capability_markers(self._controller.backends)
-        return controller_pb2.Controller.GetClusterCapabilitiesResponse(capabilities=capabilities)

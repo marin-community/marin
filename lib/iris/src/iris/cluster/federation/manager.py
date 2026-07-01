@@ -75,7 +75,7 @@ class FederationManager:
             dashboard_url=peer.dashboard_url,
             reachable=heartbeat.reachable,
             last_sync_ms=heartbeat.last_contact_ms,
-            advertised_capabilities=list(heartbeat.capabilities),
+            backends=heartbeat.backends,
         )
 
     def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:

@@ -71,9 +71,8 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetSchedulerState",
         "GetKubernetesClusterStatus",
         "ListBackends",
-        # Federation (read-only observation + capability heartbeat)
+        # Federation (read-only peer observation)
         "ListPeers",
-        "GetClusterCapabilities",
         # Identity, users, budgets (read)
         "GetAuthInfo",
         "GetCurrentUser",

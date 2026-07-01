@@ -3,25 +3,28 @@
 
 """Federation: peer config, capability heartbeat, and the dark submit router.
 
-Covers the observable-but-not-targetable slice: peers parse and validate, a
-controller derives the capability markers it advertises, the heartbeat learns a
-peer's live capabilities, ListPeers surfaces them, and the submit router routes
-every job local even with a reachable peer configured.
+Covers the observable-but-not-targetable slice: peers parse and validate, the
+heartbeat forwards a peer's live backends, ListPeers surfaces them, and the
+submit router routes every job local even with a reachable peer configured.
 """
 
 import pydantic
 import pytest
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config
-from iris.cluster.federation.capabilities import cluster_capability_markers
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter
 from iris.managed_thread import get_thread_container, thread_container_scope
+from iris.rpc import controller_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 
 def _config(**extra) -> dict:
     return {"name": "parent", "platform": {"local": {}}, **extra}
+
+
+def _backend(backend_id: str, **fields) -> controller_pb2.Controller.BackendSummary:
+    return controller_pb2.Controller.BackendSummary(backend_id=backend_id, **fields)
 
 
 # ---------------------------------------------------------------------------
@@ -72,61 +75,24 @@ def test_peers_config_rejects_static_token_without_cluster():
 
 
 # ---------------------------------------------------------------------------
-# capability markers (the serving side of the heartbeat)
-# ---------------------------------------------------------------------------
-
-
-class _StubBackend:
-    def __init__(self, attributes: dict[str, set[str]]):
-        self._attributes = attributes
-
-    def advertised_attributes(self) -> dict[str, set[str]]:
-        return self._attributes
-
-
-def test_capability_markers_cover_every_advertised_device():
-    backends = {
-        "tpu": _StubBackend({"device-type": {"tpu"}, "device-variant": {"v5e-4", "v6e-8"}}),
-        "gpu": _StubBackend({"device-type": {"gpu"}, "gpu-variant": {"H100"}}),
-    }
-    assert cluster_capability_markers(backends) == [
-        "available:H100",
-        "available:gpu",
-        "available:tpu",
-        "available:v5e-4",
-        "available:v6e-8",
-    ]
-
-
-def test_capability_markers_default_to_cpu_for_attribute_less_backend():
-    assert cluster_capability_markers({"default": _StubBackend({})}) == ["available:cpu"]
-
-
-def test_capability_markers_ignore_placement_attributes():
-    # region/zone/preemptible describe placement, not a schedulable device.
-    backend = _StubBackend({"region": {"us-east"}, "zone": {"us-east-1a"}, "preemptible": {"true"}})
-    assert cluster_capability_markers({"b": backend}) == ["available:cpu"]
-
-
-# ---------------------------------------------------------------------------
 # peer heartbeat + ListPeers view (the parent side)
 # ---------------------------------------------------------------------------
 
 
 class _StubConnection:
-    """A peer connection whose capability probe returns a canned answer."""
+    """A peer connection whose ListBackends probe returns a canned answer."""
 
-    def __init__(self, capabilities: tuple[str, ...], *, fail: bool = False):
-        self.capabilities = capabilities
+    def __init__(self, backends: tuple[controller_pb2.Controller.BackendSummary, ...], *, fail: bool = False):
+        self.backends = backends
         self.fail = fail
         self.probe_count = 0
         self.shutdown_count = 0
 
-    def get_cluster_capabilities(self) -> list[str]:
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         self.probe_count += 1
         if self.fail:
             raise ConnectionError("peer unreachable")
-        return list(self.capabilities)
+        return list(self.backends)
 
     def shutdown(self) -> None:
         self.shutdown_count += 1
@@ -140,28 +106,29 @@ def _peer(peer_id: str, connection: _StubConnection, *, dashboard_url: str = "ht
     )
 
 
-def test_peer_probe_populates_capabilities_and_reachability():
-    peer = _peer("cw", _StubConnection(("available:tpu", "available:v5e-4")))
+def test_peer_probe_populates_backends_and_reachability():
+    peer = _peer("cw", _StubConnection((_backend("tpu-fleet", kind="worker-daemon"),)))
     peer.probe()
     heartbeat = peer.heartbeat()
     assert heartbeat.reachable is True
-    assert heartbeat.capabilities == ("available:tpu", "available:v5e-4")
+    assert [b.backend_id for b in heartbeat.backends] == ["tpu-fleet"]
     assert heartbeat.last_contact_ms > 0
 
 
-def test_peer_probe_failure_marks_unreachable_and_keeps_last_capabilities():
-    connection = _StubConnection(("available:tpu",))
+def test_peer_probe_failure_marks_unreachable_and_keeps_last_backends():
+    connection = _StubConnection((_backend("tpu-fleet"),))
     peer = _peer("cw", connection)
     peer.probe()  # first probe succeeds
     connection.fail = True
     peer.probe()  # second probe fails
     heartbeat = peer.heartbeat()
     assert heartbeat.reachable is False
-    assert heartbeat.capabilities == ("available:tpu",)  # last-known markers retained
+    assert [b.backend_id for b in heartbeat.backends] == ["tpu-fleet"]  # last-known backends retained
 
 
-def test_list_peers_view_surfaces_heartbeat_capabilities():
-    peer = _peer("cw-east", _StubConnection(("available:tpu", "available:v5e-4")))
+def test_list_peers_view_surfaces_heartbeat_backends():
+    backend = _backend("tpu-fleet", kind="worker-daemon", worker_count=3)
+    peer = _peer("cw-east", _StubConnection((backend,)))
     manager = FederationManager([peer], threads=get_thread_container())
     peer.probe()
     (summary,) = manager.peer_summaries()
@@ -169,12 +136,15 @@ def test_list_peers_view_surfaces_heartbeat_capabilities():
     assert summary.controller_address == "http://cw:10000"
     assert summary.dashboard_url == "https://cw.dev"
     assert summary.reachable is True
-    assert list(summary.advertised_capabilities) == ["available:tpu", "available:v5e-4"]
+    (forwarded,) = summary.backends
+    assert forwarded.backend_id == "tpu-fleet"
+    assert forwarded.kind == "worker-daemon"
+    assert forwarded.worker_count == 3
     assert summary.last_sync_ms > 0
 
 
-def test_heartbeat_loop_refreshes_capabilities_and_stop_releases_connections():
-    connection = _StubConnection(("available:cpu",))
+def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
+    connection = _StubConnection((_backend("cpu-fleet"),))
     peer = _peer("local", connection)
     with thread_container_scope() as threads:
         manager = FederationManager([peer], threads=threads, heartbeat_interval=Duration.from_seconds(0.02))
@@ -184,7 +154,7 @@ def test_heartbeat_loop_refreshes_capabilities_and_stop_releases_connections():
                 lambda: peer.heartbeat().reachable, timeout=Duration.from_seconds(3.0)
             )
             assert reached
-            assert list(manager.peer_summaries()[0].advertised_capabilities) == ["available:cpu"]
+            assert [b.backend_id for b in manager.peer_summaries()[0].backends] == ["cpu-fleet"]
         finally:
             manager.stop()
     assert connection.shutdown_count == 1
@@ -204,7 +174,7 @@ def test_build_peers_orders_by_id_and_uses_injected_factory():
 
     def fake_connect(config: PeerConfig) -> _StubConnection:
         created.append(config.controller_address)
-        return _StubConnection(("available:cpu",))
+        return _StubConnection((_backend("cpu-fleet"),))
 
     peers = build_peers(
         {
@@ -223,7 +193,7 @@ def test_build_peers_orders_by_id_and_uses_injected_factory():
 
 
 def test_router_selects_local_even_with_a_reachable_peer():
-    connection = _StubConnection(("available:tpu",))
+    connection = _StubConnection((_backend("tpu-fleet"),))
     peer = _peer("cw", connection)
     peer.probe()
     decision = PeerRouter([peer]).decide([], "alice")

@@ -642,21 +642,14 @@ message Controller {
     int64 last_sync_ms = 5;           // last successful contact, ms since epoch
     int32 active_federated_jobs = 6;
     int64 aggregate_spend_micros = 7;
-    // Live markers the peer advertises for what it can currently schedule
-    // (e.g. "available:H100"), refreshed by the capability heartbeat.
-    repeated string advertised_capabilities = 8;
+    // The peer's backends, forwarded from its ListBackends: the underlying
+    // cluster's static topology (kind, advertised devices) and dynamic state
+    // (availability, worker/task counts). Refreshed by the capability heartbeat.
+    repeated BackendSummary backends = 8;
   }
 
   message ListPeersResponse {
     repeated PeerSummary peers = 1;
-  }
-
-  message GetClusterCapabilitiesRequest {}
-
-  // The availability markers a controller advertises to federating peers,
-  // derived from the device types its backends can currently schedule.
-  message GetClusterCapabilitiesResponse {
-    repeated string capabilities = 1;
   }
 }
 
@@ -736,10 +729,6 @@ service ControllerService {
   // ListBackends: backends are what this controller runs, peers are what it
   // delegates to.
   rpc ListPeers(Controller.ListPeersRequest) returns (Controller.ListPeersResponse);
-
-  // Federation capability heartbeat: report the availability markers this
-  // controller advertises to peers that may delegate work to it.
-  rpc GetClusterCapabilities(Controller.GetClusterCapabilitiesRequest) returns (Controller.GetClusterCapabilitiesResponse);
 }
 
 // Service-discovery endpoint registry, leased.
