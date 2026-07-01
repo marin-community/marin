@@ -129,4 +129,8 @@ lib/buoy/dashboard/
 
 ## Status
 
-- 2026-07-01: plan written; scaffolding `lib/buoy/dashboard/` (phase 1).
+- 2026-07-01: plan written; phase 1 (scaffold: build tree + sidebar/run-list) done.
+- 2026-07-01: phase 2 done — `useRun` (mirror→poll→load, nav-race guarded),
+  `RunHeader` (info pills + refetch), `Tabs` (profile only when present),
+  `SummaryTab` (searchable summary + config). `build:check` green. Next: phase 3
+  (charts + `MetricChart` Plotly wrapper).
