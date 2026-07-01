@@ -1382,7 +1382,7 @@ def _mosaic_fp8_ragged_dot_impl(
     block_n = 128 if block_n is None else block_n
     block_k = 64 if block_k is None else block_k
     max_concurrent_steps = int(os.environ.get("FP8_MOSAIC_MAX_CONCURRENT_STEPS", "4"))
-    grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"))
+    grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "16"))
     mosaic_out_dtype = lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
 
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
@@ -1413,6 +1413,20 @@ def _mosaic_fp8_ragged_dot_impl(
         )
 
     if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
+        if os.environ.get("FP8_MOSAIC_DGRAD_IMPL") == "official":
+            if _official_mgpu_ragged_dot is None:
+                raise NotImplementedError("official ragged_dot_mgpu is not available")
+            return _official_mgpu_ragged_dot(
+                lhs,
+                rhs,
+                group_sizes=group_sizes,
+                block_m=block_m,
+                block_n=block_k,
+                block_k=block_n,
+                max_concurrent_steps=max_concurrent_steps,
+                grid_block_n=grid_block_n,
+                transpose_rhs=True,
+            ).astype(mosaic_out_dtype)
         return mosaic_ragged_dot(
             lhs,
             rhs,
@@ -1517,7 +1531,7 @@ def _mosaic_fp8_ragged_dot_k_major_impl(
     block_n = 128 if block_n is None else block_n
     block_k = 64 if block_k is None else block_k
     max_concurrent_steps = int(os.environ.get("FP8_MOSAIC_MAX_CONCURRENT_STEPS", "4"))
-    grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"))
+    grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "16"))
     mosaic_out_dtype = lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
     return mosaic_ragged_dot(
         lhs,
@@ -1550,16 +1564,11 @@ def _mosaic_fp8_ragged_wgrad_transposed_impl(
     grid_block_n = int(
         os.environ.get(
             "FP8_MOSAIC_WGRAD_GRID_BLOCK_N",
-            os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"),
+            os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "16"),
         )
     )
-    lhs_contract_dim = lhs_t.shape[0]
-    if lhs_contract_dim <= 1280:
-        default_wgrad_block_m = 64
-        default_wgrad_block_k = 128
-    else:
-        default_wgrad_block_m = block_k if block_k is not None else 128
-        default_wgrad_block_k = 64
+    default_wgrad_block_m = block_k if block_k is not None else 128
+    default_wgrad_block_k = 64
     wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(default_wgrad_block_m)))
     wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)))
     wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", str(default_wgrad_block_k)))
@@ -1574,6 +1583,7 @@ def _mosaic_fp8_ragged_wgrad_transposed_impl(
         max_concurrent_steps=max_concurrent_steps,
         grid_block_n=grid_block_n,
         mask_boundaries=os.environ.get("FP8_MOSAIC_WGRAD_MASK_BOUNDARIES", "1") == "1",
+        exact_token_start=os.environ.get("FP8_MOSAIC_WGRAD_EXACT_START", "0") == "1",
     )
 
 
@@ -2044,6 +2054,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
 
     grad_lhs_block_n = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_N", str(block_n)))
     grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "128"))
+    grad_lhs_block_m = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_M", str(block_m)))
     grad_lhs = _raw_ragged_dot_impl(
         q_g,
         q_rhs,
@@ -2052,7 +2063,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
         implementation,
         preferred_element_type,
         None,
-        block_m,
+        grad_lhs_block_m,
         grad_lhs_block_n,
         grad_lhs_block_k,
     )

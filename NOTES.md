@@ -19,10 +19,9 @@ The current checked-in Mosaic FP8 opt-in default is:
 - fused Triton quantize-transpose+amax for lhs/rhs/output-gradient operands,
   using one bf16 load and natural + transposed fp8 stores
 
-This is correct end-to-end for arbitrary non-uniform groups. The latest stable
-H100 measurements are still just below the requested 1.2x fwd+bwd bar at the
-1024 operating point, with the remaining gap in fused quantize/layout overhead
-rather than the raw ragged WGMMA kernels.
+This is correct end-to-end for arbitrary non-uniform groups. After the latest
+backward-grid autotune, the checked-in defaults are still just below the
+requested 1.2x fwd+bwd bar at the 1024 operating point.
 
 ## Latest resume measurement
 
@@ -40,18 +39,22 @@ Raw prequantized forward, measuring the FP8 ragged WGMMA itself with
 | w13 K=2560 N=2560 | 1.826 ms | 1.008 ms | 1.812x | 852 TF/s | 0.0424 |
 | w2 K=1280 N=2560 | 1.048 ms | 0.712 ms | 1.472x | 603 TF/s | 0.0393 |
 
-Best stable fwd+bwd measurement with fused quantize-transpose+amax and the
-genuine mixed-FP8 Mosaic wgrad:
+Best fwd+bwd measurement with fused quantize-transpose+amax and the genuine
+mixed-FP8 Mosaic wgrad:
 
 ```bash
-./h100 python bench_fp8_ragged_dot.py --quick --mode fwd_bwd --warmups 2 --iters 5 \
+./h100 python bench_fp8_ragged_dot.py --quick --mode fwd_bwd --warmups 3 --iters 10 \
   --fp8-implementation mosaic --fp8-block-m 192 --fp8-block-n 128 --fp8-block-k 128
 ```
 
 | GEMM | bf16 fwd+bwd | fp8 fwd+bwd | speedup | fp8 TFLOP/s |
 | --- | ---: | ---: | ---: | ---: |
-| w13 K=2560 N=2560 | 5.885 ms | 4.990 ms | 1.179x | 516 TF/s |
-| w2 K=1280 N=2560 | 3.245 ms | 3.251 ms | 0.998x | 396 TF/s |
+| w13 K=2560 N=2560 | 5.895 ms | 4.946 ms | 1.192x | 521 TF/s |
+| w2 K=1280 N=2560 | 3.228 ms | 2.887 ms | 1.118x | 446 TF/s |
+
+`mode=all` with the same checked-in defaults measured w13 fwd+bwd `1.190x`
+with forward rel-Fro `0.0424`, and w2 fwd+bwd `1.115x` with forward rel-Fro
+`0.0393`.
 
 The non-uniform group distribution in both measurements is
 `bounded_normal_sigma_0.18_capacity_1.35`, `E=64`, average tokens/expert
@@ -60,16 +63,21 @@ The non-uniform group distribution in both measurements is
 Tuning results from this resume:
 
 - `block_m=192, block_n=128, block_k=128` is the best forward tile found.
-- `FP8_MOSAIC_DGRAD_BLOCK_K=128` is the best dgrad tile found.
-- w13's best wgrad tile is `block_m=128, block_n=128, block_k=64`.
-- w2 has been noisy: one short sweep measured `block_m=64, block_n=128,
-  block_k=128` at 1.22x, but the final rerun with shape-specific defaults was
-  break-even, so the reproducible result above is the one to trust.
+- `FP8_MOSAIC_DGRAD_BLOCK_K=128`, `FP8_MOSAIC_DGRAD_BLOCK_N=128`, inherited
+  dgrad `block_m=192`, and shared `grid_block_n=16` are the best dgrad settings
+  found. `dgrad_block_n=256` exceeds shared memory, and `dgrad_block_m=128` is
+  slower.
+- The best reproducible wgrad tile is `block_m=128, block_n=128, block_k=64`
+  with `max_concurrent_steps=4` and `grid_block_n=16`; `block_k=128`,
+  `block_n=256`, `block_m=64`, `block_m=192`, and `block_m=256` all regressed
+  or failed shape/shared-memory constraints.
 - fused quantize-transpose tile `128x64`, `num_warps=4`, `num_stages=2` is the
   best stable tile found; `128x32`, `128x16`, `128x128`, `128x256`, `64x64`,
   and `256x64` all regressed in fwd+bwd.
 - Changing Triton quantize math from `x / scale` to reciprocal multiply
   regressed w13 on this build and was reverted.
+- `FP8_MOSAIC_WGRAD_EXACT_START=1` and the official mgpu dgrad selector both
+  regressed or failed layout inference, so neither is a default.
 
 ## 1024 non-uniform H100 measurement
 
