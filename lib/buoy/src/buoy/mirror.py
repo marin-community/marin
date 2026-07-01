@@ -101,19 +101,21 @@ def page_table(rows: list[dict], columns: list[str]) -> pa.Table:
     return pa.Table.from_pandas(df[columns], schema=schema, preserve_index=False)
 
 
-def _mirror_history(run: object, prefix: str, columns: list[str], report: Progress) -> dict:
+def _mirror_history(run: object, prefix: str, columns: list[str], report: Progress, prev: dict | None) -> dict:
     """Mirror the run history, preferring the bulk parquet artifact over scan.
 
     Finished runs usually expose the full history as a single-parquet
     ``wandb-history`` artifact — a bulk download (~2s for 180 MB) vs minutes of
     ``scan_history`` pagination. Running runs (whose artifact is a stale periodic
-    snapshot) and finished runs that never logged one fall back to scanning.
+    snapshot) and finished runs that never logged one fall back to scanning, which
+    is *incremental*: a refresh fetches only steps past the last mirrored one and
+    appends a shard, so the live-refresh cost is O(new steps), not O(all steps).
     """
     if getattr(run, "state", None) in TERMINAL_STATES:
         art = next((a for a in run.logged_artifacts() if a.type == HISTORY_ARTIFACT_TYPE), None)  # type: ignore[attr-defined]
         if art is not None:
             return _history_from_artifact(art, prefix, report)
-    return _history_from_scan(run, prefix, columns, report)
+    return _history_from_scan(run, prefix, columns, report, prev)
 
 
 def _history_from_artifact(art: object, prefix: str, report: Progress) -> dict:
@@ -121,7 +123,7 @@ def _history_from_artifact(art: object, prefix: str, report: Progress) -> dict:
     local = art.download()  # type: ignore[attr-defined]
     files = sorted(glob.glob(os.path.join(local, "**", "*.parquet"), recursive=True))
     hdir = cache.history_dir(prefix)
-    cache.clear_dir(hdir)  # replace any shards left by a previous scan mirror
+    cache.clear_dir(hdir)  # replace any shards left by a previous (incremental) scan mirror
     rows = 0
     numeric: set[str] = set()
     for i, path in enumerate(files):
@@ -132,32 +134,53 @@ def _history_from_artifact(art: object, prefix: str, report: Progress) -> dict:
             if not field.name.startswith("_") and (pa.types.is_integer(field.type) or pa.types.is_floating(field.type)):
                 numeric.add(field.name)
         cache.upload_file(path, posixpath.join(hdir, f"part-{i:05d}.parquet"))
-    return {"parts": len(files), "rows": rows, "columns": sorted(numeric)}
+    return {"parts": len(files), "rows": rows, "columns": sorted(numeric), "last_step": None}
 
 
-def _history_from_scan(run: object, prefix: str, columns: list[str], report: Progress) -> dict:
+def _history_from_scan(run: object, prefix: str, columns: list[str], report: Progress, prev: dict | None) -> dict:
     hdir = cache.history_dir(prefix)
-    part = 0
-    rows = 0
+    # Resume from the previous scan mirror when possible: fetch only newer steps and
+    # append shards. A first mirror (or a manifest predating last_step) does a full scan.
+    if not (prev and prev.get("last_step") is not None and prev.get("parts")):
+        prev = None
+    if prev is None:
+        cache.clear_dir(hdir)
+        part, prev_rows, min_step, max_step = 0, 0, None, -1
+        prev_cols: set[str] = set()
+    else:
+        part = prev["parts"]
+        prev_rows = prev["rows"]
+        prev_cols = set(prev["columns"])
+        min_step = prev["last_step"] + 1
+        max_step = prev["last_step"]
+    new_rows = 0
     batch: list[dict] = []
 
     def flush() -> None:
-        nonlocal part, rows
+        nonlocal part, new_rows, max_step
         if not batch:
             return
         table = page_table(batch, columns)
         cache.write_parquet(posixpath.join(hdir, f"part-{part:05d}.parquet"), table)
+        steps = table.column("_step").to_pylist()
+        if steps:
+            max_step = max(max_step, max(steps))
         part += 1
-        rows += table.num_rows
+        new_rows += table.num_rows
         batch.clear()
-        report(f"history: {rows:,} steps")
+        report(f"history: {prev_rows + new_rows:,} steps")
 
-    for row in run.scan_history():  # type: ignore[attr-defined]
+    for row in run.scan_history(min_step=min_step):  # type: ignore[attr-defined]
         batch.append(row)
         if len(batch) >= HISTORY_PAGE_ROWS:
             flush()
     flush()
-    return {"parts": part, "rows": rows, "columns": [c for c in columns if c != "_step"]}
+    return {
+        "parts": part,
+        "rows": prev_rows + new_rows,
+        "columns": sorted(prev_cols | {c for c in columns if c != "_step"}),
+        "last_step": max_step if max_step >= 0 else None,
+    }
 
 
 def _profile_logdir(local: str) -> str:
@@ -226,7 +249,7 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False, on_progre
     api = wandb.Api()
     run = api.run(ref.key)
     columns = history_columns(run)
-    history = _mirror_history(run, prefix, columns, report)
+    history = _mirror_history(run, prefix, columns, report, existing.get("history") if existing else None)
     report("writing config + summary")
     cache.write_json(posixpath.join(prefix, "config.json"), dict(run.config))
     summary_raw = getattr(run.summary, "_json_dict", None)

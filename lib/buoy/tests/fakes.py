@@ -40,8 +40,8 @@ class FakeRun:
     def summary(self) -> FakeSummary:
         return FakeSummary(self.summary_dict)
 
-    def scan_history(self):
-        return iter(self.rows)
+    def scan_history(self, min_step=None):
+        return iter(r for r in self.rows if min_step is None or r.get("_step", 0) >= min_step)
 
     def logged_artifacts(self):
         return self.artifacts

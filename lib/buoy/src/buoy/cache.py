@@ -82,8 +82,10 @@ def read_manifest(prefix: str) -> dict | None:
 def read_history(prefix: str, columns: list[str]) -> pd.DataFrame:
     """Read selected columns from the history shards into one frame.
 
-    All shards share a unified schema (see mirror.py), so a plain concat is
-    correct; only the requested columns are read off disk.
+    Only the requested columns are read off disk. Shards may differ in columns
+    (incremental appends for a running run can introduce a later metric that
+    earlier shards lack), so each shard contributes whichever requested columns
+    it has and the concat aligns the rest to NaN.
     """
     hdir = history_dir(prefix)
     fs = _fs(hdir)
@@ -91,10 +93,15 @@ def read_history(prefix: str, columns: list[str]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for part in parts:
         with fs.open(part, "rb") as handle:
-            frames.append(pq.read_table(handle, columns=columns).to_pandas())
+            pf = pq.ParquetFile(handle)
+            available = [c for c in columns if c in pf.schema_arrow.names]
+            if available:
+                frames.append(pf.read(columns=available).to_pandas())
     if not frames:
         return pd.DataFrame(columns=columns)
-    return pd.concat(frames, ignore_index=True)
+    # Reindex so a requested column absent from every shard (e.g. a metric newly in
+    # summary but not yet in any history row) is present and all-NaN, not missing.
+    return pd.concat(frames, ignore_index=True).reindex(columns=columns)
 
 
 def upload_tree(local_dir: str, dst_prefix: str) -> None:
