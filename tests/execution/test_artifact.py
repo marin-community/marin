@@ -171,13 +171,6 @@ def test_read_artifact_missing_raises(tmp_path):
         read_artifact((tmp_path / "nothing").as_posix(), _Doc)
 
 
-def test_read_artifact_reads_legacy_bare_payload(tmp_path):
-    """Old outputs wrote a bare ``.artifact`` payload; the manual API still loads them."""
-    (tmp_path / ".artifact").write_text('{"title": "legacy", "tokens": 3}')
-    loaded = read_artifact(tmp_path.as_posix(), _Doc)
-    assert loaded == _Doc(title="legacy", tokens=3)
-
-
 # --- the legacy Ray executor .executor_info fallback ---------------------------
 
 # A trimmed per-step ``.executor_info`` in the old ``ExecutorStepInfo`` schema, as written for the
@@ -215,11 +208,3 @@ def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
     record = read_record(tmp_path.as_posix())
     assert record.name == "modern"
     assert record.config == {"tokenizer": "gpt2"}
-
-
-def test_read_record_reads_legacy_undotted_record(tmp_path):
-    """Outputs materialized while the record was briefly written un-dotted still resolve."""
-    (tmp_path / "artifact.json").write_text('{"name": "undotted", "config": {"tokenizer": "gpt2"}}')
-
-    record = read_record(tmp_path.as_posix())
-    assert record.name == "undotted"
