@@ -17,6 +17,7 @@ dependencies = [
     "marin-core",
     "marin-rigging",
     "marin-zephyr",
+    "marin-buoy",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
@@ -130,6 +131,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/buoy",
 ]
 # lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
 # log-server ext is consumed as a pre-built wheel by default and only built from
@@ -157,6 +159,7 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-buoy = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
