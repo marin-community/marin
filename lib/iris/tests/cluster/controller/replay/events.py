@@ -148,7 +148,7 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     scale_group=scale_group,
                 )
             case QueueAssignments(assignments):
-                return ops.task.assign(cur, assignments, health=transitions._health)
+                return ops.task.assign(cur, assignments, backend=transitions)
             case ApplyTaskUpdates(request):
                 return apply_task_observations(
                     cur,

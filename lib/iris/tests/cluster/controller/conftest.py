@@ -64,7 +64,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
@@ -79,7 +79,6 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
-    workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
@@ -108,7 +107,7 @@ from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from tests.cluster.backends.conftest import make_mock_platform
-from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -229,6 +228,10 @@ class FakeProvider:
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return run_worker_daemon_schedule(self._scheduler, self._store, request)
+
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        assert self._store is not None, "FakeProvider.commit_placements called before worker store attached"
+        return self._store.validate_placements(cur, assignments)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
@@ -994,12 +997,8 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
 
 
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
-    with state._db.read_snapshot() as tx:
-        row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).one()
     with state._db.transaction() as cur:
-        ops.task.assign(
-            cur, [Assignment(task_id=task.task_id, worker_id=worker_id, address=row.address)], health=state._health
-        )
+        ops.task.assign(cur, [assignment_for_test(cur, task.task_id, worker_id)], backend=state)
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,

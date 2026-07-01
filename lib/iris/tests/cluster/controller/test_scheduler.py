@@ -115,7 +115,7 @@ def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId)
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
 
 

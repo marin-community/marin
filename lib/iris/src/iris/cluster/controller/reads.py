@@ -1343,6 +1343,7 @@ class SchedulableWorker:
 
     worker_id: WorkerId
     address: str
+    registered_at_ms: int
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -1371,6 +1372,7 @@ def healthy_active_workers_with_attributes(
         select(
             workers_table.c.worker_id,
             workers_table.c.address,
+            workers_table.c.registered_at_ms,
             workers_table.c.total_cpu_millicores,
             workers_table.c.total_memory_bytes,
             workers_table.c.total_gpu_count,
@@ -1384,6 +1386,7 @@ def healthy_active_workers_with_attributes(
         SchedulableWorker(
             worker_id=row.worker_id,
             address=str(row.address),
+            registered_at_ms=int(row.registered_at_ms),
             total_cpu_millicores=int(row.total_cpu_millicores),
             total_memory_bytes=int(row.total_memory_bytes),
             total_gpu_count=int(row.total_gpu_count),

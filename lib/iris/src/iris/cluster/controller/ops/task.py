@@ -18,6 +18,7 @@ Worker-reported task states are authored through ``ops.worker.apply_reconcile``
 """
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from rigging.timing import Timestamp
 
@@ -35,7 +36,6 @@ from iris.cluster.controller.reconcile import (
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
-from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -43,6 +43,13 @@ from iris.rpc import job_pb2
 @dataclass(frozen=True)
 class Assignment:
     """Scheduler assignment decision.
+
+    ``address`` and ``incarnation`` are the worker's address and
+    ``registered_at_ms`` at scheduling time, authored by the backend that owns
+    the worker table. The backend validates both against its current worker
+    row at commit, so the controller never re-reads the worker table: a
+    worker that re-registered (recycled worker_id or address) between
+    scheduling and commit no longer matches, and the placement is dropped.
 
     ``priority_band`` is the effective band computed at scheduling time
     (after applying any over-budget downgrade). Stamped onto ``tasks.priority_band``
@@ -57,41 +64,50 @@ class Assignment:
     task_id: JobName
     worker_id: WorkerId
     address: str
+    incarnation: int
     priority_band: int | None = None
+
+
+class PlacementValidator(Protocol):
+    """The backend-owned check ``assign`` delegates worker identity to."""
+
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        """Return the subset of ``assignments`` whose worker_id + address +
+        incarnation still matches this backend's current worker row and whose
+        worker is healthy and active, read from ``cur`` (the same write
+        transaction the caller commits into)."""
+        ...
 
 
 def assign(
     cur: Tx,
     assignments: list[Assignment],
     *,
-    health: WorkerHealthTracker,
+    backend: PlacementValidator,
 ) -> None:
     """Commit assignments to ``tasks.state = ASSIGNED`` + ``task_attempts``.
 
+    ``backend`` validates each assignment's worker identity and liveness
+    against its own worker table; only the surviving subset is written.
     Worker-bound dispatch is driven by the control tick's reconcile phase, which
     reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out Reconcile
     RPCs. This method does not enqueue or fan out anything; the next reconcile
     phase picks up the new ASSIGNED rows (a fresh assignment forces one).
     """
-    accepted: list[Assignment] = []
+    surviving = backend.commit_placements(cur, assignments)
+    if not surviving:
+        return
+
     now_ms = Timestamp.now().epoch_ms()
     jobs_to_update: set[JobName] = set()
 
-    task_map = reads.bulk_get_task_detail(cur, [a.task_id for a in assignments])
-
-    liveness = health.all()
-    healthy_worker_ids = [
-        a.worker_id for a in assignments if (liv := liveness.get(a.worker_id)) is not None and liv.healthy and liv.active
-    ]
-    address_map = reads.bulk_get_worker_addresses(cur, healthy_worker_ids)
-
+    task_map = reads.bulk_get_task_detail(cur, [a.task_id for a in surviving])
     potential_job_ids = {task.job_id for task in task_map.values()}
     job_config_map = reads.bulk_get_job_configs(cur, potential_job_ids)
 
-    for assignment in assignments:
+    for assignment in surviving:
         task = task_map.get(assignment.task_id)
-        worker_address: str | None = address_map.get(assignment.worker_id)
-        if task is None or worker_address is None:
+        if task is None:
             continue
         if not task_row_can_be_scheduled(task):
             continue
@@ -102,13 +118,12 @@ def assign(
             cur,
             assignment.task_id,
             assignment.worker_id,
-            worker_address,
+            assignment.address,
             attempt_id,
             now_ms,
             assignment.priority_band,
         )
         jobs_to_update.add(task.job_id)
-        accepted.append(assignment)
         task_wire = assignment.task_id.to_wire()
         worker_wire = str(assignment.worker_id)
         cur.register(

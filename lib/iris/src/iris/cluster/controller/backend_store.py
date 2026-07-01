@@ -15,12 +15,14 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from rigging.timing import Timestamp
+from sqlalchemy import bindparam, select
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
 from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import fail as fail_workers
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -30,6 +32,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TransitionSnapshot
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.controller.scheduling.policy import build_scheduling_context
+from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.transition_reader import load_transition_snapshot
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
@@ -60,6 +63,31 @@ def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> Worker
     return None
 
 
+def validate_worker_placements(cur: Tx, assignments: list[Assignment], health: WorkerHealthTracker) -> list[Assignment]:
+    """Return the subset of ``assignments`` whose worker_id + address + incarnation
+    still matches the current ``workers`` row read through ``cur`` and whose worker
+    is healthy and active in ``health``."""
+    if not assignments:
+        return []
+    worker_ids = list({a.worker_id for a in assignments})
+    rows = cur.execute(
+        select(workers_table.c.worker_id, workers_table.c.address, workers_table.c.registered_at_ms).where(
+            workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
+        ),
+        {"worker_ids": worker_ids},
+    ).all()
+    current = {row.worker_id: (str(row.address), int(row.registered_at_ms)) for row in rows}
+    surviving = []
+    for assignment in assignments:
+        if current.get(assignment.worker_id) != (assignment.address, assignment.incarnation):
+            continue
+        liveness = health.liveness(assignment.worker_id)
+        if not (liveness.healthy and liveness.active):
+            continue
+        surviving.append(assignment)
+    return surviving
+
+
 class BackendWorkerStore(TransitionReader, Protocol):
     """The worker-state operations a worker-daemon backend depends on."""
 
@@ -81,6 +109,13 @@ class BackendWorkerStore(TransitionReader, Protocol):
 
     def worker_address(self, worker_id: WorkerId) -> str | None:
         """The worker's address, or ``None`` if it has none."""
+        ...
+
+    def validate_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        """Return the subset of ``assignments`` whose worker_id + address + incarnation
+        still matches this backend's current worker row and whose worker is healthy
+        and active. Reads through ``cur``, the same write transaction the caller
+        commits the surviving placements into."""
         ...
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
@@ -186,6 +221,9 @@ class DbBackendWorkerStore:
     def worker_address(self, worker_id: WorkerId) -> str | None:
         with self.db.control_read_snapshot() as snap:
             return reads.bulk_get_worker_addresses(snap, [worker_id]).get(worker_id)
+
+    def validate_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        return validate_worker_placements(cur, assignments, self.health)
 
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget

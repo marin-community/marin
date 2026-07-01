@@ -80,6 +80,10 @@ class FakeDirectProvider:
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()
 
+    def commit_placements(self, cur, assignments):
+        """No-op: a cluster-view backend never produces assignments."""
+        return []
+
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 

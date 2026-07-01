@@ -56,6 +56,7 @@ from tests.cluster.controller._test_support import (
     ControllerTestState,
     assignment_for_test,
     create_attempt_for_test,
+    worker_incarnation_for_test,
 )
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
@@ -195,7 +196,7 @@ def test_sa_core_typed_values_roundtrip(state) -> None:
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, wid)],
-            health=state._health,
+            backend=state,
         )
 
     running = worker_running_tasks(state, wid)
@@ -601,7 +602,7 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     assert _query_task(state, task.task_id).current_attempt_id == 0
@@ -637,14 +638,19 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
     tasks = submit_job(state, "j1", make_job_request("job1"))
     task = tasks[0]
 
+    # Capture the incarnation the assignment is authored under before the worker
+    # disappears (its row -- and registered_at_ms with it -- is gone after removal).
+    with state._db.read_snapshot() as snap:
+        incarnation = worker_incarnation_for_test(snap, worker_id)
+
     # Worker disappears between scheduling and assignment commit.
     with state._db.transaction() as cur:
         writes.remove_worker(cur, worker_id, health=state._health, worker_attrs=state._worker_attrs)
     with state._db.transaction() as cur:
         ops.task.assign(
             cur,
-            [Assignment(task_id=task.task_id, worker_id=worker_id, address="host:8080")],
-            health=state._health,
+            [Assignment(task_id=task.task_id, worker_id=worker_id, address="host:8080", incarnation=incarnation)],
+            backend=state,
         )
 
     # Task remains schedulable and no attempt/resources are committed.
@@ -1079,7 +1085,7 @@ def test_endpoint_survives_building_state(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     task = _query_task(state, task.task_id)
     with state._db.transaction() as cur:
@@ -2633,7 +2639,7 @@ def test_worker_failed_from_assigned_is_delivery_failure(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
@@ -2694,7 +2700,7 @@ def test_worker_failed_from_building_counts_as_preemption(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
@@ -2730,7 +2736,7 @@ def test_worker_failed_from_assigned_bumps_health_tracker(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     # No build failures recorded yet (worker registered, but no failure events).
@@ -2768,7 +2774,7 @@ def test_failed_from_building_bumps_health_tracker(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
@@ -2807,7 +2813,7 @@ def test_worker_failed_from_building_bumps_health_tracker(state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING

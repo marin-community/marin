@@ -166,7 +166,7 @@ def _schedule_and_commit(scheduler, state):
                 ops.task.assign(
                     cur,
                     [assignment_for_test(cur, tid, wid)],
-                    health=state._health,
+                    backend=state,
                 )
     return result
 

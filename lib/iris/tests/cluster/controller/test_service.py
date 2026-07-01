@@ -109,7 +109,7 @@ def _assign_and_transition(
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(

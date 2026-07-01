@@ -63,6 +63,7 @@
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",
       "md_tpu_worker_id": "",
+      "registered_at_ms": 1704067200000,
       "scale_group": "",
       "slice_id": "",
       "total_cpu_millicores": 8000,

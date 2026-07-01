@@ -76,6 +76,7 @@ class WorkerSnapshot:
 
     worker_id: WorkerId
     address: str
+    registered_at_ms: int
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -92,6 +93,7 @@ class _WorkerRowLike(Protocol):
 
     worker_id: WorkerId
     address: str
+    registered_at_ms: int
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -128,6 +130,7 @@ def worker_snapshot_from_row(
     return WorkerSnapshot(
         worker_id=row.worker_id,
         address=row.address,
+        registered_at_ms=row.registered_at_ms,
         total_cpu_millicores=row.total_cpu_millicores,
         total_memory_bytes=row.total_memory_bytes,
         total_gpu_count=row.total_gpu_count,

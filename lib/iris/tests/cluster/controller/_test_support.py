@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
+from iris.cluster.controller.backend_store import validate_worker_placements
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
@@ -69,18 +70,40 @@ class ControllerTestState:
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
         self._run_template_cache = run_template_cache or new_run_template_cache()
 
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        """Satisfies ``ops.task.PlacementValidator`` for tests that call ``ops.task.assign``
+        directly against this single simulated backend."""
+        return validate_worker_placements(cur, assignments, self._health)
+
+
+def worker_incarnation_for_test(cur: Tx, worker_id: WorkerId) -> int:
+    """Look up ``worker_id``'s current ``registered_at_ms`` via ``cur``.
+
+    ``cur`` may be either a write cursor or a read snapshot. Tests that
+    construct ``Assignment`` directly (bypassing the scheduler, which sources
+    ``incarnation`` from the same column) use this to source a value that
+    matches the worker's current row, the same way ``PlacementValidator``
+    checks it at commit.
+    """
+    row = cur.execute(select(workers_table.c.registered_at_ms).where(workers_table.c.worker_id == worker_id)).first()
+    assert row is not None, f"no workers row for {worker_id}"
+    return int(row.registered_at_ms)
+
 
 def assignment_for_test(cur: Tx, task_id: JobName, worker_id: WorkerId) -> Assignment:
     """Build an ``Assignment`` for ``task_id``/``worker_id`` against the worker's
-    current address, read via ``cur``.
+    current address and incarnation, read via ``cur``.
 
     ``cur`` may be either a write cursor or a read snapshot. Tests that assign
-    a task without going through the scheduler use this to source the
-    ``address`` value that matches the worker's current row.
+    a task without going through the scheduler use this to source ``address``/
+    ``incarnation`` values that match the worker's current row, the same way
+    ``PlacementValidator`` checks them at commit.
     """
-    row = cur.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
+    row = cur.execute(
+        select(workers_table.c.address, workers_table.c.registered_at_ms).where(workers_table.c.worker_id == worker_id)
+    ).first()
     assert row is not None, f"no workers row for {worker_id}"
-    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address)
+    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address, incarnation=row.registered_at_ms)
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:

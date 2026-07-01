@@ -727,7 +727,7 @@ def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tu
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_row.task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
@@ -1022,7 +1022,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
                     assignment_for_test(cur, task_id_1, wid1),
                     assignment_for_test(cur, task_id_2, wid2),
                 ],
-                health=state._health,
+                backend=state,
             )
 
         attempt_id_1 = query_task(state, task_id_1).current_attempt_id
@@ -1277,7 +1277,7 @@ def test_e2e_converges_to_succeeded(make_controller):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
@@ -1333,7 +1333,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
 
     reconcile_once(ctrl)
@@ -1642,7 +1642,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task.task_id, wid) for task in tasks],
-            health=state._health,
+            backend=state,
         )
 
     # The first THRESHOLD - 1 build failures accrue but stay under the bar.
@@ -1722,7 +1722,7 @@ def _setup_coscheduled_running_pair(
                 assignment_for_test(cur, t0, wid1),
                 assignment_for_test(cur, t1, wid2),
             ],
-            health=state._health,
+            backend=state,
         )
     a0 = query_task(state, t0).current_attempt_id
     a1 = query_task(state, t1).current_attempt_id

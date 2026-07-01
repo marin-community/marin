@@ -374,14 +374,23 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == job_pb2.TASK_STATE_PENDING:
             with self.db.read_snapshot() as tx:
-                worker_row = tx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(1)).first()
+                worker_row = tx.execute(
+                    select(workers_table.c.worker_id, workers_table.c.address, workers_table.c.registered_at_ms).limit(1)
+                ).first()
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             with self.db.transaction() as cur:
                 ops.task.assign(
                     cur,
-                    [Assignment(task_id=task_id, worker_id=worker_row.worker_id, address=worker_row.address)],
-                    health=self.state._health,
+                    [
+                        Assignment(
+                            task_id=task_id,
+                            worker_id=worker_row.worker_id,
+                            address=worker_row.address,
+                            incarnation=worker_row.registered_at_ms,
+                        )
+                    ],
+                    backend=self.state,
                 )
 
         worker_id, attempt_id = self._current_attempt_info(task_id)

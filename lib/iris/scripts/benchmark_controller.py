@@ -210,6 +210,10 @@ class _FakeProvider:
             ),
         )
 
+    def commit_placements(self, cur, assignments):
+        assert self._store is not None
+        return self._store.validate_placements(cur, assignments)
+
     def get_process_status(self, target, request):
         raise RuntimeError("fake provider")
 
@@ -1290,6 +1294,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                     task_id=t.task_id,
                     worker_id=worker_list[i % len(worker_list)].worker_id,
                     address=worker_list[i % len(worker_list)].address,
+                    incarnation=worker_list[i % len(worker_list)].registered_at_ms,
                 )
                 for i, t in enumerate(pending_tasks[:20])
             ]
@@ -1342,7 +1347,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
             def _do_queue():
                 with write_db.transaction() as cur:
-                    ops.task.assign(cur, sample_assignments, health=write_txns._health)
+                    ops.task.assign(cur, sample_assignments, backend=write_txns)
 
             bench(
                 f"Scheduling: assign (n={len(sample_assignments)} tasks, WRITE)",
@@ -2529,6 +2534,7 @@ def _build_synthetic_reconcile_state(
     task_ids = [r.task_id for r in task_rows]
     assert len(task_ids) == num_tasks, f"expected {num_tasks} tasks, got {len(task_ids)}"
 
+    worker_incarnation = now.epoch_ms()
     for chunk_start in range(0, num_tasks, chunk):
         slice_tasks = task_ids[chunk_start : chunk_start + chunk]
         assignments = [
@@ -2536,11 +2542,12 @@ def _build_synthetic_reconcile_state(
                 task_id=tid,
                 worker_id=worker_ids[(chunk_start + i) % num_workers],
                 address=worker_address,
+                incarnation=worker_incarnation,
             )
             for i, tid in enumerate(slice_tasks)
         ]
         with db.transaction() as cur:
-            ops.task.assign(cur, assignments, health=txns._health)
+            ops.task.assign(cur, assignments, backend=txns)
 
     return SyntheticReconcileState(
         db=db, txns=txns, health=health, job_id=job_id, worker_ids=worker_ids, task_ids=task_ids, address=worker_address

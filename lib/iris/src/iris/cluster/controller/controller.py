@@ -1189,15 +1189,14 @@ class Controller:
             )
         if result.unschedulable:
             finalize(cur, self._unschedulable_decisions(result.unschedulable), endpoints=self._endpoints, now=now)
-        # Each backend's assignments are re-checked against the liveness tracker that
-        # backend owns. Walking backends in order reproduces the merged ordering.
+        # Each backend's assignments are re-validated against the worker identity
+        # and liveness that backend owns. Walking backends in order reproduces the
+        # merged ordering.
         for backend_id in self._backend_ids:
             backend_result = results.get(backend_id)
             if backend_result is None or not backend_result.assignments:
                 continue
-            health = self._backends[backend_id].health
-            assert health is not None, f"backend {backend_id!r} produced assignments without a liveness tracker"
-            ops.task.assign(cur, backend_result.assignments, health=health)
+            ops.task.assign(cur, backend_result.assignments, backend=self._backends[backend_id])
         if result.preemptions:
             finalize(cur, result.preemptions, endpoints=self._endpoints, now=now)
             logger.info("Preemption pass: %d tasks preempted", len(result.preemptions))
@@ -1289,11 +1288,9 @@ class Controller:
                 logger.info("[DRY-RUN] Would assign task %s to worker %s", assignment.task_id, assignment.worker_id)
             return
         # The dry-run scheduling path routes through the representative backend, so
-        # these assignments are all its workers — re-checked against its tracker.
-        health = self._representative_backend.health
-        assert health is not None, "scheduling assignments produced by a backend with no liveness tracker"
+        # these assignments are all its workers — re-validated against its store.
         with self._db.transaction() as cur:
-            ops.task.assign(cur, assignments, health=health)
+            ops.task.assign(cur, assignments, backend=self._representative_backend)
 
     def _apply_preemptions(self, preemptions: list[TerminalDecision]) -> None:
         """Finalize the backend's PREEMPT decisions.

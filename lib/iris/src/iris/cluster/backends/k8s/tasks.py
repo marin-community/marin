@@ -39,7 +39,8 @@ from iris.cluster.controller.backend import (
     TaskTarget,
     user_admitted,
 )
-from iris.cluster.controller.ops.task import apply_dispatch_updates
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -1486,6 +1487,10 @@ class K8sTaskProvider:
     def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
         self.advertised = advertised
         self.allowed_users = allowed_users
+
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        """Unreachable: Kueue owns placement, so this backend never produces assignments."""
+        return []
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """No-op: Kueue owns placement, so Iris makes no scheduling decisions."""

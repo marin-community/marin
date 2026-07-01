@@ -20,7 +20,7 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-from tests.cluster.controller._test_support import assignment_for_test
+from tests.cluster.controller._test_support import assignment_for_test, worker_incarnation_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -1250,8 +1250,16 @@ def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     with state._db.transaction() as cur:
         ops.task.assign(
             cur,
-            [Assignment(task_id=task.task_id, worker_id=worker_id, address=address, priority_band=priority_band)],
-            health=state._health,
+            [
+                Assignment(
+                    task_id=task.task_id,
+                    worker_id=worker_id,
+                    address=address,
+                    incarnation=worker_incarnation_for_test(cur, worker_id),
+                    priority_band=priority_band,
+                )
+            ],
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1294,7 +1302,7 @@ def test_preempted_assigned_task_always_retries():
             ops.task.assign(
                 cur,
                 [assignment_for_test(cur, task.task_id, w1)],
-                health=state._health,
+                backend=state,
             )
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 

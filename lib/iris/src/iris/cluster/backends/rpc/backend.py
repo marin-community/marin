@@ -43,6 +43,8 @@ from iris.cluster.controller.backend import (
     user_admitted,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
@@ -277,6 +279,10 @@ class RpcTaskBackend:
             ),
             zone_capabilities,
         )
+
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        assert self._store is not None, "RpcTaskBackend.commit_placements called before worker store attached"
+        return self._store.validate_placements(cur, assignments)
 
     def _observe_fleet(self) -> "FleetObservation":
         """Source this backend's placement, fan the Reconcile RPC out, classify liveness.

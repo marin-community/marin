@@ -924,7 +924,7 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -989,7 +989,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1031,7 +1031,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1072,7 +1072,7 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1128,7 +1128,7 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1148,7 +1148,7 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -1206,7 +1206,7 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, wid)],
-            health=state._health,
+            backend=state,
         )
 
     with state._db.transaction() as cur:

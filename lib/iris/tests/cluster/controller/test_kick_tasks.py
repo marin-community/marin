@@ -61,7 +61,7 @@ def _assign_and_run(state, task_id, worker_id):
         ops.task.assign(
             cur,
             [assignment_for_test(cur, task_id, worker_id)],
-            health=state._health,
+            backend=state,
         )
     _observe(state, worker_id, task_id, 0, job_pb2.TASK_STATE_RUNNING)
 

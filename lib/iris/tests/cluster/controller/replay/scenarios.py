@@ -201,15 +201,19 @@ def _task_ids(transitions: ControllerTestState, job_id: JobName) -> list[JobName
 
 
 def _assignment(transitions: ControllerTestState, task_id: JobName, worker_id: WorkerId) -> Assignment:
-    """Build an ``Assignment`` against ``worker_id``'s current registered address.
+    """Build an ``Assignment`` against ``worker_id``'s current registered address + incarnation.
 
     Scenarios build ``Assignment`` payloads for ``QueueAssignments`` events
     outside any write transaction, so this reads through a read snapshot
     rather than a cursor.
     """
     with transitions._db.read_snapshot() as snap:
-        row = snap.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).one()
-    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address)
+        row = snap.execute(
+            select(workers_table.c.address, workers_table.c.registered_at_ms).where(
+                workers_table.c.worker_id == worker_id
+            )
+        ).one()
+    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address, incarnation=row.registered_at_ms)
 
 
 def _current_attempt(transitions: ControllerTestState, task_id: JobName) -> int:

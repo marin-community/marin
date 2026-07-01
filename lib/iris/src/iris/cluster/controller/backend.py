@@ -13,9 +13,11 @@ and getting back method-specific results (:class:`ScheduleResult` /
 :class:`ReconcileResult` / :class:`AutoscaleResult`). Worker and placement state
 never flow controller→backend: a backend sources its own workers through a
 :class:`~iris.cluster.controller.backend_store.BackendWorkerStore` and decides
-placement itself. Backends perform
-backend-specific I/O (worker-daemon RPC fan-out, ``kubectl apply``) but never
-read or write the controller database directly.
+placement itself. ``schedule``/``reconcile``/``autoscale`` perform backend-specific
+I/O (worker-daemon RPC fan-out, ``kubectl apply``) and never read or write the
+controller database directly; ``commit_placements`` is the one exception, validating
+a placement against the backend's own worker table inside the controller's write
+transaction.
 
 :attr:`TaskBackend.capabilities` is a pure descriptor for the dashboard tab list
 and on-demand service-RPC routing (worker-daemon vs direct-pod exec). One narrow
@@ -36,7 +38,7 @@ from typing import ClassVar, Protocol
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -385,12 +387,14 @@ def run_scheduling_decision(
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
     worker_addresses = {w.worker_id: w.address for w in context.workers}
+    worker_incarnations = {w.worker_id: w.registered_at_ms for w in context.workers}
     return ScheduleResult(
         assignments=[
             Assignment(
                 task_id=task_id,
                 worker_id=worker_id,
                 address=worker_addresses[worker_id],
+                incarnation=worker_incarnations[worker_id],
                 priority_band=order.task_band_map.get(task_id),
             )
             for task_id, worker_id in all_assignments
@@ -534,6 +538,19 @@ class TaskBackend(Protocol):
         scheduling context internally. Worker-daemon backends run the full
         Iris scheduling pipeline; cluster backends (Kueue, slurmctld) return an
         empty result — they place tasks themselves.
+        """
+        ...
+
+    def commit_placements(self, cur: Tx, assignments: list[Assignment]) -> list[Assignment]:
+        """Validate ``assignments`` against this backend's current worker table.
+
+        Reads through ``cur`` (the same write transaction the controller commits
+        the surviving placements into), so a concurrent worker removal is
+        serialized against this check. Returns the subset whose worker_id +
+        address + incarnation still matches the current worker row and whose
+        worker is healthy and active. Worker-daemon backends validate against
+        their own worker store; a cluster backend (k8s) never produces
+        assignments, so this is unreachable there.
         """
         ...
 

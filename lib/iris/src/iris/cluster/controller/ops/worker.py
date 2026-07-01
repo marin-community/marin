@@ -89,6 +89,7 @@ def register(
         {
             "worker_id": worker_id,
             "address": address,
+            "registered_at_ms": now_ms,
             "total_cpu_millicores": metadata.cpu_count * 1000,
             "total_memory_bytes": metadata.memory_bytes,
             "total_gpu_count": gpu_count,

@@ -428,6 +428,7 @@ workers_table = Table(
     metadata,
     Column("worker_id", WorkerIdType, primary_key=True),
     Column("address", String, nullable=False),
+    Column("registered_at_ms", Integer, nullable=False, server_default="0"),
     Column("md_hostname", String, nullable=False, server_default=""),
     Column("md_ip_address", String, nullable=False, server_default=""),
     Column("md_cpu_count", Integer, nullable=False, server_default="0"),
