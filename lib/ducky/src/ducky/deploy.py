@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import click
@@ -27,6 +29,8 @@ from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 
 logger = logging.getLogger(__name__)
+
+DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 
 # Prod default: a single ct6e-standard-4t v6e host — 180 vCPU / 720 GB advertised,
 # ~700 GB allocatable after system reservation. DuckDB runs on CPU/RAM only (the v6e
@@ -77,6 +81,22 @@ def submit_ducky(
     )
 
 
+def _build_dashboard() -> None:
+    """Build the Vue dashboard so the gitignored ``dashboard/dist`` ships in the bundle.
+
+    Runs ``npm install`` (only if deps are missing) then ``npm run build``. The Iris
+    bundle re-includes the gitignored ``dist`` via ``GENERATED_ARTIFACT_GLOBS``.
+    """
+    npm = shutil.which("npm")
+    if npm is None:
+        raise click.UsageError("npm not found — install Node, or build the dashboard yourself and pass --skip-build.")
+    if not (DASHBOARD_DIR / "node_modules").is_dir():
+        logger.info("installing dashboard deps (npm install)…")
+        subprocess.run([npm, "install"], cwd=DASHBOARD_DIR, check=True)
+    logger.info("building dashboard (npm run build)…")
+    subprocess.run([npm, "run", "build"], cwd=DASHBOARD_DIR, check=True)
+
+
 @click.command()
 @click.option(
     "--controller-url",
@@ -94,12 +114,16 @@ def submit_ducky(
 )
 @click.option("--cpu", default=DEFAULT_CPU, show_default=True, type=float, help="CPUs to request.")
 @click.option("--memory", default=DEFAULT_MEMORY, show_default=True, help="Memory to request (e.g. 16GB).")
-def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memory: str) -> None:
+@click.option("--skip-build", is_flag=True, help="Skip the dashboard `npm run build` (use an already-built dist).")
+def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memory: str, skip_build: bool) -> None:
     """Submit the always-on ducky service to an Iris cluster."""
     logging.basicConfig(level=logging.INFO)
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
+
+    if not skip_build:
+        _build_dashboard()
 
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)

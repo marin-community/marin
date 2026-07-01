@@ -68,11 +68,38 @@ def test_health_is_public():
     assert resp.json() == {"status": "healthy"}
 
 
-def test_index_serves_form():
-    resp = _client(_FakeRunner()).get("/")
+def _built_dist(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "static").mkdir(parents=True)
+    (dist / "index.html").write_text('<!doctype html><base href="/" /><div id="app"></div>', encoding="utf-8")
+    return dist
+
+
+def test_index_serves_spa_and_rewrites_base(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUCKY_DASHBOARD_DIST", str(_built_dist(tmp_path)))
+    resp = _client(_FakeRunner()).get("/", headers={"X-Forwarded-Prefix": "/proxy/ducky"})
     assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert "<textarea" in resp.text
+    assert 'id="app"' in resp.text
+    assert '<base href="/proxy/ducky/"' in resp.text  # rewritten for the proxy sub-path
+
+
+def test_index_without_prefix_keeps_root_base(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUCKY_DASHBOARD_DIST", str(_built_dist(tmp_path)))
+    resp = _client(_FakeRunner()).get("/")
+    assert '<base href="/"' in resp.text
+
+
+def test_index_not_built_returns_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUCKY_DASHBOARD_DIST", str(tmp_path / "absent"))
+    resp = _client(_FakeRunner()).get("/")
+    assert resp.status_code == 503
+    assert "not built" in resp.text.lower()
+
+
+def test_api_config_returns_ttl():
+    resp = _client(_FakeRunner()).get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json() == {"result_ttl_days": 7}
 
 
 def test_query_accepts_and_returns_uuid_query_id():

@@ -51,6 +51,9 @@ GENERATED_ARTIFACT_GLOBS = [
     "lib/iris/src/iris/rpc/*_pb2.py",
     "lib/iris/src/iris/rpc/*_pb2.pyi",
     "lib/iris/src/iris/rpc/*_connect.py",
+    # ducky's dashboard is a bundled Vue SPA built to dashboard/dist by `npm run
+    # build`; gitignored like any build output but needed at runtime on the worker.
+    "lib/ducky/dashboard/dist/**/*",
 ]
 
 

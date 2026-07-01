@@ -21,10 +21,12 @@ import dataclasses
 import enum
 import logging
 import multiprocessing
+import os
 import threading
 import time
 import uuid
 from concurrent.futures import Executor, ThreadPoolExecutor
+from pathlib import Path
 
 import uvicorn
 from iris.client.client import iris_ctx
@@ -33,7 +35,8 @@ from iris.cluster.dashboard_common import on_shutdown, public, requires_auth
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from ducky.config import DuckyConfig
 from ducky.runner import DuckyError, QueryResult, QueryRunner
@@ -177,150 +180,39 @@ def _result_payload(state: QueryState) -> dict:
     }
 
 
-# CodeMirror 5 (SQL mode) gives DuckDB-flavored SQL highlighting from a CDN — loaded
-# by the browser, so no server-side egress. __TTL_DAYS__ is substituted per config.
-_INDEX_HTML = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>ducky</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/display/placeholder.min.js"></script>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 2rem; }
-  .CodeMirror { border: 1px solid #ccc; height: 12rem; font-size: 13px; }
-  .CodeMirror-placeholder { color: #aaa !important; font-style: italic; }
-  button { margin-top: .5rem; padding: .4rem 1rem; font-size: 14px; }
-  #status { margin: .6rem 0; color: #555; }
-  #status .cached { color: #2a7; font-weight: 600; }
-  #status .computed { color: #888; }
-  #status .loc { font-family: monospace; }
-  table { border-collapse: collapse; margin-top: 1rem; font-size: 13px; }
-  th, td { border: 1px solid #ccc; padding: .2rem .5rem; text-align: left; }
-  th { background: #f0f0f0; }
-  .error { color: #b00; white-space: pre-wrap; font-family: monospace; }
-</style>
-</head>
-<body>
-<h1>🦆 ducky</h1>
-<textarea id="sql" placeholder="SELECT * FROM read_parquet('gs://bucket/path/*.parquet') LIMIT 100"></textarea>
-<div><button id="run">Run</button> <span style="color:#888;font-size:12px">(⌘/Ctrl-Enter)</span></div>
-<div id="status"></div>
-<div id="result"></div>
-<script>
-const TTL_DAYS = __TTL_DAYS__;
-const POLL_MS = 1000;
-const runBtn = document.getElementById("run");
-const statusEl = document.getElementById("status");
-const resultEl = document.getElementById("result");
-
-const editor = CodeMirror.fromTextArea(document.getElementById("sql"), {
-  mode: "text/x-sql",
-  lineNumbers: true,
-  lineWrapping: true,
-  placeholder: "-- write DuckDB SQL, then \\u2318/Ctrl-Enter to run\\n"
-    + "SELECT *\\nFROM read_parquet('gs://marin-us-east5/<path>/*.parquet')\\nLIMIT 100",
-  extraKeys: { "Cmd-Enter": run, "Ctrl-Enter": run },
-});
-
-function showError(msg) {
-  statusEl.textContent = "";
-  resultEl.innerHTML = '<div class="error"></div>';
-  resultEl.firstChild.textContent = msg;
-}
-
-async function run() {
-  const sql = editor.getValue().trim();
-  if (!sql) return;
-  runBtn.disabled = true;
-  statusEl.textContent = "Submitting…";
-  resultEl.innerHTML = "";
-  try {
-    const resp = await fetch("query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sql }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showError(data.error || ("HTTP " + resp.status)); runBtn.disabled = false; return; }
-    poll(data.query_id);
-  } catch (e) {
-    showError(String(e));
-    runBtn.disabled = false;
-  }
-}
-
-async function poll(queryId) {
-  statusEl.textContent = "Running…";
-  try {
-    const resp = await fetch("result/" + queryId);
-    const data = await resp.json();
-    if (!resp.ok) { showError(data.error || ("HTTP " + resp.status)); runBtn.disabled = false; return; }
-    if (data.status === "running") { setTimeout(() => poll(queryId), POLL_MS); return; }
-    if (data.status === "error") { showError(data.error); runBtn.disabled = false; return; }
-    renderResult(data);
-  } catch (e) {
-    showError(String(e));
-    runBtn.disabled = false;
-  }
-}
-
-function fmtBytes(n) {
-  if (n == null) return "?";
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return (i === 0 ? n : n.toFixed(1)) + " " + u[i];
-}
-function fmtDuration(ms) {
-  if (ms == null) return "?";
-  return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(ms < 10000 ? 2 : 1) + " s";
-}
-
-function renderResult(data) {
-  const shown = data.rows.length;
-  const rowsLabel = data.truncated
-    ? "showing " + shown + " of " + data.total_rows + " rows"
-    : shown + " row" + (shown === 1 ? "" : "s");
-  const cacheBadge = data.cached
-    ? '<span class="cached">cached ✓</span>'
-    : '<span class="computed">computed</span>';
-  statusEl.innerHTML = rowsLabel
-    + " · " + fmtDuration(data.elapsed_ms) + " · " + fmtBytes(data.result_bytes) + " result"
-    + " · " + cacheBadge
-    + ' · output: <span class="loc"></span> <span style="color:#888">(expires in ' + TTL_DAYS + "d)</span>";
-  statusEl.querySelector(".loc").textContent = data.result_path;
-
-  const table = document.createElement("table");
-  table.innerHTML = "<thead><tr>" + data.columns.map(() => "<th></th>").join("") + "</tr></thead><tbody></tbody>";
-  table.querySelectorAll("th").forEach((th, i) => th.textContent = data.columns[i]);
-  const tbody = table.querySelector("tbody");
-  for (const row of data.rows) {
-    const tr = document.createElement("tr");
-    for (const cell of row) {
-      const td = document.createElement("td");
-      td.textContent = cell === null ? "NULL" : String(cell);
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
-  resultEl.innerHTML = "";
-  resultEl.appendChild(table);
-  runBtn.disabled = false;
-}
-
-runBtn.addEventListener("click", run);
-</script>
-</body>
-</html>
-"""
+# The dashboard is a bundled Vue SPA built into dashboard/dist by `npm run build`
+# (gitignored; shipped in the Iris bundle via GENERATED_ARTIFACT_GLOBS). Resolve its
+# dist dir: env override → the in-repo build output next to this package.
+def _dashboard_dist() -> Path:
+    override = os.environ.get("DUCKY_DASHBOARD_DIST")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "dashboard" / "dist"
 
 
-def _index_html(ttl_days: int) -> str:
-    return _INDEX_HTML.replace("__TTL_DAYS__", str(ttl_days))
+_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>ducky</title>"
+    "<body style='font-family:system-ui;margin:3rem'><h1>🦆 ducky</h1>"
+    "<p>Dashboard not built — run "
+    "<code>npm --prefix lib/ducky/dashboard install &amp;&amp; npm --prefix lib/ducky/dashboard run build</code>.</p>"
+)
+
+
+def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
+    """Serve dist/index.html, rewriting ``<base href="/">`` to the proxy sub-path.
+
+    The controller proxy sets ``X-Forwarded-Prefix`` (e.g. ``/proxy/ducky``) in
+    path-style mode; rewriting the base makes the SPA's relative asset and API URLs
+    resolve under it. Empty prefix (subdomain/direct) leaves the base at ``/``.
+    """
+    index_path = dist / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_NOT_BUILT_HTML, status_code=503)
+    html = index_path.read_text(encoding="utf-8")
+    prefix = forwarded_prefix.rstrip("/")
+    if prefix:
+        html = html.replace('<base href="/"', f'<base href="{prefix}/"', 1)
+    return HTMLResponse(html)
 
 
 def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | None = None) -> Starlette:
@@ -328,7 +220,7 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
 
     ``executor`` overrides the query executor (tests inject a synchronous one).
     """
-    index_html = _index_html(config.result_ttl_days)
+    dist = _dashboard_dist()
     manager = QueryManager(
         runner,
         executor=executor,
@@ -337,8 +229,8 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     )
 
     @requires_auth
-    async def index(_request: Request) -> HTMLResponse:
-        return HTMLResponse(index_html)
+    async def index(request: Request) -> HTMLResponse:
+        return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
 
     @requires_auth
     async def query(request: Request) -> JSONResponse:
@@ -355,18 +247,25 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
             return JSONResponse({"error": "unknown query_id"}, status_code=404)
         return JSONResponse(_result_payload(state))
 
+    @requires_auth
+    async def api_config(_request: Request) -> JSONResponse:
+        return JSONResponse({"result_ttl_days": config.result_ttl_days})
+
     @public
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy"})
 
-    app = Starlette(
-        routes=[
-            Route("/", index),
-            Route("/query", query, methods=["POST"]),
-            Route("/result/{query_id:str}", result),
-            Route("/health", health),
-        ]
-    )
+    routes = [
+        Route("/", index),
+        Route("/query", query, methods=["POST"]),
+        Route("/result/{query_id:str}", result),
+        Route("/api/config", api_config),
+        Route("/health", health),
+    ]
+    # check_dir=False: the app still boots (index shows a "not built" page) when the
+    # SPA hasn't been built yet, instead of raising at startup.
+    routes.append(Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"))
+    app = Starlette(routes=routes)
     app.state.query_manager = manager
     return app
 
