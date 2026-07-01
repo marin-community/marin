@@ -55,6 +55,7 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, env_int, run_grug_moe_trial, slimpajama_6b_dataset
@@ -220,7 +221,7 @@ def build_scale_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterChec
         )
 
     return ArtifactStep(
-        name=f"{OUTPUT_SUBDIR}/{name}-{run_id}",
+        name=user_namespaced_name(f"{OUTPUT_SUBDIR}/{name}-{run_id}", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,

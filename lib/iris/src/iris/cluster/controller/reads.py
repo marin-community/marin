@@ -19,7 +19,7 @@ Areas covered:
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -1487,6 +1487,11 @@ def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
     """
     rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
     return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
+
+
+def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[WorkerId]:
+    """The workers whose scale group ``owns_scale_group`` claims, in the read ``tx``."""
+    return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
 
 
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))

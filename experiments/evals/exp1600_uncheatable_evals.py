@@ -20,8 +20,8 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.evals.hf_log_probs import default_hf_lm_log_probs
-from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig
 from experiments.models import download_model
@@ -68,7 +68,7 @@ def build_steps() -> list[ArtifactStep[Artifact]]:
     steps: list[ArtifactStep[Artifact]] = []
     for model_config in models:
         tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
-        validation_datasets = uncheatable_validation(tokenizer=tokenizer)
+        validation_datasets = list(uncheatable_datasets(tokenizer=tokenizer).values())
 
         model_checkpoint = download_model(
             HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)

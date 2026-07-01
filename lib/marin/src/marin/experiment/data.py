@@ -22,10 +22,13 @@ weights live in the experiment that chose them, not buried in a catalog constant
   training components plus weight-0 ``validation`` handles, reading each cache's
   tokenizer/format from its :class:`~marin.processing.tokenize.tokenize.TokenizedCache`
   record at run time.
+- :func:`dataset_main` is the ``python -m`` entry point for a dataset module: it prints
+  the build plan by default and builds the module's handles under ``--run``.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 
+import click
 from fray.types import ResourceConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
@@ -37,7 +40,7 @@ from levanter.data.text import (
 
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.execution.remote import remote
 from marin.execution.step_spec import _is_relative_path
 from marin.processing.tokenize.data_configs import dataset_component
@@ -316,3 +319,35 @@ def mixture(
         shuffle=shuffle,
         permutation_type="feistel",
     )
+
+
+def dataset_main(datasets: Mapping[str, ArtifactStep[TokenizedCache]]) -> None:
+    """CLI entry point for a runnable dataset module.
+
+    Use as the body of a module's ``if __name__ == "__main__":`` block, passing the
+    module's family map keyed by subset (a single-corpus module passes a one-entry map).
+    Building is opt-in so ``python -m experiments.datasets.<name>`` never starts a large
+    tokenize by accident: by default it prints the lowered plan for the selected handles;
+    ``--run`` builds them, and ``--only`` restricts a family to named keys.
+    """
+
+    @click.command()
+    @click.option("--run", "build", is_flag=True, help="Build the handles (default: only print the plan).")
+    @click.option("--only", help="Comma-separated subset keys to select (default: all).")
+    @click.option("--max-concurrent", type=int, default=8, help="Max handles built concurrently.")
+    def cli(build: bool, only: str | None, max_concurrent: int) -> None:
+        selected = datasets
+        if only is not None:
+            keys = only.split(",")
+            unknown = [key for key in keys if key not in datasets]
+            if unknown:
+                raise click.BadParameter(f"unknown keys {unknown}; available: {sorted(datasets)}", param_hint="--only")
+            selected = {key: datasets[key] for key in keys}
+        handles = list(selected.values())
+        if not build:
+            for handle in handles:
+                click.echo(lower(handle))
+            return
+        run(*handles, max_concurrent=max_concurrent)
+
+    cli()

@@ -11,7 +11,7 @@ marin.datakit.download.nemotron_v2; subsets and their globs are defined there.
 from marin.datakit.download.nemotron_v2 import NEMOTRON_V2_DATASETS
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -78,3 +78,7 @@ def nemotron_v2_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Arti
     for family in NEMOTRON_V2_DATASETS:
         all_datasets.update(nemotron_v2_family_datasets(family, tokenizer=tokenizer))
     return all_datasets
+
+
+if __name__ == "__main__":
+    dataset_main(nemotron_v2_datasets())

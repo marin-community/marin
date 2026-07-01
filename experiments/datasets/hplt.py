@@ -13,7 +13,7 @@ from marin.datakit.download.hplt import HPLT_BASE_URL, download_hplt_v3
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -69,3 +69,7 @@ def hplt_datasets(*, tokenizer: str = marin_tokenizer) -> dict[str, ArtifactStep
             version="2026.06.28",
         )
     }
+
+
+if __name__ == "__main__":
+    dataset_main(hplt_datasets())

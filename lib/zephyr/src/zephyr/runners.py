@@ -208,29 +208,29 @@ def _periodic_sampler(
     ctx: _InProcessWorkerContext,
     interval: float,
     *,
-    cpu_s_at_start: float = 0.0,
-    stats_writer: StatsWriter | None = None,
-    task: ShardTask | None = None,
-    execution_id: str = "",
-    start_time: float = 0.0,
-    proc: psutil.Process | None = None,
+    cpu_s_at_start: float,
+    stats_writer: StatsWriter,
+    task: ShardTask,
+    execution_id: str,
+    start_time: float,
+    proc: psutil.Process,
 ) -> None:
-    """Periodically sample process stats and optionally emit RUNNING rows to finelog."""
+    """Periodically sample process stats and emit RUNNING rows to finelog.
 
+    ``stats_writer.emit_worker_stat`` is itself a no-op when finelog is
+    unavailable, so no gating is needed here.
+    """
     while not stop_event.wait(timeout=interval):
         try:
-            if task is not None and proc is not None:
-                _sample_process_stats(cpu_s_at_start, proc)
-
-            if stats_writer is not None and task is not None and proc is not None:
-                stats_writer.emit_worker_stat(
-                    task.stage_name,
-                    task.shard_idx,
-                    execution_id,
-                    ZephyrWorkerStatStatus.RUNNING,
-                    start_time,
-                    ctx.get_counters(),
-                )
+            _sample_process_stats(cpu_s_at_start, proc)
+            stats_writer.emit_worker_stat(
+                task.stage_name,
+                task.shard_idx,
+                execution_id,
+                ZephyrWorkerStatStatus.RUNNING,
+                start_time,
+                ctx.get_counters(),
+            )
         except Exception:
             logger.warning("Failed to sample/emit process stats", exc_info=True)
 

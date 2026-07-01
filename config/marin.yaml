@@ -2,10 +2,10 @@ iris: marin
 data:
   scheme: gs
   region_buckets:
-    us-central1:  marin-us-central1
-    us-central2:  marin-us-central2
-    us-east1:     marin-us-east1
-    us-east5:     marin-us-east5
-    us-west4:     marin-us-west4
-    europe-west4: marin-eu-west4
+    us-central1:  { bucket: marin-us-central1, store: gcs }
+    us-central2:  { bucket: marin-us-central2, store: gcs }
+    us-east1:     { bucket: marin-us-east1,    store: gcs }
+    us-east5:     { bucket: marin-us-east5,    store: gcs }
+    us-west4:     { bucket: marin-us-west4,    store: gcs }
+    europe-west4: { bucket: marin-eu-west4,    store: gcs }
   temp: { path: tmp, ttl_days: [1, 2, 3, 4, 5, 6, 7, 14, 30] }

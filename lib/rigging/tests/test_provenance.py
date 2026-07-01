@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from rigging.provenance import Provenance
+from rigging.provenance import Provenance, username_segment
 
 
 def test_str_clean_shows_commit_branch_user():
@@ -26,6 +26,21 @@ def test_str_omits_missing_branch_and_user():
 def test_json_round_trip():
     p = Provenance(tree_hash="aaaa", base_commit="bbbb", dirty=True, branch=None, built_by="power")
     assert Provenance.from_json(p.to_json()) == p
+
+
+def test_username_segment_sanitizes_email_to_a_clean_distinct_segment(monkeypatch):
+    # Drops the domain but keeps the whole local name, so the segment is path-safe (no '@'/'.')
+    # and two users who share a first name don't collapse onto one namespace.
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: "Russell.Power@gmail.com")
+    assert username_segment() == "russell-power"
+
+
+def test_username_segment_raises_when_unresolvable(monkeypatch):
+    # Fail-fast is the contract: a username that does not resolve must not silently namespace
+    # artifacts under a shared bucket.
+    monkeypatch.setattr("rigging.provenance._getuser", lambda: None)
+    with pytest.raises(RuntimeError):
+        username_segment()
 
 
 def _run(args: list[str], cwd: Path) -> None:

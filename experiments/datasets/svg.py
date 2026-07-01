@@ -6,7 +6,7 @@
 from marin.datakit.download.svgfind import CC_GLOBS, HF_DATASET_ID, HF_REVISION, transform_svgfind_creativecommons
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -23,7 +23,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def svg_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def svg_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """SVG Creative Commons corpus as a tokenized Dataset handle."""
     dl = hf_download(
         "raw/svgfind-creativecommons",
@@ -53,3 +53,7 @@ def svg_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedC
         deps=(processed,),
     )
     return tokenized("svg", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28")
+
+
+if __name__ == "__main__":
+    dataset_main({"svg": svg_dataset()})

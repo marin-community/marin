@@ -61,7 +61,7 @@ Training data is expressed as a dict of `ArtifactStep[TokenizedCache]` handles t
 this dict as `datasets=` to `train_lm`; it assembles the Levanter data mixture internally:
 
 ```python
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 from experiments.llama import llama3_tokenizer
 
 train = dclm_datasets(tokenizer=llama3_tokenizer)
@@ -95,10 +95,10 @@ from marin.execution.lazy import ArtifactStep, lower
 from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 from experiments.recipes import core_tasks
 
 TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
@@ -106,8 +106,8 @@ TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-128")
 def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     train = dclm_datasets(tokenizer=llama3_tokenizer)
     validation = [
-        *paloma_validation(tokenizer=llama3_tokenizer),
-        *uncheatable_validation(tokenizer=llama3_tokenizer),
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
     ]
     weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
 

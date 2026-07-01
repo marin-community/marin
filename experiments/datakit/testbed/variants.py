@@ -36,8 +36,8 @@ from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit.testbed.sampler import build_testbed_steps
 from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
 from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
-from experiments.evals.uncheatable import uncheatable_validation
-from experiments.paloma import paloma_validation
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,7 @@ def main() -> None:
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
-    validation = [*paloma_validation(tokenizer=tokenizer), *uncheatable_validation(tokenizer=tokenizer)]
+    validation = [*paloma_datasets(tokenizer=tokenizer).values(), *uncheatable_datasets(tokenizer=tokenizer).values()]
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
     training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer, validation=validation)

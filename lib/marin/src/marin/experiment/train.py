@@ -39,6 +39,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levant
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -122,6 +123,10 @@ def train_lm(
     metadata, and ``resources`` (the TPU the job is dispatched onto — a runtime arg, so it
     never enters the checkpoint's fingerprint). ``init_from`` chains this run onto another
     checkpoint (it becomes a dep and seeds ``initialize_from_checkpoint_path``).
+
+    A mutable (``dev``) ``version`` namespaces the checkpoint per user — its name becomes
+    ``users/{username}/{name}`` so concurrent authors of the same experiment do not clobber each
+    other; a fixed (calendar) ``version`` keeps the shared name.
     """
     harness = (
         LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(list(evals.tasks))) if evals is not None else None
@@ -171,7 +176,7 @@ def train_lm(
         )
 
     return ArtifactStep(
-        name=name,
+        name=user_namespaced_name(name, version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=_train_job,
