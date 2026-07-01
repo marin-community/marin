@@ -11,7 +11,7 @@ default Marin tokenizer.
 from marin.datakit.download.climblab_ja import HF_DATASET_ID, HF_REVISION
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -25,7 +25,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def climblab_ja_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def climblab_ja_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """ClimbLab-Ja as a tokenized Dataset handle."""
     dl = hf_download("raw/climblab-ja", hf_id=HF_DATASET_ID, revision=HF_REVISION, version="2026.06.28")
     norm = ArtifactStep(
@@ -41,3 +41,7 @@ def climblab_ja_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[To
         deps=(dl,),
     )
     return tokenized("climblab-ja", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28")
+
+
+if __name__ == "__main__":
+    dataset_main({"climblab-ja": climblab_ja_dataset()})

@@ -4,7 +4,7 @@
 """Longmino (dolma3_longmino_pool) dataset with length-bucket breakdowns."""
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -56,3 +56,7 @@ def longmino_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifac
         )
         for name, desc in _LONGMINO_BUCKET_DESCS.items()
     }
+
+
+if __name__ == "__main__":
+    dataset_main(longmino_datasets())

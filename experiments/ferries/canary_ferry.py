@@ -45,7 +45,11 @@ from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import marin_prefix, marin_temp_bucket
 
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import (
     GRUG_MOE_TRIAL_MODEL,
@@ -56,9 +60,6 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.nemotron import nemotron_datasets
-from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 CANARY_OPTIMIZER = AdamConfig(
     learning_rate=3e-3,
@@ -195,8 +196,8 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
         train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
         validation = [
-            *paloma_validation(tokenizer=llama3_tokenizer),
-            *uncheatable_validation(tokenizer=llama3_tokenizer),
+            *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+            *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
         ]
         deps = (*train, *validation)
 

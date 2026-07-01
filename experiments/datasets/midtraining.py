@@ -4,7 +4,7 @@
 """ArtifactStep dataset handles for mid-training: math, code, medical QA, and pile validation."""
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
@@ -12,7 +12,7 @@ from marin.transform.common_pile.filter_by_extension import (
 )
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
-from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered_download
+from experiments.datasets.common_pile import stackv2_edu_filtered_download
 from experiments.llama import llama3_tokenizer
 
 STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
@@ -227,3 +227,15 @@ def lavita_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactS
             version="2026.06.28",
         ),
     }
+
+
+if __name__ == "__main__":
+    dataset_main(
+        {
+            **finemath_datasets(),
+            **megamath_datasets(),
+            **lavita_datasets(),
+            **pile_validation_datasets(),
+            **stackv2_edu_python_datasets(),
+        }
+    )

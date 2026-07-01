@@ -14,11 +14,11 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 
 SEQ_LEN = 2048
 BATCH_SIZE = 2048
@@ -45,7 +45,10 @@ llama_7b_dclm = LlamaConfig(
 def build(*, version: str = "2026.06.28") -> ArtifactStep[LevanterCheckpoint]:
     """The DCLM 7B/1x training run as a lazy checkpoint, every decision stated inline."""
     train = dclm_datasets(tokenizer=llama3_tokenizer)
-    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
     weighted = {train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in train}
 
     return train_lm(

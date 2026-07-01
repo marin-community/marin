@@ -6,7 +6,7 @@
 from marin.datakit.download.nsf_awards import MAX_YEAR, MIN_YEAR, download_nsf_awards
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -26,7 +26,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def nsf_awards_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """NSF awards corpus as a tokenized Dataset handle."""
     dl = raw_download(
         "raw/nsf-awards",
@@ -53,3 +53,7 @@ def nsf_awards_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[Tok
         deps=(dl,),
     )
     return tokenized("nsf_awards", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28")
+
+
+if __name__ == "__main__":
+    dataset_main({"nsf_awards": nsf_awards_dataset()})

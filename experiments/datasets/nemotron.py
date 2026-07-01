@@ -11,7 +11,7 @@ weights; the mixture weights are policy and live in the experiment that chooses 
 
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import tokenized
+from marin.experiment.data import dataset_main, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -59,3 +59,7 @@ def nemotron_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Artifac
         )
         for split, glob in NEMOTRON_SPLIT_GLOBS.items()
     }
+
+
+if __name__ == "__main__":
+    dataset_main(nemotron_datasets())

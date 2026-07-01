@@ -9,7 +9,7 @@ Step-functions return per-language tokenized Dataset handles.
 """
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -92,3 +92,13 @@ def finepdfs_edu_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Art
             version="2026.06.28",
         )
     }
+
+
+if __name__ == "__main__":
+    # Both families key on the language code (eng_Latn), so namespace them when merging.
+    dataset_main(
+        {
+            **{f"finepdfs/{lang}": handle for lang, handle in finepdfs_datasets().items()},
+            **{f"finepdfs_edu/{lang}": handle for lang, handle in finepdfs_edu_datasets().items()},
+        }
+    )
