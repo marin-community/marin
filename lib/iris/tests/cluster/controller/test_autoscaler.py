@@ -572,11 +572,12 @@ class TestAutoscalerWorkerFailure:
 
         def drain(group: ScalingGroup, worker_id: str, timestamp: Timestamp) -> None:
             drain_slices_for_workers(
-                {group.name: group},
-                [worker_id],
-                lambda *_: None,
-                lambda *_, **__: vm_pb2.AutoscalerAction(),
-                timestamp,
+                groups={group.name: group},
+                worker_ids=[worker_id],
+                unregister_slice_workers=lambda *_: None,
+                log_action=lambda *_, **__: vm_pb2.AutoscalerAction(),
+                timestamp=timestamp,
+                cause=SliceDrainCause.WORKER_FAILED,
             )
 
         t0 = Timestamp.from_ms(1_000_000)
