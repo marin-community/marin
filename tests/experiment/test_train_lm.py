@@ -154,3 +154,34 @@ def test_lowers_to_a_runnable_graph():
     assert spec.name == "checkpoints/unit"
     # The corpus dependency is lowered into the graph.
     assert any(dep.name == "corpus" for dep in spec.deps)
+
+
+def test_dev_checkpoints_are_per_user_while_datasets_stay_shared(tmp_path, monkeypatch):
+    def build_as(user: str):
+        monkeypatch.setattr("rigging.provenance._getuser", lambda: user)
+        return train_lm(
+            name="checkpoints/unit",
+            model=_MODEL,
+            optimizer=_OPTIMIZER,
+            datasets={_corpus(): 1.0},
+            batch_size=8,
+            seq_len=128,
+            num_train_steps=50,
+            z_loss_weight=1e-4,
+            evals=None,
+            resources=_RESOURCES,
+            version="dev",
+        )
+
+    alice = build_as("alice")
+    bob = build_as("bob")
+
+    # Two people running the same dev experiment write to distinct, per-user checkpoint paths
+    # instead of clobbering each other.
+    assert alice.path(str(tmp_path)) == f"{tmp_path}/users/alice/checkpoints/unit/dev"
+    assert bob.path(str(tmp_path)) == f"{tmp_path}/users/bob/checkpoints/unit/dev"
+
+    # The shared dataset keeps its un-namespaced name in the assembled data config, so its cache
+    # is reused across users rather than re-tokenized per person.
+    tc = _assemble(alice, str(tmp_path)).train_config
+    assert tc.data.train_weights == {"corpus": 1.0}

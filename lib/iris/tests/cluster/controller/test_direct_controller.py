@@ -3,6 +3,7 @@
 
 """Tests for KubernetesProvider integration with controller and transitions."""
 
+import threading
 from collections.abc import Iterable
 
 from finelog.rpc import logging_pb2
@@ -29,7 +30,6 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller.transition_driver import commit_dispatch_updates
 
 from .conftest import (
@@ -82,6 +82,10 @@ class FakeDirectProvider:
 
     def run_teardown(self) -> None:
         """No-op: a cluster-view backend tracks no Iris workers to reap."""
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """No-op: a cluster-view backend tracks no Iris workers to garbage-collect."""
+        return 0
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         return ScheduleResult()

@@ -13,7 +13,7 @@ from marin.datakit.download.uncheatable_eval import (
     download_latest_uncheatable_eval,
 )
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -46,18 +46,26 @@ def uncheatable_raw() -> ArtifactStep[TokenizedCache]:
     )
 
 
-def uncheatable_validation(*, tokenizer: str = llama3_tokenizer) -> list[ArtifactStep[TokenizedCache]]:
-    """One validation ``TokenizedCache`` handle per Uncheatable Eval subset, keyed by
-    ``uncheatable_eval/<subset>-llama3``, each tokenizing from the shared raw download."""
+def uncheatable_dataset(
+    subset: str, *, tokenizer: str = llama3_tokenizer, raw: ArtifactStep[TokenizedCache] | None = None
+) -> ArtifactStep[TokenizedCache]:
+    """One Uncheatable Eval subset as a validation handle."""
+    raw = raw if raw is not None else uncheatable_raw()
+    return tokenized(
+        f"uncheatable_eval/{subset}-llama3",
+        tokenizer=tokenizer,
+        version="2026.06.28",
+        raw=raw,
+        glob=UNCHEATABLE_SUBSETS[subset],
+        validation=True,
+    )
+
+
+def uncheatable_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+    """All Uncheatable Eval subsets, keyed by subset name; one shared raw download."""
     raw = uncheatable_raw()
-    return [
-        tokenized(
-            f"uncheatable_eval/{subset}-llama3",
-            tokenizer=tokenizer,
-            version="2026.06.28",
-            raw=raw,
-            glob=pattern,
-            validation=True,
-        )
-        for subset, pattern in UNCHEATABLE_SUBSETS.items()
-    ]
+    return {subset: uncheatable_dataset(subset, tokenizer=tokenizer, raw=raw) for subset in UNCHEATABLE_SUBSETS}
+
+
+if __name__ == "__main__":
+    dataset_main(uncheatable_datasets())

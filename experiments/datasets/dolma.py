@@ -12,7 +12,7 @@ experiment that chooses them.
 
 from marin.datakit.download.dolma import DOLMA_DATASETS
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import tokenized
+from marin.experiment.data import dataset_main, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -59,7 +59,7 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+def dolma_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
     """One :class:`Dataset` handle per Dolma 1.7 split, keyed by ``dolma/<split>``."""
     return {
         f"dolma/{dataset}": tokenized(
@@ -71,3 +71,7 @@ def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactSt
         )
         for dataset, files in DOLMA_DATASETS.items()
     }
+
+
+if __name__ == "__main__":
+    dataset_main(dolma_datasets())

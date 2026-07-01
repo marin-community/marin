@@ -16,7 +16,6 @@ import pytest
 from iris.cluster.types import AcceleratorType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
 from iris.rpc import job_pb2
-
 from tests.e2e._docker_cluster import E2ECluster
 
 pytestmark = [pytest.mark.requires_cluster, pytest.mark.docker]

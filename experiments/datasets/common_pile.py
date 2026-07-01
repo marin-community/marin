@@ -14,7 +14,7 @@ catalog only — handles plus the published mixture weights; assembling a mixtur
 
 from fray.types import ResourceConfig
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
@@ -167,3 +167,7 @@ def common_pile_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, Arti
         f"common_pile/{name}": common_pile_slice(name, revision, pin, tokenizer=tokenizer)
         for name, (revision, pin) in COMMON_PILE_SLICES.items()
     }
+
+
+if __name__ == "__main__":
+    dataset_main(common_pile_datasets())

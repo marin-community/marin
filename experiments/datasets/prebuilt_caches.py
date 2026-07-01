@@ -11,14 +11,14 @@ Two fineweb-edu subcaches are available:
 
 Example usage::
 
-    from experiments.prebuilt_caches import fineweb_edu_10B_dataset
+    from experiments.datasets.prebuilt_caches import fineweb_edu_10B_dataset
     from marin.experiment.data import mixture
 
     data = lambda ctx: mixture(ctx, {fineweb_edu_10B_dataset(): 1.0})
 """
 
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import pretokenized
+from marin.experiment.data import dataset_main, pretokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -45,3 +45,7 @@ def fineweb_edu_10M_dataset() -> ArtifactStep[TokenizedCache]:
         tokenizer=marin_tokenizer,
         version="2026.06.28",
     )
+
+
+if __name__ == "__main__":
+    dataset_main({"fineweb-edu-10B": fineweb_edu_10B_dataset(), "fineweb-edu-10M": fineweb_edu_10M_dataset()})

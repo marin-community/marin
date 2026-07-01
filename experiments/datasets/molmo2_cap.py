@@ -7,7 +7,7 @@ from fray.types import ResourceConfig
 from marin.datakit.download.molmo2_cap import HF_DATASET_ID, HF_REVISION, transform
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -24,7 +24,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def molmo2_cap_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tokenize the normalized Molmo2-Cap captions."""
     dl = hf_download(
         "raw/molmo2-cap",
@@ -61,3 +61,7 @@ def molmo2_cap_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[Tok
         resources=ResourceConfig(ram="16g", disk="5g"),
         version="2026.06.28",
     )
+
+
+if __name__ == "__main__":
+    dataset_main({"molmo2_cap": molmo2_cap_dataset()})

@@ -32,7 +32,6 @@ from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import make_test_entrypoint
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -444,7 +443,7 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
-    worker_attrs = WorkerAttrsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
     state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     k8s = InMemoryK8sService()
@@ -473,7 +472,6 @@ def _make_k8s_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         log_client=LogClient.connect(log_address),
         db=db,
         endpoints=endpoints,
-        worker_attrs=worker_attrs,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 
@@ -491,14 +489,15 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()
     endpoints = EndpointsProjection(db)
-    worker_attrs = WorkerAttrsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
     state = ControllerTestState(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
     ctrl.capabilities = frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER})
-    # Share the harness tracker so the service registers into and reads liveness
-    # through the same object this harness's ControllerTestState exposes.
+    # Share the harness tracker/projection so the service registers into and reads
+    # liveness/attrs through the same objects this harness's ControllerTestState exposes.
     ctrl.provider.health = health
+    ctrl.provider.worker_attrs = worker_attrs
 
     service = ControllerServiceImpl(
         controller=ctrl,
@@ -506,7 +505,6 @@ def _make_gcp_harness(tmp_path, log_address: str) -> ServiceTestHarness:
         log_client=LogClient.connect(log_address),
         db=db,
         endpoints=endpoints,
-        worker_attrs=worker_attrs,
         endpoint_service=EndpointServiceImpl(db=db, endpoints=endpoints),
     )
 

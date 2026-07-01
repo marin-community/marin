@@ -5,7 +5,7 @@ from marin.execution.lazy import materialized_config
 from marin.transform.conversation.adapters import InputDatasetFormat
 from marin.transform.conversation.transform_conversation import transform_row
 
-from experiments.posttrain.instruction_datasets import (
+from experiments.datasets.instruction import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,

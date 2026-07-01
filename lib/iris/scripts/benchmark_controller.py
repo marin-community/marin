@@ -82,6 +82,7 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import (  # noqa: F401
     ControlSnapshot,
     SchedulableWorker,
@@ -182,6 +183,7 @@ class _FakeProvider:
         self._scheduler = Scheduler()
         self._store: BackendWorkerStore | None = None
         self.health: WorkerHealthTracker = WorkerHealthTracker()
+        self.worker_attrs: WorkerAttrsProjection | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         self._pending_dead: list[WorkerId] = []
@@ -212,11 +214,12 @@ class _FakeProvider:
         raise RuntimeError("fake provider")
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
-            worker_attrs=runtime.worker_attrs,
+            worker_attrs=self.worker_attrs,
             endpoints=runtime.endpoints,
             run_template_cache=runtime.run_template_cache,
             defaults=runtime.budget_defaults,

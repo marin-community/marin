@@ -65,7 +65,6 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
@@ -1011,7 +1010,6 @@ class ControllerServiceImpl:
         log_client: LogClient for reading task logs through LogService.FetchLogs.
         db: Underlying database connection.
         endpoints: Endpoint projection (in-memory cache over the endpoints table).
-        worker_attrs: Worker attributes projection.
     """
 
     def __init__(
@@ -1023,7 +1021,6 @@ class ControllerServiceImpl:
         db: ControllerDB,
         endpoints: EndpointsProjection,
         endpoint_service: EndpointServiceImpl,
-        worker_attrs: WorkerAttrsProjection,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
@@ -1032,7 +1029,6 @@ class ControllerServiceImpl:
         # The leased registry owns endpoint logic; the legacy
         # ControllerService.{Register,Unregister,List}Endpoint RPCs delegate here.
         self._endpoint_service = endpoint_service
-        self._worker_attrs = worker_attrs
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_client = log_client
@@ -1849,10 +1845,11 @@ class ControllerServiceImpl:
         worker_id = WorkerId(request.worker_id)
 
         # Route the worker into the backend that owns its scale group; the backend
-        # persists it (seeding liveness in its own tracker) and reports any stale
-        # prior owner of the address — a recycled internal IP. Address reuse can
-        # cross backends, so the controller routes each stale worker to its owning
-        # backend to reap, rather than the backend that just registered.
+        # persists it (seeding liveness and attributes in its own trackers) and
+        # reports any stale prior owner of the address — a recycled internal IP.
+        # Address reuse can cross backends, so the controller routes each stale
+        # worker to its owning backend to reap, rather than the backend that just
+        # registered.
         backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
         outcome = backend.register_worker(
             WorkerRegistration(

@@ -26,16 +26,17 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.train import train_lm
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.nemotron import nemotron_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.proofpile import proofpile_dataset
+from experiments.datasets.starcoder import starcoder_dataset
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.llama import (
     compute_num_parameters,
     llama3_tokenizer,
     llama3_tokenizer_vocab_size,
     llama_150m,
 )
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.nemotron import nemotron_datasets
-from experiments.pretraining_datasets.simple import proofpile_dataset, starcoder_dataset
 
 # ---------------------------
 # Daily ferry policy defaults
@@ -87,7 +88,10 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
     train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
     train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
     train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+    validation = [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
     return train_lm(
         name=RUN_NAME,

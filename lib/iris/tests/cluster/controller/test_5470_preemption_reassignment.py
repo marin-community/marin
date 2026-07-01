@@ -37,7 +37,6 @@ from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, update
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
@@ -431,7 +430,7 @@ class TestPreemptionReassignment:
             ctrl._db,
             health=ctrl.provider.health,
             endpoints=ctrl._endpoints,
-            worker_attrs=ctrl._worker_attrs,
+            worker_attrs=ctrl.provider.worker_attrs,
             run_template_cache=ctrl._run_template_cache,
         )
 

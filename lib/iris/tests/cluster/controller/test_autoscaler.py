@@ -27,7 +27,6 @@ from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
 from iris.cluster.types import AcceleratorType, WorkerStatus
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.backends.conftest import (
     FakeSliceHandle,
     FakeWorkerHandle,

@@ -7,7 +7,7 @@ from fray.types import ResourceConfig
 from marin.datakit.download.common_corpus import HF_DATASET_ID, filter_common_corpus
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import hf_download, tokenized
+from marin.experiment.data import dataset_main, hf_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -29,7 +29,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def common_corpus_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def common_corpus_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """Tokenize the filtered Common Corpus (English, open types)."""
     dl = hf_download(
         "raw/common_corpus", hf_id=HF_DATASET_ID, revision=_HF_REVISION, urls_glob=_URLS_GLOB, version="2026.06.28"
@@ -62,3 +62,7 @@ def common_corpus_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[
         resources=ResourceConfig(ram="40g", disk="5g"),
         version="2026.06.28",
     )
+
+
+if __name__ == "__main__":
+    dataset_main({"common_corpus_english": common_corpus_dataset()})

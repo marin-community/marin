@@ -4615,7 +4615,7 @@ requires-dist = [
     { name = "google-vizier", extras = ["jax"], marker = "extra == 'vizier'" },
     { name = "harbor", marker = "extra == 'harbor'", git = "https://github.com/marin-community/harbor.git?rev=354692d9c0eab497b05f266aa0dff30e2a238d2e" },
     { name = "huggingface-hub", marker = "extra == 'datakit'" },
-    { name = "jax", specifier = ">=0.9.2,<0.11" },
+    { name = "jax", specifier = ">=0.9.2" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.10.0" },
     { name = "jax", marker = "extra == 'tpu'", specifier = "==0.10.0" },
     { name = "jax", marker = "extra == 'vllm'", specifier = "==0.10.0" },
@@ -4781,6 +4781,12 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
+test = [
+    { name = "marin-finelog-server" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -4798,6 +4804,12 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
     { name = "marin-finelog-server", specifier = ">=0.2.0.dev0" },
     { name = "pytest", specifier = ">=8.4" },
     { name = "pytest-timeout" },
@@ -4831,7 +4843,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
-fray-test = [
+test = [
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
@@ -4855,7 +4867,7 @@ dev = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
 ]
-fray-test = [
+test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
 ]
@@ -4894,14 +4906,17 @@ dev = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
     { name = "pytest" },
-    { name = "safetensors" },
+]
+test = [
+    { name = "chex" },
+    { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aqtp", specifier = ">=0.8.2" },
     { name = "equinox", specifier = ">=0.10.6" },
-    { name = "jax", specifier = ">=0.8.0" },
+    { name = "jax", specifier = ">=0.9.2,<0.11" },
     { name = "jaxtyping", specifier = ">=0.2.20" },
     { name = "jmp", specifier = ">=0.0.4" },
     { name = "safetensors", specifier = ">=0.4.3" },
@@ -4922,7 +4937,10 @@ dev = [
     { name = "pygments" },
     { name = "pymdown-extensions" },
     { name = "pytest", specifier = ">=7.4.0" },
-    { name = "safetensors", specifier = ">=0.4.3" },
+]
+test = [
+    { name = "chex", specifier = ">=0.1.86" },
+    { name = "pytest", specifier = ">=7.4.0" },
 ]
 
 [[package]]
@@ -4984,6 +5002,16 @@ examples = [
     { name = "nbconvert" },
     { name = "nbformat" },
 ]
+test = [
+    { name = "kubernetes" },
+    { name = "playwright" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-flakefinder" },
+    { name = "pytest-playwright" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -5035,6 +5063,16 @@ examples = [
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "nbformat", specifier = ">=5.10.4" },
+]
+test = [
+    { name = "kubernetes", specifier = ">=31.0.0,<36" },
+    { name = "playwright", specifier = ">=1.49.0" },
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-flakefinder", specifier = ">=1.1.0" },
+    { name = "pytest-playwright", specifier = ">=0.6.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -5288,6 +5326,11 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
 ]
+test = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -5305,6 +5348,11 @@ provides-extras = ["iap"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+test = [
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },

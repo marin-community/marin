@@ -11,7 +11,7 @@ from marin.datakit.download.massive import (
 )
 from marin.datakit.normalize import normalize_to_parquet
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.data import raw_download, tokenized
+from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.marin_tokenizer import marin_tokenizer
@@ -35,7 +35,7 @@ def _run_normalize(cfg: dict) -> None:
     )
 
 
-def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
+def massive_function_calling_dataset(*, tokenizer: str = marin_tokenizer) -> ArtifactStep[TokenizedCache]:
     """MASSIVE function-calling corpus as a tokenized Dataset handle."""
     staged = raw_download(
         "raw/massive",
@@ -76,3 +76,7 @@ def massive_function_calling_datasets(*, tokenizer: str = marin_tokenizer) -> Ar
     return tokenized(
         "massive_function_calling", tokenizer=tokenizer, raw=norm, glob="outputs/main/*.parquet", version="2026.06.28"
     )
+
+
+if __name__ == "__main__":
+    dataset_main({"massive_function_calling": massive_function_calling_dataset()})
