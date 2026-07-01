@@ -71,6 +71,13 @@ class ProfilerConfig:
     start_step: int = 5
     num_steps: int = 25
     perfetto_link: bool = False
+    create_perfetto_trace: bool = True
+    """Also write a perfetto trace on stop. The conversion is slow and, for large
+    multi-process traces, can OOM/corrupt (BadGzipFile); set False to keep only the
+    xplane .pb that xprof/tensorboard read."""
+    profile_process_index: int | None = None
+    """If set, only this process starts/stops the trace (e.g. 0 for rank 0 only);
+    every rank still reaches the stop barrier. None profiles all processes."""
     profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
 
     @property
@@ -98,9 +105,15 @@ def profile(
     num_steps: int,
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    *,
+    create_perfetto_trace: bool = True,
+    profile_process_index: int | None = None,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
     mkdirs(path)
+
+    def _profiles_here() -> bool:
+        return profile_process_index is None or jax.process_index() == profile_process_index
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal trace_started
@@ -112,14 +125,17 @@ def profile(
         if step.step == start_step - 1:
             if force or trace_started:
                 return
-            _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info(f"Starting profiler until step {start_step + num_steps}.")
-            jax.profiler.start_trace(
-                path,
-                create_perfetto_link=_create_perfetto_link,
-                create_perfetto_trace=True,
-                profiler_options=profiler_options,
-            )
+            if _profiles_here():
+                _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
+                logger.info(f"Starting profiler until step {start_step + num_steps}.")
+                jax.profiler.start_trace(
+                    path,
+                    create_perfetto_link=_create_perfetto_link,
+                    create_perfetto_trace=create_perfetto_trace,
+                    profiler_options=profiler_options,
+                )
+            # Mark on every rank so all reach the stop barrier below, even when only
+            # one rank actually profiles.
             trace_started = True
         elif step.step == start_step + num_steps - 1:
             _stop_profile()
@@ -139,11 +155,14 @@ def profile(
         if create_perfetto_link and jax.process_index() == 0:
             _flush_while_waiting(event)
 
-        jax.profiler.stop_trace()
+        if _profiles_here():
+            jax.profiler.stop_trace()
         trace_started = False
 
         if create_perfetto_link and jax.process_index() == 0:
             event.set()
+        # All ranks barrier here (not just profiling ones) so a single-rank profile
+        # does not deadlock waiting for peers that never started a trace.
         barrier_sync()
 
     return profiler_callback_fn

@@ -42,14 +42,12 @@ launch stays single-host.
 import argparse
 import logging
 import os
-import shutil
 import tarfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
@@ -266,10 +264,15 @@ def build_run_config(args: argparse.Namespace) -> GrugRunConfig:
         process_id=args.process_id,
     )
     tracker = WandbConfig(project=WANDB_PROJECT, tags=["grug-moe-standalone"]) if args.wandb else NoopConfig()
+    # Profile rank 0 only, and skip the perfetto trace: writing it is slow and, for a
+    # large multi-process trace, corrupts/hangs (BadGzipFile). The xplane .pb that xprof
+    # reads is still written. Every rank still adds the callback so the stop barrier syncs.
     profiler = ProfilerConfig(
         enabled=args.profiler_steps > 0,
         start_step=args.profiler_start,
         num_steps=args.profiler_steps,
+        create_perfetto_trace=False,
+        profile_process_index=0,
     )
     # Local-only checkpointer with no periodic saves: _run_grug_local always builds
     # one, but we keep everything off GCS/R2 for an external-engineer repro.
@@ -373,13 +376,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     prof = p.add_argument_group("profiler (off by default)")
     prof.add_argument("--profiler-steps", type=int, default=0, help="steps to profile; 0 disables")
     prof.add_argument("--profiler-start", type=int, default=8, help="step to start profiling at")
-    prof.add_argument(
-        "--profile-upload-uri",
-        default=None,
-        help="fsspec URI (e.g. s3://.../prefix) to upload the xprof trace tarball to after the run; "
-        "lets the trace survive an ephemeral pod. With --wandb the trace is also logged as a W&B "
-        "artifact regardless. Omit both to keep it only under --output-dir.",
-    )
 
     return p.parse_args(argv)
 
@@ -390,13 +386,6 @@ def _archive_profiler_dir(profile_dir: Path, *, run_id: str) -> Path:
     with tarfile.open(archive_path, "w:gz") as tar:
         tar.add(profile_dir, arcname="profiler")
     return archive_path
-
-
-def _copy_to_uri(archive_path: Path, remote_uri: str) -> None:
-    """Copy a local file to a remote fsspec URI (e.g. s3://.../foo.tgz)."""
-    with archive_path.open("rb") as src, fsspec.open(remote_uri, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-    logger.info("Uploaded profiler tarball to %s", remote_uri)
 
 
 def _log_profiler_wandb(archive_path: Path, *, run_id: str) -> None:
@@ -441,17 +430,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     _run_grug_local(run_config)
 
-    # Profiler outputs are written locally on (ephemeral) rank 0; ship them out.
-    if args.profiler_steps > 0 and jax.process_index() == 0:
+    # Rank 0 wrote the xprof trace locally on the (ephemeral) pod; log it to W&B so it
+    # survives. Only sink is W&B, so this is a no-op without --wandb (trace stays under
+    # --output-dir).
+    if args.wandb and args.profiler_steps > 0 and jax.process_index() == 0:
         profile_dir = Path(args.output_dir) / "logs" / args.run_id / "profiler"
         if not profile_dir.exists():
             logger.warning("Profiler outputs requested but trace dir is missing: %s", profile_dir)
         else:
             archive_path = _archive_profiler_dir(profile_dir, run_id=args.run_id)
-            if args.profile_upload_uri:
-                _copy_to_uri(archive_path, f"{args.profile_upload_uri.rstrip('/')}/{archive_path.name}")
-            if args.wandb:
-                _log_profiler_wandb(archive_path, run_id=args.run_id)
+            _log_profiler_wandb(archive_path, run_id=args.run_id)
 
 
 if __name__ == "__main__":

@@ -478,6 +478,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    create_perfetto_trace=profiler_cfg.create_perfetto_trace,
+                    profile_process_index=profiler_cfg.profile_process_index,
                 ),
                 every=1,
             )
