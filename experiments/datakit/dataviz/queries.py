@@ -88,8 +88,9 @@ class Dataviz:
     def normalized_length_hist(self, source: str, buckets: int = 20) -> QueryResult:
         # log-scaled char-length histogram over a bounded sample (floor bucketing).
         b = int(buckets)
+        glob = self._normalize_glob(source)
         return self.ducky.run(
-            f"WITH d AS (SELECT length(text) AS n FROM read_parquet('{self._normalize_glob(source)}') LIMIT {self._SAMPLE}), "
+            f"WITH d AS (SELECT length(text) AS n FROM read_parquet('{glob}') LIMIT {self._SAMPLE}), "
             f"m AS (SELECT ln(max(n)+1) AS lg FROM d) "
             f"SELECT least(floor(ln(n+1)/(SELECT lg FROM m)*{b}), {b - 1}) AS bucket, "
             f"min(n) AS lo, max(n) AS hi, count(*) AS docs FROM d GROUP BY bucket ORDER BY bucket"
