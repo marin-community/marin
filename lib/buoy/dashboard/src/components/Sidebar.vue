@@ -2,7 +2,7 @@
 import { onMounted } from 'vue'
 import { useRuns } from '../composables/useRuns'
 
-const emit = defineEmits<{ select: [name: string] }>()
+const emit = defineEmits<{ select: [entity: string, project: string, name: string] }>()
 const { entity, project, user, search, entities, projects, users, runs, loading, loadEntities, fetchRuns } = useRuns()
 
 onMounted(async () => {
@@ -53,7 +53,7 @@ const glyph = (state: string) => GLYPH[state] ?? '·'
         v-for="run in runs"
         :key="run.id"
         class="w-full break-all rounded px-2 py-1 text-left font-mono text-xs hover:bg-white/10"
-        @click="emit('select', run.name)"
+        @click="emit('select', entity, project, run.name)"
       >
         <span>{{ glyph(run.state) }}</span> {{ run.name }}
       </button>

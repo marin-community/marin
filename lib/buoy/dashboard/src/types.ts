@@ -36,3 +36,5 @@ export interface Manifest {
 
 // Columnar series from /api/metrics: { key: { x: number[], y: number[] } }.
 export type MetricSeries = Record<string, { x: number[]; y: number[] }>
+
+export type TabId = 'summary' | 'charts' | 'profile'
