@@ -242,17 +242,18 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     Mosaic ``wgmma`` over dynamic non-uniform ``group_sizes`` (each expert may
     receive a different number of tokens), then dequantizes the result.
 
-    The input gradient (grad_lhs) runs on the FP8 tensor cores: the output gradient
-    is quantized to ``rev_dtype`` with delayed scaling and contracted against the
-    pre-cast natural weight layout. On stock jaxlib Mosaic ``wgmma`` rejects mixed
-    operand dtypes, so ``rev_dtype`` defaults to E4M3 (same as the weight) -- a
-    uniform ``e4m3 x e4m3`` dgrad. The weight gradient (grad_rhs) stays **bf16**
-    (numerically exact) via the bf16 ``ragged_dot`` Triton kernel; FP8 weight
-    gradient is a follow-up. All state (per-tensor scale + amax history for the
-    input, kernel, and output gradient) is carried as [OverwriteWithGradient][] so
-    it threads through ``partition_for_grad_overwrite`` / ``apply_updates`` and
-    stays out of the optimizer/EMA state; the output-gradient scale + amax history
-    now update from the gradient magnitudes each step.
+    Both gradients run on the FP8 tensor cores: the output gradient is quantized to
+    ``rev_dtype`` with delayed scaling and contracted against the pre-cast natural
+    weight layout (grad_lhs), and the pre-cast transposed activation and transposed
+    output gradient are contracted for grad_rhs via ``mgpu_dwgrad``.  On stock
+    jaxlib, Mosaic ``wgmma`` rejects mixed operand dtypes, so ``rev_dtype`` defaults
+    to E4M3 (same as the weight) -- uniform ``e4m3 x e4m3`` for both gradients.
+    **This is an approximate backward**: the numerically correct output-gradient
+    dtype is E5M2, but E5M2 x E4M3 mixed contractions require the patched Mosaic
+    fork (deferred to a future PR).  All state (per-tensor scale + amax history
+    for the input, kernel, and output gradient) is carried as [OverwriteWithGradient][]
+    so it threads through ``partition_for_grad_overwrite`` / ``apply_updates`` and
+    stays out of the optimizer/EMA state.
 
     Both forward operands (``fwd_dtype``) and the output-gradient dtype
     (``rev_dtype``) default to E4M3.

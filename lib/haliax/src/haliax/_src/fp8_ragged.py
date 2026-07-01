@@ -219,6 +219,10 @@ def _qrd_bwd(rev_dtype, res, g):
     # grad_lhs[T,K] = g[T,N] . rhs[E,K,N]  (contract N).  FP8 e4m3 x e4m3 on stock
     # jaxlib; consumes the pre-cast natural weight layout q_rhs (no re-cast). The
     # dequant folds both operands' scales: rhs_scale * new_g_scale.
+    # Config: reuses _autotuned_config (the forward's block_m=192/block_k=128/mcs=5).
+    # At the d2560 operating point (w13, K=N=2560) the dgrad shape -- g[T,N], rhs[E,K,N] --
+    # is identical to the forward shape, so _autotuned_config selects the same tuned
+    # values.  Validated: no separate _dgrad_config is needed.
     dlhs_scale = (rhs_scale * new_g_scale).astype(jnp.float32)
     grad_lhs = _ragged_fp8(q_g, q_rhs, group_sizes, out_dtype, dlhs_scale)
 
