@@ -94,6 +94,8 @@
     .chart-bar .seg-mini { display: inline-flex; gap: 2px; }
     .chart-bar .seg-mini button { font-size: 10px; width: 19px; padding: 1px 0; border: 1px solid #e2e8f0; background: #fff; color: #a0aec0; cursor: pointer; border-radius: 3px; }
     .chart-bar .seg-mini button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
+    .chart-bar .close { font-weight: 700; margin-left: .15em; }
+    .chart-bar .close:hover { color: #e53e3e; border-color: #e53e3e; }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
     .chip { display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff; border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace; }
     .chip button { border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px; line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0; }
@@ -178,7 +180,8 @@
     let chartState = {};         // per-metric { logY, logX, smoothing, size } — every control is per chart
     const CHART_H = { s: 190, m: 285, l: 400 };
     const CHART_SPAN = { s: 1, m: 1, l: 2 };  // L spans two grid columns (wider)
-    const CHART_CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
+    // scrollZoom: trackpad-pinch / mouse-wheel zoom; drag still box-zooms, double-click autoscales.
+    const CHART_CONFIG = { responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
     const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"];
     let liveTimer = null;        // running-run auto-refresh timer
     let searchTimer = null;
@@ -596,6 +599,11 @@
         seg.appendChild(b);
       }
       bar.appendChild(seg);
+
+      const close = el("button", "cbtn close", "×");
+      close.title = "remove this chart";
+      close.addEventListener("click", () => removeMetric(key));
+      bar.appendChild(close);
 
       card.append(bar, plot);
       $("charts").appendChild(card);
