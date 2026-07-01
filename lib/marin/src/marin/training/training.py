@@ -13,10 +13,10 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, TypeVar, cast
 
-import draccus
 from draccus.utils import DataclassInstance
 from fray import CpuConfig, ResourceConfig, TpuConfig
 from levanter.adaptor import NoAdaptorConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.main.train_dpo import TrainDpoConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.schedule import BatchSchedule
@@ -93,13 +93,7 @@ class TrainLmOnPodConfig:
     train_config: object
     resources: ResourceConfig
     output_path: str | None = None
-    """Base output directory to be used for training, mainly for use with executor framework."""
-    impute_run_id_from_output_path: bool = True
-    """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
-
-    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
-    """
+    """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -118,13 +112,7 @@ class TrainDpoOnPodConfig:
     train_config: object
     resources: ResourceConfig
     output_path: str | None = None
-    """Base output directory to be used for training, mainly for use with executor framework."""
-    impute_run_id_from_output_path: bool = True
-    """
-    If true and out_path is not None, the run id will be set to the basename of the out_path plus a random string.
-
-    Note that trainer.id and the RUN_ID env variable take precedence, in that order.
-    """
+    """Base output directory for the run. The checkpointer, HF export, and run id derive from it."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
     auto_build_caches: bool = False
@@ -173,103 +161,65 @@ def temporary_checkpoint_base_path(output_path: str) -> str:
     )
 
 
-def bake_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
-    """Bake ``output_path`` into the trainer's checkpointer and HF save path.
+def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_path: str) -> CheckpointerConfig:
+    """Point ``checkpointer`` at ``output_path``: rolling checkpoints under ``<output_path>/checkpoints``
+    and time-policy (temporary) checkpoints on region-local storage keyed off ``output_path``.
 
-    Sets:
-    * ``trainer.checkpointer.base_path`` → ``<output_path>/checkpoints``
-    * ``trainer.checkpointer.temporary_base_path`` → region-local temp bucket
-    * ``hf_save_path`` → ``<output_path>/hf``
-
-    The ``append_run_id_to_base_path`` flag is NOT changed here; callers that
-    impute a run id from the output path should also set it to ``False`` via
-    ``impute_run_id``.
+    ``append_run_id_to_base_path`` is ``False`` because ``output_path`` already encodes the run's
+    identity, so a run id suffix would double it up. Every other checkpointer field is preserved.
     """
-    trainer = replace(
-        train_config.trainer,
-        checkpointer=replace(
-            train_config.trainer.checkpointer,
-            base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
-            temporary_base_path=temporary_checkpoint_base_path(output_path),
-        ),
+    return replace(
+        checkpointer,
+        base_path=os.path.join(output_path, DEFAULT_CHECKPOINTS_PATH),
+        temporary_base_path=temporary_checkpoint_base_path(output_path),
+        append_run_id_to_base_path=False,
     )
-    return replace(  # type: ignore[bad-specialization]
+
+
+def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
+    """Set every run-scoped path on ``train_config`` from ``output_path``.
+
+    Points the checkpointer at ``output_path`` and sets ``hf_save_path`` to ``<output_path>/hf``.
+    Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
+    is cleared and ``peft_save_path`` takes the HF location.
+    """
+    config = replace(  # type: ignore[bad-specialization]
         train_config,
-        trainer=trainer,
+        trainer=replace(
+            train_config.trainer,
+            checkpointer=resolve_checkpointer_output_path(train_config.trainer.checkpointer, output_path),
+        ),
         hf_save_path=os.path.join(output_path, DEFAULT_HF_CHECKPOINTS_PATH),
     )
 
-
-def impute_run_id(
-    train_config: TrainConfigT,
-    *,
-    output_path: str | None,
-    env_run_id: str | None = None,
-    impute_from_output_path: bool = True,
-) -> tuple[TrainConfigT, str]:
-    """Pick a stable run id and stamp it into ``train_config``.
-
-    Priority:
-    1. ``train_config.trainer.id`` (already set by the caller)
-    2. ``env_run_id`` (e.g. from ``config.env_vars["RUN_ID"]``)
-    3. ``RUN_ID`` environment variable
-    4. ``basename(output_path)`` when ``impute_from_output_path`` is True
-    5. Random UID (last resort, logged as a warning)
-
-    When the run id is imputed from ``output_path`` (case 4), the path already
-    encodes identity so ``append_run_id_to_base_path`` is set to ``False`` to
-    avoid double-suffixing.  For all other cases it follows
-    ``not impute_from_output_path``.
-
-    Returns:
-        ``(updated_train_config, run_id)``
-    """
-    run_id = train_config.trainer.id
-
-    if run_id is None:
-        run_id = env_run_id or os.environ.get("RUN_ID")
-
-    from_output_path = False
-    if run_id is None and impute_from_output_path and output_path is not None:
-        path = output_path.rstrip("/")
-        run_id = os.path.basename(path)
-        from_output_path = True
-        logger.info(f"Imputing run ID from out path: {run_id}")
-
-    if not run_id:
-        run_id = _cli_helpers_module().default_run_id()
-        logger.warning(f"Run ID not set. Using default: {run_id}")
-
-    append_id_to_checkpoints = not (impute_from_output_path and from_output_path) and not impute_from_output_path
-    checkpointer_config = replace(train_config.trainer.checkpointer, append_run_id_to_base_path=append_id_to_checkpoints)
-    updated = replace(train_config, trainer=replace(train_config.trainer, id=run_id, checkpointer=checkpointer_config))  # type: ignore[bad-specialization]
-    return updated, run_id
-
-
-def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodConfigT:
-    """
-    Update the config to use the out_path as the base output directory for training.
-
-    This will set the following paths to be subdirectories of the out_path:
-    * checkpoints (in $out_path/checkpoints)
-    * hf checkpoints (in $out_path/hf)
-    * logging (in $out_path/log)
-
-    This is useful when running with the executor framework, where the output path is set by the executor.
-    """
-    if pod_config.output_path is None:
-        return pod_config
-
-    config = bake_output_path(pod_config.train_config, pod_config.output_path)
-
-    # Adapter LM/DPO exports PEFT by default; merged HF export is explicit.
     if isinstance(config, (TrainDpoConfig, TrainLmConfig)) and not isinstance(config.adapter, NoAdaptorConfig):
         peft_save_path = config.peft_save_path
         if peft_save_path is None and config.hf_save_steps is not None:
             peft_save_path = config.hf_save_path
         config = replace(config, hf_save_path=None, peft_save_path=peft_save_path)
 
-    return replace(pod_config, train_config=config)
+    return config
+
+
+def _resolve_run_id(
+    train_config: TrainConfigT, *, output_path: str | None, env_run_id: str | None
+) -> tuple[TrainConfigT, str]:
+    """Pick a stable run id and stamp it into ``train_config.trainer.id``.
+
+    A stable id is required so a run resumes into the same W&B run and checkpoint directory after
+    preemption. Priority: ``trainer.id`` already set by the caller, then ``env_run_id`` (from
+    ``env_vars["RUN_ID"]``), then the ``RUN_ID`` environment variable, then ``basename(output_path)``,
+    and finally a random UID as a last resort.
+    """
+    run_id = train_config.trainer.id or env_run_id or os.environ.get("RUN_ID")
+    if run_id is None and output_path is not None:
+        run_id = os.path.basename(output_path.rstrip("/"))
+        logger.info("Imputing run ID from output path: %s", run_id)
+    if not run_id:
+        run_id = _cli_helpers_module().default_run_id()
+        logger.warning("Run ID not set. Using default: %s", run_id)
+    updated = replace(train_config, trainer=replace(train_config.trainer, id=run_id))  # type: ignore[bad-specialization]
+    return updated, run_id
 
 
 def _num_validation_sequences(total_sequences: int, fraction: float) -> int:
@@ -400,28 +350,6 @@ def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) ->
     return config
 
 
-def _enforce_run_id(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
-    """
-    Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
-    properly after preemption.
-
-    Look for:
-        * config.trainer.id
-        * environment variable RUN_ID in config.env_vars
-        * environment variable RUN_ID
-        * default to a random UID
-    """
-    env_run_id = (config.env_vars or {}).get("RUN_ID")
-    inner_config, run_id = impute_run_id(
-        config.train_config,
-        output_path=config.output_path,
-        env_run_id=env_run_id,
-        impute_from_output_path=config.impute_run_id_from_output_path,
-    )
-    logger.info(f"Using run ID: {run_id}")
-    return replace(config, train_config=inner_config)
-
-
 def _normalize_jax_compilation_cache_dir(path: str) -> str:
     """Normalize cache dir to a form accepted by JAX's compilation cache.
 
@@ -496,19 +424,25 @@ def _prepare_training_run(
     environment dict that callers should merge into ``os.environ`` before
     invoking the Levanter main.
     """
+    train_config = config.train_config
     if config.output_path is not None:
         logger.info(f"Using output path: {config.output_path}")
-        config = _update_config_to_use_out_path(config)
+        train_config = apply_output_path(train_config, config.output_path)
+
+    train_config, run_id = _resolve_run_id(
+        train_config,
+        output_path=config.output_path,
+        env_run_id=(config.env_vars or {}).get("RUN_ID"),
+    )
+    logger.info(f"Using run ID: {run_id}")
+    config = replace(config, train_config=train_config)
 
     if isinstance(config, TrainDpoOnPodConfig):
         config = cast(TrainOnPodConfigT, _maybe_auto_resolve_dpo_schedule(config))
+        train_config = config.train_config
 
     env = resolve_training_env(config.env_vars, config.resources)
 
-    config = _enforce_run_id(config)
-    logger.info(f"Using run ID: {config.train_config.trainer.id}")
-
-    train_config = config.train_config
     train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources
@@ -616,7 +550,3 @@ def _check_for_wandb_key(env):
                     "WANDB_API_KEY must be set in the environment. Please add it to your .config, export "
                     "WANDB_API_KEY=..., or add it to the env dict."
                 )
-
-
-if __name__ == "__main__":
-    draccus.wrap()(run_levanter_train_lm)()
