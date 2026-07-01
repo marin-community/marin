@@ -280,7 +280,7 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
 def reset_data_config_cache() -> None:
     """Clear the cluster-config and S3-bucket-registry caches. For tests."""
     _load_cluster_config_cached.cache_clear()
-    _s3_data_bucket_registry.cache_clear()
+    s3_data_buckets.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -331,11 +331,14 @@ def marin_prefix() -> str:
 
 
 @functools.cache
-def _s3_data_bucket_registry() -> Mapping[str, BucketSpec]:
-    """Map bucket name -> :class:`BucketSpec` for every R2/CoreWeave bucket
-    declared in any discoverable cluster config.
+def s3_data_buckets() -> Mapping[str, BucketSpec]:
+    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
 
-    S3-compatible buckets are the ones with ``tmp/ttl=Nd/`` lifecycle rules.
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
+    route temp paths (:func:`marin_temp_bucket`) and to drive
+    ``infra/configure_buckets.py``. The set is defined in ``config/*.yaml`` via
+    each bucket's ``store`` type (``r2``/``coreweave``).
+
     Recognition must be cross-cluster — a launcher on a GCS cluster may target an
     R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``)
     — so this aggregates across all cluster configs rather than only the active
@@ -347,17 +350,6 @@ def _s3_data_bucket_registry() -> Mapping[str, BucketSpec]:
             if spec.store in (StoreType.R2, StoreType.COREWEAVE):
                 registry.setdefault(spec.name, spec)
     return MappingProxyType(registry)
-
-
-def s3_data_buckets() -> Mapping[str, BucketSpec]:
-    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
-
-    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
-    route temp paths (:func:`marin_temp_bucket`) and to drive
-    ``infra/configure_buckets.py``. Replaces the old hardcoded bucket constants:
-    the set is now defined in ``config/*.yaml`` via each bucket's ``store`` type.
-    """
-    return _s3_data_bucket_registry()
 
 
 # Finite botocore timeouts/retries for every S3/R2 filesystem we build.
