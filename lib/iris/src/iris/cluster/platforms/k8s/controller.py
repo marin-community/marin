@@ -394,20 +394,12 @@ class K8sControllerProvider:
     def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
         """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.
 
-        ``--fresh`` wipes the SQLite DB and skips checkpoint restore. That belongs
-        at deploy time only, but ``cluster start --fresh`` bakes the flag into the
-        Deployment's pod ``command``, so it persists in the pod template. Any later
-        involuntary respawn of that pod — node eviction, node upgrade, OOMKill, or
-        the Deployment controller simply recreating a lost pod — then comes back
-        ``--fresh`` and silently wipes live job state. That is what wiped a running
-        canary and reaped its task pods in issue #6808.
-
-        Once the fresh controller is up it has emitted an (empty) checkpoint, so we
-        re-apply the same manifest without ``--fresh``. The Recreate strategy swaps
-        the pod in place on the already-warm controller node, and every future
-        respawn restores from the local state PVC / remote checkpoint instead of
-        wiping. ``--fresh`` thus means "ignore existing state on this deploy", not
-        "wipe on every restart forever".
+        ``--fresh`` baked into the pod ``command`` persists in the template, so any
+        involuntary respawn (eviction, node upgrade, OOMKill) comes back ``--fresh``
+        and wipes live job state — the failure in issue #6808. The fresh controller
+        has already emitted an (empty) checkpoint by now, so re-applying without the
+        flag makes ``--fresh`` mean "ignore existing state on this deploy" rather
+        than "wipe on every restart forever".
         """
         logger.info("Re-applying controller Deployment without --fresh so the wipe is one-shot")
         self._kubectl.apply_json(_build_controller_deployment(**deploy_kwargs, fresh=False))
