@@ -43,8 +43,8 @@ from marin.rl.environments.inference_ctx import (
     vLLMInferenceContextConfig,
 )
 from marin.rl.kl_regularization import KLConfig, KLMode
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.replay_buffer import ReplayBufferConfig
-from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutWorker, find_open_port
 from marin.rl.run_state import RLRunState
@@ -204,6 +204,7 @@ def create_nano_llama_config() -> LlamaConfig:
         num_kv_heads=8,
         num_layers=4,
         tokenizer=DummyTokenizer(),
+        flash_attention_block_size=16,
     )
 
 
@@ -316,11 +317,12 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        loss=RLOOLoss(
+        objective=make_rloo_objective(
             kl=KLConfig(mode=KLMode.NONE, beta=0.0),
             clip_epsilon_low=5.0,
             clip_epsilon_high=5.0,
         ),
+        scorer_vocab_tile_size=None,
         initial_checkpoint=None,
     )
 
@@ -709,6 +711,7 @@ class RolloutBatchFeeder:
     def __post_init__(self):
         self.thread = None
         self.stop_flag = threading.Event()
+        self.batch_index = 0
 
     def _run(self):
         """Thread target - continuously generate batches until runner completes."""
@@ -729,11 +732,15 @@ class RolloutBatchFeeder:
                 if self.runner.trained_model:
                     model = self.runner.trained_model
 
+                rollout_step = self.runner.all_steps_seen[-1] if self.runner.all_steps_seen else -1
+                batch_index = self.batch_index
+                self.batch_index += 1
                 batch = self.batch_generator(
                     policy_model=model,
                     batch_size=batch_size,
                     tokenizer=self.tokenizer,
-                    step=self.runner.steps_completed,
+                    step=rollout_step,
+                    batch_index=batch_index,
                 )
                 self.queue_writer.write_batch(batch)
         except Exception:

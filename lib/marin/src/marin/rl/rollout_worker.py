@@ -56,9 +56,11 @@ from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.runtime import RLRuntimeHandles
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
+from .traces import make_group_id, make_trace_id
 from .types import (
     RolloutBatch,
     RolloutGroup,
+    RolloutGroupMetadata,
     RolloutMetadata,
     RolloutStats,
 )
@@ -445,6 +447,7 @@ class RolloutWorker:
         self._current_train_step: int = -1
         self._last_transfer_counters = RolloutTransferCounterSnapshot()
         self._last_eval_train_step: int | None = None
+        self._sample_batch_index: int = 0
 
         self._tokenizer = config.tokenizer
 
@@ -510,7 +513,7 @@ class RolloutWorker:
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
         decoding = resolve_decoding_for_mode(lesson_config.sampling_params, mode)
 
-        rollout_groups, metrics = env.sample(
+        sample = env.sample(
             inference_ctx=self._policy_ctx,
             n_examples=n_examples,
             n_generations=n_generations,
@@ -519,10 +522,17 @@ class RolloutWorker:
             mode=mode,
             system_prompt=self.config.system_prompt,
         )
+        rollout_groups = sample.rollout_groups
+        metrics = sample.metrics
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
             return None, None
+
+        if sample.traces and len(sample.traces) != len(rollout_groups):
+            raise ValueError(
+                f"Environment returned {len(sample.traces)} traces for {len(rollout_groups)} rollout groups"
+            )
 
         logger.info(
             "Generated rollout with %d groups from lesson %s at step %d",
@@ -536,18 +546,72 @@ class RolloutWorker:
             worker_id=f"{socket.gethostname()}_{os.getpid()}",
             timestamp=time.time(),
             weight_step=self._current_weight_step,
+            run_id=self.config.run_id,
+            lesson_id=lesson_id,
+            task_name=sample.identity.task_name,
+            task_version=sample.identity.task_version,
+            verifier_name=sample.identity.verifier_name,
+            verifier_version=sample.identity.verifier_version,
         )
 
         # Attach metadata to each rollout in each group
+        sample_batch_index = getattr(self, "_sample_batch_index", 0)
+        self._sample_batch_index = sample_batch_index + 1
         rollout_groups_with_metadata = []
-        for group in rollout_groups:
+        for group_index, group in enumerate(rollout_groups):
+            trace = sample.traces[group_index] if sample.traces else None
+            group_id = (
+                trace.group_id
+                if trace and trace.group_id
+                else make_group_id(
+                    self.config.run_id,
+                    lesson_id,
+                    self._current_weight_step,
+                    batch_metadata.worker_id,
+                    sample_batch_index,
+                    group_index,
+                )
+            )
+            trace_id = (
+                trace.trace_id
+                if trace and trace.trace_id
+                else make_trace_id(
+                    self.config.run_id,
+                    lesson_id,
+                    self._current_weight_step,
+                    batch_metadata.worker_id,
+                    sample_batch_index,
+                    group_index,
+                )
+            )
+            trace_ref = trace.trace_ref if trace is not None else None
+            group_metadata = RolloutGroupMetadata(
+                group_id=group_id,
+                lesson_id=lesson_id,
+                trace_id=trace_id,
+                task_name=sample.identity.task_name,
+                task_version=sample.identity.task_version,
+                verifier_name=sample.identity.verifier_name,
+                verifier_version=sample.identity.verifier_version,
+                trace_ref=trace_ref,
+            )
+
             rollouts_with_metadata = []
             for rollout in group.rollouts:
                 # Create new rollout with metadata attached
-                rollout_with_meta = eqx.tree_at(lambda r: r.metadata, rollout, batch_metadata)
+                rollout_with_meta = eqx.tree_at(
+                    lambda r: r.metadata,
+                    rollout,
+                    dataclasses.replace(
+                        batch_metadata,
+                        group_id=group_id,
+                        trace_id=trace_id,
+                        trace_ref=trace_ref,
+                    ),
+                )
                 rollouts_with_metadata.append(rollout_with_meta)
 
-            rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata))
+            rollout_groups_with_metadata.append(RolloutGroup(rollouts=rollouts_with_metadata, metadata=group_metadata))
 
         rollout_batch = RolloutBatch(
             groups=rollout_groups_with_metadata,

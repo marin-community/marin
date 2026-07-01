@@ -18,6 +18,7 @@ from marin.rl.types import (
     Rollout,
     RolloutBatch,
     RolloutGroup,
+    RolloutGroupMetadata,
     RolloutMetadata,
 )
 
@@ -57,7 +58,19 @@ def create_test_rollout(idx: int) -> Rollout:
 def create_test_rollout_group(key: str, n_rollouts: int, start_idx: int = 0) -> RolloutGroup:
     """Create a test rollout group."""
     rollouts = [create_test_rollout(start_idx + i) for i in range(n_rollouts)]
-    return RolloutGroup(rollouts=rollouts)
+    return RolloutGroup(
+        rollouts=rollouts,
+        metadata=RolloutGroupMetadata(
+            group_id=key,
+            lesson_id="lesson",
+            trace_id=f"trace-{key}",
+            task_name="test_task",
+            task_version="v1",
+            verifier_name="test_verifier",
+            verifier_version="v1",
+            trace_ref=f"trace://{key}",
+        ),
+    )
 
 
 def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: int = 3) -> RolloutBatch:
@@ -70,6 +83,10 @@ def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: i
 
     metadata = RolloutMetadata(worker_id=f"worker_{idx}", timestamp=time.time(), weight_step=0)
     return RolloutBatch(groups=groups, metadata=metadata)
+
+
+def assert_group_metadata_round_trips(read_back: RolloutGroup, original: RolloutGroup) -> None:
+    assert read_back.metadata == original.metadata
 
 
 @pytest.fixture(params=["memory", "file"])
@@ -103,9 +120,11 @@ def test_storage_operations(storage_config):
     assert len(read_batches) == 3
 
     # Verify content
-    for original, read_back in zip(test_batches, read_batches, strict=False):
+    for original, read_back in zip(test_batches, read_batches, strict=True):
         assert len(read_back.groups) == len(original.groups)
         assert read_back.metadata.worker_id == original.metadata.worker_id
+        for read_group, original_group in zip(read_back.groups, original.groups, strict=True):
+            assert_group_metadata_round_trips(read_group, original_group)
 
         # Check first rollout of first group
         orig_rollout = original.groups[0].rollouts[0]
@@ -161,3 +180,5 @@ def test_large_rollout_batch():
     assert read_batch is not None
     assert len(read_batch.groups) == 10
     assert len(read_batch.groups[0].rollouts) == 20
+    for read_group, original_group in zip(read_batch.groups, batch.groups, strict=True):
+        assert_group_metadata_round_trips(read_group, original_group)

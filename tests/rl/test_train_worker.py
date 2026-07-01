@@ -1,26 +1,62 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 from types import SimpleNamespace
 
-import pytest
-from marin.rl.kl_regularization import KLConfig, KLMode
-from marin.rl.rl_losses import RLOOLoss
+import numpy as np
+from marin.rl.scoring import ScoreRequirements
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
+    StreamingRolloutLoader,
     TrainWorker,
     _initial_rollout_state,
     _resume_safe_weight_transfer_metrics,
     _training_step_timing_metrics,
 )
+from marin.rl.types import RolloutMetadata, TrajectoryGroupRecord, TrajectoryRecord
 from marin.rl.weight_transfer.base import WeightTransferServerMetrics
+
+
+def create_test_trajectory(group_id: str, trace_id: str, reward: float) -> TrajectoryRecord:
+    return TrajectoryRecord(
+        trace_id=trace_id,
+        env_name="test_env",
+        task_name="math",
+        task_version="v1",
+        lesson_id="lesson-a",
+        env_example_id="example-a",
+        group_id=group_id,
+        verifier_name="verifier",
+        verifier_version="v1",
+        prompt_tokens=np.array([1, 2, 3], dtype=np.int32),
+        response_tokens=np.array([4, 5], dtype=np.int32),
+        behavior_logprobs=np.array([-0.1, -0.2], dtype=np.float32),
+        token_rewards=np.array([reward, reward], dtype=np.float32),
+        episode_reward=reward,
+        correctness_reward=None,
+        is_truncated=False,
+        sampling_temperature=1.0,
+        sampling_top_k=None,
+        rollout_metadata=RolloutMetadata(
+            worker_id="worker-a",
+            timestamp=123.0,
+            weight_step=7,
+            run_id="run-a",
+            lesson_id="lesson-a",
+            group_id=group_id,
+            trace_id=trace_id,
+            task_name="math",
+            task_version="v1",
+        ),
+    )
 
 
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
+    worker.objective_runtime = SimpleNamespace(score_requirements=ScoreRequirements(reference_logprobs=False))
     worker.initial_model = model
     worker.reference_model = model
 
@@ -30,11 +66,10 @@ def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled
     assert worker.reference_model is None
 
 
-@pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
-def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled(mode: KLMode):
+def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled():
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl=KLConfig(mode=mode, beta=0.01))
+    worker.objective_runtime = SimpleNamespace(score_requirements=ScoreRequirements(reference_logprobs=True))
     worker.initial_model = model
     worker.reference_model = model
 
@@ -109,6 +144,70 @@ def test_seed_initial_rollout_state_publishes_resumed_step():
     assert recorded_steps == [68, 68]
 
 
+def test_streaming_rollout_loader_preserves_full_groups(monkeypatch):
+    trajectories = (
+        create_test_trajectory(group_id="group-a", trace_id="trace-a-0", reward=0.0),
+        create_test_trajectory(group_id="group-a", trace_id="trace-a-1", reward=1.0),
+    )
+    group = TrajectoryGroupRecord(
+        group_id="group-a",
+        lesson_id="lesson-a",
+        trace_id="trace-a",
+        task_name="math",
+        task_version="v1",
+        verifier_name="verifier",
+        verifier_version="v1",
+        prompt_tokens=trajectories[0].prompt_tokens,
+        trajectories=trajectories,
+    )
+
+    class _FakeReplayLoader:
+        get_groups_calls = 0
+
+        def get_trajectories(self, *, timeout):
+            del timeout
+            raise AssertionError("trainer data path must sample full groups, not individual trajectories")
+
+        def get_groups(self, *, timeout):
+            del timeout
+            self.get_groups_calls += 1
+            return [group]
+
+    class _FakeObjectiveRuntime:
+        prepared_group_ids: tuple[str, ...] | None = None
+        prepared_rewards: list[float] | None = None
+
+        def prepare_batch(self, sequence_batch, batch_info):
+            del sequence_batch
+            self.prepared_group_ids = batch_info.group_id
+            self.prepared_rewards = [float(value) for value in batch_info.episode_reward.array]
+            return batch_info
+
+    monkeypatch.setattr("marin.rl.train_worker.hax.set_mesh", lambda _mesh: contextlib.nullcontext())
+    monkeypatch.setattr("marin.rl.train_worker.hax.shard", lambda batch, _axis_mapping: batch)
+
+    replay_loader = _FakeReplayLoader()
+    objective_runtime = _FakeObjectiveRuntime()
+    loader = StreamingRolloutLoader(
+        data_loader=replay_loader,
+        config=SimpleNamespace(
+            curriculum_config=SimpleNamespace(max_seq_len=8),
+            model=SimpleNamespace(attn_backend=None, flash_attention_block_size=1),
+            tokenizer=SimpleNamespace(pad_token_id=0, eos_token_id=0),
+            trainer=SimpleNamespace(device_mesh=None, compute_axis_mapping={}),
+        ),
+        objective_runtime=objective_runtime,
+    )
+
+    prepared_batch = next(iter(loader))
+
+    assert replay_loader.get_groups_calls == 1
+    assert objective_runtime.prepared_group_ids == ("group-a", "group-a")
+    assert objective_runtime.prepared_rewards == [0.0, 1.0]
+    assert prepared_batch.group_id == ("group-a", "group-a")
+    assert loader._last_trajectories == list(trajectories)
+
+
 def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
     served_weight_steps: list[int] = []
     waited_weight_steps: list[int] = []
@@ -166,7 +265,10 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.objective_runtime = SimpleNamespace(
+        create_loss_fn=lambda *, reference_model=None, teacher_model=None: lambda model, batch, key: 0.0,
+        score_requirements=ScoreRequirements(reference_logprobs=False),
+    )
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
@@ -244,7 +346,10 @@ def test_train_reuses_recovered_step_on_resume(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.objective_runtime = SimpleNamespace(
+        create_loss_fn=lambda *, reference_model=None, teacher_model=None: lambda model, batch, key: 0.0,
+        score_requirements=ScoreRequirements(reference_logprobs=True),
+    )
     worker.reference_model = object()
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)

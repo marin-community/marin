@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
+from marin.rl.objectives import make_rloo_objective
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
-from marin.rl.rl_losses import RLOOLoss
 
 from tests.rl.integration.config import (
     DummyTokenizer,
@@ -45,7 +45,7 @@ def test_train_worker_checkpoint_restart(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(
+            objective=make_rloo_objective(
                 kl=KLConfig(mode=KLMode.NONE, beta=0.0),
                 clip_epsilon_low=0.2,
                 clip_epsilon_high=0.2,
@@ -101,7 +101,7 @@ def test_train_worker_checkpoint_restart(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(
+            objective=make_rloo_objective(
                 kl=KLConfig(mode=KLMode.NONE, beta=0.0),
                 clip_epsilon_low=0.2,
                 clip_epsilon_high=0.2,
