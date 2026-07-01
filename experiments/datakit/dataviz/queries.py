@@ -89,11 +89,16 @@ class Dataviz:
         )
 
     def normalized_samples(self, source: str, n: int = 20, search: str = "") -> QueryResult:
+        # Only id + text are guaranteed across sources; other normalize columns
+        # (source_id / uuid / source-specific fields) vary, so don't select them.
+        # LIMIT (not USING SAMPLE): reservoir sampling would scan the whole source
+        # (5TB+ for the big ones); LIMIT reads first row-groups and stops early
+        # (id is a content hash, so first-N is unbiased w.r.t. content), and with
+        # a search it stops as soon as N matches are found.
         where = f"WHERE text ILIKE '%{_sql_str(search)}%'" if search.strip() else ""
         return self.ducky.run(
-            f"SELECT id, source_id, length(text) AS chars, substr(text, 1, 2000) AS text "
-            f"FROM read_parquet('{self._normalize_glob(source)}') {where} "
-            f"USING SAMPLE {int(n)} ROWS"
+            f"SELECT id, length(text) AS chars, substr(text, 1, 2000) AS text "
+            f"FROM read_parquet('{self._normalize_glob(source)}') {where} LIMIT {int(n)}"
         )
 
     # -- decontamination ----------------------------------------------------
