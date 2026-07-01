@@ -69,8 +69,11 @@ def submit_ducky(
         environment=EnvironmentSpec(env_vars=env_vars),
         ports=[PORT_NAME],
         constraints=[region_constraint([region])],
-        # Always-on: ride out preemptions rather than exiting.
+        # Always-on: ride out preemptions, and also failures — the in-process supervisor
+        # restarts the server on an OOM, but if the whole container is cgroup-killed this
+        # lets Iris bring the task back instead of leaving the service down.
         max_retries_preemption=1000,
+        max_retries_failure=1000,
     )
 
 

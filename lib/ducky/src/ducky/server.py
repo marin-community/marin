@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+import multiprocessing
 import threading
 import time
 import uuid
@@ -378,8 +379,11 @@ class _QuietPolls(logging.Filter):
         return '"GET /result/' not in message and '"GET /health ' not in message
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+_RESTART_DELAY = 3  # seconds between supervised server restarts
+
+
+def _serve() -> None:
+    """Serve ducky in this process. Runs in a supervised child (see `main`)."""
     logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
     config = DuckyConfig.from_environment()
     runner = QueryRunner(config)
@@ -402,6 +406,22 @@ def main() -> None:
 
     app.router.lifespan_context = on_shutdown(_on_shutdown)
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+def main() -> None:
+    """Supervise the server: run it in a child process and restart it if it exits.
+
+    A cgroup OOM-kill reaps the largest process — the server child — while this tiny
+    supervisor survives, so ducky restarts in-process without consuming an Iris job
+    retry. If the whole cgroup is killed the Iris task retry is the backstop.
+    """
+    logging.basicConfig(level=logging.INFO)
+    while True:
+        server = multiprocessing.Process(target=_serve, name="ducky-server")
+        server.start()
+        server.join()
+        logger.error("ducky server exited (exitcode=%s) — restarting in %ds", server.exitcode, _RESTART_DELAY)
+        time.sleep(_RESTART_DELAY)
 
 
 if __name__ == "__main__":

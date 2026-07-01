@@ -83,14 +83,16 @@ class DuckyConfig:
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
 
-    memory_fraction: float = 0.8
-    """DuckDB ``memory_limit`` = this fraction of host RAM, leaving headroom for Python/Arrow/OS.
-    A hard self-cap: the process won't be OS-OOM-killed; a query needing more fails (and is
-    caught per-query) instead of taking down the service."""
+    memory_fraction: float = 0.6
+    """DuckDB ``memory_limit`` = this fraction of host RAM, a hard self-cap. Leaves generous
+    headroom (~40%) for concurrent Arrow previews, httpfs read buffers, and untracked
+    allocations so the container isn't cgroup-OOM-killed under load — a query that needs more
+    fails per-query instead of taking down the service."""
 
-    spill_directory: str = "/tmp/ducky-spill"
+    spill_directory: str = "/var/tmp/ducky-spill"
     """Local disk path DuckDB spills to when a query exceeds ``memory_limit`` (out-of-core
-    execution). Must be a real disk (not tmpfs) so spilling relieves memory pressure."""
+    execution). ``/var/tmp`` rather than ``/tmp`` because ``/tmp`` is often tmpfs — spilling
+    there consumes RAM and defeats the point."""
 
     max_concurrent_queries: int = 8
     """How many queries run at once. Each gets its own DuckDB cursor (sharing the instance's
