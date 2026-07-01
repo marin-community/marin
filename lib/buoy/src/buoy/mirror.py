@@ -23,6 +23,7 @@ import posixpath
 import tarfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pandas as pd
@@ -33,6 +34,10 @@ from buoy import cache
 from buoy.config import HISTORY_PAGE_ROWS, PROFILE_ARTIFACT_TYPES, BuoyConfig
 
 logger = logging.getLogger("buoy.mirror")
+
+# Callback the mirror invokes with a short human-readable stage string, surfaced
+# by mirror_status so the SPA can show progress while a run is being fetched.
+Progress = Callable[[str], None]
 
 # A running run is re-mirrored every WATCH_INTERVAL while it is being viewed; the
 # watcher stops once the run reaches a terminal state or no view has touched it
@@ -94,7 +99,7 @@ def page_table(rows: list[dict], columns: list[str]) -> pa.Table:
     return pa.Table.from_pandas(df[columns], schema=schema, preserve_index=False)
 
 
-def _mirror_history(run: object, prefix: str, columns: list[str]) -> dict:
+def _mirror_history(run: object, prefix: str, columns: list[str], report: Progress) -> dict:
     hdir = cache.history_dir(prefix)
     part = 0
     rows = 0
@@ -109,6 +114,7 @@ def _mirror_history(run: object, prefix: str, columns: list[str]) -> dict:
         part += 1
         rows += table.num_rows
         batch.clear()
+        report(f"history: {rows:,} steps")
 
     for row in run.scan_history():  # type: ignore[attr-defined]
         batch.append(row)
@@ -139,7 +145,7 @@ def _profile_logdir(local: str) -> str:
     return dest
 
 
-def _mirror_profile(run: object, prefix: str, existing: dict | None = None) -> dict | None:
+def _mirror_profile(run: object, prefix: str, existing: dict | None, report: Progress) -> dict | None:
     for art in run.logged_artifacts():  # type: ignore[attr-defined]
         if art.type not in PROFILE_ARTIFACT_TYPES:
             continue
@@ -147,21 +153,28 @@ def _mirror_profile(run: object, prefix: str, existing: dict | None = None) -> d
         # artifact version — critical for the running-run refresh loop.
         if existing and existing.get("artifact_name") == art.name and cache.exists(existing.get("logdir", "")):
             return existing
-        logdir = _profile_logdir(art.download())
+        mb = int((getattr(art, "size", 0) or 0) / 1e6)
+        report(f"profile: downloading {mb} MB")
+        local = art.download()
+        report("profile: unpacking")
+        logdir = _profile_logdir(local)
         safe = art.name.replace(":", "_").replace("/", "_")
         dst = posixpath.join(prefix, "artifacts", safe)
+        report("profile: uploading to cache")
         cache.upload_tree(logdir, dst)
         return {"artifact_name": art.name, "logdir": dst, "size_bytes": int(getattr(art, "size", 0) or 0)}
     return None
 
 
-def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False) -> dict:
+def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False, on_progress: Progress | None = None) -> dict:
     """Synchronously mirror ``ref`` into the cache and return its manifest.
 
     Idempotent: a finished run whose ``manifest.json`` already exists is returned
     as-is unless ``refresh`` is set. A run that was still *running* when last
-    mirrored is always re-fetched (its history was incomplete).
+    mirrored is always re-fetched (its history was incomplete). ``on_progress`` is
+    called with short stage strings for the UI.
     """
+    report = on_progress or (lambda _msg: None)
     prefix = cache.run_prefix(cfg.cache_root, ref.entity, ref.project, ref.run_id)
     mpath = cache.manifest_path(prefix)
     existing = cache.read_json(mpath)
@@ -173,14 +186,17 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False) -> dict:
     # running run never see "not cached" mid-refresh. (A crash mid-refresh can leave
     # a brief shard/manifest skew for that one running run; a generation swap would
     # remove even that, tracked as a follow-up.)
+    report("reading run metadata")
     api = wandb.Api()
     run = api.run(ref.key)
     columns = history_columns(run)
-    history = _mirror_history(run, prefix, columns)
+    history = _mirror_history(run, prefix, columns, report)
+    report("writing config + summary")
     cache.write_json(posixpath.join(prefix, "config.json"), dict(run.config))
     summary_raw = getattr(run.summary, "_json_dict", None)
     cache.write_json(posixpath.join(prefix, "summary.json"), dict(summary_raw) if summary_raw is not None else {})
-    profile = _mirror_profile(run, prefix, existing.get("profile") if existing else None)
+    profile = _mirror_profile(run, prefix, existing.get("profile") if existing else None, report)
+    report("finalizing")
 
     author = getattr(run, "user", None)
     manifest = {
@@ -224,10 +240,15 @@ class MirrorManager:
         self._locks: dict[str, threading.Lock] = {}
         self._watch_touch: dict[str, float] = {}
         self._watching: set[str] = set()
+        self._progress: dict[str, str] = {}
 
     def _lock_for(self, key: str) -> threading.Lock:
         with self._guard:
             return self._locks.setdefault(key, threading.Lock())
+
+    def _set_progress(self, key: str, msg: str) -> None:
+        with self._guard:
+            self._progress[key] = msg
 
     def start(self, ref: RunRef, *, refresh: bool = False) -> threading.Thread | None:
         """Start a background mirror; return the thread, or None if one was already running."""
@@ -236,6 +257,7 @@ class MirrorManager:
             if current and current.state == "running":
                 return None
             self._states[ref.key] = _State("running")
+            self._progress[ref.key] = "queued"
         thread = threading.Thread(target=self._worker, args=(ref, refresh), daemon=True)
         thread.start()
         return thread
@@ -243,7 +265,7 @@ class MirrorManager:
     def _worker(self, ref: RunRef, refresh: bool) -> None:
         with self._lock_for(ref.key):
             try:
-                mirror_run(self._cfg, ref, refresh=refresh)
+                mirror_run(self._cfg, ref, refresh=refresh, on_progress=lambda m: self._set_progress(ref.key, m))
                 with self._guard:
                     self._states[ref.key] = _State("done")
             except Exception as exc:
@@ -254,8 +276,9 @@ class MirrorManager:
     def status(self, ref: RunRef) -> dict:
         with self._guard:
             current = self._states.get(ref.key)
+            detail = self._progress.get(ref.key)
         if current and current.state == "running":
-            return {"state": "running"}
+            return {"state": "running", "detail": detail}
         if current and current.state == "error":
             return {"state": "error", "error": current.error}
         prefix = cache.run_prefix(self._cfg.cache_root, ref.entity, ref.project, ref.run_id)

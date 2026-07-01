@@ -159,11 +159,11 @@ def test_manager_coalesces_concurrent(cfg, patch_wandb, monkeypatch):
     release = threading.Event()
     calls: list[int] = []
 
-    def gated(cfg_, ref, *, refresh=False):
+    def gated(cfg_, ref, *, refresh=False, on_progress=None):
         calls.append(1)
         entered.set()
         assert release.wait(5)
-        return real(cfg_, ref, refresh=refresh)
+        return real(cfg_, ref, refresh=refresh, on_progress=on_progress)
 
     monkeypatch.setattr("buoy.mirror.mirror_run", gated)
     mgr = MirrorManager(cfg)
