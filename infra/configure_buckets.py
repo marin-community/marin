@@ -16,13 +16,14 @@ Three backends are configured:
   backend also enforces that soft-delete is disabled — Marin churns a lot of
   multi-gigabyte ephemeral data, and soft-delete retention quickly explodes
   storage cost.
-* **Cloudflare R2** buckets (:data:`rigging.filesystem.R2_DATA_BUCKETS`), via the
-  S3 lifecycle API (botocore). The owned rules are ``Expiration`` rules whose
-  ``ID`` starts with ``marin-ttl-``. R2 has no soft-delete to manage.
-* **CoreWeave AI Object Storage** buckets
-  (:data:`rigging.filesystem.CW_DATA_BUCKETS`), via the same S3 lifecycle API.
-  CoreWeave AOS is virtual-host only, served from :data:`CW_ENDPOINT_URL`, and
-  signs with each bucket's CoreWeave region. Owned-rule shape is identical to R2.
+* **Cloudflare R2** and **CoreWeave AI Object Storage** buckets, via the S3
+  lifecycle API (botocore). Both are enumerated from
+  :func:`rigging.filesystem.s3_data_buckets` — the R2/CoreWeave buckets declared
+  in ``config/*.yaml`` by their ``store`` type — so the set lives in config, not
+  here. The owned rules are ``Expiration`` rules whose ``ID`` starts with
+  ``marin-ttl-``; neither backend has soft-delete to manage. CoreWeave AOS is
+  virtual-host only, served from :data:`CW_ENDPOINT_URL`, and signs with each
+  bucket's CoreWeave region; R2 is region-agnostic (``region_name="auto"``).
 
 Each S3 backend reads its own namespaced credentials — ``R2_ACCESS_KEY_ID`` /
 ``R2_SECRET_ACCESS_KEY`` for R2, ``CW_ACCESS_KEY_ID`` / ``CW_SECRET_ACCESS_KEY``
@@ -55,15 +56,18 @@ import botocore.config
 import botocore.session
 import click
 from botocore.exceptions import ClientError
-from rigging.filesystem import CW_DATA_BUCKETS, R2_DATA_BUCKETS, load_cluster_config
+from rigging.filesystem import BucketSpec, StoreType, load_cluster_config, s3_data_buckets
 
 logger = logging.getLogger(__name__)
 
 _MARIN_CONFIG = load_cluster_config("marin")
 
-# Region from which each bucket is served. Built from the canonical
-# region_buckets map so this script never drifts from the runtime view.
-BUCKETS: dict[str, str] = {bucket: region for region, bucket in _MARIN_CONFIG.region_buckets.items()}
+# GCS bucket -> serving region, from the marin cluster's region_buckets so this
+# script never drifts from the runtime view. The R2/CoreWeave (S3) buckets come
+# from s3_data_buckets(), which reads their `store` type from config/*.yaml.
+BUCKETS: dict[str, str] = {
+    spec.name: region for region, spec in _MARIN_CONFIG.region_buckets.items() if spec.store == StoreType.GCS
+}
 
 PROJECT = "hai-gcp-models"
 
@@ -385,28 +389,23 @@ def configure_s3_bucket(
     "--bucket",
     type=str,
     default=None,
-    help=(
-        "Only configure this bucket (a GCS bucket in config/marin.yaml, an R2 "
-        "bucket in R2_DATA_BUCKETS, or a CoreWeave bucket in CW_DATA_BUCKETS)."
-    ),
+    help="Only configure this bucket (a GCS bucket in config/marin.yaml, or an R2/CoreWeave bucket in config/*.yaml).",
 )
 def main(dry_run: bool, bucket: str | None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     # Default run configures every backend; each S3 backend reads its own
     # namespaced credentials (R2_* / CW_*, AWS_* fallback) in its client factory.
+    s3_buckets = s3_data_buckets()
     gcs_targets: dict[str, str] = BUCKETS
-    r2_targets: frozenset[str] = R2_DATA_BUCKETS
-    cw_targets: dict[str, str] = dict(CW_DATA_BUCKETS)
+    s3_targets: dict[str, BucketSpec] = dict(s3_buckets)
     if bucket is not None:
         if bucket in BUCKETS:
-            gcs_targets, r2_targets, cw_targets = {bucket: BUCKETS[bucket]}, frozenset(), {}
-        elif bucket in R2_DATA_BUCKETS:
-            gcs_targets, r2_targets, cw_targets = {}, frozenset({bucket}), {}
-        elif bucket in CW_DATA_BUCKETS:
-            gcs_targets, r2_targets, cw_targets = {}, frozenset(), {bucket: CW_DATA_BUCKETS[bucket]}
+            gcs_targets, s3_targets = {bucket: BUCKETS[bucket]}, {}
+        elif bucket in s3_buckets:
+            gcs_targets, s3_targets = {}, {bucket: s3_buckets[bucket]}
         else:
-            known = ", ".join(sorted([*BUCKETS, *R2_DATA_BUCKETS, *CW_DATA_BUCKETS]))
+            known = ", ".join(sorted([*BUCKETS, *s3_buckets]))
             logger.error("Unknown bucket %r. Known buckets: %s", bucket, known)
             sys.exit(1)
 
@@ -415,18 +414,28 @@ def main(dry_run: bool, bucket: str | None) -> None:
         for name, region in sorted(gcs_targets.items()):
             configure_gcs_bucket(name, region, owned_gcs, dry_run)
 
-    owned_s3 = build_s3_ttl_rules()
-
-    if r2_targets:
-        client = make_r2_client()
-        for name in sorted(r2_targets):
-            configure_s3_bucket(client, name, owned_s3, dry_run, label="R2")
-
-    for name, region in sorted(cw_targets.items()):
-        client = make_cw_client(region)
-        configure_s3_bucket(client, name, owned_s3, dry_run, label=f"CoreWeave {region}")
+    if s3_targets:
+        configure_s3_buckets(s3_targets, build_s3_ttl_rules(), dry_run)
 
     logger.info("Done.")
+
+
+def configure_s3_buckets(targets: dict[str, BucketSpec], owned: list[dict], dry_run: bool) -> None:
+    """Configure lifecycle rules on R2/CoreWeave buckets, one client per backend.
+
+    The R2 client is shared across all R2 buckets; CoreWeave signs per bucket
+    region, so each gets its own client.
+    """
+    r2_client: botocore.client.BaseClient | None = None
+    for name, spec in sorted(targets.items()):
+        if spec.store == StoreType.R2:
+            r2_client = r2_client or make_r2_client()
+            configure_s3_bucket(r2_client, name, owned, dry_run, label="R2")
+        elif spec.store == StoreType.COREWEAVE:
+            assert spec.region is not None, f"CoreWeave bucket {name!r} missing signing region"
+            configure_s3_bucket(make_cw_client(spec.region), name, owned, dry_run, label=f"CoreWeave {spec.region}")
+        else:
+            raise click.ClickException(f"bucket {name!r} has non-S3 store {spec.store!r}")
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def _validate_data_region(wandb_dict: dict, cluster: str) -> None:
 
     # Build reverse mapping: bucket name -> region
     bucket_to_region: dict[str, str] = {
-        bucket: region for region, bucket in load_cluster_config("marin").region_buckets.items()
+        spec.name: region for region, spec in load_cluster_config("marin").region_buckets.items()
     }
 
     mismatches: list[str] = []

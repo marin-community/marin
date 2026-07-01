@@ -1,6 +1,13 @@
 iris: coreweave
 data:
   scheme: s3
-  region_buckets: { na: marin-na }
+  # S3-compatible storage for the CoreWeave clusters. `store` selects the backend
+  # (endpoint/addressing/credentials); CoreWeave AI Object Storage buckets also
+  # carry their signing `region`. Consumed by rigging temp-path routing and by
+  # infra/configure_buckets.py lifecycle rules.
+  region_buckets:
+    na:          { bucket: marin-na,          store: r2 }
+    us-east-02a: { bucket: marin-us-east-02a, store: coreweave, region: US-EAST-02A }
+    us-west-04a: { bucket: marin-us-west-04a, store: coreweave, region: US-WEST-04A }
   temp: { path: tmp, ttl_days: [1, 2, 3, 7] }
   root: s3://marin-na/marin

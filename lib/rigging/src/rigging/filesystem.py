@@ -45,6 +45,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
+from enum import StrEnum
 from pathlib import PurePath
 from types import MappingProxyType
 from typing import Any, cast
@@ -56,7 +57,7 @@ from fsspec.implementations.local import LocalFileSystem
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from google.cloud import storage
 
-from rigging.config_discovery import resolve_cluster_config
+from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.distributed_lock import create_lock, default_worker_id
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
@@ -95,12 +96,42 @@ _GCP_METADATA_ZONE_URL = "http://metadata.google.internal/computeMetadata/v1/ins
 _DEFAULT_LOCAL_PREFIX = "/tmp/marin"
 
 
+class StoreType(StrEnum):
+    """Object-storage backend serving a bucket.
+
+    Distinguishes the two S3-compatible backends — which share the ``s3://``
+    scheme but differ in endpoint, addressing, and credentials — from GCS.
+    """
+
+    GCS = "gcs"
+    R2 = "r2"
+    COREWEAVE = "coreweave"
+
+
+@dataclasses.dataclass(frozen=True)
+class BucketSpec:
+    """A single data bucket: its name and which backend serves it.
+
+    Attributes:
+        name: Bucket name without scheme, e.g. ``marin-us-east1`` or ``marin-na``.
+        store: Backend serving the bucket.
+        region: Backend signing region for backends that require one (CoreWeave,
+            e.g. ``US-EAST-02A``). ``None`` for GCS (the region is the
+            ``region_buckets`` key / VM metadata) and R2 (region-agnostic).
+    """
+
+    name: str
+    store: StoreType
+    region: str | None = None
+
+
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
     """Where a cluster's data lives — the single source for storage layout.
 
     Attributes:
-        region_buckets: Region name -> bucket name for the cross-region mirror set.
+        region_buckets: Region name -> :class:`BucketSpec` for the cross-region
+            mirror set.
         scheme: URL scheme for the cluster's storage (e.g. ``"gs"`` or ``"s3"``).
         temp_path: Path segment for TTL-managed scratch data.
         ttl_days: Allowed TTL-day values for temp lifecycle rules.
@@ -108,7 +139,7 @@ class DataConfig:
             only for clusters that do not use region-local bucket selection.
     """
 
-    region_buckets: Mapping[str, str]
+    region_buckets: Mapping[str, BucketSpec]
     scheme: str = "gs"
     temp_path: str = "tmp"
     ttl_days: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 14, 30)
@@ -128,9 +159,9 @@ class DataConfig:
             return self.root
         region = region_from_metadata()
         if region is not None:
-            bucket = self.region_buckets.get(region)
-            if bucket is not None:
-                return f"{self.scheme}://{bucket}"
+            spec = self.region_buckets.get(region)
+            if spec is not None:
+                return f"{self.scheme}://{spec.name}"
             return f"{self.scheme}://marin-{region}"
         return _DEFAULT_LOCAL_PREFIX
 
@@ -202,6 +233,30 @@ def _load_cluster_config_cached(cluster: str) -> DataConfig:
     return _parse_data_config(data)
 
 
+def _parse_bucket_spec(value: object, scheme: str) -> BucketSpec:
+    """Normalize one ``region_buckets`` YAML entry into a :class:`BucketSpec`.
+
+    Accepts either a bare bucket-name string — allowed only under ``scheme: gs``,
+    which pins the store to GCS — or a mapping ``{bucket, store[, region]}``. A
+    bare string under an ``s3`` scheme is rejected because it cannot distinguish
+    R2 from CoreWeave. CoreWeave entries must carry a signing ``region``.
+    """
+    if isinstance(value, str):
+        if scheme != "gs":
+            raise ValueError(
+                f"bucket {value!r} under scheme={scheme!r} must be a mapping with an explicit "
+                f"'store' ({', '.join(s.value for s in StoreType)}); a bare name is GCS-only."
+            )
+        return BucketSpec(name=value, store=StoreType.GCS)
+    if isinstance(value, Mapping):
+        store = StoreType(str(value["store"]))
+        region = str(value["region"]) if value.get("region") is not None else None
+        if store is StoreType.COREWEAVE and region is None:
+            raise ValueError(f"CoreWeave bucket {value.get('bucket')!r} must specify a signing 'region'.")
+        return BucketSpec(name=str(value["bucket"]), store=store, region=region)
+    raise ValueError(f"region_buckets entry must be a str or mapping, got {type(value).__name__}: {value!r}")
+
+
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     """Build a :class:`DataConfig` from a parsed ``data:`` config block.
 
@@ -211,9 +266,12 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     temp = data.get("temp") or {}
     raw_ttl = temp.get("ttl_days")
     root = data.get("root")
+    scheme = str(data.get("scheme") or DataConfig.scheme)
+    raw_buckets = data.get("region_buckets") or {}
+    region_buckets = {region: _parse_bucket_spec(value, scheme) for region, value in raw_buckets.items()}
     return DataConfig(
-        region_buckets=dict(data.get("region_buckets") or {}),
-        scheme=str(data.get("scheme") or DataConfig.scheme),
+        region_buckets=region_buckets,
+        scheme=scheme,
         temp_path=str(temp.get("path") or DataConfig.temp_path),
         ttl_days=tuple(raw_ttl) if raw_ttl is not None else DataConfig.ttl_days,
         root=str(root) if root is not None else None,
@@ -221,8 +279,9 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
 
 
 def reset_data_config_cache() -> None:
-    """Clear the :func:`load_cluster_config` cache. For tests."""
+    """Clear the cluster-config and S3-bucket-registry caches. For tests."""
     _load_cluster_config_cached.cache_clear()
+    _s3_data_bucket_registry.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +313,8 @@ def region_from_prefix(prefix: str) -> str | None:
     if not m:
         return None
     bucket = m.group(1)
-    for region, region_bucket in data_config().region_buckets.items():
-        if region_bucket == bucket:
+    for region, spec in data_config().region_buckets.items():
+        if spec.name == bucket:
             return region
     if bucket.startswith("marin-"):
         return bucket[len("marin-") :]
@@ -272,23 +331,35 @@ def marin_prefix() -> str:
     return data_config().resolved_root()
 
 
-# Cloudflare R2 data buckets (S3-compatible, ``s3://`` scheme). Cross-cluster S3
-# detection that is not part of any single cluster's profile, so it stays
-# explicit here.
-R2_DATA_BUCKETS: frozenset[str] = frozenset({"marin-na"})
+@functools.cache
+def _s3_data_bucket_registry() -> Mapping[str, BucketSpec]:
+    """Map bucket name -> :class:`BucketSpec` for every R2/CoreWeave bucket
+    declared in any discoverable cluster config.
 
-# CoreWeave AI Object Storage buckets (S3-compatible, ``s3://`` scheme, served
-# virtual-host-only from cwobject.com/cwlota.com). Each maps to its CoreWeave
-# region, used both to route temp paths here (alongside R2, see
-# :func:`_s3_bucket_from_prefix`) and to sign lifecycle requests in
-# ``infra/configure_buckets.py``. Like R2, this is cross-cluster S3 detection
-# that does not belong to any single cluster's profile.
-CW_DATA_BUCKETS: Mapping[str, str] = MappingProxyType(
-    {
-        "marin-us-east-02a": "US-EAST-02A",
-        "marin-us-west-04a": "US-WEST-04A",
-    }
-)
+    S3-compatible buckets are the ones with ``tmp/ttl=Nd/`` lifecycle rules.
+    Recognition must be cross-cluster — a launcher on a GCS cluster may target an
+    R2/CoreWeave output prefix (see :func:`marin_temp_bucket`'s ``source_prefix``)
+    — so this aggregates across all cluster configs rather than only the active
+    one. Cached; :func:`reset_data_config_cache` clears it.
+    """
+    registry: dict[str, BucketSpec] = {}
+    for cluster in list_cluster_configs(MARIN_CLUSTER_CONFIG_DIRS):
+        for spec in load_cluster_config(cluster).region_buckets.values():
+            if spec.store in (StoreType.R2, StoreType.COREWEAVE):
+                registry.setdefault(spec.name, spec)
+    return MappingProxyType(registry)
+
+
+def s3_data_buckets() -> Mapping[str, BucketSpec]:
+    """R2/CoreWeave data buckets (name -> :class:`BucketSpec`) across all configs.
+
+    These S3-compatible buckets carry ``tmp/ttl=Nd/`` lifecycle rules; used to
+    route temp paths (:func:`marin_temp_bucket`) and to drive
+    ``infra/configure_buckets.py``. Replaces the old hardcoded bucket constants:
+    the set is now defined in ``config/*.yaml`` via each bucket's ``store`` type.
+    """
+    return _s3_data_bucket_registry()
+
 
 # Finite botocore timeouts/retries for every S3/R2 filesystem we build.
 # s3fs/aiobotocore default to *no* read or connect timeout, so a silently dead
@@ -309,16 +380,15 @@ _S3_RETRY_MAX_ATTEMPTS = 5
 def _s3_bucket_from_prefix(prefix: str | None) -> str | None:
     """Return the bucket from an ``s3://bucket/…`` prefix, or ``None``.
 
-    Only recognizes buckets in :data:`R2_DATA_BUCKETS` or :data:`CW_DATA_BUCKETS`
-    (the S3-compatible backends with lifecycle rules configured by
-    ``infra/configure_buckets.py``), so unknown S3 buckets fall through to the
-    flat non-TTL fallback instead of getting a ``tmp/ttl=Nd/`` path that would
-    never be cleaned up.
+    Only recognizes buckets in :func:`s3_data_buckets` (the R2/CoreWeave buckets
+    with lifecycle rules configured by ``infra/configure_buckets.py``), so unknown
+    S3 buckets fall through to the flat non-TTL fallback instead of getting a
+    ``tmp/ttl=Nd/`` path that would never be cleaned up.
     """
     if not prefix or not prefix.startswith("s3://"):
         return None
     bucket = prefix[len("s3://") :].split("/", 1)[0]
-    return bucket if bucket in R2_DATA_BUCKETS or bucket in CW_DATA_BUCKETS else None
+    return bucket if bucket in s3_data_buckets() else None
 
 
 # ---------------------------------------------------------------------------
@@ -362,9 +432,8 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
 
         gs://marin-{region}/tmp/ttl={N}d/{prefix}
 
-    For a known S3-compatible prefix — a Cloudflare R2 bucket
-    (:data:`R2_DATA_BUCKETS`) or a CoreWeave bucket (:data:`CW_DATA_BUCKETS`) —
-    returns a path at the bucket root::
+    For a known S3-compatible prefix — an R2 or CoreWeave bucket in
+    :func:`s3_data_buckets` — returns a path at the bucket root::
 
         s3://marin-na/tmp/ttl={N}d/{prefix}
         s3://marin-us-east-02a/tmp/ttl={N}d/{prefix}
@@ -405,9 +474,9 @@ def marin_temp_bucket(ttl_days: int, prefix: str = "", *, source_prefix: str | N
         s3_bucket = _s3_bucket_from_prefix(mp)
 
     if region:
-        bucket = cfg.region_buckets.get(region)
-        if bucket:
-            path = f"gs://{bucket}/{cfg.temp_path}/ttl={ttl_days}d"
+        spec = cfg.region_buckets.get(region)
+        if spec:
+            path = f"gs://{spec.name}/{cfg.temp_path}/ttl={ttl_days}d"
             return _append_path_prefix(path, prefix)
 
     # R2 and CoreWeave temp lives at the bucket root so the `tmp/ttl=Nd/`
@@ -1118,8 +1187,8 @@ def atomic_rename(output_path: str, fs: Any = None) -> Generator[str, None, None
 
 
 def _all_data_bucket_prefixes() -> list[str]:
-    """Return gs:// prefixes for all of the active cluster's data buckets."""
-    return [f"gs://{bucket}" for bucket in data_config().region_buckets.values()]
+    """Return gs:// prefixes for all of the active cluster's GCS data buckets."""
+    return [f"gs://{spec.name}" for spec in data_config().region_buckets.values() if spec.store == StoreType.GCS]
 
 
 def _mirror_remote_prefixes(local_prefix: str) -> list[str]:

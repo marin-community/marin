@@ -8,12 +8,15 @@ import pytest
 import rigging.filesystem as fs
 from rigging.config_discovery import find_project_root
 from rigging.filesystem import (
+    BucketSpec,
     DataConfig,
+    StoreType,
     data_config,
     load_cluster_config,
     marin_prefix,
     marin_temp_bucket,
     reset_data_config_cache,
+    s3_data_buckets,
     use_data_config,
 )
 
@@ -69,7 +72,7 @@ def test_cluster_yaml_sets_given_fields_and_defaults_the_rest(tmp_path, monkeypa
         "iris: synth\n"
         "data:\n"
         "  scheme: s3\n"
-        "  region_buckets: {na: synth-na}\n"
+        "  region_buckets: {na: {bucket: synth-na, store: r2}}\n"
         "  root: s3://synth-na/data\n"
         "  temp: {ttl_days: [1, 5]}\n"
     )
@@ -79,7 +82,7 @@ def test_cluster_yaml_sets_given_fields_and_defaults_the_rest(tmp_path, monkeypa
     config = load_cluster_config("synth")
     # Fields present in the YAML are parsed through:
     assert config.scheme == "s3"
-    assert config.region_buckets == {"na": "synth-na"}
+    assert config.region_buckets == {"na": BucketSpec(name="synth-na", store=StoreType.R2)}
     assert config.root == "s3://synth-na/data"
     assert config.ttl_days == (1, 5)
     # Fields absent from the YAML fall back to the DataConfig field defaults:
@@ -123,7 +126,7 @@ def test_resolved_root_selects_region_local_bucket(monkeypatch):
     """A detected metadata region selects its region-local bucket."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: "us-east5")
-    config = DataConfig(region_buckets={"us-east5": "marin-us-east5"})
+    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
     assert config.resolved_root() == "gs://marin-us-east5"
 
 
@@ -131,7 +134,7 @@ def test_resolved_root_constructs_default_for_unmapped_region(monkeypatch):
     """A detected-but-unmapped region constructs gs://marin-{region}."""
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(fs, "region_from_metadata", lambda: "antarctica-south1")
-    config = DataConfig(region_buckets={"us-east5": "marin-us-east5"})
+    config = DataConfig(region_buckets={"us-east5": BucketSpec("marin-us-east5", StoreType.GCS)})
     assert config.resolved_root() == "gs://marin-antarctica-south1"
 
 
@@ -148,8 +151,9 @@ def test_resolved_root_local_fallback(monkeypatch):
 def test_marin_temp_bucket_routes_coreweave_to_bucket_root():
     """A CoreWeave source prefix yields a TTL temp path at the CW bucket root.
 
-    The CW bucket is recognized (CW_DATA_BUCKETS) so it gets a managed
-    ``tmp/ttl=Nd/`` prefix, and the ``marin/`` data subdir is stripped.
+    The CW bucket is recognized via its config-declared ``store: coreweave`` (see
+    :func:`s3_data_buckets`), so it gets a managed ``tmp/ttl=Nd/`` prefix, and the
+    ``marin/`` data subdir is stripped.
     """
     cfg = DataConfig(region_buckets={}, scheme="s3", ttl_days=(1, 3, 7))
     with use_data_config(cfg):
@@ -172,3 +176,27 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
     with use_data_config(cfg):
         path = marin_temp_bucket(3, source_prefix="s3://random-bucket/marin")
     assert path == "s3://random-bucket/marin/tmp"
+
+
+# --- config-driven S3 bucket registry --------------------------------------
+
+
+def test_s3_data_buckets_reads_store_types_from_config(monkeypatch):
+    """The R2/CoreWeave registry is aggregated from config, with regions preserved."""
+    monkeypatch.delenv("MARIN_CLUSTER", raising=False)
+    buckets = s3_data_buckets()
+    assert buckets["marin-na"] == BucketSpec("marin-na", StoreType.R2)
+    assert buckets["marin-us-east-02a"] == BucketSpec("marin-us-east-02a", StoreType.COREWEAVE, "US-EAST-02A")
+    # GCS buckets are not S3-managed and must not appear.
+    assert not any(spec.store == StoreType.GCS for spec in buckets.values())
+
+
+def test_bare_string_bucket_rejected_under_s3_scheme(tmp_path, monkeypatch):
+    """A bare bucket name under scheme s3 is ambiguous (R2 vs CoreWeave) and rejected."""
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    (cluster_dir / "ambig.yaml").write_text("data:\n  scheme: s3\n  region_buckets: {na: marin-na}\n")
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
+    reset_data_config_cache()
+    with pytest.raises(ValueError, match="must be a mapping with an explicit 'store'"):
+        load_cluster_config("ambig")
