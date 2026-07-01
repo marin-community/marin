@@ -174,14 +174,17 @@ function renderStageSource(m,stage){
 function loadNormalized(out,src){
   const search=document.getElementById('q').value;
   out.innerHTML=`<div id="nst" class="spin">stats…</div>
-    <h4>char-length distribution <span class="muted">(sampled)</span></h4><div id="nhi" class="spin">loading…</div>
+    <h4>char-length distribution</h4><div id="nhi" class="spin">loading…</div>
     <h4>samples</h4><div id="nsa" class="spin">loading…</div>`;
   fillSection('nst',runQuery('normalized_stats',{source:src}),st=>`<div class="stats">
      <div class="stat"><b>${fmt(st.docs)}</b><span>docs${st.docs==null?' (n/a)':''}</span></div>
-     <div class="stat"><b>${fmt(st.avg_chars)}</b><span>avg chars (sampled)</span></div>
+     <div class="stat"><b>${fmt(st.avg_chars)}</b><span>avg chars (over ${cnum(st.sampled_rows)} sample)</span></div>
      <div class="stat"><b>${fmt(st.median_chars)}</b><span>median chars</span></div>
-     <div class="stat"><b>${fmt(st.max_chars)}</b><span>max chars (sampled)</span></div></div>`);
-  fillSection('nhi',runQuery('normalized_hist',{source:src}),hist=>bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs));
+     <div class="stat"><b>${fmt(st.max_chars)}</b><span>max chars (in sample)</span></div></div>`);
+  fillSection('nhi',runQuery('normalized_hist',{source:src}),hist=>{
+    const total=hist.reduce((a,r)=>a+(r.docs||0),0);
+    return `<p class="muted">sampled over ${fmt(total)} documents (first rows of the source; id is a content hash, so unbiased)</p>`
+      +bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs);});
   fillSection('nsa',runQuery('normalized_samples',{source:src,n:20,search}),samp=>sampleTable(samp,['id','chars','text']));
 }
 function loadDecontam(out,src){
@@ -196,7 +199,8 @@ function loadDecontam(out,src){
 async function loadQuality(out,src){
   const hist=await runQuery('quality_hist',{source:src});
   const max=Math.max(1,...hist.map(r=>r.docs));
-  let html='<h4>quality score distribution <span class="muted">(click a bar to sample that score range)</span></h4>';
+  const total=hist.reduce((a,r)=>a+(r.docs||0),0);
+  let html=`<h4>quality score distribution <span class="muted">(sampled over ${fmt(total)} docs; click a bar to sample that score range)</span></h4>`;
   for(const r of hist)
     html+=`<div class="barrow qb" style="cursor:pointer" data-lo="${r.lo}" data-hi="${r.hi}"><span class="lbl">${r.lo}–${r.hi}</span><span class="bar" style="width:${Math.round(260*r.docs/max)}px"></span><span class="cnt">${fmt(r.docs)}</span></div>`;
   html+='<div id="qs"><p class="muted">click a score range above to load samples</p></div>';
