@@ -65,9 +65,9 @@ cluster can satisfy (e.g. `cluster=cw-us-east`, or an accelerator only CW has):
    federated parent id, escapes it; the parent handles that server-side: route such a child to the
    parent's peer via the handle, or reject it — §9.2.)
 5. **Status.** User polls the parent (`iris status <job_id>` / dashboard). The parent serves the
-   **cached projection** — job phase, spend, and **per-task state** mirrored into a read-only
-   `federated_tasks` table (§4.2) — so the *same* job/task views a local job gets render natively,
-   annotated `cluster: cw-us-east`. The projection is refreshed by a bulk delta-sync (§5.2).
+   **cached rows** — the sync mirrors the peer's job/task state into the parent's own `jobs`/`tasks`
+   rows (`child_cluster`-stamped, §4.2) — so the *same* job/task views a local job gets render
+   natively, annotated `cluster: cw-us-east`. Refreshed by a bulk delta-sync (§5.2).
 6. **Logs.** User asks for logs. They resolve from the **shared global finelog** (§6): the peer
    controller relays its (siloed) workers' log batches out to the one finelog service, and reads —
    from the parent, the peer, or any client — hit that single store. No per-peer log proxy.
@@ -99,58 +99,62 @@ single-cluster deployment therefore sees the same tab with one card in it, not a
 
 ## 4. Q1 — How the parent tracks child-cluster jobs
 
-**Recommendation: yes, add `jobs.child_cluster: str` (a new nullable/`""`-default column), *plus* a
-`federated_jobs` sidecar table for the mutable handle state.** The column is the *ownership
-discriminator*; the sidecar is the *passive cache*.
+**Recommendation: add `child_cluster: str` to *both* `jobs` and `tasks` (a new `""`-default column,
+exactly parallel to `backend_id`), and keep the federated rows in the *main* tables so every read
+just works.** `federated_jobs`/`federated_tasks` become thin **join sidecars** for federation-only
+metadata — not parallel copies of the rows. (This supersedes the v3 separate-`federated_tasks`
+projection — see §4.2 for why the review's unified-table instinct is the better call.)
 
-### 4.1 `jobs.child_cluster` — the discriminator, a sibling of `backend_id`
+### 4.1 `child_cluster` — the discriminator, symmetric with `backend_id`
 
-`backend_id` (`schema.py:273`) already answers "*which local substrate owns this?*". `child_cluster`
-answers the orthogonal "*is this owned locally, or handed off to a peer, and which one?*":
+`backend_id` (`schema.py:273/350`) already answers "*which local substrate owns this?*". `child_cluster`
+answers the orthogonal "*is this owned locally, or handed off to a peer, and which one?*", and lives in
+exactly the same places:
 
-- `child_cluster == ""` → **local job.** Routed to a local backend via `backend_id` as today.
-- `child_cluster == "<peer>"` → **federated job.** Handed off; `backend_id` stays `""` (there is no
-  local backend). The two columns are mutually exclusive by construction.
+- `child_cluster == ""` → **local.** Routed to a local backend via `backend_id` as today.
+- `child_cluster == "<peer>"` → **federated.** `backend_id` stays `""` (no local backend). Mutually
+  exclusive by construction, on both `jobs` and `tasks`.
 
-**Asymmetry vs `backend_id` (important):** `backend_id` lives on `jobs` **and** `tasks` **and**
-`task_attempts` (`schema.py:273/350/401`) because each *local task* carries its owning backend as a
-routing pin. `child_cluster` lives on **`jobs` only** — it is a whole-*tree* handoff property, not a
-per-task one; the peer owns the tasks. The parent keeps a *read-only cached projection* of the peer's
-tasks (in a separate `federated_tasks` table, §4.2), but those are **not** authoritative `tasks` rows:
-the scheduler and the DAG fold never read them. This is the precise reading of Model D's "never mirror
-remote task rows" — the rule forbids mirroring rows *into the DAG the fold operates on*; a read-only
-display projection the fold never touches is safe and is what makes the parent a real cache.
+**A federated job's tasks live in the normal `tasks` table**, with `child_cluster` set — they are not
+held off in a parallel projection. The payoff (per review): every existing read — `ListTasks`,
+`GetTaskStatus`, the job's task-count `GROUP BY`, the dashboard task table, `JobQuery`/`WorkerQuery`
+filters — *just works* with no federated branch, exactly as they already work across `backend_id`.
 
-Why a column and not just a sentinel `backend_id`? Because it is the exact dimension the dashboard
-scope selector and `JobQuery` filter on server-side (`JobQuery.backend_id` today → add
-`JobQuery.child_cluster`), and routing/GetJobStatus branch on it. Making it a first-class column —
-never an overloaded empty string — is the same call the multi-backend design made for `backend_id`
-("never an overloaded sentinel").
+**How this stays inside Model D — the fold is excluded structurally, not the rows.** Model D says
+"never mirror remote task rows"; the operative danger is the *fold/scheduler operating on* those rows,
+not their physical presence in a table. So the exclusion is enforced in **one** place: the scheduler,
+reconcile, budget, and routing read a **`local_tasks` view** = `tasks WHERE child_cluster = ''` (and
+`_route_pending`'s unrouted scan, the active-task budget count, and the cancel/timeout scans read it),
+so federated rows are *structurally* invisible to scheduling. That is a stronger guarantee than the v3
+"separate table + hope every read remembers to union it in": here the risky direction (a scheduler
+query seeing a federated row) is opt-*out*, so a newly-written scheduler query is safe by default and
+must go out of its way (raw `tasks`) to see a federated row. Reads use the raw `tasks` table and get
+federation for free. (This is the same lesson the backend-contract work drew from worker state: a
+boundary held *by convention across N call sites* leaks; a boundary enforced *in one view/store* holds.)
 
-### 4.2 `federated_jobs` (handle) + `federated_tasks` (read-only task projection)
+### 4.2 The rows live in `jobs`/`tasks`; `federated_jobs`/`federated_tasks` are thin join sidecars
 
-Two federation-only tables, keyed by `job_id`, holding all the *frequently rewritten* sync state
-apart from the hot `jobs` table (matching the repo's partition philosophy — controller-owned `jobs`
-vs backend-owned `workers` are already separate tables — and isolating sync-write churn from the
-scheduler's transactions). **`federated_jobs`** is the handle + job-level summary; **`federated_tasks`**
-is the read-only per-task cache that lets the parent render a real task table.
+`jobs` and `tasks` hold the federated rows (with `child_cluster` set); the sync mirrors the peer's
+state into them. The `federated_*` tables are **joins for federation-only metadata**, not parallel
+copies — the same shape as `jobs` ⋈ `job_config` today. `federation_sync_state` holds the delta cursor.
 
-**`jobs.state` is the single source of truth for the federated job's state (codex).** The current
-list/status/filter paths read `jobs.state`/`started_at_ms`/`finished_at_ms` (`reads.py:256/292`,
-`service.py:1480`); duplicating a mutable `job_state` on `federated_jobs` would give two states that
-diverge. So the sync loop **mirrors the peer's job state transactionally into the `jobs` row** (state +
-timings), and `federated_jobs` holds *only* handle + sync metadata — no duplicate job state, no
-counts. The per-job counts render from `federated_tasks` (a `GROUP BY state`, exactly as local counts
-come from `tasks`). This is safe because a federated job has **no local task rows**, so no scheduler /
-fold / `_route_pending` path ever acts on it — `jobs.state` for a federated handle is a mirrored
-display field, not a scheduling input.
+**`jobs.state`/`tasks.state` are the single source of truth (codex).** List/status/filter/count paths
+read `jobs.state`/`started_at_ms` and the `tasks`-`GROUP BY` (`reads.py:256/292`, `service.py:1480`);
+a duplicate mutable state would diverge. So the sync writes the peer's job/task state **into the `jobs`
+and `tasks` rows transactionally**, and the sidecars carry only what those tables can't express.
 
 ```python
-federated_jobs_table = Table(   # pure handle + sync metadata; NO job state/counts (those live in jobs / federated_tasks)
+# jobs   += Column("child_cluster", String, nullable=False, server_default="")   # discriminator (§4.1)
+# tasks  += Column("child_cluster", String, nullable=False, server_default="")   # discriminator (§4.1)
+
+# Scheduler/reconcile/budget/route read THIS, never raw `tasks` — structural fold-exclusion (§4.1).
+local_tasks_view = "CREATE VIEW local_tasks AS SELECT * FROM tasks WHERE child_cluster = ''"
+
+federated_jobs_table = Table(   # job-level handle + sync metadata; job STATE lives in `jobs`
     "federated_jobs", metadata,
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
     Column("peer_id", String, nullable=False),                # == jobs.child_cluster
-    Column("remote_job_id", String, nullable=False),          # DETERMINISTIC, globally unique: "<parent_cluster>/<job_id>" (see §5.1)
+    Column("remote_job_id", String, nullable=False),          # DETERMINISTIC, globally unique: "<parent_cluster>/<job_id>" (§5.1)
     Column("owner_principal", String, nullable=False),        # auth identity asserted to the peer on delegated RPCs
     Column("handoff_state", Integer, nullable=False),         # PENDING_HANDOFF | HANDED_OFF | HANDOFF_FAILED
     Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
@@ -167,64 +171,54 @@ federation_sync_state_table = Table(
     Column("last_full_resync_ms", TimestampMsType),
 )
 
-# Read-only projection. Written ONLY by the sync loop; the scheduler and the DAG fold never read it.
-# Fields chosen to cover what ListTasks/GetTaskStatus render (codex: the UI needs more than state).
+# OPTIONAL per-task join: ONLY the federation extras that don't fit `tasks` (e.g. the opaque peer-side
+# worker name for display, since there is no local worker row). Add a column here only when a field the
+# UI shows has no home in `tasks`; task STATE / timing / exit / counts live in the `tasks` row itself.
 federated_tasks_table = Table(
     "federated_tasks", metadata,
-    Column("job_id", JobNameType, ForeignKey("federated_jobs.job_id", ondelete="CASCADE"), nullable=False),
-    Column("task_index", Integer, nullable=False),
-    Column("state", Integer, nullable=False),
-    Column("worker_label", String, nullable=False, server_default=""),   # opaque peer-side worker name, display only
-    Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
-    Column("exit_code", Integer),
-    Column("error", String),
-    Column("failure_count", Integer, nullable=False, server_default="0"),
-    Column("preemption_count", Integer, nullable=False, server_default="0"),
-    Column("started_at_ms", TimestampMsType),
-    Column("finished_at_ms", TimestampMsType),
-    PrimaryKeyConstraint("job_id", "task_index"),
+    Column("task_id", TaskNameType, ForeignKey("tasks.task_id", ondelete="CASCADE"), primary_key=True),
+    Column("peer_worker_label", String, nullable=False, server_default=""),   # opaque peer worker name, display only
 )
 ```
 
-Per-task detail lives in `federated_tasks` rows, which scale exactly like the local `tasks` table
-(SQLite handles millions of rows), and the sync only writes the tasks that *changed* (§5.2), so a
-5 000-task job costs one row-set once and then only deltas. Attempt-level history (`task_attempts`) is
-**deliberately not mirrored** — the federated task-detail page shows the current attempt from the
-projection and deep-links to the peer for the full attempt list; this is a conscious *reduced* task
-path, not an oversight (codex flagged that the naive projection lacked UI fields — the schema above
-carries the ones `ListTasks`/`GetTaskStatus` actually render).
+Attempt-level history (`task_attempts`) is **deliberately not mirrored** — the task-detail page shows
+the current attempt from the `tasks` row and deep-links to the peer for the full attempt list; a
+conscious *reduced* path (the `tasks` row still carries `current_attempt_id`, exit, timing, counts, so
+the task *list* and detail header render natively).
 
-**Why a task projection at all — the compare/contrast the review asked for.** The first draft cached
-only job-level counts and deep-linked to the peer for tasks. That is minimal but a usability cliff: a
-federated job's detail page can't show the per-task table, worker, exit code, or timing that every
-local job shows. The alternative is to mirror the peer's task state into the parent DB:
+**Why unified tables + a view, not a separate projection (the review's question).** v3 put federated
+tasks in a parallel `federated_tasks` projection so the fold physically couldn't see them — but that
+forces *every read* (`ListTasks`, `GetTaskStatus`, counts, dashboard) to branch on `child_cluster` and
+union the projection in. The review's instinct is better: keep the rows in `tasks` so reads just work,
+and move the guarantee to the *write/scheduler* side:
 
-| | A — summary only (first draft) | **B — cached task projection (chosen)** |
+| | v3 — separate `federated_tasks` projection | **chosen — `tasks` + `child_cluster` + `local_tasks` view** |
 |---|---|---|
-| Parent state | job counts on `federated_jobs` | + per-task rows in read-only `federated_tasks` |
-| Job/task detail UX | segmented bar + "view on peer ↗" | native task table & task-detail, identical to a local job |
-| Sync payload | job summary per job | job summary + *changed* task rows (delta-bounded, §5.2) |
-| Model D safety | trivially safe | safe **because** the scheduler/fold never read `federated_tasks` — enforced by table separation, not convention |
-| Cost | minimal | O(changed tasks) sync + local rows; bounded by the delta protocol |
+| Read paths (list/detail/counts/filters) | **branch** on `child_cluster`, union the projection | **unchanged** — read raw `tasks`, works like `backend_id` |
+| Fold/scheduler safety | structural (rows not in `tasks`) | structural (scheduler reads `local_tasks`; federated rows opt-*out*) |
+| Where the boundary lives | in every *read* | in **one** *view* + the handful of scheduler task-scans |
+| New-code failure mode | a new read forgets to union → missing federated data (display bug) | a new scheduler query hits raw `tasks` → sees federated rows (caught by the view convention + review) |
+| Net | reads pay forever, fold trivially safe | reads free, fold safe via one view |
 
-**B is chosen for usability.** The Model D boundary is preserved by *where* the rows live: a separate
-projection table the fold never queries, not the authoritative `tasks` table. Attempt-level drill-down
-(the per-attempt history) is not mirrored — it stays a deep-link to the peer, keeping the projection
-to one row per task.
+**Chosen: unified.** The cost moves from "every read branches" to "the ~4 scheduler task-scans read
+`local_tasks`" (`_route_pending`, `build_scheduling_context`, the active-task budget count, the
+cancel/timeout scans) — fewer sites, all on the write/schedule side where the discipline already
+exists (they already filter by `backend_id`). Symmetric with jobs (which already live in `jobs` with
+`child_cluster` + the `federated_jobs` join), so tasks and jobs are modeled the same way.
 
 ### 4.3 Insertion points (grounded)
 
 | Concern | Where | Change |
 |---|---|---|
-| Schema | `schema.py:255` (jobs), new `federated_jobs` + `federation_sync_state` + `federated_tasks` | add `child_cluster` col + the three tables |
-| Migration | new `migrations/0034_federation.py` | `ALTER TABLE jobs ADD COLUMN child_cluster` + `CREATE TABLE` the three; template is `0033_backend_id.py` verbatim (idempotent `_has_column` guard, `""` backfill) |
-| **Decide (submit)** | `launch_job` (`service.py:1097`), **before** `ops.job.submit` materializes tasks (`ops/job.py:208/262`) | federation is decided **at submit**, not on the routing tick — `ops.job.submit` unconditionally inserts local PENDING task rows and `_route_pending` is driven from them (`controller.py:991`), so a federated job must take a **separate `submit_federated_handle` path** that persists `jobs`(+`child_cluster`)+`job_config`+`federated_jobs` with **no tasks**, and never enters `_route_pending` |
+| Schema | `schema.py:255/326` (jobs, tasks) | add `child_cluster` col to **both** `jobs` and `tasks`; new `federated_jobs` + `federation_sync_state` + (thin) `federated_tasks`; `local_tasks` view |
+| Migration | new `migrations/0034_federation.py` | `ALTER TABLE jobs/tasks ADD COLUMN child_cluster` + `CREATE TABLE` the sidecars + `CREATE VIEW local_tasks`; template is `0033_backend_id.py` verbatim (idempotent guard, `""` backfill) |
+| **Scheduler exclusion** | `_route_pending` (`controller.py:991`), `build_scheduling_context`, active-task budget count (`reads.py:1181`, `budget.py:43`), cancel/timeout scans | read **`local_tasks`** (or add `AND child_cluster = ''`) so federated task rows are never routed/scheduled/counted — the one load-bearing change (§4.1) |
+| **Decide (submit)** | `launch_job` (`service.py:1097`), **before** `ops.job.submit` materializes tasks (`ops/job.py:208/262`) | federation is decided **at submit** — a separate `submit_federated_handle` path persists `jobs`(+`child_cluster`)+`job_config`+`federated_jobs` with **no tasks** (peer decides the tasks); the sync later inserts federated `tasks` rows |
 | Handoff | `federation.FederationManager.submit` | synchronous peer `LaunchJob` with the deterministic `remote_job_id` (§5.1); flip `handoff_state` |
-| Sync write | `FederationManager` sync loop (§5.2) | mirror peer job state into `jobs`; upsert changed `federated_tasks`; apply tombstones; advance `federation_sync_state.cursor` |
-| Read (job) | `reads.get_job_detail` (`reads.py:495`, selects `jobs.backend_id` at `:512`) | also select `child_cluster`; `jobs.state`/timings already carry the mirrored peer state; left-join `federated_jobs` for handle fields |
-| Read (tasks) | `list_tasks`/`get_task_status` (`service.py:417/508/1697`) | for `child_cluster != ""`, read the task list/detail from `federated_tasks` instead of `tasks`/`task_attempts` (reduced attempt path) |
-| Prune | `pruner.py:52`, `reads.py:455` terminal-job prune | **exclude `jobs.child_cluster != ""`** — tombstones are the only deletion path for federated handles (§5.4) |
-| Proto | `job.proto:328` `JobStatus`, next free field **35** | `string child_cluster = 35;` (sibling of `backend_id = 34`) |
+| Sync write | `FederationManager` sync loop (§5.2) | mirror peer job state into `jobs`, peer task state into `tasks`(+`child_cluster`), extras into `federated_tasks`; apply tombstones; advance `federation_sync_state.cursor` |
+| Read (job/tasks) | `get_job_detail`/`list_tasks`/`get_task_status` (`reads.py:495`, `service.py:417/508/1697`) | **unchanged** — read raw `jobs`/`tasks`; `child_cluster` and mirrored state come for free; left-join `federated_jobs`/`federated_tasks` only where a handle/extra field is shown |
+| Prune | `pruner.py:52`, `reads.py:455` terminal-job prune | **exclude `child_cluster != ""`** — tombstones are the only deletion path for federated rows (§5.4) |
+| Proto | `job.proto:328/234` | `JobStatus.child_cluster = 35`; `TaskStatus.child_cluster = 25` (siblings of `backend_id`) |
 | Dashboard | §8 | always-on `cluster:` annotation + combined execution-targets view |
 
 ## 5. Q2 — Synchronization between parent and child
@@ -291,9 +285,10 @@ rpc FederationSync(FederationSyncRequest) returns (FederationSyncResponse);
   lives in `federation_sync_state.cursor` (one row per peer), **not** per job. On the peer side it
   indexes a durable **federation changelog** — a monotonic sequence over job/task transitions **and**
   tombstones, retained past the maximum tolerated parent outage. The parent applies each batch in one
-  transaction (mirror `jobs` state, upsert `federated_tasks`, apply tombstones, advance the cursor).
-  A "changed task" is any task whose *display fields* changed — worker, exit, timing, counts, not just
-  state — so each delta carries the **full projection row**, not a state-only diff.
+  transaction (mirror peer state into the `jobs` + `tasks`(+`child_cluster`) rows, upsert any
+  `federated_tasks` extras, apply tombstones, advance the cursor). A "changed task" is any task whose
+  *display fields* changed — worker, exit, timing, counts, not just state — so each delta carries the
+  **full row**, not a state-only diff.
 - **Full-resync is authoritative set-replacement, so a missed tombstone can't leak (codex).** If the
   parent's cursor is older than the changelog floor (long outage) the peer sets `cursor_stale`; the
   parent then does a full resync — fetch the peer's entire active set for this requester and **delete
@@ -337,17 +332,17 @@ remote id" race **does not exist**. The remaining races have defined outcomes (c
 The parent's projection is a cache of what the peer *still holds*, so its lifetime is the peer's
 lifetime — the parent needs **no retention policy of its own** (per review). When the peer's normal
 job pruning removes a finished job, the next `FederationSync` carries a `tombstone` for it (or a
-full-resync set-difference reclaims it after a long outage, §5.2); the parent deletes the
-`federated_jobs`/`federated_tasks`/`jobs` rows for that handle. Want longer history on the parent?
-Lengthen the *peer's* retention — the parent follows.
+full-resync set-difference reclaims it after a long outage, §5.2); the parent deletes that handle's
+`jobs` + `tasks` rows (both `child_cluster`-stamped) and its `federated_*` sidecar rows. Want longer
+history on the parent? Lengthen the *peer's* retention — the parent follows.
 
-**This requires excluding federated handles from the local pruner (codex).** The current pruner
-deletes *any* terminal `jobs` row older than local retention (`pruner.py:52`, `reads.py:455`) — and
-because the sync mirrors the peer's terminal state into `jobs.state`, a federated handle would look
+**This requires excluding federated rows from the local pruner (codex).** The current pruner deletes
+*any* terminal `jobs` row (and its tasks) older than local retention (`pruner.py:52`, `reads.py:455`) —
+and because the sync mirrors the peer's terminal state into `jobs`/`tasks`, federated rows would look
 prunable and the two GC clocks would fight. So the local terminal-job pruner must **skip
-`jobs.child_cluster != ""`**; tombstone application (or full-resync set-difference) is the *only*
-deletion path for a federated handle. This is the single change that makes "the parent mirrors the
-peer" actually hold.
+`child_cluster != ""`**; tombstone application (or full-resync set-difference) is the *only* deletion
+path for federated rows. This is the single change that makes "the parent mirrors the peer" actually
+hold.
 
 ## 6. Q3 — Logs: one shared global finelog, fed by peer-controller relays
 
@@ -432,11 +427,11 @@ it. **Recommendation: proxy through the peer controller** (not redirect the clie
   client needs direct reach + peer auth, which siloed peers may deny. Proxy is the safer baseline; this
   is the open "proxy vs redirect" question from the spec (`spec.md:216`), resolved toward **proxy** for
   the siloed threat model.
-- **Races have defined outcomes (codex).** The parent's `federated_tasks` projection is last-sync
-  stale, so an exec/profile may target a task the peer has since moved or finished — the *peer* is
-  authoritative and returns its live answer or a `NOT_FOUND`, which the parent surfaces verbatim (it
-  does not guess from the projection). A federated job whose handle is tombstoned resolves exec/profile
-  to `NOT_FOUND` immediately, without a peer round-trip.
+- **Races have defined outcomes (codex).** The parent's mirrored `tasks` rows are last-sync stale, so
+  an exec/profile may target a task the peer has since moved or finished — the *peer* is authoritative
+  and returns its live answer or a `NOT_FOUND`, which the parent surfaces verbatim (it does not guess
+  from the cached row). A federated job whose handle is tombstoned resolves exec/profile to `NOT_FOUND`
+  immediately, without a peer round-trip.
 
 ## 8. Q4 — Visualization
 
@@ -447,11 +442,11 @@ peers or ten — a single-cluster deployment just sees one execution target and 
 
 - **Jobs list**: a **Cluster** column, always rendered (`JobsTab.vue:534-637`), showing
   `cluster: cw-us-east` for a federated job and blank for a local one; clicking it filters `?cluster=`.
-- **Job/Task detail**: a `Cluster` `InfoRow` (`JobDetail.vue:960`) and — because the parent now holds a
-  read-only task projection (§4.2) — the **native task table and task-detail pages render exactly as
-  they do for a local job** (state, worker label, exit code, timing), read from `federated_tasks`
-  instead of `tasks`. Attempt-level drill-down deep-links to the peer (`ClusterManifest.dashboard_url`),
-  the one place the projection stops.
+- **Job/Task detail**: a `Cluster` `InfoRow` (`JobDetail.vue:960`) and — because federated tasks live in
+  the normal `tasks` table (§4.2) — the **native task table and task-detail pages render with no
+  federated branch at all** (state, worker, exit code, timing come straight from the `tasks` row).
+  Attempt-level drill-down deep-links to the peer (`ClusterManifest.dashboard_url`), the one place the
+  mirror stops.
 - **Scope selector**: extend `useBackends.ts`/`BackendScope.vue` to an `All ▾` selector over *backends +
   peers* (one combined list, below), writing `?cluster=`/`?backend=`; server-side filter via
   `JobQuery.child_cluster`.
@@ -555,10 +550,10 @@ Federation is **Track 2**, independent of the local backend hygiene (**Track 1**
 P7 published status, P8 autoscaler-single-writer — see `iris_backend_contract/spec.md`). They share
 only the router (which grows the peer arm). Suggested sequence, each PR inert until the next:
 
-1. **Schema + projection.** `jobs.child_cluster` + `federated_jobs` + `federated_tasks` + migration
-   0034; `JobStatus.child_cluster`; `get_job_status`/`list_tasks` federated branch reading the
-   projection. *No behavior yet* — no peer can be configured, so every job is local and the column is
-   always `""`. Pure additive, single-cluster byte-identical.
+1. **Schema.** `child_cluster` on `jobs` **and** `tasks` + `federated_jobs` + `federation_sync_state` +
+   (thin) `federated_tasks` + the `local_tasks` view + migration 0034; `JobStatus`/`TaskStatus.child_cluster`;
+   point the scheduler task-scans at `local_tasks`. *No behavior yet* — no peer can be configured, so
+   every row is local and the column is always `""`. Pure additive, single-cluster byte-identical.
 2. **Federation module + submit-time routing.** The `iris.cluster.federation` package (§9.1): `peers:`
    config, `FederationPeer`, dynamic capability advertisement, the **separate** submit-time prefer-local
    peer-routing layer (§9.1, not folded into `route_jobs_to_backends`), `ListPeers`/`PeerSummary`. Still
@@ -584,9 +579,9 @@ meeting only at the router.
 
 ## 12. Decisions folded in from review (2026-07-01)
 
-- **Task-level cache, not summary-only.** Mirror the peer's tasks into a read-only `federated_tasks`
-  projection so the parent renders native task views; the Model D boundary holds because the fold never
-  reads it (§4.2). *(Comments: federated-tasks table, blob size, usability.)*
+- **Task-level cache, not summary-only.** Mirror the peer's tasks so the parent renders native task
+  views (§4.2). *(Comments: federated-tasks table, blob size, usability.)* **Refined in v4 (below):
+  the rows live in the `tasks` table, not a separate projection.**
 - **Global finelog, not a query-time proxy.** One shared store fed by peer-controller relays; uniform
   and cross-cluster-queryable, at the cost of an auth front + cross-region egress (§6). *(Comment: global finelog.)*
 - **Bulk `FederationSync` delta protocol,** transport-agnostic so reverse-dial can defer (§5.2). *(Comments: bulk update, delta-in-either-case.)*
@@ -608,11 +603,11 @@ zero-task federated job meets the current DAG-shaped code. Folded in:
   policy — no new idempotency field; `remote_job_id` known at handle creation (§5.1). *(BLOCKER)*
 - **Per-(peer,requester) cursor in `federation_sync_state` + a durable peer changelog with retained
   tombstones + full-resync-as-set-replacement** so a missed tombstone can't leak (§4.2, §5.2). *(BLOCKER)*
-- **`jobs.state` is the single source of truth** (sync mirrors peer state into `jobs`); dropped the
-  duplicate `job_state`/counts from `federated_jobs`; counts derive from `federated_tasks` (§4.2). *(MAJOR)*
+- **`jobs.state`/`tasks.state` are the single source of truth** (sync mirrors peer state into `jobs`
+  and `tasks`); no duplicate state on the sidecars; counts come from the `tasks` `GROUP BY` (§4.2). *(MAJOR)*
 - **Exclude `child_cluster != ""` from the local pruner** — tombstones are the only deletion path (§5.4). *(BLOCKER)*
-- **Expanded `federated_tasks` to the fields `ListTasks`/`GetTaskStatus` render** (attempt drill-down
-  stays a deep-link — a deliberate reduced path) (§4.2). *(MAJOR)*
+- **Federated tasks carry the fields the task views render**; attempt drill-down stays a deep-link —
+  a deliberate reduced path (§4.2). *(MAJOR)* **(Superseded by v4's unified-table model below.)*
 - **Cluster-namespaced global-finelog keys** (the "no remapping" claim was wrong) + a **new durable
   relay spool** (the finelog `Table` drops on overflow; `LogStack` is not a relay) + **mandatory auth** (§6). *(MAJOR)*
 - **Peer routing is a separate submit-time layer** over live snapshots with rejection/retry — not folded
@@ -623,6 +618,17 @@ zero-task federated job meets the current DAG-shaped code. Folded in:
   `PENDING_HANDOFF`, exec against a stale projection) (§5.3, §7). *(MAJOR)*
 - **Subtree lock scoped to the default in-task client**, with server-side handling of out-of-band child
   submits at the parent (§2 step 4, §9.2). *(MINOR)*
+
+### 12.2 Unified tables (2026-07-01, maintainer)
+
+*"Why a separate `federated_tasks` at all — could federated tasks live in `tasks` with a `cluster_id`
+column so the dashboard queries just work, and jobs the same with `federated_jobs` as a join?"* Adopted
+(§4): `child_cluster` goes on **both `jobs` and `tasks`**; the federated rows live in the main tables so
+every read is unchanged; `federated_jobs`/`federated_tasks` are thin **join sidecars** for the handle /
+per-task extras only. The v3 separate-projection is dropped. The single guarantee this moves — keeping
+federated rows out of the *fold* — is enforced structurally by a **`local_tasks` view** the scheduler
+reads, so the cost lands on ~4 write-side task-scans instead of every read. Tasks and jobs are now
+modeled identically.
 
 ## 13. Open questions
 
