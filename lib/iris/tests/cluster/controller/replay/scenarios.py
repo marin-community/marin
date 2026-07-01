@@ -319,12 +319,56 @@ def scenario_cancel_running_job(transitions: ControllerTestState, clock: FrozenC
 
 
 def scenario_preempt_task(transitions: ControllerTestState, clock: FrozenClock) -> None:
-    """Assign a task and preempt it terminally (no preemption-retry budget)."""
+    """Assign a task (leaving it ASSIGNED) and preempt it → requeued to PENDING.
+
+    An ASSIGNED task always requeues on preemption regardless of budget; the
+    ``max_retries_preemption`` gate only bites once a task is EXECUTING (see
+    ``scenario_preempt_running_task_no_budget`` / ``_with_budget``).
+    """
     worker_id = _register_worker(transitions, clock, "w-preempt")
     job_id = _submit(transitions, clock, "preempt-job", max_retries_preemption=0)
     (task_id,) = _task_ids(transitions, job_id)
     apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
     apply_event(transitions, PreemptTask(task_id=task_id, reason="reclaim"))
+
+
+def _preempt_running_task(transitions: ControllerTestState, clock: FrozenClock, *, max_retries_preemption: int) -> None:
+    """Submit a solo job with the given preemption budget, drive its task to RUNNING,
+    then preempt it. The budget decides requeue-vs-terminate; the two scenarios below
+    pin each outcome to a golden.
+    """
+    worker_id = _register_worker(transitions, clock, "w-preempt-run")
+    job_id = _submit(transitions, clock, "preempt-run-job", max_retries_preemption=max_retries_preemption)
+    (task_id,) = _task_ids(transitions, job_id)
+    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    attempt = _current_attempt(transitions, task_id)
+    _observe(transitions, worker_id, task_id, attempt, job_pb2.TASK_STATE_RUNNING)
+    apply_event(transitions, PreemptTask(task_id=task_id, reason="reclaim"))
+
+
+def scenario_preempt_running_task_no_budget(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Solo RUNNING task preempted with no budget → terminal PREEMPTED.
+
+    Matched pair with ``scenario_preempt_running_task_with_budget``: identical event
+    stream (see ``_preempt_running_task``), only ``max_retries_preemption`` differs.
+    Isolates the requeue-vs-terminate gate in ``resolve_task_failure_state`` for an
+    EXECUTING task: ``preemption_count`` becomes 1, ``1 <= 0`` is false, so the task
+    goes terminal PREEMPTED (finished) rather than back to PENDING.
+    """
+    _preempt_running_task(transitions, clock, max_retries_preemption=0)
+
+
+def scenario_preempt_running_task_with_budget(transitions: ControllerTestState, clock: FrozenClock) -> None:
+    """Solo RUNNING task preempted WITH budget → requeued to PENDING.
+
+    The complement of ``scenario_preempt_running_task_no_budget``: ``preemption_count``
+    becomes 1, ``1 <= 1`` holds, so the task bounces back to PENDING. The preempted
+    attempt is recorded PREEMPTED; a fresh attempt is only minted when the scheduler
+    next assigns the task, which this scenario stops short of. The budget only bites
+    for an EXECUTING task — an ASSIGNED task (see ``scenario_preempt_task``) always
+    requeues.
+    """
+    _preempt_running_task(transitions, clock, max_retries_preemption=1)
 
 
 def scenario_coscheduled_timeout(transitions: ControllerTestState, clock: FrozenClock) -> None:
@@ -617,6 +661,8 @@ SCENARIOS: dict[str, Callable[[ControllerTestState, FrozenClock], None]] = {
     "endpoint_register_remove": scenario_endpoint_register_remove,
     "independent_five_tasks_one_fails": scenario_independent_five_tasks_one_fails,
     "preempt_task": scenario_preempt_task,
+    "preempt_running_task_no_budget": scenario_preempt_running_task_no_budget,
+    "preempt_running_task_with_budget": scenario_preempt_running_task_with_budget,
     "prune_old_data": scenario_prune_old_data,
     "register_assign_run_succeed": scenario_register_assign_run_succeed,
     "submit_simple": scenario_submit_simple,
