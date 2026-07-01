@@ -63,6 +63,19 @@ def test_concurrent_launch_reserves_slot(mgr, monkeypatch):
     assert set(mgr._procs) == {"a"}
 
 
+def test_new_logdir_evicts_stale_session(mgr, monkeypatch):
+    # A refetched profile publishes a new logdir; the old server must be replaced,
+    # not reused (which would keep serving the stale profile).
+    ports = iter([30010, 30011])
+    monkeypatch.setattr(XprofManager, "_spawn", lambda self, logdir: (DummyProc(), next(ports)))
+    first = mgr.ensure("a", "logdir-v1")
+    stale_proc = mgr._procs["a"].proc
+    second = mgr.ensure("a", "logdir-v2")
+    assert second != first
+    assert stale_proc.poll() is not None  # old process terminated
+    assert mgr._procs["a"].logdir == "logdir-v2"
+
+
 def test_prepare_status(mgr, monkeypatch):
     monkeypatch.setattr(XprofManager, "_spawn", lambda self, logdir: (DummyProc(), 30003))
     assert mgr.prepare_status("a")["state"] == "absent"

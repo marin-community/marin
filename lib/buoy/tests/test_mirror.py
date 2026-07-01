@@ -132,6 +132,25 @@ def test_finished_run_uses_history_artifact(cfg, patch_wandb, tmp_path):
     assert list(frame["train/loss"]) == [3.0, 2.0, 1.0]
 
 
+def test_pending_run_is_refetched(cfg, patch_wandb):
+    # Only terminal states are immutable; a nonterminal 'pending' run must re-fetch.
+    run = FakeRun(state="pending", summary_dict={"train/loss": 1.0}, rows=_rows(2, ("train/loss",)))
+    api = patch_wandb(run)
+    mirror_run(cfg, REF)
+    mirror_run(cfg, REF)
+    assert api.run_calls == 2
+
+
+def test_write_json_sanitizes_non_finite(tmp_path):
+    # NaN/±Inf (common in wandb summaries) must be cached as strict JSON (null),
+    # not the bare NaN/Infinity tokens that break the browser's JSON.parse.
+    path = str(tmp_path / "summary.json")
+    cache.write_json(path, {"a": float("nan"), "b": float("inf"), "c": 1.5, "d": {"e": float("-inf")}})
+    text = (tmp_path / "summary.json").read_text()
+    assert "NaN" not in text and "Infinity" not in text
+    assert cache.read_json(path) == {"a": None, "b": None, "c": 1.5, "d": {"e": None}}
+
+
 def test_running_run_incremental_history(cfg, patch_wandb):
     # A running run's refresh fetches only new steps and appends a shard.
     run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
