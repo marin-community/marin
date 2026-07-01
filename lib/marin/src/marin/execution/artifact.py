@@ -21,6 +21,7 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 """
 
 import functools
+import json
 import logging
 from dataclasses import asdict, is_dataclass
 from typing import Self, TypeVar, cast
@@ -44,6 +45,12 @@ type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, J
 RECORD_FILENAME = "artifact.json"
 _LEGACY_RECORD_FILENAMES = (".artifact_record.json", ".artifact")
 _LEGACY_PAYLOAD_FILENAMES = (".artifact.json", ".artifact")
+
+# The old Ray executor wrote a per-step ``.executor_info`` sidecar (the ``ExecutorStepInfo``
+# schema) instead of an ``artifact.json``. Caches built that way — e.g. the pinned llama3
+# Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
+# so we read it as a last resort to recover the record. Never written.
+_LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
 
 # Keys under ``StepSpec.hash_attrs`` carrying the artifact's identity, so the runner can
 # apply the drift check without knowing about the lazy layer.
@@ -183,9 +190,28 @@ def _read_text(output_path: str, filename: str) -> str | None:
         return f.read()
 
 
+def _record_from_executor_info(text: str) -> ArtifactRecord:
+    """Map an old Ray executor ``.executor_info`` sidecar into an :class:`ArtifactRecord`.
+
+    Only the fields a consumer reads back are carried across: ``name``, the materialized
+    ``config`` (where a tokenized cache keeps its tokenizer/format/tags), ``output_path``, and
+    ``dependencies`` (recorded as output paths, not ``name@version``). The legacy ``version`` is a
+    per-dependency dict rather than a string, so it is dropped rather than coerced.
+    """
+    info = json.loads(text)
+    return ArtifactRecord(
+        name=info.get("name") or "",
+        config=info.get("config"),
+        output_path=info.get("output_path") or "",
+        deps=list(info.get("dependencies") or []),
+    )
+
+
 def read_record(output_path: str) -> ArtifactRecord | None:
     """The full record at ``{output_path}/artifact.json`` (or a legacy name), else ``None``.
 
+    Falls back to an old Ray executor ``.executor_info`` sidecar when no modern or legacy record
+    file is present, so caches built before ``artifact.json`` existed still resolve their config.
     A corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
@@ -193,6 +219,9 @@ def read_record(output_path: str) -> ArtifactRecord | None:
         text = _read_text(output_path, filename)
         if text is not None:
             return ArtifactRecord.model_validate_json(text)
+    executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
+    if executor_info is not None:
+        return _record_from_executor_info(executor_info)
     return None
 
 

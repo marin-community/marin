@@ -60,7 +60,7 @@ jobs:
       - name: Test with pytest
         run: |
           # Test with specific JAX version, excluding TPU tests
-          PYTHONPATH=tests:src:. uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not slow and not torch" --durations=20
+          uv run --package marin-levanter --frozen pytest tests --durations=20
 
   levanter-torch:
     needs: changes
@@ -125,14 +125,14 @@ jobs:
       - name: Test torch-marked suite
         run: |
           # run directly on CPU to avoid GPU dependency issues
-          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
-#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+          CUDA_VISIBLE_DEVICES="" ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+#          CUDA_VISIBLE_DEVICES="" uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   levanter-tpu-tests:
     needs: changes
     if: needs.changes.outputs.should_run == 'true' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [tpu-ci]
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -186,10 +186,9 @@ jobs:
                 echo '::endgroup::'; \
               fi && \
               cp -a /workspace-src/. /workspace/ && cd /workspace && \
-              timeout --kill-after=5 --signal=TERM 1190 \
+              timeout --kill-after=5 --signal=TERM 1490 \
               uv run --package marin-levanter --frozen --group test --extra tpu \
               pytest -n 0 lib/levanter/tests \
-              -m 'not slow and not torch' \
               --ignore=lib/levanter/tests/test_audio.py \
               --ignore=lib/levanter/tests/test_new_cache.py \
               --ignore=lib/levanter/tests/test_hf_checkpoints.py \

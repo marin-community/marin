@@ -122,10 +122,10 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
 
 def marin_prefix_for_region(region: str) -> str:
     """Return the canonical Marin bucket prefix for a region."""
-    bucket = data_config().region_buckets.get(region.lower())
-    if bucket is None:
+    spec = data_config().region_buckets.get(region.lower())
+    if spec is None:
         raise ValueError(f"No Marin data bucket configured for region {region!r}.")
-    return f"gs://{bucket}"
+    return f"gs://{spec.name}"
 
 
 def singleton_region_list(region: str) -> list[str]:

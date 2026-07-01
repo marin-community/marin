@@ -9,6 +9,7 @@ manual ``read_artifact``/``write_artifact`` payload API.
 """
 
 import dataclasses
+import json
 import logging
 
 import pytest
@@ -175,3 +176,42 @@ def test_read_artifact_reads_legacy_bare_payload(tmp_path):
     (tmp_path / ".artifact").write_text('{"title": "legacy", "tokens": 3}')
     loaded = read_artifact(tmp_path.as_posix(), _Doc)
     assert loaded == _Doc(title="legacy", tokens=3)
+
+
+# --- the legacy Ray executor .executor_info fallback ---------------------------
+
+# A trimmed per-step ``.executor_info`` in the old ``ExecutorStepInfo`` schema, as written for the
+# pinned llama3 Nemotron-CC caches: the tokenizer lives only under ``config``.
+_EXECUTOR_INFO = json.dumps(
+    {
+        "name": "tokenized/nemotron_cc/hq_actual",
+        "fn_name": "tokenize",
+        "config": {"tokenizer": "meta-llama/Meta-Llama-3.1-8B", "tags": ["nemotron"]},
+        "description": None,
+        "override_output_path": None,
+        "version": {},
+        "dependencies": ["gs://bucket/raw/nemotron"],
+        "output_path": "gs://bucket/tokenized/nemotron_cc/hq_actual-5af4cc",
+    }
+)
+
+
+def test_read_record_recovers_config_from_executor_info(tmp_path):
+    """A cache with only a legacy ``.executor_info`` resolves its config, not ``None``."""
+    (tmp_path / ".executor_info").write_text(_EXECUTOR_INFO)
+
+    record = read_record(tmp_path.as_posix())
+    assert record is not None
+    assert record.config == {"tokenizer": "meta-llama/Meta-Llama-3.1-8B", "tags": ["nemotron"]}
+    assert record.name == "tokenized/nemotron_cc/hq_actual"
+    assert record.deps == ["gs://bucket/raw/nemotron"]
+
+
+def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
+    """``.executor_info`` is a last resort: a modern ``artifact.json`` still wins."""
+    (tmp_path / ".executor_info").write_text(_EXECUTOR_INFO)
+    (tmp_path / "artifact.json").write_text('{"name": "modern", "config": {"tokenizer": "gpt2"}}')
+
+    record = read_record(tmp_path.as_posix())
+    assert record.name == "modern"
+    assert record.config == {"tokenizer": "gpt2"}

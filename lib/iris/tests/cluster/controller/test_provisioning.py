@@ -19,7 +19,6 @@ from iris.cluster.controller.autoscaler.runtime import _ScaleUpOutcome, _ScaleUp
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.types import CapacityType
 from rigging.timing import Timestamp
-
 from tests.cluster.backends.conftest import make_mock_platform, make_mock_slice_handle
 from tests.cluster.controller.conftest import make_autoscaler, make_scale_group_config, mark_discovered_ready
 

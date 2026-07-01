@@ -22,13 +22,17 @@ The HF dataset is gated (auto-approve); ``HF_TOKEN`` must be set locally
 for ``download_hf_step`` to authenticate.
 """
 
-import json
-
 from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_jsonl
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, text_document
+from marin.datakit.download.rollout_transforms import (
+    TRAJECTORY_FAILED_TAG,
+    TRAJECTORY_SOLVED_TAG,
+    load_parquet_batched,
+    render_tool_message,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -153,45 +157,12 @@ def davinci_dev_ctx_native_normalize_steps() -> tuple[StepSpec, ...]:
 ENV_GLOBS = ["env-native.jsonl"]
 
 
-def _render_tool_call(tc: dict) -> str:
-    func = tc.get("function") or {}
-    name = func.get("name") or "unknown"
-    args = func.get("arguments")
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            pass
-    parts = [f"<tool_call:{name}>"]
-    if isinstance(args, dict):
-        for k, v in args.items():
-            parts.append(f"  {k}: {v}")
-    elif args is not None:
-        parts.append(f"  {args}")
-    parts.append(f"</tool_call:{name}>")
-    return "\n".join(parts)
-
-
-def _render_env_message(msg: dict) -> str:
-    role = msg.get("role") or "unknown"
-    content = msg.get("content") or ""
-    tool_calls = msg.get("tool_calls")
-    parts = [f"<{role}>"]
-    if content:
-        parts.append(content)
-    if tool_calls:
-        for tc in tool_calls:
-            parts.append(_render_tool_call(tc))
-    parts.append(f"</{role}>")
-    return "\n".join(parts)
-
-
 def _success_to_tag(success: bool | None) -> str | None:
     if success is None:
         return None
     if success:
-        return "This trajectory solved the task successfully."
-    return "This trajectory failed to solve the task."
+        return TRAJECTORY_SOLVED_TAG
+    return TRAJECTORY_FAILED_TAG
 
 
 def env_row_to_doc(row: dict) -> list[dict]:
@@ -200,7 +171,7 @@ def env_row_to_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("davinci_dev/env/dropped", 1)
         return []
     tag = _success_to_tag(row.get("success") if "success" in row else None)
-    rendered = "\n\n".join(_render_env_message(m) for m in messages)
+    rendered = "\n\n".join(render_tool_message(m) for m in messages)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.pipeline.update_counter("davinci_dev/env/kept", 1)

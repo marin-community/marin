@@ -27,6 +27,7 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 """
 
 import logging
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -444,8 +445,6 @@ class BackendRuntime:
     """The worker-endpoint projection."""
     run_template_cache: RunTemplateCache
     """Per-job ``RunTaskRequest`` template cache."""
-    worker_attrs: WorkerAttrsProjection
-    """The worker-attributes projection."""
     owns_scale_group: Callable[[str], bool]
     """Whether a scale group belongs to this backend (the default backend also claims
     scale groups mapped to no backend)."""
@@ -485,6 +484,14 @@ class TaskBackend(Protocol):
         workers (k8s). The backend folds and reaps through it; the controller reaches
         worker liveness through it (routed by scale group) for its Fleet/exec/capacity/
         prune readers and to seed/register a worker into its owning backend."""
+        ...
+
+    @property
+    def worker_attrs(self) -> WorkerAttrsProjection | None:
+        """The worker-attributes projection this backend constructs and owns, holding
+        only the workers in its scale groups, or None for a backend that tracks no
+        Iris workers (k8s). The controller reaches it (routed by scale group) to
+        register a worker's attributes into its owning backend."""
         ...
 
     allowed_users: frozenset[str]
@@ -554,6 +561,17 @@ class TaskBackend(Protocol):
         controller resolved to this backend off the reconcile path — the
         recycled-IP eviction queue. ``reason`` is recorded on the worker failure.
         A backend that tracks no Iris workers is a no-op.
+        """
+        ...
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Garbage-collect this backend's DEAD workers whose heartbeat predates ``cutoff_ms``.
+
+        Driven by the controller's background prune loop, not the control tick. The
+        backend deletes its own dead worker rows (and their attributes) from its own
+        tracker, one per transaction, sleeping ``pause`` between deletes and stopping
+        early once ``stop_event`` is set. Returns the count removed. A backend that
+        tracks no Iris workers returns 0.
         """
         ...
 

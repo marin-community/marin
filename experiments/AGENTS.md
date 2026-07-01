@@ -2,6 +2,29 @@
 
 Start with `/AGENTS.md`; this file adds experiment-specific guidance.
 
+## Dataset Catalogs
+
+All dataset definitions live under `experiments/datasets/`, one leaf module per
+dataset (or dataset family), built with the lazy data builders in
+`marin.experiment.data` (`tokenized`, `hf_download`, `pretokenized`, ...).
+
+- A single-corpus dataset exposes `<name>_dataset() -> ArtifactStep[TokenizedCache]`.
+- A keyed family exposes `<name>_datasets() -> dict[str, ArtifactStep[TokenizedCache]]`,
+  keyed by subset; a `<name>_dataset(key)` builder is added only when the keys are a
+  natural registry (e.g. a Paloma subset).
+- Mixture weights are policy, not catalog: keep them in a separate
+  `<NAME>_MIXTURE_WEIGHTS` constant keyed the same way, and let the experiment pick
+  weights and assemble them with `mixture()`.
+- A module that builds tokenized-cache handles is runnable: end it with
+  `if __name__ == "__main__": dataset_main(<family-dict>)`. `python -m
+  experiments.datasets.<name>` prints the build plan; `--run` (optionally `--only
+  <keys>`) builds it. Modules of a different shape — `eval` (builds `EvalDataset`s)
+  and the `instruction`/`preference` HF-id registries — are exceptions with no CLI.
+  Never change a handle's `name=`/`version=`/`pin=`/path strings — those are
+  artifact identities.
+- `__init__.py` stays docstring-only (no re-exports); import catalogs directly, e.g.
+  `from experiments.datasets.nemotron import nemotron_datasets`.
+
 ## Artifact Path Rules
 
 - Do not hardcode `gs://...` paths in experiment configs unless there is no viable alternative.

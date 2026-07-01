@@ -12,7 +12,13 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import load_parquet_batched, render_role_message, text_document
+from marin.datakit.download.rollout_transforms import (
+    TRAJECTORY_FAILED_TAG,
+    TRAJECTORY_SOLVED_TAG,
+    load_parquet_batched,
+    render_role_message,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -24,8 +30,8 @@ def resolved_to_tag(resolved: int | None) -> str | None:
     if resolved is None:
         return None
     if resolved >= 1:
-        return "This trajectory solved the task successfully."
-    return "This trajectory failed to solve the task."
+        return TRAJECTORY_SOLVED_TAG
+    return TRAJECTORY_FAILED_TAG
 
 
 def row_to_doc(row: dict) -> list[dict]:

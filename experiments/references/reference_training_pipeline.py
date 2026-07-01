@@ -23,15 +23,16 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evals.uncheatable import uncheatable_validation
+from experiments.datasets.dclm import dclm_datasets
+from experiments.datasets.dolmino import dolmino_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
 from experiments.marin_tokenizer import marin_tokenizer
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.dclm import dclm_datasets
-from experiments.pretraining_datasets.dolmino import tokenize_dolmino
 
 # --- Schedule ---
 PRETRAIN_STEPS = 40_000
@@ -57,8 +58,11 @@ _MODEL = GrugModelConfig(
 def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
     """600M Grug reference pipeline as a lazy checkpoint, every decision stated inline."""
     dclm = dclm_datasets(tokenizer=marin_tokenizer)["dclm_baseline"]
-    dolmino_math = tokenize_dolmino(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
-    validation = [*paloma_validation(tokenizer=marin_tokenizer), *uncheatable_validation(tokenizer=marin_tokenizer)]
+    dolmino_math = dolmino_datasets(tokenizer=marin_tokenizer)["dolmino/math/metamath-owmfilter"]
+    validation = [
+        *paloma_datasets(tokenizer=marin_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
+    ]
 
     # Mixture weights that approximate the time-averaged composition:
     # pretrain (40k steps) at dclm=1.0; midtrain (10k steps) at dclm=0.7, dolmino=0.3.
@@ -91,7 +95,7 @@ def build(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
         )
 
     return ArtifactStep(
-        name="references/reference-pipeline",
+        name=user_namespaced_name("references/reference-pipeline", version),
         version=version,
         artifact_type=LevanterCheckpoint,
         run=run_grug_base_trial,

@@ -30,11 +30,11 @@ from marin.experiment.sweep import sweep
 from marin.experiment.train import EvalSuite, train_lm
 from marin.training.training import LevanterCheckpoint
 
+from experiments.datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.evals.uncheatable import uncheatable_validation
 from experiments.llama import llama3_tokenizer, llama_30m
-from experiments.paloma import paloma_validation
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_datasets
 
 # A single-host TPU slice; each trial trains on its own slice. This is a runtime arg, not
 # part of a trial's identity — re-running on a different TPU is the same checkpoint.
@@ -43,7 +43,10 @@ RESOURCES = ResourceConfig.with_tpu("v4-8")
 # The corpus and held-out validation: tokenized once into shared caches, reused by every
 # trial by name@version. The first trial to run tokenizes them (their own Fray jobs).
 _train = dclm_datasets(tokenizer=llama3_tokenizer)
-_validation = [*paloma_validation(tokenizer=llama3_tokenizer), *uncheatable_validation(tokenizer=llama3_tokenizer)]
+_validation = [
+    *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+    *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+]
 _weighted = {_train[name]: DCLM_MIXTURE_WEIGHTS[name] for name in _train}
 
 
