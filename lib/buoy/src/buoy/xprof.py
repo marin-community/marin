@@ -18,6 +18,7 @@ By then :meth:`ensure` (called per proxied request) hits the warm fast path.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -46,6 +47,7 @@ class _Proc:
     proc: subprocess.Popen
     port: int
     last_used: float
+    logdir: str  # the GCS profile logdir this process serves; changes with the artifact version
 
 
 @dataclass
@@ -68,8 +70,9 @@ class XprofManager:
     def start_prepare(self, run_key: str, gcs_logdir: str) -> None:
         """Kick off (download + launch) on a background thread; idempotent."""
         with self._guard:
-            running = run_key in self._procs and self._procs[run_key].proc.poll() is None
-            if running:
+            self._evict_stale_locked(run_key, gcs_logdir)
+            existing = self._procs.get(run_key)
+            if existing is not None and existing.proc.poll() is None:
                 self._prepare[run_key] = _PrepState("ready")
                 return
             current = self._prepare.get(run_key)
@@ -113,7 +116,9 @@ class XprofManager:
         return None
 
     def ensure(self, run_key: str, gcs_logdir: str) -> int:
-        """Return a live xprof port for ``run_key``, launching one if needed."""
+        """Return a live xprof port for ``run_key`` serving ``gcs_logdir``, launching if needed."""
+        with self._guard:
+            self._evict_stale_locked(run_key, gcs_logdir)  # a new artifact version supersedes the old server
         port = self.port_if_running(run_key)
         if port is not None:
             return port
@@ -121,6 +126,8 @@ class XprofManager:
             raise RuntimeError("xprof binary not found; set BUOY_XPROF_BIN or install xprof")
 
         with self._launch_lock_for(run_key):
+            with self._guard:
+                self._evict_stale_locked(run_key, gcs_logdir)
             port = self.port_if_running(run_key)  # another caller may have won the race
             if port is not None:
                 return port
@@ -138,7 +145,7 @@ class XprofManager:
                 raise
             with self._guard:
                 self._launching.discard(run_key)
-                self._procs[run_key] = _Proc(proc, port, time.time())
+                self._procs[run_key] = _Proc(proc, port, time.time(), gcs_logdir)
             logger.info("launched xprof for %s on :%d (logdir=%s)", run_key, port, local)
             return port
 
@@ -152,8 +159,18 @@ class XprofManager:
         with self._guard:
             return self._launch_locks.setdefault(run_key, threading.Lock())
 
+    def _evict_stale_locked(self, run_key: str, gcs_logdir: str) -> None:
+        """Drop a process whose profile logdir no longer matches (artifact refetched)."""
+        existing = self._procs.get(run_key)
+        if existing is not None and existing.logdir != gcs_logdir:
+            existing.proc.terminate()
+            del self._procs[run_key]
+
     def _materialize(self, run_key: str, gcs_logdir: str) -> str:
-        safe = run_key.replace("/", "_")
+        # Key the local dir by the logdir too, so a new artifact version downloads
+        # fresh instead of reusing the previous version's `.complete` tree.
+        tag = hashlib.sha1(gcs_logdir.encode()).hexdigest()[:12]
+        safe = run_key.replace("/", "_") + "-" + tag
         local = os.path.join(self._cfg.local_profile_dir, safe)
         done = local + ".complete"
         # Reuse only a download that finished — a non-empty dir may be a partial

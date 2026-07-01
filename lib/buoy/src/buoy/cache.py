@@ -20,6 +20,7 @@ trust every referenced file is present.
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
 
@@ -61,11 +62,27 @@ def read_json(path: str) -> dict | None:
         return json.load(handle)
 
 
+def _json_safe(obj: object) -> object:
+    """Replace non-finite floats (NaN/±Inf — common in wandb summaries) with None.
+
+    Python's ``json`` emits them as bare ``NaN``/``Infinity`` tokens, which are
+    invalid JSON: the browser's ``JSON.parse`` rejects them, breaking the summary/
+    config panes. Normalize to null so every cached document is strict JSON.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 def write_json(path: str, obj: dict) -> None:
     fs = _fs(path)
     fs.makedirs(posixpath.dirname(path), exist_ok=True)
     with fs.open(path, "w") as handle:
-        json.dump(obj, handle, default=str)
+        json.dump(_json_safe(obj), handle, default=str, allow_nan=False)
 
 
 def write_parquet(path: str, table) -> None:

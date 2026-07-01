@@ -237,7 +237,9 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False, on_progre
     prefix = cache.run_prefix(cfg.cache_root, ref.entity, ref.project, ref.run_id)
     mpath = cache.manifest_path(prefix)
     existing = cache.read_json(mpath)
-    if existing and not refresh and existing.get("state") != "running":
+    # Only a terminal run is immutable; any nonterminal state (running, pending,
+    # preempting, …) must be re-fetched or it would stay stale forever.
+    if existing and not refresh and existing.get("state") in TERMINAL_STATES:
         return existing
 
     # Refresh overwrites shards in place and rewrites the manifest LAST, so the old

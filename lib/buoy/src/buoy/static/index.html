@@ -306,6 +306,7 @@
 
     async function poll(r, verb) {
       const s = await jget("api/mirror_status?" + qs(r));
+      if (r.run !== loadedRunId) return;  // a newer run was selected mid-poll — drop this stale loop
       if (s.state === "running") { showLoading(verb, r.run, s.detail || "…"); setTimeout(() => poll(r, verb), 1500); return; }
       if (s.state === "error") { hideLoading(); $("status").textContent = "mirror failed: " + s.error; return; }
       if (s.state === "absent") { hideLoading(); $("status").textContent = "run not found"; return; }
