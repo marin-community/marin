@@ -552,20 +552,6 @@ class JobStatus(_message.Message):
     backend_id: str
     def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., ports: _Optional[_Mapping[str, int]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., failure_count: _Optional[int] = ..., preemption_count: _Optional[int] = ..., tasks: _Optional[_Iterable[_Union[TaskStatus, _Mapping]]] = ..., name: _Optional[str] = ..., submitted_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., task_state_counts: _Optional[_Mapping[str, int]] = ..., task_count: _Optional[int] = ..., completed_count: _Optional[int] = ..., pending_reason: _Optional[str] = ..., has_children: _Optional[bool] = ..., parent_job_id: _Optional[str] = ..., backend_id: _Optional[str] = ...) -> None: ...
 
-class ReservationEntry(_message.Message):
-    __slots__ = ("resources", "constraints")
-    RESOURCES_FIELD_NUMBER: _ClassVar[int]
-    CONSTRAINTS_FIELD_NUMBER: _ClassVar[int]
-    resources: ResourceSpecProto
-    constraints: _containers.RepeatedCompositeFieldContainer[Constraint]
-    def __init__(self, resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ...) -> None: ...
-
-class ReservationConfig(_message.Message):
-    __slots__ = ("entries",)
-    ENTRIES_FIELD_NUMBER: _ClassVar[int]
-    entries: _containers.RepeatedCompositeFieldContainer[ReservationEntry]
-    def __init__(self, entries: _Optional[_Iterable[_Union[ReservationEntry, _Mapping]]] = ...) -> None: ...
-
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
     CPU_FIELD_NUMBER: _ClassVar[int]

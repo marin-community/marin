@@ -3,13 +3,10 @@
 
 """Aggregate-scoped commands for jobs: submit, cancel, remove_finished."""
 
-import logging
-
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.constraints import availability_constraints_from_reservation
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import (
@@ -34,38 +31,6 @@ from iris.cluster.controller.schema import (
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
-
-logger = logging.getLogger(__name__)
-
-
-def _job_constraints_json(request: controller_pb2.Controller.LaunchJobRequest, job_id: JobName) -> str | None:
-    """Serialize the job's constraints, folding in the deprecated reservation field.
-
-    Reservations were replaced by hard ``availability:<variant>`` constraints. A
-    pre-availability client may still set ``request.reservation``; we convert each
-    entry to an availability constraint here (the single server-side ingestion point)
-    and never persist anything reservation-shaped. Converted constraints are
-    deduplicated against constraints the request already carries.
-    """
-    constraints = list(request.constraints)
-    if not (request.HasField("reservation") and request.reservation.entries):
-        return constraints_to_json(constraints)
-
-    existing_keys = {c.key for c in constraints}
-    converted = [
-        c.to_proto()
-        for c in availability_constraints_from_reservation(request.reservation)
-        if c.key not in existing_keys
-    ]
-    if converted:
-        logger.warning(
-            "Job %s submitted with the deprecated `reservation` field; converting it to "
-            "availability constraints %s. Update the client to pass availability constraints directly.",
-            job_id.to_wire(),
-            [c.key for c in converted],
-        )
-        constraints.extend(converted)
-    return constraints_to_json(constraints)
 
 
 def _extract_resource_cols(resources: job_pb2.ResourceSpecProto | None) -> tuple[int, int, int, str | None]:
@@ -190,7 +155,7 @@ def submit(
 
     res = request.resources if request.HasField("resources") else None
     res_cpu, res_mem, res_disk, res_device = _extract_resource_cols(res)
-    constraints_json = _job_constraints_json(request, job_id)
+    constraints_json = constraints_to_json(list(request.constraints))
     has_cosched = 1 if request.HasField("coscheduling") else 0
     cosched_group = request.coscheduling.group_by if has_cosched else ""
     sched_timeout: int | None = (

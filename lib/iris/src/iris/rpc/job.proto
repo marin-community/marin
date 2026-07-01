@@ -379,32 +379,6 @@ message JobStatus {
 }
 
 // ============================================================================
-// RESERVATION (DEPRECATED — back-compat only)
-// ============================================================================
-//
-// Reservations are gone. The controller no longer holds capacity, spawns holder
-// jobs, or gates scheduling. These messages and LaunchJobRequest.reservation are
-// retained ONLY so pre-availability clients don't hard-fail: the server converts
-// any incoming reservation into hard availability:<variant> constraints at
-// ingestion and discards it (nothing reservation-shaped is persisted). Current
-// clients omit the field. Scheduled for removal once stragglers have upgraded.
-
-// A single reservation entry describing one worker's worth of resources.
-message ReservationEntry {
-  // Resource spec for one worker.
-  ResourceSpecProto resources = 1;
-
-  // Constraints for routing (region, zone, preemptible, etc.).
-  repeated Constraint constraints = 2;
-}
-
-// Reservation configuration attached to a job (deprecated; see above).
-message ReservationConfig {
-  // Resource entries to reserve. Each entry = one worker.
-  repeated ReservationEntry entries = 1;
-}
-
-// ============================================================================
 // RESOURCE SPECIFICATION
 // ============================================================================
 

@@ -545,7 +545,6 @@ _CLONE_TABLES = [
     "workers",
     "worker_attributes",
     "endpoints",
-    "reservation_claims",
     "meta",
     "users",
     "user_budgets",
