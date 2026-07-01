@@ -22,12 +22,13 @@ surface stays pure — the I/O command layer imports them from their own modules
 """
 
 from iris.cluster.controller.reconcile.batches import ReconcileState
-from iris.cluster.controller.reconcile.effects import ControllerEffects
+from iris.cluster.controller.reconcile.effects import ControllerEffects, DirectTransitionResult
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 
 __all__ = [
     "ControllerEffects",
+    "DirectTransitionResult",
     "ReconcileState",
     "TaskUpdate",
     "TerminalDecision",

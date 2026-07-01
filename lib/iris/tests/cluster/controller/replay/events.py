@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.cluster.controller import ops
+from iris.cluster.controller.ops.reconcile import fold_direct_results
 from iris.cluster.controller.ops.task import Assignment, apply_dispatch_updates, finalize
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reconcile import dispatch
@@ -178,9 +179,12 @@ def apply_event(transitions: ControllerTestState, event: IrisEvent) -> Any:
                     cur, cache=transitions._run_template_cache, max_promotions=max_promotions
                 )
             case ApplyDirectProviderUpdates(updates):
-                # Relocated glue: author the effects from this write transaction,
-                # then commit them — the two steps the controller now does apart.
-                effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=Timestamp.now())
+                # Relocated glue: author the direct transitions from this write
+                # transaction, fold the job-DAG recompute over them, then commit —
+                # the steps the controller now does apart.
+                now = Timestamp.now()
+                direct = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
+                effects = fold_direct_results(cur, [direct], now=now)
                 commit_effects(cur, effects, endpoints=transitions._endpoints)
                 return effects
             case AddEndpoint(endpoint):

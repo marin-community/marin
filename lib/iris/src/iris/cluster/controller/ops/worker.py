@@ -15,7 +15,7 @@ from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reconcile import ControllerEffects, ReconcileState
+from iris.cluster.controller.reconcile import DirectTransitionResult, ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.loader import TransitionReader, load_closed_snapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
@@ -237,15 +237,16 @@ def apply_reconcile(
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     *,
     now: Timestamp,
-) -> ControllerEffects:
-    """Author reconcile effects from the backend's read snapshot (no commit).
+) -> DirectTransitionResult:
+    """Author this backend's direct transitions from its read snapshot (no commit).
 
     Loads ONE snapshot covering every (plan, result) pair through the backend's
-    own read surface, then runs the reconcile kernel once: the pure
-    :meth:`ReconcileState.reconcile` shares one ``Overlay`` across all pairs so
-    cascade kills triggered by earlier workers are visible to later ones. The
-    caller (the backend) folds the returned ``effects.health`` and the controller
-    commits the ``effects`` via ``commit_effects``.
+    own read surface, then runs the reconcile kernel's apply pass once: the pure
+    :meth:`ReconcileState.reconcile` shares one ``Overlay`` across all pairs so a
+    task requeued/terminated by an earlier worker is visible to a later one's
+    overlay-aware guards. The caller (the backend) folds the returned
+    ``direct.health``; the controller folds every backend's ``direct`` into the
+    tick's job-DAG recompute pass and commits the result.
     """
     all_task_ids: list[JobName] = []
     all_attempt_keys: list[tuple[JobName, int]] = []

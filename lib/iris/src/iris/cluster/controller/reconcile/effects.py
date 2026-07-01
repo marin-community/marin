@@ -141,3 +141,39 @@ class ControllerEffects:
         tracker by the backend, never persisted by ``commit_effects``.
         """
         return not (self.tasks or self.attempts or self.jobs or self.endpoint_deletions or self.log_events)
+
+
+@dataclass
+class DirectTransitionResult:
+    """One backend's apply-pass output: its own workers' direct transitions.
+
+    A backend's ``reconcile``/``record_updates`` pass applies its own workers'
+    task/attempt transitions and the intra-job peer cascade, but does not run
+    job-DAG recompute/finalize/cascade — that is folded once, controller-side,
+    over the union of every backend's :class:`DirectTransitionResult` for the
+    tick. ``touched_jobs`` and ``pending_child_cascades`` seed that fold;
+    ``jobs`` deltas are therefore never populated here.
+    """
+
+    tasks: dict[JobName, TaskRowDelta] = field(default_factory=dict)
+    attempts: dict[tuple[JobName, int], AttemptRowDelta] = field(default_factory=dict)
+    endpoint_deletions: list[EndpointDeletion] = field(default_factory=list)
+    health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)
+    log_events: list[LogEvent] = field(default_factory=list)
+
+    touched_jobs: list[JobName] = field(default_factory=list)
+    """Insertion-ordered, deduped jobs with a state-changing task transition this pass."""
+    pending_child_cascades: dict[JobName, str] = field(default_factory=dict)
+    """Jobs whose parent task rolled back to PENDING under TERMINATE_CHILDREN, keyed to their cascade reason."""
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether this pass has nothing for the controller fold to merge or recompute."""
+        return not (
+            self.tasks
+            or self.attempts
+            or self.endpoint_deletions
+            or self.log_events
+            or self.touched_jobs
+            or self.pending_child_cascades
+        )

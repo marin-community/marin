@@ -22,7 +22,6 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
@@ -37,7 +36,7 @@ from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, update
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -164,7 +163,11 @@ def _schedule_and_commit(scheduler, state):
         task = _query_task(state, tid)
         if task:
             with state._db.transaction() as cur:
-                ops.task.assign(cur, [Assignment(task_id=tid, worker_id=wid)], health=state._health)
+                ops.task.assign(
+                    cur,
+                    [assignment_for_test(cur, tid, wid)],
+                    health=state._health,
+                )
     return result
 
 

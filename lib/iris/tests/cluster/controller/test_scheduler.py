@@ -15,7 +15,6 @@ from iris.cluster.constraints import AttributeValue, WellKnownAttribute
 from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -36,7 +35,11 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from tests.cluster.conftest import eq_constraint, in_constraint
-from tests.cluster.controller._test_support import ControllerTestState, set_worker_health_for_test
+from tests.cluster.controller._test_support import (
+    ControllerTestState,
+    assignment_for_test,
+    set_worker_health_for_test,
+)
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -109,7 +112,11 @@ def _worker_attr(state: ControllerTestState, worker_id: WorkerId, key: str):
 
 def assign_task_to_worker(state: ControllerTestState, task, worker_id: WorkerId) -> None:
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
 
 
 def transition_task_to_running(state: ControllerTestState, task) -> None:

@@ -353,12 +353,12 @@ class RpcTaskBackend:
         # through the SAME shared tracker reached via the worker store, so the
         # startup seed and reopen hook are preserved.
         now = Timestamp.now()
-        effects = apply_reconcile(self._store, observation.worker_results, now=now)
+        direct = apply_reconcile(self._store, observation.worker_results, now=now)
         events = observation.transport_events + [
-            WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
+            WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in direct.health.build_failed
         ]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
+        return ReconcileResult(direct=direct)
 
     def run_teardown(self) -> None:
         """Tear down the workers this tick's reconcile fold reaped.

@@ -20,6 +20,7 @@ from iris.cluster.controller.scheduling.scheduler import JobRequirements, Runnin
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from tests.cluster.controller._test_support import assignment_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -32,6 +33,7 @@ from .conftest import (
     query_job,
     query_task,
     query_tasks_for_job,
+    query_worker,
     register_worker,
     submit_job,
 )
@@ -1244,10 +1246,11 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
 
 def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
     """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
+    address = query_worker(state, worker_id).address
     with state._db.transaction() as cur:
         ops.task.assign(
             cur,
-            [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
+            [Assignment(task_id=task.task_id, worker_id=worker_id, address=address, priority_band=priority_band)],
             health=state._health,
         )
     with state._db.transaction() as cur:
@@ -1288,7 +1291,11 @@ def test_preempted_assigned_task_always_retries():
 
         # Only assign, don't advance to RUNNING
         with state._db.transaction() as cur:
-            ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=w1)], health=state._health)
+            ops.task.assign(
+                cur,
+                [assignment_for_test(cur, task.task_id, w1)],
+                health=state._health,
+            )
         assert query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
         with state._db.transaction() as cur:

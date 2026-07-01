@@ -26,7 +26,6 @@ from iris.cluster.controller.backend import BackendCapability
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import ControlSnapshot, healthy_active_workers_with_attributes
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -50,7 +49,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -922,7 +921,11 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
     task_id = job_id.task(0)
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -983,7 +986,11 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
 
     # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -1021,7 +1028,11 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -1058,7 +1069,11 @@ def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_
     job_id = submit_job(state, "uid-worker-job", job_request)
     task_id = job_id.task(0)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -1110,7 +1125,11 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
 
     # Attempt 0: placed then WORKER_FAILED so it retries to a fresh attempt.
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -1126,7 +1145,11 @@ def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
         )
     # Attempt 1: re-placed and RUNNING.
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,
@@ -1180,7 +1203,11 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
 
     with state._db.transaction() as cur:
         apply_task_observations(

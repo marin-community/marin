@@ -1512,8 +1512,8 @@ class K8sTaskProvider:
         """
         assert self.transition_reader is not None, "K8sTaskProvider.reconcile called before transition reader attached"
         updates = self.sync(request)
-        effects = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
-        return ReconcileResult(effects=effects)
+        direct = apply_dispatch_updates(self.transition_reader, updates, now=Timestamp.now())
+        return ReconcileResult(direct=direct)
 
     def run_teardown(self) -> None:
         """No-op: a cluster backend tracks no Iris workers to reap."""

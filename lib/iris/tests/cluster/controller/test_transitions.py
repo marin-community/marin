@@ -52,7 +52,11 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState, create_attempt_for_test
+from tests.cluster.controller._test_support import (
+    ControllerTestState,
+    assignment_for_test,
+    create_attempt_for_test,
+)
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
     apply_task_observations,
@@ -188,7 +192,11 @@ def test_sa_core_typed_values_roundtrip(state) -> None:
     )
     [task] = submit_job(state, "projection", request)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, wid)],
+            health=state._health,
+        )
 
     running = worker_running_tasks(state, wid)
 
@@ -590,7 +598,11 @@ def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
 
     # Task gets assigned (creates attempt, puts in ASSIGNED state)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     assert _query_task(state, task.task_id).current_attempt_id == 0
 
@@ -629,7 +641,11 @@ def test_task_assigned_to_missing_worker_is_ignored(state):
     with state._db.transaction() as cur:
         writes.remove_worker(cur, worker_id, health=state._health, worker_attrs=state._worker_attrs)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id, address="host:8080")],
+            health=state._health,
+        )
 
     # Task remains schedulable and no attempt/resources are committed.
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
@@ -1060,7 +1076,11 @@ def test_endpoint_survives_building_state(state):
 
     # Assign task and transition to BUILDING
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     task = _query_task(state, task.task_id)
     with state._db.transaction() as cur:
         apply_task_observations(
@@ -2610,7 +2630,11 @@ def test_worker_failed_from_assigned_is_delivery_failure(state):
 
     # Assign but do NOT transition to RUNNING
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
 
     # Worker reports WORKER_FAILED (e.g., "Task not found on worker")
@@ -2667,7 +2691,11 @@ def test_worker_failed_from_building_counts_as_preemption(state):
 
     # Assign and transition to BUILDING (worker confirmed it received the task)
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
 
@@ -2699,7 +2727,11 @@ def test_worker_failed_from_assigned_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_ASSIGNED
     # No build failures recorded yet (worker registered, but no failure events).
     assert state._health.snapshot().get(worker_id, (0, 0))[1] == 0
@@ -2733,7 +2765,11 @@ def test_failed_from_building_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
 
@@ -2768,7 +2804,11 @@ def test_worker_failed_from_building_bumps_health_tracker(state):
     task = tasks[0]
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task.task_id, worker_id)],
+            health=state._health,
+        )
     transition_task(state, task.task_id, job_pb2.TASK_STATE_BUILDING)
     assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_BUILDING
     # No build failures recorded yet.

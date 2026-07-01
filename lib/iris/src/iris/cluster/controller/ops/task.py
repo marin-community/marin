@@ -27,6 +27,7 @@ from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile import (
     ControllerEffects,
+    DirectTransitionResult,
     ReconcileState,
     TaskUpdate,
     TerminalDecision,
@@ -55,6 +56,7 @@ class Assignment:
 
     task_id: JobName
     worker_id: WorkerId
+    address: str
     priority_band: int | None = None
 
 
@@ -124,13 +126,14 @@ def apply_dispatch_updates(
     updates: list[TaskUpdate],
     *,
     now: Timestamp,
-) -> ControllerEffects:
-    """Author effects for direct-provider updates from a read snapshot (no commit).
+) -> DirectTransitionResult:
+    """Author direct transitions for direct-provider updates from a read snapshot (no commit).
 
     The cluster backend's reconcile glue: load a snapshot covering the updated
-    tasks through the backend's own read surface, run the direct-dispatch state
-    machine, and return the effects for the controller to commit. ``now`` stamps
-    the snapshot, which ``record_updates`` reads for its transition timestamps.
+    tasks through the backend's own read surface, run the direct-dispatch
+    apply pass, and return the result for the controller to fold and commit.
+    ``now`` stamps the snapshot, which ``record_updates`` reads for its
+    transition timestamps.
     """
     relevant_task_ids = [
         update.task_id

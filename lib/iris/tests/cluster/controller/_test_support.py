@@ -17,7 +17,8 @@ from dataclasses import dataclass
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.run_template import RunTemplateCache, new_run_template_cache
@@ -67,6 +68,19 @@ class ControllerTestState:
         self._endpoints = endpoints or EndpointsProjection(db)
         self._worker_attrs = worker_attrs or WorkerAttrsProjection(db, owns_scale_group=lambda _scale_group: True)
         self._run_template_cache = run_template_cache or new_run_template_cache()
+
+
+def assignment_for_test(cur: Tx, task_id: JobName, worker_id: WorkerId) -> Assignment:
+    """Build an ``Assignment`` for ``task_id``/``worker_id`` against the worker's
+    current address, read via ``cur``.
+
+    ``cur`` may be either a write cursor or a read snapshot. Tests that assign
+    a task without going through the scheduler use this to source the
+    ``address`` value that matches the worker's current row.
+    """
+    row = cur.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).first()
+    assert row is not None, f"no workers row for {worker_id}"
+    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address)
 
 
 def set_worker_health_for_test(ctrl: ControllerTestState, worker_id: WorkerId, healthy: bool) -> None:

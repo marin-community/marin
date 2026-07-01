@@ -75,6 +75,7 @@ class WorkerSnapshot:
     """
 
     worker_id: WorkerId
+    address: str
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -90,6 +91,7 @@ class _WorkerRowLike(Protocol):
     """Structural shape of any worker row that ``worker_snapshot_from_row`` accepts."""
 
     worker_id: WorkerId
+    address: str
     total_cpu_millicores: int
     total_memory_bytes: int
     total_gpu_count: int
@@ -125,6 +127,7 @@ def worker_snapshot_from_row(
     tpu = usage.tpu_count if usage is not None else 0
     return WorkerSnapshot(
         worker_id=row.worker_id,
+        address=row.address,
         total_cpu_millicores=row.total_cpu_millicores,
         total_memory_bytes=row.total_memory_bytes,
         total_gpu_count=row.total_gpu_count,

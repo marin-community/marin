@@ -16,14 +16,13 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.controller import ops
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.service import PendingKick
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -59,7 +58,11 @@ def _observe(state, worker_id, task_id, attempt_id, new_state, error=None):
 def _assign_and_run(state, task_id, worker_id):
     """Drive a PENDING task to RUNNING on ``worker_id`` (attempt 0)."""
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, worker_id)],
+            health=state._health,
+        )
     _observe(state, worker_id, task_id, 0, job_pb2.TASK_STATE_RUNNING)
 
 

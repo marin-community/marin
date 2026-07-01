@@ -19,7 +19,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
-from iris.cluster.controller.schema import jobs_table, tasks_table
+from iris.cluster.controller.schema import jobs_table, tasks_table, workers_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging import timing
@@ -200,6 +200,18 @@ def _task_ids(transitions: ControllerTestState, job_id: JobName) -> list[JobName
     return [JobName.from_wire(str(row.task_id)) for row in rows]
 
 
+def _assignment(transitions: ControllerTestState, task_id: JobName, worker_id: WorkerId) -> Assignment:
+    """Build an ``Assignment`` against ``worker_id``'s current registered address.
+
+    Scenarios build ``Assignment`` payloads for ``QueueAssignments`` events
+    outside any write transaction, so this reads through a read snapshot
+    rather than a cursor.
+    """
+    with transitions._db.read_snapshot() as snap:
+        row = snap.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).one()
+    return Assignment(task_id=task_id, worker_id=worker_id, address=row.address)
+
+
 def _current_attempt(transitions: ControllerTestState, task_id: JobName) -> int:
     with transitions._db.read_snapshot() as snap:
         row = snap.execute(
@@ -226,7 +238,7 @@ def scenario_register_assign_run_succeed(transitions: ControllerTestState, clock
     (task_id,) = _task_ids(transitions, job_id)
     apply_event(
         transitions,
-        QueueAssignments(assignments=[Assignment(task_id=task_id, worker_id=worker_id)]),
+        QueueAssignments(assignments=[_assignment(transitions, task_id, worker_id)]),
     )
     attempt = _current_attempt(transitions, task_id)
     apply_event(
@@ -258,7 +270,10 @@ def scenario_task_failure_with_retry(transitions: ControllerTestState, clock: Fr
     worker_id = _register_worker(transitions, clock, "w-retry")
     job_id = _submit(transitions, clock, "retry-job", max_retries_failure=2, max_task_failures=2)
     (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     first_attempt = _current_attempt(transitions, task_id)
     apply_event(
         transitions,
@@ -276,7 +291,10 @@ def scenario_task_failure_with_retry(transitions: ControllerTestState, clock: Fr
             )
         ),
     )
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     second_attempt = _current_attempt(transitions, task_id)
     apply_event(
         transitions,
@@ -294,7 +312,10 @@ def scenario_worker_failure_cascade(transitions: ControllerTestState, clock: Fro
     worker_id = _register_worker(transitions, clock, "w-doomed")
     job_id = _submit(transitions, clock, "cascade-job")
     (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     # Direct call: fail_workers is intentionally not an IrisEvent.
     ops.worker.fail(
         transitions._db,
@@ -313,7 +334,7 @@ def scenario_cancel_running_job(transitions: ControllerTestState, clock: FrozenC
     tasks = _task_ids(transitions, job_id)
     apply_event(
         transitions,
-        QueueAssignments([Assignment(task_id=t, worker_id=worker_id) for t in tasks]),
+        QueueAssignments([_assignment(transitions, t, worker_id) for t in tasks]),
     )
     apply_event(transitions, CancelJob(job_id=job_id, reason="user-cancel"))
 
@@ -323,7 +344,10 @@ def scenario_preempt_task(transitions: ControllerTestState, clock: FrozenClock) 
     worker_id = _register_worker(transitions, clock, "w-preempt")
     job_id = _submit(transitions, clock, "preempt-job", max_retries_preemption=0)
     (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     apply_event(transitions, PreemptTask(task_id=task_id, reason="reclaim"))
 
 
@@ -337,8 +361,8 @@ def scenario_coscheduled_timeout(transitions: ControllerTestState, clock: Frozen
         transitions,
         QueueAssignments(
             [
-                Assignment(task_id=tasks[0], worker_id=worker_a),
-                Assignment(task_id=tasks[1], worker_id=worker_b),
+                _assignment(transitions, tasks[0], worker_a),
+                _assignment(transitions, tasks[1], worker_b),
             ],
         ),
     )
@@ -370,8 +394,8 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         transitions,
         QueueAssignments(
             [
-                Assignment(task_id=tasks[0], worker_id=worker_a),
-                Assignment(task_id=tasks[1], worker_id=worker_b),
+                _assignment(transitions, tasks[0], worker_a),
+                _assignment(transitions, tasks[1], worker_b),
             ],
         ),
     )
@@ -434,8 +458,8 @@ def scenario_coscheduled_preempt_retry_bounces_siblings(transitions: ControllerT
         transitions,
         QueueAssignments(
             [
-                Assignment(task_id=tasks[0], worker_id=worker_a),
-                Assignment(task_id=tasks[1], worker_id=worker_b),
+                _assignment(transitions, tasks[0], worker_a),
+                _assignment(transitions, tasks[1], worker_b),
             ],
         ),
     )
@@ -467,8 +491,8 @@ def scenario_coscheduled_preempt_terminal_cascades_siblings(
         transitions,
         QueueAssignments(
             [
-                Assignment(task_id=tasks[0], worker_id=worker_a),
-                Assignment(task_id=tasks[1], worker_id=worker_b),
+                _assignment(transitions, tasks[0], worker_a),
+                _assignment(transitions, tasks[1], worker_b),
             ],
         ),
     )
@@ -497,7 +521,10 @@ def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock
     worker_id = _register_worker(transitions, clock, "w-prune")
     job_id = _submit(transitions, clock, "prune-job")
     (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     attempt = _current_attempt(transitions, task_id)
     apply_event(
         transitions,
@@ -530,7 +557,10 @@ def scenario_endpoint_register_remove(transitions: ControllerTestState, clock: F
     worker_id = _register_worker(transitions, clock, "w-endpoint")
     job_id = _submit(transitions, clock, "endpoint-job")
     (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, QueueAssignments([Assignment(task_id=task_id, worker_id=worker_id)]))
+    apply_event(
+        transitions,
+        QueueAssignments([_assignment(transitions, task_id, worker_id)]),
+    )
     endpoint = EndpointRow(
         endpoint_id="ep-replay",
         name="api",
@@ -572,7 +602,7 @@ def scenario_coscheduled_five_tasks_one_fails_all_terminal(transitions: Controll
     tasks = _task_ids(transitions, job_id)
     apply_event(
         transitions,
-        QueueAssignments([Assignment(task_id=t, worker_id=w) for t, w in zip(tasks, workers, strict=True)]),
+        QueueAssignments([_assignment(transitions, t, w) for t, w in zip(tasks, workers, strict=True)]),
     )
     attempts = [_current_attempt(transitions, t) for t in tasks]
     for task_id, worker_id, attempt in zip(tasks, workers, attempts, strict=True):
@@ -593,7 +623,7 @@ def scenario_independent_five_tasks_one_fails(transitions: ControllerTestState, 
     tasks = _task_ids(transitions, job_id)
     apply_event(
         transitions,
-        QueueAssignments([Assignment(task_id=t, worker_id=w) for t, w in zip(tasks, workers, strict=True)]),
+        QueueAssignments([_assignment(transitions, t, w) for t, w in zip(tasks, workers, strict=True)]),
     )
     attempts = [_current_attempt(transitions, t) for t in tasks]
     for task_id, worker_id, attempt in zip(tasks, workers, attempts, strict=True):

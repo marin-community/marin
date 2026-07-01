@@ -30,7 +30,7 @@ from iris.cluster.controller import service as service_module
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment, finalize
+from iris.cluster.controller.ops.task import finalize
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -52,7 +52,7 @@ from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -106,7 +106,11 @@ def _assign_and_transition(
     error: str | None = None,
 ) -> None:
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, worker_id)],
+            health=state._health,
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,

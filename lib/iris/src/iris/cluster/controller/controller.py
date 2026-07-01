@@ -58,7 +58,7 @@ from iris.cluster.controller.ops.task import (
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.pruner import prune_old_data
-from iris.cluster.controller.reconcile import dispatch
+from iris.cluster.controller.reconcile import ControllerEffects, dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
@@ -814,6 +814,7 @@ class Controller:
 
         recon_results: dict[str, ReconcileResult] = {}
         timeout_decisions: list[TerminalDecision] = []
+        fold_effects = ControllerEffects()
         if run_reconcile:
             timeout_decisions = self._timeout_decisions(inputs.timeout_rows, now.epoch_ms())
             for backend_id in self._backend_ids:
@@ -821,6 +822,14 @@ class Controller:
                 # a cluster-view backend gets its dispatch drain.
                 request = inputs.reconcile_requests.get(backend_id, ReconcileRequest())
                 recon_results[backend_id] = self._backends[backend_id].reconcile(request)
+            # Controller-owned job-DAG fold over the union of every backend's direct
+            # transitions, read from a snapshot taken here (before this tick's write
+            # transaction opens) so the fold never sees this tick's own schedule/assign
+            # writes -- matching each backend's own pre-assign reconcile snapshot timing.
+            with self._db.control_read_snapshot() as snap:
+                fold_effects = ops.reconcile.fold_direct_results(
+                    snap, (result.direct for result in recon_results.values()), now=now
+                )
 
         auto_results: dict[str, AutoscaleResult] = {}
         if run_autoscale:
@@ -837,7 +846,7 @@ class Controller:
             sched_results=sched_results,
             backend_pins=backend_pins,
             routing_unschedulable=routing_unschedulable,
-            recon_results=recon_results,
+            fold_effects=fold_effects,
             timeout_decisions=timeout_decisions,
             pending_kicks=pending_kicks,
             auto_results=auto_results,
@@ -1102,7 +1111,7 @@ class Controller:
         sched_results: dict[str, ScheduleResult],
         backend_pins: list[tuple[JobName, str]],
         routing_unschedulable: list[tuple[PendingTask, str]],
-        recon_results: dict[str, ReconcileResult],
+        fold_effects: ControllerEffects,
         timeout_decisions: list[TerminalDecision],
         pending_kicks: list[PendingKick],
         auto_results: dict[str, AutoscaleResult],
@@ -1111,10 +1120,10 @@ class Controller:
         """Apply this tick's merged decisions and authored effects in one write transaction.
 
         Order within the txn: schedule decisions (incl. backend pins + routing
-        UNSCHEDULABLE), each backend's reconcile effects, execution-timeout
-        finalizations, administrative kicks, per-backend autoscaler state. Each
-        backend already authored its own ``effects`` during reconcile; the
-        controller just commits them uniformly. A no-op tick opens no transaction.
+        UNSCHEDULABLE), the tick's folded reconcile effects (every backend's direct
+        transitions plus the controller's job-DAG recompute/finalize/cascade over
+        their union), execution-timeout finalizations, administrative kicks,
+        per-backend autoscaler state. A no-op tick opens no transaction.
         """
         states = [result.autoscaler_state for result in auto_results.values() if result.autoscaler_state is not None]
 
@@ -1125,7 +1134,7 @@ class Controller:
             or backend_pins
             or routing_unschedulable
         )
-        has_recon = any(not result.effects.is_empty for result in recon_results.values())
+        has_recon = not fold_effects.is_empty
         if not (has_sched or has_recon or timeout_decisions or pending_kicks or states):
             return
 
@@ -1134,10 +1143,8 @@ class Controller:
                 self._commit_schedule_decisions(
                     cur, sched_result, sched_results, now, backend_pins, routing_unschedulable
                 )
-            for backend_id in self._backend_ids:
-                result = recon_results.get(backend_id)
-                if result is not None and not result.effects.is_empty:
-                    commit_effects(cur, result.effects, endpoints=self._endpoints)
+            if has_recon:
+                commit_effects(cur, fold_effects, endpoints=self._endpoints)
             if timeout_decisions:
                 finalize(cur, timeout_decisions, endpoints=self._endpoints, now=now)
             if pending_kicks:

@@ -8,4 +8,4 @@ Each submodule names an aggregate (job, worker, task) and exposes the
 that controller RPC handlers and internal loops call.
 """
 
-from iris.cluster.controller.ops import job, task, worker
+from iris.cluster.controller.ops import job, reconcile, task, worker

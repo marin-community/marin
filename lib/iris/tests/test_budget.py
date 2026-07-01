@@ -18,7 +18,6 @@ from iris.cluster.controller.budget import (
     resource_value,
 )
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
@@ -26,6 +25,7 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Timestamp
+from tests.cluster.controller._test_support import assignment_for_test
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,
@@ -227,7 +227,11 @@ def _start_running_job(
     for idx in range(replicas):
         task_id = job_id.task(idx)
         with state._db.transaction() as cur:
-            ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=worker_id)], health=state._health)
+            ops.task.assign(
+                cur,
+                [assignment_for_test(cur, task_id, worker_id)],
+                health=state._health,
+            )
         with state._db.transaction() as cur:
             apply_task_observations(
                 cur,

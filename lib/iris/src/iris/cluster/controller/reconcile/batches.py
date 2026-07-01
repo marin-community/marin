@@ -1,23 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The reconcile kernel facade: snapshot in → ``ControllerEffects`` out.
+"""The reconcile kernel facade: snapshot in → effects out.
 
 :class:`ReconcileState` is one batch session over a closed
 :class:`TransitionSnapshot`. Its public methods are the controller's state
-operations — ``reconcile``, ``fail_workers``, ``record_updates``,
-``finalize_tasks``, ``cancel_job`` — each of which runs the same
-two-pass contract and returns the accumulated effects:
+operations, each of which runs the apply pass over the batch:
 
 * **apply pass** — per task-update or controller-asserted outcome: apply the
   per-task mutation, cascade to coscheduled peers (so later items in the batch
   observe the terminate/requeue), and record the job on a touched-jobs work-list
   (plus any deferred PENDING-rollback child cascade).
-* **recompute pass** (``_recompute_and_finalize``) — recompute each touched job
-  once, finalize the ones that go terminal, then drain the deferred child
-  cascades. Folding recompute out of the per-update loop makes a batch
-  order-independent and keeps ``job.recompute_state`` (which rescans a job's
-  whole task histogram) off the O(tasks_per_job²) per-dispatch path.
+
+``reconcile`` and ``record_updates`` — the two backend-facing, per-tick entry
+points — run ONLY the apply pass and return a :class:`DirectTransitionResult`:
+their row deltas plus the touched-jobs/pending-child-cascade fold-seed
+metadata. The controller folds every backend's result into one shared
+:class:`Overlay` and runs the **recompute pass** once per tick, over the union
+(:func:`run_job_dag_fold`): recompute each touched job once, finalize the ones
+that go terminal, then drain the deferred child cascades. ``fail_workers``,
+``finalize_tasks``, and ``cancel_job`` are controller-owned, single-shot
+operations (not part of the per-backend split) and run both passes themselves,
+returning a full :class:`ControllerEffects`.
+
+Folding recompute out of the per-update loop makes a batch order-independent
+and keeps ``job.recompute_state`` (which rescans a job's whole task histogram)
+off the O(tasks_per_job²) per-dispatch path.
 
 The cross-aggregate primitives below the facade (``_kill_non_terminal_tasks``,
 ``_cascade_to_children``, ``_finalize_terminal_job``, ``_cascade_to_peers``) stay
@@ -32,6 +40,7 @@ from rigging.timing import Timestamp
 from iris.cluster.controller.reconcile import job, peers, task, worker
 from iris.cluster.controller.reconcile.effects import (
     ControllerEffects,
+    DirectTransitionResult,
     JobRowDelta,
     LogEvent,
 )
@@ -151,6 +160,24 @@ class ReconcileState:
     def open(cls, snapshot: TransitionSnapshot) -> "ReconcileState":
         return cls(overlay=Overlay(snapshot))
 
+    @classmethod
+    def fold(
+        cls,
+        overlay: Overlay,
+        touched: list[JobName],
+        pending_child_cascades: dict[JobName, str],
+    ) -> set[JobName]:
+        """Run the recompute pass over ``overlay``, seeded by the union of every
+        backend's touched jobs + pending child cascades for the tick.
+
+        Recomputes state, finalizes, and cascades for every touched job and its
+        descendants, regardless of which backend authored the transition that
+        touched it. Returns the jobs that went terminal this pass.
+        """
+        return cls(
+            overlay=overlay, touched=touched, pending_child_cascades=pending_child_cascades
+        )._recompute_and_finalize(overlay.now.epoch_ms())
+
     @property
     def _snapshot(self) -> TransitionSnapshot:
         return self.overlay.snapshot
@@ -163,13 +190,14 @@ class ReconcileState:
         self,
         plan_results: list[tuple[worker.WorkerReconcilePlan, worker.WorkerReconcileResult]],
         now: Timestamp,
-    ) -> ControllerEffects:
-        """Apply many workers' reconcile outcomes against the shared overlay.
+    ) -> DirectTransitionResult:
+        """Apply pass only: fold many workers' reconcile outcomes against the shared overlay.
 
         Each worker's task updates are applied (with their per-update peer
         cascades) in turn, so a sibling requeued/terminated by an earlier worker
-        is visible to a later worker's overlay-aware guards; the recompute pass
-        then recomputes/finalizes every touched job once for the whole batch.
+        is visible to a later worker's overlay-aware guards. Does NOT recompute
+        or finalize jobs — the controller runs that pass once, over the union of
+        every backend's :class:`DirectTransitionResult` (:func:`run_job_dag_fold`).
         """
         now_ms = now.epoch_ms()
         # Liveness (REACHED/UNREACHABLE) is observed by the backend from its own
@@ -179,28 +207,31 @@ class ReconcileState:
             for update in self._reconcile_updates_for_plan(plan, result):
                 self._apply_update(update, now_ms, source=task.TransitionSource.WORKER_RECONCILE)
 
-        self._recompute_and_finalize(now_ms)
-        return self.overlay.effects
+        return self._direct_result()
 
-    def record_updates(self, updates: list[TaskUpdate]) -> ControllerEffects:
-        """Apply a batch of task-state updates from a direct (e.g. Kubernetes) provider."""
+    def record_updates(self, updates: list[TaskUpdate]) -> DirectTransitionResult:
+        """Apply pass only: fold a batch of task-state updates from a direct (e.g. Kubernetes) provider.
+
+        Does NOT recompute or finalize jobs — see :meth:`reconcile`.
+        """
         now_ms = self._snapshot.now.epoch_ms()
         # Direct providers manage their own hosts -> no build-failed reaping.
         for update in updates:
             self._apply_update(update, now_ms, source=task.TransitionSource.DISPATCH)
-        cascaded_jobs = self._recompute_and_finalize(now_ms)
+        return self._direct_result()
 
-        if cascaded_jobs:
-            self.overlay.emit_log_event(LogEvent(action="dispatch_updates_applied", entity_id="direct"))
-            for job_id in cascaded_jobs:
-                self.overlay.emit_log_event(
-                    LogEvent(
-                        action="job_terminated",
-                        entity_id=job_id.to_wire(),
-                        trigger="dispatch_updates_applied",
-                    )
-                )
-        return self.overlay.effects
+    def _direct_result(self) -> DirectTransitionResult:
+        """Package the apply pass's accumulated effects plus the fold-seed metadata."""
+        effects = self.overlay.effects
+        return DirectTransitionResult(
+            tasks=effects.tasks,
+            attempts=effects.attempts,
+            endpoint_deletions=effects.endpoint_deletions,
+            health=effects.health,
+            log_events=effects.log_events,
+            touched_jobs=list(self.touched),
+            pending_child_cascades=dict(self.pending_child_cascades),
+        )
 
     def fail_workers(self, failures: list[tuple[WorkerId, str | None, str]]) -> ControllerEffects:
         """Cascade a batch of worker failures against the shared overlay.

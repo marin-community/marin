@@ -32,6 +32,7 @@ def _worker(worker_id: str, zone: str | None) -> WorkerSnapshot:
         attrs[WellKnownAttribute.ZONE] = AttributeValue(zone)
     return WorkerSnapshot(
         worker_id=WorkerId(worker_id),
+        address=f"{worker_id}:9000",
         total_cpu_millicores=64_000,
         total_memory_bytes=1024,
         total_gpu_count=0,

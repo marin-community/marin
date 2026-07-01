@@ -79,6 +79,7 @@ from iris.cluster.controller.schema import (
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
+    workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
@@ -161,12 +162,12 @@ def run_worker_daemon_reconcile(
     on ``self._pending_dead``."""
     assert store is not None, "worker-daemon backend reconciled before worker store attached"
     now = Timestamp.now()
-    effects = apply_reconcile(store, worker_results, now=now)
+    direct = apply_reconcile(store, worker_results, now=now)
     events = transport_events + [
-        WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
+        WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in direct.health.build_failed
     ]
     dead = health.apply(events, now_ms=now.epoch_ms())
-    return ReconcileResult(effects=effects), dead
+    return ReconcileResult(direct=direct), dead
 
 
 def store_from_runtime(
@@ -993,8 +994,12 @@ def healthy_active_workers(state: ControllerTestState) -> list[SchedulableWorker
 
 
 def dispatch_task(state: ControllerTestState, task, worker_id: WorkerId) -> None:
+    with state._db.read_snapshot() as tx:
+        row = tx.execute(select(workers_table.c.address).where(workers_table.c.worker_id == worker_id)).one()
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)], health=state._health)
+        ops.task.assign(
+            cur, [Assignment(task_id=task.task_id, worker_id=worker_id, address=row.address)], health=state._health
+        )
     with state._db.transaction() as cur:
         apply_task_observations(
             cur,

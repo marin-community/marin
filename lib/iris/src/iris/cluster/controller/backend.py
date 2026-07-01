@@ -41,7 +41,7 @@ from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
-from iris.cluster.controller.reconcile import ControllerEffects
+from iris.cluster.controller.reconcile import DirectTransitionResult
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.worker import (
     ReconcileInputs,
@@ -196,12 +196,13 @@ class ScheduleResult:
 class ReconcileResult:
     """The committable projection :meth:`TaskBackend.reconcile` authored this tick.
 
-    Carries only ``effects``: a backend that tracks Iris workers folds and tears
+    Carries only ``direct``: a backend that tracks Iris workers folds and tears
     down its own reaped workers, so no worker identity crosses this boundary.
     """
 
-    effects: ControllerEffects = field(default_factory=ControllerEffects)
-    """Task/attempt/job writes for the controller to commit (``commit_effects``)."""
+    direct: DirectTransitionResult = field(default_factory=DirectTransitionResult)
+    """This backend's own workers' direct transitions, for the controller to fold
+    (:func:`iris.cluster.controller.ops.reconcile.fold_direct_results`) and commit."""
 
 
 @dataclass(frozen=True)
@@ -383,9 +384,15 @@ def run_scheduling_decision(
     preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
+    worker_addresses = {w.worker_id: w.address for w in context.workers}
     return ScheduleResult(
         assignments=[
-            Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
+            Assignment(
+                task_id=task_id,
+                worker_id=worker_id,
+                address=worker_addresses[worker_id],
+                priority_band=order.task_band_map.get(task_id),
+            )
             for task_id, worker_id in all_assignments
         ],
         preemptions=[

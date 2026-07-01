@@ -37,7 +37,6 @@ from iris.cluster.controller.backend import (
     plans_from_snapshot,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
-from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
@@ -66,7 +65,7 @@ from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, assignment_for_test
 from tests.cluster.controller.transition_driver import (
     WorkerTaskUpdates,
     apply_task_observations,
@@ -725,7 +724,11 @@ def _setup_assigned_task(state: ControllerTestState, worker_id: str = _W1) -> tu
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
     task_row = tasks[0]
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_row.task_id, wid)],
+            health=state._health,
+        )
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
     assert refreshed.state == job_pb2.TASK_STATE_ASSIGNED
@@ -1016,8 +1019,8 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
             ops.task.assign(
                 cur,
                 [
-                    Assignment(task_id=task_id_1, worker_id=wid1),
-                    Assignment(task_id=task_id_2, worker_id=wid2),
+                    assignment_for_test(cur, task_id_1, wid1),
+                    assignment_for_test(cur, task_id_2, wid2),
                 ],
                 health=state._health,
             )
@@ -1271,7 +1274,11 @@ def test_e2e_converges_to_succeeded(make_controller):
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
 
     # Tick 1: ASSIGNED — controller dispatches the inline spec.
     reconcile_once(ctrl)
@@ -1323,7 +1330,11 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
     task_id = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+        ops.task.assign(
+            cur,
+            [assignment_for_test(cur, task_id, wid)],
+            health=state._health,
+        )
 
     reconcile_once(ctrl)
     reconcile_once(ctrl)
@@ -1630,7 +1641,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
     with state._db.transaction() as cur:
         ops.task.assign(
             cur,
-            [Assignment(task_id=task.task_id, worker_id=wid) for task in tasks],
+            [assignment_for_test(cur, task.task_id, wid) for task in tasks],
             health=state._health,
         )
 
@@ -1707,7 +1718,10 @@ def _setup_coscheduled_running_pair(
     with state._db.transaction() as cur:
         ops.task.assign(
             cur,
-            [Assignment(task_id=t0, worker_id=wid1), Assignment(task_id=t1, worker_id=wid2)],
+            [
+                assignment_for_test(cur, t0, wid1),
+                assignment_for_test(cur, t1, wid2),
+            ],
             health=state._health,
         )
     a0 = query_task(state, t0).current_attempt_id

@@ -247,11 +247,14 @@ class ServiceTestHarness:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
-        # The backend now authors its dispatch effects; the controller (here, the
-        # harness) just commits them.
+        # The backend now authors only its own direct transitions; the harness (here
+        # standing in for the controller) folds the job-DAG recompute/finalize/cascade
+        # pass, then commits, mirroring one control tick.
+        now = Timestamp.now()
         result = self.k8s_provider.reconcile(snapshot)
         with self.db.transaction() as cur:
-            commit_effects(cur, result.effects, endpoints=self.state._endpoints)
+            effects = ops.reconcile.fold_direct_results(cur, [result.direct], now=now)
+            commit_effects(cur, effects, endpoints=self.state._endpoints)
 
     # ── GCP-specific ────────────────────────────────────────────
 
@@ -371,12 +374,14 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == job_pb2.TASK_STATE_PENDING:
             with self.db.read_snapshot() as tx:
-                worker_row = tx.execute(select(workers_table.c.worker_id).limit(1)).first()
+                worker_row = tx.execute(select(workers_table.c.worker_id, workers_table.c.address).limit(1)).first()
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             with self.db.transaction() as cur:
                 ops.task.assign(
-                    cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)], health=self.state._health
+                    cur,
+                    [Assignment(task_id=task_id, worker_id=worker_row.worker_id, address=worker_row.address)],
+                    health=self.state._health,
                 )
 
         worker_id, attempt_id = self._current_attempt_info(task_id)

@@ -14,11 +14,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.ops.reconcile import fold_direct_results
 from iris.cluster.controller.ops.task import apply_dispatch_updates
 from iris.cluster.controller.ops.worker import apply_reconcile
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.reconcile.commit import commit_effects
-from iris.cluster.controller.reconcile.effects import ControllerEffects
+from iris.cluster.controller.reconcile.effects import ControllerEffects, DirectTransitionResult
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate, TransitionSnapshot
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
@@ -84,14 +85,16 @@ def commit_reconcile(
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Author + commit worker-reconcile effects against a write cursor (test glue).
+    """Author + fold + commit worker-reconcile effects against a write cursor (test glue).
 
-    The two steps the controller now does apart (backend authors, controller
+    The three steps the controller now does apart (backend authors its direct
+    transitions, controller folds the job-DAG recompute over the union, controller
     commits), collapsed for tests that drive the kernel directly from a write
     transaction. Loads from ``cur`` so the snapshot reflects the same transaction
     the effects commit into.
     """
-    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    direct = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+    effects = fold_direct_results(cur, [direct], now=now)
     commit_effects(cur, effects, endpoints=endpoints)
     return effects
 
@@ -103,8 +106,9 @@ def commit_dispatch_updates(
     endpoints: EndpointsProjection,
     now: Timestamp,
 ) -> ControllerEffects:
-    """Author + commit direct-provider effects against a write cursor (test glue)."""
-    effects = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
+    """Author + fold + commit direct-provider effects against a write cursor (test glue)."""
+    direct = apply_dispatch_updates(CursorTransitionReader(cur), updates, now=now)
+    effects = fold_direct_results(cur, [direct], now=now)
     commit_effects(cur, effects, endpoints=endpoints)
     return effects
 
@@ -131,21 +135,16 @@ def _observation(uid: str, update: TaskUpdate) -> worker_pb2.Worker.AttemptObser
     )
 
 
-def apply_task_observations(
-    cur: Tx,
-    requests: list[WorkerTaskUpdates],
-    *,
-    health: WorkerHealthTracker,
-    endpoints: EndpointsProjection,
-    now: Timestamp,
-) -> ControllerEffects:
-    """Land ``requests`` through the production reconcile-observation verb.
+def author_task_observations(cur: Tx, requests: list[WorkerTaskUpdates], *, now: Timestamp) -> DirectTransitionResult:
+    """Author (but do not fold or commit) the direct transitions for ``requests``.
 
     Builds one ``(WorkerReconcilePlan, WorkerReconcileResult)`` pair per worker: the
     plan lists each touched attempt's uid as desired (so the production filter
-    accepts the observation) and the result reports the observed state. The
-    kernel-derived build failures ride back on the effects; this helper folds
-    them into ``health`` the way ``Controller._fold_health`` does in production.
+    accepts the observation) and the result reports the observed state. Split out
+    of :func:`apply_task_observations` for tests that author several backends'
+    direct results independently before folding them together in one
+    :func:`fold_direct_results` call, mirroring how the controller authors each
+    backend's reconcile before the single job-DAG fold.
     """
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
     for req in requests:
@@ -161,13 +160,29 @@ def apply_task_observations(
         )
         result = WorkerReconcileResult(worker_id=req.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))
+    return apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
 
-    # Author the effects through the relocated (backend-side) reconcile glue,
-    # reading from this write transaction, then commit them — the controller now
-    # does these as two separate steps.
-    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+
+def apply_task_observations(
+    cur: Tx,
+    requests: list[WorkerTaskUpdates],
+    *,
+    health: WorkerHealthTracker,
+    endpoints: EndpointsProjection,
+    now: Timestamp,
+) -> ControllerEffects:
+    """Land ``requests`` through the production reconcile-observation verb.
+
+    The kernel-derived build failures ride back on the effects; this helper folds
+    them into ``health`` the way ``Controller._fold_health`` does in production.
+    """
+    # Author the direct transitions through the relocated (backend-side) reconcile
+    # glue, reading from this write transaction, fold the job-DAG recompute over
+    # them, then commit — the controller now does these as separate steps.
+    direct = author_task_observations(cur, requests, now=now)
+    effects = fold_direct_results(cur, [direct], now=now)
     commit_effects(cur, effects, endpoints=endpoints)
-    build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
+    build_events = [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in direct.health.build_failed]
     if build_events:
         health.apply(build_events, now_ms=now.epoch_ms())
     return effects

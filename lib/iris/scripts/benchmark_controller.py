@@ -247,10 +247,10 @@ class _FakeProvider:
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
         now = Timestamp.now()
-        effects = apply_reconcile(self._store, worker_results, now=now)
-        events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed]
+        direct = apply_reconcile(self._store, worker_results, now=now)
+        events += [WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in direct.health.build_failed]
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
-        return ReconcileResult(effects=effects)
+        return ReconcileResult(direct=direct)
 
     def run_teardown(self) -> None:
         dead = self._pending_dead
@@ -1286,7 +1286,11 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         if pending_tasks and workers:
             worker_list = list(workers)
             sample_assignments: list[Assignment] = [
-                Assignment(task_id=t.task_id, worker_id=worker_list[i % len(worker_list)].worker_id)
+                Assignment(
+                    task_id=t.task_id,
+                    worker_id=worker_list[i % len(worker_list)].worker_id,
+                    address=worker_list[i % len(worker_list)].address,
+                )
                 for i, t in enumerate(pending_tasks[:20])
             ]
             task_ids_jn = [a.task_id for a in sample_assignments]
@@ -1797,7 +1801,8 @@ def _run_apply_under_contention(
                 t0 = time.perf_counter()
                 with write_db.transaction() as cur:
                     now = Timestamp.now()
-                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    direct = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    effects = ops.reconcile.fold_direct_results(cur, [direct], now=now)
                     commit_effects(cur, effects, endpoints=write_txns._endpoints)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -2527,7 +2532,11 @@ def _build_synthetic_reconcile_state(
     for chunk_start in range(0, num_tasks, chunk):
         slice_tasks = task_ids[chunk_start : chunk_start + chunk]
         assignments = [
-            Assignment(task_id=tid, worker_id=worker_ids[(chunk_start + i) % num_workers])
+            Assignment(
+                task_id=tid,
+                worker_id=worker_ids[(chunk_start + i) % num_workers],
+                address=worker_address,
+            )
             for i, tid in enumerate(slice_tasks)
         ]
         with db.transaction() as cur:
@@ -2777,7 +2786,8 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.db.transaction() as cur:
-        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        direct = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        effects = ops.reconcile.fold_direct_results(cur, [direct], now=now)
         commit_effects(cur, effects, endpoints=state.txns._endpoints)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000
