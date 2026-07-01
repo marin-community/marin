@@ -609,13 +609,10 @@ class ScalingGroup:
     def drain_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
         """Begin tearing down a live slice: mark it DRAINING and return its handle.
 
-        The single entry point for removing a tracked slice — idle scale-down,
-        worker-liveness teardown, and cross-variant preemption all route through it.
         The slice stays tracked (still counted against its reservation pool) so the
-        ledger reports its chips as ``draining`` until ``refresh`` observes the cloud
-        VMs are gone and reaps it via ``detach_slice``. The caller terminates the
-        returned handle to start the deletion. Returns None if the slice is not
-        tracked.
+        ledger reports its chips as ``draining`` until the cloud VMs are observed
+        gone and it is reaped. The caller terminates the returned handle to start
+        the deletion. Returns None if the slice is not tracked.
         """
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
