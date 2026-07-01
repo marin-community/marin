@@ -175,6 +175,24 @@ def test_query_missing_sql_is_400(body):
     assert resp.json() == {"error": "missing 'sql'"}
 
 
+def test_retained_states_are_bounded_lru():
+    """An always-on service must not retain every query's state forever."""
+    runner = _FakeRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor(), max_retained_states=3)
+    ids = [manager.submit(f"SELECT {i}") for i in range(5)]  # distinct SQL, inline → each terminal
+    assert manager.get(ids[0]) is None  # oldest two evicted past the cap
+    assert manager.get(ids[1]) is None
+    assert all(manager.get(qid) is not None for qid in ids[2:])  # newest three kept
+
+
+def test_cache_is_bounded_lru():
+    runner = _FakeRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor(), max_cache_entries=2)
+    for i in range(4):
+        manager.submit(f"SELECT {i}")
+    assert len(manager._cache) == 2  # capped
+
+
 def test_cache_entry_expires_after_ttl():
     """A cached result older than the TTL is dropped (its spilled parquet may be gone)."""
     manager = QueryManager(_FakeRunner(), executor=_InlineExecutor(), cache_ttl=10)

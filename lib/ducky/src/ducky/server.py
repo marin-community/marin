@@ -25,6 +25,7 @@ import os
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 
@@ -84,21 +85,46 @@ class QueryManager:
     """
 
     def __init__(
-        self, runner: QueryRunner, executor: Executor | None = None, max_workers: int = 8, cache_ttl: float = 0.0
+        self,
+        runner: QueryRunner,
+        executor: Executor | None = None,
+        max_workers: int = 8,
+        cache_ttl: float = 0.0,
+        max_retained_states: int = 1024,
+        max_cache_entries: int = 256,
     ) -> None:
         self._runner = runner
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
-        self._states: dict[str, QueryState] = {}
-        self._cache: dict[str, tuple[QueryResult, float]] = {}  # sql -> (result, monotonic ts)
+        # Bounded LRU maps: an always-on service would otherwise grow the heap unbounded,
+        # since each result retains up to preview_row_cap rows. Oldest entries are evicted;
+        # an evicted query_id just 404s on /result (results also live on GCS).
+        self._states: OrderedDict[str, QueryState] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[QueryResult, float]] = OrderedDict()  # sql -> (result, monotonic ts)
         self._cache_ttl = cache_ttl  # seconds; entries older than this are re-run (their parquet may be gone)
+        self._max_retained_states = max_retained_states
+        self._max_cache_entries = max_cache_entries
         self._lock = threading.Lock()
+
+    def _set_state(self, query_id: str, state: QueryState) -> None:
+        """Record a query's state (most-recent-last), evicting the oldest past the cap. Under the lock."""
+        self._states[query_id] = state
+        self._states.move_to_end(query_id)
+        while len(self._states) > self._max_retained_states:
+            self._states.popitem(last=False)
+
+    def _store_cache(self, sql: str, result: QueryResult) -> None:
+        """Cache a result (most-recent-last), evicting the oldest past the cap. Under the lock."""
+        self._cache[sql] = (result, time.monotonic())
+        self._cache.move_to_end(sql)
+        while len(self._cache) > self._max_cache_entries:
+            self._cache.popitem(last=False)
 
     def submit(self, sql: str) -> str:
         query_id = uuid.uuid4().hex
         with self._lock:
             cached = self._cached_result(sql)
             if cached is not None:
-                self._states[query_id] = QueryState(QueryStatus.DONE, result=cached, cached=True)
+                self._set_state(query_id, QueryState(QueryStatus.DONE, result=cached, cached=True))
                 logger.info(
                     "query %s cache hit (%d rows, %s): %s",
                     query_id,
@@ -107,7 +133,7 @@ class QueryManager:
                     _log_sql(sql),
                 )
                 return query_id
-            self._states[query_id] = QueryState(QueryStatus.RUNNING)
+            self._set_state(query_id, QueryState(QueryStatus.RUNNING))
         logger.info("query %s submitted: %s", query_id, _log_sql(sql))
         self._executor.submit(self._run, sql, query_id)
         return query_id
@@ -130,6 +156,7 @@ class QueryManager:
         if self._cache_ttl and (time.monotonic() - created) > self._cache_ttl:
             del self._cache[sql]
             return None
+        self._cache.move_to_end(sql)  # LRU: a hit keeps the entry fresh against eviction
         return result
 
     def _run(self, sql: str, query_id: str) -> None:
@@ -138,12 +165,12 @@ class QueryManager:
         except DuckyError as e:
             logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
             with self._lock:
-                self._states[query_id] = QueryState(QueryStatus.ERROR, error=str(e))
+                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=str(e)))
             return
         except Exception as e:  # background task: record instead of hanging in RUNNING forever
             logger.exception("query %s crashed", query_id)
             with self._lock:
-                self._states[query_id] = QueryState(QueryStatus.ERROR, error=f"internal error: {e}")
+                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=f"internal error: {e}"))
             return
         logger.info(
             "query %s done: %d rows, %s, %d ms",
@@ -153,8 +180,8 @@ class QueryManager:
             result.elapsed_ms,
         )
         with self._lock:
-            self._cache[sql] = (result, time.monotonic())
-            self._states[query_id] = QueryState(QueryStatus.DONE, result=result, cached=False)
+            self._store_cache(sql, result)
+            self._set_state(query_id, QueryState(QueryStatus.DONE, result=result, cached=False))
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
