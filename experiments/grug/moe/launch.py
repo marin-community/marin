@@ -209,16 +209,14 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 def _trainer_mesh_for_grug(grug_trainer: GrugTrainerConfig) -> MeshConfig:
     """Build the validation mesh that matches Grug's compact batch sharding."""
-    replica_axis_size = grug_trainer.replica_axis_size or 1
     return MeshConfig(
         axes={
             "data": -1,
-            "replica": replica_axis_size,
             "expert": grug_trainer.expert_axis_size,
             "model": grug_trainer.model_axis_size,
         },
-        dcn_axes={"replica_dcn": 1},
-        compute_mapping={"batch": ["replica", "data", "expert"]},
+        dcn_axes={"replica_dcn": -1},
+        compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
     )
 
 

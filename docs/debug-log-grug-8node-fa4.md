@@ -101,6 +101,17 @@ MoE-specific trainer validation mesh whose batch mapping is
 diagnostic shape this gives `data=8`, `expert=4`, `model=2`, and 32 batch
 shards, matching the run's global batch size.
 
+The first version of this fix incorrectly pinned `replica_dcn=1` in
+`TrainerConfig.mesh`; on CoreWeave the trainer sees `num_slices=8`, so
+`/dlwh/iris-run-job-20260701-222846` failed during mesh validation with:
+
+`ValueError: DCN product 1 must equal num_slices 8.`
+
+Leave `replica_dcn=-1` as the DCN absorber and map the trainer batch axis over
+`replica_dcn, data, expert`. With eight slices and eight devices per slice, the
+lower-batch diagnostic shape gives `replica_dcn=8`, `data=1`, `expert=4`,
+`model=2`, and 32 batch shards.
+
 ## Future work
 
 - [ ] Capture W&B link, step time, throughput, MFU, and FA4/CE routing once the
