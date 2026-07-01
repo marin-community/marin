@@ -14,6 +14,8 @@ from haliax.quantization import Fp8RaggedDotOp, partition_for_grad_overwrite
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
+gpu_only = pytest.mark.skipif(jax.default_backend() != "gpu", reason="fp8 wgmma only lowers on GPU")
+
 
 def _inputs():
     lhs = jnp.arange(12, dtype=jnp.float32).reshape(3, 4)
@@ -128,15 +130,18 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# FP8 op dispatch tests (C1: bf16 matmul, state plumbing)
+# FP8 op dispatch tests (routing, op=None reference, state plumbing)
 # ---------------------------------------------------------------------------
 
 
-def _fp8_inputs(T=48, K=16, E=4, N=24, seed=0):
+def _fp8_inputs(T=64, K=128, E=4, N=128, seed=0):
+    # FP8-wgmma-friendly dims (K, N multiples of 128 so the FP8 kernel's block tiles
+    # and bf16 output-store swizzle align) driving both the CPU XLA reference and the
+    # H100 FP8 op with the same non-uniform inputs.
     rng = np.random.default_rng(seed)
-    lhs = jnp.asarray(rng.standard_normal((T, K)), jnp.bfloat16)
-    rhs = jnp.asarray(rng.standard_normal((E, K, N)), jnp.bfloat16)
-    group_sizes = jnp.asarray([13, 5, 17, 13], jnp.int32)  # non-uniform, sums to T
+    lhs = jnp.asarray(rng.standard_normal((T, K)) * 0.1, jnp.bfloat16)
+    rhs = jnp.asarray(rng.standard_normal((E, K, N)) * 0.1, jnp.bfloat16)
+    group_sizes = jnp.asarray(rng.multinomial(T, np.ones(E) / E), jnp.int32)  # non-uniform, sums to T
     return lhs, rhs, group_sizes
 
 
@@ -162,13 +167,18 @@ def test_op_none_matches_xla_reference():
     np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
 
 
+@gpu_only
 def test_op_routes_to_op_and_runs_end_to_end():
+    # The FP8 op runs a genuine e4m3 wgmma forward, which only lowers on the H100.
+    # Routing through op= executes that FP8 path end-to-end and matches the bf16
+    # reference to the FP8 forward tolerance.
     lhs, rhs, gs = _fp8_inputs()
     op = Fp8RaggedDotOp.init()
-    out = ragged_dot(lhs, rhs, gs, op=op)  # C1: internally bf16
+    out = ragged_dot(lhs, rhs, gs, op=op)
     ref = ragged_dot(lhs, rhs, gs, op=None)
     assert out.shape == ref.shape
-    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
+    out, ref = np.asarray(out, np.float32), np.asarray(ref, np.float32)
+    assert np.linalg.norm(out - ref) / (np.linalg.norm(ref) + 1e-12) < 5e-2
 
 
 def test_op_state_partitions_as_overwrite():
