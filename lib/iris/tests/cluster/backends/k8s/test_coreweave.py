@@ -268,6 +268,95 @@ def test_start_controller_reconciles_when_already_available():
     provider.shutdown()
 
 
+def _keep_deployment_ready(k8s: InMemoryK8sService, name: str, stop: threading.Event):
+    """Continuously mark the deployment available until stopped.
+
+    Unlike _auto_ready_deployment (one-shot), this keeps re-marking the
+    deployment available across re-applies, since apply_json replaces the
+    manifest and drops its status.
+    """
+    while not stop.is_set():
+        dep = k8s.get_json(K8sResource.DEPLOYMENTS, name)
+        if dep is not None:
+            dep.setdefault("status", {})["availableReplicas"] = dep.get("spec", {}).get("replicas", 1)
+        time.sleep(0.02)
+
+
+def _controller_command(k8s: InMemoryK8sService) -> list[str]:
+    dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
+    return dep["spec"]["template"]["spec"]["containers"][0]["command"]
+
+
+def test_fresh_start_strips_fresh_from_persisted_deployment():
+    """A --fresh start must not leave --fresh baked into the persisted pod command.
+
+    cluster start --fresh wipes the DB and skips checkpoint restore, but if the
+    flag stayed in the Deployment's pod command an involuntary pod respawn
+    (eviction, node upgrade, OOM) would come back --fresh and silently wipe live
+    job state (issue #6808). After the fresh controller is up, start_controller
+    re-applies the Deployment without --fresh so future respawns restore state.
+    """
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    stop = threading.Event()
+    t = threading.Thread(target=_keep_deployment_ready, args=(k8s, "iris-controller", stop), daemon=True)
+    t.start()
+    try:
+        provider.start_controller(cluster_config, fresh=True)
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+    assert "--fresh" not in _controller_command(k8s)
+    provider.shutdown()
+
+
+def test_non_fresh_start_never_includes_fresh():
+    """A normal (non-fresh) start deploys a pod command without --fresh."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+
+    provider.start_controller(cluster_config)
+
+    assert "--fresh" not in _controller_command(k8s)
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_fresh_start_reapplies_deployment_after_ready():
+    """The fresh one-shot re-applies the Deployment: apply(fresh) then apply(non-fresh)."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+
+    applied_fresh_flags: list[bool] = []
+    real_apply = k8s.apply_json
+
+    def recording_apply(manifest):
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "iris-controller":
+            command = manifest["spec"]["template"]["spec"]["containers"][0]["command"]
+            applied_fresh_flags.append("--fresh" in command)
+        return real_apply(manifest)
+
+    k8s.apply_json = recording_apply
+
+    stop = threading.Event()
+    t = threading.Thread(target=_keep_deployment_ready, args=(k8s, "iris-controller", stop), daemon=True)
+    t.start()
+    try:
+        provider.start_controller(cluster_config, fresh=True)
+    finally:
+        stop.set()
+        t.join(timeout=5)
+
+    # First apply carries --fresh (wipe on deploy), the follow-up apply strips it.
+    assert applied_fresh_flags == [True, False]
+    provider.shutdown()
+
+
 def test_start_controller_stops_old_controller_before_reapply():
     """start_controller tears the old Deployment down before applying the new one.
 

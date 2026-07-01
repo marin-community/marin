@@ -338,14 +338,14 @@ class K8sControllerProvider:
         self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
         logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
-        deploy_manifest = _build_controller_deployment(
+        deploy_kwargs = dict(
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
-            fresh=fresh,
         )
+        deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
         # Always stop the old controller before starting the new one. The
         # SQLite state PVC is ReadWriteOnce and a rolling update could briefly
         # mount it from two pods on the same node, corrupting the DB. Iris
@@ -386,7 +386,33 @@ class K8sControllerProvider:
         self.wait_for_deployment_ready()
         self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
+        if fresh:
+            self._persist_deployment_without_fresh(deploy_kwargs)
+
         return self.discover_controller(config.controller)
+
+    def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
+        """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.
+
+        ``--fresh`` wipes the SQLite DB and skips checkpoint restore. That belongs
+        at deploy time only, but ``cluster start --fresh`` bakes the flag into the
+        Deployment's pod ``command``, so it persists in the pod template. Any later
+        involuntary respawn of that pod — node eviction, node upgrade, OOMKill, or
+        the Deployment controller simply recreating a lost pod — then comes back
+        ``--fresh`` and silently wipes live job state. That is what wiped a running
+        canary and reaped its task pods in issue #6808.
+
+        Once the fresh controller is up it has emitted an (empty) checkpoint, so we
+        re-apply the same manifest without ``--fresh``. The Recreate strategy swaps
+        the pod in place on the already-warm controller node, and every future
+        respawn restores from the local state PVC / remote checkpoint instead of
+        wiping. ``--fresh`` thus means "ignore existing state on this deploy", not
+        "wipe on every restart forever".
+        """
+        logger.info("Re-applying controller Deployment without --fresh so the wipe is one-shot")
+        self._kubectl.apply_json(_build_controller_deployment(**deploy_kwargs, fresh=False))
+        self.wait_for_deployment_ready()
+        self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
         return self.start_controller(config)
