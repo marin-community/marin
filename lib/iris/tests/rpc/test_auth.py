@@ -14,7 +14,9 @@ from rigging.timing import Timestamp
 # --- read-only dashboard role: per-method authorization ----------------------
 
 
-@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "GetRpcStats"])
+@pytest.mark.parametrize(
+    "method", ["ListJobs", "GetJobStatus", "ListWorkers", "GetRpcStats", "ListPeers", "GetClusterCapabilities"]
+)
 def test_authorize_method_allows_dashboard_reads(method):
     # Does not raise: read methods are the dashboard role's contract.
     authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)
