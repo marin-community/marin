@@ -84,7 +84,22 @@ probe with explicit `--remat recompute_all`.
 
 ## Results
 
-Pending.
+The resubmitted full-batch job `/dlwh/iris-run-job-20260701-220304` repeated the
+same first-step NCCL/CUDA OOM under `MAY_REMAT=recompute_all`, so remat alone is
+not sufficient at the original batch/model layout.
+
+A lower-memory diagnostic with `MAY_BATCH=32`, `MAY_EXPERT_AXIS=4`, and
+`MAY_MODEL_AXIS=2` failed before reaching training. The failure was a
+Levanter trainer validation bug rather than an OOM:
+
+`ZeroDivisionError: integer modulo by zero`
+
+The trainer validation mesh still treated all 64 devices as batch-parallel while
+Grug's compact mesh excludes the `model` axis from batch sharding. Add a Grug
+MoE-specific trainer validation mesh whose batch mapping is
+`replica, data, expert`, leaving `model` out of the batch axis. For the active
+diagnostic shape this gives `data=8`, `expert=4`, `model=2`, and 32 batch
+shards, matching the run's global batch size.
 
 ## Future work
 

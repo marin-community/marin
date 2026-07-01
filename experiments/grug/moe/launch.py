@@ -30,6 +30,7 @@ from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
@@ -206,6 +207,21 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
     return tracker
 
 
+def _trainer_mesh_for_grug(grug_trainer: GrugTrainerConfig) -> MeshConfig:
+    """Build the validation mesh that matches Grug's compact batch sharding."""
+    replica_axis_size = grug_trainer.replica_axis_size or 1
+    return MeshConfig(
+        axes={
+            "data": -1,
+            "replica": replica_axis_size,
+            "expert": grug_trainer.expert_axis_size,
+            "model": grug_trainer.model_axis_size,
+        },
+        dcn_axes={"replica_dcn": 1},
+        compute_mapping={"batch": ["replica", "data", "expert"]},
+    )
+
+
 class DisabledCheckpointerConfig(CheckpointerConfig):
     """TrainerConfig-compatible checkpoint config that never creates a checkpointer."""
 
@@ -242,6 +258,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         watch=config.watch,
         mp=jmp.get_policy(config.mp),
         tracker=_resolve_tracker(config.tracker, config.run_id),
+        mesh=_trainer_mesh_for_grug(config.grug_trainer),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
