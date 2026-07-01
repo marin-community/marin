@@ -627,6 +627,37 @@ message Controller {
     int32 unroutable_job_count = 2;
     repeated UnroutableJob unroutable_sample = 3;
   }
+
+  message ListPeersRequest {}
+
+  // A federation peer: a remote Iris controller this cluster may delegate whole
+  // jobs to. Distinct from a backend (BackendSummary): a backend is a local
+  // execution substrate this controller drives and folds into its own DAG; a
+  // peer owns its own DAG and is handed whole jobs.
+  message PeerSummary {
+    string peer_id = 1;
+    string controller_address = 2;
+    string dashboard_url = 3;
+    bool reachable = 4;               // last capability heartbeat succeeded
+    int64 last_sync_ms = 5;           // last successful contact, ms since epoch
+    int32 active_federated_jobs = 6;
+    int64 aggregate_spend_micros = 7;
+    // Live markers the peer advertises for what it can currently schedule
+    // (e.g. "available:H100"), refreshed by the capability heartbeat.
+    repeated string advertised_capabilities = 8;
+  }
+
+  message ListPeersResponse {
+    repeated PeerSummary peers = 1;
+  }
+
+  message GetClusterCapabilitiesRequest {}
+
+  // The availability markers a controller advertises to federating peers,
+  // derived from the device types its backends can currently schedule.
+  message GetClusterCapabilitiesResponse {
+    repeated string capabilities = 1;
+  }
 }
 
 // ============================================================================
@@ -700,6 +731,15 @@ service ControllerService {
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
   rpc ListBackends(Controller.ListBackendsRequest) returns (Controller.ListBackendsResponse);
+
+  // Federation peers this controller may delegate whole jobs to. Distinct from
+  // ListBackends: backends are what this controller runs, peers are what it
+  // delegates to.
+  rpc ListPeers(Controller.ListPeersRequest) returns (Controller.ListPeersResponse);
+
+  // Federation capability heartbeat: report the availability markers this
+  // controller advertises to peers that may delegate work to it.
+  rpc GetClusterCapabilities(Controller.GetClusterCapabilitiesRequest) returns (Controller.GetClusterCapabilitiesResponse);
 }
 
 // Service-discovery endpoint registry, leased.

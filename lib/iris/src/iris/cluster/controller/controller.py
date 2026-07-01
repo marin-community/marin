@@ -24,7 +24,7 @@ from sqlalchemy import Row
 
 from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig
+from iris.cluster.config import BackendConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
@@ -80,6 +80,8 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.manager import DEFAULT_HEARTBEAT_INTERVAL, FederationManager
+from iris.cluster.federation.peer import build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -253,6 +255,13 @@ class ControllerConfig:
     cluster_config.endpoints by the daemon entrypoint. Registered as system
     endpoints on the EndpointService during start()."""
 
+    peers: dict[str, PeerConfig] = field(default_factory=dict)
+    """Federation peers (peer id -> declaration). Empty leaves federation inert:
+    no peer connections, no heartbeat, an empty ListPeers view."""
+
+    federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
+    """How often the federation capability heartbeat probes each peer."""
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -352,6 +361,15 @@ class Controller:
         self._endpoints = EndpointsProjection(self._db)
 
         self._threads = threads if threads is not None else get_thread_container()
+
+        # Federation: remote clusters this controller may delegate whole jobs to.
+        # Inert with no peers configured (build_peers returns nothing, the
+        # heartbeat never starts), so a single-cluster deployment is unchanged.
+        self._federation = FederationManager(
+            build_peers(config.peers),
+            threads=self._threads,
+            heartbeat_interval=config.federation_heartbeat_interval,
+        )
 
         # The log client and its tables are built before the backend and autoscaler
         # (their finelog handles are constructor args), so the controller only holds
@@ -615,6 +633,9 @@ class Controller:
         if self._periodic_checkpoint_limiter is not None and not self._config.dry_run:
             self._checkpoint_thread = self._threads.spawn(self._run_checkpoint_loop, name="checkpoint-loop")
 
+        # Start the federation capability heartbeat (a no-op with no peers).
+        self._federation.start()
+
         # Register atexit hook to capture final state for post-mortem analysis.
         # Unregistered in stop() so it doesn't fire against a closed DB.
         self._atexit_registered = True
@@ -653,6 +674,7 @@ class Controller:
         if self._checkpoint_thread:
             self._checkpoint_thread.stop()
             self._checkpoint_thread.join(timeout=join_timeout)
+        self._federation.stop()
 
         self._threads.stop()
         # Each backend owns its autoscaler; close() shuts it down (terminates VMs,
@@ -1528,6 +1550,11 @@ class Controller:
     def backends(self) -> dict[str, TaskBackend]:
         """The controller's ``{backend_id: TaskBackend}`` collection."""
         return self._backends
+
+    @property
+    def federation(self) -> FederationManager:
+        """The federation manager: peer registry, heartbeat, and submit-time router."""
+        return self._federation
 
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         """Return the backend id owning ``scale_group``, or DEFAULT_BACKEND_ID."""

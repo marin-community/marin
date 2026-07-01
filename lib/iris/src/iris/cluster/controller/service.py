@@ -75,6 +75,8 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.capabilities import cluster_capability_markers
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -947,6 +949,9 @@ class ControllerProtocol(Protocol):
     def backends(self) -> dict[str, TaskBackend]: ...
 
     @property
+    def federation(self) -> FederationManager: ...
+
+    @property
     def capabilities(self) -> frozenset[BackendCapability]: ...
 
     @property
@@ -1406,6 +1411,16 @@ class ControllerServiceImpl:
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Job {job_id} is unschedulable: {feasibility_errors[0]} (constraints: {constraints})",
+            )
+
+        # Decide at submit whether this job runs locally or hands off to a
+        # federation peer. Prefer-local is the rule, so every job routes local; a
+        # peer decision fails loud here because job handoff is not enabled.
+        routing = self._controller.federation.route_submit(constraints, job_id.user)
+        if not routing.is_local:
+            raise ConnectError(
+                Code.UNIMPLEMENTED,
+                f"Job {job_id} routed to peer {routing.peer_id!r}, but federated handoff is not enabled",
             )
 
         with self._db.transaction() as cur:
@@ -2976,3 +2991,31 @@ class ControllerServiceImpl:
             unroutable_job_count=len(unroutable),
             unroutable_sample=sample,
         )
+
+    def list_peers(
+        self,
+        request: controller_pb2.Controller.ListPeersRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.ListPeersResponse:
+        """List federation peers this controller may delegate whole jobs to.
+
+        Each summary carries the peer's identity, controller/dashboard addresses,
+        and its last capability-heartbeat result (reachability + advertised
+        markers).
+        """
+        require_identity()
+        return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
+
+    def get_cluster_capabilities(
+        self,
+        request: controller_pb2.Controller.GetClusterCapabilitiesRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.GetClusterCapabilitiesResponse:
+        """Report the availability markers this controller advertises to peers.
+
+        Markers name the device types this cluster's backends can currently
+        schedule (e.g. ``available:H100``).
+        """
+        require_identity()
+        capabilities = cluster_capability_markers(self._controller.backends)
+        return controller_pb2.Controller.GetClusterCapabilitiesResponse(capabilities=capabilities)

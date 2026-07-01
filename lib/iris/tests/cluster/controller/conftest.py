@@ -88,6 +88,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
+from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -101,6 +102,7 @@ from iris.cluster.types import (
     WorkerId,
     is_job_finished,
 )
+from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
@@ -336,6 +338,8 @@ class MockController:
         self.scale_group_to_backend: dict[str, str] = {}
         self.last_unroutable_jobs: dict[str, str] = {}
         self.backends: dict = {DEFAULT_BACKEND_ID: self.provider}
+        # Zero-peer federation: route_submit returns local, ListPeers is empty.
+        self.federation = FederationManager([], threads=get_thread_container())
 
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)

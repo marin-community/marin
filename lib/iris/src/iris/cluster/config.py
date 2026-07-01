@@ -598,6 +598,33 @@ class BackendConfig(_Config):
 
 
 # ---------------------------------------------------------------------------
+# Federation peers
+# ---------------------------------------------------------------------------
+
+
+class PeerConfig(_Config):
+    """One federation peer: a remote Iris controller this cluster may delegate to.
+
+    A peer is *not* a backend. A backend is a local execution substrate this
+    controller drives and folds into its own job DAG; a peer owns its own DAG and
+    is handed whole jobs. A peer declares identity, reachability, and trust — never
+    capabilities, which the peer advertises live at runtime (the capability
+    heartbeat), so a peer that loses a pool stops advertising it without a config
+    edit here.
+
+    ``cluster`` names the peer's cluster manifest, from which the client
+    credentials this controller presents to the peer are resolved (the same
+    ``credentials_for`` path every cross-cluster client uses). Empty ``cluster``
+    means loopback / no-auth — a local or same-VPC peer that trusts the connection.
+    """
+
+    controller_address: str  # peer controller RPC address (reachability)
+    dashboard_url: str = ""  # peer public dashboard origin, for deep links
+    cluster: str = ""  # peer cluster manifest name; resolves the presented credentials
+    static_token: str = ""  # client token for a peer whose manifest uses static auth
+
+
+# ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
 
@@ -623,6 +650,10 @@ class IrisClusterConfig(_OneofConfig):
     backends: dict[str, BackendConfig] | None = None
     user_budgets: list[UserBudgetTier] = Field(default_factory=list)
     endpoints: dict[str, EndpointSpec] = Field(default_factory=dict)
+    # Federation peers (peer id -> declaration): remote Iris controllers this
+    # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
+    # a single-cluster deployment is unchanged.
+    peers: dict[str, PeerConfig] = Field(default_factory=dict)
     # When set, iris auto-derives /system/log-server from this finelog config name.
     log_server_config: str = ""
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
@@ -878,9 +909,24 @@ def _validate_backends(config: IrisClusterConfig) -> None:
                 raise ValueError(f"backend '{backend_id}': kind 'k8s' must not set worker_provider.")
 
 
+def _validate_peers(config: IrisClusterConfig) -> None:
+    """Validate the ``peers:`` federation registry."""
+    for peer_id, peer in config.peers.items():
+        if not peer_id.strip():
+            raise ValueError("peers: peer id must be a non-empty string.")
+        if not peer.controller_address.strip():
+            raise ValueError(f"peer '{peer_id}': controller_address is required.")
+        if peer.static_token and not peer.cluster:
+            raise ValueError(
+                f"peer '{peer_id}': static_token requires cluster to be set (the manifest "
+                "whose static auth the token authenticates against)."
+            )
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_backends(config)
+    _validate_peers(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
