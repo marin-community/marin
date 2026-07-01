@@ -5,6 +5,8 @@ from collections.abc import Sequence
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
+from experiments.evals import dclm_core
+
 # tasks to run (corresponding to lm_eval_harness tasks)
 # subset from from page 43 of the DCLM paper: https://arxiv.org/pdf/2406.11794
 # TODO: add more once supported in lm-eval-harness and/or tested on our end
@@ -24,6 +26,10 @@ CORE_TASKS = (
     # EvalTaskConfig("squadv2", 10),  # reading comprehension benchmark
     EvalTaskConfig("wsc273", 0),  # Winograd Schema Challenge
     EvalTaskConfig("winogrande", 0),  # Winograd challenge, extended to more domains
+)
+
+DCLM_CORE_V2_TASKS = tuple(
+    task.eval_config() for task in dclm_core.dclm_core_tasks() if task.status == dclm_core.TaskStatus.LAUNCHABLE
 )
 
 MMLU_0_SHOT = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
