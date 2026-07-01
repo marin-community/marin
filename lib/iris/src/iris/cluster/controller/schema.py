@@ -36,6 +36,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     literal_column,
+    select,
     text,
 )
 from sqlalchemy.sql.elements import ColumnElement
@@ -271,6 +272,10 @@ jobs_table = Table(
     Column("num_tasks", Integer, nullable=False),
     Column("name", String, nullable=False, server_default=""),
     Column("backend_id", String, nullable=False, server_default=""),
+    # Federation discriminator, orthogonal to backend_id: "" == owned locally,
+    # "<peer>" == handed off to that peer cluster. Mutually exclusive with a
+    # local backend_id by construction (a federated job has backend_id="").
+    Column("child_cluster", String, nullable=False, server_default=""),
     Index("idx_jobs_parent", "parent_job_id"),
     Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
     Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
@@ -348,6 +353,11 @@ tasks_table = Table(
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
     Column("backend_id", String, nullable=False, server_default=""),
+    # Federation discriminator; see jobs.child_cluster. A federated task has
+    # child_cluster set, backend_id="", and no local worker/attempt rows. Every
+    # control-plane reader sources the ``local_tasks`` selectable (child_cluster
+    # = "") so these rows are structurally invisible to the scheduler fold.
+    Column("child_cluster", String, nullable=False, server_default=""),
     UniqueConstraint("job_id", "task_index", name="tasks_job_id_task_index_key"),
     Index("idx_tasks_job_state", "job_id", "state"),
     Index("idx_tasks_backend_state", "backend_id", "state"),
@@ -360,7 +370,20 @@ tasks_table = Table(
         "submitted_at_ms",
         "priority_insertion",
     ),
+    # Partial mirrors of the two hot control-plane scans, restricted to local
+    # rows so the ``local_tasks`` fold-exclusion costs nothing at read time.
+    Index(
+        "idx_tasks_pending_local",
+        "state",
+        "priority_band",
+        "priority_neg_depth",
+        "priority_root_submitted_ms",
+        "submitted_at_ms",
+        "priority_insertion",
+        sqlite_where=text("child_cluster = ''"),
+    ),
     Index("idx_tasks_state", "state"),
+    Index("idx_tasks_state_local", "state", sqlite_where=text("child_cluster = ''")),
     Index("idx_tasks_state_attempt", "state", "task_id", "current_attempt_id", "job_id"),
     Index("idx_tasks_job_failures", "job_id", "failure_count", "preemption_count"),
     Index(
@@ -383,6 +406,17 @@ _RARE_STATE_PROBABILITY = literal_column("0.005")
 def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
     """Hint SQLite that ``predicate`` matches few rows, so it drives off idx_tasks_state."""
     return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
+
+
+# Structural fold-exclusion for federated tasks. Every control-plane reader
+# (scheduling, routing, reconcile/dispatch, budget, capacity/autoscale, cancel,
+# timeout, pruner) sources this selectable instead of raw ``tasks_table`` so
+# rows handed off to a peer (``child_cluster != ''``) are invisible to the fold.
+# SQLite flattens the subquery and drives off the ``… WHERE child_cluster = ''``
+# partial indexes, so the exclusion is free at read time. User-facing read paths
+# (job/task detail, list, status) keep reading raw ``tasks_table`` so federated
+# rows still render in listings.
+local_tasks = select(tasks_table).where(tasks_table.c.child_cluster == "").subquery("local_tasks")
 
 
 task_attempts_table = Table(
@@ -525,6 +559,51 @@ user_budgets_table = Table(
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),
+)
+
+
+# ---------------------------------------------------------------------------
+# Federation sidecars (Model D, Track 2).
+#
+# The federated job/task rows live in ``jobs``/``tasks`` with ``child_cluster``
+# set; state/timing/counts are the single source of truth there. These tables
+# are thin join sidecars carrying only federation-only metadata that has no home
+# in the main rows — the same shape as ``jobs`` ⋈ ``job_config`` today.
+# ---------------------------------------------------------------------------
+
+
+federated_jobs_table = Table(
+    "federated_jobs",
+    metadata,
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
+    Column("peer_id", String, nullable=False),  # == jobs.child_cluster
+    # Deterministic, globally unique remote id: "<parent_cluster>/<job_id>".
+    Column("remote_job_id", String, nullable=False),
+    Column("owner_principal", String, nullable=False),  # auth identity asserted to the peer
+    Column("handoff_state", Integer, nullable=False),  # PENDING_HANDOFF | HANDED_OFF | HANDOFF_FAILED
+    Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
+    Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
+    Column("last_sync_ms", TimestampMsType),
+    Column("terminal_error", String),
+)
+
+
+federation_sync_state_table = Table(
+    "federation_sync_state",
+    metadata,
+    Column("peer_id", String, primary_key=True),
+    # Opaque monotonic watermark into the peer's changelog; one row per peer.
+    Column("cursor", String, nullable=False, server_default=""),
+    Column("last_full_resync_ms", TimestampMsType),
+)
+
+
+federated_tasks_table = Table(
+    "federated_tasks",
+    metadata,
+    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE"), primary_key=True),
+    # Opaque peer-side worker name, display only (a federated task has no local worker row).
+    Column("peer_worker_label", String, nullable=False, server_default=""),
 )
 
 

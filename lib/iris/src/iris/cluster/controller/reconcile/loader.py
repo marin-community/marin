@@ -23,7 +23,7 @@ from iris.cluster.controller.reconcile.snapshot import (
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
-    tasks_table,
+    local_tasks,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.types import (
@@ -174,13 +174,13 @@ def _load_all_tasks_for_jobs(cur: Tx, job_ids: Iterable[JobName]) -> dict[JobNam
         return {}
     rows = cur.execute(
         select(
-            tasks_table.c.task_id,
-            tasks_table.c.job_id,
-            tasks_table.c.task_index,
-            tasks_table.c.state,
-            tasks_table.c.failure_count,
-            tasks_table.c.error,
-        ).where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            local_tasks.c.task_id,
+            local_tasks.c.job_id,
+            local_tasks.c.task_index,
+            local_tasks.c.state,
+            local_tasks.c.failure_count,
+            local_tasks.c.error,
+        ).where(local_tasks.c.job_id.in_(bindparam("job_ids", expanding=True))),
         {"job_ids": ids},
     ).all()
     grouped: dict[JobName, list[TaskHistogramRow]] = {jid: [] for jid in ids}

@@ -67,6 +67,7 @@ from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
+    local_tasks,
     task_attempts_table,
     tasks_table,
     worker_attributes_table,
@@ -2709,7 +2710,7 @@ class ControllerServiceImpl:
             # Pending tasks: the scheduler's pending-task projection, reused here for
             # task_row_can_be_scheduled + band aggregation. No ORDER BY — we aggregate, not display.
             pending_raw = snap.execute(
-                select(*reads.PENDING_TASK_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
+                select(*reads.PENDING_TASK_COLS).where(local_tasks.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
             pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
