@@ -48,8 +48,16 @@
     .spinner { width: 16px; height: 16px; border: 2px solid #d7e0ea; border-top-color: #0d3b66; border-radius: 50%; animation: spin .8s linear infinite; flex: 0 0 auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .loading-row { display: flex; align-items: center; gap: .6em; color: #4a5568; font-size: 13px; }
-    .load-run { font-family: ui-monospace, monospace; color: #0d3b66; }
-    .load-detail { color: #718096; }
+    .overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+      background: rgba(247, 249, 252, .82); backdrop-filter: blur(2px); }
+    .overlay.hidden { display: none; }
+    .overlay-box { text-align: center; padding: 2em; }
+    .spinner-lg { width: 58px; height: 58px; border: 5px solid #d7e0ea; border-top-color: #0d3b66; border-radius: 50%;
+      animation: spin .8s linear infinite; margin: 0 auto 1.1em; }
+    .overlay-msg { font-size: 1.2em; color: #0d3b66; font-weight: 650; }
+    .overlay-msg .run { display: block; margin-top: .35em; font-family: ui-monospace, monospace; font-weight: 500;
+      font-size: .78em; color: #334155; word-break: break-all; max-width: min(680px, 72vw); }
+    .overlay-detail { margin-top: .7em; color: #64748b; font-size: .95em; }
     .tabs { display: flex; gap: .5em; padding: .5em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
     .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
     .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
@@ -155,6 +163,14 @@
     </main>
   </div>
 
+  <div id="overlay" class="overlay hidden">
+    <div class="overlay-box">
+      <div class="spinner-lg"></div>
+      <div class="overlay-msg"><span id="ov-verb"></span> <span class="run" id="ov-run"></span></div>
+      <div class="overlay-detail" id="ov-detail"></div>
+    </div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const DEFAULT_METRICS = [
@@ -239,15 +255,14 @@
       document.querySelectorAll(".run-item").forEach((it) => it.classList.toggle("active", it.dataset.id === runId));
     }
 
-    // Spinner + status message; `runId`/`detail` are optional emphasized parts.
-    function showLoading(msg, runId, detail) {
-      const s = $("status");
-      s.textContent = "";
-      s.appendChild(el("div", "spinner"));
-      s.appendChild(el("span", null, msg));
-      if (runId) s.appendChild(el("span", "load-run", runId));
-      if (detail) s.appendChild(el("span", "load-detail", "· " + detail));
+    // Big centered overlay so it's obvious the page is (re)loading.
+    function showLoading(verb, runId, detail) {
+      $("ov-verb").textContent = verb || "loading";
+      $("ov-run").textContent = runId || "";
+      $("ov-detail").textContent = detail || "";
+      $("overlay").classList.remove("hidden");
     }
+    const hideLoading = () => $("overlay").classList.add("hidden");
 
     async function init() {
       const d = await jget("api/defaults");
@@ -287,8 +302,8 @@
     async function poll(r, verb) {
       const s = await jget("api/mirror_status?" + qs(r));
       if (s.state === "running") { showLoading(verb, r.run, s.detail || "…"); setTimeout(() => poll(r, verb), 1500); return; }
-      if (s.state === "error") { $("status").textContent = "mirror failed: " + s.error; return; }
-      if (s.state === "absent") { $("status").textContent = "run not found"; return; }
+      if (s.state === "error") { hideLoading(); $("status").textContent = "mirror failed: " + s.error; return; }
+      if (s.state === "absent") { hideLoading(); $("status").textContent = "run not found"; return; }
       render(r);
     }
 
@@ -308,7 +323,7 @@
         if (!stillCurrent(r)) return;
         const s = await jget("api/mirror_status?" + qs(r));
         if (s.state === "running") { showLoading("refetching", r.run, s.detail || "…"); setTimeout(p, 1500); return; }
-        if (s.state === "error") { $("status").textContent = "refetch failed: " + s.error; return; }
+        if (s.state === "error") { hideLoading(); $("status").textContent = "refetch failed: " + s.error; return; }
         render(r);
       };
       p();
@@ -451,6 +466,7 @@
     async function render(r) {
       const m = await jget("api/manifest?" + qs(r));
       current = { r, m };
+      hideLoading();
       $("status").textContent = "";
       renderInfo(m);
       $("tabs").classList.remove("hidden");
