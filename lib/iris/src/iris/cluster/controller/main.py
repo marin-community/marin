@@ -168,6 +168,7 @@ def run_controller_serve(
         dry_run=dry_run,
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
+        peers=cluster_config.peers,
     )
 
     # Each worker-daemon backend constructs and owns its liveness tracker, sized by
