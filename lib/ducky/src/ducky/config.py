@@ -79,10 +79,6 @@ class DuckyConfig:
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
 
-    max_result_rows: int = 50_000_000
-    """Hard cap on rows written to the spilled result parquet, so a broad ``SELECT *`` can't
-    materialize an unbounded (multi-TB) object to the store. Beyond it the result is truncated."""
-
     memory_fraction: float = 0.6
     """DuckDB ``memory_limit`` = this fraction of host RAM, a hard self-cap. Leaves generous
     headroom (~40%) for concurrent Arrow previews, httpfs read buffers, and untracked
@@ -162,7 +158,6 @@ class DuckyConfig:
             scratch_bucket=scratch_bucket,
             allowed_buckets=allowed_buckets,
             preview_row_cap=int(os.environ.get(f"{_ENV_PREFIX}PREVIEW_ROW_CAP", cls.preview_row_cap)),
-            max_result_rows=int(os.environ.get(f"{_ENV_PREFIX}MAX_RESULT_ROWS", cls.max_result_rows)),
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             max_concurrent_queries=int(
                 os.environ.get(f"{_ENV_PREFIX}MAX_CONCURRENT_QUERIES", cls.max_concurrent_queries)

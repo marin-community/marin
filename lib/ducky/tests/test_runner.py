@@ -84,13 +84,6 @@ def test_run_query_full_result_not_truncated(make_runner):
     assert result.truncated is False
 
 
-def test_run_query_caps_result_rows(make_runner):
-    # the row cap bounds the materialized object; a broad query is truncated to it
-    runner = make_runner(max_result_rows=10)
-    result = runner.run_query("SELECT * FROM range(100) t(x)", uuid.uuid4().hex)
-    assert result.total_rows == 10
-
-
 def test_remote_scratch_blocks_local_filesystem_access(tmp_path):
     # results to object storage → user SQL must not read local files (e.g. /proc/self/environ)
     config = _make_config("gs://marin-us-east5/tmp/ttl=7d", spill_directory=str(tmp_path / "spill"))

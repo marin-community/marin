@@ -238,9 +238,8 @@ class QueryRunner:
         try:
             # Run the user SQL as a relation and write it out, rather than wrapping it in a
             # COPY (...) string — DuckDB parses it as a complete statement, so a trailing
-            # ';' or '-- comment' just works. The row cap bounds the materialized object so a
-            # broad SELECT * can't write an unbounded (multi-TB) result to the store.
-            cursor.sql(sql).limit(self._config.max_result_rows).write_parquet(result_path)
+            # ';' or '-- comment' just works.
+            cursor.sql(sql).write_parquet(result_path)
             count_row = cursor.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
