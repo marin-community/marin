@@ -31,7 +31,6 @@ from iris.cluster.controller.dashboard import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import DEFAULT_BACKEND_ID
 from iris.rpc.auth import DASHBOARD_ROLE, SESSION_COOKIE
@@ -88,7 +87,6 @@ def service(state, tmp_path, log_client):
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=WorkerAttrsProjection(state._db),
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 

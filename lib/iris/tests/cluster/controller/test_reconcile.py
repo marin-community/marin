@@ -38,6 +38,7 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
@@ -1162,6 +1163,7 @@ class _ScriptedProvider:
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
+    worker_attrs: WorkerAttrsProjection | None = None
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1187,7 +1189,8 @@ class _ScriptedProvider:
         raise NotImplementedError
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
+        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1259,7 +1262,7 @@ def test_e2e_converges_to_succeeded(make_controller):
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1311,7 +1314,7 @@ def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_contro
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1351,6 +1354,7 @@ class _UnreachableProvider:
     autoscaler: Any = None
     _store: BackendWorkerStore | None = None
     health: WorkerHealthTracker = field(default_factory=WorkerHealthTracker)
+    worker_attrs: WorkerAttrsProjection | None = None
     advertised: dict[str, set[str]] = field(default_factory=dict)
     allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
@@ -1370,7 +1374,8 @@ class _UnreachableProvider:
         self.allowed_users = allowed_users
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self._store = store_from_runtime(runtime, self.health, self.autoscale)
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
+        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
 
     def seed_liveness(self) -> None:
         assert self._store is not None
@@ -1482,7 +1487,7 @@ def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, 
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1517,7 +1522,7 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1551,7 +1556,7 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 
@@ -1604,7 +1609,7 @@ def test_reconcile_reaps_worker_at_build_failure_threshold(make_controller):
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
 

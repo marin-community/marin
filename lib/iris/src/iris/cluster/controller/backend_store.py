@@ -251,8 +251,7 @@ class DbBackendWorkerStore:
 
     def _owned_worker_ids(self, snap: Tx) -> set[WorkerId]:
         """The workers this backend owns, by scale group, in the read ``snap``."""
-        groups = reads.worker_scale_groups(snap)
-        return {wid for wid, scale_group in groups.items() if self.owns_scale_group(scale_group)}
+        return reads.owned_worker_ids(snap, self.owns_scale_group)
 
     def _run_templates(self, snap: Tx, reconcile_rows: Sequence[ReconcileRow]) -> dict[JobName, job_pb2.RunTaskRequest]:
         """Per-job ``RunTaskRequest`` templates for the ASSIGNED rows, dropping uncached jobs."""

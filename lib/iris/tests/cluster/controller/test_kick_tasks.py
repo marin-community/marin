@@ -74,7 +74,7 @@ def _running_task_on_controller(ctrl, request=None):
         ctrl._db,
         health=ctrl.provider.health,
         endpoints=ctrl._endpoints,
-        worker_attrs=ctrl._worker_attrs,
+        worker_attrs=ctrl.provider.worker_attrs,
         run_template_cache=ctrl._run_template_cache,
     )
     register_worker(state, "w0", "10.0.0.1", make_worker_metadata())

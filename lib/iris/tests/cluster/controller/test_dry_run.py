@@ -37,11 +37,11 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
     controller = dry_run_controller
     state = ControllerTestState(
         controller._db,
-        # The single backend owns the liveness tracker now; register workers into
-        # it so the controller's schedule path sees them.
+        # The single backend owns the liveness tracker and attrs projection now;
+        # register workers into them so the controller's schedule path sees them.
         health=controller.provider.health,
         endpoints=controller._endpoints,
-        worker_attrs=controller._worker_attrs,
+        worker_attrs=controller.provider.worker_attrs,
         run_template_cache=controller._run_template_cache,
     )
 
