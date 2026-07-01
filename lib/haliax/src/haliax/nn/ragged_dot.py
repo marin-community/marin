@@ -722,7 +722,7 @@ def _triton_quantize_transpose_2d(
     if not _has_jax_triton or jt is None:
         raise NotImplementedError("jax_triton native Triton backend is not available")
     rows, cols = x.shape
-    block_rows = int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16")) if block_rows is None else block_rows
+    block_rows = int(os.environ.get("FP8_QUANTIZE_TRANSPOSE_BLOCK_ROWS", "128")) if block_rows is None else block_rows
     block_cols = int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64")) if block_cols is None else block_cols
     fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
     return jt.triton_call(
@@ -735,7 +735,7 @@ def _triton_quantize_transpose_2d(
         ),
         grid=(triton.cdiv(rows, block_rows), triton.cdiv(cols, block_cols)),
         num_warps=4,
-        num_stages=4,
+        num_stages=2,
         rows=rows,
         cols=cols,
         fp8_max=fp8_max,
@@ -790,7 +790,7 @@ def _triton_quantize_transpose_amax_2d(
     if not _has_jax_triton or jt is None:
         raise NotImplementedError("jax_triton native Triton backend is not available")
     rows, cols = x.shape
-    block_rows = int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16")) if block_rows is None else block_rows
+    block_rows = int(os.environ.get("FP8_QUANTIZE_TRANSPOSE_BLOCK_ROWS", "128")) if block_rows is None else block_rows
     block_cols = int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64")) if block_cols is None else block_cols
     row_blocks = triton.cdiv(rows, block_rows)
     col_blocks = triton.cdiv(cols, block_cols)
@@ -806,7 +806,7 @@ def _triton_quantize_transpose_amax_2d(
         ),
         grid=(row_blocks, col_blocks),
         num_warps=4,
-        num_stages=4,
+        num_stages=2,
         zeroed_outputs=(2,),
         rows=rows,
         cols=cols,
@@ -829,14 +829,7 @@ def _triton_quantize_transpose_3d(
         raise NotImplementedError("jax_triton native Triton backend is not available")
     experts, contract_dim, out_dim = x.shape
     block_contract = (
-        int(
-            os.environ.get(
-                "FP8_QUANTIZE_BLOCK_CONTRACT",
-                os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16"),
-            )
-        )
-        if block_contract is None
-        else block_contract
+        int(os.environ.get("FP8_QUANTIZE_BLOCK_CONTRACT", "128")) if block_contract is None else block_contract
     )
     block_out = (
         int(
@@ -863,7 +856,7 @@ def _triton_quantize_transpose_3d(
             triton.cdiv(out_dim, block_out),
         ),
         num_warps=4,
-        num_stages=4,
+        num_stages=2,
         contract_dim=contract_dim,
         out_dim=out_dim,
         fp8_max=fp8_max,
@@ -941,14 +934,7 @@ def _triton_quantize_transpose_amax_3d(
         raise NotImplementedError("jax_triton native Triton backend is not available")
     experts, contract_dim, out_dim = x.shape
     block_contract = (
-        int(
-            os.environ.get(
-                "FP8_QUANTIZE_BLOCK_CONTRACT",
-                os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16"),
-            )
-        )
-        if block_contract is None
-        else block_contract
+        int(os.environ.get("FP8_QUANTIZE_BLOCK_CONTRACT", "128")) if block_contract is None else block_contract
     )
     block_out = (
         int(
@@ -974,7 +960,7 @@ def _triton_quantize_transpose_amax_3d(
         ),
         grid=(experts, contract_blocks, out_blocks),
         num_warps=4,
-        num_stages=4,
+        num_stages=2,
         zeroed_outputs=(2,),
         contract_dim=contract_dim,
         out_dim=out_dim,
@@ -1567,9 +1553,16 @@ def _mosaic_fp8_ragged_wgrad_transposed_impl(
             os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"),
         )
     )
-    wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k if block_k is not None else 128)))
+    lhs_contract_dim = lhs_t.shape[0]
+    if lhs_contract_dim <= 1280:
+        default_wgrad_block_m = 64
+        default_wgrad_block_k = 128
+    else:
+        default_wgrad_block_m = block_k if block_k is not None else 128
+        default_wgrad_block_k = 64
+    wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(default_wgrad_block_m)))
     wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)))
-    wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", "128"))
+    wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", str(default_wgrad_block_k)))
     return mosaic_transposed_ragged_dot(
         lhs_t,
         rhs_t,
@@ -2042,7 +2035,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
         out_grad_amax_history,
         group_sizes,
     ) = res
-    del lhs, rhs, max_group_size
+    del lhs, q_lhs, rhs, max_group_size
     if implementation != "mosaic":
         raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
     new_out_grad_scale = _delayed_scale(rev_dtype, out_grad_scale, out_grad_amax_history)
@@ -2050,7 +2043,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
     new_out_grad_amax_history = _roll_amax_history(out_grad_amax_history, out_grad_amax)
 
     grad_lhs_block_n = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_N", str(block_n)))
-    grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "64"))
+    grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "128"))
     grad_lhs = _raw_ragged_dot_impl(
         q_g,
         q_rhs,
@@ -2120,7 +2113,7 @@ def fp8_scaled_ragged_dot(
     rev_dtype: DTypeLike = jnp.float8_e5m2,
 ) -> jax.Array:
     """Ragged grouped matmul with delayed-scaling FP8 operands and custom VJP."""
-    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_PRETRANSPOSE", "0") == "1":
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_PRETRANSPOSE", "1") == "1":
         q_lhs, q_lhs_t, new_lhs_scale = _in_q_with_transpose(
             2, quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history
         )

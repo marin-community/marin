@@ -16,6 +16,7 @@ import jax.random as jrandom
 import numpy as np
 
 from haliax.nn import ragged_dot
+from haliax.nn.ragged_dot import _mosaic_fp8_ragged_dot_k_major_impl
 from haliax.quantization import Fp8RaggedDotOp
 
 
@@ -146,6 +147,23 @@ def _bench_shape(
             max_group_size=max_group_size,
         )
 
+    q_lhs = lhs.astype(jnp.float8_e4m3fn)
+    q_rhs_k_major = jnp.swapaxes(rhs.astype(jnp.float8_e4m3fn), 1, 2)
+
+    def bf16_raw_fwd(lhs, rhs):
+        return ragged_dot(lhs, rhs, group_sizes, implementation="triton")
+
+    def fp8_raw_fwd(q_lhs, q_rhs_k_major):
+        return _mosaic_fp8_ragged_dot_k_major_impl(
+            q_lhs,
+            q_rhs_k_major,
+            group_sizes,
+            jnp.bfloat16,
+            fp8_block_m,
+            fp8_block_n,
+            fp8_block_k,
+        )
+
     def bf16_fwd_bwd(lhs, rhs, cot):
         def loss(lhs, rhs):
             out = ragged_dot(lhs, rhs, group_sizes, implementation="triton")
@@ -177,6 +195,21 @@ def _bench_shape(
             [
                 ("fwd", "bf16_triton", bf16_compile_fwd, bf16_fwd_time, shape.fwd_flops),
                 ("fwd", f"fp8_{fp8_implementation}", fp8_compile_fwd, fp8_fwd_time, shape.fwd_flops),
+            ]
+        )
+
+    if mode == "raw_fwd":
+        bf16_compile_fwd, bf16_fwd_time, bf16_out = _time_jit(
+            bf16_raw_fwd, lhs, rhs, warmups=warmups, iters=iters
+        )
+        fp8_compile_fwd, fp8_fwd_time, fp8_out = _time_jit(
+            fp8_raw_fwd, q_lhs, q_rhs_k_major, warmups=warmups, iters=iters
+        )
+        fwd_rel_error = _relative_frobenius(fp8_out, bf16_out)
+        timings.extend(
+            [
+                ("raw_fwd", "bf16_triton", bf16_compile_fwd, bf16_fwd_time, shape.fwd_flops),
+                ("raw_fwd", f"fp8_{fp8_implementation}", fp8_compile_fwd, fp8_fwd_time, shape.fwd_flops),
             ]
         )
 
@@ -234,7 +267,7 @@ def _bench_shape(
         )
 
     speeds = {}
-    for row_mode in ("fwd", "fwd_bwd"):
+    for row_mode in ("fwd", "raw_fwd", "fwd_bwd"):
         mode_rows = [row for row in rows if row["mode"] == row_mode]
         if len(mode_rows) == 2:
             bf16 = next(row for row in mode_rows if row["implementation"] == "bf16_triton")
@@ -244,6 +277,7 @@ def _bench_shape(
         f"{shape.name} E={shape.experts} tpe={shape.tokens_per_expert} K={shape.k} N={shape.n}: "
         f"group[min={min_group_size}, max={max_group_size}] "
         f"fwd speedup={speeds.get('fwd', float('nan')):.3f} "
+        f"raw_fwd speedup={speeds.get('raw_fwd', float('nan')):.3f} "
         f"fwd+bwd speedup={speeds.get('fwd_bwd', float('nan')):.3f} "
         f"fp8 fwd err={fwd_rel_error if fwd_rel_error is not None else float('nan'):.4f}"
     )
@@ -271,7 +305,7 @@ def main() -> None:
         default="mosaic",
         choices=("mosaic", "padded_dense", "triton", "triton_native", "xla"),
     )
-    parser.add_argument("--mode", default="all", choices=("all", "fwd", "fwd_bwd"))
+    parser.add_argument("--mode", default="all", choices=("all", "fwd", "raw_fwd", "fwd_bwd"))
     parser.add_argument("--quick", action="store_true", help="Run only the operating point E=64,tpe=1024.")
     args = parser.parse_args()
 
@@ -299,7 +333,7 @@ def main() -> None:
                     )
                 )
 
-    target_mode = "fwd" if args.mode == "fwd" else "fwd_bwd"
+    target_mode = args.mode if args.mode in ("fwd", "raw_fwd") else "fwd_bwd"
     target = [
         row
         for row in all_rows
