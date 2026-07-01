@@ -183,7 +183,7 @@ Marin's research is made possible by the generous support of our partners.
   </tr>
   <tr>
     <td align="center"><a href="https://www.siegelendowment.org/"><img alt="Siegel Family Endowment" src="docs/design/supporter-sfe.png" height="44"></a></td>
-    <td align="center"><a href="https://tsffoundation.org/"><img alt="The Schmidt Family Foundation" src="docs/design/supporter-schmidt-foundation.png" height="44"></a></td>
+    <td align="center"><a href="https://www.schmidtsciences.org/"><img alt="Schmidt Sciences" src="docs/design/supporter-schmidt-sciences.svg" height="44"></a></td>
   </tr>
   <tr>
     <td align="center"><sub>for supporting development</sub></td>
