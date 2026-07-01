@@ -9,8 +9,10 @@
 > where every piece hooks into today's code. It answers five questions the goal poses — child-job
 > tracking, parent↔child sync, log forwarding from siloed clusters, visualization, and the backend
 > representation — and pins the backend-vs-peer contract so the codebase stays clean and a
-> single-cluster user's workflow is unchanged. **Revised 2026-07-01 after review** — see §12 for the
-> decisions folded in (task-level cache, global finelog, bulk delta-sync, always-on combined UI).
+> single-cluster user's workflow is unchanged. **Revised 2026-07-01 through two review rounds** — see
+> §12 for the maintainer's direction (task-level cache, global finelog, bulk delta-sync, always-on
+> combined UI) and §12.1 for the codex hardening pass (submit-time federation, deterministic handoff
+> id, durable sync changelog, `jobs.state` as source of truth, pruner exclusion, namespaced logs).
 
 ## 1. The mental model: two downstreams, distinguished by ownership
 
@@ -41,23 +43,27 @@ cluster can satisfy (e.g. `cluster=cw-us-east`, or an accelerator only CW has):
 1. **Submit.** User runs an executor / `iris submit` against the parent. The client builds a
    `LaunchJobRequest` and calls `ControllerService.LaunchJob` (`remote_client.py:205`) — *exactly as
    today, unchanged*. One controller URL, one connection (`RemoteClusterClient`, `remote_client.py:71`).
-2. **Route.** The parent's meta-scheduler evaluates the job's constraints. Today it matches them
-   against local **backends** (`route_jobs_to_backends`, `meta_scheduler.py:93`). Federation adds a
-   second target kind: if the constraints match a **peer** — and no local backend can *currently*
-   schedule them — the job is a *federation candidate*. **Prefer-local is the rule** (decided): a job
-   a local backend can run stays local; a peer is only chosen for capacity/hardware the local
-   backends lack. An explicit `cluster=<peer>` pin forces a peer.
-3. **Hand off.** The parent creates a **local job row** for the federated root with
-   `child_cluster=<peer>` set and **no authoritative task rows** (§4.1), then synchronously calls the
-   peer's `LaunchJob` with an idempotency key, recording the returned `remote_job_id` on the handle
-   (§4.2, §5). It returns the *parent's* job id to the user immediately.
+2. **Decide at submit.** Federation is decided **inside `launch_job`, before tasks are materialized**
+   (codex: `ops.job.submit` unconditionally inserts local task rows, `ops/job.py:262`). The parent
+   asks: is any local backend *feasible* for the job's constraints (the feasibility check already in
+   `launch_job`, `service.py:1366`)? If yes → **local** (normal submit; the tick schedules it,
+   possibly waiting for capacity). **Prefer-local is the rule** (decided). Only if no local backend
+   can satisfy the constraints — or an explicit `cluster=<peer>` pin — does peer routing run, a
+   *separate* layer over live peer capability (§9.1).
+3. **Hand off.** For a federated job the parent takes a distinct `submit_federated_handle` path: it
+   persists the `jobs` row (with `child_cluster=<peer>`) + `job_config` + the `federated_jobs` handle
+   with **no task rows** (so `_route_pending` never sees it, §4.3), computes a **deterministic
+   globally unique `remote_job_id`** (§5.1), then synchronously calls the peer's `LaunchJob`. It
+   returns the *parent's* job id to the user immediately.
 4. **Peer runs the whole tree.** The peer materializes the job in **its own** DAG and schedules it on
    **its own** backends. Crucially, the peer injects **its own** `IRIS_CONTROLLER_ADDRESS` into every
-   task's env (`runtime/env.py:150`). So when the running program spawns a child job, `get_iris_ctx()`
-   connects the in-task client back to the **peer** (`client.py:1190`), and the child's `LaunchJob`
-   lands in the **peer's** DAG. **The subtree stays on the peer by construction** — the parent never
-   sees the children. This is Model D's "self-enforcing whole-tree lock," and it is *already true* of
-   the current code: it is simply what `IRIS_CONTROLLER_ADDRESS` does.
+   task's env (`runtime/env.py:150`). So when the running program spawns a child job *via the default
+   in-task client*, `get_iris_ctx()` connects back to the **peer** (`client.py:1190`), and the child's
+   `LaunchJob` lands in the **peer's** DAG. **The subtree stays on the peer by construction** for the
+   common path. (This guarantee is scoped to the default in-task client — a program that hand-builds an
+   `IrisClient.remote(...)` to the parent, `client.py:524`, or an out-of-band submit of a child with a
+   federated parent id, escapes it; the parent handles that server-side: route such a child to the
+   parent's peer via the handle, or reject it — §9.2.)
 5. **Status.** User polls the parent (`iris status <job_id>` / dashboard). The parent serves the
    **cached projection** — job phase, spend, and **per-task state** mirrored into a read-only
    `federated_tasks` table (§4.2) — so the *same* job/task views a local job gets render natively,
@@ -129,47 +135,64 @@ vs backend-owned `workers` are already separate tables — and isolating sync-wr
 scheduler's transactions). **`federated_jobs`** is the handle + job-level summary; **`federated_tasks`**
 is the read-only per-task cache that lets the parent render a real task table.
 
+**`jobs.state` is the single source of truth for the federated job's state (codex).** The current
+list/status/filter paths read `jobs.state`/`started_at_ms`/`finished_at_ms` (`reads.py:256/292`,
+`service.py:1480`); duplicating a mutable `job_state` on `federated_jobs` would give two states that
+diverge. So the sync loop **mirrors the peer's job state transactionally into the `jobs` row** (state +
+timings), and `federated_jobs` holds *only* handle + sync metadata — no duplicate job state, no
+counts. The per-job counts render from `federated_tasks` (a `GROUP BY state`, exactly as local counts
+come from `tasks`). This is safe because a federated job has **no local task rows**, so no scheduler /
+fold / `_route_pending` path ever acts on it — `jobs.state` for a federated handle is a mirrored
+display field, not a scheduling input.
+
 ```python
-federated_jobs_table = Table(
+federated_jobs_table = Table(   # pure handle + sync metadata; NO job state/counts (those live in jobs / federated_tasks)
     "federated_jobs", metadata,
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
-    Column("peer_id", String, nullable=False),                # == jobs.child_cluster (denormalized for standalone sync reads)
-    Column("remote_job_id", String, nullable=False),          # the peer's own JobName; the key for every peer RPC
-    Column("idempotency_key", String, nullable=False),        # request digest — exactly-once handoff + safe retry
-    Column("owner_principal", String, nullable=False),        # auth identity to assert to the peer on delegated RPCs
+    Column("peer_id", String, nullable=False),                # == jobs.child_cluster
+    Column("remote_job_id", String, nullable=False),          # DETERMINISTIC, globally unique: "<parent_cluster>/<job_id>" (see §5.1)
+    Column("owner_principal", String, nullable=False),        # auth identity asserted to the peer on delegated RPCs
     Column("handoff_state", Integer, nullable=False),         # PENDING_HANDOFF | HANDED_OFF | HANDOFF_FAILED
-    # Job-level summary (small, fixed size — counts, not per-task):
-    Column("job_state", Integer, nullable=False),
-    Column("task_count", Integer, nullable=False, server_default="0"),
-    Column("completed_count", Integer, nullable=False, server_default="0"),
-    Column("failure_count", Integer, nullable=False, server_default="0"),
     Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
-    Column("sync_cursor", String, nullable=False, server_default=""),           # peer's delta watermark (§5.2)
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
     Column("last_sync_ms", TimestampMsType),
     Column("terminal_error", String),
 )
 
+# Per-(peer,requester) delta cursor — NOT per-job (codex). One row per peer this controller federates to.
+federation_sync_state_table = Table(
+    "federation_sync_state", metadata,
+    Column("peer_id", String, primary_key=True),
+    Column("cursor", String, nullable=False, server_default=""),   # opaque monotonic watermark into the peer's changelog (§5.2)
+    Column("last_full_resync_ms", TimestampMsType),
+)
+
 # Read-only projection. Written ONLY by the sync loop; the scheduler and the DAG fold never read it.
+# Fields chosen to cover what ListTasks/GetTaskStatus render (codex: the UI needs more than state).
 federated_tasks_table = Table(
     "federated_tasks", metadata,
     Column("job_id", JobNameType, ForeignKey("federated_jobs.job_id", ondelete="CASCADE"), nullable=False),
     Column("task_index", Integer, nullable=False),
     Column("state", Integer, nullable=False),
-    Column("worker_label", String, nullable=False, server_default=""),   # opaque peer-side worker name, for display only
+    Column("worker_label", String, nullable=False, server_default=""),   # opaque peer-side worker name, display only
+    Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
     Column("exit_code", Integer),
     Column("error", String),
+    Column("failure_count", Integer, nullable=False, server_default="0"),
+    Column("preemption_count", Integer, nullable=False, server_default="0"),
     Column("started_at_ms", TimestampMsType),
     Column("finished_at_ms", TimestampMsType),
     PrimaryKeyConstraint("job_id", "task_index"),
 )
 ```
 
-`federated_jobs` carries the handle fields the delegation-model doc enumerated
-(`delegation_model.md:273-280`); the job summary is inherently small (state + four counts, **not**
-per-task, so it does not grow with task count). Per-task detail lives in `federated_tasks` rows, which
-scale exactly like the local `tasks` table (SQLite handles millions of rows), and the sync only writes
-the tasks that *changed* (§5.2), so a 5 000-task job costs one row-set once and then only deltas.
+Per-task detail lives in `federated_tasks` rows, which scale exactly like the local `tasks` table
+(SQLite handles millions of rows), and the sync only writes the tasks that *changed* (§5.2), so a
+5 000-task job costs one row-set once and then only deltas. Attempt-level history (`task_attempts`) is
+**deliberately not mirrored** — the federated task-detail page shows the current attempt from the
+projection and deep-links to the peer for the full attempt list; this is a conscious *reduced* task
+path, not an oversight (codex flagged that the naive projection lacked UI fields — the schema above
+carries the ones `ListTasks`/`GetTaskStatus` actually render).
 
 **Why a task projection at all — the compare/contrast the review asked for.** The first draft cached
 only job-level counts and deep-linked to the peer for tasks. That is minimal but a usability cliff: a
@@ -193,13 +216,14 @@ to one row per task.
 
 | Concern | Where | Change |
 |---|---|---|
-| Schema | `schema.py:255` (jobs), new `federated_jobs_table` + `federated_tasks_table` | add `child_cluster` col + the two projection tables |
-| Migration | new `migrations/0034_federation.py` | `ALTER TABLE jobs ADD COLUMN child_cluster` + `CREATE TABLE federated_jobs` + `federated_tasks`; template is `0033_backend_id.py` verbatim (idempotent `_has_column` guard, `""` backfill) |
-| Route | `controller.py:1011` `_route_pending` → `meta_scheduler.route_jobs_to_backends` | add peer as a target kind; a federation candidate stamps `child_cluster` instead of `backend_id` |
-| Write (handoff) | new `federation.FederationManager.submit` invoked from `launch_job` (`service.py:1097`) after routing, *or* stamped at the routing commit next to `writes.stamp_backend` (`writes.py:208`, `controller.py:1172`) | insert `jobs.child_cluster` + `federated_jobs` row, call peer `LaunchJob` |
-| Sync write | `FederationManager` sync loop (§5.2) | upsert `federated_jobs` summary + changed `federated_tasks` rows; apply tombstones |
-| Read (job) | `reads.get_job_detail` (`reads.py:495`, already selects `jobs.backend_id` at `:512`) | also select `child_cluster`; left-join `federated_jobs` for federated ids |
-| Read (tasks) | `get_job_status`/`list_tasks` (`service.py:1443`, `task_summaries_for_jobs` `:1460`) | for `child_cluster != ""`, read the summary from `federated_jobs` and the task list from `federated_tasks` instead of `tasks` |
+| Schema | `schema.py:255` (jobs), new `federated_jobs` + `federation_sync_state` + `federated_tasks` | add `child_cluster` col + the three tables |
+| Migration | new `migrations/0034_federation.py` | `ALTER TABLE jobs ADD COLUMN child_cluster` + `CREATE TABLE` the three; template is `0033_backend_id.py` verbatim (idempotent `_has_column` guard, `""` backfill) |
+| **Decide (submit)** | `launch_job` (`service.py:1097`), **before** `ops.job.submit` materializes tasks (`ops/job.py:208/262`) | federation is decided **at submit**, not on the routing tick — `ops.job.submit` unconditionally inserts local PENDING task rows and `_route_pending` is driven from them (`controller.py:991`), so a federated job must take a **separate `submit_federated_handle` path** that persists `jobs`(+`child_cluster`)+`job_config`+`federated_jobs` with **no tasks**, and never enters `_route_pending` |
+| Handoff | `federation.FederationManager.submit` | synchronous peer `LaunchJob` with the deterministic `remote_job_id` (§5.1); flip `handoff_state` |
+| Sync write | `FederationManager` sync loop (§5.2) | mirror peer job state into `jobs`; upsert changed `federated_tasks`; apply tombstones; advance `federation_sync_state.cursor` |
+| Read (job) | `reads.get_job_detail` (`reads.py:495`, selects `jobs.backend_id` at `:512`) | also select `child_cluster`; `jobs.state`/timings already carry the mirrored peer state; left-join `federated_jobs` for handle fields |
+| Read (tasks) | `list_tasks`/`get_task_status` (`service.py:417/508/1697`) | for `child_cluster != ""`, read the task list/detail from `federated_tasks` instead of `tasks`/`task_attempts` (reduced attempt path) |
+| Prune | `pruner.py:52`, `reads.py:455` terminal-job prune | **exclude `jobs.child_cluster != ""`** — tombstones are the only deletion path for federated handles (§5.4) |
 | Proto | `job.proto:328` `JobStatus`, next free field **35** | `string child_cluster = 35;` (sibling of `backend_id = 34`) |
 | Dashboard | §8 | always-on `cluster:` annotation + combined execution-targets view |
 
@@ -209,24 +233,32 @@ Two distinct channels, deliberately different in shape.
 
 ### 5.1 Submission = **synchronous handoff**, not a queue
 
-The parent (a) durably writes the `jobs`+`federated_jobs` handle in one local transaction, then (b)
-**synchronously** calls the peer's `LaunchJob` with the `idempotency_key`. On success it records
-`remote_job_id` and flips `handoff_state → HANDED_OFF`. The user's client blocks only for one RPC —
-the same interactive contract as a local submit (which is one SQLite txn + recheck,
-`service.py:1407`).
+**Idempotency comes from a deterministic remote id, not a new protocol (codex).** Today
+`LaunchJobRequest` has no idempotency-key field and duplicate handling is same-job-name *policy*, not
+request-digest dedup (`controller.proto:80`, `service.py:1407`). Rather than add a new idempotency
+mechanism, the parent derives the `remote_job_id` **deterministically and globally uniquely** before
+it calls the peer — `"<parent_cluster_id>/<parent_job_id>"` — and hands the job to the peer *under
+that name*. Re-sending the same handoff is then a same-name submit, which the peer's **existing** KEEP
+policy makes a no-op (`service.py:1254-1297`). The handle stores `remote_job_id` at creation time (so
+the column is non-null from the start), and the peer's global uniqueness also fixes cross-cluster log-key
+collisions (§6).
+
+The parent (a) durably writes the `jobs`+`federated_jobs` handle (with the deterministic `remote_job_id`,
+`handoff_state=PENDING_HANDOFF`) in one local transaction, then (b) **synchronously** calls the peer's
+`LaunchJob`. On ack it flips `handoff_state → HANDED_OFF`. The user's client blocks only for one RPC —
+the same interactive contract as a local submit.
 
 *Why synchronous, not a general queue:* submission is user-facing; the client wants a job id back.
-Durable-handle-first + idempotent-retry gives resilience **without** a queue's complexity:
+Durable-handle-first + deterministic-id retry gives resilience **without** a queue's complexity:
 
 - If the peer is **unreachable**, the handle persists in `PENDING_HANDOFF`; a background retry re-sends
-  with the *same* `idempotency_key` (the peer dedups). The parent surfaces the job as
+  under the same `remote_job_id` (the peer's KEEP policy dedups). The parent surfaces the job as
   `pending (handing off to <peer>)` — never lost, never double-submitted.
 - If the parent **crashes mid-handoff**, recovery re-drives `PENDING_HANDOFF` handles on boot; the
-  idempotency key makes the re-send safe.
+  deterministic id makes the re-send a no-op if the peer already has it.
 
-This is the "exactly-once root handoff" the delegation doc flagged (`delegation_model.md:346`), scoped
-to one durable state machine. A true queue is unnecessary because there is exactly one hop and the
-handle *is* the durable record.
+This is the "exactly-once root handoff" the delegation doc flagged (`delegation_model.md:346`), reduced
+to "a deterministic name + the peer's existing same-name policy" — no new idempotency machinery.
 
 ### 5.2 Status = **one bulk delta-sync RPC per peer** (`FederationSync`)
 
@@ -244,58 +276,78 @@ message FederationSyncRequest {
 message FederationJobDelta {
   string remote_job_id = 1;
   JobStatus summary    = 2;              // job state + counts + spend (reuses the existing message)
-  repeated TaskStatus changed_tasks = 3; // only tasks whose state changed since the cursor
+  repeated TaskStatus changed_tasks = 3; // FULL row for any task whose display fields changed since the cursor
   bool tombstone       = 4;              // peer has pruned this job → parent drops its projection (§5.4)
 }
 message FederationSyncResponse {
   repeated FederationJobDelta deltas = 1;
-  string next_cursor = 2;    // persisted to federated_jobs.sync_cursor; passed back next tick
+  string next_cursor  = 2;   // persisted to federation_sync_state.cursor; passed back next tick
+  bool   cursor_stale = 3;   // cursor older than the changelog floor → parent must full-resync (below)
 }
 rpc FederationSync(FederationSyncRequest) returns (FederationSyncResponse);
 ```
 
-- **Bulk delta, cursor-driven.** The peer returns *only what changed* since `cursor` across **all**
-  jobs this parent handed it — job summaries and the specific tasks that transitioned — plus a
-  `next_cursor`. The parent applies the batch in one transaction (upsert `federated_jobs` +
-  changed `federated_tasks`), advances the cursor, done. Steady state is one small RPC per peer;
-  the payload is bounded by *churn*, not by job or task count. On **first call / after a parent
-  restart** the cursor is empty and the peer replays the full active set (bulk reconcile), then
-  reverts to deltas — so restart recovery and steady state are the *same* code path, just a different
-  starting cursor. This is the whole protocol; there is no second per-job status RPC to maintain.
-- **Peer-side cost is contained.** The peer computes the delta from a monotonic per-job revision it
-  already needs for its own change-tracking (a watermark bumped on every job/task transition); it does
-  **not** grow federation state per requester beyond the cursor. This is the one piece of genuinely
-  new peer-side code, and it is deliberately one RPC + one watermark — not a mirror of the parent's DAG.
-- **Transport-agnostic (per review).** `FederationSync` is a request/response over the peer link; it
-  works **identically** whether the parent dials the peer (baseline) or the peer dials the parent and
-  the parent calls back over that reverse channel (§6.3). The delta protocol is designed once and is
-  independent of who opened the socket — so reverse-dial can be deferred without redesigning sync.
-- **Cadence, adaptive.** Active peers sync on a short interval (a few seconds, matching the dashboard's
-  5–10s job refresh); a peer with no active handoffs backs off. There is no "terminal handles sync
-  forever" — a job goes quiet the moment it is terminal (no more deltas) and is dropped when the peer
-  tombstones it (§5.4).
-- **Spend / budget.** Admission at submit: the parent enforces the per-user global cap *before* handoff
-  (it knows the job's max-band, `service.py:1161`), aggregating local spend + cached federated spend.
-  During the run each job's spend rides back inside its `FederationJobDelta.summary`. Overspend bound =
-  one sync interval of peer spend — acceptable; a reservation protocol is a later hardening
+- **The cursor is per-(peer, requester), and the peer keeps a durable changelog (codex).** The cursor
+  lives in `federation_sync_state.cursor` (one row per peer), **not** per job. On the peer side it
+  indexes a durable **federation changelog** — a monotonic sequence over job/task transitions **and**
+  tombstones, retained past the maximum tolerated parent outage. The parent applies each batch in one
+  transaction (mirror `jobs` state, upsert `federated_tasks`, apply tombstones, advance the cursor).
+  A "changed task" is any task whose *display fields* changed — worker, exit, timing, counts, not just
+  state — so each delta carries the **full projection row**, not a state-only diff.
+- **Full-resync is authoritative set-replacement, so a missed tombstone can't leak (codex).** If the
+  parent's cursor is older than the changelog floor (long outage) the peer sets `cursor_stale`; the
+  parent then does a full resync — fetch the peer's entire active set for this requester and **delete
+  any local federated handle not in that set**. This set-difference is what reclaims a job the parent
+  never saw tombstoned. An empty cursor (first contact) is the same path. So restart/gap recovery and
+  steady state converge, but recovery is a *set replace*, not just an additive replay.
+- **Transport-agnostic (per review).** `FederationSync` is one request/response over the peer link;
+  it works **identically** whether the parent dials the peer (baseline) or the peer dials the parent
+  and the parent calls back over that reverse channel (§6.4) — so reverse-dial defers without a redesign.
+- **Cadence, adaptive.** Active peers sync on a short interval (a few seconds); a peer with no active
+  handoffs drops to a slow capability heartbeat. A terminal job simply stops producing deltas; it is
+  removed only by its eventual tombstone (§5.4).
+- **Spend / budget (codex — needs its own path).** The current submit cap counts active *local task
+  rows* (`service.py:1207`, `reads.py:1181`) and the scheduler sums active local tasks (`budget.py:43`);
+  a zero-local-task federated root bypasses **both**. Federated admission is therefore an explicit
+  transaction: `local_active_spend + Σ cached_federated_spend (+ optional reservation)` against the
+  user cap, evaluated in the `submit_federated_handle` path. Spend then rides back in each
+  `FederationJobDelta.summary`. **Report-and-throttle is explicitly weaker** than local enforcement
+  (overspend bound = one sync interval); a grant/reservation protocol is the hardening
   (`delegation_model.md:419`).
 
-### 5.3 Cancel / preemption = versioned intent, routed
+### 5.3 Cancel / preemption = versioned intent, routed, with defined races
 
 Cancel on the parent bumps `cancel_intent_version` on the handle and routes an idempotent
 `CancelJob(remote_job_id)` to the peer; the next `FederationSync` confirms the peer reached a terminal
 state. Versioning makes a retried/late cancel a no-op. This replaces today's single-transaction subtree
-kill (`ops/job.py:284`) *only at the federation boundary* — local cancel is unchanged.
+kill (`ops/job.py:284`) *only at the federation boundary* — local cancel is unchanged. Because the
+`remote_job_id` is deterministic and set at handle creation (§5.1), the "cancel before we learned the
+remote id" race **does not exist**. The remaining races have defined outcomes (codex):
+
+- **Cancel while `PENDING_HANDOFF`** (peer may not have the job yet): mark the handle cancelled locally
+  and *skip or supersede* the handoff; if the handoff already reached the peer, the deterministic id
+  means the follow-up `CancelJob(remote_job_id)` still targets the right job.
+- **Peer returns `NOT_FOUND`** (job already terminal-and-pruned, i.e. tombstoned): treat the cancel as
+  **satisfied**, not an error — the job is already gone.
+- **Cancel a job the sync last saw as running but the peer has since finished**: idempotent; the next
+  sync reconciles the terminal state.
 
 ### 5.4 Retention = the parent mirrors the peer (no separate GC)
 
 The parent's projection is a cache of what the peer *still holds*, so its lifetime is the peer's
 lifetime — the parent needs **no retention policy of its own** (per review). When the peer's normal
-job pruning removes a finished job, the next `FederationSync` carries a `tombstone` for it; the parent
-deletes the `federated_jobs`/`federated_tasks`/`jobs` rows for that handle in the same batch. Want
-longer history on the parent? Lengthen the *peer's* retention — the parent follows. This reuses the
-peer's existing pruning (`pruner.py`) as the single source of truth for job lifetime and avoids two
-divergent GC clocks.
+job pruning removes a finished job, the next `FederationSync` carries a `tombstone` for it (or a
+full-resync set-difference reclaims it after a long outage, §5.2); the parent deletes the
+`federated_jobs`/`federated_tasks`/`jobs` rows for that handle. Want longer history on the parent?
+Lengthen the *peer's* retention — the parent follows.
+
+**This requires excluding federated handles from the local pruner (codex).** The current pruner
+deletes *any* terminal `jobs` row older than local retention (`pruner.py:52`, `reads.py:455`) — and
+because the sync mirrors the peer's terminal state into `jobs.state`, a federated handle would look
+prunable and the two GC clocks would fight. So the local terminal-job pruner must **skip
+`jobs.child_cluster != ""`**; tombstone application (or full-resync set-difference) is the *only*
+deletion path for a federated handle. This is the single change that makes "the parent mirrors the
+peer" actually hold.
 
 ## 6. Q3 — Logs: one shared global finelog, fed by peer-controller relays
 
@@ -310,33 +362,41 @@ are siloed. So the child controller is the **egress relay** for its silo's logs.
 The child's siloed workers ship logs to the **child controller's** finelog ingest *intra-cluster* —
 the k8s `logship` sidecar resolves `/system/log-server` from the *child* controller's endpoint
 registry and pushes directly (`logship.py:315`), exactly as today (no worker ever needs to reach the
-global service). The change is one level up: the child controller's `LogStack` (`log_stack.py`) is
-configured as a **store-and-forward relay** — instead of (or in addition to) storing locally, it
-forwards each batch to the shared global finelog over its egress. Log **keys** are already
-cluster-agnostic (`/user/<job>/<task>:<attempt>`, `/system/worker/<id>`; `log_keys.py`), so many
-clusters multiplex into one store with **no key remapping** — the parent's `remote_job_id` *is* the
-key the peer already wrote under. A local buffer at the child absorbs transient egress blips and
-retries; the global store is the single durable, queryable surface. finelog's existing remote-archive
-tiering (GCS) bounds hot storage in the global service.
+global service). The change is one level up: the child controller runs a **new durable relay** that
+forwards each batch to the shared global finelog over its egress.
+
+**The relay is net-new, not "configure the existing `LogStack`" (codex).** Today `LogStack` is just a
+client/server holder (`log_stack.py:33`) and a finelog `Table` is a *bounded in-memory queue that
+drops oldest rows on overflow and drops non-retryable failures* (`log_client.py:190/334/421`) — nowhere
+near store-and-forward. So the relay is a real component: a durable spool with per-batch ids,
+retry-dedup, backpressure, and loss metrics, so a child-region egress stall doesn't silently drop logs.
+
+**Keys must be cluster-namespaced (codex — the v2 "no remapping" claim was wrong).** Iris log keys are
+just `/user/<job>/<task>:<attempt>` (`log_keys.py:52`) and finelog keys are opaque strings
+(`finelog/types.py`), so two clusters running the same user/job path would **collide** in one store.
+Two things prevent it, and they compose: (a) the relay stamps a **cluster id** (a per-cluster
+namespace/key-prefix) on everything it forwards; and (b) a federated job's logs are already written
+under the **globally unique** `remote_job_id` (`<parent_cluster>/<job_id>`, §5.1). So the parent's log
+query targets `<peer_cluster>` + `remote_job_id` — a real (small) remapping, not "none."
 
 ### 6.2 Reads hit the one global finelog
 
 There is no per-peer log proxy. The parent (and every client) queries the shared finelog exactly as a
 single-cluster controller queries its own today — via `FetchLogs`/`StatsService.Query` through the
-`EndpointProxy` (`dashboard.py:298`). Because the store is global and keys are cluster-agnostic, a
-federated job's logs, a local job's logs, and even a **cross-cluster** query ("all failures for user
-X across every cluster") are one query against one store. The parent still translates its own job id →
-the handle's `remote_job_id` when building the `FetchLogs` source (a `federated_jobs` lookup), because
-that is the key the peer wrote under.
+`EndpointProxy` (`dashboard.py:298`). Because the store is global and keys are cluster-namespaced, a
+federated job's logs, a local job's logs, and even a **cross-cluster** query ("all failures for user X
+across every cluster") are one query against one store. The parent translates its own job id → the
+`<peer_cluster>` namespace + `remote_job_id` when building the `FetchLogs` source (a `federated_jobs`
+lookup), because that is where the peer's relay wrote it (§6.1).
 
 ### 6.3 What the global store requires (honest costs)
 
-- **Auth — a real addition.** A globally shared finelog receives pushes from *many* controllers across
-  the internet, so it can no longer rely on being private behind one controller's `EndpointProxy`
-  (finelog has **no auth** today, `app.rs:100`). The global finelog must be fronted by an authenticated
-  ingress — reuse the rigging `server_auth` verifier so each relaying controller authenticates its
-  pushes, or co-locate it with a controller and reach it only through that controller's authed proxy.
-  This is net-new work the per-cluster model avoided; it is the price of a single store.
+- **Auth is mandatory, and net-new.** A globally shared finelog receives pushes from *many* controllers
+  across the internet, so it can no longer rely on being private behind one controller's `EndpointProxy`
+  (finelog has **no server auth** today — `lib/finelog/AGENTS.md:29`, `app.rs:100`). The global finelog
+  must be fronted by an authenticated ingress — reuse the rigging `server_auth` verifier so each relaying
+  controller authenticates its pushes, or co-locate it with a controller and reach it only through that
+  controller's authed proxy. This is the one genuinely new security surface the design adds.
 - **Cross-region egress.** Relaying every cluster's logs to one region is real bandwidth (the
   `AGENTS.md` cost concern), unlike a query-time proxy that moved bytes only on demand. It is the
   deliberate trade for a uniform, always-available, cross-cluster-queryable log surface. finelog
@@ -363,14 +423,20 @@ Today these are **controller-mediated** — the client hits the controller, whic
 exists). For a federated job the target task lives in the *peer's* DAG, so the parent cannot resolve
 it. **Recommendation: proxy through the peer controller** (not redirect the client):
 
-- The parent's on-demand handler checks the target job's `child_cluster`. If set, it forwards the RPC
-  to the peer controller (keyed by the handle's `remote_job_id`), which does its *own* normal
-  `task→worker` resolution internally and returns the result. Uniform auth (the parent stays the trust
-  boundary), one endpoint for the user, no client reach/creds into the peer.
+- The parent's on-demand handler branches on the target job's `child_cluster` *before* the local
+  `task→worker→backend` resolution (`service.py:2222/2556`). If set, it forwards the RPC to the peer
+  controller (keyed by the handle's `remote_job_id`), which does its *own* `task→worker` resolution and
+  returns the result. Uniform auth (the parent stays the trust boundary), one endpoint for the user, no
+  client reach/creds into the peer.
 - Redirect (hand the client the peer address) is the alternative — parent off the hot path, but the
   client needs direct reach + peer auth, which siloed peers may deny. Proxy is the safer baseline; this
   is the open "proxy vs redirect" question from the spec (`spec.md:216`), resolved toward **proxy** for
   the siloed threat model.
+- **Races have defined outcomes (codex).** The parent's `federated_tasks` projection is last-sync
+  stale, so an exec/profile may target a task the peer has since moved or finished — the *peer* is
+  authoritative and returns its live answer or a `NOT_FOUND`, which the parent surfaces verbatim (it
+  does not guess from the projection). A federated job whose handle is tombstoned resolves exec/profile
+  to `NOT_FOUND` immediately, without a peer round-trip.
 
 ## 8. Q4 — Visualization
 
@@ -450,15 +516,29 @@ not a merge of the concepts.
   these live, piggybacked on the `FederationSync` response (or a lightweight capability heartbeat when a
   peer has no active jobs), so a peer that loses a pool stops attracting routes within one interval — no
   config edit, no stale routing to a peer that can't actually run the work.
-- **Router.** `route_jobs_to_backends` gains a peer arm: build the constraint index over
-  *backends ∪ peers* using the live advertised capabilities; a job that a local backend can currently
-  schedule stays local (**prefer-local, decided** — a peer is only for capacity/hardware the local
-  backends lack); a job only a peer can satisfy becomes a federation candidate; an explicit
-  `cluster=<peer>` constraint forces a peer. This reuses the existing constraint-matcher and the
-  `region ANY/PINNED` machinery — peers are just another set of match targets.
+- **Peer routing is a *separate layer*, not folded into `route_jobs_to_backends` (codex).** The
+  existing meta-scheduler index is built **once at startup** from immutable backend attributes and
+  picks a match lexicographically with no prefer-local phase (`controller.py:328`,
+  `meta_scheduler.py:93`) — it is the wrong home for *dynamic* peer capabilities. So federation adds a
+  distinct step, run at **submit** (§2, before task materialization): (1) is any local backend
+  *feasible*? → local (prefer-local, decided); (2) else match the job against **live** peer capability
+  snapshots; (3) an explicit `cluster=<peer>` forces a peer. The peer step **tolerates rejection** — a
+  peer whose live capacity vanished between the snapshot and the handoff can reject, and the layer
+  requeues / tries another peer / falls back to local-and-wait, rather than wedging the job.
 - **Connection.** `RemoteClusterClient` already encapsulates "one connection to one controller"
   (`remote_client.py:71`); a `FederationPeer` holds one per peer, keyed by peer id — the natural place
-  the reverse-dial transport (§6.3) plugs in later.
+  the reverse-dial transport (§6.4) plugs in later.
+
+### 9.2 Out-of-band child submits (closing the subtree-lock gap)
+
+The subtree lock (§2, step 4) is self-enforcing only for the *default in-task client*. Two escapes exist
+(codex): a program that hand-builds an `IrisClient.remote(...)` pointed at the parent
+(`client.py:524`), and an out-of-band client that submits a job whose *parent id* is a federated job,
+directly to the parent. The parent closes both **server-side** in `launch_job`: when a submitted job's
+parent id resolves to a `child_cluster != ""` handle, the parent does not materialize it locally — it
+**forwards the submit to that parent's peer** via the handle (the child belongs on the peer with the
+rest of the tree), or rejects it if forwarding is disallowed. So the lock is enforced by the parent's
+submit path, not merely by `IRIS_CONTROLLER_ADDRESS` convention.
 
 ## 10. Auth / trust across the peer link
 
@@ -479,19 +559,22 @@ only the router (which grows the peer arm). Suggested sequence, each PR inert un
    0034; `JobStatus.child_cluster`; `get_job_status`/`list_tasks` federated branch reading the
    projection. *No behavior yet* — no peer can be configured, so every job is local and the column is
    always `""`. Pure additive, single-cluster byte-identical.
-2. **Federation module + router arm.** The `iris.cluster.federation` package (§9.1): `peers:` config,
-   `FederationPeer`, dynamic capability advertisement, the `route_jobs_to_backends` prefer-local peer
-   target, `ListPeers`/`PeerSummary`. Still inert with zero peers configured.
-3. **Handoff + `FederationSync`.** `FederationManager`: synchronous durable handoff (§5.1) + the bulk
-   delta-sync loop and its peer-served `FederationSync` endpoint (§5.2) + tombstone retention (§5.4) +
-   versioned cancel (§5.3) + budget admission. First end-to-end federated job (parent + one peer).
-4. **Global finelog + exec proxy.** Stand up the shared finelog with its authenticated ingress (§6.3);
-   configure the child controller's `LogStack` as a relay (§6.1); proxy on-demand exec/profile through
-   the peer controller (§7).
+2. **Federation module + submit-time routing.** The `iris.cluster.federation` package (§9.1): `peers:`
+   config, `FederationPeer`, dynamic capability advertisement, the **separate** submit-time prefer-local
+   peer-routing layer (§9.1, not folded into `route_jobs_to_backends`), `ListPeers`/`PeerSummary`. Still
+   inert with zero peers configured.
+3. **Handoff + `FederationSync`.** `FederationManager`: the `submit_federated_handle` path with a
+   deterministic `remote_job_id` (§5.1) + the bulk delta-sync loop and its peer-served `FederationSync`
+   endpoint incl. the durable changelog + full-resync (§5.2) + tombstone retention & pruner exclusion
+   (§5.4) + versioned cancel with race semantics (§5.3) + the federated budget-admission path. First
+   end-to-end federated job (parent + one peer).
+4. **Global finelog + exec proxy.** Stand up the shared finelog with its mandatory authenticated ingress
+   (§6.3); build the child controller's **durable log relay** (§6.1, a new spool — not a `LogStack`
+   flag) with cluster-namespaced keys; proxy on-demand exec/profile through the peer controller (§7).
 5. **Dashboard.** Always-on `cluster` column + `Cluster` detail row + **native federated task views**
    off the projection + the combined execution-targets tab (§8, §8.1). Screenshot smoke updates to
    include the always-on tab (a single-cluster cluster shows one card, not a hidden tab).
-6. **(Later) reverse-dial transport** for fully-egress-blocked peer controllers (§6.3) — a transport
+6. **(Later) reverse-dial transport** for fully-egress-blocked peer controllers (§6.4) — a transport
    swap under `FederationPeer`, with the `FederationSync` protocol unchanged.
 
 The contract that keeps the codebase clean: **the backend seam never learns federation exists** (no
@@ -513,6 +596,33 @@ meeting only at the router.
 - **Prefer-local routing** (§2, §9.1). *(Comment: prefer-local.)*
 - **Dynamic `available:X` capability advertisement** on the sync channel (§9.1). *(Comment: dynamic availability.)*
 - **`iris.cluster.federation` module** owns the abstractions (§9.1). *(Comment: peering/federation module.)*
+
+### 12.1 Hardening from the codex review cycle (2026-07-01)
+
+The v2 direction held ("Model D is the right boundary"), but codex flagged that v2 hand-waved where a
+zero-task federated job meets the current DAG-shaped code. Folded in:
+
+- **Federation decided at *submit*, before task materialization** — a separate `submit_federated_handle`
+  path, because `ops.job.submit` unconditionally inserts local tasks (§2, §4.3). *(BLOCKER)*
+- **Idempotency via a deterministic globally-unique `remote_job_id`** + the peer's existing same-name
+  policy — no new idempotency field; `remote_job_id` known at handle creation (§5.1). *(BLOCKER)*
+- **Per-(peer,requester) cursor in `federation_sync_state` + a durable peer changelog with retained
+  tombstones + full-resync-as-set-replacement** so a missed tombstone can't leak (§4.2, §5.2). *(BLOCKER)*
+- **`jobs.state` is the single source of truth** (sync mirrors peer state into `jobs`); dropped the
+  duplicate `job_state`/counts from `federated_jobs`; counts derive from `federated_tasks` (§4.2). *(MAJOR)*
+- **Exclude `child_cluster != ""` from the local pruner** — tombstones are the only deletion path (§5.4). *(BLOCKER)*
+- **Expanded `federated_tasks` to the fields `ListTasks`/`GetTaskStatus` render** (attempt drill-down
+  stays a deep-link — a deliberate reduced path) (§4.2). *(MAJOR)*
+- **Cluster-namespaced global-finelog keys** (the "no remapping" claim was wrong) + a **new durable
+  relay spool** (the finelog `Table` drops on overflow; `LogStack` is not a relay) + **mandatory auth** (§6). *(MAJOR)*
+- **Peer routing is a separate submit-time layer** over live snapshots with rejection/retry — not folded
+  into the static, startup-built `route_jobs_to_backends` index (§9.1). *(MAJOR)*
+- **Federated budget admission is its own transaction** (local + cached federated spend + optional
+  reservation); report-and-throttle marked explicitly weaker than local enforcement (§5.2). *(MAJOR)*
+- **Cancel/exec race semantics defined** (peer `NOT_FOUND` after tombstone, cancel while
+  `PENDING_HANDOFF`, exec against a stale projection) (§5.3, §7). *(MAJOR)*
+- **Subtree lock scoped to the default in-task client**, with server-side handling of out-of-band child
+  submits at the parent (§2 step 4, §9.2). *(MINOR)*
 
 ## 13. Open questions
 
