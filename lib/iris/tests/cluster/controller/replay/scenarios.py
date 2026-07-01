@@ -26,8 +26,8 @@ from rigging import timing
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller.conftest import worker_daemon_backends_for_prune
 from tests.cluster.controller.replay.events import (
     AddEndpoint,
     ApplyDirectProviderUpdates,
@@ -560,9 +560,8 @@ def scenario_prune_old_data(transitions: ControllerTestState, clock: FrozenClock
     # Direct call: prune_old_data is intentionally not an IrisEvent.
     prune_old_data(
         transitions._db,
-        transitions._health,
+        worker_daemon_backends_for_prune(transitions),
         transitions._endpoints,
-        transitions._worker_attrs,
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
         slice_retention=Duration.from_seconds(3600),

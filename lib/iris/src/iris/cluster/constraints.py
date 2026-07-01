@@ -354,30 +354,6 @@ def availability_constraint(variant: str) -> Constraint:
     )
 
 
-def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
-    """Map a deprecated ``ReservationConfig`` to hard ``availability:<variant>`` constraints.
-
-    Back-compat shim for pre-availability clients (see job.proto): each reservation
-    entry's accelerator variant becomes one hard availability constraint. Entries
-    with no accelerator device contribute nothing (availability is accelerators
-    only). Deduplicated by key so duplicate entries collapse to a single constraint.
-    """
-    constraints: list[Constraint] = []
-    seen: set[str] = set()
-    for entry in reservation.entries:
-        if not entry.resources.HasField("device"):
-            continue
-        variant = get_device_variant(entry.resources.device)
-        if not variant or variant == "auto":
-            continue
-        key = availability_key(variant)
-        if key in seen:
-            continue
-        seen.add(key)
-        constraints.append(availability_constraint(variant))
-    return constraints
-
-
 def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 
@@ -998,6 +974,29 @@ def is_cpu_device_type_constraint(c: Constraint) -> bool:
 def is_any_region_marker(c: Constraint) -> bool:
     """True if ``c`` is the ANY-region marker: a ``region EXISTS`` constraint."""
     return c.key == WellKnownAttribute.REGION and c.op == ConstraintOp.EXISTS
+
+
+BACKEND_CONSTRAINT_KEY = "backend"
+"""Reserved constraint key carrying a ``--backend`` routing directive.
+
+A ``backend EQ <id>`` constraint pins a job to a named task backend. The
+meta-scheduler reads it via :func:`backend_directive` and strips it (no worker
+advertises a ``backend`` attribute, so a leftover hard ``backend=X`` constraint
+would match no worker and starve the task) before per-backend scheduling sees
+the constraints."""
+
+
+def strip_backend_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
+    """Drop the reserved ``backend`` routing directive from ``constraints``."""
+    return [c for c in constraints if c.key != BACKEND_CONSTRAINT_KEY]
+
+
+def backend_directive(constraints: Sequence[Constraint]) -> str | None:
+    """Return the ``--backend`` target from a ``backend EQ <id>`` constraint, if any."""
+    for c in constraints:
+        if c.key == BACKEND_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
+            return str(c.values[0].value)
+    return None
 
 
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:

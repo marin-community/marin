@@ -24,7 +24,6 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.types import ExecutorStep, InputName, VersionedValue, ensure_versioned, this_output_path
 from marin.training.run_environment import add_run_env_variables
 from marin.training.training import _add_default_env_variables
 
@@ -44,13 +43,13 @@ class ConvertCheckpointStepConfig:
     Configuration for converting a single Levanter checkpoint into HuggingFace format.
     """
 
-    checkpoint_path: str | InputName | VersionedValue[str]
+    checkpoint_path: str
     trainer: TrainerConfig
     model: LmConfig
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
     resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
+    output_path: str = ""
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
     override_vocab_size: int | None = None
@@ -67,7 +66,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
     default_launch_config = levanter.infra.cli_helpers.load_config()
 
-    checkpoint_path = config.checkpoint_path  # type: ignore[assignment]
+    checkpoint_path = config.checkpoint_path
     if config.discover_latest:
         discovered = discover_latest_checkpoint(checkpoint_path)
         if not discovered:
@@ -118,76 +117,3 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     )
     job = client.submit(job_request)
     job.wait(raise_on_failure=True)
-
-
-def convert_checkpoint_to_hf_step(
-    name: str,
-    checkpoint_path: InputName | str,
-    *,
-    trainer: TrainerConfig,
-    model: LmConfig,
-    resources: ResourceConfig | None = None,
-    upload_to_hf: bool | str | RepoRef = False,
-    tokenizer: str | None = None,
-    override_vocab_size: int | None = None,
-    config_overrides: dict[str, Any] | None = None,
-    checkpoint_subpath: str = "model",
-    max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
-    save_tokenizer: bool = True,
-    use_cpu: bool = False,
-    override_output_path: str | None = None,
-    discover_latest: bool = False,
-) -> ExecutorStep:
-    """
-    Creates an ExecutorStep that materializes a HuggingFace checkpoint from a saved Levanter checkpoint.
-
-    Args:
-        name: Step name. Commonly prefixed with ``hf/`` to keep outputs organized.
-        checkpoint_path: Path (or InputName) pointing to a Levanter checkpoint directory, e.g.
-            ``train_step.cd("checkpoints/ckpt-210388")``.
-        trainer: TrainerConfig that matches the topology the checkpoint was saved with.
-        model: Model configuration that produced the checkpoint.
-        resources: Hardware resources to use when running the conversion. Defaults to CPU-only
-            execution (8 CPU, 64g RAM, 64g disk); override when using an accelerator.
-        upload_to_hf: Optional HuggingFace repo reference (bool, repo-id string, or RepoRef).
-        tokenizer: Optional tokenizer override. Defaults to the tokenizer specified by ``model``.
-        override_vocab_size: If provided, resizes the vocabulary before exporting.
-        config_overrides: Optional dict merged into the HF config prior to saving.
-        checkpoint_subpath: Checkpoint subtree to load as the model parameters. Standard Levanter LM checkpoints use
-            ``model``; GrugMoE training-state checkpoints use ``params``.
-        max_shard_size: Maximum safetensors shard size, in bytes. Defaults to Levanter's standard HF export size.
-        save_tokenizer: Whether to emit tokenizer files alongside the model weights.
-        use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
-            automatically if the provided resources do not expose an accelerator.
-        override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
-    """
-
-    checkpoint_value: InputName | VersionedValue[str]
-    if isinstance(checkpoint_path, InputName):
-        checkpoint_value = checkpoint_path
-    else:
-        checkpoint_value = ensure_versioned(checkpoint_path)
-
-    config = ConvertCheckpointStepConfig(
-        checkpoint_path=checkpoint_value,
-        trainer=trainer,
-        model=model,
-        resources=resources or _default_export_resources(),
-        upload_to_hf=upload_to_hf,
-        tokenizer=tokenizer,
-        override_vocab_size=override_vocab_size,
-        config_overrides=config_overrides,
-        checkpoint_subpath=checkpoint_subpath,
-        max_shard_size=max_shard_size,
-        save_tokenizer=save_tokenizer,
-        use_cpu=use_cpu,
-        discover_latest=discover_latest,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=convert_checkpoint_to_hf,
-        config=config,
-        override_output_path=override_output_path,
-    )

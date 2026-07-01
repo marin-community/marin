@@ -44,7 +44,7 @@ dependencies = [
     "einops",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
-    "transformers>=4.57.1,<5.0",
+    "transformers>=5.5.3,<6.0",
     "chex>=0.1.86",
     "optax>=0.1.9,<0.2.7",
     "wandb>0.24.0",
@@ -80,7 +80,7 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 
 [project.optional-dependencies]
 gpu = [
-  "jax[cuda13]==0.10.0",
+  "jax[cuda13]==0.10.1",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -100,7 +100,7 @@ deepep = [
   # The Levanter wheel ships the JAX FFI shim sources; CUDA toolchain dependencies
   # come from the host GPU environment.
 ]
-tpu = ["jax==0.10.0", "jaxlib==0.10.0", "libtpu==0.0.40"]
+tpu = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
@@ -208,7 +208,7 @@ mypy_path = ["src"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "-n auto"
+addopts = "-n auto -m 'not slow and not torch' --import-mode=importlib"
 pythonpath = ["src", "tests"]
 filterwarnings = [
     "ignore:Transparent hugepages are not enabled\\..*:UserWarning:jax._src.cloud_tpu_init",

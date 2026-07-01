@@ -21,8 +21,12 @@ from unittest.mock import MagicMock
 import pytest
 from zephyr.execution import ZephyrCoordinator
 from zephyr.shuffle import ListShard
-from zephyr.stage_io import ShardTask, TaskResult
+from zephyr.stage_io import ShardTask, TaskResult, ZephyrTaskResources
 from zephyr.worker_context import CounterSnapshot
+
+# Default ZephyrContext worker: 1 CPU, 1 GiB RAM, one concurrent task per actor.
+_TEST_WORKER_RAM = 1 << 30
+_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
 
 
 @pytest.fixture
@@ -39,7 +43,14 @@ def test_check_worker_group_skips_after_completed_stage(coordinator):
     mock_group.is_done.return_value = True
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
     coordinator._start_stage("last-stage", 0, [task])
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
@@ -56,7 +67,14 @@ def test_check_worker_group_still_aborts_mid_stage(coordinator):
     mock_group.is_done.return_value = True
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=2,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
     coordinator._start_stage("mid-stage", 0, [task, task])
     # Only 1 of 2 shards completed
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
@@ -80,7 +98,14 @@ def test_coordinator_loop_no_abort_during_result_collection(coordinator):
     mock_group.is_done.side_effect = is_done_with_delay
     coordinator.set_worker_group(mock_group)
 
-    task = ShardTask(shard_idx=0, total_shards=1, shard=ListShard(refs=[]), operations=[], stage_name="test")
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        cost=_TEST_TASK_COST,
+        stage_name="test",
+    )
     coordinator._start_stage("last-stage", 0, [task])
     coordinator.report_result("worker-0", 0, 0, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 

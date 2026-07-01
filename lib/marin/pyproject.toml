@@ -27,6 +27,7 @@ dependencies = [
     "jax>=0.9.2,<0.11",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
+    "transformers>=5.5.3,<6.0",
     "markdownify>=0.14.1",
     "mcp>=1.25.0",
     "numpy",
@@ -113,7 +114,7 @@ conflicts = [
 [project.optional-dependencies]
 
 gpu = [
-  "jax[cuda13]==0.10.0",
+  "jax[cuda13]==0.10.1",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -131,9 +132,9 @@ gpu = [
   "torchvision==0.26.0",
 ]
 tpu = [
-  "jax==0.10.0",
-  "jaxlib==0.10.0",
-  "libtpu==0.0.40",
+  "jax==0.10.1",
+  "jaxlib==0.10.1",
+  "libtpu==0.0.41",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -144,7 +145,7 @@ tpu = [
 ]
 
 cpu = [
-  "jax==0.10.0",
+  "jax==0.10.1",
   "torch==2.11.0",
   # Linux x86_64
   "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -187,11 +188,11 @@ vizier = [
 ]
 
 vllm = [
-    "jax==0.10.0",
-    "jaxlib==0.10.0",
-    "libtpu==0.0.40",
+    "jax==0.10.1",
+    "jaxlib==0.10.1",
+    "libtpu==0.0.41",
     "vllm",
-    "tpu-inference==0.22.1",
+    "tpu-inference==0.23.0",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.
     "torch==2.11.0",

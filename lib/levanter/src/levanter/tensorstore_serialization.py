@@ -4,6 +4,8 @@
 # References:
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import asyncio
+import contextlib
+import functools
 import logging
 import os
 import urllib.parse
@@ -19,6 +21,7 @@ import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import tensorstore as ts
+from jax.experimental.array_serialization import tensorstore_impl as ts_impl
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
@@ -92,6 +95,36 @@ def build_kvstore_spec(path: str) -> dict:
         return {"driver": "file", "path": os.path.abspath(path)}
     else:
         raise ValueError(f"Unsupported URI scheme for tensorstore: {parsed.scheme!r} in {path!r}")
+
+
+@contextlib.contextmanager
+def _serialize_with_fresh_ts_context():
+    """Route ``GlobalAsyncCheckpointManager.serialize`` through a fresh tensorstore ``Context``.
+
+    JAX serializes every checkpoint with one process-lifetime ``Context`` singleton
+    (``tensorstore_impl._TS_CONTEXT``) that strongly owns its cache pool. Each save writes a
+    distinct OCDBT database (fresh ``step-{N}`` dir → new cache keys), so caches accumulate in
+    the shared ``Context`` and are never reused or reclaimed. The pinned-host source buffers they
+    reference grow as anonymous host RAM until the cgroup OOM-kills training.
+
+    Injecting a fresh ``Context`` per save releases the prior save's pool once its commit drains
+    (``serialize`` waits on the previous commit first), bounding live host RAM to one save. The
+    ``Context`` clones the JAX config (same pool sizes and concurrency limits), so write behavior
+    is unchanged.
+    """
+    fresh_context = ts.Context(ts_impl._TS_CONTEXT.spec)
+    original_async_serialize = ts_impl.async_serialize
+
+    @functools.wraps(original_async_serialize)
+    def async_serialize_with_fresh_context(*args, **kwargs):
+        kwargs.setdefault("context", fresh_context)
+        return original_async_serialize(*args, **kwargs)
+
+    ts_impl.async_serialize = async_serialize_with_fresh_context
+    try:
+        yield
+    finally:
+        ts_impl.async_serialize = original_async_serialize
 
 
 def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
@@ -215,7 +248,8 @@ def tree_serialize_leaves_tensorstore(
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
-    manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
+    with _serialize_with_fresh_ts_context():
+        manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize returned from manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)

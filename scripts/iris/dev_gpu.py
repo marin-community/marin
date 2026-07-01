@@ -39,6 +39,10 @@ DEFAULT_GPU_COUNT = 8
 TASK_CONTAINER = "task"
 GPU_VARIANT = "H100"
 
+DEFAULT_CPU = 8.0
+DEFAULT_MEMORY = "64GB"
+DEFAULT_DISK = "100GB"
+
 TERMINAL_JOB_STATES = {
     job_pb2.JOB_STATE_FAILED,
     job_pb2.JOB_STATE_KILLED,
@@ -263,10 +267,29 @@ def cli(ctx, config: str | None, session_name: str | None, verbose: bool) -> Non
     help="H100 GPUs to reserve. Only 8 (a whole h100-8x node) is validated; "
     "smaller values may not schedule on the bare-metal pool.",
 )
+@click.option(
+    "--cpu",
+    type=click.FloatRange(min=0, min_open=True),
+    default=DEFAULT_CPU,
+    show_default=True,
+    help="CPU cores to request for the dev pod (request only, burstable).",
+)
+@click.option(
+    "--memory",
+    default=DEFAULT_MEMORY,
+    show_default=True,
+    help="Memory for the dev pod (e.g. 64GB). Enforced as a hard k8s limit.",
+)
+@click.option(
+    "--disk",
+    default=DEFAULT_DISK,
+    show_default=True,
+    help="Ephemeral disk for the dev pod (e.g. 100GB). Enforced as a hard k8s limit.",
+)
 @click.option("--timeout", default=900, show_default=True, help="Seconds to wait for the task to run.")
 @click.option("--pod-timeout", default=120, show_default=True, help="Seconds to wait for the pod to run.")
 @click.pass_context
-def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
+def allocate(ctx, gpu_count: int, cpu: float, memory: str, disk: str, timeout: int, pod_timeout: int) -> None:
     """Allocate a dev GPU H100 pod and hold it until Ctrl-C."""
     if not ctx.obj.config_file:
         raise click.ClickException("--config is required")
@@ -282,7 +305,7 @@ def allocate(ctx, gpu_count: int, timeout: int, pod_timeout: int) -> None:
 
     state: DevGpuState | None = None
     with controller_client(ctx.obj.config_file) as client:
-        resources = ResourceSpec(cpu=0.5, memory="1GB", disk="5GB", device=gpu_device(GPU_VARIANT, gpu_count))
+        resources = ResourceSpec(cpu=cpu, memory=memory, disk=disk, device=gpu_device(GPU_VARIANT, gpu_count))
         try:
             job = client.submit(
                 entrypoint=Entrypoint.from_command("python", "-c", HOLDER_COMMAND),

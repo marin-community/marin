@@ -27,11 +27,14 @@ from fray.current_client import _current_client_var, current_client, set_current
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, check_drift, is_mutable_version, write_artifact
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
+from marin.execution.step_spec import StepSpec
 
 # Re-export for backward compatibility
-from marin.execution.executor_step_status import (
+from marin.execution.step_status import (
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -41,8 +44,6 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
-from marin.execution.remote import RemoteCallable, _sanitize_job_name
-from marin.execution.step_spec import StepSpec
 from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -85,14 +86,39 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
+def _is_built(step: StepSpec) -> bool:
+    """True when the runner will serve ``step`` from cache rather than rebuild it.
+
+    A non-mutable step whose output already has a ``SUCCESS`` status. This is the
+    same condition the launcher uses to skip a step, evaluated here at scheduling
+    time so an already-built node's dependencies are pruned from the schedule
+    instead of rebuilt; the launcher re-checks authoritatively before serving the
+    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    """
+    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
+        return False
+    return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
+
+
+def _expand_unseen(
+    step: StepSpec,
+    seen: set[str],
+    is_built: Callable[[StepSpec], bool] = lambda _s: False,
+    pruned: set[str] | None = None,
+) -> list[StepSpec]:
     """Return ``step`` and its transitive deps (post-order), excluding any in ``seen``.
 
     ``seen`` is mutated in place to include every returned step, so subsequent
     calls skip nodes already scheduled by an earlier terminal. Cycles within
     this expansion raise ``ValueError`` — by DAG construction they shouldn't
     exist, but the check guards against silent hangs.
+
+    When ``is_built(node)`` holds, ``node``'s output is already cached: the walk
+    records its ``output_path`` in ``pruned`` and does not descend into its deps,
+    so they are neither scheduled nor rebuilt. ``node`` itself is still returned (as
+    a cache-only leaf the caller confirms). The default ``is_built`` prunes nothing.
     """
+    recorded = pruned if pruned is not None else set()
     in_stack: set[str] = set()
     ordered: list[StepSpec] = []
 
@@ -103,8 +129,11 @@ def _expand_unseen(step: StepSpec, seen: set[str]) -> list[StepSpec]:
         if path in in_stack:
             raise ValueError(f"Cycle detected in step graph involving {s.name_with_hash}")
         in_stack.add(path)
-        for dep in s.deps:
-            visit(dep)
+        if is_built(s):
+            recorded.add(path)
+        else:
+            for dep in s.deps:
+                visit(dep)
         in_stack.remove(path)
         seen.add(path)
         ordered.append(s)
@@ -140,6 +169,11 @@ class StepRunner:
         Concurrency is bounded by the thread pool (``max_concurrent``
         workers, default 8).
         """
+        # Make step progress visible by default. Idempotent and non-clobbering:
+        # skipped when the driver (or a wrapping app) already installed handlers.
+        if not logging.getLogger().handlers:
+            configure_logging(level=logging.INFO)
+
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
@@ -161,6 +195,11 @@ class StepRunner:
         failures: list[Exception] = []
         # output_path → name_with_hash, for human-readable logging
         path_to_name: dict[str, str] = {}
+        # Outputs already cached: their deps are pruned from the schedule and they are
+        # confirmed from cache rather than run. Disabled under dry_run, which stays
+        # I/O-free and lists the full static graph.
+        pruned: set[str] = set()
+        is_built = (lambda _s: False) if dry_run else _is_built
 
         def _display_name(output_path: str) -> str:
             return path_to_name.get(output_path, output_path)
@@ -223,16 +262,40 @@ class StepRunner:
             else:
                 completed.add(path)
 
+        def _confirm_pruned(step: StepSpec) -> None:
+            """Mark a pruned cache-only leaf complete without running it.
+
+            Its dependencies were dropped from the schedule, so the step must not run.
+            If its cached output is no longer a clean success, record a failure (which
+            cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
+            """
+            path = step.output_path
+            mutable = check_drift(step)
+            status = StatusFile(path, worker_id="check").status
+            if status == STATUS_SUCCESS and not mutable:
+                logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
+                completed.add(path)
+            else:
+                failed.add(path)
+                failures.append(
+                    RuntimeError(
+                        f"Step {step.name_with_hash}: cached output disappeared after its inputs were "
+                        f"pruned (status={status}); rerun to rebuild it and its inputs."
+                    )
+                )
+
         scheduled: set[str] = set()
         for raw_step in steps:
-            for step in _expand_unseen(raw_step, scheduled):
+            for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash
 
                 _harvest()
                 _flush_waiting()
 
                 path = step.output_path
-                if any(d in failed for d in step.dep_paths):
+                if path in pruned:
+                    _confirm_pruned(step)
+                elif any(d in failed for d in step.dep_paths):
                     failed.add(path)
                 elif all(d in completed for d in step.dep_paths):
                     _do_launch(step)
@@ -266,9 +329,12 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
+        # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+        mutable = check_drift(step)
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
-        if status == STATUS_SUCCESS:
+        if status == STATUS_SUCCESS and not mutable:
             logger.info(f"Skip {step_name}: already succeeded")
             return None
 
@@ -315,21 +381,24 @@ def check_cache(output_path: str) -> bool:
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
-    For inline steps the result is saved via ``Artifact.save``. For
-    ``RemoteCallable`` steps (or any step with explicit ``resources``), the
-    raw function + artifact save are submitted as a Fray job; the runner
-    process only manages the lock and status file.
+    An inline step that does not write its own record (``writes_record=False``) has its
+    return saved via :func:`~marin.execution.artifact.write_artifact`. For ``RemoteCallable``
+    steps (or any step with explicit ``resources``), the raw function + artifact save are
+    submitted as a Fray job; the runner process only manages the lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
 
+    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
+    mutable = check_drift(step)
+
     # 1. Cache check
-    if check_cache(output_path):
+    if not mutable and check_cache(output_path):
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
     try:
-        with step_lock(output_path, step_label) as status_file:
+        with step_lock(output_path, step_label, force_rerun=mutable) as status_file:
             # 3. Run the function
             try:
                 t0 = time.monotonic()
@@ -339,7 +408,9 @@ def run_step(step: StepSpec) -> None:
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
-                    Artifact.save(result, output_path)
+                    # A lazy step writes its own full record; a plain step's return is saved.
+                    if not step.writes_record:
+                        write_artifact(result, output_path)
                 elapsed = timedelta(seconds=time.monotonic() - t0)
 
                 # 4. Mark success
@@ -364,13 +435,13 @@ def _submit_iris_job(
     """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
     ``raw_fn`` is wrapped to also persist its return value via
-    :func:`Artifact.save` inside the submitted job, since Fray jobs cannot
-    return values back to the caller.
+    :func:`~marin.execution.artifact.write_artifact` inside the submitted job, since Fray
+    jobs cannot return values back to the caller.
     """
 
     def _fn_with_artifact_save() -> None:
         result = raw_fn(output_path)
-        Artifact.save(result, output_path)
+        write_artifact(result, output_path)
 
     job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)

@@ -13,17 +13,6 @@ to Hugging Face repositories. It handles:
 
 Usage as a script:
   python upload_gcs_to_hf.py --repo-id="organization/model-name" [--dry-run] [--directory="gs://bucket/path"]
-
-Usage as an ExecutorStep:
-  upload_step = ExecutorStep(
-      name="upload_model_to_hf",
-      fn=upload_gcs_to_hf,
-      config=UploadConfig(
-          hf_repo_id="organization/model-name",
-          gcs_directories=["gs://bucket/path/to/model"],
-          dry_run=False
-      )
-  )
 """
 
 import argparse

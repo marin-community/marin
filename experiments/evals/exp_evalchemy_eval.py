@@ -154,9 +154,8 @@ def determine_tensor_parallel_size(tpu_type: str) -> int:
 # =============================================================================
 # Parallel Job Limit
 # =============================================================================
-# Maximum number of eval jobs to run in parallel. Eval steps are split into
-# batches of this size, with each batch submitted as a separate executor_main
-# call. Set to None to run all eval steps in a single executor_main call.
+# Maximum number of eval jobs to run in parallel.
+# Set to None to run all eval steps concurrently.
 # WARNING: Setting this value higher will cause many jobs to be launched in parallel.
 #          Please be mindful of other users sharing the cluster.
 MAX_PARALLEL_JOBS = 3

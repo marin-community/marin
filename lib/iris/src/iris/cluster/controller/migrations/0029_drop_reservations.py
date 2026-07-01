@@ -19,12 +19,12 @@ migration handles the two cases the removed code would otherwise mishandle:
 
 2. **Real reservations are converted to availability constraints.** Each non-holder
    job with a ``reservation_json`` has its reserved accelerator variants folded into
-   the job's ``constraints_json`` as hard ``availability:<variant>`` constraints (the
-   same conversion the ingestion shim applies to new submissions), preserving the
-   zone-steering intent of a job that was mid-flight at upgrade. This is an
-   intentional, transitional data migration: it reuses live constraint helpers rather
-   than re-encoding the wire format by hand, and is scheduled for removal with the
-   rest of the back-compat shim.
+   the job's ``constraints_json`` as hard ``availability:<variant>`` constraints,
+   preserving the zone-steering intent of a job that was mid-flight at upgrade. The
+   ``ReservationConfig`` proto is gone, so this migration decodes the old
+   ``reservation_json`` dict by hand instead of parsing it back into a message —
+   a fixed historical snapshot of the wire format, kept independent of the current
+   proto definitions.
 
 Then it strips the schema the controller no longer writes or reads:
 
@@ -46,10 +46,8 @@ steps guard on column/table presence. A crash mid-migration is safe to retry.
 import json
 import logging
 
-from google.protobuf import json_format
-from iris.cluster.constraints import availability_constraints_from_reservation
+from iris.cluster.constraints import availability_constraint, availability_key
 from iris.cluster.controller.codec import constraints_from_json, constraints_to_json
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +115,29 @@ def _delete_reservation_holders(raw_conn) -> None:
     raw_conn.commit()
 
 
+def _accelerator_variants(reservation: dict) -> list[str]:
+    """Extract deduplicated accelerator variants from a decoded ``reservation_json`` dict.
+
+    Mirrors the field names ``MessageToDict(..., preserving_proto_field_name=True)``
+    produced for the now-removed ``ReservationConfig`` proto: each entry is
+    ``{"resources": {"device": {"tpu"|"gpu": {"variant": "..."}}}}``. Entries with no
+    accelerator device (e.g. plain CPU) contribute nothing, and neither does a GPU
+    entry left at the ``auto`` variant ("any GPU") — no worker or group ever
+    advertises ``availability:auto``, so folding it in would make the job permanently
+    unschedulable.
+    """
+    variants: list[str] = []
+    seen: set[str] = set()
+    for entry in reservation.get("entries", []):
+        device = entry.get("resources", {}).get("device", {})
+        variant = device.get("tpu", {}).get("variant") or device.get("gpu", {}).get("variant")
+        if not variant or variant == "auto" or variant in seen:
+            continue
+        seen.add(variant)
+        variants.append(variant)
+    return variants
+
+
 def _merged_constraints_json(reservation_json: str, constraints_json: str | None) -> str | None:
     """Fold a job's ``reservation_json`` into its ``constraints_json`` as hard availability constraints.
 
@@ -125,16 +146,17 @@ def _merged_constraints_json(reservation_json: str, constraints_json: str | None
     idempotent). Malformed reservation JSON is logged and skipped.
     """
     try:
-        config = json_format.ParseDict(json.loads(reservation_json), job_pb2.ReservationConfig())
-    except (ValueError, json_format.ParseError):
+        reservation = json.loads(reservation_json)
+    except ValueError:
         logger.warning("0029: skipping unparseable reservation_json: %r", reservation_json)
-        return None
-    available = availability_constraints_from_reservation(config)
-    if not available:
         return None
     existing = constraints_from_json(constraints_json)
     existing_keys = {c.key for c in existing}
-    fresh = [c for c in available if c.key not in existing_keys]
+    fresh = [
+        availability_constraint(variant)
+        for variant in _accelerator_variants(reservation)
+        if availability_key(variant) not in existing_keys
+    ]
     if not fresh:
         return None
     return constraints_to_json([c.to_proto() for c in existing] + [c.to_proto() for c in fresh])

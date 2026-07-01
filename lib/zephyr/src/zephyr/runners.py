@@ -92,14 +92,14 @@ class _InProcessWorkerContext:
     of the task.
     """
 
-    def __init__(self, chunk_prefix: str, execution_id: str, stage_name: str, num_workers: int = 1):
+    def __init__(self, chunk_prefix: str, execution_id: str, stage_name: str, task_memory_bytes: int = 0):
         self._chunk_prefix = chunk_prefix
         self._execution_id = execution_id
         self._stage_name = stage_name
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
         self._generation = 0
-        self.num_workers = num_workers
+        self.task_memory_bytes = task_memory_bytes
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
@@ -167,11 +167,10 @@ def _wrap_stage_stats(gen: Iterator[_T]) -> Iterator[_T]:
 
 
 def _sample_process_stats(cpu_s_at_start: float, proc: psutil.Process) -> None:
-    """Sample the current process's resource usage into ``ctx`` counters.
+    """Sample the current process's resource usage into the current stage's counters.
 
     Uses set_counter (not increment) because these are point-in-time metrics.
     Peak memory is tracked as a monotonically increasing max across calls.
-    IO counters are cumulative totals from the OS; unavailable on some platforms.
     ``cpu_s_at_start`` is subtracted from cumulative CPU time to give per-shard delta.
     ``proc`` must be the same object across calls so cpu_percent() has a
     prior measurement to diff against; prime it once before the first sample.
@@ -209,29 +208,29 @@ def _periodic_sampler(
     ctx: _InProcessWorkerContext,
     interval: float,
     *,
-    cpu_s_at_start: float = 0.0,
-    stats_writer: StatsWriter | None = None,
-    task: ShardTask | None = None,
-    execution_id: str = "",
-    start_time: float = 0.0,
-    proc: psutil.Process | None = None,
+    cpu_s_at_start: float,
+    stats_writer: StatsWriter,
+    task: ShardTask,
+    execution_id: str,
+    start_time: float,
+    proc: psutil.Process,
 ) -> None:
-    """Periodically sample process stats and optionally emit RUNNING rows to finelog."""
+    """Periodically sample process stats and emit RUNNING rows to finelog.
 
+    ``stats_writer.emit_worker_stat`` is itself a no-op when finelog is
+    unavailable, so no gating is needed here.
+    """
     while not stop_event.wait(timeout=interval):
         try:
-            if task is not None and proc is not None:
-                _sample_process_stats(cpu_s_at_start, proc)
-
-            if stats_writer is not None and task is not None and proc is not None:
-                stats_writer.emit_worker_stat(
-                    task.stage_name,
-                    task.shard_idx,
-                    execution_id,
-                    ZephyrWorkerStatStatus.RUNNING,
-                    start_time,
-                    ctx.get_counters(),
-                )
+            _sample_process_stats(cpu_s_at_start, proc)
+            stats_writer.emit_worker_stat(
+                task.stage_name,
+                task.shard_idx,
+                execution_id,
+                ZephyrWorkerStatStatus.RUNNING,
+                start_time,
+                ctx.get_counters(),
+            )
         except Exception:
             logger.warning("Failed to sample/emit process stats", exc_info=True)
 
@@ -282,8 +281,7 @@ class InlineRunner:
     here, and tests run dramatically faster than under ``SubprocessRunner``.
     """
 
-    def __init__(self, num_workers: int = 1) -> None:
-        self._num_workers = num_workers
+    def __init__(self) -> None:
         self._ctx: _InProcessWorkerContext | None = None
 
     def execute(
@@ -292,7 +290,7 @@ class InlineRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, num_workers=self._num_workers)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
         worker_token = _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
@@ -362,14 +360,9 @@ class SubprocessRunner:
     imports plus pickle round-trip; reserve for stages with leak-prone or
     crash-prone user code.
 
-    Args:
-        num_workers: Total number of concurrent subprocess workers sharing this
-            actor's RAM. Passed to child processes via ``ZEPHYR_NUM_WORKERS_PER_ACTOR``
-            so each child scales its scatter-write buffer budget proportionally.
     """
 
-    def __init__(self, num_workers: int = 1) -> None:
-        self._num_workers = num_workers
+    def __init__(self) -> None:
         self._counter_file: str | None = None
 
     def execute(
@@ -392,7 +385,7 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, str(self._num_workers)],
+                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )

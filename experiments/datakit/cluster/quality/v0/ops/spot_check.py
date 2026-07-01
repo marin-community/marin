@@ -38,7 +38,7 @@ from statistics import mean, median, stdev
 import pyarrow.parquet as pq
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -199,7 +199,7 @@ def _spot_check_one(source_name: str, inference_base: str, top_k: int, bottom_k:
         by_pid.setdefault(pid, set()).add(doc_id)
 
     src = all_sources()[source_name]
-    nd = Artifact.from_path(src.normalized, NormalizedData)
+    nd = read_artifact(src.normalized.output_path, NormalizedData)
     text_by_id = _lookup_texts(nd.main_output_dir, by_pid, preview)
 
     def _enrich(rs):

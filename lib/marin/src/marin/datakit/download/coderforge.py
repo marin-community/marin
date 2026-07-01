@@ -15,7 +15,12 @@ from fray import ResourceConfig
 from zephyr import Dataset, ZephyrContext, counters, load_parquet
 
 from marin.datakit.download.huggingface import download_hf_step
-from marin.datakit.download.rollout_transforms import text_document
+from marin.datakit.download.rollout_transforms import (
+    TRAJECTORY_FAILED_TAG,
+    TRAJECTORY_SOLVED_TAG,
+    render_tool_message,
+    text_document,
+)
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
@@ -29,54 +34,26 @@ def reward_to_tag(reward: float | None) -> str:
     if reward is None:
         return "This trajectory has an unknown outcome."
     if reward >= 1.0:
-        return "This trajectory solved the task successfully."
-    return "This trajectory failed to solve the task."
-
-
-def render_tool_call(tc: dict) -> str:
-    func = tc.get("function", {})
-    name = func.get("name", "unknown")
-    args = func.get("arguments", {})
-    if isinstance(args, str):
-        args = json.loads(args)
-    parts = [f"<tool_call:{name}>"]
-    for k, v in args.items():
-        parts.append(f"  {k}: {v}")
-    parts.append(f"</tool_call:{name}>")
-    return "\n".join(parts)
-
-
-def render_message(msg: dict) -> str:
-    role = msg.get("role", "unknown")
-    content = msg.get("content") or ""
-    tool_calls = msg.get("tool_calls")
-
-    parts = [f"<{role}>"]
-    if content:
-        parts.append(content)
-    if tool_calls:
-        for tc in tool_calls:
-            parts.append(render_tool_call(tc))
-    parts.append(f"</{role}>")
-    return "\n".join(parts)
+        return TRAJECTORY_SOLVED_TAG
+    return TRAJECTORY_FAILED_TAG
 
 
 def row_to_doc(row: dict) -> list[dict]:
     messages_raw = row.get("messages", "")
     if not messages_raw:
-        counters.increment("coderforge/dropped")
+        counters.pipeline.update_counter("coderforge/dropped", 1)
         return []
 
     messages = json.loads(messages_raw) if isinstance(messages_raw, str) else messages_raw
     if not messages:
-        counters.increment("coderforge/dropped")
+        counters.pipeline.update_counter("coderforge/dropped", 1)
         return []
 
     tag = reward_to_tag(row.get("reward"))
-    rendered = "\n\n".join(render_message(m) for m in messages)
+    rendered = "\n\n".join(render_tool_message(m) for m in messages)
     text = f"{tag}\n\n{rendered}"
 
-    counters.increment("coderforge/kept")
+    counters.pipeline.update_counter("coderforge/kept", 1)
     return [text_document(text, "togethercomputer/CoderForge-Preview")]
 
 

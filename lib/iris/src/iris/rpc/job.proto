@@ -143,6 +143,17 @@ message ProfileTaskResponse {
   string error = 2;             // Non-empty if profiling failed
 }
 
+// Build provenance of an image: the content-addressed tree hash (the dedup key)
+// plus the human context needed to read it. Baked into images at build time via
+// IRIS_PROVENANCE and surfaced for version display.
+message Provenance {
+  string tree_hash = 1;    // Working-tree tree hash baked in at build time; the dedup key
+  string base_commit = 2;  // Short HEAD commit the tree was built from
+  bool dirty = 3;          // Working tree had uncommitted changes at build time
+  string branch = 4;       // Branch at build time ("" if detached HEAD)
+  string built_by = 5;     // OS user that ran the build ("" if unknown)
+}
+
 // --- Process Status ---
 // Shared by both ControllerService and WorkerService.
 // Returns local process info (host, resource usage) and recent process logs.
@@ -158,9 +169,11 @@ message ProcessInfo {
   int32 open_fd_count = 9;      // Open file descriptors
   int64 memory_total_bytes = 10; // Total system memory
   int32 cpu_count = 11;          // Number of CPU cores
-  string git_hash = 12;          // Git commit hash baked in at image build time (IRIS_GIT_HASH)
   reserved 7;                    // Formerly process cpu_percent; use cpu_millicores instead.
+  reserved 12;                   // Formerly git_hash; use provenance.tree_hash instead.
+  reserved git_hash;
   int32 cpu_millicores = 13;     // Process CPU usage over the sample window
+  Provenance provenance = 14;    // Build provenance (tree hash, branch, base commit, builder)
 }
 
 message GetProcessStatusRequest {
@@ -254,6 +267,15 @@ message TaskStatus {
   // The list view attaches only the latest failed attempt, so this carries the
   // true count for the dashboard's failure badge.
   int32 failure_count = 23;
+
+  // Literal owning backend id: DEFAULT_BACKEND_ID ("default") on single-backend
+  // clusters, the routed id once pinned, empty ONLY while a job is genuinely
+  // unrouted. Never an overloaded sentinel; the UI hides the column via multiBackend.
+  string backend_id = 24;
+
+  // Federation discriminator, orthogonal to backend_id: "" == owned by this
+  // cluster, "<peer>" == handed off to that peer cluster (backend_id then "").
+  string child_cluster = 25;
 }
 
 // Record of a single task execution attempt
@@ -355,32 +377,12 @@ message JobStatus {
   // Parent job id, if this job was launched as a child of another job.
   // Empty for root jobs.
   string parent_job_id = 33;
-}
 
-// ============================================================================
-// RESERVATION (DEPRECATED — back-compat only)
-// ============================================================================
-//
-// Reservations are gone. The controller no longer holds capacity, spawns holder
-// jobs, or gates scheduling. These messages and LaunchJobRequest.reservation are
-// retained ONLY so pre-availability clients don't hard-fail: the server converts
-// any incoming reservation into hard availability:<variant> constraints at
-// ingestion and discards it (nothing reservation-shaped is persisted). Current
-// clients omit the field. Scheduled for removal once stragglers have upgraded.
+  // Literal owning backend id. See TaskStatus.backend_id.
+  string backend_id = 34;
 
-// A single reservation entry describing one worker's worth of resources.
-message ReservationEntry {
-  // Resource spec for one worker.
-  ResourceSpecProto resources = 1;
-
-  // Constraints for routing (region, zone, preemptible, etc.).
-  repeated Constraint constraints = 2;
-}
-
-// Reservation configuration attached to a job (deprecated; see above).
-message ReservationConfig {
-  // Resource entries to reserve. Each entry = one worker.
-  repeated ReservationEntry entries = 1;
+  // Federation discriminator. See TaskStatus.child_cluster.
+  string child_cluster = 35;
 }
 
 // ============================================================================
@@ -570,9 +572,13 @@ message WorkerMetadata {
 
   reserved 41;  // was vm_address, removed
 
-  // Git commit hash baked into the worker image at build time (IRIS_GIT_HASH).
-  // Allows the controller to surface per-worker version info for debugging.
-  string git_hash = 42;
+  reserved 42;  // was git_hash; use provenance.tree_hash instead
+  reserved git_hash;
+
+  // Build provenance baked into the worker image (tree hash + branch + base
+  // commit + builder). The controller keys version display and
+  // skip-already-current-workers on ``provenance.tree_hash``.
+  Provenance provenance = 43;
 }
 
 enum JobPreemptionPolicy {

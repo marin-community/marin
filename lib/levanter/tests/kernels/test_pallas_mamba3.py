@@ -40,7 +40,7 @@ from levanter.kernels.pallas.mamba3.reference import (
 )
 from levanter.kernels.pallas.mamba3.xla import mamba3_mimo_chunked_forward_ranked_xla_batched
 from levanter.kernels.pallas.ssd import intra_chunk_log_alpha_cumsum, local_log_alpha
-from tests.test_utils import skip_if_no_torch
+from test_utils import skip_if_no_torch
 
 MAMBA3_MIMO_RANKED_PARITY_ATOL = 1e-4
 MAMBA3_MIMO_RANKED_PARITY_RTOL = 1e-4

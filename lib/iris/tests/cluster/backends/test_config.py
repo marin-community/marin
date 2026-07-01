@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.config import (
+    BackendConfig,
     ControllerVmConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
@@ -20,6 +21,7 @@ from iris.cluster.config import (
     GcpPlatformConfig,
     GcpSliceConfig,
     IrisClusterConfig,
+    KubernetesProviderConfig,
     LocalSliceConfig,
     ManualSliceConfig,
     PlatformConfig,
@@ -30,10 +32,12 @@ from iris.cluster.config import (
     WorkerConfig,
     WorkerProviderConfig,
     WorkerSettings,
+    backend_attribute_sets,
     build_ssh_command_config,
     config_to_dict,
     load_config,
     make_local_config,
+    resolve_backends,
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
@@ -41,7 +45,7 @@ from iris.cluster.controller.autoscaler.factory import create_autoscaler
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
-from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode
+from iris.cluster.types import DEFAULT_BACKEND_ID, AcceleratorType, CapacityType, GcpSliceMode
 from iris.rpc import controller_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.timing import Duration, ExponentialBackoff
@@ -1896,3 +1900,104 @@ def test_smoke_gcp_config_boots_locally():
             error_message="No healthy workers with smoke-gcp.yaml in local mode",
         )
         client.close()
+
+
+def _worker_daemon_backend(**overrides) -> BackendConfig:
+    """A minimal valid worker_daemon backend (worker_provider present, in_process)."""
+    fields = {"kind": "worker_daemon", "worker_provider": WorkerProviderConfig()}
+    fields.update(overrides)
+    return BackendConfig(**fields)
+
+
+class TestBackendsConfig:
+    """The explicit ``backends:`` map and the implicit single-backend synthesis."""
+
+    def test_explicit_backends_map_validates_and_resolves(self):
+        config = IrisClusterConfig(
+            backends={"cpu": _worker_daemon_backend(attributes={"device-type": "cpu"})},
+        )
+        validate_config(config)
+
+        resolved = resolve_backends(config)
+        assert set(resolved) == {"cpu"}
+        # Defaults fill in: in_process transport and the all-users allow policy.
+        assert resolved["cpu"].transport == "in_process"
+        assert resolved["cpu"].allow_policy.users == ["*"]
+
+    def test_mixing_backends_with_top_level_scale_groups_rejected(self):
+        config = IrisClusterConfig(
+            backends={"cpu": _worker_daemon_backend()},
+            scale_groups={"test": _valid_scale_group()},
+        )
+        with pytest.raises(ValueError, match="cannot be combined with top-level"):
+            validate_config(config)
+
+    def test_multiple_in_process_backends_validate(self):
+        # The controller routes tasks to N in-process backends by backend_id and
+        # drives them from its single control thread, so more than one in_process
+        # backend is allowed.
+        config = IrisClusterConfig(
+            backends={
+                "cpu": _worker_daemon_backend(attributes={"device-type": "cpu"}),
+                "tpu": _worker_daemon_backend(attributes={"device-type": "tpu"}),
+            },
+        )
+        validate_config(config)
+
+        resolved = resolve_backends(config)
+        assert set(resolved) == {"cpu", "tpu"}
+
+    def test_remote_transport_rejected(self):
+        config = IrisClusterConfig(
+            backends={"cpu": _worker_daemon_backend(transport="remote")},
+        )
+        with pytest.raises(ValueError, match="remote transport lands in a later PR"):
+            validate_config(config)
+
+    def test_k8s_backend_requires_kubernetes_provider(self):
+        config = IrisClusterConfig(backends={"k8s": BackendConfig(kind="k8s")})
+        with pytest.raises(ValueError, match="kind 'k8s' requires kubernetes_provider"):
+            validate_config(config)
+
+    def test_backend_scale_group_names_injected(self, tmp_path: Path):
+        # A backend's scale groups must get their map key stamped onto `name`,
+        # exactly like top-level scale groups. Otherwise the worker registers
+        # under an empty scale group, which maps to DEFAULT_BACKEND_ID instead
+        # of the backend that owns it, and the backend never sees its workers.
+        config_path = tmp_path / "cluster.yaml"
+        config_path.write_text(
+            "name: c\n"
+            "backends:\n"
+            "  tpu:\n"
+            "    kind: worker_daemon\n"
+            "    worker_provider: {}\n"
+            "    scale_groups:\n"
+            "      sg-tpu:\n"
+            "        max_slices: 1\n"
+        )
+        config = load_config(config_path)
+        assert config.backends["tpu"].scale_groups["sg-tpu"].name == "sg-tpu"
+
+    def test_single_cluster_synthesizes_one_default_backend(self):
+        config = _config_with()  # no backends: — implicit single-backend form
+        validate_config(config)
+
+        resolved = resolve_backends(config)
+        assert list(resolved) == [DEFAULT_BACKEND_ID]
+        synthesized = resolved[DEFAULT_BACKEND_ID]
+        assert synthesized.kind == "worker_daemon"
+        assert set(synthesized.scale_groups) == set(config.scale_groups)
+
+    def test_kubernetes_provider_synthesizes_k8s_backend(self):
+        config = IrisClusterConfig(
+            kubernetes_provider=KubernetesProviderConfig(controller_address="http://controller:10000"),
+        )
+        resolved = resolve_backends(config)
+        assert resolved[DEFAULT_BACKEND_ID].kind == "k8s"
+
+    def test_attribute_values_comma_split_into_sets(self):
+        backend = _worker_daemon_backend(attributes={"device-variant": "v5e-4, v5p-8 ,", "device-type": "tpu"})
+        assert backend_attribute_sets(backend) == {
+            "device-variant": {"v5e-4", "v5p-8"},
+            "device-type": {"tpu"},
+        }

@@ -5,9 +5,13 @@
 
 The worker-daemon backend used by the GCP/TPU, CoreWeave-bare-metal, manual, and
 local clusters. The Iris scheduler assigns task→worker; this backend fans the
-per-worker Reconcile RPC out to the worker daemons, reports the raw observations
-back to the controller, and surfaces the per-worker liveness it observed
-(REACHED / UNREACHABLE) as health events the controller folds.
+per-worker Reconcile RPC out to the worker daemons, resolves the observations
+into task ``effects`` from its own read snapshot, and folds the per-worker
+liveness it observed (REACHED / UNREACHABLE / kernel-derived BUILD_FAILED)
+through the liveness tracker it constructs and owns (``self.health``, holding
+only the workers in this backend's scale groups). The workers its fold reaps are
+stashed and torn down by ``run_teardown`` after the controller commits the
+effects, so no worker identity crosses the reconcile result boundary.
 """
 
 import asyncio
@@ -17,28 +21,40 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
-from rigging.timing import Duration
+from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.backend import (
+    AutoscaleRequest,
     AutoscaleResult,
     BackendCapability,
+    BackendRuntime,
     ProviderError,
+    ReconcileRequest,
     ReconcileResult,
     ScheduleInput,
+    ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
+    user_admitted,
 )
-from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
+from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
 from iris.cluster.controller.scheduling.scheduler import Scheduler
-from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerHealthEventKind
+from iris.cluster.controller.worker_health import (
+    DEFAULT_UNREACHABLE_GRACE,
+    WorkerHealthEvent,
+    WorkerHealthEventKind,
+    WorkerHealthTracker,
+)
 from iris.cluster.types import WorkerId
-from iris.rpc import job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
 
@@ -62,6 +78,10 @@ RECONCILE_FANOUT_PARALLELISM = 512
 # enough for real interactive/debug commands, but not the old ~1-hour stall.
 EXEC_IN_CONTAINER_MAX_TIMEOUT = Duration.from_seconds(900.0)
 
+# Failure reason stamped on a worker the reconcile fold reaped (drained by
+# ``run_teardown``).
+WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
+
 _T = TypeVar("_T")
 _R = TypeVar("_R")
 
@@ -84,6 +104,19 @@ def _fan_out(
         return await asyncio.gather(*(run_one(sem, item) for item in items))
 
     return asyncio.run(_run())
+
+
+@dataclass(frozen=True)
+class FleetObservation:
+    """One reconcile fan-out's raw outcome.
+
+    The per-worker results paired with their plans, and the transport liveness
+    each yielded (REACHED / UNREACHABLE). :meth:`RpcTaskBackend.reconcile` resolves
+    the results into effects and folds the liveness.
+    """
+
+    worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]
+    transport_events: list[WorkerHealthEvent]
 
 
 class WorkerStubFactory(Protocol):
@@ -143,42 +176,127 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
-    # The Iris autoscaler that provisions capacity for this backend, attached by
-    # the composer after it builds the autoscaler from the provider bundle; None
-    # for clusters with no scale groups, where capacity calls are no-ops.
+    # The Iris autoscaler that provisions capacity for this backend, passed by the
+    # composer at construction after it builds the autoscaler from the provider
+    # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
+    # This backend's worker store, built in ``bind_runtime`` from the controller-owned
+    # ``BackendRuntime`` joined with this backend's own health tracker. The backend
+    # reads its own workers and reaps its dead ones through this; the controller never
+    # hands it a worker snapshot or a raw DB.
+    _store: BackendWorkerStore | None = field(default=None, init=False, repr=False)
+    # Wall-clock window a worker may stay continuously unreachable before this
+    # backend's tracker reaps it; configures the WorkerHealthTracker built below.
+    unreachable_grace: Duration = field(default_factory=lambda: DEFAULT_UNREACHABLE_GRACE)
+    # Static routing metadata the meta-scheduler reads. ``advertised`` expands into
+    # routing posting lists; ``allowed_users`` is the allow policy (``*`` = any).
+    advertised: dict[str, set[str]] = field(default_factory=dict)
+    allowed_users: frozenset[str] = frozenset({"*"})
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset(
         {BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}
     )
-    # Stateless: holds no per-tick state, so one shared instance is reused
-    # across scheduling cycles (mirrors the autoscaler's own Scheduler).
+    # This backend's liveness tracker, constructed and owned here, holding only the
+    # workers in this backend's scale groups. The backend folds (reconcile) and
+    # forgets (teardown) through it; the controller reads it for its
+    # Fleet/exec/capacity/prune paths and routes a registering worker's liveness to
+    # it by scale group.
+    health: WorkerHealthTracker = field(init=False, repr=False)
+    # This backend's worker-attributes projection, constructed in ``bind_runtime``
+    # (it needs ``runtime.db``/``owns_scale_group``, unavailable at construction)
+    # and holding only the workers in this backend's scale groups. The controller
+    # routes a registering worker's attributes to it by scale group.
+    worker_attrs: WorkerAttrsProjection | None = field(default=None, init=False, repr=False)
+    # One shared scheduler instance reused across cycles; per-tick worker state
+    # comes from ``_store``.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
+    # Workers this backend's reconcile fold reaped, awaiting teardown. ``reconcile``
+    # appends; ``run_teardown`` drains post-commit. Kept off the reconcile result so
+    # no worker identity crosses that boundary back to the controller.
+    _pending_dead: list[WorkerId] = field(default_factory=list, init=False, repr=False)
 
-    def attach_autoscaler(self, autoscaler: Autoscaler) -> None:
-        """Attach the Iris autoscaler that provisions capacity for this backend."""
-        self.autoscaler = autoscaler
+    def __post_init__(self) -> None:
+        self.health = WorkerHealthTracker(unreachable_grace=self.unreachable_grace)
 
-    def schedule(self, snapshot: ScheduleInput) -> ScheduleResult:
-        """Run the Iris scheduling decision pipeline over the snapshot.
+    def bind_runtime(self, runtime: BackendRuntime) -> None:
+        """Build this backend's worker-attributes projection and worker store from
+        ``runtime`` and the backend's own liveness tracker and ``autoscale`` callback."""
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
+        self._store = DbBackendWorkerStore(
+            db=runtime.db,
+            owns_scale_group=runtime.owns_scale_group,
+            health=self.health,
+            worker_attrs=self.worker_attrs,
+            endpoints=runtime.endpoints,
+            run_template_cache=runtime.run_template_cache,
+            defaults=runtime.budget_defaults,
+            autoscale=self.autoscale,
+        )
 
-        Reads the autoscaler's per-zone accelerator-capability map so the
-        scheduler can inject ``availability:<variant>`` markers onto workers and
-        confine a hard availability constraint to a capable zone. Clusters with no
-        autoscaler pass an empty map: no worker gets an availability marker, so a
-        job carrying an availability constraint there stays unschedulable (it has
-        no zone that can satisfy it).
+    def seed_liveness(self) -> None:
+        """Seed this backend's persisted workers as healthy so the scheduler sees them.
+
+        Run at controller start and after a DB reopen (checkpoint restore): each
+        owned worker is heartbeat-seeded so it comes up ACTIVE, then accrues
+        failures through the reconcile fold and is reaped once over threshold.
         """
+        assert self._store is not None, "RpcTaskBackend.seed_liveness called before worker store attached"
+        worker_ids = self._store.owned_worker_ids()
+        if worker_ids:
+            self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
+
+    def advertised_attributes(self) -> dict[str, set[str]]:
+        return self.advertised
+
+    def admits(self, user: str) -> bool:
+        return user_admitted(self.allowed_users, user)
+
+    def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
+        self.advertised = advertised
+        self.allowed_users = allowed_users
+
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        """Author the ``worker`` status variant from this backend's autoscaler.
+
+        Counts are left zero: the controller overlays DB-derived worker health
+        counts after this returns (the backend never reads the controller DB).
+        """
+        autoscaler_status = self.autoscaler.get_status() if self.autoscaler is not None else vm_pb2.AutoscalerStatus()
+        return controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
+        )
+
+    def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        """Assemble this backend's scheduling context and run the Iris pipeline.
+
+        The routed pending tasks + budgets come from ``request``; the workers,
+        building counts and running attempts come from this backend's own worker
+        store. The autoscaler's per-zone accelerator-capability map injects
+        ``availability:<variant>`` markers onto workers so a hard availability
+        constraint is confined to a capable zone; clusters with no autoscaler pass
+        an empty map, so a job carrying an availability constraint there stays
+        unschedulable (no zone can satisfy it).
+        """
+        assert self._store is not None, "RpcTaskBackend.schedule called before worker store attached"
+        context = assemble_scheduling_context(self._store.scheduling_inputs(), request)
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
-        return run_scheduling_decision(self._scheduler, snapshot, zone_capabilities)
+        return run_scheduling_decision(
+            self._scheduler,
+            ScheduleInput(
+                context=context,
+                max_tasks_per_job_per_cycle=request.max_tasks_per_job_per_cycle,
+                trace=request.trace,
+            ),
+            zone_capabilities,
+        )
 
-    def reconcile(self, snapshot: ControlSnapshot) -> ReconcileResult:
-        """Build per-worker plans, fan the Reconcile RPC out, observe liveness.
+    def _observe_fleet(self) -> "FleetObservation":
+        """Source this backend's placement, fan the Reconcile RPC out, classify liveness.
 
-        Plans are built here (worker-daemon-specific protos) from the snapshot's
-        reconcile rows + job specs. Each per-worker RPC carries the stub
-        factory's deadline and the fan-out caps concurrency at ``parallelism``,
-        so this returns in bounded time even when the whole fleet is hung. Each
-        outcome yields a health event the controller folds:
+        The reconcile snapshot (worker addresses + reconcile rows + job specs) comes
+        from this backend's own worker store. Each per-worker RPC carries the stub
+        factory's deadline and the fan-out caps concurrency at
+        ``parallelism``, so this returns in bounded time even when the whole fleet
+        is hung. Each outcome yields a transport liveness signal:
 
         * a healthy response is REACHED;
         * an RPC error/timeout is UNREACHABLE, and the (likely broken) stub is
@@ -187,8 +305,11 @@ class RpcTaskBackend:
           UNREACHABLE so the worker is eventually reaped, but the connection is
           fine so the stub is kept.
 
-        The backend never decides a worker is dead — it only observes.
+        Pure observation — it never decides a worker dead; :meth:`reconcile` folds
+        these signals into liveness.
         """
+        assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
+        snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
 
         async def _one(sem: asyncio.Semaphore, plan: WorkerReconcilePlan) -> WorkerReconcileResult:
@@ -197,11 +318,11 @@ class RpcTaskBackend:
         results = _fan_out(plans, self.parallelism, _one)
 
         worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = list(zip(plans, results, strict=True))
-        health_events: list[WorkerHealthEvent] = []
+        transport_events: list[WorkerHealthEvent] = []
         for plan, result in worker_results:
             address = snapshot.worker_addresses[plan.worker_id]
             if result.error is not None:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
             elif result.responder_worker_id is not None and result.responder_worker_id != str(plan.worker_id):
                 # Misrouted reconcile: a *different* live worker answered at this
@@ -218,42 +339,82 @@ class RpcTaskBackend:
                     address,
                     result.responder_worker_id,
                 )
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
                 self.stub_factory.evict(address)
             elif not result.self_healthy:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.UNREACHABLE))
             else:
-                health_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
-        return ReconcileResult(worker_results=worker_results, health_events=health_events)
+                transport_events.append(WorkerHealthEvent(plan.worker_id, WorkerHealthEventKind.REACHED))
+        return FleetObservation(worker_results=worker_results, transport_events=transport_events)
 
-    def autoscale(
-        self,
-        snapshot: ControlSnapshot,
-        residual_demand: list[DemandEntry],
-        dead_workers: list[WorkerId],
-    ) -> AutoscaleResult:
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        """Observe the fleet, resolve its observations into effects, fold liveness.
+
+        ``request`` (the cluster-view dispatch drain) is unused — a worker-daemon
+        backend sources its own placement. :meth:`_observe_fleet` fans the Reconcile
+        RPC out; this resolves the observations into task ``effects`` and folds the
+        liveness it observed (transport signals plus kernel-derived BUILD_FAILED)
+        through the shared ``WorkerHealthTracker``. The reaped workers are stashed
+        for :meth:`run_teardown`; only the committable ``effects`` are returned.
+        """
+        assert self._store is not None, "RpcTaskBackend.reconcile called before worker store attached"
+        observation = self._observe_fleet()
+
+        # Fold transport events first, then the kernel's BUILD_FAILED; both go
+        # through the SAME shared tracker reached via the worker store, so the
+        # startup seed and reopen hook are preserved.
+        now = Timestamp.now()
+        effects = apply_reconcile(self._store, observation.worker_results, now=now)
+        events = observation.transport_events + [
+            WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
+        ]
+        self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
+        return ReconcileResult(effects=effects)
+
+    def run_teardown(self) -> None:
+        """Tear down the workers this tick's reconcile fold reaped.
+
+        Drains the stash and runs the same fail → slice-and-sibling teardown →
+        forget sequence over a fresh snapshot. The controller calls this after it
+        commits the reconcile effects, so a just-finalized attempt is already
+        terminal and skipped. Empty between reaps, so most ticks are a no-op.
+        """
+        dead = self._pending_dead
+        self._pending_dead = []
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+
+    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
+        """Fail ``dead_workers``, reap their slices and siblings, and forget them."""
+        assert self._store is not None, "RpcTaskBackend.teardown called before worker store attached"
+        self._store.reap_workers(dead_workers, reason=reason)
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        """Garbage-collect this backend's stale DEAD workers through its worker store."""
+        assert self._store is not None, "RpcTaskBackend.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
+
+    def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """Tear down dead workers' slices, or run one provisioning cycle.
 
-        With ``dead_workers`` set the autoscaler terminates their slices and
-        returns the dead workers plus their healthy siblings as
-        ``removed_workers`` (no provisioning this call); the cached stub for
-        every torn-down worker is evicted, since none will be reconciled again.
-        Otherwise it runs a refresh + probe_health + update cycle against
-        ``residual_demand``. The DB reads (worker status, demand) are done by the
-        controller and handed in; this only drives the in-memory autoscaler.
+        With ``request.dead_workers`` set the autoscaler terminates their slices
+        and returns the dead workers plus their healthy siblings as
+        ``removed_workers`` (no provisioning this call). Stubs for the removed
+        workers are not evicted here: a dead worker's stub was already dropped as
+        it accrued UNREACHABLE reconcile rounds, and a healthy sibling's stub
+        self-evicts on the next reconcile RPC once its slice is gone. Otherwise it
+        runs a refresh + probe_health + update cycle against
+        ``request.residual_demand``, reading its own worker status.
         """
         if self.autoscaler is None:
             return AutoscaleResult()
-        if dead_workers:
-            siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in dead_workers])
-            removed = list(dead_workers) + [WorkerId(wid) for wid in siblings]
-            for wid in removed:
-                if address := snapshot.worker_addresses.get(wid):
-                    self.stub_factory.evict(address)
+        if request.dead_workers:
+            siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in request.dead_workers])
+            removed = list(request.dead_workers) + [WorkerId(wid) for wid in siblings]
             return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
-        self.autoscaler.refresh(snapshot.worker_status_map)
+        assert self._store is not None, "RpcTaskBackend.autoscale called before worker store attached"
+        self.autoscaler.refresh(self._store.worker_status())
         self.autoscaler.probe_health()
-        self.autoscaler.update(residual_demand)
+        self.autoscaler.update(request.residual_demand)
         return AutoscaleResult(autoscaler_state=self.autoscaler.persistable_state())
 
     def get_process_status(

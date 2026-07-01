@@ -158,10 +158,15 @@ nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
-# https://github.com/marin-community/vllm/compare/04321f0f01b8e60d577a85a1b1af688e4433e7e0...9b02ecc2115a1b3d190d8bdfd39b893495e75eff
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "9b02ecc2115a1b3d190d8bdfd39b893495e75eff" }
-# https://github.com/marin-community/tpu-inference/compare/4c38590e29d33451f2b4375a78ad8f70cacd7b98...67a07c1083bdc7c177ba71522a2d935b24d6d03f
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "67a07c1083bdc7c177ba71522a2d935b24d6d03f" }
+# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
+# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
+# if this is a fixed-base overlay PR, then follow
+# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
+# temporary and must be replaced by the landed fork main SHA.
+# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d
+vllm = { git = "https://github.com/marin-community/vllm.git", rev = "04f7da7e26eacb4e8d7e7d2dce6347d2ff90af4d" }
+# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...808415f45bbfcb512e9c593c4a3330aed115917e
+tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "808415f45bbfcb512e9c593c4a3330aed115917e" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -434,10 +439,11 @@ markers = [
     "requires_cluster: mark tests that need a running iris cluster",
 ]
 testpaths = ["tests", "experiments"]
+pythonpath = ["."]
 
 # Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
 # gated HF repos, etc.); data_integration tests fetch fixtures from HF;
 # requires_cluster tests need a running iris cluster (local or remote).
 # All are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster'"
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster' --import-mode=importlib"

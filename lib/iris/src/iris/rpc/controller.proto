@@ -88,12 +88,7 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // DEPRECATED, back-compat only. Reservations were replaced by the hard
-    // availability:<variant> constraint. Current clients leave this empty; when a
-    // pre-availability client sets it, the server converts each entry into a hard
-    // availability constraint at ingestion and discards the field. Scheduled for
-    // removal once stragglers have upgraded — do not add new uses.
-    iris.job.ReservationConfig reservation = 30;
+    reserved 30;  // was: iris.job.ReservationConfig reservation (replaced by hard availability:<variant> constraints)
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;
     iris.job.ExistingJobPolicy existing_job_policy = 32;
@@ -200,6 +195,8 @@ message Controller {
     // "/alice/exp-"). The caller does not need to provide a parseable JobName;
     // any string is accepted and is matched as ``job_id LIKE '<prefix>%'``.
     string job_id_prefix = 9;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 10;
   }
 
   message ListJobsRequest {
@@ -295,6 +292,8 @@ message Controller {
     string address = 6;                    // Worker RPC address (host:port)
     iris.job.WorkerMetadata metadata = 7;           // Full worker metadata
     string status_message = 8;             // Error or status message (e.g., "Reconcile timeout", "Worker crashed")
+    string backend_id = 9;     // resolved from scale_group via the controller map
+    string scale_group = 10;   // scale group this worker belongs to
   }
 
   // Sort fields for worker listing
@@ -315,6 +314,8 @@ message Controller {
     // Max workers to return. 0 means unbounded (preserves CLI behavior);
     // dashboard callers should always set an explicit page size.
     int32 limit = 5;
+    // Filter to one backend. Empty = all backends.
+    string backend_id = 6;
   }
 
   message ListWorkersRequest {
@@ -363,10 +364,18 @@ message Controller {
     map<string, string> metadata = 4;
     int32 attempt_id = 5;            // Attempt number for stale endpoint cleanup
     string endpoint_id = 6;          // Client-generated UUID for idempotency; server generates one if empty.
+    // Lease length the registrant wants; it renews within this. Unset selects
+    // the server default. The server clamps it to its own [min, max] bounds and
+    // returns the granted value in RegisterEndpointResponse.lease_duration.
+    iris.time.Duration lease_duration = 7;
   }
 
   message RegisterEndpointResponse {
     string endpoint_id = 1;
+    // Lease granted for this endpoint. The registrant re-registers (renews)
+    // before this elapses; an unrenewed endpoint expires and is GC'd. Unset
+    // on the legacy ControllerService surface, which does not lease-renew.
+    iris.time.Duration lease_duration = 2;
   }
 
   message UnregisterEndpointRequest {
@@ -384,7 +393,10 @@ message Controller {
   }
 
   // --- Autoscaler ---
-  message GetAutoscalerStatusRequest {}
+  message GetAutoscalerStatusRequest {
+    // Filter to one backend. Empty = merge all.
+    string backend_id = 1;
+  }
 
   message GetAutoscalerStatusResponse {
     iris.vm.AutoscalerStatus status = 1;
@@ -455,7 +467,10 @@ message Controller {
     iris.job.ResourceSpecProto resources = 3;
   }
 
-  message GetKubernetesClusterStatusRequest {}
+  message GetKubernetesClusterStatusRequest {
+    // Filter to one backend. Empty = single CLUSTER_VIEW backend, or error if >1.
+    string backend_id = 1;
+  }
 
   message KubernetesPodStatus {
     string pod_name = 1;
@@ -527,6 +542,7 @@ message Controller {
     string user_id = 2;
     string job_id = 3;
     int32 count = 4;
+    string backend_id = 5;
   }
 
   // Aggregated running-task count keyed by (band, user, worker, job). The
@@ -538,6 +554,7 @@ message Controller {
     string worker_id = 3;
     string job_id = 4;
     int32 count = 5;
+    string backend_id = 6;
   }
 
   message SchedulerUserBudget {
@@ -560,11 +577,87 @@ message Controller {
     repeated PendingTaskBucket pending_buckets = 6;
     repeated RunningTaskBucket running_buckets = 7;
   }
+
+  message ListBackendsRequest {}
+
+  // Worker-daemon fleet detail: the backend's own autoscaler view plus the
+  // controller's DB-derived worker health counts. Populated for backends that
+  // carry WORKER_DAEMON.
+  message WorkerFleetDetail {
+    iris.vm.AutoscalerStatus autoscaler = 1;
+    int32 healthy_worker_count = 2;
+    int32 total_worker_count = 3;
+  }
+
+  // The expanded, backend-authored status each TaskBackend.status() returns. The
+  // variant follows the backend's BackendCapability: a CLUSTER_VIEW backend
+  // fills ``kubernetes``; a WORKER_DAEMON backend fills ``worker``.
+  message BackendStatus {
+    oneof detail {
+      GetKubernetesClusterStatusResponse kubernetes = 1;
+      WorkerFleetDetail worker = 2;
+    }
+  }
+
+  message BackendSummary {
+    string backend_id = 1;
+    string name = 2;
+    string kind = 3;
+    repeated string capabilities = 4;
+    map<string, StringList> advertised_attributes = 5;
+    bool restricted = 6;
+    int32 allowed_user_count = 7;
+    repeated string scale_groups = 8;
+    int32 worker_count = 9;
+    int32 pending_task_count = 10;
+    int32 running_task_count = 11;
+    bool has_autoscaler = 12;
+    map<string, int32> capacity_health = 13;
+    // Expanded per-backend status for the always-on Backends tab's detail panel.
+    BackendStatus detail = 14;
+  }
+
+  message UnroutableJob {
+    string job_id = 1;
+    string reason = 2;
+  }
+
+  message ListBackendsResponse {
+    repeated BackendSummary backends = 1;
+    int32 unroutable_job_count = 2;
+    repeated UnroutableJob unroutable_sample = 3;
+  }
+
+  message ListPeersRequest {}
+
+  // A federation peer: a remote Iris controller this cluster may delegate whole
+  // jobs to. Distinct from a backend (BackendSummary): a backend is a local
+  // execution substrate this controller drives and folds into its own DAG; a
+  // peer owns its own DAG and is handed whole jobs.
+  message PeerSummary {
+    string peer_id = 1;
+    string controller_address = 2;
+    string dashboard_url = 3;
+    bool reachable = 4;               // last capability heartbeat succeeded
+    int64 last_sync_ms = 5;           // last successful contact, ms since epoch
+    int32 active_federated_jobs = 6;
+    int64 aggregate_spend_micros = 7;
+    // The peer's backends, forwarded from its ListBackends: the underlying
+    // cluster's static topology (kind, advertised devices) and dynamic state
+    // (availability, worker/task counts). Refreshed by the capability heartbeat.
+    repeated BackendSummary backends = 8;
+  }
+
+  message ListPeersResponse {
+    repeated PeerSummary peers = 1;
+  }
 }
 
 // ============================================================================
 // SERVICES
 // ============================================================================
+
+message StringList { repeated string values = 1; }
 
 service ControllerService {
   // Job lifecycle
@@ -630,4 +723,27 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
+  rpc ListBackends(Controller.ListBackendsRequest) returns (Controller.ListBackendsResponse);
+
+  // Federation peers this controller may delegate whole jobs to. Distinct from
+  // ListBackends: backends are what this controller runs, peers are what it
+  // delegates to.
+  rpc ListPeers(Controller.ListPeersRequest) returns (Controller.ListPeersResponse);
+}
+
+// Service-discovery endpoint registry, leased.
+//
+// Registration grants a time-bounded lease; the registrant renews by
+// re-registering with the same endpoint_id before the lease elapses, and an
+// unrenewed endpoint expires (stops being served and is GC'd) independent of
+// the owning task's row lifetime. RegisterEndpoint returns the granted
+// lease_duration so the client can pace its renewals off the server's policy.
+//
+// The ControllerService.{RegisterEndpoint,UnregisterEndpoint,ListEndpoints}
+// RPCs forward here so clients that call the old surface keep working; clients
+// that want to renew call this service directly to learn their lease.
+service EndpointService {
+  rpc RegisterEndpoint(Controller.RegisterEndpointRequest) returns (Controller.RegisterEndpointResponse);
+  rpc UnregisterEndpoint(Controller.UnregisterEndpointRequest) returns (iris.job.Empty);
+  rpc ListEndpoints(Controller.ListEndpointsRequest) returns (Controller.ListEndpointsResponse);
 }

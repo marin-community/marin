@@ -6,6 +6,13 @@
 Mirrors the on-disk schema produced by ``controller/migrations/``. Auth tables
 live on a separate ``auth_metadata`` because they are stored in the attached
 ``auth.sqlite3`` database, not the main controller DB.
+
+``server_default`` holds the literal value to store, not a SQL fragment:
+SQLAlchemy quotes it into the DDL, so a string must be passed unquoted (``""``
+renders ``DEFAULT ''``, ``"{}"`` renders ``DEFAULT '{}'``). Pre-wrapping it
+(``"''"`` / ``"'{}'"``) stores the quote characters themselves, which then fails
+``json.loads`` for the JSON-backed columns. Integer columns pass the numeric
+value the same way (``"0"``); SQLite's type affinity coerces it to an int.
 """
 
 import json
@@ -29,6 +36,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     literal_column,
+    select,
     text,
 )
 from sqlalchemy.sql.elements import ColumnElement
@@ -240,7 +248,7 @@ users_table = Table(
     Column("user_id", String, primary_key=True),
     Column("created_at_ms", TimestampMsType, nullable=False),
     Column("display_name", String),
-    Column("role", String, nullable=False, server_default=f"'{USER_ROLE_DEFAULT}'"),
+    Column("role", String, nullable=False, server_default=USER_ROLE_DEFAULT),
     CheckConstraint(USER_ROLE_CHECK, name="users_role_check"),
 )
 
@@ -262,7 +270,12 @@ jobs_table = Table(
     Column("error", String),
     Column("exit_code", Integer),
     Column("num_tasks", Integer, nullable=False),
-    Column("name", String, nullable=False, server_default="''"),
+    Column("name", String, nullable=False, server_default=""),
+    Column("backend_id", String, nullable=False, server_default=""),
+    # Federation discriminator, orthogonal to backend_id: "" == owned locally,
+    # "<peer>" == handed off to that peer cluster. Mutually exclusive with a
+    # local backend_id by construction (a federated job has backend_id="").
+    Column("child_cluster", String, nullable=False, server_default=""),
     Index("idx_jobs_parent", "parent_job_id"),
     Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
     Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
@@ -277,28 +290,28 @@ job_config_table = Table(
     "job_config",
     metadata,
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
-    Column("name", String, nullable=False, server_default="''"),
+    Column("name", String, nullable=False, server_default=""),
     Column("res_cpu_millicores", Integer, nullable=False, server_default="0"),
     Column("res_memory_bytes", Integer, nullable=False, server_default="0"),
     Column("res_disk_bytes", Integer, nullable=False, server_default="0"),
     Column("res_device_json", String),
     Column("constraints_json", String),
     Column("has_coscheduling", BoolIntType, nullable=False, server_default="0"),
-    Column("coscheduling_group_by", String, nullable=False, server_default="''"),
+    Column("coscheduling_group_by", String, nullable=False, server_default=""),
     Column("scheduling_timeout_ms", Integer),
     Column("max_task_failures", Integer, nullable=False, server_default="0"),
-    Column("entrypoint_json", String, nullable=False, server_default="'{}'"),
-    Column("environment_json", String, nullable=False, server_default="'{}'"),
-    Column("bundle_id", String, nullable=False, server_default="''"),
-    Column("ports_json", JSONList(), nullable=False, server_default="'[]'"),
+    Column("entrypoint_json", String, nullable=False, server_default="{}"),
+    Column("environment_json", String, nullable=False, server_default="{}"),
+    Column("bundle_id", String, nullable=False, server_default=""),
+    Column("ports_json", JSONList(), nullable=False, server_default="[]"),
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
     Column("preemption_policy", Integer, nullable=False, server_default="0"),
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
-    Column("task_image", String, nullable=False, server_default="''"),
-    Column("submit_argv_json", JSONList(), nullable=False, server_default="'[]'"),
+    Column("task_image", String, nullable=False, server_default=""),
+    Column("submit_argv_json", JSONList(), nullable=False, server_default="[]"),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
@@ -339,8 +352,15 @@ tasks_table = Table(
     Column("container_id", String),
     Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
     Column("current_worker_address", String),
+    Column("backend_id", String, nullable=False, server_default=""),
+    # Federation discriminator; see jobs.child_cluster. A federated task has
+    # child_cluster set, backend_id="", and no local worker/attempt rows. Every
+    # control-plane reader sources the ``local_tasks`` selectable (child_cluster
+    # = "") so these rows are structurally invisible to the scheduler fold.
+    Column("child_cluster", String, nullable=False, server_default=""),
     UniqueConstraint("job_id", "task_index", name="tasks_job_id_task_index_key"),
     Index("idx_tasks_job_state", "job_id", "state"),
+    Index("idx_tasks_backend_state", "backend_id", "state"),
     Index(
         "idx_tasks_pending",
         "state",
@@ -350,7 +370,20 @@ tasks_table = Table(
         "submitted_at_ms",
         "priority_insertion",
     ),
+    # Partial mirrors of the two hot control-plane scans, restricted to local
+    # rows so the ``local_tasks`` fold-exclusion costs nothing at read time.
+    Index(
+        "idx_tasks_pending_local",
+        "state",
+        "priority_band",
+        "priority_neg_depth",
+        "priority_root_submitted_ms",
+        "submitted_at_ms",
+        "priority_insertion",
+        sqlite_where=text("child_cluster = ''"),
+    ),
     Index("idx_tasks_state", "state"),
+    Index("idx_tasks_state_local", "state", sqlite_where=text("child_cluster = ''")),
     Index("idx_tasks_state_attempt", "state", "task_id", "current_attempt_id", "job_id"),
     Index("idx_tasks_job_failures", "job_id", "failure_count", "preemption_count"),
     Index(
@@ -375,6 +408,17 @@ def hint_rare_state(predicate: ColumnElement[bool]) -> ColumnElement[bool]:
     return func.likelihood(predicate, _RARE_STATE_PROBABILITY)
 
 
+# Structural fold-exclusion for federated tasks. Every control-plane reader
+# (scheduling, routing, reconcile/dispatch, budget, capacity/autoscale, cancel,
+# timeout, pruner) sources this selectable instead of raw ``tasks_table`` so
+# rows handed off to a peer (``child_cluster != ''``) are invisible to the fold.
+# SQLite flattens the subquery and drives off the ``… WHERE child_cluster = ''``
+# partial indexes, so the exclusion is free at read time. User-facing read paths
+# (job/task detail, list, status) keep reading raw ``tasks_table`` so federated
+# rows still render in listings.
+local_tasks = select(tasks_table).where(tasks_table.c.child_cluster == "").subquery("local_tasks")
+
+
 task_attempts_table = Table(
     "task_attempts",
     metadata,
@@ -388,6 +432,7 @@ task_attempts_table = Table(
     Column("exit_code", Integer),
     Column("error", String),
     Column("attempt_uid", String, nullable=False),
+    Column("backend_id", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
     Index(
@@ -396,6 +441,19 @@ task_attempts_table = Table(
         sqlite_where=text("worker_id IS NOT NULL AND finished_at_ms IS NULL"),
     ),
     Index("idx_task_attempts_uid", "attempt_uid", unique=True),
+    Index("idx_task_attempts_backend", "backend_id"),
+)
+
+
+backends_table = Table(
+    "backends",
+    metadata,
+    Column("backend_id", String, primary_key=True),
+    Column("kind", String, nullable=False, server_default=""),
+    Column("status", Integer, nullable=False, server_default="0"),
+    Column("attributes_json", String, nullable=False, server_default="{}"),
+    Column("allow_policy_json", String, nullable=False, server_default="{}"),
+    Column("last_seen_ms", Integer),
 )
 
 
@@ -404,30 +462,30 @@ workers_table = Table(
     metadata,
     Column("worker_id", WorkerIdType, primary_key=True),
     Column("address", String, nullable=False),
-    Column("md_hostname", String, nullable=False, server_default="''"),
-    Column("md_ip_address", String, nullable=False, server_default="''"),
+    Column("md_hostname", String, nullable=False, server_default=""),
+    Column("md_ip_address", String, nullable=False, server_default=""),
     Column("md_cpu_count", Integer, nullable=False, server_default="0"),
     Column("md_memory_bytes", Integer, nullable=False, server_default="0"),
     Column("md_disk_bytes", Integer, nullable=False, server_default="0"),
-    Column("md_tpu_name", String, nullable=False, server_default="''"),
-    Column("md_tpu_worker_hostnames", String, nullable=False, server_default="''"),
-    Column("md_tpu_worker_id", String, nullable=False, server_default="''"),
-    Column("md_tpu_chips_per_host_bounds", String, nullable=False, server_default="''"),
+    Column("md_tpu_name", String, nullable=False, server_default=""),
+    Column("md_tpu_worker_hostnames", String, nullable=False, server_default=""),
+    Column("md_tpu_worker_id", String, nullable=False, server_default=""),
+    Column("md_tpu_chips_per_host_bounds", String, nullable=False, server_default=""),
     Column("md_gpu_count", Integer, nullable=False, server_default="0"),
-    Column("md_gpu_name", String, nullable=False, server_default="''"),
+    Column("md_gpu_name", String, nullable=False, server_default=""),
     Column("md_gpu_memory_mb", Integer, nullable=False, server_default="0"),
-    Column("md_gce_instance_name", String, nullable=False, server_default="''"),
-    Column("md_gce_zone", String, nullable=False, server_default="''"),
-    Column("md_git_hash", String, nullable=False, server_default="''"),
-    Column("md_device_json", String, nullable=False, server_default="'{}'"),
+    Column("md_gce_instance_name", String, nullable=False, server_default=""),
+    Column("md_gce_zone", String, nullable=False, server_default=""),
+    Column("md_device_json", String, nullable=False, server_default="{}"),
+    Column("md_provenance_json", String, nullable=False, server_default="{}"),
     Column("total_cpu_millicores", Integer, nullable=False, server_default="0"),
     Column("total_memory_bytes", Integer, nullable=False, server_default="0"),
     Column("total_gpu_count", Integer, nullable=False, server_default="0"),
     Column("total_tpu_count", Integer, nullable=False, server_default="0"),
-    Column("device_type", String, nullable=False, server_default="''"),
-    Column("device_variant", String, nullable=False, server_default="''"),
-    Column("slice_id", String, nullable=False, server_default="''"),
-    Column("scale_group", String, nullable=False, server_default="''"),
+    Column("device_type", String, nullable=False, server_default=""),
+    Column("device_variant", String, nullable=False, server_default=""),
+    Column("slice_id", String, nullable=False, server_default=""),
+    Column("scale_group", String, nullable=False, server_default=""),
 )
 
 
@@ -455,6 +513,12 @@ endpoints_table = Table(
     Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
     Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
+    # Lease expiry. Registration grants a lease; re-registering renews it. A row
+    # past its deadline is hidden from reads and swept by the pruner, independent
+    # of the FK CASCADE. Nullable so it can be added to an existing DB without a
+    # backfill; a NULL deadline is treated as never-expiring until the registrant
+    # next re-registers with a real lease.
+    Column("lease_deadline_ms", TimestampMsType, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),
@@ -470,7 +534,7 @@ scaling_groups_table = Table(
     Column("last_scale_up_ms", Integer, nullable=False, server_default="0"),
     Column("last_scale_down_ms", Integer, nullable=False, server_default="0"),
     Column("quota_exceeded_until_ms", Integer, nullable=False, server_default="0"),
-    Column("quota_reason", String, nullable=False, server_default="''"),
+    Column("quota_reason", String, nullable=False, server_default=""),
     Column("updated_at_ms", Integer, nullable=False, server_default="0"),
 )
 
@@ -481,9 +545,9 @@ slices_table = Table(
     Column("slice_id", String, primary_key=True),
     Column("scale_group", String, nullable=False),
     Column("lifecycle", String, nullable=False),
-    Column("worker_ids", JSONList(), nullable=False, server_default="'[]'"),
+    Column("worker_ids", JSONList(), nullable=False, server_default="[]"),
     Column("created_at_ms", Integer, nullable=False, server_default="0"),
-    Column("error_message", String, nullable=False, server_default="''"),
+    Column("error_message", String, nullable=False, server_default=""),
     Index("idx_slices_scale_group", "scale_group"),
 )
 
@@ -495,6 +559,51 @@ user_budgets_table = Table(
     Column("budget_limit", Integer, nullable=False, server_default="0"),
     Column("max_band", Integer, nullable=False, server_default="2"),
     Column("updated_at_ms", TimestampMsType, nullable=False),
+)
+
+
+# ---------------------------------------------------------------------------
+# Federation sidecars.
+#
+# The federated job/task rows live in ``jobs``/``tasks`` with ``child_cluster``
+# set; state/timing/counts are the single source of truth there. These tables
+# are thin join sidecars carrying only federation-only metadata that has no home
+# in the main rows — the same shape as ``jobs`` ⋈ ``job_config`` today.
+# ---------------------------------------------------------------------------
+
+
+federated_jobs_table = Table(
+    "federated_jobs",
+    metadata,
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
+    Column("peer_id", String, nullable=False),  # == jobs.child_cluster
+    # Deterministic, globally unique remote id: "<parent_cluster>/<job_id>".
+    Column("remote_job_id", String, nullable=False),
+    Column("owner_principal", String, nullable=False),  # auth identity asserted to the peer
+    Column("handoff_state", Integer, nullable=False),  # PENDING_HANDOFF | HANDED_OFF | HANDOFF_FAILED
+    Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
+    Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
+    Column("last_sync_ms", TimestampMsType),
+    Column("terminal_error", String),
+)
+
+
+federation_sync_state_table = Table(
+    "federation_sync_state",
+    metadata,
+    Column("peer_id", String, primary_key=True),
+    # Opaque monotonic watermark into the peer's changelog; one row per peer.
+    Column("cursor", String, nullable=False, server_default=""),
+    Column("last_full_resync_ms", TimestampMsType),
+)
+
+
+federated_tasks_table = Table(
+    "federated_tasks",
+    metadata,
+    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE"), primary_key=True),
+    # Opaque peer-side worker name, display only (a federated task has no local worker row).
+    Column("peer_worker_label", String, nullable=False, server_default=""),
 )
 
 

@@ -5,7 +5,6 @@
 
 import logging
 import time
-import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +18,7 @@ from rigging.connect import proxy_path
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
+from iris.cluster.client.endpoint_client import EndpointClient
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -27,7 +27,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt
 from iris.cluster.worker.stats import TASK_STATUS_NAMESPACE, TASK_STATUS_STORAGE_POLICY, TaskStatusRow
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
 from iris.version import client_revision_date
@@ -105,6 +105,19 @@ class RemoteClusterClient:
             interceptors=interceptors,
             accept_compression=IRIS_RPC_COMPRESSIONS,
             send_compression=None,
+        )
+        # Endpoint registry on its own service. EndpointClient owns the RPC stub
+        # and the background lease renewal: register() keeps the endpoint alive
+        # until unregister()/close(), so the controller keeps serving it while
+        # the task runs.
+        self._endpoint_client = EndpointClient(
+            EndpointServiceClientSync(
+                address=controller_address,
+                timeout_ms=timeout_ms,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
         )
         # In-cluster clients resolve the finelog endpoint and write direct so
         # task-status pushes don't pile up on the controller's RPC thread pool;
@@ -378,34 +391,14 @@ class RemoteClusterClient:
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
     ) -> str:
-        endpoint_id = str(uuid.uuid4())
-        request = controller_pb2.Controller.RegisterEndpointRequest(
-            name=name,
-            address=address,
-            task_id=task_attempt.task_id.to_wire(),
-            attempt_id=task_attempt.attempt_id if task_attempt.attempt_id is not None else 0,
-            metadata=metadata or {},
-            endpoint_id=endpoint_id,
-        )
-
-        def _call():
-            return self._client.register_endpoint(request)
-
-        response = call_with_retry("register_endpoint", _call)
-        return response.endpoint_id
+        return self._endpoint_client.register(name, address, task_attempt, metadata)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
-        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
-        self._client.unregister_endpoint(request)
+        self._endpoint_client.unregister(endpoint_id)
 
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
-        def _call():
-            request = controller_pb2.Controller.ListEndpointsRequest(prefix=prefix, exact=exact)
-            response = self._client.list_endpoints(request, timeout_ms=10_000)
-            return list(response.endpoints)
-
-        return call_with_retry("list_endpoints", _call)
+        return self._endpoint_client.list_endpoints(prefix, exact=exact)
 
     def resolve_endpoint(self, endpoint_name: str) -> str:
         """Resolve ``endpoint_name`` to a service address.
@@ -471,6 +464,7 @@ class RemoteClusterClient:
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
+        self._endpoint_client.close()
         self._log_client.close()
         self._client.close()
 
@@ -555,6 +549,15 @@ class RemoteClusterClient:
             return self._log_client.fetch_logs(request)
 
         return call_with_retry(f"fetch_logs({source})", _call)
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        """Fetch this controller's backends: their topology and current state."""
+        request = controller_pb2.Controller.ListBackendsRequest()
+        # Single attempt, no retry (unlike the sibling calls): a failed federation
+        # heartbeat marks the peer unreachable until the next one, so retrying here
+        # would only delay that signal.
+        response = self._client.list_backends(request)
+        return list(response.backends)
 
     def get_autoscaler_status(self) -> controller_pb2.Controller.GetAutoscalerStatusResponse:
         """Get autoscaler status including recent actions and group states.

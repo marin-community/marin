@@ -12,7 +12,7 @@ from typing import Generic, ParamSpec, TypeVar
 import cloudpickle
 from rigging.filesystem import marin_temp_bucket, open_url
 
-from marin.execution.executor_step_status import (
+from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
     StatusFile,

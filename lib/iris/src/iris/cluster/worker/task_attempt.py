@@ -10,6 +10,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import contextlib
 import logging
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -49,6 +50,7 @@ from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
+from iris.rpc.proto_display import signal_name
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -56,14 +58,6 @@ logger = logging.getLogger(__name__)
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
 
-
-# Signal numbers for interpreting exit codes > 128
-_SIGNAL_NAMES = {
-    6: "SIGABRT",
-    9: "SIGKILL",
-    11: "SIGSEGV",
-    15: "SIGTERM",
-}
 
 # Max time to wait for the container to actually exit after force-kill before
 # reporting TASK_STATE_KILLED. SIGKILL is uncatchable, so a healthy runtime
@@ -95,11 +89,11 @@ def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
     # Interpret signal-based exit codes
     if exit_code > 128:
         signal_num = exit_code - 128
-        signal_name = _SIGNAL_NAMES.get(signal_num, f"signal {signal_num}")
+        name = signal_name(signal_num)
         # Exit 137 (SIGKILL) without OOMKilled flag could still be resource-related
-        if signal_num == 9:
-            return f"Exit code {exit_code}: killed by {signal_name} (possibly OOM or resource limit)"
-        return f"Exit code {exit_code}: killed by {signal_name}"
+        if signal_num == signal.SIGKILL:
+            return f"Exit code {exit_code}: killed by {name} (possibly OOM or resource limit)"
+        return f"Exit code {exit_code}: killed by {name}"
 
     return f"Exit code: {exit_code}"
 

@@ -1,5 +1,18 @@
 {
+  "backends": [
+    {
+      "allow_policy_json": "{}",
+      "attributes_json": "{}",
+      "backend_id": "default",
+      "kind": "",
+      "last_seen_ms": null,
+      "status": 0
+    }
+  ],
   "endpoints": [],
+  "federated_jobs": [],
+  "federated_tasks": [],
+  "federation_sync_state": [],
   "job_config": [
     {
       "bundle_id": "",
@@ -32,6 +45,8 @@
   "job_workdir_files": [],
   "jobs": [
     {
+      "backend_id": "",
+      "child_cluster": "",
       "depth": 1,
       "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
       "exit_code": null,
@@ -61,6 +76,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-0>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
       "exit_code": null,
@@ -73,6 +89,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-1>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
       "exit_code": null,
@@ -85,6 +102,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-2>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "boom",
       "exit_code": null,
@@ -97,6 +115,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-3>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
       "exit_code": null,
@@ -109,6 +128,7 @@
     {
       "attempt_id": 0,
       "attempt_uid": "<masked-4>",
+      "backend_id": "",
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched5-job/2 failed",
       "exit_code": null,
@@ -121,6 +141,8 @@
   ],
   "tasks": [
     {
+      "backend_id": "",
+      "child_cluster": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -144,6 +166,8 @@
       "task_index": 0
     },
     {
+      "backend_id": "",
+      "child_cluster": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -167,6 +191,8 @@
       "task_index": 1
     },
     {
+      "backend_id": "",
+      "child_cluster": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -190,6 +216,8 @@
       "task_index": 2
     },
     {
+      "backend_id": "",
+      "child_cluster": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -213,6 +241,8 @@
       "task_index": 3
     },
     {
+      "backend_id": "",
+      "child_cluster": "",
       "container_id": null,
       "current_attempt_id": 0,
       "current_worker_address": null,
@@ -297,13 +327,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",
@@ -325,13 +355,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",
@@ -353,13 +383,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",
@@ -381,13 +411,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",
@@ -409,13 +439,13 @@
       "md_disk_bytes": 17179869184,
       "md_gce_instance_name": "",
       "md_gce_zone": "",
-      "md_git_hash": "",
       "md_gpu_count": 0,
       "md_gpu_memory_mb": 0,
       "md_gpu_name": "",
       "md_hostname": "replay-worker",
       "md_ip_address": "127.0.0.1",
       "md_memory_bytes": 17179869184,
+      "md_provenance_json": "{}",
       "md_tpu_chips_per_host_bounds": "",
       "md_tpu_name": "",
       "md_tpu_worker_hostnames": "",

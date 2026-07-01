@@ -338,14 +338,14 @@ class K8sControllerProvider:
         self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
         logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
-        deploy_manifest = _build_controller_deployment(
+        deploy_kwargs = dict(
             namespace=self._namespace,
             image=config.controller.image,
             port=port,
             node_selector={self._iris_labels.iris_scale_group: cw.scale_group},
             task_env_secret=projects_task_env_secret(config),
-            fresh=fresh,
         )
+        deploy_manifest = _build_controller_deployment(**deploy_kwargs, fresh=fresh)
         # Always stop the old controller before starting the new one. The
         # SQLite state PVC is ReadWriteOnce and a rolling update could briefly
         # mount it from two pods on the same node, corrupting the DB. Iris
@@ -386,7 +386,25 @@ class K8sControllerProvider:
         self.wait_for_deployment_ready()
         self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
+        if fresh:
+            self._persist_deployment_without_fresh(deploy_kwargs)
+
         return self.discover_controller(config.controller)
+
+    def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
+        """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.
+
+        ``--fresh`` baked into the pod ``command`` persists in the template, so any
+        involuntary respawn (eviction, node upgrade, OOMKill) comes back ``--fresh``
+        and wipes live job state — the failure in issue #6808. The fresh controller
+        has already emitted an (empty) checkpoint by now, so re-applying without the
+        flag makes ``--fresh`` mean "ignore existing state on this deploy" rather
+        than "wipe on every restart forever".
+        """
+        logger.info("Re-applying controller Deployment without --fresh so the wipe is one-shot")
+        self._kubectl.apply_json(_build_controller_deployment(**deploy_kwargs, fresh=False))
+        self.wait_for_deployment_ready()
+        self._kubectl.rollout_status(K8sResource.DEPLOYMENTS, "iris-controller")
 
     def restart_controller(self, config: IrisClusterConfig) -> str:
         return self.start_controller(config)

@@ -104,12 +104,12 @@ def dedup_exact_paragraph(
             for record in records:
                 is_dup: bool = record["is_dup"]
                 total += 1
-                counters.increment("dedup/exact/paragraph/total")
+                counters.pipeline.update_counter("dedup/exact/paragraph/total", 1)
                 if is_dup:
                     dups += 1
-                    counters.increment("dedup/exact/paragraph/dups")
+                    counters.pipeline.update_counter("dedup/exact/paragraph/dups", 1)
                 else:
-                    counters.increment("dedup/exact/paragraph/unique")
+                    counters.pipeline.update_counter("dedup/exact/paragraph/unique", 1)
                 yield record
 
         def group_by_doc_id(records: Iterator[dict]) -> Iterator[dict]:
@@ -155,7 +155,7 @@ def dedup_exact_paragraph(
 
     def _flat_map_paragraph_hashes(batch: pa.RecordBatch) -> Iterator[dict]:
         hashes = compute_paragraph_hashes(batch).to_pylist()
-        counters.increment("hash/paragraphs", len(hashes))
+        counters.pipeline.update_counter("hash/paragraphs", len(hashes))
         for hash_record in hashes:
             yield {
                 "file_idx": path_to_idx[hash_record.pop(DEFAULT_FILE_PATH_COLUMN)],
@@ -244,7 +244,7 @@ def dedup_exact_document(
     def _flat_map_document_hashes(path: str) -> Iterator[dict]:
         for batch in _load_batches(path):
             hashes = compute_document_hashes(batch).to_pylist()
-            counters.increment("hash/documents", len(hashes))
+            counters.pipeline.update_counter("hash/documents", len(hashes))
             for hash_record in hashes:
                 yield {"file_idx": path_to_idx[path], **hash_record}
 
