@@ -34,12 +34,21 @@ def _sql_str(value: str) -> str:
 class Dataviz:
     """Query facade bound to one resolved store lineage + a ducky client."""
 
-    def __init__(self, lineage: StoreLineage, ducky: DuckyClient, source_docs: dict[str, int] | None = None):
+    def __init__(
+        self,
+        lineage: StoreLineage,
+        ducky: DuckyClient,
+        source_docs: dict[str, int] | None = None,
+        dedup_attr: dict[str, str] | None = None,
+    ):
         self.lineage = lineage
         self.ducky = ducky
         # Estimated docs per source (from the baked summary), used to sample the
         # store from cheap small sources first rather than scanning huge ones.
         self.source_docs = source_docs or {}
+        # source -> per-source fuzzy-dup attribute dir ({id, attributes:
+        # {dup_cluster_id, is_cluster_canonical}}), for dedup drill-down.
+        self.dedup_attr = dedup_attr or {}
 
     # -- glob helpers -------------------------------------------------------
     def _normalize_glob(self, source: str) -> str:
@@ -129,6 +138,51 @@ class Dataviz:
             f"WHERE q.score >= {float(lo)} AND q.score < {float(hi)} "
             f"ORDER BY q.score DESC LIMIT {int(n)}"
         )
+
+    # -- deduplication ------------------------------------------------------
+    def _dedup_glob(self, source: str) -> str:
+        return f"{self.dedup_attr[source]}/*.parquet"
+
+    def dedup_examples(self, source: str, n_clusters: int = 6, per_cluster: int = 3) -> list[dict]:
+        """Example duplicate clusters for ``source`` with each member's text.
+
+        The per-source fuzzy-dup attr is sparse (non-singletons only). We bound
+        cost by grouping within the first ~500k-row window (never the full
+        multi-shard set — that would risk an OOM), which surfaces the *dense*
+        clusters (templated / near-identical content) that dominate dedup. Then
+        we fetch each shown member's normalized text with an id ``IN`` filter.
+        """
+        if source not in self.dedup_attr or source not in self.lineage.normalize:
+            return []
+        attr, norm = self._dedup_glob(source), self._normalize_glob(source)
+        rows = self.ducky.run(
+            f"WITH win AS (SELECT id, attributes.dup_cluster_id d, attributes.is_cluster_canonical c "
+            f"FROM read_parquet('{attr}') LIMIT 500000), "
+            f"r AS (SELECT *, row_number() OVER (PARTITION BY d ORDER BY c DESC) rn, "
+            f"count(*) OVER (PARTITION BY d) n FROM win), "
+            f"big AS (SELECT DISTINCT d, n FROM r WHERE n >= 3 ORDER BY n DESC LIMIT {int(n_clusters)}) "
+            f"SELECT r.d AS cluster_id, r.n AS sampled_size, r.id AS doc_id, r.c AS canonical "
+            f"FROM r JOIN big USING (d) WHERE r.rn <= {int(per_cluster)} ORDER BY r.n DESC, r.d, r.c DESC"
+        ).dicts()
+        if not rows:
+            return []
+        ids = [r["doc_id"] for r in rows]
+        in_list = ", ".join(f"'{_sql_str(i)}'" for i in ids)
+        text = {
+            d["id"]: d["text"]
+            for d in self.ducky.run(
+                f"SELECT id, substr(text, 1, 1500) AS text FROM read_parquet('{norm}') WHERE id IN ({in_list})"
+            ).dicts()
+        }
+        clusters: dict[str, dict] = {}
+        for r in rows:
+            cl = clusters.setdefault(
+                r["cluster_id"], {"cluster_id": r["cluster_id"], "sampled_size": r["sampled_size"], "members": []}
+            )
+            cl["members"].append(
+                {"doc_id": r["doc_id"], "canonical": bool(r["canonical"]), "text": text.get(r["doc_id"], "")}
+            )
+        return list(clusters.values())
 
     # -- final store --------------------------------------------------------
     def store_heatmap(self) -> dict:

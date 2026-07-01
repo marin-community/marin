@@ -184,22 +184,59 @@ async function loadDecontam(out,src){
 }
 async function loadQuality(out,src){
   const hist=await runQuery('quality_hist',{source:src});
-  out.innerHTML=`<h4>quality score distribution</h4>${bars(hist,r=>`${r.lo}–${r.hi}`,r=>r.docs)}
-    <h4>high-score samples</h4><div id="qs" class="muted">loading…</div>`;
-  const samp=await runQuery('quality_samples',{source:src,lo:0.8,hi:1.01,n:15});
-  document.getElementById('qs').innerHTML=sampleTable(samp,['score','text']);
+  const max=Math.max(1,...hist.map(r=>r.docs));
+  let html='<h4>quality score distribution <span class="muted">(click a bar to sample that score range)</span></h4>';
+  for(const r of hist)
+    html+=`<div class="barrow qb" style="cursor:pointer" data-lo="${r.lo}" data-hi="${r.hi}"><span class="lbl">${r.lo}–${r.hi}</span><span class="bar" style="width:${Math.round(260*r.docs/max)}px"></span><span class="cnt">${fmt(r.docs)}</span></div>`;
+  html+='<div id="qs"><p class="muted">click a score range above to load samples</p></div>';
+  out.innerHTML=html;
+  out.querySelectorAll('.qb').forEach(el=>el.onclick=async()=>{
+    out.querySelectorAll('.qb').forEach(x=>x.style.fontWeight='');el.style.fontWeight='700';
+    const lo=+el.dataset.lo, hi=+el.dataset.hi, qs=document.getElementById('qs');loading(qs);
+    try{const s=await runQuery('quality_samples',{source:src,lo:lo,hi:hi+0.0001,n:20});
+      qs.innerHTML=`<h4>samples with score in ${lo}–${hi}</h4>${sampleTable(s,['score','text'])}`;
+    }catch(e){fail(qs,e);}
+  });
 }
 
 function renderDedup(m){
   const c=OV.counters||{};
-  m.innerHTML=`<div class="card"><h3>Deduplication</h3>
+  const ds=(OV.source_summary||[]).filter(r=>r.drop_rate!=null).map(r=>r.source).sort();
+  m.innerHTML=`<div class="card"><h3>Deduplication (store-wide)</h3>
    <div class="stats">
      <div class="stat"><b>${fmt(c['datakit_store/records_in'])}</b><span>records in</span></div>
      <div class="stat"><b>${fmt(c['datakit_store/dedup_noncanonical_dropped'])}</b><span>dropped as non-canonical</span></div>
      <div class="stat"><b>${fmt(c['datakit_store/records_out'])}</b><span>kept (canonical/singleton)</span></div>
    </div>
-   <p class="muted">fuzzy-dup dataset: <code>${OV.dedup?esc(OV.dedup):'unresolved'}</code></p>
-   <p class="muted">per-cluster duplicate exploration (from the connected-components metadata) is not yet wired.</p></div>`;
+   <p class="muted">fuzzy-dup dataset: <code>${OV.dedup?esc(OV.dedup):'unresolved'}</code></p></div>
+   <div class="card"><div class="controls"><label>source <select id="ds">${ds.map(s=>`<option>${esc(s)}</option>`).join('')}</select></label>
+     <button class="primary" id="dgo">load duplicate clusters</button></div>
+     <div id="dout"><p class="muted">pick a source to inspect its duplicate clusters (canonical kept vs dropped)</p></div></div>`;
+  const out=document.getElementById('dout');
+  document.getElementById('dgo').onclick=()=>loadDedup(out,document.getElementById('ds').value);
+}
+async function loadDedup(out,src){
+  const s=(OV.source_summary||[]).find(r=>r.source===src)||{};
+  const pct=v=>v==null?'—':(100*v).toFixed(1)+'%';
+  loading(out);
+  try{
+    const cl=await runQuery('dedup_examples',{source:src,n_clusters:6});
+    let html=`<div class="stats">
+      <div class="stat"><b>${pct(s.drop_rate)}</b><span>docs dropped as dup</span></div>
+      <div class="stat"><b>${pct(s.dup_prevalence)}</b><span>in a dup cluster</span></div>
+      <div class="stat"><b>${fmt(s.dup_largest)}</b><span>largest cluster (sampled)</span></div>
+      <div class="stat"><b>${s.dup_avg_size??'—'}</b><span>avg cluster size</span></div>
+      <div class="stat"><b>${fmt(s.docs_est)}</b><span>docs (est)</span></div></div>
+      <h4>example duplicate clusters <span class="muted">(densest clusters in a sampled window; KEPT = canonical)</span></h4>`;
+    if(!cl.length) html+='<p class="muted">no multi-member clusters found in the sampled window</p>';
+    for(const c of cl){
+      html+=`<div class="sample"><div class="shdr"><span>cluster ${esc(String(c.cluster_id).slice(0,14))}…</span><span>~${fmt(c.sampled_size)} members</span></div>`;
+      for(const mem of c.members)
+        html+=`<div style="padding:6px 10px;border-top:1px solid var(--border)"><span style="font-size:11px;padding:1px 7px;border-radius:10px;${mem.canonical?'background:#e7f5ee;color:#1b5e20':'background:#fff7e6;color:#7a4a00'}">${mem.canonical?'KEPT':'dropped'}</span><pre style="margin-top:4px">${esc(mem.text)}</pre></div>`;
+      html+='</div>';
+    }
+    out.innerHTML=html;
+  }catch(e){fail(out,e);}
 }
 
 function renderStore(m){

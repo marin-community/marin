@@ -88,6 +88,36 @@ def _source_docs(source_summary: list[dict] | None) -> dict[str, int]:
     return {r["source"]: r["docs_est"] for r in source_summary or [] if r.get("docs_est")}
 
 
+def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
+    """Map source -> per-source fuzzy-dup attr dir, from the dedup artifact.
+
+    The dedup artifact keys its ``sources`` by each source's normalized *main*
+    dir; we join that to the resolved normalize paths to get source -> attr_dir.
+    """
+    if not lineage.dedup:
+        return {}
+    import json  # noqa: PLC0415 — startup-only
+
+    from rigging.filesystem import open_url  # noqa: PLC0415
+
+    doc = None
+    for name in (".artifact.json", "artifact.json"):
+        try:
+            with open_url(f"{lineage.dedup}/{name}", "r") as f:
+                doc = json.load(f)
+            break
+        except FileNotFoundError:
+            continue
+    if not doc:
+        return {}
+    by_main = {main: entry["attr_dir"] for main, entry in doc.get("sources", {}).items()}
+    return {
+        src: by_main[f"{ndir}/outputs/main"]
+        for src, ndir in lineage.normalize.items()
+        if f"{ndir}/outputs/main" in by_main
+    }
+
+
 def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
     return {
@@ -103,6 +133,7 @@ def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
             lambda p: dv.quality_samples(p["source"], float(p["lo"]), float(p["hi"]), int(p.get("n", 20))).dicts()
         ),
         "store_samples": lambda p: dv.store_cluster_samples(int(p["cluster"]), int(p.get("n", 12))),
+        "dedup_examples": lambda p: dv.dedup_examples(p["source"], int(p.get("n_clusters", 6))),
     }
 
 
@@ -148,7 +179,8 @@ def build_app(
     ducky: DuckyClient,
     source_summary: list[dict] | None = None,
 ) -> Starlette:
-    manager = QueryManager(_build_views(Dataviz(lineage, ducky, _source_docs(source_summary))))
+    dv = Dataviz(lineage, ducky, _source_docs(source_summary), _dedup_attr_map(lineage))
+    manager = QueryManager(_build_views(dv))
 
     def overview() -> dict:
         buckets = [
