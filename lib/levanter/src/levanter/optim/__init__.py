@@ -24,6 +24,7 @@ __all__ = [
     "MuonConfig",
     "MuonHConfig",
     "ScaleByMuonState",
+    "MudamConfig",
     "GrugMuonConfig",
     "NamoConfig",
     "NamoDConfig",
@@ -50,6 +51,7 @@ from .adamh import AdamHConfig
 from .kron import KronConfig
 from .mars import MarsConfig, ScaleByMarsState
 from .muon import MuonConfig, ScaleByMuonState
+from .mudam import MudamConfig
 from .grugmuon import GrugMuonConfig
 from .muonh import MuonHConfig
 from .namo import NamoConfig, NamoDConfig
