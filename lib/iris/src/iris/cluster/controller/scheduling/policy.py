@@ -31,6 +31,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger
 from iris.cluster.controller.budget import (
     UserTask,
     compute_effective_band,
@@ -678,6 +679,181 @@ def run_preemption_pass(
                 satisfied_preemptor_jobs.add(parent)
 
     return preemptions
+
+
+@dataclass(frozen=True)
+class _VictimSlice:
+    """A running slice eligible for cross-variant reserved-pool eviction."""
+
+    slice_id: str
+    chips: int
+    # Highest priority (min band_sort_key) among the slice's members: evicting the
+    # slice tears down every task on it, so the most important one must still be
+    # strictly lower priority than the preemptor for the slice to be evictable.
+    band: int
+    workers: frozenset[WorkerId]
+    tasks: tuple[JobName, ...]
+
+
+def _victim_slices_by_pool(
+    running_tasks_info: list[RunningTaskInfo],
+    ledger: ReservationLedger,
+) -> dict[str, list[_VictimSlice]]:
+    """Group evictable running tasks into per-pool victim slices.
+
+    Victims are grouped by physical slice: draining one evicts every task on it
+    and frees its chips once. A coscheduled job spanning multiple slices is
+    excluded, since evicting one of its slices would still strand its tasks on
+    the others. Tasks the same-variant pass already claimed this tick are
+    skipped so their chips are not double-counted.
+    """
+    slice_members: dict[str, list[RunningTaskInfo]] = defaultdict(list)
+    parent_slices: dict[JobName, set[str]] = defaultdict(set)
+    for task in running_tasks_info:
+        if task.already_preempted:
+            continue
+        slice_id = ledger.worker_slice.get(str(task.worker_id))
+        if slice_id is None:
+            continue
+        slice_members[slice_id].append(task)
+        parent = task.task_id.parent
+        if task.is_coscheduled and parent is not None:
+            parent_slices[parent].add(slice_id)
+
+    entangled = {sid for slice_ids in parent_slices.values() if len(slice_ids) > 1 for sid in slice_ids}
+
+    victims_by_pool: dict[str, list[_VictimSlice]] = defaultdict(list)
+    for slice_id, members in slice_members.items():
+        if slice_id in entangled:
+            continue
+        # A member's device_variant is None for a CPU-only co-tenant sharing the
+        # slice's hosts; use the first TPU member's variant so such a co-tenant
+        # (which may sort first) never hides an evictable TPU slice.
+        variant = next((m.device_variant for m in members if m.device_variant is not None), None)
+        if variant is None or variant not in ledger.chips_per_variant:
+            continue
+        worker_pools = {ledger.worker_pool.get(str(m.worker_id)) for m in members}
+        pool = next(iter(worker_pools)) if len(worker_pools) == 1 else None
+        if pool is None:
+            continue
+        victims_by_pool[pool].append(
+            _VictimSlice(
+                slice_id=slice_id,
+                chips=ledger.chips_per_variant[variant],
+                band=min(m.band_sort_key for m in members),
+                workers=frozenset(m.worker_id for m in members),
+                tasks=tuple(m.task_id for m in members),
+            )
+        )
+    return victims_by_pool
+
+
+def run_reserved_pool_preemption(
+    unscheduled_tasks: list[PreemptionCandidate],
+    running_tasks_info: list[RunningTaskInfo],
+    ledger: ReservationLedger,
+) -> tuple[list[tuple[JobName, JobName]], set[WorkerId]]:
+    """Evict cross-variant victims on a full fungible reservation pool.
+
+    A fungible reservation's chips are interchangeable across slice sizes, so a
+    higher-band preemptor targeting a full reserved pool can evict the minimal
+    set of lowest-band victim slices of ANY variant in the SAME pool to free
+    enough chips. The same-variant preemption gate cannot do this; this pass
+    runs only over reserved pools and only on chip-count arithmetic.
+
+    The pass does not re-preempt a pool whose deficit is already being addressed:
+    its incoming chips (free now plus chips a drain is in the middle of freeing)
+    already cover the need, or a replacement slice of the preemptor's own variant
+    is already booting.
+
+    A preemptor evicts only strictly lower-priority victims
+    (``band_sort_key > candidate.band``), and a BATCH preemptor never preempts.
+    Victims are chosen lowest-priority-then-smallest so the eviction is minimal;
+    if no combination of evictable victims covers the deficit, nothing is evicted
+    (no partial work).
+
+    Returns ``(preemptor, victim)`` pairs (one per evicted member task) and the
+    set of worker ids whose slices the autoscaler must drain.
+    """
+    victims_by_pool = _victim_slices_by_pool(running_tasks_info, ledger)
+
+    # ``incoming`` (free now + draining chips) is what a deficit is measured
+    # against, so an already-draining victim isn't double-counted; ``replacement``
+    # lazily mirrors the ledger's in-flight slice count of each preemptor's own
+    # variant, marking a replacement that is already booting. Both are consumed as
+    # the pass commits preemptions within this tick.
+    incoming: dict[str, int] = {}
+    replacement: dict[str, dict[str, int]] = {}
+    claimed: set[str] = set()
+    pairs: list[tuple[JobName, JobName]] = []
+    drain_workers: set[WorkerId] = set()
+    handled_preemptor_jobs: set[JobName] = set()
+
+    for candidate in unscheduled_tasks:
+        # Batch never preempts.
+        if candidate.band >= job_pb2.PRIORITY_BAND_BATCH:
+            continue
+        # Dedup coscheduled preemptors: N task candidates are one job needing one
+        # slice's worth of chips. Mark the job handled up front so a later sibling
+        # candidate never re-consumes incoming/replacement capacity already spent
+        # on this job, regardless of which branch below this job resolves through.
+        # A non-coscheduled replica needs its own slice's worth, so it dedups on
+        # its own task id instead of the parent.
+        preemptor_job = (
+            candidate.job_name.parent
+            if candidate.requirements.is_coscheduled and candidate.job_name.parent is not None
+            else candidate.job_name
+        )
+        if preemptor_job in handled_preemptor_jobs:
+            continue
+        handled_preemptor_jobs.add(preemptor_job)
+
+        variant = candidate.requirements.device_variant
+        if variant is None:
+            continue
+        pool = ledger.variant_pool.get(variant)
+        if pool is None:
+            continue
+        need = ledger.chips_per_variant[variant]
+        incoming.setdefault(pool, ledger.incoming_chips(pool))
+        pool_replacement = replacement.setdefault(pool, {})
+        pool_replacement.setdefault(variant, ledger.inflight_slices(pool, variant))
+
+        if pool_replacement[variant] >= 1:
+            # A same-variant replacement already booting covers this candidate
+            # without spending the pool's shared incoming chips on it.
+            pool_replacement[variant] -= 1
+            continue
+        if incoming[pool] >= need:
+            # Covered by free chips or chips a drain is already freeing; no preemption.
+            incoming[pool] -= need
+            continue
+
+        deficit = need - incoming[pool]
+        # Lowest priority (highest band) first, then smallest, for minimal eviction.
+        eligible = sorted(
+            (v for v in victims_by_pool.get(pool, []) if v.slice_id not in claimed and v.band > candidate.band),
+            key=lambda v: (-v.band, v.chips),
+        )
+        chosen: list[_VictimSlice] = []
+        freed = 0
+        for victim in eligible:
+            if freed >= deficit:
+                break
+            chosen.append(victim)
+            freed += victim.chips
+        if freed < deficit:
+            # Cannot cover the deficit even by evicting everything: do nothing.
+            continue
+
+        for victim in chosen:
+            claimed.add(victim.slice_id)
+            drain_workers.update(victim.workers)
+            pairs.extend((candidate.job_name, victim_task) for victim_task in victim.tasks)
+        # Surplus freed chips stay available to later, lower-priority preemptors.
+        incoming[pool] += freed - need
+
+    return pairs, drain_workers
 
 
 def _sort_pending_tasks_by_resolved_band(

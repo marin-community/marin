@@ -6,6 +6,7 @@
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rigging.timing import Timestamp
 
@@ -14,6 +15,44 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, Slice
 from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)
+
+
+class SliceDrainCause(StrEnum):
+    """Why a slice's workers are being drained.
+
+    Selects telemetry and whether the teardown counts against the group's health
+    and backoff signals: a lost-liveness failure is charged to the group as churn,
+    a deliberate cross-variant preemption leaves those signals untouched.
+    """
+
+    WORKER_FAILED = "worker_failed"
+    PREEMPTED = "preempted"
+
+
+@dataclass(frozen=True)
+class DrainTelemetry:
+    """Per-cause action label, reason prefix, log verb, and terminate context."""
+
+    action_type: str
+    reason_prefix: str
+    log_verb: str
+    terminate_context: str
+
+
+DRAIN_TELEMETRY: dict[SliceDrainCause, DrainTelemetry] = {
+    SliceDrainCause.WORKER_FAILED: DrainTelemetry(
+        action_type="worker_failed",
+        reason_prefix="workers failed",
+        log_verb="termination",
+        terminate_context="cleaning up anyway",
+    ),
+    SliceDrainCause.PREEMPTED: DrainTelemetry(
+        action_type="slice_drained",
+        reason_prefix="drained for preemption",
+        log_verb="drain",
+        terminate_context="draining for preemption",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -34,11 +73,13 @@ class SliceTerminationResult:
 
 
 def drain_slices_for_workers(
+    *,
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
+    cause: SliceDrainCause,
 ) -> SliceTerminationResult:
     """Mark every slice holding ``worker_ids`` DRAINING and collect its handle.
 
@@ -52,15 +93,14 @@ def drain_slices_for_workers(
     and reaps it; the caller terminates the returned handles to start that
     deletion.
 
-    Every newly observed drain is reported to the group's churn detector as
-    :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
-    The detector classifies internally based on slice age — short-lived deaths
-    move churn rate; long-lived deaths count as positive samples. Returns the
-    drained slices' sibling worker ids for the caller to fail immediately.
+    ``cause`` selects telemetry and, for ``WORKER_FAILED``, records a PREEMPTED fate
+    on the group's churn detector. Returns the drained slices' sibling worker ids
+    for the caller to fail immediately.
     """
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
 
+    telemetry = DRAIN_TELEMETRY[cause]
     primary_workers = set(worker_ids)
     sibling_worker_ids: set[str] = set()
     termination_requests: list[SliceTerminationRequest] = []
@@ -83,14 +123,15 @@ def drain_slices_for_workers(
             continue
 
         affected_workers = sorted(primary_workers & set(slice_worker_ids))
-        logger.info("Workers %s triggered slice drain for %s", affected_workers, slice_id)
+        logger.info("Workers %s triggered slice %s for %s", affected_workers, telemetry.log_verb, slice_id)
         log_action(
-            "worker_failed",
+            telemetry.action_type,
             group.name,
             slice_id=slice_id,
-            reason=f"workers failed: {', '.join(affected_workers)}",
+            reason=f"{telemetry.reason_prefix}: {', '.join(affected_workers)}",
         )
-        group.record_slice_preempted(slice_id, timestamp)
+        if cause is SliceDrainCause.WORKER_FAILED:
+            group.record_slice_preempted(slice_id, timestamp)
         handle = group.drain_slice(slice_id, timestamp)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))

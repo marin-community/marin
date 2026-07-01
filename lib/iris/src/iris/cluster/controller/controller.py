@@ -809,7 +809,7 @@ class Controller:
         backend_pins: list[tuple[JobName, str]] = []
         routing_unschedulable: list[tuple[PendingTask, str]] = []
         if run_schedule:
-            sched = self._schedule_phase(inputs)
+            sched = self._schedule_phase(inputs, autoscale_runs=run_autoscale)
             sched_results, backend_pins, routing_unschedulable = sched.results, sched.pins, sched.unschedulable
 
         recon_results: dict[str, ReconcileResult] = {}
@@ -826,8 +826,9 @@ class Controller:
         if run_autoscale:
             for backend_id in self._backend_ids:
                 residual_demand = sched_results[backend_id].residual_demand if backend_id in sched_results else []
+                drain_workers = sched_results[backend_id].reserved_drain_workers if backend_id in sched_results else []
                 auto_results[backend_id] = self._backends[backend_id].autoscale(
-                    AutoscaleRequest(residual_demand=residual_demand)
+                    AutoscaleRequest(residual_demand=residual_demand, drain_workers=drain_workers)
                 )
 
         merged_sched = self._merge_schedule_results(sched_results) if run_schedule else None
@@ -843,6 +844,16 @@ class Controller:
             auto_results=auto_results,
             now=now,
         )
+
+        # A cross-variant reserved-pool drain deletes whole slices: their workers
+        # are gone, so fail them out of the registry now (closing the victims'
+        # dangling attempts) rather than waiting for ping timeouts to reap zombie
+        # rows that would otherwise stay schedulable. The victims' tasks were
+        # already moved to PENDING by the committed PREEMPT decisions above.
+        for backend_id in self._backend_ids:
+            auto_result = auto_results.get(backend_id)
+            if auto_result is not None and auto_result.removed_workers:
+                self._remove_drained_workers(backend_id, auto_result.removed_workers)
 
         # Force the next reconcile so workers are told to stop the kicked attempts
         # promptly instead of waiting a full reconcile interval.
@@ -937,7 +948,7 @@ class Controller:
             for wid, scale_group in reads.worker_scale_groups(snap).items()
         }
 
-    def _schedule_phase(self, inputs: _TickInputs) -> SchedulePhaseResult:
+    def _schedule_phase(self, inputs: _TickInputs, *, autoscale_runs: bool) -> SchedulePhaseResult:
         """Route unpinned jobs, then run each backend's scheduler over its tasks.
 
         Returns the per-backend ``ScheduleResult``s, the ``(job_id, backend_id)``
@@ -947,6 +958,8 @@ class Controller:
         hands each backend its slice; the backend sources its own workers. The
         global user budget is threaded across backends in ``self._backend_ids``
         order so two backends cannot double-spend one user's budget in a tick.
+        ``autoscale_runs`` flags whether the autoscaler runs this tick, gating
+        cross-variant reserved-pool preemption to ticks that also apply its drain.
         """
         routing = inputs.routing
         if routing is None:
@@ -981,6 +994,7 @@ class Controller:
                     user_budget_defaults=routing.user_budget_defaults,
                     max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
                     trace=trace,
+                    autoscale_runs=autoscale_runs,
                 )
             )
             results[backend_id] = result
@@ -1410,6 +1424,31 @@ class Controller:
             tasks_to_run=batch.tasks_to_run,
             running_tasks=batch.running_tasks,
         )
+
+    def _remove_drained_workers(self, backend_id: str, drained_workers: list[WorkerId]) -> None:
+        """Fail and forget workers whose slices a cross-variant drain is tearing down.
+
+        The autoscaler marked their slices DRAINING and started terminating the VMs;
+        the slices linger DRAINING (still counted against the reservation pool) until
+        refresh reaps them. This clears the worker rows (and any still-active attempt)
+        so the scheduler stops seeing draining VMs as live placement targets. The
+        reason marks the drain so it is distinguishable from a health failure in the
+        audit log.
+        """
+        health = self._backends[backend_id].health
+        assert health is not None, f"backend {backend_id!r} produced removed_workers without a liveness tracker"
+        reason = "drained for cross-variant preemption"
+        for wid in drained_workers:
+            log_event("worker_failing", str(wid), trigger=reason)
+        ops.worker.fail(
+            self._db,
+            worker_ids=[str(wid) for wid in drained_workers],
+            reason=reason,
+            health=health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
+        )
+        health.forget_many(set(drained_workers))
 
     def _drain_pending_evictions(self) -> None:
         """Tear down the workers queued by :meth:`request_worker_eviction`.

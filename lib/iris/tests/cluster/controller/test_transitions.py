@@ -2656,6 +2656,55 @@ def test_worker_failed_from_running_counts_as_preemption(state):
     assert check_task_can_be_scheduled(_query_task(state, task.task_id))
 
 
+def test_failing_worker_after_preempt_keeps_task_pending(state):
+    """Drain teardown: a victim preempted to PENDING then has its worker failed.
+
+    Cross-variant reserved-pool preemption commits the PREEMPT (victim -> PENDING,
+    one preemption charge) and, in the same tick, drains the victim's whole slice
+    -> the controller fails those workers out of the registry. Failing a worker
+    whose task already moved to PENDING must NOT re-charge or re-terminate the
+    task: it stays a schedulable PENDING with its single preemption charge, and
+    the worker row is gone (so the scheduler stops seeing the deleted VM).
+    """
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    req = make_job_request("job1")
+    req.max_retries_preemption = 5
+    tasks = submit_job(state, "j1", req)
+    task = tasks[0]
+
+    dispatch_task(state, task, worker_id)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Cross-variant preemption: victim rolls back to PENDING with one charge.
+    with state._db.transaction() as cur:
+        finalize(
+            cur,
+            [TerminalDecision(TerminalKind.PREEMPT, task.task_id, "reclaim for v4-8")],
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_PENDING
+    assert _query_task(state, task.task_id).preemption_count == 1
+
+    # Drain teardown fails the now-deleted worker (mirrors _remove_drained_workers).
+    ops.worker.fail(
+        state._db,
+        worker_ids=["w1"],
+        reason="drained for cross-variant preemption",
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
+    )
+
+    after = _query_task(state, task.task_id)
+    assert after.state == job_pb2.TASK_STATE_PENDING
+    assert after.preemption_count == 1, "worker failure must not re-charge an already-preempted task"
+    assert after.failure_count == 0
+    assert check_task_can_be_scheduled(after)
+    assert _query_worker(state, worker_id) is None
+
+
 def test_worker_failed_from_building_counts_as_preemption(state):
     """WORKER_FAILED on a task in BUILDING state counts as a preemption."""
     worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())

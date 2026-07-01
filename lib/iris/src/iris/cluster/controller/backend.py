@@ -35,6 +35,7 @@ from typing import ClassVar, Protocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
@@ -190,6 +191,9 @@ class ScheduleResult:
     """Per-job scheduling diagnostics surfaced on the dashboard."""
     scheduling_context: SchedulingContext | None = None
     """Post-placement scheduling context cached for dashboard diagnostics."""
+    reserved_drain_workers: list[WorkerId] = field(default_factory=list)
+    """Workers whose slices the autoscaler must drain to free reserved chips for
+    a cross-variant preemptor whose victim PREEMPT decisions this tick commits."""
 
 
 @dataclass(frozen=True)
@@ -258,6 +262,11 @@ class ScheduleRequest:
     user_budget_defaults: UserBudgetDefaults
     max_tasks_per_job_per_cycle: int
     trace: bool = False
+    autoscale_runs: bool = False
+    """Whether the autoscaler runs this tick. Cross-variant reserved-pool
+    preemption is only valid when it does: the victim PREEMPT and the slice drain
+    that reclaims its chips must commit together, so a schedule-only mini-tick
+    (a submit wake) must not emit cross-variant preemptions the drain never reaps."""
 
 
 @dataclass(frozen=True)
@@ -287,6 +296,7 @@ class AutoscaleRequest:
 
     residual_demand: list[DemandEntry] = field(default_factory=list)
     dead_workers: list[WorkerId] = field(default_factory=list)
+    drain_workers: list[WorkerId] = field(default_factory=list)
 
 
 def user_admitted(allowed_users: frozenset[str], user: str) -> bool:
@@ -321,6 +331,7 @@ def run_scheduling_decision(
     scheduler: Scheduler,
     snapshot: ScheduleInput,
     zone_capabilities: Mapping[str, frozenset[str]] | None = None,
+    ledger: ReservationLedger | None = None,
 ) -> ScheduleResult:
     """Run the full Iris scheduling decision pipeline over a DB-less snapshot.
 
@@ -334,6 +345,11 @@ def run_scheduling_decision(
     is folded onto worker attributes as ``availability:<variant>`` markers so a hard
     availability constraint confines a job to a zone where the accelerator has
     actually been obtained.
+
+    ``ledger`` (the fungible reservation chip ledger) enables cross-variant
+    preemption: a higher-band preemptor on a full reserved pool evicts the minimal
+    set of lower-band victim slices (any variant) so the autoscaler can drain them
+    and reprovision. The drained workers ride back in ``reserved_drain_workers``.
     """
     ctx = snapshot.context
     trace = snapshot.trace
@@ -376,17 +392,21 @@ def run_scheduling_decision(
             unschedulable=list(gated.expired_tasks),
             scheduling_context=ctx,
             residual_demand=residual_demand,
+            reserved_drain_workers=[],
         )
 
     order = compute_scheduling_order(ctx, gated, trace=trace)
     all_assignments, context, placed_jobs = apply_placements(scheduler, order, gated, ctx, trace=trace)
-    preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
+    preemptions, drain_workers = apply_preemptions(
+        order, placed_jobs, all_assignments, ctx.running_for_preemption, context, ledger
+    )
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
     # Stamp each demand entry with its tasks' effective band so the autoscaler's
     # reservation-aware launch cap admits a fungible pool's new slices in priority
     # order: the higher-priority job's larger slice claims the shared chip budget
-    # before a lower-priority job's.
+    # before a lower-priority job's, and a just-drained victim cannot re-grab the
+    # freed chips.
     banded_residual = _stamp_demand_bands(residual_demand, order.task_band_map)
 
     return ScheduleResult(
@@ -406,6 +426,7 @@ def run_scheduling_decision(
         diagnostics=diagnostics,
         scheduling_context=context,
         residual_demand=banded_residual,
+        reserved_drain_workers=sorted(drain_workers),
     )
 
 
@@ -602,15 +623,18 @@ class TaskBackend(Protocol):
         ...
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
-        """Provision capacity for unmet demand, OR tear down dead workers.
+        """Provision capacity for unmet demand, OR tear down dead/drained workers.
 
         Bounded I/O. With ``request.dead_workers`` set, the backend terminates
         those workers' slices AND their healthy siblings and returns the full set
-        as ``removed_workers`` (no provisioning this call). Otherwise it runs one
-        scaling cycle against ``request.residual_demand``, reading its own worker
-        status. Either way it returns its tracked ``autoscaler_state`` for the
-        controller to persist. Backends that manage their own capacity (k8s)
-        return an empty result.
+        as ``removed_workers`` (no provisioning this call). With only
+        ``request.drain_workers`` set (cross-variant reserved-pool preemption) it
+        tears them down through an intentional-drain path that does not feed the
+        churn detector, returning them the same way. Otherwise it runs one scaling
+        cycle against ``request.residual_demand``, reading its own worker status.
+        Either way it returns its tracked ``autoscaler_state`` for the controller
+        to persist. Backends that manage their own capacity (k8s) return an empty
+        result.
         """
         ...
 
