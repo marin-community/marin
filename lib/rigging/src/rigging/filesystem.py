@@ -115,14 +115,15 @@ class BucketSpec:
     Attributes:
         name: Bucket name without scheme, e.g. ``marin-us-east1`` or ``marin-na``.
         store: Backend serving the bucket.
-        region: Backend signing region for backends that require one (CoreWeave,
-            e.g. ``US-EAST-02A``). ``None`` for GCS (the region is the
-            ``region_buckets`` key / VM metadata) and R2 (region-agnostic).
+        signing_region: S3 signing region for backends that require one
+            (CoreWeave, e.g. ``US-EAST-02A``). Distinct from the *placement*
+            region (the ``region_buckets`` key). ``None`` for GCS (not S3) and R2
+            (which signs with ``"auto"``).
     """
 
     name: str
     store: StoreType
-    region: str | None = None
+    signing_region: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -233,28 +234,26 @@ def _load_cluster_config_cached(cluster: str) -> DataConfig:
     return _parse_data_config(data)
 
 
-def _parse_bucket_spec(value: object, scheme: str) -> BucketSpec:
+def _parse_bucket_spec(value: object) -> BucketSpec:
     """Normalize one ``region_buckets`` YAML entry into a :class:`BucketSpec`.
 
-    Accepts either a bare bucket-name string — allowed only under ``scheme: gs``,
-    which pins the store to GCS — or a mapping ``{bucket, store[, region]}``. A
-    bare string under an ``s3`` scheme is rejected because it cannot distinguish
-    R2 from CoreWeave. CoreWeave entries must carry a signing ``region``.
+    Each entry is an explicit mapping ``{bucket, store[, signing_region]}``. The
+    ``store`` (``gcs``/``r2``/``coreweave``) is required because it cannot be
+    inferred — R2 and CoreWeave share the ``s3`` scheme but need different
+    endpoints and credentials. CoreWeave entries must carry a ``signing_region``.
     """
-    if isinstance(value, str):
-        if scheme != "gs":
-            raise ValueError(
-                f"bucket {value!r} under scheme={scheme!r} must be a mapping with an explicit "
-                f"'store' ({', '.join(s.value for s in StoreType)}); a bare name is GCS-only."
-            )
-        return BucketSpec(name=value, store=StoreType.GCS)
-    if isinstance(value, Mapping):
-        store = StoreType(str(value["store"]))
-        region = str(value["region"]) if value.get("region") is not None else None
-        if store is StoreType.COREWEAVE and region is None:
-            raise ValueError(f"CoreWeave bucket {value.get('bucket')!r} must specify a signing 'region'.")
-        return BucketSpec(name=str(value["bucket"]), store=store, region=region)
-    raise ValueError(f"region_buckets entry must be a str or mapping, got {type(value).__name__}: {value!r}")
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"region_buckets entry must be a mapping {{bucket, store[, signing_region]}}, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+    if "bucket" not in value or "store" not in value:
+        raise ValueError(f"region_buckets entry must set 'bucket' and 'store': {value!r}")
+    store = StoreType(str(value["store"]))
+    signing_region = str(value["signing_region"]) if value.get("signing_region") is not None else None
+    if store is StoreType.COREWEAVE and signing_region is None:
+        raise ValueError(f"CoreWeave bucket {value['bucket']!r} must specify a 'signing_region'.")
+    return BucketSpec(name=str(value["bucket"]), store=store, signing_region=signing_region)
 
 
 def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
@@ -268,7 +267,7 @@ def _parse_data_config(data: Mapping[str, object]) -> DataConfig:
     root = data.get("root")
     scheme = str(data.get("scheme") or DataConfig.scheme)
     raw_buckets = data.get("region_buckets") or {}
-    region_buckets = {region: _parse_bucket_spec(value, scheme) for region, value in raw_buckets.items()}
+    region_buckets = {region: _parse_bucket_spec(value) for region, value in raw_buckets.items()}
     return DataConfig(
         region_buckets=region_buckets,
         scheme=scheme,

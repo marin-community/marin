@@ -191,12 +191,25 @@ def test_s3_data_buckets_reads_store_types_from_config(monkeypatch):
     assert not any(spec.store == StoreType.GCS for spec in buckets.values())
 
 
-def test_bare_string_bucket_rejected_under_s3_scheme(tmp_path, monkeypatch):
-    """A bare bucket name under scheme s3 is ambiguous (R2 vs CoreWeave) and rejected."""
+def test_bucket_entry_requires_explicit_store(tmp_path, monkeypatch):
+    """A bare bucket-name string is rejected: the store type must be explicit."""
     cluster_dir = tmp_path / "clusters"
     cluster_dir.mkdir()
-    (cluster_dir / "ambig.yaml").write_text("data:\n  scheme: s3\n  region_buckets: {na: marin-na}\n")
+    (cluster_dir / "bare.yaml").write_text("data:\n  scheme: gs\n  region_buckets: {us-east5: marin-us-east5}\n")
     monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
     reset_data_config_cache()
-    with pytest.raises(ValueError, match="must be a mapping with an explicit 'store'"):
-        load_cluster_config("ambig")
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_cluster_config("bare")
+
+
+def test_coreweave_bucket_requires_signing_region(tmp_path, monkeypatch):
+    """A CoreWeave bucket without a signing_region is rejected."""
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    (cluster_dir / "cw.yaml").write_text(
+        "data:\n  scheme: s3\n  region_buckets: {e: {bucket: marin-us-east-02a, store: coreweave}}\n"
+    )
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
+    reset_data_config_cache()
+    with pytest.raises(ValueError, match="must specify a 'signing_region'"):
+        load_cluster_config("cw")

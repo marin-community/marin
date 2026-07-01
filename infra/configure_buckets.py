@@ -432,8 +432,9 @@ def configure_s3_buckets(targets: dict[str, BucketSpec], owned: list[dict], dry_
             r2_client = r2_client or make_r2_client()
             configure_s3_bucket(r2_client, name, owned, dry_run, label="R2")
         elif spec.store == StoreType.COREWEAVE:
-            assert spec.region is not None, f"CoreWeave bucket {name!r} missing signing region"
-            configure_s3_bucket(make_cw_client(spec.region), name, owned, dry_run, label=f"CoreWeave {spec.region}")
+            assert spec.signing_region is not None, f"CoreWeave bucket {name!r} missing signing_region"
+            region = spec.signing_region
+            configure_s3_bucket(make_cw_client(region), name, owned, dry_run, label=f"CoreWeave {region}")
         else:
             raise click.ClickException(f"bucket {name!r} has non-S3 store {spec.store!r}")
 
