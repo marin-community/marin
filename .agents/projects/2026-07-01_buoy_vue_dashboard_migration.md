@@ -132,5 +132,18 @@ lib/buoy/dashboard/
 - 2026-07-01: plan written; phase 1 (scaffold: build tree + sidebar/run-list) done.
 - 2026-07-01: phase 2 done — `useRun` (mirror→poll→load, nav-race guarded),
   `RunHeader` (info pills + refetch), `Tabs` (profile only when present),
-  `SummaryTab` (searchable summary + config). `build:check` green. Next: phase 3
-  (charts + `MetricChart` Plotly wrapper).
+  `SummaryTab` (searchable summary + config). `build:check` green.
+- 2026-07-01: phase 3 done — charts: `useMetrics` (columnar cache), `ChartsTab`
+  (chips + searchable add + grid + fullscreen + 'no data yet'), `MetricChart`
+  (per-chart log x/y, EMA smoothing, full-screen, close, pan+scrollZoom, single
+  blue). Plotly bundled. build:check green.
+- 2026-07-01: phase 4 done — `ProfileTab` (xprof iframe via /wrap), `useProfile`
+  (async prepare+poll), and browser-driven live refresh in `useRun` (+ ChartsTab
+  last_step watch). build:check green.
+- 2026-07-01: phase 5 done — cutover: `app.py` serves `dashboard/dist` (static
+  Mount + base-href rewrite), `launch.py` builds before bundle, iris `bundle.py`
+  ships `dist`, `buoy-dashboard.yaml` CI (build:check). **Deployed + HTTP-validated**
+  (Vue shell served, base-href → /proxy/buoy/, static assets 200, dist on worker).
+  PENDING: visual/browser parity confirmation, then retire `static/index.html` +
+  its wheel force-include. Minor parity gaps to add: sidebar collapse toggle,
+  deep-link `?entity&project&run` URL sync.

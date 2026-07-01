@@ -1,0 +1,56 @@
+name: "Buoy Dashboard - Build"
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      should_run: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'lib/buoy/dashboard/**'
+              - '.github/workflows/buoy-dashboard.yaml'
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: lib/buoy/dashboard
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: lib/buoy/dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck + build
+        run: npm run build:check
