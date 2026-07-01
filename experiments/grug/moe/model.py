@@ -112,6 +112,13 @@ class GrugModelConfig:
     to the down-projected MoE latent ``c`` before expert dispatch (analogous to
     DeepSeek's ``a_layernorm`` on compressed latents). Adds ``(moe_latent_dim,)`` params
     per layer."""
+    moe_latent_gated_norm: bool = False
+    """When True (and ``moe_latent_dim`` is set), apply a GatedNorm to the MoE latent
+    ``c`` (after the optional ``moe_latent_norm`` RMSNorm). Same low-rank sigmoid gate
+    used elsewhere in the block, applied on the ``l``-dim latent."""
+    moe_latent_scale: bool = False
+    """When True (and ``moe_latent_dim`` is set), multiply the MoE latent ``c`` by a
+    single learnable scalar (init 1.0). A minimal alternative to normalizing the latent."""
     num_layers: int = 6
     num_heads: int = 4
     head_dim: int | None = None
@@ -698,16 +705,22 @@ class MoEMLP(eqx.Module):
     moe_down: jax.Array | None  # (D, l) shared down-proj; None unless moe_latent_dim set
     moe_up: jax.Array | None  # (l, D) shared up-proj; None unless moe_latent_dim set
     moe_latent_rms: RMSNorm | None  # learnable RMSNorm on the latent c; None unless moe_latent_norm
+    moe_latent_gate: GatedNorm | None  # GatedNorm on the latent c; None unless moe_latent_gated_norm
+    moe_latent_scale: jax.Array | None  # learnable scalar on the latent c; None unless moe_latent_scale
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        # Keep the no-latent RNG stream identical to before so existing configs are unchanged.
+        # Keep existing RNG streams identical: no-latent -> 2 keys, latent (no gate) -> 4,
+        # latent + gated-norm -> 5 (only the gated variant consumes the extra key).
+        k_gate = None
         if cfg.moe_latent_dim is None:
             k_router, k_expert = random.split(key, 2)
             k_down = k_up = None
-        else:
+        elif not cfg.moe_latent_gated_norm:
             k_router, k_expert, k_down, k_up = random.split(key, 4)
+        else:
+            k_router, k_expert, k_down, k_up, k_gate = random.split(key, 5)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -733,6 +746,18 @@ class MoEMLP(eqx.Module):
             if (cfg.moe_latent_dim is not None and cfg.moe_latent_norm)
             else None
         )
+        # GatedNorm on the latent (paired with the RMSNorm above).
+        moe_latent_gate = (
+            GatedNorm.init(cfg.moe_latent_dim, cfg.initializer_std, key=k_gate)
+            if (cfg.moe_latent_dim is not None and cfg.moe_latent_gated_norm)
+            else None
+        )
+        # Single learnable scalar on the latent (init 1.0).
+        moe_latent_scale = (
+            jnp.ones(())
+            if (cfg.moe_latent_dim is not None and cfg.moe_latent_scale)
+            else None
+        )
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
@@ -750,6 +775,8 @@ class MoEMLP(eqx.Module):
             moe_down=moe_down,
             moe_up=moe_up,
             moe_latent_rms=moe_latent_rms,
+            moe_latent_gate=moe_latent_gate,
+            moe_latent_scale=moe_latent_scale,
             cfg=cfg,
         )
 
@@ -810,6 +837,10 @@ class MoEMLP(eqx.Module):
             expert_in = reshard(jnp.einsum("td,dl->tl", x_flat, self.moe_down), P(_BATCH_AXES, None))
             if self.moe_latent_rms is not None:
                 expert_in = self.moe_latent_rms(expert_in)
+            if self.moe_latent_gate is not None:
+                expert_in = self.moe_latent_gate(expert_in)
+            if self.moe_latent_scale is not None:
+                expert_in = expert_in * self.moe_latent_scale.astype(expert_in.dtype)
 
         routed_flat, dropped_assignments = self.expert_mlp(
             expert_in,
