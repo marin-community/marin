@@ -62,20 +62,19 @@ def test_manifest_written_last(cfg, patch_wandb, monkeypatch):
     assert cache.read_manifest(prefix) is None
 
 
-def test_idempotent_finished(cfg, patch_wandb):
-    run = FakeRun(state="finished", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
+@pytest.mark.parametrize(
+    ("state", "wandb_fetches"),
+    [("finished", 1), ("running", 2), ("pending", 2)],
+    ids=["terminal-cached", "running-refetched", "pending-refetched"],
+)
+def test_second_view_refetches_only_nonterminal(cfg, patch_wandb, state, wandb_fetches):
+    # A terminal run is served from cache on the second view (1 wandb fetch); any
+    # nonterminal state (running, pending, …) is re-fetched (2 fetches).
+    run = FakeRun(state=state, summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
     api = patch_wandb(run)
     mirror_run(cfg, REF)
-    mirror_run(cfg, REF)  # second call should hit the cached manifest
-    assert api.run_calls == 1
-
-
-def test_running_run_refetches(cfg, patch_wandb):
-    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
-    api = patch_wandb(run)
     mirror_run(cfg, REF)
-    mirror_run(cfg, REF)  # a still-running run is always re-fetched
-    assert api.run_calls == 2
+    assert api.run_calls == wandb_fetches
 
 
 def test_divergent_schema_union(cfg, patch_wandb, monkeypatch):
@@ -130,15 +129,6 @@ def test_finished_run_uses_history_artifact(cfg, patch_wandb, tmp_path):
     prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
     frame = cache.read_history(prefix, ["_step", "train/loss"])
     assert list(frame["train/loss"]) == [3.0, 2.0, 1.0]
-
-
-def test_pending_run_is_refetched(cfg, patch_wandb):
-    # Only terminal states are immutable; a nonterminal 'pending' run must re-fetch.
-    run = FakeRun(state="pending", summary_dict={"train/loss": 1.0}, rows=_rows(2, ("train/loss",)))
-    api = patch_wandb(run)
-    mirror_run(cfg, REF)
-    mirror_run(cfg, REF)
-    assert api.run_calls == 2
 
 
 def test_write_json_sanitizes_non_finite(tmp_path):
