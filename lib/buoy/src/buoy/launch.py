@@ -12,6 +12,8 @@ from the frozen lock and the entrypoint (``serve_in_job``) ships by reference.
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,6 +34,24 @@ from buoy.serve import serve_in_job
 
 logger = logging.getLogger("buoy.launch")
 
+DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
+
+
+def _build_dashboard() -> None:
+    """Build the Vue dashboard so the gitignored ``dashboard/dist`` ships in the bundle.
+
+    Runs ``npm install`` (only if deps are missing) then ``npm run build``. The Iris
+    bundle re-includes the gitignored ``dist`` via ``GENERATED_ARTIFACT_GLOBS``.
+    """
+    npm = shutil.which("npm")
+    if npm is None:
+        raise click.UsageError("npm not found — install Node, or build the dashboard and pass --skip-build.")
+    if not (DASHBOARD_DIR / "node_modules").is_dir():
+        logger.info("installing dashboard deps (npm install)…")
+        subprocess.run([npm, "install"], cwd=DASHBOARD_DIR, check=True)
+    logger.info("building dashboard (npm run build)…")
+    subprocess.run([npm, "run", "build"], cwd=DASHBOARD_DIR, check=True)
+
 
 @click.command(context_settings={"show_default": True})
 @click.option("--cluster", default="marin", help="Named Iris cluster to submit to.")
@@ -49,6 +69,7 @@ logger = logging.getLogger("buoy.launch")
 @click.option("--timeout", type=int, default=0, help="Job timeout seconds (0 = no timeout).")
 @click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--wait-timeout", type=float, default=600.0)
+@click.option("--skip-build", is_flag=True, help="Skip the dashboard `npm run build` (use an already-built dist).")
 def cli(
     cluster: str,
     endpoint_name: str,
@@ -60,10 +81,13 @@ def cli(
     timeout: int,
     max_retries_preemption: int,
     wait_timeout: float,
+    skip_build: bool,
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="[buoy-launch] %(message)s")
     if not endpoint_name.startswith("/") or "." in endpoint_name:
         raise click.ClickException("--endpoint-name must be absolute (start with '/') and contain no '.'.")
+    if not skip_build:
+        _build_dashboard()
 
     resolved = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
     config = load_config(str(resolved))

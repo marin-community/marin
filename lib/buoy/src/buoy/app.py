@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import posixpath
 import re
 from pathlib import Path
@@ -30,7 +31,8 @@ from starlette.applications import Starlette
 from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from buoy import cache
 from buoy.config import BuoyConfig
@@ -39,9 +41,6 @@ from buoy.xprof import XprofCapacityError, XprofManager
 
 logger = logging.getLogger("buoy.app")
 
-# Read the SPA at import so it travels with the (cloudpickle-by-value) deploy
-# rather than depending on a static file being present on the worker.
-INDEX_HTML = (Path(__file__).parent / "static" / "index.html").read_text()
 # Hop-by-hop headers only. Content-Encoding/Content-Length are forwarded so the
 # browser can decode xprof's responses — xprof serves some assets pre-gzipped
 # regardless of Accept-Encoding, and we stream the raw body verbatim, so its
@@ -310,11 +309,47 @@ async def xprof_proxy(request: Request) -> Response:
     )
 
 
-async def index(request: Request) -> HTMLResponse:
-    return HTMLResponse(INDEX_HTML)
+# The dashboard is a bundled Vue SPA built into dashboard/dist by `npm run build`
+# (gitignored; shipped in the Iris bundle via GENERATED_ARTIFACT_GLOBS). Resolve its
+# dist dir: env override → the in-repo build output next to this package.
+def _dashboard_dist() -> Path:
+    override = os.environ.get("BUOY_DASHBOARD_DIST")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "dashboard" / "dist"
+
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>buoy</title>"
+    "<body style='font-family:system-ui;margin:3rem'><h1>buoy</h1>"
+    "<p>Dashboard not built — run "
+    "<code>npm --prefix lib/buoy/dashboard install &amp;&amp; npm --prefix lib/buoy/dashboard run build</code>.</p>"
+)
+
+
+def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
+    """Serve dist/index.html, rewriting ``<base href="/">`` to the proxy sub-path.
+
+    The controller proxy sets ``X-Forwarded-Prefix`` (e.g. ``/proxy/buoy``) in
+    path-style mode; rewriting the base makes the SPA's relative asset and API URLs
+    resolve under it. Empty prefix (direct access) leaves the base at ``/``.
+    """
+    index_path = dist / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_NOT_BUILT_HTML, status_code=503)
+    html = index_path.read_text(encoding="utf-8")
+    prefix = forwarded_prefix.rstrip("/")
+    if prefix:
+        html = html.replace('<base href="/"', f'<base href="{prefix}/"', 1)
+    return HTMLResponse(html)
 
 
 def build_app(cfg: BuoyConfig) -> Starlette:
+    dist = _dashboard_dist()
+
+    async def index(request: Request) -> HTMLResponse:
+        return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
+
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         app.state.cfg = cfg
@@ -353,6 +388,7 @@ def build_app(cfg: BuoyConfig) -> Starlette:
             Route("/api/profile_status", profile_status),
             Route("/wrap/{entity}/{project}/{run_id}", xprof_wrap),
             Route("/xprof/{entity}/{project}/{run_id}/{sub:path}", xprof_proxy, methods=["GET", "HEAD"]),
+            Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"),
         ],
         lifespan=lifespan,
     )

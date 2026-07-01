@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from buoy.app import build_app
+from buoy.app import _index_html, build_app
 from buoy.mirror import RunRef, mirror_run
 from fakes import FakeArtifact, FakeRun
 from starlette.testclient import TestClient
@@ -30,11 +30,15 @@ def _populate(cfg, patch_wandb, profile_logdir=None):
     return mirror_run(cfg, REF)
 
 
-def test_index_and_metrics(cfg, patch_wandb):
+def test_index_serves_dashboard_and_metrics(cfg, patch_wandb, tmp_path, monkeypatch):
     _populate(cfg, patch_wandb)
+    dist = tmp_path / "dist"
+    (dist / "static").mkdir(parents=True)
+    (dist / "index.html").write_text('<!doctype html><base href="/"><title>buoy</title><div id="app"></div>')
+    monkeypatch.setenv("BUOY_DASHBOARD_DIST", str(dist))
     with TestClient(build_app(cfg)) as client:
-        assert client.get("/").status_code == 200
-        assert "buoy" in client.get("/").text
+        home = client.get("/")
+        assert home.status_code == 200 and "buoy" in home.text
 
         manifest = client.get("/api/manifest", params=Q).json()
         assert manifest["history"]["rows"] == 6
@@ -43,6 +47,15 @@ def test_index_and_metrics(cfg, patch_wandb):
         series = body["metrics"]["train/loss"]  # columnar {x, y}
         assert series["x"] == [0, 1, 2, 3, 4, 5]
         assert series["y"] == [0, 1, 2, 3, 4, 5]
+
+
+def test_index_html_rewrites_base_href(tmp_path):
+    (tmp_path / "index.html").write_text('<html><head><base href="/"><title>buoy</title></head></html>')
+    # Behind the controller proxy the base is rewritten so relative URLs resolve under it.
+    assert '<base href="/proxy/buoy/"' in _index_html(tmp_path, "/proxy/buoy").body.decode()
+    # Direct access leaves the base at root; a missing build is a 503, not a crash.
+    assert '<base href="/"' in _index_html(tmp_path, "").body.decode()
+    assert _index_html(tmp_path / "missing", "").status_code == 503
 
 
 def test_manifest_404_when_absent(cfg):
