@@ -81,8 +81,12 @@
     .seg { display: inline-flex; align-items: center; gap: .3em; }
     .seg button { border: 1px solid #cbd5e0; background: #fff; color: #4a5568; padding: .2em .55em; cursor: pointer; font-size: 12px; border-radius: 5px; }
     .seg button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
+    .tb-hint { color: #94a3b8; font-size: 11.5px; }
     #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
-    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
+    .chart { position: relative; border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
+    .chart-ctrls { position: absolute; top: 6px; right: 8px; z-index: 3; display: flex; gap: 4px; }
+    .chart-ctrls .lg { font-size: 10px; padding: 1px 6px; border: 1px solid #d7e0ea; border-radius: 5px; background: rgba(255, 255, 255, .82); color: #718096; cursor: pointer; }
+    .chart-ctrls .lg.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
     .chip { display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff; border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace; }
     .chip button { border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px; line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0; }
@@ -138,12 +142,11 @@
           <div id="metric-options" class="options hidden"></div>
         </div>
         <div class="chart-toolbar">
-          <label><input type="checkbox" id="log-y"> log y</label>
-          <label><input type="checkbox" id="log-x"> log x</label>
           <label class="smooth">smoothing<input type="range" id="smooth" min="0" max="0.97" step="0.01" value="0"><span id="smooth-val">0.00</span></label>
           <span class="seg" id="size-seg">size
-            <button data-size="s">S</button><button data-size="m" class="active">M</button><button data-size="l">L</button>
+            <button data-size="s">S</button><button data-size="m">M</button><button data-size="l" class="active">L</button>
           </span>
+          <span class="tb-hint">log scale: toggle per chart ↗</span>
         </div>
         <div id="charts"></div>
       </div>
@@ -164,7 +167,8 @@
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
     let metricData = {};         // key -> [{step,value}], cached so toolbar toggles don't refetch
-    const chartOpts = { logY: false, logX: false, smoothing: 0, size: "m" };
+    let chartAxis = {};          // per-metric { logY, logX } — log scale is per chart
+    const chartOpts = { smoothing: 0, size: "l" };
     const CHART_H = { s: 200, m: 285, l: 420 }, CHART_MINW = { s: 340, m: 440, l: 720 };
     const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"];
     let liveTimer = null;        // running-run auto-refresh timer
@@ -460,6 +464,7 @@
       selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
       if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
       metricData = {};
+      chartAxis = {};
       renderChips();
       plotSelected();
 
@@ -525,9 +530,23 @@
     }
 
     function drawChart(key, points, idx) {
-      const div = document.createElement("div");
-      div.className = "chart";
-      $("charts").appendChild(div);
+      const ax = chartAxis[key] || (chartAxis[key] = { logY: false, logX: false });
+      const card = el("div", "chart");
+      const plot = el("div", "chart-plot");
+      const ctrls = el("div", "chart-ctrls");
+      const mkBtn = (label, axisKey, plotKey) => {
+        const b = el("button", "lg" + (ax[axisKey] ? " active" : ""), label);
+        b.addEventListener("click", () => {
+          ax[axisKey] = !ax[axisKey];
+          b.classList.toggle("active", ax[axisKey]);
+          Plotly.relayout(plot, { [plotKey]: ax[axisKey] ? "log" : "linear" });  // lightweight, keeps zoom
+        });
+        return b;
+      };
+      ctrls.append(mkBtn("log y", "logY", "yaxis.type"), mkBtn("log x", "logX", "xaxis.type"));
+      card.append(ctrls, plot);
+      $("charts").appendChild(card);
+
       const x = points.map((p) => p.step), y = points.map((p) => p.value);
       const color = PALETTE[idx % PALETTE.length];
       const traces = [];
@@ -539,11 +558,11 @@
         traces.push({ x, y, mode: "lines", line: { width: 1.6, color }, name: key });
       }
       const axis = (log) => ({ type: log ? "log" : "linear", showgrid: true, gridcolor: "#eef2f6", zeroline: false });
-      Plotly.newPlot(div, traces, {
+      Plotly.newPlot(plot, traces, {
         title: { text: key, font: { size: 12.5 }, x: 0.02, xanchor: "left", y: 0.97 },
         height: CHART_H[chartOpts.size], margin: { l: 54, r: 14, t: 28, b: 34 },
         template: "plotly_white", hovermode: "x unified", showlegend: false,
-        xaxis: axis(chartOpts.logX), yaxis: axis(chartOpts.logY),
+        xaxis: axis(ax.logX), yaxis: axis(ax.logY),
       }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
     }
 
@@ -581,9 +600,7 @@
     });
     document.addEventListener("mousedown", (e) => { if (!e.target.closest(".combo")) hideOptions(); });
 
-    // chart toolbar: log scale, smoothing, size — redraw from cache (no refetch)
-    $("log-y").addEventListener("change", (e) => { chartOpts.logY = e.target.checked; redrawCharts(); });
-    $("log-x").addEventListener("change", (e) => { chartOpts.logX = e.target.checked; redrawCharts(); });
+    // chart toolbar: smoothing + size redraw from cache (no refetch); log scale is per chart
     $("smooth").addEventListener("input", (e) => {
       chartOpts.smoothing = parseFloat(e.target.value);
       $("smooth-val").textContent = chartOpts.smoothing.toFixed(2);
