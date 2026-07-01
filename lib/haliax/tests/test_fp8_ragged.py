@@ -43,15 +43,15 @@ def test_fp8_forward_rel_fro():
 
 @gpu_only
 def test_fp8_grad_lhs_rel_fro():
-    # The input gradient (grad_lhs) now runs on the FP8 tensor cores: the output
-    # gradient is quantized to e4m3 (uniform, stock-jaxlib-safe) and contracted
-    # against the pre-cast weight, so grad_lhs is approximate vs the bf16 grad.
-    # The weight gradient (grad_rhs) stays bf16, so it still matches to roundoff.
-    # T is a multiple of 64 so the ragged wgmma accumulator tile is valid; the
-    # groups are still genuinely non-uniform (including a small 5-token expert).
-    lhs, rhs, _ = _nonuniform(64, 128, 4, 128, seed=3)
-    gs = jnp.asarray([13, 5, 17, 29], jnp.int32)  # genuine non-uniform, sums to T=64
-    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e4m3 (uniform dgrad)
+    # Both gradients now run on the FP8 tensor cores: the output gradient is
+    # quantized to e4m3 (uniform, stock-jaxlib-safe) and contracted against the
+    # pre-cast weight (grad_lhs) and the pre-cast transposed activation (grad_rhs),
+    # so both are approximate vs the bf16 grad and held to the 6e-2 FP8 tolerance.
+    # T is a multiple of 128 (the wgrad's token-dim TMA tile); the groups are still
+    # genuinely non-uniform (including a small 5-token expert).
+    lhs, rhs, _ = _nonuniform(128, 128, 4, 128, seed=3)
+    gs = jnp.asarray([13, 5, 47, 63], jnp.int32)  # genuine non-uniform, sums to T=128
+    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e4m3 (uniform backward)
 
     def loss(l, r, o):
         return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
@@ -60,7 +60,29 @@ def test_fp8_grad_lhs_rel_fro():
     g_lhs_ref, g_rhs_ref = jax.grad(lambda l, r: loss(l, r, None), argnums=(0, 1))(lhs, rhs)
 
     assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 6e-2, "FP8 dgrad grad_lhs out of tolerance"
-    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 1e-3, "bf16 wgrad grad_rhs should match bf16 to roundoff"
+    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 6e-2, "FP8 wgrad grad_rhs out of tolerance"
+
+
+@gpu_only
+def test_fp8_grad_rhs_rel_fro_incl_boundaries():
+    # The weight gradient (grad_rhs) contracts the ragged token dim in block_k=128
+    # tiles via mgpu_dwgrad. This exercises the f16-upcast group-boundary mask:
+    # the token groups are chosen so boundaries fall mid-tile and one group
+    # straddles the 128-token block boundary (start 100, end 180). T is a multiple
+    # of 128 (the wgrad's contracting-dim TMA tile), N a multiple of 128 (the
+    # ragged-kernel alignment), K a multiple of 128 (the dgrad alignment).
+    lhs, rhs, _ = _nonuniform(256, 128, 4, 128, seed=4)
+    gs = jnp.asarray([60, 40, 80, 76], jnp.int32)  # boundaries 60, 100, 180 (mid-block_k)
+    assert int(gs.sum()) == 256
+    op = Fp8RaggedDotOp.init()
+
+    def loss(w, o):
+        return ragged_dot(lhs, w, gs, op=o).astype(jnp.float32).sum()
+
+    g_rhs_fp8 = jax.grad(lambda w: loss(w, op))(rhs)
+    g_rhs_ref = jax.grad(lambda w: loss(w, None))(rhs)
+
+    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 6e-2, "FP8 wgrad grad_rhs out of tolerance at mid-tile boundaries"
 
 
 @gpu_only
@@ -73,7 +95,7 @@ def test_output_grad_scale_updates_across_steps():
     1.0 once the amax history accumulates a non-zero gradient magnitude — exactly
     like input_scale/kernel_scale. It must still never be zeroed.
     """
-    lhs, rhs, gs = _nonuniform(64, 128, 4, 128)
+    lhs, rhs, gs = _nonuniform(128, 128, 4, 128)
     op = Fp8RaggedDotOp.init()
 
     def loss(op_, l, r):
