@@ -13,7 +13,7 @@ import itertools
 import logging
 import pickle
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 import cloudpickle
@@ -257,8 +257,8 @@ def _write_stage_output(
 class ZephyrTaskResources:
     """CPU and memory budget for a single task or worker resource pool."""
 
-    cpu: float = 0.0
-    memory: int = 0
+    cpu: float
+    memory: int
 
     def __add__(self, other: "ZephyrTaskResources") -> "ZephyrTaskResources":
         return ZephyrTaskResources(cpu=self.cpu + other.cpu, memory=self.memory + other.memory)
@@ -278,9 +278,9 @@ class ShardTask:
     total_shards: int
     shard: Shard
     operations: list[PhysicalOp]
+    cost: ZephyrTaskResources
     stage_name: str = "output"
     aux_shards: dict[int, Shard] | None = None
-    cost: ZephyrTaskResources = field(default_factory=ZephyrTaskResources)
 
 
 class StageRunner(Protocol):
