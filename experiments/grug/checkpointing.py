@@ -85,6 +85,7 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
+    initialize_from: str | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
     if not checkpoint_search_paths:
@@ -115,6 +116,26 @@ def restore_grug_state_from_checkpoint(
             logger.warning(
                 "Checkpoint candidate %s could not be loaded (%s). Trying an older checkpoint.", candidate, exc
             )
+
+    # Nothing to auto-resume from. Fall back to initialize_from (first-time
+    # init only): loads model + optimizer + step from an external source
+    # checkpoint. Subsequent restarts will find this run's own checkpoints
+    # in checkpoint_search_paths and take the auto-resume path above,
+    # bypassing initialize_from.
+    if initialize_from is not None:
+        logger.info("No checkpoint found under %s; initializing from %s", checkpoint_search_paths, initialize_from)
+        try:
+            return _load_candidate_state(
+                state=state,
+                candidate=initialize_from,
+                mesh=mesh,
+                allow_partial=allow_partial,
+                load_fn=_load_fn,
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"initialize_from={initialize_from!r} but the checkpoint could not be loaded."
+            ) from exc
 
     if load_checkpoint_setting is True:
         search_path_summary = ", ".join(checkpoint_search_paths)

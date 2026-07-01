@@ -34,6 +34,7 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LmDataConfig
 from levanter.optim import OptimizerConfig
+from levanter.schedule import ScheduleStep
 from levanter.tracker import TrackerConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -141,13 +142,57 @@ class GrugMoeLaunchConfig2xBS:
     auto-resumes from the latest temp/permanent checkpoint under
     ``output_path``, so iris preemption survives without re-loading the
     source step every time."""
+    source_batch_size: int | None = None
+    """Batch size the source run used (typically half of ``batch_size``).
+    When set, ``run_grug_moe_trial_2x_bs`` builds a piecewise BS schedule
+    -- ``source_batch_size`` for steps ``[0, resume_step)``, then
+    ``batch_size`` for ``[resume_step, end_step)`` -- and feeds it to
+    ``TrainerConfig.train_batch_size``. This makes the data loader's
+    cumulative offset at ``resume_step`` exactly match where the source
+    left off, instead of jumping to ``resume_step * batch_size`` samples
+    (which would skip half the dataset when batch_size doubled). Pass
+    ``None`` when this run was trained at a constant BS throughout (i.e.
+    no source-BS handoff to reconcile)."""
+    resume_step: int = 0
+    """Step number of the source checkpoint being resumed. Used only when
+    ``source_batch_size`` is set (defines the BS-schedule boundary)."""
+    per_device_parallelism: int = -1
+    """Per-chip micro-batch size. Required when ``source_batch_size`` is
+    set, because ``TrainerConfig`` cannot auto-infer it from a non-int
+    ``train_batch_size``. For mesh (replica, data, expert, model) with
+    batch_shards = replica * data * expert, this should be
+    ``batch_size // batch_shards``."""
 
 
 def run_grug_moe_trial_2x_bs(config: GrugMoeLaunchConfig2xBS) -> None:
+    # Build a piecewise BS schedule when resuming from a source run that
+    # used a different batch size. This makes the data loader's cumulative
+    # offset at config.resume_step exactly match where the source left off
+    # (= resume_step * source_batch_size samples), instead of jumping ahead
+    # to resume_step * batch_size and skipping the data the source already
+    # trained on. iter_from_step uses the BatchSchedule to compute offsets,
+    # so the schedule has to faithfully describe what the source consumed.
+    if config.source_batch_size is not None and config.source_batch_size != config.batch_size:
+        train_batch_size: int | list[ScheduleStep] = [
+            ScheduleStep(start=0, value=config.source_batch_size),
+            ScheduleStep(start=config.resume_step, value=config.batch_size),
+        ]
+    else:
+        train_batch_size = config.batch_size
+
     trainer = TrainerConfig(
         id=config.run_id,
         seed=config.seed,
-        train_batch_size=config.batch_size,
+        train_batch_size=train_batch_size,
+        per_device_parallelism=config.per_device_parallelism,
+        # Skip Levanter's per_device_parallelism divisibility check on the
+        # phase-0 head of the piecewise schedule. That phase describes the
+        # source run's BS (used only for the BatchSchedule's cumulative
+        # offset computation at the resume step) and is never actually
+        # iterated by this run because state.step loads to the resume step.
+        skip_batch_size_schedule_head_validation=(
+            config.source_batch_size is not None and config.source_batch_size != config.batch_size
+        ),
         num_train_steps=config.steps,
         profiler=config.profiler,
         mp=jmp.get_policy(config.mp),

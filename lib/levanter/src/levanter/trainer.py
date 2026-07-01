@@ -842,6 +842,16 @@ class TrainerConfig:
     This is typically used when you want a specific batch size but have a weird number of devices.
     """
 
+    skip_batch_size_schedule_head_validation: bool = False
+    """
+    When train_batch_size is an IntSchedule, skip the divisibility check on
+    schedule phases whose start step is 0. This is intended for BS-ramp
+    resume scenarios where the first phase describes what a source run
+    consumed (so the data loader's cumulative offset at the resume step
+    matches where the source left off) but is never actually iterated by
+    this run because it starts at a later step from a loaded checkpoint.
+    """
+
     # Config related to duration
     num_train_steps: int = 400_000  # number of training steps
     steps_per_eval: int = 1_000  # how often to evaluate
@@ -1073,6 +1083,12 @@ class TrainerConfig:
                 for phase in self.train_batch_size:
                     assert isinstance(phase, ScheduleStep)
                     if phase.value % (self.per_device_parallelism * self.data_axis_size) != 0:
+                        if self.skip_batch_size_schedule_head_validation and phase.start == 0:
+                            # BS-ramp resume: phase 0 describes what the source
+                            # run consumed (for BatchSchedule offset math) and
+                            # is never iterated by this run, so a value that
+                            # doesn't fit per_device_parallelism is OK.
+                            continue
                         raise ValueError(
                             f"At step {phase.start}, train_batch_size ({phase.value}) must be divisible by "
                             "per_device_parallelism * data_axis_size "

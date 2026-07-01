@@ -444,6 +444,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             load_checkpoint_setting=trainer.load_checkpoint,
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
+            initialize_from=trainer.initialize_from,
         )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})

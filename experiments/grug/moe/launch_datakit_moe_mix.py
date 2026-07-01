@@ -300,8 +300,20 @@ def _datakit_data_config(
     batch_size: int,
     max_seq_len: int,
     enable_simulated_epoching: bool,
+    phase_1_start_step: int | None = None,
 ) -> LmDataConfig:
-    phase_1_start = _phase_1_start_step(total_steps, batch_size)
+    """Build a datakit MoE mix LmDataConfig.
+
+    ``phase_1_start_step`` defaults to ``_phase_1_start_step(total_steps,
+    batch_size)``, which rounds 80% of *steps* to a step_multiple of
+    ``_MIXTURE_BLOCK_SIZE``. Pass an explicit value to override -- needed
+    for runs with a non-constant batch-size schedule (e.g. a BS-ramp
+    resume), where 80% of steps no longer corresponds to 80% of tokens
+    and you want the phase boundary pinned to a token mark."""
+    if phase_1_start_step is None:
+        phase_1_start = _phase_1_start_step(total_steps, batch_size)
+    else:
+        phase_1_start = phase_1_start_step
     budget_kwargs = {}
     if enable_simulated_epoching:
         experiment_budget = _simulated_experiment_budget(

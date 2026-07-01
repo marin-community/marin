@@ -64,6 +64,7 @@ from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _DIM: int = 2560
+_BS_SOURCE: int = 4096  # source-run BS, used for the piecewise BS schedule's pre-resume segment
 _BS_NEW: int = 8192  # 8192 * 8192 = 67,108,864 tokens/step (~67.1M)
 _SEQ: int = 8192
 _TOTAL_STEPS: int = 157_500  # 15,000 (BS=4096 phase) + 142,500 (BS=8192 phase) → ~10.07T
@@ -73,6 +74,18 @@ _SLICE: str = "v4-2048"
 _LOGIT_Z_LOSS_WEIGHT: float = 1e-4
 _CHECKPOINT_EVERY: int = 3_000
 _STEPS_PER_EVAL: int = 3_000
+
+# Mesh (replica=8, data=128, expert=1, model=1) on v4-2048 (1,024 chips):
+# batch_shards = 8 * 128 * 1 = 1024. BS=8192 → 8 sequences per chip.
+_BATCH_SHARDS: int = _REPLICA_AXIS * (1024 // _REPLICA_AXIS // _EP) * _EP  # = 1024
+_PER_DEVICE_PARALLELISM: int = _BS_NEW // _BATCH_SHARDS  # = 8
+
+# Phase-0 → phase-1 mixture transition, pinned to 80% of tokens (the source's
+# design intent) rather than 80% of steps. With the BS=4096 head consuming
+# only 5% of tokens despite being 10% of steps, the default
+# `_phase_1_start_step` would land at 79.0% of tokens; bumping by 1,500
+# steps puts it at exactly 80.00%. Multiple of step_multiple=6 for BS=8192.
+_PHASE_1_START_STEP: int = 127_500
 
 # LR transition at the BS-ramp boundary (pre-computed; see job summary doc).
 _RESUME_STEP: int = 15_000
@@ -133,7 +146,7 @@ _optimizer = GrugMoeMuonHResumeConfig(
     lr_at_ramp_end=_LR_AT_RAMP_END,
 )
 
-_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS_NEW}_" f"seq{_SEQ}_sw2k_v4_2048_muon_resume15k_10T"
+_run_id = f"moe_67b_a2b_d{_DIM}_ep{_EP}_rep{_REPLICA_AXIS}_bs{_BS_NEW}_" f"seq{_SEQ}_sw2k_v4_2048_muon_resume15k_v2_10T"
 step = ExecutorStep(
     name=f"grug/{_run_id}",
     fn=run_grug_moe_trial_2x_bs,
@@ -144,6 +157,7 @@ step = ExecutorStep(
             batch_size=_BS_NEW,
             max_seq_len=_SEQ,
             enable_simulated_epoching=False,
+            phase_1_start_step=_PHASE_1_START_STEP,
         ),
         output_path=this_output_path(),
         run_id=_run_id,
@@ -182,6 +196,9 @@ step = ExecutorStep(
         checkpoint_keep=[{"every": _CHECKPOINT_EVERY}],
         save_interval_minutes=60,
         initialize_from_path=_RESUME_CKPT_PATH,
+        source_batch_size=_BS_SOURCE,
+        resume_step=_RESUME_STEP,
+        per_device_parallelism=_PER_DEVICE_PARALLELISM,
         grug_trainer=versioned(
             GrugTrainerConfig(
                 z_loss_weight=_LOGIT_Z_LOSS_WEIGHT,
