@@ -4,9 +4,10 @@
 """Tests for migration ``0029_drop_reservations``.
 
 Builds a representative pre-migration DB (reservation columns/indexes/CHECK, a
-holder job, a real reservation job, a plain job, a FK-referenced task) and asserts
-the migration: deletes holders (cascading to their tasks), converts real
-reservations into hard ``availability:<variant>`` constraints, strips the schema,
+holder job, a real reservation job, a plain job, an "auto"-variant GPU reservation,
+a FK-referenced task) and asserts the migration: deletes holders (cascading to
+their tasks), converts real reservations into hard ``availability:<variant>``
+constraints while skipping the unschedulable ``auto`` variant, strips the schema,
 and leaves data + FK integrity intact — and is idempotent on re-run.
 """
 
@@ -74,6 +75,11 @@ def _reservation_json(variant: str) -> str:
     return json.dumps({"entries": [{"resources": {"device": {"tpu": {"variant": variant}}}}]})
 
 
+def _gpu_reservation_json(variant: str) -> str:
+    """Same as ``_reservation_json`` but for a GPU device entry."""
+    return json.dumps({"entries": [{"resources": {"device": {"gpu": {"variant": variant}}}}]})
+
+
 def _load_migration():
     spec = importlib.util.spec_from_file_location("m0029", _MIGRATION)
     module = importlib.util.module_from_spec(spec)
@@ -114,6 +120,15 @@ def _seed(conn: sqlite3.Connection) -> None:
         "INSERT INTO job_config (job_id,name,has_reservation,constraints_json,reservation_json) VALUES (?,?,?,?,?)",
         ("/u1/plain", "plain", 0, "[]", None),
     )
+
+    # GPU reservation left at the "auto" (any-GPU) variant — must NOT become a hard
+    # availability:auto constraint, since no worker/group ever advertises one.
+    add_job("/u1/auto-gpu", holder=0, has_reservation=1, name="auto-gpu")
+    conn.execute(
+        "INSERT INTO job_config (job_id,name,has_reservation,constraints_json,reservation_json) VALUES (?,?,?,?,?)",
+        ("/u1/auto-gpu", "auto-gpu", 1, "[]", _gpu_reservation_json("auto")),
+    )
+
     conn.execute("INSERT INTO reservation_claims VALUES ('w1','/u1/real',0)")
     conn.commit()
 
@@ -141,6 +156,10 @@ def test_migration_0029_drops_reservations_and_converts_in_flight():
 
     # Plain job's constraints are untouched.
     assert conn.execute("SELECT constraints_json FROM job_config WHERE job_id='/u1/plain'").fetchone()[0] == "[]"
+
+    # "auto" GPU variant is skipped, not folded into an unschedulable availability:auto.
+    auto_json = conn.execute("SELECT constraints_json FROM job_config WHERE job_id='/u1/auto-gpu'").fetchone()[0]
+    assert constraints_from_json(auto_json) == []
 
     # Schema stripped: columns, indexes, table all gone.
     jcols = [r[1] for r in conn.execute("PRAGMA table_info(jobs)")]
