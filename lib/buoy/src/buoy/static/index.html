@@ -82,19 +82,18 @@
     .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
     .kv-col td.v { font-family: ui-monospace, monospace; }
 
-    .chart-toolbar { display: flex; align-items: center; gap: 1.2em; flex-wrap: wrap; margin-bottom: 1em; font-size: 12.5px; color: #4a5568; }
-    .chart-toolbar label { display: inline-flex; align-items: center; gap: .4em; cursor: pointer; }
-    .chart-toolbar .smooth input[type="range"] { width: 130px; }
-    .chart-toolbar #smooth-val { font-family: ui-monospace, monospace; width: 2.6em; }
-    .seg { display: inline-flex; align-items: center; gap: .3em; }
-    .seg button { border: 1px solid #cbd5e0; background: #fff; color: #4a5568; padding: .2em .55em; cursor: pointer; font-size: 12px; border-radius: 5px; }
-    .seg button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
-    .tb-hint { color: #94a3b8; font-size: 11.5px; }
-    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
-    .chart { position: relative; border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
-    .chart-ctrls { position: absolute; top: 6px; right: 8px; z-index: 3; display: flex; gap: 4px; }
-    .chart-ctrls .lg { font-size: 10px; padding: 1px 6px; border: 1px solid #d7e0ea; border-radius: 5px; background: rgba(255, 255, 255, .82); color: #718096; cursor: pointer; }
-    .chart-ctrls .lg.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: .9em; align-items: start; }
+    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
+    /* discreet per-chart control bar */
+    .chart-bar { display: flex; align-items: center; justify-content: flex-end; gap: .5em; padding: .3em .55em; border-bottom: 1px solid #f1f4f8; opacity: .5; transition: opacity .12s; }
+    .chart:hover .chart-bar { opacity: 1; }
+    .chart-bar .cbtn { font-size: 10px; padding: 1px 6px; border: 1px solid #e2e8f0; border-radius: 4px; background: #fff; color: #a0aec0; cursor: pointer; }
+    .chart-bar .cbtn:hover { color: #4a5568; }
+    .chart-bar .cbtn.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
+    .chart-bar .sm-slider { width: 64px; accent-color: #0d3b66; margin: 0 .1em; }
+    .chart-bar .seg-mini { display: inline-flex; gap: 2px; }
+    .chart-bar .seg-mini button { font-size: 10px; width: 19px; padding: 1px 0; border: 1px solid #e2e8f0; background: #fff; color: #a0aec0; cursor: pointer; border-radius: 3px; }
+    .chart-bar .seg-mini button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
     .chip { display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff; border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace; }
     .chip button { border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px; line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0; }
@@ -149,13 +148,6 @@
           <input id="metric-search" class="search" placeholder="add a metric to plot…" autocomplete="off">
           <div id="metric-options" class="options hidden"></div>
         </div>
-        <div class="chart-toolbar">
-          <label class="smooth">smoothing<input type="range" id="smooth" min="0" max="0.97" step="0.01" value="0"><span id="smooth-val">0.00</span></label>
-          <span class="seg" id="size-seg">size
-            <button data-size="s">S</button><button data-size="m">M</button><button data-size="l" class="active">L</button>
-          </span>
-          <span class="tb-hint">log scale: toggle per chart ↗</span>
-        </div>
         <div id="charts"></div>
       </div>
 
@@ -183,9 +175,10 @@
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
     let metricData = {};         // key -> [{step,value}], cached so toolbar toggles don't refetch
-    let chartAxis = {};          // per-metric { logY, logX } — log scale is per chart
-    const chartOpts = { smoothing: 0, size: "l" };
-    const CHART_H = { s: 200, m: 285, l: 420 }, CHART_MINW = { s: 340, m: 440, l: 720 };
+    let chartState = {};         // per-metric { logY, logX, smoothing, size } — every control is per chart
+    const CHART_H = { s: 190, m: 285, l: 400 };
+    const CHART_SPAN = { s: 1, m: 1, l: 2 };  // L spans two grid columns (wider)
+    const CHART_CONFIG = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
     const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"];
     let liveTimer = null;        // running-run auto-refresh timer
     let searchTimer = null;
@@ -440,13 +433,11 @@
       }
       redrawCharts();
     }
-    // Redraw from cached data (toolbar toggles don't refetch).
     function redrawCharts() {
-      const charts = $("charts");
-      charts.style.gridTemplateColumns = `repeat(auto-fill, minmax(${CHART_MINW[chartOpts.size]}px, 1fr))`;
-      charts.textContent = "";
+      $("charts").textContent = "";
       selectedMetrics.forEach((k, i) => drawChart(k, metricData[k] || [], i));
     }
+    const cstate = (key) => chartState[key] || (chartState[key] = { logY: false, logX: false, smoothing: 0, size: "l" });
     // wandb-style debiased EMA smoothing.
     function ema(values, w) {
       if (w <= 0) return values;
@@ -480,7 +471,7 @@
       selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
       if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
       metricData = {};
-      chartAxis = {};
+      chartState = {};
       renderChips();
       plotSelected();
 
@@ -545,41 +536,70 @@
       poll();
     }
 
+    function chartTraces(key, points, st, color) {
+      const x = points.map((p) => p.step), y = points.map((p) => p.value);
+      if (st.smoothing > 0 && y.length > 1) {
+        // raw faint underneath, smoothed bold on top (wandb style)
+        return [
+          { x, y, mode: "lines", line: { width: 1, color }, opacity: 0.22, hoverinfo: "skip", showlegend: false },
+          { x, y: ema(y, st.smoothing), mode: "lines", line: { width: 2, color }, name: key },
+        ];
+      }
+      return [{ x, y, mode: "lines", line: { width: 1.6, color }, name: key }];
+    }
+    function chartLayout(key, st) {
+      const axis = (log) => ({ type: log ? "log" : "linear", showgrid: true, gridcolor: "#eef2f6", zeroline: false });
+      return {
+        title: { text: key, font: { size: 12.5 }, x: 0.02, xanchor: "left", y: 0.98 },
+        height: CHART_H[st.size], margin: { l: 52, r: 14, t: 26, b: 32 },
+        template: "plotly_white", hovermode: "x unified", showlegend: false,
+        xaxis: axis(st.logX), yaxis: axis(st.logY),
+      };
+    }
     function drawChart(key, points, idx) {
-      const ax = chartAxis[key] || (chartAxis[key] = { logY: false, logX: false });
+      const st = cstate(key);
+      const color = PALETTE[idx % PALETTE.length];
       const card = el("div", "chart");
+      card.style.gridColumn = `span ${CHART_SPAN[st.size]}`;
       const plot = el("div", "chart-plot");
-      const ctrls = el("div", "chart-ctrls");
-      const mkBtn = (label, axisKey, plotKey) => {
-        const b = el("button", "lg" + (ax[axisKey] ? " active" : ""), label);
+      const bar = el("div", "chart-bar");
+
+      const logBtn = (label, k, plotKey) => {
+        const b = el("button", "cbtn" + (st[k] ? " active" : ""), label);
         b.addEventListener("click", () => {
-          ax[axisKey] = !ax[axisKey];
-          b.classList.toggle("active", ax[axisKey]);
-          Plotly.relayout(plot, { [plotKey]: ax[axisKey] ? "log" : "linear" });  // lightweight, keeps zoom
+          st[k] = !st[k];
+          b.classList.toggle("active", st[k]);
+          Plotly.relayout(plot, { [plotKey]: st[k] ? "log" : "linear" });  // keeps zoom
         });
         return b;
       };
-      ctrls.append(mkBtn("log y", "logY", "yaxis.type"), mkBtn("log x", "logX", "xaxis.type"));
-      card.append(ctrls, plot);
-      $("charts").appendChild(card);
+      bar.append(logBtn("log y", "logY", "yaxis.type"), logBtn("log x", "logX", "xaxis.type"));
 
-      const x = points.map((p) => p.step), y = points.map((p) => p.value);
-      const color = PALETTE[idx % PALETTE.length];
-      const traces = [];
-      if (chartOpts.smoothing > 0 && y.length > 1) {
-        // raw faint underneath, smoothed bold on top (wandb style)
-        traces.push({ x, y, mode: "lines", line: { width: 1, color }, opacity: 0.22, hoverinfo: "skip", showlegend: false });
-        traces.push({ x, y: ema(y, chartOpts.smoothing), mode: "lines", line: { width: 2, color }, name: key });
-      } else {
-        traces.push({ x, y, mode: "lines", line: { width: 1.6, color }, name: key });
+      const sm = el("input");
+      Object.assign(sm, { type: "range", min: "0", max: "0.97", step: "0.01", value: String(st.smoothing), className: "sm-slider", title: "smoothing" });
+      sm.addEventListener("input", () => {
+        st.smoothing = parseFloat(sm.value);
+        Plotly.react(plot, chartTraces(key, points, st, color), chartLayout(key, st), CHART_CONFIG);
+      });
+      bar.appendChild(sm);
+
+      const seg = el("span", "seg-mini");
+      for (const s of ["s", "m", "l"]) {
+        const b = el("button", s === st.size ? "active" : "", s.toUpperCase());
+        b.addEventListener("click", () => {
+          st.size = s;
+          seg.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+          card.style.gridColumn = `span ${CHART_SPAN[s]}`;
+          Plotly.relayout(plot, { height: CHART_H[s] });
+          window.dispatchEvent(new Event("resize"));
+        });
+        seg.appendChild(b);
       }
-      const axis = (log) => ({ type: log ? "log" : "linear", showgrid: true, gridcolor: "#eef2f6", zeroline: false });
-      Plotly.newPlot(plot, traces, {
-        title: { text: key, font: { size: 12.5 }, x: 0.02, xanchor: "left", y: 0.97 },
-        height: CHART_H[chartOpts.size], margin: { l: 54, r: 14, t: 28, b: 34 },
-        template: "plotly_white", hovermode: "x unified", showlegend: false,
-        xaxis: axis(ax.logX), yaxis: axis(ax.logY),
-      }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
+      bar.appendChild(seg);
+
+      card.append(bar, plot);
+      $("charts").appendChild(card);
+      Plotly.newPlot(plot, chartTraces(key, points, st, color), chartLayout(key, st), CHART_CONFIG);
     }
 
     // ---- events ----
@@ -615,20 +635,6 @@
       }
     });
     document.addEventListener("mousedown", (e) => { if (!e.target.closest(".combo")) hideOptions(); });
-
-    // chart toolbar: smoothing + size redraw from cache (no refetch); log scale is per chart
-    $("smooth").addEventListener("input", (e) => {
-      chartOpts.smoothing = parseFloat(e.target.value);
-      $("smooth-val").textContent = chartOpts.smoothing.toFixed(2);
-      redrawCharts();
-    });
-    $("size-seg").addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-size]");
-      if (!b) return;
-      chartOpts.size = b.dataset.size;
-      document.querySelectorAll("#size-seg button").forEach((x) => x.classList.toggle("active", x === b));
-      redrawCharts();
-    });
     init();
   </script>
 </body>
