@@ -15,16 +15,18 @@ bf16 ``ragged_dot`` backward (``_DLHS_DIM_NUMS`` / ``_DRHS_DIM_NUMS`` via
 bit-for-bit with no forward recompute.
 
 Delayed per-tensor scaling (TE-style scale + amax history) is reused verbatim
-from the dense helpers in ``_src/fp8.py`` (``in_q`` / ``quantize``): the input and
-kernel scale + amax_history update through ``in_q``'s custom VJP as
-``OverwriteWithGradient`` overwrites. The output-gradient scaling state is unused
-here (the backward is bf16) and threads through unchanged.
+from the dense helpers in ``_src/fp8.py``: the input and kernel scale + amax_history
+update through ``in_q_ct``'s custom VJP as ``OverwriteWithGradient`` overwrites.
+The output-gradient scaling state is unused here (the backward is bf16) and threads
+through unchanged.
 
-The activation (lhs) quantize goes through ``in_q_qa`` (``_src/fp8_cast_transpose``),
-a fused Pallas-Triton kernel that reads the bf16 tile once, folds the amax reduction
-via ``atomic_max``, and stores the natural FP8 tile.  The expert weight (rhs) still
-gets its transposed layout via bf16-transpose-then-cast; a fused cast-transpose kernel
-is deferred to a later commit.
+Both the activation (lhs) and expert weight (rhs) quantize go through ``in_q_ct``
+(``_src/fp8_cast_transpose``), a fused Pallas-Triton kernel that reads the bf16 tile
+once, folds the amax reduction via ``atomic_max``, and stores **both** the natural
+and the transposed FP8 tile in one pass.  The transposed-weight layout (``[E,N,K]``)
+is consumed by the forward; the natural-weight layout (``[E,K,N]``) and the
+transposed-activation layout (``[K,T]``) are produced but deferred to the FP8
+backward follow-up.
 """
 
 import functools
@@ -32,8 +34,7 @@ import functools
 import jax.numpy as jnp
 from jax import custom_vjp
 
-from .fp8 import in_q, quantize
-from .fp8_cast_transpose import in_q_qa
+from .fp8_cast_transpose import in_q_ct
 from .ragged_dot_mgpu import mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
@@ -170,19 +171,16 @@ def fp8_scaled_ragged_dot(
     Quantizes activations and expert weights to ``fwd_dtype`` with delayed
     per-tensor scaling and contracts them on the FP8 tensor cores via the genuine
     ragged ``wgmma`` kernel, then dequantizes. The input and kernel scale /
-    amax-history update through ``in_q``'s custom VJP as ``OverwriteWithGradient``
+    amax-history update through ``in_q_ct``'s custom VJP as ``OverwriteWithGradient``
     overwrites; the output-gradient state passes through unchanged.
     """
     del rev_dtype  # FP8 output-grad dtype is reserved for the FP8-backward path; unused while backward is bf16.
-    comp = quantize_compute_type
-    # Fused quantize+amax kernel: reads the bf16 tile once, folds the amax reduction,
-    # and stores the natural FP8 tile.  VJP threading matches in_q.
-    q_lhs, new_lhs_scale = in_q_qa(fwd_dtype, lhs, lhs_scale, lhs_amax_history)
-    # in_q on rhs threads the kernel scale + amax_history overwrite; the naturally
-    # quantized weight it returns is unused (the forward needs the transposed
-    # layout), so it is dropped and DCE'd.
-    _q_rhs, new_rhs_scale = in_q(comp, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
-    # bf16-transpose-then-cast: transpose in bf16 (hardware-legal), then cast to FP8.
-    q_rhs_t = quantize(jnp.swapaxes(rhs, 1, 2), fwd_dtype, new_rhs_scale, comp)
+    del quantize_compute_type  # CT kernel uses float32 internally; parameter kept for API parity.
+    # Fused cast-transpose+amax: reads each bf16 tile once, folds the amax reduction, and
+    # stores both the natural and the transposed FP8 tile in one pass.  VJP threading matches in_q.
+    # _q_lhs_t [K,T] and _q_rhs [E,K,N] are produced in the same fused read as the used layouts;
+    # they will be wired into the FP8 backward in the follow-up commit.
+    q_lhs, _q_lhs_t, new_lhs_scale = in_q_ct(fwd_dtype, "2d", lhs, lhs_scale, lhs_amax_history)
+    _q_rhs, q_rhs_t, new_rhs_scale = in_q_ct(fwd_dtype, "3d", rhs, rhs_scale, rhs_amax_history)
     out_scale = (new_lhs_scale * new_rhs_scale).astype(jnp.float32)
     return quantized_ragged_dot(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history, group_sizes)
