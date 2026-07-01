@@ -8,6 +8,8 @@ from __future__ import annotations
 import tarfile
 import threading
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from buoy import cache
 from buoy.mirror import MirrorManager, RunRef, mirror_run
@@ -108,6 +110,37 @@ def test_profile_reuse_skips_redownload(cfg, patch_wandb, profile_logdir):
     assert art.download_calls == 1
     mirror_run(cfg, REF, refresh=True)  # same artifact version → reuse, no re-download
     assert art.download_calls == 1
+
+
+def test_finished_run_uses_history_artifact(cfg, patch_wandb, tmp_path):
+    # A finished run's `wandb-history` parquet is used directly (fast bulk path);
+    # scan_history is NOT used (its rows here are a single non-numeric record).
+    art_dir = tmp_path / "histart"
+    art_dir.mkdir()
+    pq.write_table(
+        pa.table({"_step": [0, 1, 2], "train/loss": [3.0, 2.0, 1.0], "note": ["a", "b", "c"]}), art_dir / "0000.parquet"
+    )
+    art = FakeArtifact("wandb-history", "run-x-history:v5", str(art_dir))
+    run = FakeRun(state="finished", summary_dict={"train/loss": 1.0}, rows=[{"nope": 1}], artifacts=[art])
+    patch_wandb(run)
+    manifest = mirror_run(cfg, REF)
+
+    assert manifest["history"]["rows"] == 3
+    assert manifest["history"]["columns"] == ["train/loss"]  # numeric, non-"_" only ("note"/"_step" excluded)
+    prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
+    frame = cache.read_history(prefix, ["_step", "train/loss"])
+    assert list(frame["train/loss"]) == [3.0, 2.0, 1.0]
+
+
+def test_running_run_scans_despite_history_artifact(cfg, patch_wandb, tmp_path):
+    # A running run's history artifact is a stale snapshot — mirror must scan for freshness.
+    art_dir = tmp_path / "h"
+    art_dir.mkdir()
+    pq.write_table(pa.table({"_step": [0], "train/loss": [9.0]}), art_dir / "0000.parquet")
+    art = FakeArtifact("wandb-history", "run-x-history:v1", str(art_dir))
+    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(4, ("train/loss",)), artifacts=[art])
+    patch_wandb(run)
+    assert mirror_run(cfg, REF)["history"]["rows"] == 4  # from scan (4 rows), not the 1-row artifact
 
 
 def test_profiler_tarball_extracted(cfg, patch_wandb, tmp_path):

@@ -110,3 +110,15 @@ def download_tree(src_prefix: str, local_dir: str) -> str:
     os.makedirs(local_dir, exist_ok=True)
     fs.get(src_prefix.rstrip("/") + "/", local_dir.rstrip("/") + "/", recursive=True)
     return local_dir
+
+
+def upload_file(local_path: str, dst: str) -> None:
+    fs = _fs(dst)
+    fs.makedirs(posixpath.dirname(dst), exist_ok=True)
+    fs.put_file(local_path, dst)
+
+
+def clear_dir(path: str) -> None:
+    fs = _fs(path)
+    if fs.exists(path):
+        fs.rm(path, recursive=True)

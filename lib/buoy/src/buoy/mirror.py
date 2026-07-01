@@ -17,6 +17,7 @@ Two halves:
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import posixpath
@@ -28,10 +29,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 import wandb
 
 from buoy import cache
-from buoy.config import HISTORY_PAGE_ROWS, PROFILE_ARTIFACT_TYPES, BuoyConfig
+from buoy.config import HISTORY_ARTIFACT_TYPE, HISTORY_PAGE_ROWS, PROFILE_ARTIFACT_TYPES, BuoyConfig
 
 logger = logging.getLogger("buoy.mirror")
 
@@ -100,6 +102,40 @@ def page_table(rows: list[dict], columns: list[str]) -> pa.Table:
 
 
 def _mirror_history(run: object, prefix: str, columns: list[str], report: Progress) -> dict:
+    """Mirror the run history, preferring the bulk parquet artifact over scan.
+
+    Finished runs usually expose the full history as a single-parquet
+    ``wandb-history`` artifact — a bulk download (~2s for 180 MB) vs minutes of
+    ``scan_history`` pagination. Running runs (whose artifact is a stale periodic
+    snapshot) and finished runs that never logged one fall back to scanning.
+    """
+    if getattr(run, "state", None) in TERMINAL_STATES:
+        art = next((a for a in run.logged_artifacts() if a.type == HISTORY_ARTIFACT_TYPE), None)  # type: ignore[attr-defined]
+        if art is not None:
+            return _history_from_artifact(art, prefix, report)
+    return _history_from_scan(run, prefix, columns, report)
+
+
+def _history_from_artifact(art: object, prefix: str, report: Progress) -> dict:
+    report("history: downloading parquet")
+    local = art.download()  # type: ignore[attr-defined]
+    files = sorted(glob.glob(os.path.join(local, "**", "*.parquet"), recursive=True))
+    hdir = cache.history_dir(prefix)
+    cache.clear_dir(hdir)  # replace any shards left by a previous scan mirror
+    rows = 0
+    numeric: set[str] = set()
+    for i, path in enumerate(files):
+        report("history: caching parquet")
+        schema = pq.read_schema(path)
+        rows += pq.read_metadata(path).num_rows
+        for field in schema:
+            if not field.name.startswith("_") and (pa.types.is_integer(field.type) or pa.types.is_floating(field.type)):
+                numeric.add(field.name)
+        cache.upload_file(path, posixpath.join(hdir, f"part-{i:05d}.parquet"))
+    return {"parts": len(files), "rows": rows, "columns": sorted(numeric)}
+
+
+def _history_from_scan(run: object, prefix: str, columns: list[str], report: Progress) -> dict:
     hdir = cache.history_dir(prefix)
     part = 0
     rows = 0
