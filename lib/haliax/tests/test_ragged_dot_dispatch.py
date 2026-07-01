@@ -6,9 +6,11 @@ import importlib
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from haliax.nn import ragged_dot
+from haliax.quantization import Fp8RaggedDotOp, partition_for_grad_overwrite
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
@@ -123,3 +125,70 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
         ragged_dot_module._DLHS_DIM_NUMS,
         ragged_dot_module._DRHS_DIM_NUMS,
     ]
+
+
+# ---------------------------------------------------------------------------
+# FP8 op dispatch tests (C1: bf16 matmul, state plumbing)
+# ---------------------------------------------------------------------------
+
+
+def _fp8_inputs(T=48, K=16, E=4, N=24, seed=0):
+    rng = np.random.default_rng(seed)
+    lhs = jnp.asarray(rng.standard_normal((T, K)), jnp.bfloat16)
+    rhs = jnp.asarray(rng.standard_normal((E, K, N)), jnp.bfloat16)
+    group_sizes = jnp.asarray([13, 5, 17, 13], jnp.int32)  # non-uniform, sums to T
+    return lhs, rhs, group_sizes
+
+
+def test_op_none_matches_xla_reference():
+    """ragged_dot(op=None) default path computes a correct grouped matmul.
+
+    Compares against jax.lax.ragged_dot_general (the canonical XLA reference)
+    on a non-uniform group distribution to prove adding op= left the default
+    path producing correct results.
+    """
+    lhs, rhs, gs = _fp8_inputs()
+    out = ragged_dot(lhs, rhs, gs, op=None)
+    ref = jax.lax.ragged_dot_general(
+        lhs=lhs,
+        rhs=rhs,
+        group_sizes=gs,
+        ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
+            dot_dimension_numbers=(((1,), (1,)), ((), ())),
+            lhs_ragged_dimensions=(0,),
+            rhs_group_dimensions=(0,),
+        ),
+    )
+    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
+
+
+def test_op_routes_to_op_and_runs_end_to_end():
+    lhs, rhs, gs = _fp8_inputs()
+    op = Fp8RaggedDotOp.init()
+    out = ragged_dot(lhs, rhs, gs, op=op)  # C1: internally bf16
+    ref = ragged_dot(lhs, rhs, gs, op=None)
+    assert out.shape == ref.shape
+    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
+
+
+def test_op_state_partitions_as_overwrite():
+    """Fp8RaggedDotOp is OverwriteWithGradient: its scale/amax_history arrays
+    go entirely to the overwrite partition and stay out of the optimizer gradient.
+
+    Verifies the structural plumbing required for delayed-scaling state
+    management via partition_for_grad_overwrite / apply_updates.
+    """
+    op = Fp8RaggedDotOp.init(amax_history_length=4)
+    regular_param = jnp.array([1.0, 2.0])
+
+    # Partition a tree containing both the op and a regular parameter.
+    tree = {"op": op, "weight": regular_param}
+    overwrites, grads = partition_for_grad_overwrite(tree)
+
+    # The op (OverwriteWithGradient) lands in overwrites, not in grads.
+    assert isinstance(overwrites["op"], Fp8RaggedDotOp)
+    assert grads["op"] is None
+
+    # Regular parameters are not overwritten; they stay in the grad/optimizer partition.
+    assert overwrites["weight"] is None
+    np.testing.assert_array_equal(np.asarray(grads["weight"]), np.asarray(regular_param))

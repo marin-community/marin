@@ -342,6 +342,7 @@ def ragged_dot(
     group_sizes_: jax.Array,
     ar: bool = False,
     implementation: Implementation = "auto",
+    op=None,
 ) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
@@ -353,10 +354,22 @@ def ragged_dot(
         implementation: Backend selection. ``"auto"`` selects per-platform default.
             ``"triton"`` forces GPU Pallas Triton kernel. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
+        op: Optional opt-in stateful grouped-matmul op (e.g.
+            ``haliax.quantization.Fp8RaggedDotOp``). When provided it replaces the
+            backend dispatch entirely and is called as ``op(lhs, rhs, group_sizes)``
+            over the genuine non-uniform ``group_sizes``; ``implementation`` is
+            ignored. The op owns its own layout and the default bf16 path below is
+            left completely unchanged.
 
     Returns:
         A [tokens, out] array.
     """
+    if op is not None:
+        out = op(lhs_, rhs_, group_sizes_)
+        if ar:
+            out = jax.lax.psum(out, ResourceAxis.MODEL)
+        return out
+
     hs_shape = lhs_.shape
     if hs_shape[0] % 512:
         pad_length = 512 - hs_shape[0] % 512

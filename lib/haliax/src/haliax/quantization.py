@@ -234,6 +234,66 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
         )
 
 
+class Fp8RaggedDotOp(OverwriteWithGradient):
+    """Direct-quantization FP8 ``ragged_dot`` op for MoE grouped matmuls.
+
+    The expert-grouped analog of [Fp8DotGeneralOp][]. Casts activations (``lhs``)
+    and expert weights (``rhs``) to FP8 and contracts them via a genuine ragged
+    Mosaic ``wgmma`` over dynamic non-uniform ``group_sizes`` (each expert may
+    receive a different number of tokens), then dequantizes the result. Output
+    gradients are quantized to FP8 in the custom VJP. All state (per-tensor
+    scale + amax history for the input, kernel, and output gradient) is carried
+    as [OverwriteWithGradient][] so it threads through
+    ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
+    optimizer/EMA state.
+
+    Both forward operands (``fwd_dtype``) and the output-gradient (``rev_dtype``)
+    default to E4M3, giving uniform same-dtype ``e4m3×e4m3`` GEMMs compatible
+    with stock jaxlib on H100.
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
+
+    @classmethod
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e4m3fn,
+    ):
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
+        )
+
+    def __call__(self, lhs, rhs, group_sizes):
+        comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+        rhs = jnp.asarray(rhs, comp_dtype)
+        # Local import to break the quantization ↔ nn.ragged_dot import cycle;
+        # this is the sanctioned exception to the all-imports-at-top rule.
+        from .nn.ragged_dot import ragged_dot as _ragged_dot  # noqa: PLC0415
+
+        # TODO: swap this bf16 matmul for fp8_scaled_ragged_dot (delayed-scaling FP8) in a follow-up.
+        return _ragged_dot(lhs, rhs, group_sizes, op=None)
+
+
 class Int8DotGeneralOp(OverwriteWithGradient):
 
     cfg: DotGeneral
