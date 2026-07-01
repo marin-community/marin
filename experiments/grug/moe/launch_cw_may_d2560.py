@@ -38,13 +38,17 @@ for optimizer state and updates.
 import dataclasses
 import datetime
 import os
+from collections.abc import Sequence
 from typing import cast
 
+import jax.numpy as jnp
+import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text import BlockShuffleConfig
+from levanter.data import AsyncDataset
+from levanter.data.text import BlockShuffleConfig, DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -84,12 +88,33 @@ DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_WARMUP_FRACTION = 0.01
 OUTPUT_SUBDIR = "experiments/grug-moe-cw"
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
+SYNTHETIC_DATASET_LENGTH = 1 << 40
 
 MAY_HEURISTIC = MoeAdamHHeuristic(
     lr_coeff=0.06602,
     lr_tokens_exp=-0.395,
     lr_dim_exp=-0.150,
 )
+
+
+class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
+    def __init__(self, *, seq_len: int, vocab_size: int):
+        self.seq_len = seq_len
+        self.vocab_size = vocab_size
+
+    async def async_len(self) -> int:
+        return SYNTHETIC_DATASET_LENGTH
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
+        examples: list[GrugLmExample] = []
+        positions = np.arange(self.seq_len, dtype=np.int32)
+        for index in indices:
+            tokens = ((positions + index * 9973) % self.vocab_size).astype(np.int32)
+            examples.append(GrugLmExample.causal(jnp.asarray(tokens)))
+        return examples
 
 
 def env_float(key: str, default: float) -> float:
@@ -112,6 +137,13 @@ def env_bool(key: str, default: bool) -> bool:
 def env_optional_int(key: str) -> int | None:
     raw = os.environ.get(key, "")
     return int(raw) if raw else None
+
+
+def may_data_mode() -> str:
+    data = os.environ.get("MAY_DATA", "slimpajama").lower()
+    if data in ("slimpajama", "synthetic"):
+        return data
+    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama' or 'synthetic'")
 
 
 def build_may_model() -> GrugModelConfig:
@@ -162,11 +194,26 @@ def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeAdamHConfig:
     )
 
 
-def build_data(ctx: StepContext, slim, model: GrugModelConfig):
-    data = os.environ.get("MAY_DATA", "slimpajama").lower()
+def build_data(ctx: StepContext, slim: ArtifactStep | None, model: GrugModelConfig):
+    data = may_data_mode()
     if data == "slimpajama":
+        assert slim is not None
         return mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
-    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama'")
+    if data == "synthetic":
+        return LmDataConfig(
+            tokenizer="passthrough",
+            vocab_size=model.vocab_size,
+            cache_dir=None,
+            auto_build_caches=False,
+            shuffle=False,
+            components={
+                "synthetic": DirectDatasetComponent(
+                    datasets={"train": SyntheticGrugDataset(seq_len=model.max_seq_len, vocab_size=model.vocab_size)}
+                )
+            },
+            train_weights={"synthetic": 1.0},
+        )
+    raise AssertionError(f"unreachable MAY_DATA mode: {data}")
 
 
 def build_tracker(run_id: str, output_path: str):
@@ -292,7 +339,8 @@ def build_may_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckp
     checkpointer, checkpointing_enabled = build_checkpointer(run_id)
 
     name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
-    slim = slimpajama_6b_dataset()
+    data_mode = may_data_mode()
+    slim = slimpajama_6b_dataset() if data_mode == "slimpajama" else None
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
@@ -324,7 +372,7 @@ def build_may_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckp
         artifact_type=LevanterCheckpoint,
         run=run_grug_moe_trial,
         build_config=build_config,
-        deps=(slim,),
+        deps=(slim,) if slim is not None else (),
         runtime_args={"train_resources": resources},
     )
 

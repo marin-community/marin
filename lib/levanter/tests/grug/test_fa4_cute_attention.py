@@ -8,6 +8,7 @@ import pytest
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 from levanter.grug.attention import (
     AttentionMask,
     gpu_fa4_cute_attention,
@@ -88,6 +89,77 @@ def test_fa4_frontend_rejects_mismatched_q_kv_segment_ids():
 
     with pytest.raises(Exception, match="requires matching q/kv segment_ids"):
         jax.block_until_ready(gpu_fa4_cute_attention(q, k, v, mask))
+
+
+def test_fa4_frontend_passes_valid_mask_to_backend(monkeypatch):
+    captured = {}
+
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
+        captured["lower_bounds"] = lower_bounds
+        captured["valid"] = valid
+        return q
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
+    q, k, v = _make_qkv(batch=1, q_len=4, k_len=4, q_heads=2, kv_heads=1)
+    q = q.astype(jnp.bfloat16)
+    k = k.astype(jnp.bfloat16)
+    v = v.astype(jnp.bfloat16)
+    segment_ids = jnp.array([[0, 0, -1, 1]], dtype=jnp.int32)
+    mask = AttentionMask.causal().with_segment_ids(segment_ids)
+
+    np.testing.assert_array_equal(gpu_fa4_cute_attention(q, k, v, mask), q)
+    np.testing.assert_array_equal(captured["valid"], jnp.array([[True, True, False, True]]))
+    np.testing.assert_array_equal(captured["lower_bounds"], jnp.array([[0, 0, 4, 3]], dtype=jnp.int32))
+
+
+def test_fa4_forward_backend_does_not_pass_valid_to_forward_launcher(monkeypatch):
+    captured = {}
+
+    class FakeCjax:
+        @staticmethod
+        def cutlass_call(launcher, *, output_shape_dtype, input_spec, output_spec, use_static_tensors, softmax_scale):
+            del launcher, input_spec, output_spec, use_static_tensors, softmax_scale
+
+            def call(*args):
+                captured["num_args"] = len(args)
+                out_shape, lse_shape = output_shape_dtype
+                return jnp.zeros(out_shape.shape, out_shape.dtype), jnp.zeros(lse_shape.shape, lse_shape.dtype)
+
+            return call
+
+    class FakeModules:
+        cjax = FakeCjax()
+
+    q, k, v = _make_qkv(batch=1, q_len=4, k_len=4, q_heads=2, kv_heads=1)
+    q = q.astype(jnp.bfloat16)
+    k = k.astype(jnp.bfloat16)
+    v = v.astype(jnp.bfloat16)
+    lower_bounds = jnp.array([[0, 0, 4, 3]], dtype=jnp.int32)
+    valid = jnp.array([[True, True, False, True]])
+
+    monkeypatch.setattr(fa4_cute_backend, "_import_cutlass_cute", FakeModules)
+    monkeypatch.setattr(
+        fa4_cute_backend, "_cutlass_attention_forward_specs", lambda modules, vector_elems: (None, None)
+    )
+    monkeypatch.setattr(
+        fa4_cute_backend,
+        "segmented_flash_attention_forward_launcher",
+        lambda *args, **kwargs: object(),
+    )
+
+    fa4_cute_backend.segmented_flash_attention_forward(
+        q,
+        k,
+        v,
+        lower_bounds,
+        valid,
+        softmax_scale=1.0,
+        kernel_config=flash4_cute_kernel_config(q.shape[-1], arch=90),
+    )
+
+    assert captured["num_args"] == 4
 
 
 @pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])

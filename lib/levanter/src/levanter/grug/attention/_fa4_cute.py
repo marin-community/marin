@@ -289,22 +289,25 @@ def gpu_fa4_cute_attention(
                     f"got metadata={mask.fa4_cute_metadata.sliding_window}, mask={mask.sliding_window}"
                 )
             lower_bounds = mask.fa4_cute_metadata.lower_bounds
+            valid = lower_bounds < q.shape[1]
         elif mask.segment_ids is not None:
             q_segment_ids = _packed_self_attention_segment_ids(q, k, mask, backend_name="gpu_fa4_cute_attention")
-            lower_bounds, _ = _packed_segment_causal_lower_bounds(
+            lower_bounds, valid = _packed_segment_causal_lower_bounds(
                 q_segment_ids,
                 batch_size=q.shape[0],
                 seq_len=q.shape[1],
                 sliding_window=mask.sliding_window,
             )
             lower_bounds = _metadata_reshard_if_mesh(lower_bounds)
+            valid = _metadata_reshard_if_mesh(valid)
         else:
-            lower_bounds, _ = _causal_lower_bounds(
+            lower_bounds, valid = _causal_lower_bounds(
                 batch_size=q.shape[0],
                 seq_len=q.shape[1],
                 sliding_window=mask.sliding_window,
             )
             lower_bounds = _metadata_reshard_if_mesh(lower_bounds)
+            valid = _metadata_reshard_if_mesh(valid)
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     with jax.named_scope("fa4_cute_kernel"):
@@ -313,6 +316,7 @@ def gpu_fa4_cute_attention(
             k,
             v,
             lower_bounds,
+            valid,
             sm_scale=1.0 / math.sqrt(q.shape[-1]),
             kernel_config=kernel_config,
         )

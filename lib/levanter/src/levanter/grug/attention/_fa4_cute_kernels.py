@@ -1104,7 +1104,6 @@ def segmented_flash_attention_backward_launcher(
                 dk,
                 dv,
                 lower_bounds,
-                valid,
                 softmax_scale,
                 None,
                 None,
