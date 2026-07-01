@@ -230,6 +230,8 @@ def _triton_ragged_contracting_dim_pallas_call(
     block_m = min(128, int(pl.next_power_of_2(m))) if block_m_override is None else block_m_override
     block_n = min(128, int(pl.next_power_of_2(n))) if block_n_override is None else block_n_override
     block_k = min(32, int(pl.next_power_of_2(k))) if block_k_override is None else block_k_override
+    block_m = min(block_m, m)
+    block_n = min(block_n, n)
 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
     out_dtype = lhs.dtype if out_dtype is None else out_dtype
@@ -442,8 +444,6 @@ def _triton_native_pallas_call(
     block_m = 128 if block_m is None else block_m
     block_n = 128 if block_n is None else block_n
     block_k = 64 if block_k is None else block_k
-    max_concurrent_steps = int(os.environ.get("FP8_MOSAIC_MAX_CONCURRENT_STEPS", "4"))
-    grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"))
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
@@ -629,6 +629,30 @@ def _scatter_packed_rows(packed: jax.Array, group_sizes: jax.Array, tokens: int)
     return jnp.zeros((tokens, packed.shape[2]), dtype=packed.dtype).at[indices].add(values)
 
 
+def _block_pad_ragged_token_stream(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    block_k: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    tokens = lhs.shape[0]
+    groups = group_sizes.shape[0]
+    padded_bound = tokens + groups * (block_k - 1)
+    group_ends = jnp.cumulative_sum(group_sizes)
+    group_starts = jnp.concatenate([jnp.zeros((1,), dtype=group_sizes.dtype), group_ends[:-1]])
+    padded_group_sizes = ((group_sizes + block_k - 1) // block_k) * block_k
+    padded_starts = jnp.cumulative_sum(padded_group_sizes, include_initial=True)[:-1]
+
+    token_ids = jnp.arange(tokens, dtype=group_sizes.dtype)
+    group_ids = jnp.searchsorted(group_ends, token_ids, side="right").astype(group_sizes.dtype)
+    token_offsets = token_ids - group_starts[group_ids]
+    padded_token_ids = padded_starts[group_ids] + token_offsets
+
+    padded_lhs = jnp.zeros((padded_bound, lhs.shape[1]), dtype=lhs.dtype).at[padded_token_ids].set(lhs)
+    padded_rhs = jnp.zeros((padded_bound, rhs.shape[1]), dtype=rhs.dtype).at[padded_token_ids].set(rhs)
+    return padded_lhs, padded_rhs, padded_group_sizes
+
+
 def _padded_dense_ragged_dot_impl(
     lhs: jax.Array,
     rhs: jax.Array,
@@ -730,14 +754,31 @@ def _mosaic_fp8_ragged_dot_impl(
                 block_n_override=block_n,
                 block_k_override=block_k,
             )
+        token_block = block_m if block_m <= 128 else 128
+        if wgrad_impl == "mosaic_block_pad":
+            padded_lhs, padded_rhs, padded_group_sizes = _block_pad_ragged_token_stream(lhs, rhs, group_sizes, token_block)
+            padded_lhs_t = padded_lhs.T + jnp.zeros((padded_lhs.shape[1], padded_lhs.shape[0]), dtype=padded_lhs.dtype)
+            padded_rhs_t = padded_rhs.T + jnp.zeros((padded_rhs.shape[1], padded_rhs.shape[0]), dtype=padded_rhs.dtype)
+            return mosaic_transposed_ragged_dot(
+                padded_lhs_t,
+                padded_rhs_t,
+                group_sizes=padded_group_sizes,
+                out_dtype=out_dtype,
+                block_m=block_k,
+                block_n=block_n,
+                block_k=token_block,
+                max_concurrent_steps=max_concurrent_steps,
+                grid_block_n=grid_block_n,
+                mask_boundaries=False,
+            )
         return mosaic_transposed_ragged_dot(
-            lhs.T,
-            rhs,
+            lhs.T + jnp.zeros((lhs.shape[1], lhs.shape[0]), dtype=lhs.dtype),
+            rhs.T + jnp.zeros((rhs.shape[1], rhs.shape[0]), dtype=rhs.dtype),
             group_sizes=group_sizes,
             out_dtype=out_dtype,
             block_m=block_k,
             block_n=block_n,
-            block_k=block_m if block_m <= 128 else 128,
+            block_k=token_block,
             max_concurrent_steps=max_concurrent_steps,
             grid_block_n=grid_block_n,
             mask_boundaries=wgrad_impl != "mosaic_nomask",
@@ -908,7 +949,7 @@ def _quantized_ragged_dot_bwd(
     g,
 ):
     lhs, q_lhs, lhs_scale, rhs, q_rhs, rhs_scale, out_grad_scale, out_grad_amax_history, group_sizes = res
-    del lhs, rhs
+    del rhs
     new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
         g,
         rev_dtype,
@@ -917,8 +958,8 @@ def _quantized_ragged_dot_bwd(
     )
     q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
     if implementation == "mosaic":
-        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "triton")
-        q_lhs_for_grad = q_lhs if wgrad_impl in ("mosaic", "mosaic_nomask") else q_lhs.astype(rev_dtype)
+        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "bf16_triton")
+        q_lhs_for_grad = q_lhs if wgrad_impl in ("mosaic", "mosaic_nomask", "mosaic_block_pad") else q_lhs.astype(rev_dtype)
         q_rhs_for_grad = q_rhs
     else:
         q_lhs_for_grad = q_lhs.astype(rev_dtype)
@@ -938,19 +979,33 @@ def _quantized_ragged_dot_bwd(
     )
     grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
 
-    grad_rhs = _raw_ragged_dot_impl(
-        q_lhs_for_grad,
-        q_g,
-        group_sizes,
-        _DRHS_DIM_NUMS,
-        implementation,
-        preferred_element_type,
-        max_group_size,
-        block_m,
-        block_n,
-        block_k,
-    )
-    grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_WGRAD", "bf16_triton") == "bf16_triton":
+        grad_rhs = _raw_ragged_dot_impl(
+            lhs.astype(preferred_element_type),
+            g.astype(preferred_element_type),
+            group_sizes,
+            _DRHS_DIM_NUMS,
+            "triton",
+            preferred_element_type,
+            max_group_size,
+            128,
+            block_n,
+            block_k,
+        )
+    else:
+        grad_rhs = _raw_ragged_dot_impl(
+            q_lhs_for_grad,
+            q_g,
+            group_sizes,
+            _DRHS_DIM_NUMS,
+            implementation,
+            preferred_element_type,
+            max_group_size,
+            block_m,
+            block_n,
+            block_k,
+        )
+        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
 
     return (
         grad_lhs,

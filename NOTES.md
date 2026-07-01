@@ -1,18 +1,26 @@
 # FP8 ragged_dot notes
 
-## Current result
+## Final result
 
 Implemented an opt-in FP8 `ragged_dot` path with:
 
 - `Fp8RaggedDotOp` delayed-scaling state in `haliax.quantization`
 - E4M3 forward operands
-- E5M2 output-gradient operands in the custom VJP
+- E5M2 output-gradient operands in the custom VJP dgrad path
 - genuine non-uniform `group_sizes` in `bench_fp8_ragged_dot.py`
 - no uniform batched-dense headline path
+- no pad-to-capacity fallback in the measured path
 
-The best fully non-uniform 1024-token operating-point result I measured does
-not clear the required 1.2x fwd+bwd speedup. The ceiling is currently blocked
-by the weight-gradient contraction.
+The final checked-in default is:
+
+- forward: Mosaic FP8 ragged WGMMA
+- dgrad: Mosaic mixed E5M2 x E4M3 ragged WGMMA
+- wgrad: genuine-ragged bf16 Triton fallback
+
+This is correct end-to-end for arbitrary non-uniform groups, but it does not
+clear the requested 1.2x fwd+bwd speedup. The measured ceiling is blocked by
+the weight-gradient contraction and by the current Mosaic layout-inference wall
+for arbitrary-ragged FP8 wgrad.
 
 ## 1024 non-uniform H100 measurement
 
@@ -22,7 +30,7 @@ Command:
 FP8_MOSAIC_OUTPUT_FP8=1 \
 FP8_MOSAIC_MAX_CONCURRENT_STEPS=4 \
 FP8_MOSAIC_GRID_BLOCK_N=4 \
-./h100 python bench_fp8_ragged_dot.py --quick --warmups 1 --iters 3 \
+./h100 python bench_fp8_ragged_dot.py --quick --warmups 2 --iters 5 \
   --fp8-implementation mosaic --fp8-block-m 192 --fp8-block-n 128 --fp8-block-k 64
 ```
 
@@ -30,16 +38,23 @@ Group distribution:
 
 - `bounded_normal_sigma_0.18_capacity_1.35`
 - `E=64`, average tokens/expert `1024`
-- latest non-aligned distribution before the final aligned wgrad experiment:
-  min `683`, max `1352`, sum `65536`
+- min `683`, max `1352`, sum `65536`
+- arbitrary non-aligned sizes; not uniform batching and not pad-to-capacity
 
-Measured ceiling with Mosaic forward/dgrad and no pad-to-capacity Pallas FP8
-wgrad:
+Measured default ceiling with Mosaic FP8 forward/dgrad and bf16 Triton wgrad:
+
+| GEMM | bf16 fwd+bwd | fp8 fwd+bwd | fwd speedup | fwd+bwd speedup | fwd rel-Fro error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| w13 K=2560 N=2560 | 5.946 ms | 6.272 ms | 1.022x | 0.948x | 0.0424 |
+| w2 K=1280 N=2560 | 3.256 ms | 3.317 ms | 1.012x | 0.982x | 0.0393 |
+
+For comparison, the all-FP8 Pallas wgrad fallback (`FP8_MOSAIC_WGRAD=triton`)
+is also correct but slower:
 
 | GEMM | fwd speedup | fwd+bwd speedup | fwd rel-Fro error |
 | --- | ---: | ---: | ---: |
-| w13 K=2560 N=2560 | 0.919x | 0.651x | 0.0424 |
-| w2 K=1280 N=2560 | 2.100x | 0.524x | 0.0393 |
+| w13 K=2560 N=2560 | 0.825x | 0.646x | 0.0424 |
+| w2 K=1280 N=2560 | 0.957x | 0.673x | 0.0393 |
 
 I also tried a block-aligned non-uniform distribution with `FP8_MOSAIC_WGRAD=mosaic_nomask`
 (min `768`, max `1280`, sum `65536`). That all-Mosaic no-pad path compiled
@@ -63,23 +78,45 @@ Hopper Mosaic WGMMA via `_fp8_mosaic_ragged.py`:
 
 ### Blocked: generic Mosaic wgrad
 
-I implemented `mosaic_transposed_ragged_dot` for wgrad using
+I implemented `mosaic_transposed_ragged_dot` for wgrad. The first version used
 `lhs.T[K,T] x dout[T,N]`, keeping the token contraction dimension contiguous and
 avoiding an FP8 WGMMA transpose. The generic version needs first/last block
-ragged-boundary masks. That path fails Mosaic layout inference:
+ragged-boundary masks and fails Mosaic layout inference:
 
 ```text
 ValueError: Layout inference failed to find a solution.
 ```
 
-The block-aligned no-mask variant compiles but is not fast enough at the 1024
+After the coordinator hint, I tried moving boundary handling out of WGMMA by
+packing each expert's token stream to a multiple of the token tile only (not
+padding to global capacity), then passing token-contiguous `lhs.T[K,T_pad]` and
+`dout.T[N,T_pad]` into a no-mask Mosaic grouped GEMM using
+`transpose_ref(rhs_smem)` on the K-contiguous RHS tile. This still fails Mosaic
+layout inference on the H100:
+
+```text
+ValueError: Failed to infer a possible set of layouts. This should only happen if user-provided layout casts are unsatisfiable.
+```
+
+I also tried materializing the transposed FP8 operands with an explicit add of a
+zero array before the Mosaic call; the same layout-inference failure remains.
+
+The block-aligned no-mask variant without the packing transform compiles but is
+not fast enough at the 1024 operating point.
+
+### Working ceiling: bf16 Triton wgrad
+
+For arbitrary non-aligned non-uniform groups, the checked-in default wgrad is
+the genuine-ragged bf16 Triton contracting-dimension fallback. It avoids
+pad-to-capacity and is faster than the all-FP8 fallback, but it dominates enough
+of fwd+bwd that the whole path reaches only `0.948x`/`0.982x` at the 1024
 operating point.
 
-### Working but slow: Pallas FP8 wgrad
-
-For arbitrary non-aligned non-uniform groups, wgrad falls back to the existing
-genuine-ragged Pallas contracting-dimension kernel. This avoids pad-to-capacity
-and keeps an E5M2 operand, but it dominates fwd+bwd time.
+The all-FP8 Pallas wgrad fallback remains selectable with
+`FP8_MOSAIC_WGRAD=triton`. I fixed its small-shape tile edge by clamping the
+contracting-dimension output tile to the actual `K,N` dimensions; direct drhs
+fallback parity on `[13, 5, 17, 9]` group sizes is exact vs
+`jax.lax.ragged_dot_general`.
 
 ### Rejected: padded dense
 
@@ -102,18 +139,20 @@ Successful:
 Successful direct H100 probes:
 
 - small non-uniform Mosaic forward/backward
-- small block-aligned no-mask Mosaic wgrad forward/backward
-- output gradients use E5M2 in the custom VJP
+- direct contracting-dimension fallback parity vs `jax.lax.ragged_dot_general`:
+  relative Frobenius `0.0`
+- custom-VJP small non-uniform gradient parity with group sizes `[13, 5, 17, 9]`:
+  forward rel-Fro `0.0369`, lhs grad rel-Fro `0.0478`, rhs grad rel-Fro `0.0356`
+- output gradients use E5M2 in the Mosaic dgrad custom-VJP path
 
-## Request for next hint
-
-The remaining blocker is a fast arbitrary-ragged FP8 wgrad:
+## Documented ceiling
 
 - In-kernel boundary masking for `lhs.T[K,T] x dout[T,N]` causes Mosaic layout
   inference failure.
 - Removing the masks only works for block-aligned group sizes and does not clear
   the 1024 fwd+bwd bar.
-- Pallas wgrad is genuine ragged but too slow.
-
-I need a hint for the intended arbitrary-ragged FP8 wgrad strategy on this
-patched JAX/Mosaic stack.
+- Token-tile packing with boundary handling moved to the grid still fails Mosaic
+  layout inference on this build.
+- `transpose_ref` variants also hit the same Mosaic layout-inference wall.
+- The working fallbacks are correct and genuinely ragged, but wgrad remains the
+  bottleneck.

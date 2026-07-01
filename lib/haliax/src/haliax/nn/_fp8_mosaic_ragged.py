@@ -243,7 +243,7 @@ def mosaic_ragged_dot_contract_major(
 
 def mosaic_transposed_ragged_dot(
     lhs_t: jax.Array,
-    rhs: jax.Array,
+    rhs_t: jax.Array,
     *,
     group_sizes: jax.Array,
     out_dtype: DTypeLike,
@@ -254,14 +254,14 @@ def mosaic_transposed_ragged_dot(
     grid_block_n: int,
     mask_boundaries: bool = True,
 ) -> jax.Array:
-    """Ragged grouped `lhs_t[:, group].T @ rhs[group]` without FP8 WGMMA transposes."""
+    """Ragged grouped `lhs_t[:, group] @ rhs_t[:, group].T` with K-contiguous RHS."""
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
-    is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
-    if lhs_t.dtype != rhs.dtype and not is_mixed_fp8:
-        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs.dtype}")
+    is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs_t.dtype in fp8_dtypes
+    if lhs_t.dtype != rhs_t.dtype and not is_mixed_fp8:
+        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs_t.dtype}")
 
     m, tokens = lhs_t.shape
-    tokens2, n = rhs.shape
+    n, tokens2 = rhs_t.shape
     groups = group_sizes.shape[0]
     if tokens != tokens2:
         raise ValueError(f"lhs_t.shape={tokens} must match rhs.shape={tokens2}")
@@ -284,7 +284,7 @@ def mosaic_transposed_ragged_dot(
         group_num_blocks_gmem,
         group_block_starts_gmem,
         lhs_t_gmem,
-        rhs_gmem,
+        rhs_t_gmem,
         out_gmem,
     ):
         grid_m = pl.cdiv(m, block_m)
@@ -312,7 +312,7 @@ def mosaic_transposed_ragged_dot(
                             lhs_smem[...] = jnp.where(lhs_indices >= start_index, lhs_reg, jnp.zeros_like(lhs_reg))
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_k, block_n), 0),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_smem[...] = jnp.where(rhs_indices >= start_index, rhs_reg, jnp.zeros_like(rhs_reg))
@@ -329,13 +329,13 @@ def mosaic_transposed_ragged_dot(
                             lhs_smem[...] = jnp.where(lhs_indices <= last_index, lhs_reg, jnp.zeros_like(lhs_reg))
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_k, block_n), 0),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_smem[...] = jnp.where(rhs_indices <= last_index, rhs_reg, jnp.zeros_like(rhs_reg))
                             plgpu.commit_smem()
 
-                    plgpu.wgmma(acc_ref, lhs_smem, rhs_smem)
+                    plgpu.wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(rhs_smem, (1, 0)))
 
                 @pl.when(group_sizes_gmem[group] > 0)
                 def _():
@@ -344,10 +344,10 @@ def mosaic_transposed_ragged_dot(
                         grid=(group_num_blocks_gmem[group],),
                         in_specs=[
                             plgpu.BlockSpec((block_m, block_k), lambda kk: (m_i, kk), delay_release=1),
-                            plgpu.BlockSpec((block_k, block_n), lambda kk: (kk, n_i), delay_release=1),
+                            plgpu.BlockSpec((block_n, block_k), lambda kk: (n_i, kk), delay_release=1),
                         ],
                         max_concurrent_steps=max_concurrent_steps,
-                    )(lhs_t_gmem.at[:, token_slice], rhs_gmem.at[token_slice, :])
+                    )(lhs_t_gmem.at[:, token_slice], rhs_t_gmem.at[:, token_slice])
 
                 return acc_ref[...]
 
@@ -371,4 +371,4 @@ def mosaic_transposed_ragged_dot(
         grid_names=("sm",),
         compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
-    return kernel(group_sizes, group_starts, group_ends, group_num_blocks, group_block_starts, lhs_t, rhs)
+    return kernel(group_sizes, group_starts, group_ends, group_num_blocks, group_block_starts, lhs_t, rhs_t)
