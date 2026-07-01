@@ -9,6 +9,11 @@ from enum import Enum
 from iris.cluster.constraints import Constraint, PlacementRequirements
 from iris.rpc import job_pb2
 
+# Band for a demand entry whose tasks carry no resolved effective band; sorts after
+# every real band (lower band = higher priority) so unranked demand yields chips to
+# ranked demand for the same fungible pool.
+UNRANKED_DEMAND_BAND = 1 << 30
+
 
 class ScalingAction(Enum):
     """Type of scaling action."""
@@ -35,6 +40,11 @@ class DemandEntry:
     constraints: list[Constraint]
     resources: job_pb2.ResourceSpecProto
     invalid_reason: str | None = None
+    band: int = UNRANKED_DEMAND_BAND
+    """Effective band (min over the entry's tasks; lower = higher priority) the
+    reservation-aware launch cap admits fungible-pool slices by. Stamped by the
+    scheduler from its resolved band map; defaults to unranked for demand emitted
+    where no band was resolved (e.g. the no-schedulable-work path)."""
 
 
 @dataclass(frozen=True)

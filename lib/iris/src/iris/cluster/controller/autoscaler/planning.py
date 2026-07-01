@@ -3,12 +3,21 @@
 
 """Scale-up planning helpers built on top of routed demand."""
 
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from rigging.timing import Timestamp
 
-from iris.cluster.controller.autoscaler.models import RoutingDecision, ScalingAction, ScalingDecision
+from iris.cluster.controller.autoscaler.models import (
+    UNRANKED_DEMAND_BAND,
+    RoutingDecision,
+    ScalingAction,
+    ScalingDecision,
+)
+from iris.cluster.controller.autoscaler.reserved_pool import ReservationLedger, build_reservation_ledger
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
+from iris.cluster.tpu_topology import get_tpu_topology
 
 
 @dataclass(frozen=True)
@@ -122,15 +131,127 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
     )
 
 
+class _PoolCandidate(NamedTuple):
+    """A scaling group of one fungible pool that wants to launch slices this tick."""
+
+    name: str
+    band: int
+    chips_per_slice: int
+    want_slices: int
+
+
+def _admit_in_band_order(candidates: list[_PoolCandidate], free_chips: int, draining_chips: int) -> dict[str, int]:
+    """Admit per-group new-slice counts under one fungible pool's chip budget.
+
+    ``candidates`` are the groups of one ``quota_pool`` that want to launch this tick
+    (lower band = higher priority). Returns ``group_name -> admitted_slices``. Groups
+    are admitted highest priority first, each taking as many slices as its own share
+    of the remaining budget allows. When a band comes up short, the rest of the
+    budget is reserved for it — locking out every strictly-lower-priority group — but
+    only when relief is actually achievable: enough chips free now plus
+    ``draining_chips`` to eventually cover one more of its slices (e.g. a multi-tick
+    drain still trickling chips back). Otherwise the shortfall can't be resolved by
+    holding back lower bands, so they stay free to use what's left instead of sitting
+    idle. Same-band groups share the remaining chips greedily.
+    """
+    remaining = max(0, free_chips)
+    admitted: dict[str, int] = {}
+    # Once set: every strictly-lower band is admitted nothing further this tick —
+    # the rest of the pool's budget is held in reserve for this band.
+    reserved_for_band: int | None = None
+
+    for cand in sorted(candidates, key=lambda c: (c.band, c.name)):
+        # A higher-priority band already claimed the remaining budget.
+        if reserved_for_band is not None and cand.band > reserved_for_band:
+            admitted[cand.name] = 0
+            continue
+
+        # Grant this candidate as many slices as its own share of the remaining
+        # budget allows.
+        grant = (
+            cand.want_slices if cand.chips_per_slice <= 0 else min(cand.want_slices, remaining // cand.chips_per_slice)
+        )
+        admitted[cand.name] = grant
+        remaining -= grant * cand.chips_per_slice
+
+        # This candidate came up short. Only start reserving the rest of the budget
+        # for it if relief is achievable: the chips free now plus what's draining
+        # would cover one more of its slices. Otherwise the chips free now plus
+        # what's draining can't satisfy this band's next slice anyway, so holding
+        # them back from lower bands wouldn't help — leave those free to use what's
+        # left.
+        fully_granted = grant == cand.want_slices
+        relief_achievable = remaining + draining_chips >= cand.chips_per_slice
+        if not fully_granted and reserved_for_band is None and relief_achievable:
+            reserved_for_band = cand.band
+
+    return admitted
+
+
+def _cap_fungible_pool_launches(
+    group_plans: dict[str, GroupScalePlan],
+    groups: dict[str, ScalingGroup],
+    routing_decision: RoutingDecision,
+    ledger: ReservationLedger,
+) -> dict[str, GroupScalePlan]:
+    """Trim new launches per fungible reservation pool to its chip budget.
+
+    A fungible reservation's per-size groups share one physical chip pool, but each
+    group's ``max_slices`` bounds it independently and ``route_demand`` never reads
+    the shared budget — so unconstrained planning can request far more chips than the
+    reservation holds (256 v4-8 *and* 128 v4-16 = 2048 chips against a 1024-chip
+    pool). This caps each pool's total ``slices_to_add * chips`` to the chips free
+    against the reservation *now* (live + in-flight slices, excluding draining chips
+    that aren't free until reaped), admitting groups highest priority first and
+    holding chips for an unsatisfied high-priority slice rather than a lower one —
+    but only while a drain in progress could still make that hold worthwhile.
+    Non-fungible groups are untouched.
+    """
+    if not ledger.pools:
+        return group_plans
+
+    candidates_by_pool: dict[str, list[_PoolCandidate]] = defaultdict(list)
+    for name, group in groups.items():
+        plan = group_plans[name]
+        if group.reservation_chips <= 0 or plan.slices_to_add <= 0:
+            continue
+        band = min(
+            (entry.band for entry in routing_decision.routed_entries.get(name, ())),
+            default=UNRANKED_DEMAND_BAND,
+        )
+        chips = get_tpu_topology(group.accelerator_variant).chip_count
+        candidates_by_pool[group.config.quota_pool].append(
+            _PoolCandidate(name=name, band=band, chips_per_slice=chips, want_slices=plan.slices_to_add)
+        )
+
+    if not candidates_by_pool:
+        return group_plans
+
+    capped = dict(group_plans)
+    for pool_id, candidates in candidates_by_pool.items():
+        admitted = _admit_in_band_order(candidates, ledger.free_chips(pool_id), ledger.draining_chips(pool_id))
+        for name, grant in admitted.items():
+            if grant != capped[name].slices_to_add:
+                capped[name] = replace(capped[name], slices_to_add=grant)
+    return capped
+
+
 def build_scale_plan(
     groups: dict[str, ScalingGroup],
     routing_decision: RoutingDecision,
     ts: Timestamp,
 ) -> ScalePlan:
-    """Build the canonical autoscaler plan for the current routing decision."""
+    """Build the canonical autoscaler plan for the current routing decision.
+
+    Fungible reservation pools are capped to their shared chip budget after per-group
+    planning, so a high-priority job's larger slice claims the reservation before a
+    lower-priority job's and the pool is never over-committed.
+    """
 
     group_plans = {
         name: build_group_scale_plan(group, routing_decision.group_required_slices.get(name, 0), ts)
         for name, group in groups.items()
     }
+    ledger = build_reservation_ledger(groups.values())
+    group_plans = _cap_fungible_pool_launches(group_plans, groups, routing_decision, ledger)
     return ScalePlan(routing_decision=routing_decision, group_plans=group_plans)

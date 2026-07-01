@@ -191,8 +191,12 @@ class TestScalingGroupVmGroupOwnership:
         assert slice_config.labels["env"] == "prod"
         assert slice_config.labels["team"] == "ml"
 
-    def test_scale_down_terminates_and_removes_vm_group(self, scale_group_config: ScaleGroupConfig):
-        """scale_down() terminates the VM group and removes it from tracking."""
+    def test_drain_slice_marks_draining_and_returns_handle(self, scale_group_config: ScaleGroupConfig):
+        """drain_slice() marks the slice DRAINING (still tracked) and returns its handle.
+
+        The handle comes back so the caller issues the terminate; the slice is
+        removed only later, by the reap, once the cloud confirms its VMs are gone.
+        """
         handle = make_fake_slice_handle("slice-001")
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
@@ -200,27 +204,26 @@ class TestScalingGroupVmGroupOwnership:
 
         assert group.slice_count() == 1
 
-        group.scale_down("slice-001")
+        returned = group.drain_slice("slice-001")
 
-        assert handle.terminated
-        assert group.slice_count() == 0
-        assert group.get_slice("slice-001") is None
+        assert returned is handle
+        assert not handle.terminated  # drain_slice does not terminate; the caller does
+        assert group.slice_count() == 1
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
 
-    def test_scale_down_nonexistent_vm_group_is_noop(self, scale_group_config: ScaleGroupConfig):
-        """scale_down() on a nonexistent VM group does nothing."""
+    def test_drain_slice_nonexistent_is_noop(self, scale_group_config: ScaleGroupConfig):
+        """drain_slice() on a nonexistent slice returns None and does nothing."""
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
 
-        # Should not raise
-        group.scale_down("nonexistent-slice")
-
+        assert group.drain_slice("nonexistent-slice") is None
         assert group.slice_count() == 0
 
-    def test_scale_down_cleans_up_even_if_terminate_fails(self, scale_group_config: ScaleGroupConfig):
-        """scale_down() removes the slice from tracking even if terminate() raises.
+    def test_detach_slice_removes_and_terminate_handle_swallows_errors(self, scale_group_config: ScaleGroupConfig):
+        """detach_slice() drops tracking; terminate_slice_handle() swallows a terminate() error.
 
-        This prevents ghost slices where the cloud resource is gone (e.g.
-        preempted) but the autoscaler still counts it as live capacity.
+        Together they reap a slice whose cloud resource is already gone (e.g.
+        preempted) without leaving a ghost the autoscaler counts as live capacity.
         """
         handle = make_fake_slice_handle("slice-001")
         handle.terminate_error = RuntimeError("resource not found")
@@ -230,12 +233,15 @@ class TestScalingGroupVmGroupOwnership:
 
         assert group.slice_count() == 1
 
-        # Should NOT raise despite terminate() failure
-        group.scale_down("slice-001")
+        detached = group.detach_slice("slice-001")
 
-        assert handle.terminated
+        assert detached is handle
         assert group.slice_count() == 0
         assert group.get_slice("slice-001") is None
+
+        # Should NOT raise despite terminate() failure.
+        group.terminate_slice_handle(handle, context="test")
+        assert handle.terminated
 
     def test_terminate_all_continues_on_individual_failure(self, scale_group_config: ScaleGroupConfig):
         """terminate_all() terminates remaining slices even if one fails."""
@@ -595,7 +601,8 @@ class TestScalingGroupIdleTracking:
         )
 
         assert len(scaled_down) == 1
-        assert group.slice_count() == 1  # One slice was terminated
+        assert scaled_down[0].terminated  # the drain issued the VM delete
+        assert group.ready_slice_count() == 1  # one slice drained, one stays READY
 
     def test_scale_down_retains_degraded_idle_slice(self, unbounded_config: ScaleGroupConfig):
         """A slice whose worker is idle but DEGRADED is NOT reclaimed as spare.
@@ -668,25 +675,26 @@ class TestScalingGroupIdleTracking:
         assert len(scaled_down) == 0
         assert group.slice_count() == 1
 
-    def test_scale_down_cleans_up_idle_tracking(self, unbounded_config: ScaleGroupConfig):
-        """scale_down removes the slice from idle tracking."""
+    def test_drain_slice_removes_from_idle_candidates(self, unbounded_config: ScaleGroupConfig):
+        """A drained slice is DRAINING and no longer offered as an idle scale-down candidate."""
         discovered = [make_fake_slice_handle("slice-001", all_ready=True)]
         platform = make_mock_platform(slices_to_discover=discovered)
-        group = ScalingGroup(unbounded_config, platform)
+        group = ScalingGroup(unbounded_config, platform, idle_threshold=Duration.from_ms(0))
         group.reconcile()
+        _mark_discovered_ready(group, discovered)
 
         handle = group.get_slice("slice-001")
         worker_id = _get_worker_id(handle)
-
-        vm_status_map = {
-            worker_id: WorkerStatus(worker_id=worker_id, running_task_ids=frozenset({"task-1"})),
-        }
+        vm_status_map = {worker_id: WorkerStatus(worker_id=worker_id, running_task_ids=frozenset())}
         group.update_slice_activity(vm_status_map, Timestamp.from_ms(1000))
 
-        # Scale down
-        group.scale_down("slice-001")
+        # READY, idle, past threshold, so it is an idle candidate — until it is drained.
+        assert [s.handle.slice_id for s in group.get_idle_slices(Timestamp.from_ms(2000))] == ["slice-001"]
 
-        assert group.get_slice("slice-001") is None
+        group.drain_slice("slice-001")
+
+        assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
+        assert group.get_idle_slices(Timestamp.from_ms(2000)) == []
 
 
 def test_scale_down_no_misleading_rate_limit_log(unbounded_config: ScaleGroupConfig, caplog):
@@ -1307,7 +1315,7 @@ class TestMultiVmSliceIdleScaleDown:
         scaled_down = group.scale_down_if_idle(idle_map, target_capacity=0, timestamp=Timestamp.from_ms(10_000))
 
         assert len(scaled_down) == 1
-        assert group.slice_count() == 0
+        assert group.ready_slice_count() == 0
 
     def test_multi_vm_slice_not_idle_when_one_worker_busy(self):
         """A 4-VM slice does NOT scale down when 1 of 4 workers has a running task."""
@@ -1391,7 +1399,7 @@ class TestMultiVmSliceIdleScaleDown:
 
         assert len(scaled_down) == 1
         assert scaled_down[0].slice_id == "slice-001"
-        assert group.slice_count() == 1
+        assert group.ready_slice_count() == 1
 
     def test_multi_vm_verify_idle_requires_all_workers_known(self):
         """_verify_slice_idle returns False if some workers are not in the status map."""

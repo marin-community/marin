@@ -45,7 +45,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingDecision,
 )
 from iris.cluster.controller.autoscaler.operations import (
-    terminate_slices_for_workers as terminate_slices_for_workers_operation,
+    drain_slices_for_workers as drain_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import build_scale_plan
 from iris.cluster.controller.autoscaler.provisioning import (
@@ -58,6 +58,11 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
+from iris.cluster.controller.autoscaler.reserved_pool import (
+    ReservationLedger,
+    build_reservation_ledger,
+    log_reservation_ledger,
+)
 from iris.cluster.controller.autoscaler.routing import (
     availability_probe_entries,
     empirical_zone_capabilities,
@@ -66,6 +71,7 @@ from iris.cluster.controller.autoscaler.routing import (
 )
 from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
+    SliceLifecycleState,
     build_worker_config_for_group,
 )
 from iris.cluster.controller.autoscaler.state import AutoscalerState, GroupPersist, SlicePersist
@@ -414,6 +420,9 @@ class Autoscaler:
 
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
+
+        # Log fungible-reservation chip utilization for operability.
+        log_reservation_ledger(build_reservation_ledger(self._groups.values()))
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
         self._last_routing_decision_proto = routing_decision_to_proto(
@@ -654,6 +663,9 @@ class Autoscaler:
         for (group, slice_id, handle), status in zip(targets, statuses, strict=True):
             if status is None:
                 continue
+            if group.slice_lifecycle(slice_id) == SliceLifecycleState.DRAINING:
+                self._fold_draining_slice(group, slice_id, status, timestamp)
+                continue
             if status.state == CloudSliceState.READY:
                 worker_ids = [w.worker_id for w in status.workers]
                 worker_urls = self._worker_urls(status.workers)
@@ -670,8 +682,10 @@ class Autoscaler:
                     worker_count=len(worker_ids),
                 )
             elif status.state == CloudSliceState.FAILED:
+                # The cloud already reports the allocation gone, so this is the
+                # cleanup step: detach directly (no terminate to issue).
                 group.mark_slice_failed(slice_id, error_message=status.error_message)
-                group.scale_down(slice_id)
+                group.detach_slice(slice_id)
                 self._unregister_slice_workers(slice_id)
                 group.record_slice_boot_failed(slice_id, timestamp)
                 reason = status.error_message if status.error_message else "bootstrap failed"
@@ -691,8 +705,12 @@ class Autoscaler:
                 # still has running tasks.
                 unknown_for = group.note_slice_unknown(slice_id, timestamp)
                 if unknown_for >= self._unresolvable_timeout:
+                    # Given up on an undescribable slice: detach and best-effort
+                    # terminate, since its VMs may still be live.
                     group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                    group.scale_down(slice_id)
+                    handle = group.detach_slice(slice_id)
+                    if handle is not None:
+                        group.terminate_slice_handle(handle, context="unresolvable after timeout")
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
                     self._log_action(
@@ -724,6 +742,49 @@ class Autoscaler:
                     slice_id=handle.slice_id,
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
+
+    def _fold_draining_slice(
+        self,
+        group: ScalingGroup,
+        slice_id: str,
+        status: SliceStatus,
+        timestamp: Timestamp,
+    ) -> None:
+        """Fold one describe of a DRAINING slice: reap it once its VMs are gone.
+
+        A DRAINING slice has already had its VMs terminated; this only watches for
+        the deletion to land. When the cloud reports it FAILED or with zero workers
+        (allocation gone), the slice is cleanly removed — without a FAILED outcome
+        and without feeding the churn detector, since the teardown is deliberate. A
+        slice still stuck DRAINING past the reap timeout is force-detached and
+        re-terminated. While its VMs are still deleting the slice stays DRAINING and
+        counted against the reservation pool.
+        """
+        gone = status.state == CloudSliceState.FAILED or not status.workers
+        if gone:
+            group.detach_slice(slice_id)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_drain_complete",
+                group.name,
+                slice_id,
+                reason="drain reaped (cloud allocation gone)",
+            )
+            return
+
+        draining_for = group.draining_for(slice_id, timestamp)
+        if draining_for >= self._unresolvable_timeout:
+            logger.warning("Slice %s stuck DRAINING for %s; forcing teardown", slice_id, draining_for)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_drain_complete",
+                group.name,
+                slice_id,
+                reason=f"drain timed out after {draining_for}; forcing teardown",
+            )
+            detached = group.detach_slice(slice_id)
+            if detached is not None:
+                group.terminate_slice_handle(detached, context="draining timed out")
 
     def probe_health(self, timestamp: Timestamp | None = None) -> None:
         """Probe each READY slice's worker /health endpoint and terminate dead slices.
@@ -790,12 +851,13 @@ class Autoscaler:
                     logger.warning("Slice %s: %s; terminating", slice_id, reason)
                     tripped[slice_id] = (group, reason)
 
-        # Phase 4: terminate tripped slices. These booted cleanly and only died
-        # at runtime, so record PREEMPTED (excluded from the create success rate),
-        # not a boot failure — the BackoffDetector's scale-up budget shouldn't decay.
+        # Phase 4: drain tripped slices. These booted cleanly and only died at
+        # runtime, so record PREEMPTED (excluded from the create success rate), not a
+        # boot failure — the BackoffDetector's scale-up budget shouldn't decay. The
+        # VM is a live zombie, so it drains (mark DRAINING, terminate, reap on
+        # confirm) rather than detaching before its deletion lands.
         for slice_id, (group, reason) in tripped.items():
-            group.mark_slice_failed(slice_id, error_message=reason)
-            group.scale_down(slice_id, timestamp)
+            handle = group.drain_slice(slice_id, timestamp)
             self._unregister_slice_workers(slice_id)
             self._log_action(
                 "slice_failed",
@@ -806,6 +868,8 @@ class Autoscaler:
                 group=group,
                 outcome=ProvisioningOutcome.PREEMPTED,
             )
+            if handle is not None:
+                group.terminate_slice_handle(handle, context="health probe failed")
 
     def _worker_urls(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
         """Map worker_id to the worker's reachable ``http://host:port`` URL.
@@ -971,18 +1035,21 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def terminate_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
-        """Terminate the unique slices containing the given workers.
+    def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
+        """Drain the unique slices holding the given workers and start their deletion.
 
-        Returns sibling worker IDs that should be failed immediately because
-        their slices are being torn down. The operation detaches the slices from
-        tracking serially (the state mutation), then issues the deletes in a
-        bounded parallel fan-out: each ``terminate_slice_handle`` is a bounded
-        cloud request that catches and logs its own errors and touches no shared
-        state, so the fan-out stays within the phase budget under a mass
-        preemption without racing.
+        Each affected slice is marked DRAINING (kept tracked, still counted against
+        its reservation pool) and its VMs are terminated now; ``refresh`` reaps it
+        once the cloud confirms it is gone. The slices are mutated serially, then the
+        deletes issue in a bounded parallel fan-out — each ``terminate_slice_handle``
+        is a self-contained cloud request that logs its own errors and touches no
+        shared state, so a mass teardown stays within the phase budget without
+        racing.
+
+        Returns the drained slices' sibling worker ids for the caller to fail
+        immediately.
         """
-        result = terminate_slices_for_workers_operation(
+        result = drain_slices_for_workers_operation(
             groups=self._groups,
             worker_ids=worker_ids,
             unregister_slice_workers=self._unregister_slice_workers,
@@ -1001,6 +1068,10 @@ class Autoscaler:
             result.termination_requests,
             lambda req: req.group.terminate_slice_handle(req.handle, context="cleaning up anyway"),
             max_workers=_CLOUD_OP_MAX_WORKERS,
-            thread_name_prefix="slice-terminate",
+            thread_name_prefix="slice-drain",
         )
         return result.sibling_worker_ids
+
+    def reservation_ledger(self) -> ReservationLedger:
+        """Build the per-tick reservation chip ledger from live group state."""
+        return build_reservation_ledger(self._groups.values())

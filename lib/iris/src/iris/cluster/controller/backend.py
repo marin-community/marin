@@ -29,12 +29,12 @@ has no Iris workers, so its ``run_teardown`` is a no-op.
 import logging
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.autoscaler.models import DemandEntry
+from iris.cluster.controller.autoscaler.models import UNRANKED_DEMAND_BAND, DemandEntry
 from iris.cluster.controller.autoscaler.state import AutoscalerState
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.ops.task import Assignment
@@ -383,6 +383,12 @@ def run_scheduling_decision(
     preemptions = apply_preemptions(order, placed_jobs, all_assignments, ctx.running_for_preemption, context)
     diagnostics = compute_diagnostics(scheduler, context, placed_jobs, all_assignments, order.ordered_task_ids)
 
+    # Stamp each demand entry with its tasks' effective band so the autoscaler's
+    # reservation-aware launch cap admits a fungible pool's new slices in priority
+    # order: the higher-priority job's larger slice claims the shared chip budget
+    # before a lower-priority job's.
+    banded_residual = _stamp_demand_bands(residual_demand, order.task_band_map)
+
     return ScheduleResult(
         assignments=[
             Assignment(task_id=task_id, worker_id=worker_id, priority_band=order.task_band_map.get(task_id))
@@ -399,8 +405,28 @@ def run_scheduling_decision(
         unschedulable=list(gated.expired_tasks),
         diagnostics=diagnostics,
         scheduling_context=context,
-        residual_demand=residual_demand,
+        residual_demand=banded_residual,
     )
+
+
+def _stamp_demand_bands(
+    residual_demand: list[DemandEntry],
+    task_band_map: Mapping[JobName, int],
+) -> list[DemandEntry]:
+    """Stamp each demand entry with its tasks' effective band for the autoscaler.
+
+    Band is the min (highest-priority) resolved band over the entry's tasks; an
+    entry whose tasks carry no resolved band trails ranked demand. The autoscaler's
+    reservation-aware launch cap admits a fungible pool's new slices in band order,
+    so it needs each entry's priority alongside its shape and constraints.
+    """
+    if not residual_demand:
+        return residual_demand
+    stamped: list[DemandEntry] = []
+    for entry in residual_demand:
+        bands = [band for tid in entry.task_ids if (band := task_band_map.get(JobName.from_wire(tid))) is not None]
+        stamped.append(replace(entry, band=min(bands) if bands else UNRANKED_DEMAND_BAND))
+    return stamped
 
 
 def apply_placements(

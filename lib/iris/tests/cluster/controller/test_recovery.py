@@ -123,14 +123,18 @@ def test_configured_group_not_replaced_by_drain():
 
 
 @pytest.mark.parametrize(
-    ("running_task_ids", "expected_slice_count"),
+    ("running_task_ids", "expected_ready_count"),
     [
         pytest.param(frozenset(), 0, id="idle-reclaimed"),
         pytest.param(frozenset({"task-1"}), 1, id="busy-kept"),
     ],
 )
-def test_drain_group_reclaims_only_idle_slices(monkeypatch, running_task_ids, expected_slice_count):
-    """A draining group reclaims an idle slice (target=0) but never kills one running a task."""
+def test_drain_group_reclaims_only_idle_slices(monkeypatch, running_task_ids, expected_ready_count):
+    """A draining group reclaims an idle slice (target=0) but never kills one running a task.
+
+    The reclaimed slice drains (lingers DRAINING until reaped), so live capacity is
+    measured by ready_slice_count.
+    """
     monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", lambda url: True)
     handle = make_fake_slice_handle("slice-001", scale_group="retired-group", all_ready=True)
     platform = make_mock_platform(slices_to_discover=[handle])
@@ -144,5 +148,5 @@ def test_drain_group_reclaims_only_idle_slices(monkeypatch, running_task_ids, ex
     drain.update_slice_activity(status, Timestamp.from_ms(2_000))  # stamp quiet_since
     autoscaler.run_once([], status, timestamp=Timestamp.from_ms(10_000))
 
-    assert drain.slice_count() == expected_slice_count
+    assert drain.ready_slice_count() == expected_ready_count
     autoscaler.shutdown()
