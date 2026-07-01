@@ -55,11 +55,14 @@ def exists(path: str) -> bool:
 
 
 def read_json(path: str) -> dict | None:
+    # Open directly and catch the miss — one round-trip, vs a separate exists() + open()
+    # (matters on GCS, where read_json is on every manifest/config/summary read).
     fs = _fs(path)
-    if not fs.exists(path):
+    try:
+        with fs.open(path, "r") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
         return None
-    with fs.open(path, "r") as handle:
-        return json.load(handle)
 
 
 def _json_safe(obj: object) -> object:

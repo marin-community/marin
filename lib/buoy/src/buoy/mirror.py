@@ -96,7 +96,9 @@ def page_table(rows: list[dict], columns: list[str]) -> pa.Table:
     return pa.Table.from_pandas(df[columns], schema=schema, preserve_index=False)
 
 
-def _mirror_history(run: object, prefix: str, columns: list[str], report: Progress, prev: dict | None) -> dict:
+def _mirror_history(
+    run: object, artifacts: list, prefix: str, columns: list[str], report: Progress, prev: dict | None
+) -> dict:
     """Mirror the run history, preferring the bulk parquet artifact over scan.
 
     Finished runs usually expose the full history as a single-parquet
@@ -107,7 +109,7 @@ def _mirror_history(run: object, prefix: str, columns: list[str], report: Progre
     appends a shard, so the live-refresh cost is O(new steps), not O(all steps).
     """
     if getattr(run, "state", None) in TERMINAL_STATES:
-        art = next((a for a in run.logged_artifacts() if a.type == HISTORY_ARTIFACT_TYPE), None)  # type: ignore[attr-defined]
+        art = next((a for a in artifacts if a.type == HISTORY_ARTIFACT_TYPE), None)
         if art is not None:
             return _history_from_artifact(art, prefix, report)
     return _history_from_scan(run, prefix, columns, report, prev)
@@ -199,8 +201,8 @@ def _profile_logdir(local: str) -> str:
     return dest
 
 
-def _mirror_profile(run: object, prefix: str, existing: dict | None, report: Progress) -> dict | None:
-    for art in run.logged_artifacts():  # type: ignore[attr-defined]
+def _mirror_profile(artifacts: list, prefix: str, existing: dict | None, report: Progress) -> dict | None:
+    for art in artifacts:
         if art.type not in PROFILE_ARTIFACT_TYPES:
             continue
         # Skip the (hundreds-of-MB) re-download when we already hold this exact
@@ -245,13 +247,14 @@ def mirror_run(cfg: BuoyConfig, ref: RunRef, *, refresh: bool = False, on_progre
     report("reading run metadata")
     api = wandb.Api()
     run = api.run(ref.key)
+    artifacts = list(run.logged_artifacts())  # paginated once, reused for history + profile discovery
     columns = history_columns(run)
-    history = _mirror_history(run, prefix, columns, report, existing.get("history") if existing else None)
+    history = _mirror_history(run, artifacts, prefix, columns, report, existing.get("history") if existing else None)
     report("writing config + summary")
     cache.write_json(posixpath.join(prefix, "config.json"), dict(run.config))
     summary_raw = getattr(run.summary, "_json_dict", None)
     cache.write_json(posixpath.join(prefix, "summary.json"), dict(summary_raw) if summary_raw is not None else {})
-    profile = _mirror_profile(run, prefix, existing.get("profile") if existing else None, report)
+    profile = _mirror_profile(artifacts, prefix, existing.get("profile") if existing else None, report)
     report("finalizing")
 
     author = getattr(run, "user", None)

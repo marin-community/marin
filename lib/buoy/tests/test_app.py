@@ -40,9 +40,9 @@ def test_index_and_metrics(cfg, patch_wandb):
         assert manifest["history"]["rows"] == 6
 
         body = client.get("/api/metrics", params={**Q, "keys": "train/loss"}).json()
-        series = body["metrics"]["train/loss"]
-        assert [p["step"] for p in series] == [0, 1, 2, 3, 4, 5]
-        assert [p["value"] for p in series] == [0, 1, 2, 3, 4, 5]
+        series = body["metrics"]["train/loss"]  # columnar {x, y}
+        assert series["x"] == [0, 1, 2, 3, 4, 5]
+        assert series["y"] == [0, 1, 2, 3, 4, 5]
 
 
 def test_manifest_404_when_absent(cfg):

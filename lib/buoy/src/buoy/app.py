@@ -199,11 +199,13 @@ async def get_metrics(request: Request) -> JSONResponse:
     keys = [k for k in requested if k in available] or sorted(available)
 
     def _read() -> dict:
+        # Columnar {x, y} (not a dict per point): a fraction of the JSON, and Plotly
+        # consumes the arrays directly — no per-point object churn on either side.
         frame = cache.read_history(prefix, ["_step", *keys])
-        series: dict[str, list[dict]] = {}
+        series: dict[str, dict] = {}
         for key in keys:
             col = frame[["_step", key]].dropna()
-            series[key] = [{"step": int(s), "value": float(v)} for s, v in zip(col["_step"], col[key], strict=True)]
+            series[key] = {"x": col["_step"].astype("int64").tolist(), "y": col[key].astype(float).tolist()}
         return series
 
     return JSONResponse({"metrics": await asyncio.to_thread(_read)})
@@ -270,16 +272,20 @@ async def xprof_proxy(request: Request) -> Response:
     cfg: BuoyConfig = request.app.state.cfg
     ref = _ref(request, from_query=False)
     sub = request.path_params["sub"]
-    manifest = cache.read_manifest(_prefix(cfg, ref))
-    if manifest is None:
-        return Response("not mirrored", status_code=404)
-    if not manifest.get("profile"):
-        return Response("run has no profile", status_code=409)
-
-    try:
-        port = await asyncio.to_thread(request.app.state.xprof.ensure, ref.key, manifest["profile"]["logdir"])
-    except XprofCapacityError as exc:
-        return Response(str(exc), status_code=503)
+    xprof = request.app.state.xprof
+    # Warm path: a live xprof serves every asset/data request, so skip the GCS
+    # manifest read entirely once the process is up (the common case for a trace).
+    port = xprof.port_if_running(ref.key)
+    if port is None:
+        manifest = cache.read_manifest(_prefix(cfg, ref))
+        if manifest is None:
+            return Response("not mirrored", status_code=404)
+        if not manifest.get("profile"):
+            return Response("run has no profile", status_code=409)
+        try:
+            port = await asyncio.to_thread(xprof.ensure, ref.key, manifest["profile"]["logdir"])
+        except XprofCapacityError as exc:
+            return Response(str(exc), status_code=503)
 
     url = "/" + sub + (("?" + request.url.query) if request.url.query else "")
     client: httpx.AsyncClient = request.app.state.http
