@@ -32,7 +32,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
+from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
@@ -145,12 +145,9 @@ def build_grug_run_config(launch: GrugBaseLaunchConfig) -> GrugRunConfig:
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=CheckpointerConfig(
-            base_path=os.path.join(output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=None,
+        checkpointer=resolve_checkpointer_output_path(
+            CheckpointerConfig(save_interval=timedelta(minutes=10), keep=None),
+            output_path,
         ),
     )
 

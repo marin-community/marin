@@ -34,7 +34,7 @@ from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint, temporary_checkpoint_base_path
+from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
 from experiments.datasets.nemotron import nemotron_datasets
 from experiments.datasets.paloma import paloma_datasets
@@ -162,12 +162,9 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         allow_nondivisible_batch_size=False,
         initialize_from=initialize_from,
         checkpointer=config.checkpointer
-        or CheckpointerConfig(
-            base_path=os.path.join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=10),
-            keep=None,
+        or resolve_checkpointer_output_path(
+            CheckpointerConfig(save_interval=timedelta(minutes=10), keep=None),
+            config.output_path,
         ),
     )
 

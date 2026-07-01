@@ -19,9 +19,9 @@ from marin.processing.tokenize import tokenized_cache_stats_path
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    _enforce_run_id,
     _maybe_auto_resolve_dpo_schedule,
-    _update_config_to_use_out_path,
+    _resolve_run_id,
+    apply_output_path,
     doublecheck_paths,
     temporary_checkpoint_base_path,
 )
@@ -80,71 +80,62 @@ def test_temporary_checkpoint_base_path_follows_output_path_region():
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
         assert temporary_checkpoint_base_path("gs://marin-us-east5/experiments/grug/base-trial") == (
-            "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+            "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
         )
 
 
-def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(trainer_config):
+def test_apply_output_path_sets_run_specific_temp_checkpoints(trainer_config):
     with (
         patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
         patch.dict(os.environ, {"MARIN_PREFIX": "gs://marin-us-central1/scratch"}),
     ):
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                trainer=trainer_config,
-            ),
-            resources=ResourceConfig.with_tpu("v4-8"),
-            output_path="gs://marin-us-east5/experiments/grug/base-trial",
+        updated = apply_output_path(
+            train_lm.TrainLmConfig(trainer=trainer_config),
+            "gs://marin-us-east5/experiments/grug/base-trial",
         )
 
-        updated = _update_config_to_use_out_path(config)
+    checkpointer = updated.trainer.checkpointer
+    assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
+    assert checkpointer.temporary_base_path == (
+        "gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
+    )
+    assert checkpointer.append_run_id_to_base_path is False
+    assert updated.hf_save_path == "gs://marin-us-east5/experiments/grug/base-trial/hf"
 
-        checkpointer = updated.train_config.trainer.checkpointer
-        assert checkpointer.base_path == "gs://marin-us-east5/experiments/grug/base-trial/checkpoints"
-        assert checkpointer.temporary_base_path == (
-            "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
-        )
 
-
-def test_update_config_to_use_out_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
+def test_apply_output_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
     with patch(
         "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
     ):
-        config = TrainDpoOnPodConfig(
-            train_config=TrainDpoConfig(
+        updated = apply_output_path(
+            TrainDpoConfig(
                 trainer=dataclasses.replace(trainer_config, num_train_steps=1),
                 adapter=LoraAdaptorConfig(),
                 hf_save_steps=None,
             ),
-            resources=ResourceConfig.with_tpu("v4-8"),
-            output_path="gs://bucket/checkpoints/dpo/example-run",
+            "gs://bucket/checkpoints/dpo/example-run",
         )
 
-        updated = _update_config_to_use_out_path(config)
-
-    assert updated.train_config.hf_save_path is None
-    assert updated.train_config.merged_hf_save_path is None
+    assert updated.hf_save_path is None
+    assert updated.merged_hf_save_path is None
 
 
-def test_update_config_to_use_out_path_routes_adapter_hf_export_to_peft(trainer_config):
+def test_apply_output_path_routes_adapter_hf_export_to_peft(trainer_config):
     with patch(
         "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
     ):
-        config = TrainDpoOnPodConfig(
-            train_config=TrainDpoConfig(
+        updated = apply_output_path(
+            TrainDpoConfig(
                 trainer=dataclasses.replace(trainer_config, num_train_steps=1),
                 adapter=LoraAdaptorConfig(),
                 hf_save_steps=10,
             ),
-            resources=ResourceConfig.with_tpu("v4-8"),
-            output_path="gs://bucket/checkpoints/dpo/example-run",
+            "gs://bucket/checkpoints/dpo/example-run",
         )
 
-        updated = _update_config_to_use_out_path(config)
-
-    assert updated.train_config.hf_save_path is None
-    assert updated.train_config.peft_save_path == "gs://bucket/checkpoints/dpo/example-run/hf"
-    assert updated.train_config.merged_hf_save_path is None
+    assert updated.hf_save_path is None
+    assert updated.peft_save_path == "gs://bucket/checkpoints/dpo/example-run/hf"
+    assert updated.merged_hf_save_path is None
 
 
 def test_recursive_path_checking(trainer_config):
@@ -209,29 +200,20 @@ def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():
     )
 
 
-def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):
-    config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(
-            data={"train_urls": []},  # type: ignore[arg-type]
-            trainer=dataclasses.replace(trainer_config, id=None),
-        ),
-        resources=ResourceConfig.with_tpu("v4-8"),
-        output_path="gs://bucket/checkpoints/dpo/example-run",
+def test_resolve_run_id_imputes_basename_of_output_path(trainer_config):
+    config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id=None))
+    updated, run_id = _resolve_run_id(config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id=None)
+    assert run_id == "example-run"
+    assert updated.trainer.id == "example-run"
+
+
+def test_resolve_run_id_prefers_explicit_id_over_output_path(trainer_config):
+    config = train_lm.TrainLmConfig(trainer=dataclasses.replace(trainer_config, id="explicit-run"))
+    updated, run_id = _resolve_run_id(
+        config, output_path="gs://bucket/checkpoints/dpo/example-run", env_run_id="from-env"
     )
-
-    with patch(
-        "marin.training.training.marin_temp_bucket",
-        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
-    ):
-        updated = _enforce_run_id(_update_config_to_use_out_path(config))
-
-    checkpointer = updated.train_config.trainer.checkpointer
-
-    assert updated.train_config.trainer.id == "example-run"
-    assert checkpointer.append_run_id_to_base_path is False
-    assert checkpointer.base_path == "gs://bucket/checkpoints/dpo/example-run/checkpoints"
-    assert checkpointer.temporary_base_path == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
-    assert checkpointer.expanded_temporary_path("example-run") == "gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    assert run_id == "explicit-run"
+    assert updated.trainer.id == "explicit-run"
 
 
 def test_auto_resolve_dpo_schedule_from_stats(trainer_config, tmp_path):
