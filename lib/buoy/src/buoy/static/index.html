@@ -445,13 +445,13 @@
       const need = selectedMetrics.filter((k) => !(k in metricData));
       if (need.length) {
         const data = (await jget("api/metrics?" + qs({ ...current.r, keys: need.join(",") }))).metrics || {};
-        for (const k of need) metricData[k] = data[k] || [];
+        for (const k of need) metricData[k] = data[k] || { x: [], y: [] };
       }
       redrawCharts();
     }
     function redrawCharts() {
       $("charts").textContent = "";
-      selectedMetrics.forEach((k) => drawChart(k, metricData[k] || []));
+      selectedMetrics.forEach((k) => drawChart(k, metricData[k] || { x: [], y: [] }));
     }
     const cstate = (key) => chartState[key] || (chartState[key] = { logY: false, logX: false, smoothing: 0 });
     // wandb-style debiased EMA smoothing.
@@ -565,8 +565,8 @@
       poll();
     }
 
-    function chartTraces(key, points, st, color) {
-      const x = points.map((p) => p.step), y = points.map((p) => p.value);
+    function chartTraces(key, data, st, color) {
+      const x = data.x, y = data.y;  // columnar from /api/metrics: {x:[steps], y:[values]}
       if (st.smoothing > 0 && y.length > 1) {
         // raw faint underneath, smoothed bold on top (wandb style)
         return [
@@ -589,13 +589,13 @@
       const st = cstate(key);
       $("cmodal").classList.remove("hidden");
       const layout = chartLayout(key, st, Math.round(window.innerHeight * 0.86));
-      Plotly.newPlot($("cmodal-plot"), chartTraces(key, metricData[key] || [], st, color), layout, CHART_CONFIG);
+      Plotly.newPlot($("cmodal-plot"), chartTraces(key, metricData[key] || { x: [], y: [] }, st, color), layout, CHART_CONFIG);
     }
     function closeFullscreen() {
       $("cmodal").classList.add("hidden");
       Plotly.purge($("cmodal-plot"));
     }
-    function drawChart(key, points) {
+    function drawChart(key, data) {
       const st = cstate(key);
       const color = LINE_COLOR;
       const card = el("div", "chart");
@@ -617,7 +617,7 @@
       Object.assign(sm, { type: "range", min: "0", max: "0.97", step: "0.01", value: String(st.smoothing), className: "sm-slider", title: "smoothing" });
       sm.addEventListener("input", () => {
         st.smoothing = parseFloat(sm.value);
-        Plotly.react(plot, chartTraces(key, points, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
+        Plotly.react(plot, chartTraces(key, data, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
       });
       bar.appendChild(sm);
 
@@ -633,7 +633,7 @@
 
       card.append(bar, plot);
       $("charts").appendChild(card);
-      Plotly.newPlot(plot, chartTraces(key, points, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
+      Plotly.newPlot(plot, chartTraces(key, data, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
     }
 
     // ---- events ----
