@@ -44,7 +44,12 @@
 
     /* ---- main area ---- */
     .main { flex: 1; overflow: auto; display: flex; flex-direction: column; }
-    #status { padding: .8em 1.5em; color: #555; }
+    #status { display: flex; align-items: center; gap: .6em; padding: .85em 1.5em; color: #4a5568; font-size: 13px; }
+    .spinner { width: 16px; height: 16px; border: 2px solid #d7e0ea; border-top-color: #0d3b66; border-radius: 50%; animation: spin .8s linear infinite; flex: 0 0 auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-row { display: flex; align-items: center; gap: .6em; color: #4a5568; font-size: 13px; }
+    .load-run { font-family: ui-monospace, monospace; color: #0d3b66; }
+    .load-detail { color: #718096; }
     .tabs { display: flex; gap: .5em; padding: .5em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
     .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
     .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
@@ -69,8 +74,15 @@
     .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
     .kv-col td.v { font-family: ui-monospace, monospace; }
 
+    .chart-toolbar { display: flex; align-items: center; gap: 1.2em; flex-wrap: wrap; margin-bottom: 1em; font-size: 12.5px; color: #4a5568; }
+    .chart-toolbar label { display: inline-flex; align-items: center; gap: .4em; cursor: pointer; }
+    .chart-toolbar .smooth input[type="range"] { width: 130px; }
+    .chart-toolbar #smooth-val { font-family: ui-monospace, monospace; width: 2.6em; }
+    .seg { display: inline-flex; align-items: center; gap: .3em; }
+    .seg button { border: 1px solid #cbd5e0; background: #fff; color: #4a5568; padding: .2em .55em; cursor: pointer; font-size: 12px; border-radius: 5px; }
+    .seg button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
     #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
-    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
+    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
     .chip { display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff; border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace; }
     .chip button { border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px; line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0; }
@@ -125,6 +137,14 @@
           <input id="metric-search" class="search" placeholder="add a metric to plot…" autocomplete="off">
           <div id="metric-options" class="options hidden"></div>
         </div>
+        <div class="chart-toolbar">
+          <label><input type="checkbox" id="log-y"> log y</label>
+          <label><input type="checkbox" id="log-x"> log x</label>
+          <label class="smooth">smoothing<input type="range" id="smooth" min="0" max="0.97" step="0.01" value="0"><span id="smooth-val">0.00</span></label>
+          <span class="seg" id="size-seg">size
+            <button data-size="s">S</button><button data-size="m" class="active">M</button><button data-size="l">L</button>
+          </span>
+        </div>
         <div id="charts"></div>
       </div>
 
@@ -143,6 +163,10 @@
     let loadedRunId = null;      // highlighted run in the sidebar
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
+    let metricData = {};         // key -> [{step,value}], cached so toolbar toggles don't refetch
+    const chartOpts = { logY: false, logX: false, smoothing: 0, size: "m" };
+    const CHART_H = { s: 200, m: 285, l: 420 }, CHART_MINW = { s: 340, m: 440, l: 720 };
+    const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"];
     let liveTimer = null;        // running-run auto-refresh timer
     let searchTimer = null;
     const LIVE_INTERVAL = 30000;
@@ -211,6 +235,16 @@
       document.querySelectorAll(".run-item").forEach((it) => it.classList.toggle("active", it.dataset.id === runId));
     }
 
+    // Spinner + status message; `runId`/`detail` are optional emphasized parts.
+    function showLoading(msg, runId, detail) {
+      const s = $("status");
+      s.textContent = "";
+      s.appendChild(el("div", "spinner"));
+      s.appendChild(el("span", null, msg));
+      if (runId) s.appendChild(el("span", "load-run", runId));
+      if (detail) s.appendChild(el("span", "load-detail", "· " + detail));
+    }
+
     async function init() {
       const d = await jget("api/defaults");
       const p = new URLSearchParams(location.search);
@@ -238,17 +272,17 @@
       clearTimeout(liveTimer);
       profileStarted = false;
       current = null;
-      $("status").textContent = "mirroring " + runId + " … (first load of a large run can take ~1 min)";
+      showLoading("mirroring", runId, "starting…");
       await fetch("api/mirror", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ entity, project, run_id: runId }),
       });
-      poll(r);
+      poll(r, "mirroring");
     }
 
-    async function poll(r) {
+    async function poll(r, verb) {
       const s = await jget("api/mirror_status?" + qs(r));
-      if (s.state === "running") { setTimeout(() => poll(r), 2000); return; }
+      if (s.state === "running") { showLoading(verb, r.run, s.detail || "…"); setTimeout(() => poll(r, verb), 1500); return; }
       if (s.state === "error") { $("status").textContent = "mirror failed: " + s.error; return; }
       if (s.state === "absent") { $("status").textContent = "run not found"; return; }
       render(r);
@@ -261,7 +295,7 @@
       const r = current.r;
       clearTimeout(liveTimer);
       profileStarted = false;
-      $("status").textContent = "refetching " + r.run + " …";
+      showLoading("refetching", r.run, "starting…");
       await fetch("api/mirror", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run, refresh: true }),
@@ -269,7 +303,7 @@
       const p = async () => {
         if (!stillCurrent(r)) return;
         const s = await jget("api/mirror_status?" + qs(r));
-        if (s.state === "running") { setTimeout(p, 1500); return; }
+        if (s.state === "running") { showLoading("refetching", r.run, s.detail || "…"); setTimeout(p, 1500); return; }
         if (s.state === "error") { $("status").textContent = "refetch failed: " + s.error; return; }
         render(r);
       };
@@ -378,11 +412,27 @@
       opts.classList.remove("hidden");
     }
     async function plotSelected() {
+      if (!current) return;
+      if (!selectedMetrics.length) { $("charts").textContent = "add metrics above to plot"; return; }
+      const need = selectedMetrics.filter((k) => !(k in metricData));
+      if (need.length) {
+        const data = (await jget("api/metrics?" + qs({ ...current.r, keys: need.join(",") }))).metrics || {};
+        for (const k of need) metricData[k] = data[k] || [];
+      }
+      redrawCharts();
+    }
+    // Redraw from cached data (toolbar toggles don't refetch).
+    function redrawCharts() {
       const charts = $("charts");
+      charts.style.gridTemplateColumns = `repeat(auto-fill, minmax(${CHART_MINW[chartOpts.size]}px, 1fr))`;
       charts.textContent = "";
-      if (!selectedMetrics.length) { charts.textContent = "add metrics above to plot"; return; }
-      const data = (await jget("api/metrics?" + qs({ ...current.r, keys: selectedMetrics.join(",") }))).metrics || {};
-      for (const key of selectedMetrics) drawChart(key, data[key] || []);
+      selectedMetrics.forEach((k, i) => drawChart(k, metricData[k] || [], i));
+    }
+    // wandb-style debiased EMA smoothing.
+    function ema(values, w) {
+      if (w <= 0) return values;
+      let last = 0, debias = 0;
+      return values.map((v) => { last = last * w + (1 - w) * v; debias = debias * w + (1 - w); return last / debias; });
     }
 
     function setTab(pane) {
@@ -409,6 +459,7 @@
 
       selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
       if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
+      metricData = {};
       renderChips();
       plotSelected();
 
@@ -438,13 +489,21 @@
       current.config = flatten(cfg.error ? {} : cfg);
       current.summary = flatten(summ.error ? {} : summ);
       renderKV();
+      metricData = {};  // running run grew — re-fetch series
       await plotSelected();
       if (!stillCurrent(r)) return;
       scheduleLive(r);
     }
 
+    function showPaneLoading(pane, msg) {
+      pane.textContent = "";
+      pane.style.padding = "1.25em 1.5em";
+      const row = el("div", "loading-row");
+      row.append(el("div", "spinner"), el("span", null, msg));
+      pane.appendChild(row);
+    }
     async function prepareProfile(r, pane) {
-      pane.textContent = "preparing profile (downloading + launching xprof)…";
+      showPaneLoading(pane, "preparing profile (downloading + launching xprof)…");
       await fetch("api/profile_prepare", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run }),
@@ -465,17 +524,27 @@
       poll();
     }
 
-    function drawChart(key, points) {
+    function drawChart(key, points, idx) {
       const div = document.createElement("div");
       div.className = "chart";
       $("charts").appendChild(div);
-      Plotly.newPlot(div, [{
-        x: points.map((p) => p.step), y: points.map((p) => p.value),
-        mode: "lines", line: { width: 1.5 }, name: key,
-      }], {
-        title: { text: key, font: { size: 13 } }, height: 280,
-        margin: { l: 48, r: 16, t: 34, b: 32 }, template: "plotly_white",
-      }, { displayModeBar: false, responsive: true });
+      const x = points.map((p) => p.step), y = points.map((p) => p.value);
+      const color = PALETTE[idx % PALETTE.length];
+      const traces = [];
+      if (chartOpts.smoothing > 0 && y.length > 1) {
+        // raw faint underneath, smoothed bold on top (wandb style)
+        traces.push({ x, y, mode: "lines", line: { width: 1, color }, opacity: 0.22, hoverinfo: "skip", showlegend: false });
+        traces.push({ x, y: ema(y, chartOpts.smoothing), mode: "lines", line: { width: 2, color }, name: key });
+      } else {
+        traces.push({ x, y, mode: "lines", line: { width: 1.6, color }, name: key });
+      }
+      const axis = (log) => ({ type: log ? "log" : "linear", showgrid: true, gridcolor: "#eef2f6", zeroline: false });
+      Plotly.newPlot(div, traces, {
+        title: { text: key, font: { size: 12.5 }, x: 0.02, xanchor: "left", y: 0.97 },
+        height: CHART_H[chartOpts.size], margin: { l: 54, r: 14, t: 28, b: 34 },
+        template: "plotly_white", hovermode: "x unified", showlegend: false,
+        xaxis: axis(chartOpts.logX), yaxis: axis(chartOpts.logY),
+      }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
     }
 
     // ---- events ----
@@ -511,6 +580,22 @@
       }
     });
     document.addEventListener("mousedown", (e) => { if (!e.target.closest(".combo")) hideOptions(); });
+
+    // chart toolbar: log scale, smoothing, size — redraw from cache (no refetch)
+    $("log-y").addEventListener("change", (e) => { chartOpts.logY = e.target.checked; redrawCharts(); });
+    $("log-x").addEventListener("change", (e) => { chartOpts.logX = e.target.checked; redrawCharts(); });
+    $("smooth").addEventListener("input", (e) => {
+      chartOpts.smoothing = parseFloat(e.target.value);
+      $("smooth-val").textContent = chartOpts.smoothing.toFixed(2);
+      redrawCharts();
+    });
+    $("size-seg").addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-size]");
+      if (!b) return;
+      chartOpts.size = b.dataset.size;
+      document.querySelectorAll("#size-seg button").forEach((x) => x.classList.toggle("active", x === b));
+      redrawCharts();
+    });
     init();
   </script>
 </body>
