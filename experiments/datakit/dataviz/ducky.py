@@ -36,17 +36,23 @@ DEFAULT_BASE_URL = "https://iris.oa.dev/proxy/ducky"
 
 TokenProvider = Callable[[], str | None]
 
-# Substrings that mark a *transient* ducky/GCS failure worth retrying (network /
-# DNS / object-store blips), as opposed to a deterministic error (SQL binder,
-# file-not-found) where a retry is pointless.
-_TRANSIENT_MARKERS = (
+# Substrings that mark a *retryable* failure: transient network/DNS/object-store
+# blips AND ducky being unavailable (the service is preemptible — it can vanish
+# and re-register at any time: "No endpoint" from the proxy, or a 502/504 upstream
+# timeout while it restarts). Deterministic errors (SQL binder, file-not-found)
+# are absent here so they fail fast.
+_RETRYABLE_MARKERS = (
     "could not resolve hostname",
     "connection reset",
     "connection refused",
     "connection aborted",
+    "connection timed out",
     "timed out",
     "temporarily unavailable",
     "network is unreachable",
+    "failed to establish",
+    "no endpoint",  # controller proxy: ducky endpoint not registered (preempted)
+    "upstream timeout",  # controller proxy: ducky didn't respond (restarting)
     "http 429",
     "http 500",
     "http 502",
@@ -55,9 +61,9 @@ _TRANSIENT_MARKERS = (
 )
 
 
-def _is_transient(message: str) -> bool:
+def _is_retryable(message: str) -> bool:
     m = message.lower()
-    return any(marker in m for marker in _TRANSIENT_MARKERS)
+    return any(marker in m for marker in _RETRYABLE_MARKERS)
 
 
 class DuckyError(RuntimeError):
@@ -113,17 +119,22 @@ class DuckyClient:
         token_provider: TokenProvider | None = iap_token_provider(),
         poll_interval: float = 1.0,
         timeout: float = 900.0,
-        max_retries: int = 2,
-        retry_backoff: float = 3.0,
+        retry_budget: float = 150.0,
+        retry_base: float = 2.0,
+        retry_cap: float = 20.0,
     ):
         self._base_url = base_url.rstrip("/")
         self._token_provider = token_provider
         self._poll_interval = poll_interval
         self._timeout = timeout
-        self._max_retries = max_retries
-        self._retry_backoff = retry_backoff
+        # Total wall-clock spent retrying a retryable failure before giving up,
+        # with exponential backoff (base, doubling, capped). Sized to outlast a
+        # ducky preemption + reschedule.
+        self._retry_budget = retry_budget
+        self._retry_base = retry_base
+        self._retry_cap = retry_cap
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+    def _request(self, method: str, path: str, body: dict | None = None, timeout: float = 30.0) -> dict:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{self._base_url}{path}", data=data, method=method)
         if data is not None:
@@ -133,7 +144,7 @@ class DuckyClient:
             if token:
                 req.add_header("Authorization", f"Bearer {token}")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
@@ -141,29 +152,50 @@ class DuckyClient:
         except urllib.error.URLError as e:
             raise DuckyError(f"ducky {method} {path} unreachable: {e.reason}") from e
 
-    def run(self, sql: str) -> QueryResult:
-        """Submit ``sql`` and poll until done, retrying transient failures.
+    def healthy(self) -> bool:
+        """Quick ``/health`` probe (short timeout, no retry) — is ducky reachable now?"""
+        try:
+            return self._request("GET", "/health", timeout=5.0).get("status") == "healthy"
+        except DuckyError:
+            return False
 
-        ducky reads object storage per query, so a one-off DNS/network blip
-        (``Could not resolve hostname …``) surfaces as a query error; those are
-        retried up to ``max_retries`` times. Deterministic errors (SQL, missing
-        file) and timeouts are raised immediately.
+    def run(self, sql: str) -> QueryResult:
+        """Submit ``sql`` and poll until done, retrying while ducky is unavailable.
+
+        ducky is preemptible (it can disappear and re-register mid-session) and
+        reads object storage per query, so both a preemption and a one-off DNS/
+        network blip surface as errors. Retryable failures (see
+        :data:`_RETRYABLE_MARKERS`) are retried with exponential backoff for up to
+        ``retry_budget`` seconds — long enough to ride out a reschedule.
+        Deterministic errors (SQL, missing file) and query timeouts fail fast.
         """
-        for attempt in range(self._max_retries + 1):
+        start = time.monotonic()
+        attempt = 0
+        while True:
             try:
                 return self._run_once(sql)
             except DuckyError as e:
-                if attempt < self._max_retries and _is_transient(str(e)):
+                retryable = _is_retryable(str(e))
+                elapsed = time.monotonic() - start
+                if retryable and elapsed < self._retry_budget:
+                    wait = min(self._retry_cap, self._retry_base * (2**attempt))
+                    attempt += 1
                     logger.warning(
-                        "transient ducky error (attempt %d/%d), retrying: %s",
-                        attempt + 1,
-                        self._max_retries + 1,
-                        str(e).splitlines()[0][:160],
+                        "ducky unavailable/transient (retry %d, %.0fs/%.0fs elapsed), sleeping %.0fs: %s",
+                        attempt,
+                        elapsed,
+                        self._retry_budget,
+                        wait,
+                        str(e).splitlines()[0][:140],
                     )
-                    time.sleep(self._retry_backoff * (attempt + 1))
+                    time.sleep(wait)
                     continue
+                if retryable:
+                    raise DuckyError(
+                        f"ducky query backend unavailable after {elapsed:.0f}s of retries "
+                        "— it may be preempted; please retry shortly"
+                    ) from e
                 raise
-        raise AssertionError("unreachable")  # loop either returns or raises
 
     def _run_once(self, sql: str) -> QueryResult:
         query_id = self._request("POST", "/query", {"sql": sql})["query_id"]

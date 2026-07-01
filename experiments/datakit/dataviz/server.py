@@ -44,6 +44,7 @@ from iris.cluster.dashboard_common import on_shutdown
 from marin.execution.artifact import read_artifact
 from marin.utils import fsspec_exists
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
@@ -245,12 +246,18 @@ def build_app(
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy"})
 
+    async def api_ducky_status(_request: Request) -> JSONResponse:
+        # Reachability of the (preemptible) query backend, for the viewer's banner.
+        available = await run_in_threadpool(ducky.healthy)
+        return JSONResponse({"available": available})
+
     return Starlette(
         routes=[
             Route("/", index),
             Route("/api/overview", api_overview),
             Route("/api/query", api_query, methods=["POST"]),
             Route("/api/result/{query_id:str}", api_result),
+            Route("/api/ducky-status", api_ducky_status),
             Route("/health", health),
         ]
     )

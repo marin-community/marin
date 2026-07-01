@@ -43,6 +43,8 @@ pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:12px/1.45 ui-monospa
 </head>
 <body>
 <header><h1>datakit dataviz</h1><span class="path" id="path">loading…</span><span class="pill" id="verified"></span></header>
+<div id="ducky-banner" class="hidden" style="background:#fff4e5;color:#7a4a00;padding:7px 20px;font-size:13px;border-bottom:1px solid #f0d9b5">
+  ⚠ query backend (ducky) is currently unavailable — it's preemptible and may be rescheduling. Queries retry automatically for a while; results may be delayed or fail until it's back.</div>
 <div class="tabs" id="tabs"></div>
 <main id="main"></main>
 
@@ -88,7 +90,12 @@ function fillSection(id,promise,render){
   promise.then(r=>{const el=document.getElementById(id);if(!el)return;el.classList.remove('spin');el.innerHTML=render(r);})
     .catch(e=>{const el=document.getElementById(id);if(el){el.classList.remove('spin');el.innerHTML=`<span style="color:#b00">error: ${esc(e.message)}</span>`;}});
 }
-function fail(node,e){node.innerHTML=`<p style="color:#b00">error: ${esc(e.message)}</p>`;}
+function fail(node,e){node.innerHTML=`<p style="color:#b00">error: ${esc(e.message)}</p>`;checkDucky();}
+async function checkDucky(){
+  try{const d=await getJSON('api/ducky-status');
+    document.getElementById('ducky-banner').classList.toggle('hidden',!!d.available);
+  }catch(e){/* status check itself failed; leave banner as-is */}
+}
 
 const TABS=[['overview','Overview'],['sources','Sources'],['normalized','Normalized'],['decontam','Decontamination'],['dedup','Deduplication'],['quality','Classifier'],['store','Store']];
 function renderTabs(){
@@ -313,6 +320,7 @@ async function sampleBucket(cluster,q,n){
     v.textContent=OV.verified?'lineage verified':'lineage best-effort';
     v.style.background=OV.verified?'#e7f5ee':'#fff7e6';
     renderTabs();render();
+    checkDucky();setInterval(checkDucky,20000);
   }catch(e){document.getElementById('main').innerHTML=`<p style="color:#b00">failed to load overview: ${esc(e.message)}</p>`;}
 })();
 </script>
