@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 
 from haliax.partitioning import ResourceAxis
+from haliax.quantization import RaggedDotOp
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,7 @@ def ragged_dot(
     group_sizes_: jax.Array,
     ar: bool = False,
     implementation: Implementation = "auto",
+    op: RaggedDotOp | None = None,
 ) -> jax.Array:
     """Grouped matrix multiply with backend-dispatched ragged dot implementations.
 
@@ -374,10 +376,30 @@ def ragged_dot(
         implementation: Backend selection. ``"auto"`` selects per-platform default.
             ``"triton"`` forces GPU Pallas Triton kernel. ``"megablox"`` forces
             TPU megablox. ``"xla"`` forces ``jax.lax.ragged_dot_general``.
+        op: Optional stateful grouped-matmul op (e.g.
+            [haliax.quantization.Fp8RaggedDotOp][]). Analogous to passing a
+            ``dot_general`` op such as ``Fp8DotGeneralOp`` to ``Linear``: the op
+            owns the full contraction (forward, backward, and its own
+            layout/padding requirements), so it is called as
+            ``op(lhs, rhs, group_sizes)`` on the unpadded inputs and the backend
+            dispatch below — including the 512-row padding, a Triton kernel
+            requirement — is bypassed. Mutually exclusive with an explicit
+            ``implementation``.
 
     Returns:
         A [tokens, out] array.
     """
+    if op is not None:
+        if implementation != "auto":
+            raise ValueError(
+                f"ragged_dot: op= and implementation={implementation!r} are mutually exclusive; "
+                "the op owns its kernel selection."
+            )
+        out = op(lhs_, rhs_, group_sizes_)
+        if ar:
+            out = jax.lax.psum(out, ResourceAxis.MODEL)
+        return out
+
     hs_shape = lhs_.shape
     if hs_shape[0] % 512:
         pad_length = 512 - hs_shape[0] % 512
