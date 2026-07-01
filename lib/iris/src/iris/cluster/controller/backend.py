@@ -72,7 +72,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, PendingTask, UserBudgetDefaults, WorkerId
-from iris.rpc import job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -517,6 +517,18 @@ class TaskBackend(Protocol):
         Called once by the composer from the backend's config. ``advertised`` is
         the (comma-expanded) attribute sets; ``allowed_users`` is the allow policy
         (``"*"`` matches any user)."""
+        ...
+
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        """Author this backend's expanded status for the dashboard Backends tab.
+
+        Each backend authors its own ``BackendStatus`` variant uniformly,
+        selected by :attr:`capabilities`: a ``CLUSTER_VIEW`` backend fills
+        ``kubernetes`` from its cached cluster-state snapshot; a
+        ``WORKER_DAEMON`` backend fills ``worker`` from its autoscaler. The
+        contract stays DB-less — the controller overlays the DB-derived worker
+        health counts onto the ``worker`` variant after this returns.
+        """
         ...
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:

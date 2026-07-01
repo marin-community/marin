@@ -54,7 +54,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
 )
 from iris.cluster.types import WorkerId
-from iris.rpc import job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.worker_connect import WorkerServiceClient
 
@@ -253,6 +253,17 @@ class RpcTaskBackend:
     def configure_routing(self, advertised: dict[str, set[str]], allowed_users: frozenset[str]) -> None:
         self.advertised = advertised
         self.allowed_users = allowed_users
+
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        """Author the ``worker`` status variant from this backend's autoscaler.
+
+        Counts are left zero: the controller overlays DB-derived worker health
+        counts after this returns (the backend never reads the controller DB).
+        """
+        autoscaler_status = self.autoscaler.get_status() if self.autoscaler is not None else vm_pb2.AutoscalerStatus()
+        return controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
+        )
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
         """Assemble this backend's scheduling context and run the Iris pipeline.

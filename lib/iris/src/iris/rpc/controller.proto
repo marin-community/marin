@@ -580,6 +580,25 @@ message Controller {
 
   message ListBackendsRequest {}
 
+  // Worker-daemon fleet detail: the backend's own autoscaler view plus the
+  // controller's DB-derived worker health counts. Populated for backends that
+  // carry WORKER_DAEMON.
+  message WorkerFleetDetail {
+    iris.vm.AutoscalerStatus autoscaler = 1;
+    int32 healthy_worker_count = 2;
+    int32 total_worker_count = 3;
+  }
+
+  // The expanded, backend-authored status each TaskBackend.status() returns. The
+  // variant follows the backend's BackendCapability: a CLUSTER_VIEW backend
+  // fills ``kubernetes``; a WORKER_DAEMON backend fills ``worker``.
+  message BackendStatus {
+    oneof detail {
+      GetKubernetesClusterStatusResponse kubernetes = 1;
+      WorkerFleetDetail worker = 2;
+    }
+  }
+
   message BackendSummary {
     string backend_id = 1;
     string name = 2;
@@ -594,6 +613,8 @@ message Controller {
     int32 running_task_count = 11;
     bool has_autoscaler = 12;
     map<string, int32> capacity_health = 13;
+    // Expanded per-backend status for the always-on Backends tab's detail panel.
+    BackendStatus detail = 14;
   }
 
   message UnroutableJob {

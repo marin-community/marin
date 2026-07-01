@@ -1658,8 +1658,16 @@ def _backend_mock(name, capabilities, autoscaler=None, cluster_status=None, allo
     backend.autoscaler = autoscaler
     backend.advertised_attributes.return_value = advertised if advertised is not None else {}
     backend.allowed_users = allowed_users if allowed_users is not None else frozenset({"*"})
+    # status() authors the BackendStatus variant the backend's capability selects:
+    # a cluster view returns ``kubernetes``; everything else returns ``worker``.
     if cluster_status is not None:
         backend.get_cluster_status.return_value = cluster_status
+        backend.status.return_value = controller_pb2.Controller.BackendStatus(kubernetes=cluster_status)
+    else:
+        autoscaler_status = autoscaler.get_status.return_value if autoscaler is not None else vm_pb2.AutoscalerStatus()
+        backend.status.return_value = controller_pb2.Controller.BackendStatus(
+            worker=controller_pb2.Controller.WorkerFleetDetail(autoscaler=autoscaler_status)
+        )
     return backend
 
 
@@ -1917,6 +1925,129 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
     assert resp["unroutableSample"][0]["reason"] == "no backend matches the job's constraints"
+
+
+def test_list_backends_worker_detail_reports_autoscaler_and_health_counts(state, scheduler, tmp_path, log_client):
+    """ListBackends.detail.worker carries the backend's autoscaler groups plus DB-derived health counts."""
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            DEFAULT_BACKEND_ID: _backend_mock(
+                "worker",
+                frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+                autoscaler=_status_autoscaler("tpu-v5e-us"),
+            )
+        },
+    )
+    register_worker(state, "w-healthy-1", "10.0.0.1:8080", make_worker_metadata(), scale_group="tpu-v5e")
+    register_worker(state, "w-healthy-2", "10.0.0.2:8080", make_worker_metadata(), scale_group="tpu-v5e")
+    register_worker(state, "w-dead", "10.0.0.3:8080", make_worker_metadata(), healthy=False, scale_group="tpu-v5e")
+
+    detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
+        "detail"
+    ]["worker"]
+    assert detail["totalWorkerCount"] == 3
+    assert detail["healthyWorkerCount"] == 2
+    # The backend's own autoscaler groups are surfaced and tagged with its backend_id.
+    assert [g["name"] for g in detail["autoscaler"]["groups"]] == ["tpu-v5e-us"]
+    assert detail["autoscaler"]["groups"][0]["backendId"] == DEFAULT_BACKEND_ID
+
+
+def test_list_backends_worker_detail_overlays_running_task_counts(state, scheduler, tmp_path, log_client, job_request):
+    """detail.worker runs the same usability overlay as GetAutoscalerStatus, so a VM
+    with a running task reports a non-zero running_task_count (not idle)."""
+    autoscaler = Mock()
+    autoscaler.get_status.return_value = vm_pb2.AutoscalerStatus(
+        groups=[
+            vm_pb2.ScaleGroupStatus(
+                name="tpu-v5e-us",
+                slices=[
+                    vm_pb2.SliceInfo(
+                        slice_id="s1",
+                        state="ready",
+                        vms=[vm_pb2.VmInfo(vm_id="w-run", state=vm_pb2.VM_STATE_READY)],
+                    )
+                ],
+            )
+        ],
+    )
+    client = _multi_backend_client(
+        state,
+        scheduler,
+        tmp_path,
+        log_client,
+        {
+            DEFAULT_BACKEND_ID: _backend_mock(
+                "worker",
+                frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
+                autoscaler=autoscaler,
+            )
+        },
+    )
+    # Place a running task on the VM's worker so the overlay's DB lookup finds it.
+    wid = register_worker(state, "w-run", "10.0.0.9:8080", make_worker_metadata(), scale_group="tpu-v5e")
+    task_id = submit_job(state, "run-job", job_request).task(0)
+    with state._db.transaction() as cur:
+        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
+    with state._db.transaction() as cur:
+        apply_task_observations(
+            cur,
+            [
+                WorkerTaskUpdates(
+                    worker_id=wid,
+                    updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+                )
+            ],
+            health=state._health,
+            endpoints=state._endpoints,
+            now=Timestamp.now(),
+        )
+
+    detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
+        "detail"
+    ]["worker"]
+    vm = detail["autoscaler"]["groups"][0]["slices"][0]["vms"][0]
+    assert vm["runningTaskCount"] == 1
+
+
+def test_list_backends_kubernetes_detail_from_cluster_state(state, scheduler, tmp_path, log_client):
+    """ListBackends.detail.kubernetes carries the CLUSTER_VIEW backend's synced node/pod snapshot."""
+    client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client)
+    k8s.seed_resource(
+        K8sResource.NODES,
+        "node-1",
+        {
+            "kind": "Node",
+            "metadata": {"name": "node-1"},
+            "spec": {"taints": []},
+            "status": {"allocatable": {"cpu": "8", "memory": "16Gi"}},
+        },
+    )
+    k8s.seed_resource(
+        K8sResource.PODS,
+        "iris-task-0",
+        {
+            "kind": "Pod",
+            "metadata": {
+                "name": "iris-task-0",
+                "labels": {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, "iris.task_id": "job.0"},
+            },
+            "status": {"phase": "Running"},
+        },
+    )
+    provider.sync(ControlSnapshot(worker_addresses={}, reconcile_rows=[], timeout_rows=[]))
+
+    detail = next(b for b in rpc_post(client, "ListBackends")["backends"] if b["backendId"] == DEFAULT_BACKEND_ID)[
+        "detail"
+    ]["kubernetes"]
+    assert detail["totalNodes"] == 1
+    assert detail["podStatuses"][0]["podName"] == "iris-task-0"
+    assert detail["podStatuses"][0]["phase"] == "Running"
+
+    provider.close()
 
 
 def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_path, log_client):

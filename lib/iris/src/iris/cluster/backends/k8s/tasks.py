@@ -1695,6 +1695,10 @@ class K8sTaskProvider:
         """Return cluster status from the latest sync() snapshot. No kubectl calls."""
         return self._cluster_state.to_status_response(self.namespace)
 
+    def status(self) -> controller_pb2.Controller.BackendStatus:
+        """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
+        return controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status())
+
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
