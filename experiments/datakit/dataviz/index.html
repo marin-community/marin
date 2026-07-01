@@ -1,0 +1,218 @@
+<!doctype html>
+<!-- Copyright The Marin Authors / SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datakit dataviz</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--border:#dcdfe4;--text:#1c2024;--muted:#687078;--accent:#2563eb;--heat0:#eef2f7;--heat:#2563eb}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--border)}
+header h1{margin:0;font-size:16px;display:inline-block}
+header .path{color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-size:12px;margin-left:10px}
+.tabs{display:flex;gap:4px;padding:0 20px;background:var(--panel);border-bottom:1px solid var(--border)}
+.tab{padding:8px 14px;cursor:pointer;border:1px solid transparent;border-bottom:none;font-size:13px;color:var(--muted)}
+.tab.active{color:var(--text);background:var(--bg);border-color:var(--border);border-radius:6px 6px 0 0;font-weight:600}
+main{padding:16px 20px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+select,input{padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:13px}
+input[type=search]{width:220px}
+button{padding:6px 12px;border:1px solid var(--border);border-radius:5px;background:#fff;cursor:pointer;font-size:13px}
+button:hover{background:#f0f4fb}button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.stats{display:flex;flex-wrap:wrap;gap:20px}
+.stat b{display:block;font-size:17px}.stat span{color:var(--muted);font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:12px/1.45 ui-monospace,Menlo,monospace;max-height:240px;overflow:auto}
+.bar{height:16px;background:var(--accent);border-radius:2px;display:inline-block;vertical-align:middle}
+.barrow{display:flex;gap:8px;align-items:center;font-size:12px;margin:1px 0}
+.barrow .lbl{width:150px;color:var(--muted);text-align:right;font-family:ui-monospace,monospace}
+.barrow .cnt{color:var(--muted)}
+.hidden{display:none!important}
+.muted{color:var(--muted)}.spin{color:var(--accent)}
+.heat{border-collapse:collapse}.heat td,.heat th{text-align:center;padding:1px;font-size:11px}
+.cell{width:64px;height:34px;border:1px solid var(--border);border-radius:3px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;line-height:1.05}
+.cell.empty{cursor:default;background:#fafbfc;color:#c4c8cc}.cell.sel{outline:3px solid var(--accent);outline-offset:-1px}
+.rowhdr{color:var(--muted);font-family:ui-monospace,monospace;padding-right:6px!important;text-align:right}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:#eef2f7;color:var(--muted);margin-left:6px}
+</style>
+</head>
+<body>
+<header><h1>datakit dataviz</h1><span class="path" id="path">loading…</span><span class="pill" id="verified"></span></header>
+<div class="tabs" id="tabs"></div>
+<main id="main"></main>
+
+<script>
+const fmt=n=>(n==null?'—':Number(n).toLocaleString());
+let OV=null;   // overview payload
+let TAB='overview';
+
+async function getJSON(u){const r=await fetch(u);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.statusText);return r.json();}
+async function runQuery(view,params){
+  const {query_id}=await (await fetch('api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({view,params})})).json();
+  for(;;){
+    const d=await getJSON('api/result/'+query_id);
+    if(d.status==='done')return d.result;
+    if(d.status==='error')throw new Error(d.error);
+    await new Promise(r=>setTimeout(r,700));
+  }
+}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
+function el(html){const t=document.createElement('template');t.innerHTML=html.trim();return t.content.firstChild;}
+function bars(rows,labelFn,countFn){
+  const max=Math.max(1,...rows.map(countFn));
+  return rows.map(r=>`<div class="barrow"><span class="lbl">${esc(labelFn(r))}</span><span class="bar" style="width:${Math.round(260*countFn(r)/max)}px"></span><span class="cnt">${fmt(countFn(r))}</span></div>`).join('');
+}
+function sourceSelect(id){
+  return `<select id="${id}">${OV.sources.map(s=>`<option>${esc(s)}</option>`).join('')}</select>`;
+}
+function sampleTable(rows,cols){
+  if(!rows||!rows.length)return '<p class="muted">no rows</p>';
+  const head=cols.map(c=>`<th>${esc(c)}</th>`).join('');
+  const body=rows.map(r=>'<tr>'+cols.map(c=>c==='text'?`<td><pre>${esc(r[c])}</pre></td>`:`<td>${esc(r[c])}</td>`).join('')+'</tr>').join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+function loading(node){node.innerHTML='<p class="spin">running query…</p>';}
+function fail(node,e){node.innerHTML=`<p style="color:#b00">error: ${esc(e.message)}</p>`;}
+
+const TABS=[['overview','Overview'],['normalized','Normalized'],['decontam','Decontamination'],['dedup','Deduplication'],['quality','Classifier'],['store','Store']];
+function renderTabs(){
+  document.getElementById('tabs').innerHTML=TABS.map(([k,l])=>`<div class="tab ${k===TAB?'active':''}" data-k="${k}">${l}</div>`).join('');
+  document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{TAB=t.dataset.k;renderTabs();render();});
+}
+
+function render(){
+  const m=document.getElementById('main');
+  if(TAB==='overview')return renderOverview(m);
+  if(TAB==='normalized')return renderStageSource(m,'normalized');
+  if(TAB==='decontam')return renderStageSource(m,'decontam');
+  if(TAB==='quality')return renderStageSource(m,'quality');
+  if(TAB==='dedup')return renderDedup(m);
+  if(TAB==='store')return renderStore(m);
+}
+
+function renderOverview(m){
+  const c=OV.counters||{};
+  const cov=k=>`${(OV.resolved[k]||[]).length}/${OV.sources.length}`;
+  m.innerHTML=`<div class="card"><div class="stats">
+    <div class="stat"><b>${fmt(OV.sources.length)}</b><span>sources</span></div>
+    <div class="stat"><b>${fmt(OV.buckets.length)}</b><span>buckets (k=${OV.cluster_view})</span></div>
+    <div class="stat"><b>${fmt(c['datakit_store/records_in'])}</b><span>records in</span></div>
+    <div class="stat"><b>${fmt(c['datakit_store/records_out'])}</b><span>records out (stored)</span></div>
+    <div class="stat"><b>${fmt(c['datakit_store/contaminated_dropped'])}</b><span>decontam dropped</span></div>
+    <div class="stat"><b>${fmt(c['datakit_store/dedup_noncanonical_dropped'])}</b><span>dedup dropped</span></div>
+  </div></div>
+  <div class="card"><h3>Stage coverage (resolved via lineage)</h3>
+    <p class="muted">data prefix <code>${esc(OV.data_prefix)}</code> · tokenizer <code>${esc(OV.tokenizer)}</code></p>
+    <table><tbody>
+     <tr><td>normalize</td><td>${cov('normalize')}</td></tr>
+     <tr><td>decontam</td><td>${cov('decontam')}</td></tr>
+     <tr><td>cluster_assign</td><td>${cov('cluster_assign')}</td></tr>
+     <tr><td>quality</td><td>${cov('quality')} ${OV.resolved.quality.length?'':'<span class="muted">(ambiguous — set DATAVIZ_QUALITY_MODEL + DATAVIZ_DOMAIN_CENTROIDS)</span>'}</td></tr>
+     <tr><td>dedup</td><td>${OV.dedup?esc(OV.dedup):'<span class="muted">unresolved</span>'}</td></tr>
+    </tbody></table></div>`;
+}
+
+function renderStageSource(m,stage){
+  const resolved=new Set(OV.resolved[stage==='normalized'?'normalize':stage]||[]);
+  m.innerHTML=`<div class="card"><div class="controls">
+    <label>source ${sourceSelect('src')}</label>
+    ${stage==='normalized'?'<input type="search" id="q" placeholder="search text…">':''}
+    <button class="primary" id="go">load</button></div>
+    <div id="out"><p class="muted">pick a source and load</p></div></div>`;
+  const out=document.getElementById('out');
+  document.getElementById('go').onclick=async()=>{
+    const src=document.getElementById('src').value;
+    if(!resolved.has(src)){out.innerHTML=`<p class="muted">${stage} not resolved for ${esc(src)}</p>`;return;}
+    loading(out);
+    try{
+      if(stage==='normalized')await loadNormalized(out,src);
+      else if(stage==='decontam')await loadDecontam(out,src);
+      else if(stage==='quality')await loadQuality(out,src);
+    }catch(e){fail(out,e);}
+  };
+}
+async function loadNormalized(out,src){
+  const [st,hist,samp]=await Promise.all([
+    runQuery('normalized_stats',{source:src}),
+    runQuery('normalized_hist',{source:src}),
+    runQuery('normalized_samples',{source:src,n:20,search:document.getElementById('q').value}),
+  ]);
+  out.innerHTML=`<div class="stats">
+     <div class="stat"><b>${fmt(st.docs)}</b><span>docs</span></div>
+     <div class="stat"><b>${fmt(st.avg_chars)}</b><span>avg chars</span></div>
+     <div class="stat"><b>${fmt(st.median_chars)}</b><span>median chars</span></div>
+     <div class="stat"><b>${fmt(st.max_chars)}</b><span>max chars</span></div></div>
+   <h4>char-length distribution (log buckets)</h4>${bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs)}
+   <h4>samples</h4>${sampleTable(samp,['id','chars','text'])}`;
+}
+async function loadDecontam(out,src){
+  const [st,samp]=await Promise.all([runQuery('decontam_stats',{source:src}),runQuery('decontam_samples',{source:src,n:20})]);
+  out.innerHTML=`<div class="stats">
+     <div class="stat"><b>${fmt(st.docs)}</b><span>docs</span></div>
+     <div class="stat"><b>${fmt(st.contaminated)}</b><span>contaminated</span></div>
+     <div class="stat"><b>${st.contaminated_pct}%</b><span>contaminated</span></div>
+     <div class="stat"><b>${st.max_overlap}</b><span>max overlap</span></div></div>
+   <h4>most-contaminated samples</h4>${sampleTable(samp,['id','max_overlap','text'])}`;
+}
+async function loadQuality(out,src){
+  const hist=await runQuery('quality_hist',{source:src});
+  out.innerHTML=`<h4>quality score distribution</h4>${bars(hist,r=>`${r.lo}–${r.hi}`,r=>r.docs)}
+    <h4>high-score samples</h4><div id="qs" class="muted">loading…</div>`;
+  const samp=await runQuery('quality_samples',{source:src,lo:0.8,hi:1.01,n:15});
+  document.getElementById('qs').innerHTML=sampleTable(samp,['score','text']);
+}
+
+function renderDedup(m){
+  const c=OV.counters||{};
+  m.innerHTML=`<div class="card"><h3>Deduplication</h3>
+   <div class="stats">
+     <div class="stat"><b>${fmt(c['datakit_store/records_in'])}</b><span>records in</span></div>
+     <div class="stat"><b>${fmt(c['datakit_store/dedup_noncanonical_dropped'])}</b><span>dropped as non-canonical</span></div>
+     <div class="stat"><b>${fmt(c['datakit_store/records_out'])}</b><span>kept (canonical/singleton)</span></div>
+   </div>
+   <p class="muted">fuzzy-dup dataset: <code>${OV.dedup?esc(OV.dedup):'unresolved'}</code></p>
+   <p class="muted">per-cluster duplicate exploration (from the connected-components metadata) is not yet wired.</p></div>`;
+}
+
+function renderStore(m){
+  const clusters=[...new Set(OV.buckets.map(b=>b.cluster_id))].sort((a,b)=>a-b);
+  const nq=OV.n_quality_buckets, by={}; let mx=0;
+  OV.buckets.forEach(b=>{by[b.cluster_id+':'+b.quality_bucket]=b;mx=Math.max(mx,b.total_elements)});
+  let h='<table class="heat"><thead><tr><th></th>';
+  for(let q=0;q<nq;q++)h+=`<th>q${q}</th>`;h+='</tr></thead><tbody>';
+  for(const cl of clusters){h+=`<tr><td class="rowhdr">c${cl}</td>`;
+    for(let q=0;q<nq;q++){const b=by[cl+':'+q];
+      if(!b){h+='<td><div class="cell empty">·</div></td>';continue;}
+      const f=mx?Math.log1p(b.total_elements)/Math.log1p(mx):0;
+      h+=`<td><div class="cell" data-c="${cl}" title="c${cl} q${q} ${esc(b.quality_range)}: ${fmt(b.total_elements)} docs" style="background:color-mix(in srgb,var(--heat) ${Math.round(f*100)}%,var(--heat0));color:${f>.55?'#fff':'var(--text)'}"><span>${fmt(b.total_elements)}</span></div></td>`;
+    }h+='</tr>';}
+  h+='</tbody></table>';
+  m.innerHTML=`<div class="card"><h3>cluster × quality store (docs per bucket)</h3>${h}<p class="muted">click a cluster row to sample documents assigned to it</p></div><div class="card" id="ss"><p class="muted">select a cluster</p></div>`;
+  document.querySelectorAll('.cell[data-c]').forEach(c=>c.onclick=()=>selCluster(+c.dataset.c));
+}
+async function selCluster(cl){
+  document.querySelectorAll('.cell').forEach(c=>c.classList.toggle('sel',+c.dataset.c===cl));
+  const ss=document.getElementById('ss');loading(ss);
+  try{const rows=await runQuery('store_samples',{cluster:cl,n:12});
+    ss.innerHTML=`<h4>cluster ${cl} — sample documents (exact text, cross-source)</h4>${sampleTable(rows,['source','text'])}`;
+  }catch(e){fail(ss,e);}
+}
+
+(async()=>{
+  try{
+    OV=await getJSON('api/overview');
+    document.getElementById('path').textContent=OV.store_path;
+    const v=document.getElementById('verified');
+    v.textContent=OV.verified?'lineage verified':'lineage best-effort';
+    v.style.background=OV.verified?'#e7f5ee':'#fff7e6';
+    renderTabs();render();
+  }catch(e){document.getElementById('main').innerHTML=`<p style="color:#b00">failed to load overview: ${esc(e.message)}</p>`;}
+})();
+</script>
+</body>
+</html>
