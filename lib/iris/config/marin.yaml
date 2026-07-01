@@ -153,20 +153,21 @@ tpu_pools:
         runtime_version: tpu-ubuntu2204-base
     # Chips are fungible across slice sizes up to the reservation: 1024 physical
     # v4 chips (= 2048 TensorCores; the GCP vN-SIZE suffix counts TensorCores, so
-    # a v4-8 slice is 4 chips). per-size max_slices = 2048 / size keeps each size
-    # individually bounded; reservation_chips bounds them jointly.
+    # a v4-8 slice is 4 chips). Each size's max_slices defaults to
+    # reservation_chips // chips-per-slice (the most that size could ever place),
+    # so the shared budget is the only number to keep in sync.
     fungible_reservation: true
     reservation_chips: 1024
     sizes:
-      8:    { buffer_slices: 0, max_slices: 256 }
-      16:   { buffer_slices: 0, max_slices: 128 }
-      32:   { buffer_slices: 0, max_slices: 64 }
-      64:   { buffer_slices: 0, max_slices: 32 }
-      128:  { buffer_slices: 0, max_slices: 16 }
-      256:  { buffer_slices: 0, max_slices: 8 }
-      512:  { buffer_slices: 0, max_slices: 4 }
-      1024: { buffer_slices: 0, max_slices: 2 }
-      2048: { buffer_slices: 0, max_slices: 1 }
+      8: {}
+      16: {}
+      32: {}
+      64: {}
+      128: {}
+      256: {}
+      512: {}
+      1024: {}
+      2048: {}
 
 # ---------------------------------------------------------------------------
 # Non-TPU scale groups (not part of tpu_pools)

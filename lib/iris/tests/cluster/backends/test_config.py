@@ -1918,7 +1918,12 @@ tpu_pools:
   {pool_yaml}
 """
 
-    def _reserved_pool(self, *, fungible: str, chips: str, capacity: str = "reserved") -> str:
+    _DEFAULT_SIZES = """\
+      8:  { max_slices: 256 }
+      16: { max_slices: 128 }"""
+
+    def _reserved_pool(self, *, fungible: str, chips: str, capacity: str = "reserved", sizes: str | None = None) -> str:
+        sizes = self._DEFAULT_SIZES if sizes is None else sizes
         return f"""\
 v4-res:
     family: v4
@@ -1930,8 +1935,7 @@ v4-res:
         service_account: test@test.iam.gserviceaccount.com
         runtime_version: tpu-ubuntu2204-base
 {fungible}{chips}    sizes:
-      8:  {{ max_slices: 256 }}
-      16: {{ max_slices: 128 }}"""
+{sizes}"""
 
     def test_expands_reservation_chips_onto_every_member(self, tmp_path: Path):
         pool_yaml = self._reserved_pool(
@@ -1956,6 +1960,51 @@ v4-res:
         for n, g in config.scale_groups.items():
             if n.startswith("tpu_v4-res_"):
                 assert g.reservation_chips == 0
+
+    def test_max_slices_defaults_to_reservation_ceiling_when_omitted(self, tmp_path: Path):
+        # v4-8 is 4 chips/slice, v4-16 is 8: 1024 // 4 = 256, 1024 // 8 = 128.
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: {}\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        assert config.scale_groups["tpu_v4-res_8-us-central2-b"].max_slices == 256
+        assert config.scale_groups["tpu_v4-res_16-us-central2-b"].max_slices == 128
+
+    def test_max_slices_override_within_ceiling_is_honored(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: { max_slices: 10 }\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        assert config.scale_groups["tpu_v4-res_8-us-central2-b"].max_slices == 10
+        assert config.scale_groups["tpu_v4-res_16-us-central2-b"].max_slices == 128
+
+    def test_max_slices_override_exceeding_ceiling_rejected(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: { max_slices: 300 }\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="exceeds"):
+            load_config(p)
+
+    def test_max_slices_required_when_not_fungible(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(fungible="", chips="", sizes="      8: {}\n      16: {}")
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="'max_slices' is required"):
+            load_config(p)
 
     _FUNGIBLE = "    fungible_reservation: true\n"
 

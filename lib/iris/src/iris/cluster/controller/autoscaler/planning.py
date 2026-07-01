@@ -140,31 +140,51 @@ class _PoolCandidate(NamedTuple):
     want_slices: int
 
 
-def _admit_in_band_order(candidates: list[_PoolCandidate], free_chips: int) -> dict[str, int]:
+def _admit_in_band_order(candidates: list[_PoolCandidate], free_chips: int, draining_chips: int) -> dict[str, int]:
     """Admit per-group new-slice counts under one fungible pool's chip budget.
 
     ``candidates`` are the groups of one ``quota_pool`` that want to launch this tick
     (lower band = higher priority). Returns ``group_name -> admitted_slices``. Groups
-    are admitted highest priority first; once a band cannot fully launch, every
-    strictly-lower-priority group on the pool is denied — so the remaining chips are
-    held for the high-priority slice (e.g. accumulating across a multi-tick drain)
-    instead of being re-grabbed by the lower-priority slice they were freed from.
-    Same-band groups share the remaining chips greedily.
+    are admitted highest priority first, each taking as many slices as its own share
+    of the remaining budget allows. When a band comes up short, the rest of the
+    budget is reserved for it — locking out every strictly-lower-priority group — but
+    only when relief is actually achievable: enough chips free now plus
+    ``draining_chips`` to eventually cover one more of its slices (e.g. a multi-tick
+    drain still trickling chips back). Otherwise the shortfall can't be resolved by
+    holding back lower bands, so they stay free to use what's left instead of sitting
+    idle. Same-band groups share the remaining chips greedily.
     """
     remaining = max(0, free_chips)
     admitted: dict[str, int] = {}
-    blocking_band: int | None = None
+    # Once set: every strictly-lower band is admitted nothing further this tick —
+    # the rest of the pool's budget is held in reserve for this band.
+    reserved_for_band: int | None = None
+
     for cand in sorted(candidates, key=lambda c: (c.band, c.name)):
-        if blocking_band is not None and cand.band > blocking_band:
+        # A higher-priority band already claimed the remaining budget.
+        if reserved_for_band is not None and cand.band > reserved_for_band:
             admitted[cand.name] = 0
             continue
+
+        # Grant this candidate as many slices as its own share of the remaining
+        # budget allows.
         grant = (
             cand.want_slices if cand.chips_per_slice <= 0 else min(cand.want_slices, remaining // cand.chips_per_slice)
         )
         admitted[cand.name] = grant
         remaining -= grant * cand.chips_per_slice
-        if grant < cand.want_slices and blocking_band is None:
-            blocking_band = cand.band
+
+        # This candidate came up short. Only start reserving the rest of the budget
+        # for it if relief is achievable: the chips free now plus what's draining
+        # would cover one more of its slices. Otherwise the chips free now plus
+        # what's draining can't satisfy this band's next slice anyway, so holding
+        # them back from lower bands wouldn't help — leave those free to use what's
+        # left.
+        fully_granted = grant == cand.want_slices
+        relief_achievable = remaining + draining_chips >= cand.chips_per_slice
+        if not fully_granted and reserved_for_band is None and relief_achievable:
+            reserved_for_band = cand.band
+
     return admitted
 
 
@@ -183,7 +203,8 @@ def _cap_fungible_pool_launches(
     pool). This caps each pool's total ``slices_to_add * chips`` to the chips free
     against the reservation *now* (live + in-flight slices, excluding draining chips
     that aren't free until reaped), admitting groups highest priority first and
-    holding chips for an unsatisfied high-priority slice rather than a lower one.
+    holding chips for an unsatisfied high-priority slice rather than a lower one —
+    but only while a drain in progress could still make that hold worthwhile.
     Non-fungible groups are untouched.
     """
     if not ledger.pools:
@@ -208,7 +229,8 @@ def _cap_fungible_pool_launches(
 
     capped = dict(group_plans)
     for pool_id, candidates in candidates_by_pool.items():
-        for name, grant in _admit_in_band_order(candidates, ledger.free_chips(pool_id)).items():
+        admitted = _admit_in_band_order(candidates, ledger.free_chips(pool_id), ledger.draining_chips(pool_id))
+        for name, grant in admitted.items():
             if grant != capped[name].slices_to_add:
                 capped[name] = replace(capped[name], slices_to_add=grant)
     return capped

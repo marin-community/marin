@@ -91,6 +91,11 @@ class ReservationLedger:
         pool = self.pools.get(pool_id)
         return pool.incoming_chips if pool is not None else 0
 
+    def draining_chips(self, pool_id: str) -> int:
+        """Chips currently draining in this pool (0 if the pool is absent)."""
+        pool = self.pools.get(pool_id)
+        return pool.draining_chips if pool is not None else 0
+
     def inflight_slices(self, pool_id: str, variant: str) -> int:
         """In-flight (non-draining) slice count of ``variant`` in ``pool_id`` (0 if absent)."""
         pool = self.pools.get(pool_id)

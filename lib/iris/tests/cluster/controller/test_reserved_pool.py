@@ -267,26 +267,53 @@ def test_highest_band_claims_chips_first():
     # PROD v4-16 (8 chips) and BATCH v4-8 (4 chips) each want 2 slices; only 16
     # chips free. PROD takes all 16; BATCH gets nothing.
     admitted = _admit_in_band_order(
-        [_PoolCandidate("v4-8", BATCH, 4, 2), _PoolCandidate("v4-16", PRODUCTION, 8, 2)], free_chips=16
+        [_PoolCandidate("v4-8", BATCH, 4, 2), _PoolCandidate("v4-16", PRODUCTION, 8, 2)], free_chips=16, draining_chips=0
     )
     assert admitted == {"v4-16": 2, "v4-8": 0}
 
 
-def test_head_of_line_holds_chips_for_unsatisfiable_high_band():
-    # Only 4 chips free — too few for the PROD v4-16 slice (8). The 4 chips are
-    # held for it, NOT handed to the BATCH v4-8 that would fit. This is the
-    # re-grab the cap prevents while a preemptor accumulates chips over ticks.
+def test_head_of_line_admits_lower_band_when_no_relief_is_coming():
+    # Only 4 chips free — too few for the PROD v4-16 slice (8) — and nothing is
+    # draining, so no more chips are ever coming for PROD from this pass. Holding
+    # them back from BATCH would just leave them idle, so BATCH gets them.
     admitted = _admit_in_band_order(
-        [_PoolCandidate("v4-16", PRODUCTION, 8, 1), _PoolCandidate("v4-8", BATCH, 4, 1)], free_chips=4
+        [_PoolCandidate("v4-16", PRODUCTION, 8, 1), _PoolCandidate("v4-8", BATCH, 4, 1)],
+        free_chips=4,
+        draining_chips=0,
+    )
+    assert admitted == {"v4-16": 0, "v4-8": 1}
+
+
+def test_head_of_line_holds_chips_when_relief_would_satisfy_high_band():
+    # Same 4 free chips for the PROD v4-16 slice (8), but 4 more are draining —
+    # enough (4 free + 4 draining = 8) to eventually complete PROD's slice. The 4
+    # free chips are held for PROD instead of being re-grabbed by BATCH, which
+    # would just force PROD to preempt it right back once the drain lands.
+    admitted = _admit_in_band_order(
+        [_PoolCandidate("v4-16", PRODUCTION, 8, 1), _PoolCandidate("v4-8", BATCH, 4, 1)],
+        free_chips=4,
+        draining_chips=4,
     )
     assert admitted == {"v4-16": 0, "v4-8": 0}
+
+
+def test_head_of_line_admits_lower_band_when_relief_is_insufficient():
+    # 4 free chips + 2 draining = 6 incoming, still short of the 8 the PROD v4-16
+    # slice needs. The drain in flight can never satisfy PROD on its own, so
+    # holding back BATCH buys nothing; BATCH gets the 4 free chips.
+    admitted = _admit_in_band_order(
+        [_PoolCandidate("v4-16", PRODUCTION, 8, 1), _PoolCandidate("v4-8", BATCH, 4, 1)],
+        free_chips=4,
+        draining_chips=2,
+    )
+    assert admitted == {"v4-16": 0, "v4-8": 1}
 
 
 def test_same_band_groups_share_remaining():
     # Equal priority: no head-of-line between them; admitted greedily in name
     # order until chips run out (a takes 2 of the 3 affordable, b takes 1).
     admitted = _admit_in_band_order(
-        [_PoolCandidate("a", PRODUCTION, 4, 2), _PoolCandidate("b", PRODUCTION, 4, 2)], free_chips=12
+        [_PoolCandidate("a", PRODUCTION, 4, 2), _PoolCandidate("b", PRODUCTION, 4, 2)], free_chips=12, draining_chips=0
     )
     assert admitted == {"a": 2, "b": 1}
 
@@ -295,17 +322,20 @@ def test_unranked_band_yields_to_ranked():
     admitted = _admit_in_band_order(
         [_PoolCandidate("v4-8", UNRANKED_DEMAND_BAND, 4, 1), _PoolCandidate("v4-16", PRODUCTION, 8, 1)],
         free_chips=8,
+        draining_chips=0,
     )
     assert admitted == {"v4-16": 1, "v4-8": 0}
 
 
 def test_demand_trimmed_to_budget():
-    assert _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 10)], free_chips=16) == {"v4-8": 4}
+    admitted = _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 10)], free_chips=16, draining_chips=0)
+    assert admitted == {"v4-8": 4}
 
 
 def test_over_committed_pool_admits_nothing():
     # Negative free chips (pool already over budget) launches nothing more.
-    assert _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 2)], free_chips=-4) == {"v4-8": 0}
+    admitted = _admit_in_band_order([_PoolCandidate("v4-8", BATCH, 4, 2)], free_chips=-4, draining_chips=0)
+    assert admitted == {"v4-8": 0}
 
 
 # -- build_scale_plan caps a fungible pool's launches to its reservation budget --
@@ -327,10 +357,29 @@ def test_high_band_slice_wins_reservation_over_low_band():
 
 
 def test_drained_victim_cannot_regrab_chips_held_for_preemptor():
-    # 16-chip pool, 12 consumed by three live v4-8 slices -> 4 free. A PROD v4-16
-    # (needs 8) is waiting; the just-drained victim's re-queued BATCH v4-8 (needs
-    # 4) would fit the 4 free chips. Head-of-line holds them for the preemptor:
-    # neither launches this tick, so the chips accumulate rather than re-grab.
+    # 16-chip pool: two live v4-8 slices (8 chips) plus one just-drained v4-8
+    # slice (4 chips, still draining) -> 4 free, 8 incoming. A PROD v4-16 (needs
+    # 8) is waiting; the incoming chips are enough to eventually satisfy it, so
+    # they're held for the preemptor instead of letting the re-queued BATCH
+    # v4-8 (needs 4) re-grab the 4 that are free right now.
+    v16 = _ready_group("v4-16", "v4-16", quota_pool="pool-a", reservation_chips=16, slice_ids=[])
+    v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2", "a3"])
+    v8.drain_slice("a3")
+    groups = {g.name: g for g in (v16, v8)}
+
+    plan = build_scale_plan(
+        groups, _routing({"v4-16": 1, "v4-8": 1}, {"v4-16": PRODUCTION, "v4-8": BATCH}), Timestamp.now()
+    )
+
+    assert plan.group_plans["v4-16"].slices_to_add == 0
+    assert plan.group_plans["v4-8"].slices_to_add == 0
+
+
+def test_head_of_line_admits_lower_band_when_nothing_is_draining():
+    # Same 16-chip pool and the same PROD v4-16 deficit, but all three v4-8
+    # slices are live — nothing draining. 4 free chips can never cover PROD's
+    # 8-chip need on their own, and nothing is coming to make up the
+    # difference, so holding them back from BATCH would just leave them idle.
     v16 = _ready_group("v4-16", "v4-16", quota_pool="pool-a", reservation_chips=16, slice_ids=[])
     v8 = _ready_group("v4-8", "v4-8", quota_pool="pool-a", reservation_chips=16, slice_ids=["a1", "a2", "a3"])
     groups = {g.name: g for g in (v16, v8)}
@@ -340,7 +389,7 @@ def test_drained_victim_cannot_regrab_chips_held_for_preemptor():
     )
 
     assert plan.group_plans["v4-16"].slices_to_add == 0
-    assert plan.group_plans["v4-8"].slices_to_add == 0
+    assert plan.group_plans["v4-8"].slices_to_add == 1
 
 
 def test_launch_cap_reads_free_not_incoming_so_draining_chips_are_unavailable():

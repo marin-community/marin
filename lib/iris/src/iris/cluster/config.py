@@ -29,7 +29,7 @@ import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
 from rigging.timing import Duration
 
-from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
+from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, TpuTopologyInfo, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
     AcceleratorType,
@@ -1014,6 +1014,34 @@ def _validate_fungible_reservation(
     return reservation_chips
 
 
+def _resolve_max_slices(
+    pool_name: str, size: object, size_overrides: dict, reservation_chips: int, topo: TpuTopologyInfo
+) -> int:
+    """Resolve one size's ``max_slices``, defaulting fungible members to the reservation ceiling.
+
+    On a fungible reservation, a single size can never legitimately place more
+    than ``reservation_chips // topo.chip_count`` slices — the shared budget is
+    the real constraint, so that ceiling is a safe default and an override may
+    only tighten it, never loosen it (a looser override would just be the same
+    hand-computed number the ceiling already gives you, restated and liable to
+    drift). Non-fungible pools (``reservation_chips == 0``) still require
+    ``max_slices`` explicitly.
+    """
+    default_max_slices = reservation_chips // topo.chip_count if reservation_chips else None
+    max_slices = size_overrides.get("max_slices", default_max_slices)
+    if max_slices is None:
+        raise ValueError(
+            f"tpu_pools.{pool_name}.sizes.{size}: 'max_slices' is required (pool is not a fungible reservation)"
+        )
+    if reservation_chips and max_slices > reservation_chips // topo.chip_count:
+        raise ValueError(
+            f"tpu_pools.{pool_name}.sizes.{size}: max_slices={max_slices} exceeds "
+            f"reservation_chips // chip_count = {reservation_chips // topo.chip_count}; "
+            "a single size can never legitimately use more than the shared reservation allows"
+        )
+    return max_slices
+
+
 def _expand_tpu_pools(data: dict) -> None:
     """Expand ``tpu_pools`` into per-(size, zone) scale groups.
 
@@ -1069,6 +1097,7 @@ def _expand_tpu_pools(data: dict) -> None:
             size_overrides = sizes[size] or {}
             variant = tpu_variant_name(family, size_int)
             topo = get_tpu_topology(variant)
+            max_slices = _resolve_max_slices(pool_name, size, size_overrides, reservation_chips, topo)
 
             for zone in zones:
                 sg_name = f"tpu_{pool_name}_{size_int}-{zone}"
@@ -1094,7 +1123,7 @@ def _expand_tpu_pools(data: dict) -> None:
                     "allocation_tier": tier_index + 1,
                     "resources": resources,
                     "buffer_slices": size_overrides.get("buffer_slices", 0),
-                    "max_slices": size_overrides["max_slices"],
+                    "max_slices": max_slices,
                     "slice_template": st,
                 }
                 if reservation_chips:
