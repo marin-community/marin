@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import threading
 import time
 
@@ -144,6 +145,10 @@ class QueryRunner:
             self._con.execute(f"SET memory_limit = '{settings.memory_limit_bytes}B'")
         # Spill to local disk when a query exceeds memory_limit, so big sorts/joins/aggregates
         # go out-of-core instead of OOM-failing; a query that still doesn't fit fails alone.
+        # DuckDB clears a query's spill on normal end (success or failure), but a process
+        # crash (OOM-kill) orphans temp files — so wipe the dir on startup. Safe: only one
+        # server child runs at a time and it hasn't served yet.
+        shutil.rmtree(config.spill_directory, ignore_errors=True)
         os.makedirs(config.spill_directory, exist_ok=True)
         self._con.execute(f"SET temp_directory = {_sql_literal(config.spill_directory)}")
         # Bound the spill so a runaway query can't fill the (small, ~100 GB) boot disk and

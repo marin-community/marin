@@ -139,6 +139,19 @@ def test_run_query_spills_under_memory_pressure_and_survives(tmp_path):
         runner.close()
 
 
+def test_startup_wipes_orphaned_spill_files(tmp_path):
+    # a killed process orphans temp files; a fresh runner must clear the spill dir on startup
+    (tmp_path / "ducky").mkdir()
+    spill = tmp_path / "spill"
+    spill.mkdir()
+    (spill / "orphan.tmp").write_text("leftover from a crashed process")
+    runner = QueryRunner(_make_config(str(tmp_path), spill_directory=str(spill)), resources=_SMALL_HOST)
+    try:
+        assert not (spill / "orphan.tmp").exists()
+    finally:
+        runner.close()
+
+
 def test_run_query_is_concurrency_safe(make_runner):
     runner = make_runner()  # one runner shared across threads; each query uses its own cursor
 
