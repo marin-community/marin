@@ -48,6 +48,11 @@ pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:12px/1.45 ui-monospa
 
 <script>
 const fmt=n=>(n==null?'—':Number(n).toLocaleString());
+function cnum(n){if(n==null)return '—';n=+n;const a=Math.abs(n);
+  if(a>=1e9)return (n/1e9).toFixed(a>=1e10?0:1)+'B';
+  if(a>=1e6)return (n/1e6).toFixed(a>=1e7?0:1)+'M';
+  if(a>=1e3)return (n/1e3).toFixed(a>=1e4?0:1)+'K';
+  return String(n);}
 let OV=null;   // overview payload
 let TAB='overview';
 
@@ -239,27 +244,45 @@ async function loadDedup(out,src){
   }catch(e){fail(out,e);}
 }
 
+let STORESORT={key:'docs',dir:-1};
 function renderStore(m){
-  const clusters=[...new Set(OV.buckets.map(b=>b.cluster_id))].sort((a,b)=>a-b);
-  const nq=OV.n_quality_buckets, by={}; let mx=0;
-  OV.buckets.forEach(b=>{by[b.cluster_id+':'+b.quality_bucket]=b;mx=Math.max(mx,b.total_elements)});
-  let h='<table class="heat"><thead><tr><th></th>';
-  for(let q=0;q<nq;q++)h+=`<th>q${q}</th>`;h+='</tr></thead><tbody>';
-  for(const cl of clusters){h+=`<tr><td class="rowhdr">c${cl}</td>`;
-    for(let q=0;q<nq;q++){const b=by[cl+':'+q];
-      if(!b){h+='<td><div class="cell empty">·</div></td>';continue;}
-      const f=mx?Math.log1p(b.total_elements)/Math.log1p(mx):0;
-      h+=`<td><div class="cell" data-c="${cl}" title="c${cl} q${q} ${esc(b.quality_range)}: ${fmt(b.total_elements)} docs" style="background:color-mix(in srgb,var(--heat) ${Math.round(f*100)}%,var(--heat0));color:${f>.55?'#fff':'var(--text)'}"><span>${fmt(b.total_elements)}</span></div></td>`;
-    }h+='</tr>';}
-  h+='</tbody></table>';
-  m.innerHTML=`<div class="card"><h3>cluster × quality store (docs per bucket)</h3>${h}<p class="muted">click a cluster row to sample documents assigned to it</p></div><div class="card" id="ss"><p class="muted">select a cluster</p></div>`;
-  document.querySelectorAll('.cell[data-c]').forEach(c=>c.onclick=()=>selCluster(+c.dataset.c));
+  const nq=OV.n_quality_buckets;
+  const qr=q=>{const b=OV.buckets.find(x=>x.quality_bucket===q);return b?b.quality_range:('q'+q);};
+  const cl={};
+  OV.buckets.forEach(b=>{const r=cl[b.cluster_id]||(cl[b.cluster_id]={cluster:b.cluster_id,docs:0,tokens:0,q:{}});
+    r.docs+=b.total_elements;r.tokens+=b.total_tokens;r.q[b.quality_bucket]=(r.q[b.quality_bucket]||0)+b.total_elements;});
+  let rows=Object.values(cl);
+  const tot={docs:0,tokens:0,q:{}};rows.forEach(r=>{tot.docs+=r.docs;tot.tokens+=r.tokens;for(let q=0;q<nq;q++)tot.q[q]=(tot.q[q]||0)+(r.q[q]||0);});
+  const k=STORESORT.key;
+  rows.sort((a,b)=>{let x,y;if(k==='cluster'){x=a.cluster;y=b.cluster;}else if(k==='docs'||k==='tokens'){x=a[k];y=b[k];}else{x=a.q[+k]||0;y=b.q[+k]||0;}return (x>y?1:x<y?-1:0)*STORESORT.dir;});
+  // per-cluster quality mix: stacked share q0..q4 (light->dark = low->high quality)
+  const qmix=r=>{let s='';for(let q=0;q<nq;q++){const f=r.docs?(r.q[q]||0)/r.docs:0;
+    s+=`<span title="q${q} ${esc(qr(q))}: ${(100*f).toFixed(0)}%" style="height:11px;width:${(100*f).toFixed(1)}%;background:rgba(37,99,235,${(0.2+0.8*q/(nq-1)).toFixed(2)})"></span>`;}
+    return `<span style="display:inline-flex;width:80px;border-radius:2px;overflow:hidden;vertical-align:middle">${s}</span>`;};
+  const th=(kk,l,al)=>`<th data-k="${kk}" style="cursor:pointer;text-align:${al||'right'}">${l}${STORESORT.key===kk?(STORESORT.dir>0?' ▲':' ▼'):''}</th>`;
+  let head=th('cluster','cluster','left');for(let q=0;q<nq;q++)head+=th(String(q),'q'+q);head+=th('docs','docs')+'<th>quality mix</th>'+th('tokens','tokens');
+  const rowHtml=r=>{let t=`<td style="text-align:left">c${r.cluster}</td>`;for(let q=0;q<nq;q++)t+=`<td style="text-align:right">${cnum(r.q[q]||0)}</td>`;
+    return `<tr>${t}<td style="text-align:right"><b>${cnum(r.docs)}</b></td><td>${qmix(r)}</td><td style="text-align:right">${cnum(r.tokens)}</td></tr>`;};
+  let totrow=`<tr style="font-weight:600;border-top:2px solid var(--border)"><td style="text-align:left">all</td>`;
+  for(let q=0;q<nq;q++)totrow+=`<td style="text-align:right">${cnum(tot.q[q]||0)}</td>`;
+  totrow+=`<td style="text-align:right">${cnum(tot.docs)}</td><td></td><td style="text-align:right">${cnum(tot.tokens)}</td></tr>`;
+  m.innerHTML=`<div class="card"><div class="stats">
+     <div class="stat"><b>${cnum(tot.docs)}</b><span>documents</span></div>
+     <div class="stat"><b>${cnum(tot.tokens)}</b><span>tokens</span></div>
+     <div class="stat"><b>${rows.length}</b><span>clusters (k=${OV.cluster_view})</span></div>
+     <div class="stat"><b>${OV.buckets.length}</b><span>buckets</span></div></div>
+   <p class="muted">q0..q${nq-1} = quality score ranges ${[...Array(nq).keys()].map(q=>esc(qr(q))).join(' · ')}; click a header to sort</p>
+   <table><thead><tr>${head}</tr></thead><tbody>${rows.map(rowHtml).join('')}${totrow}</tbody></table></div>
+   <div class="card"><div class="controls"><label>sample cluster <select id="sc">${rows.map(r=>`<option value="${r.cluster}">c${r.cluster} · ${cnum(r.docs)} docs</option>`).join('')}</select></label>
+     <input type="number" id="sn" value="12" min="1" max="50" style="width:64px"><button class="primary" id="sgo">sample documents</button></div>
+     <div id="ss"><p class="muted">exact original text of documents assigned to a cluster (joined across sources)</p></div></div>`;
+  m.querySelectorAll('th[data-k]').forEach(t=>t.onclick=()=>{const kk=t.dataset.k;STORESORT=(STORESORT.key===kk)?{key:kk,dir:-STORESORT.dir}:{key:kk,dir:(kk==='cluster'?1:-1)};render();});
+  document.getElementById('sgo').onclick=()=>sampleCluster(+document.getElementById('sc').value,+document.getElementById('sn').value);
 }
-async function selCluster(cl){
-  document.querySelectorAll('.cell').forEach(c=>c.classList.toggle('sel',+c.dataset.c===cl));
+async function sampleCluster(cluster,n){
   const ss=document.getElementById('ss');loading(ss);
-  try{const rows=await runQuery('store_samples',{cluster:cl,n:12});
-    ss.innerHTML=`<h4>cluster ${cl} — sample documents (exact text, cross-source)</h4>${sampleTable(rows,['source','text'])}`;
+  try{const rows=await runQuery('store_samples',{cluster:cluster,n:n||12});
+    ss.innerHTML=`<h4>cluster ${cluster} — ${rows.length} sample documents (exact text)</h4>${sampleTable(rows,['source','text'])}`;
   }catch(e){fail(ss,e);}
 }
 
