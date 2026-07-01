@@ -437,7 +437,13 @@
     }
     async function plotSelected() {
       if (!current) return;
-      if (!selectedMetrics.length) { $("charts").textContent = "add metrics above to plot"; return; }
+      if (!selectedMetrics.length) {
+        const noData = !current.m.history.columns.length;
+        $("charts").textContent = noData
+          ? (current.m.state === "running" ? "no data yet — this run is still starting; charts update automatically as metrics arrive." : "this run logged no scalar metrics.")
+          : "add metrics above to plot";
+        return;
+      }
       const need = selectedMetrics.filter((k) => !(k in metricData));
       if (need.length) {
         const data = (await jget("api/metrics?" + qs({ ...current.r, keys: need.join(",") }))).metrics || {};
@@ -518,6 +524,12 @@
       current.config = flatten(cfg.error ? {} : cfg);
       current.summary = flatten(summ.error ? {} : summ);
       renderKV();
+      // If the run had no metrics at load and they've now appeared, seed the default charts.
+      if (!selectedMetrics.length && m.history.columns.length) {
+        selectedMetrics = DEFAULT_METRICS.filter((k) => m.history.columns.includes(k));
+        if (!selectedMetrics.length) selectedMetrics = m.history.columns.slice(0, 6);
+        renderChips();
+      }
       metricData = {};  // running run grew — re-fetch series
       await plotSelected();
       if (!stillCurrent(r)) return;
