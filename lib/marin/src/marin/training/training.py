@@ -179,9 +179,9 @@ def resolve_checkpointer_output_path(checkpointer: CheckpointerConfig, output_pa
 def apply_output_path(train_config: TrainConfigT, output_path: str) -> TrainConfigT:
     """Set every run-scoped path on ``train_config`` from ``output_path``.
 
-    Points the checkpointer at ``output_path`` (see :func:`resolve_checkpointer_output_path`) and sets
-    ``hf_save_path`` to ``<output_path>/hf``. Adapter LM/DPO exports PEFT rather than a merged HF model,
-    so for those the merged ``hf_save_path`` is cleared and ``peft_save_path`` takes the HF location.
+    Points the checkpointer at ``output_path`` and sets ``hf_save_path`` to ``<output_path>/hf``.
+    Adapter LM/DPO exports PEFT rather than a merged HF model, so for those the merged ``hf_save_path``
+    is cleared and ``peft_save_path`` takes the HF location.
     """
     config = replace(  # type: ignore[bad-specialization]
         train_config,
