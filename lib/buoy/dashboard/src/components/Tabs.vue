@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TabId } from '../types'
 
-defineProps<{ active: TabId; hasProfile: boolean }>()
+defineProps<{ active: TabId; hasProfile: boolean; live?: string | null }>()
 defineEmits<{ change: [tab: TabId] }>()
 
 const TABS: { id: TabId; label: string }[] = [
@@ -23,5 +23,9 @@ const TABS: { id: TabId; label: string }[] = [
     >
       {{ t.label }}
     </button>
+    <span v-if="live" class="ml-auto flex items-center gap-1 self-center pr-1 text-xs font-semibold text-status-success">
+      <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-status-success"></span>
+      live · updated {{ live }}
+    </span>
   </nav>
 </template>

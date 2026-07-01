@@ -9,7 +9,7 @@ import ProfileTab from './components/ProfileTab.vue'
 import { useRun, type RunRef } from './composables/useRun'
 import type { TabId } from './types'
 
-const { manifest, config, summary, loading, error, load, refetch } = useRun()
+const { manifest, config, summary, loading, error, updatedAt, load, refetch } = useRun()
 const activeTab = ref<TabId>('summary')
 const runRef = ref<RunRef | null>(null)
 const sidebarOpen = ref(true)
@@ -72,7 +72,12 @@ onMounted(() => {
 
       <div v-else-if="manifest" class="flex flex-col">
         <div class="p-6 pb-3"><RunHeader :manifest="manifest" @refetch="refetch" /></div>
-        <Tabs :active="activeTab" :has-profile="!!manifest.profile" @change="(t) => (activeTab = t)" />
+        <Tabs
+          :active="activeTab"
+          :has-profile="!!manifest.profile"
+          :live="manifest.state === 'running' ? updatedAt : null"
+          @change="(t) => (activeTab = t)"
+        />
         <div class="p-6">
           <SummaryTab v-if="activeTab === 'summary'" :summary="summary" :config="config" />
           <ChartsTab

@@ -49,6 +49,7 @@ export function useRun() {
   const summary = ref<Flat>({})
   const loading = ref<{ verb: string; detail: string } | null>(null)
   const error = ref<string | null>(null)
+  const updatedAt = ref('') // wall-clock time of the last successful snapshot (for the live indicator)
   let seq = 0
   let current: RunRef | null = null
   let liveTimer: ReturnType<typeof setTimeout> | null = null
@@ -76,6 +77,7 @@ export function useRun() {
     manifest.value = m
     config.value = flatten(cfg)
     summary.value = flatten(summ)
+    updatedAt.value = new Date().toLocaleTimeString()
     return m
   }
 
@@ -119,5 +121,5 @@ export function useRun() {
 
   const refetch = () => (current ? load(current, true) : undefined)
 
-  return { manifest, config, summary, loading, error, load, refetch }
+  return { manifest, config, summary, loading, error, updatedAt, load, refetch }
 }
