@@ -41,11 +41,6 @@ logger = logging.getLogger("buoy.mirror")
 # by mirror_status so the SPA can show progress while a run is being fetched.
 Progress = Callable[[str], None]
 
-# A running run is re-mirrored every WATCH_INTERVAL while it is being viewed; the
-# watcher stops once the run reaches a terminal state or no view has touched it
-# within WATCH_IDLE_TIMEOUT (so an abandoned page doesn't refresh forever).
-WATCH_INTERVAL = 30.0
-WATCH_IDLE_TIMEOUT = 180.0
 TERMINAL_STATES = frozenset({"finished", "crashed", "failed", "killed", "preempted"})
 
 
@@ -291,7 +286,9 @@ class MirrorManager:
 
     Single-replica by design (the service runs ``replicas: 1``): in-process state
     is the whole truth. ``start`` is non-blocking; ``status`` is what the SPA
-    polls until ``done``, then reads the cache.
+    polls until ``done``, then reads the cache. Live refresh of a running run is
+    browser-driven — the open page re-``start``s a mirror on its own timer — so
+    there is no server-side watcher to keep running after the page closes.
     """
 
     def __init__(self, cfg: BuoyConfig) -> None:
@@ -299,8 +296,6 @@ class MirrorManager:
         self._guard = threading.Lock()
         self._states: dict[str, _State] = {}
         self._locks: dict[str, threading.Lock] = {}
-        self._watch_touch: dict[str, float] = {}
-        self._watching: set[str] = set()
         self._progress: dict[str, str] = {}
 
     def _lock_for(self, key: str) -> threading.Lock:
@@ -346,45 +341,3 @@ class MirrorManager:
         if cache.read_manifest(prefix) is not None:
             return {"state": "done"}
         return {"state": "absent"}
-
-    def touch_running(self, ref: RunRef, manifest: dict) -> threading.Thread | None:
-        """Keep the cache fresh for a running run while a page is viewing it.
-
-        Each view bumps a last-touch time and ensures a single background watcher
-        is re-mirroring the run every ``WATCH_INTERVAL`` until it reaches a terminal
-        state — or until no view has touched it within ``WATCH_IDLE_TIMEOUT`` (so a
-        closed tab stops the refresh loop). Returns the watcher thread when one is
-        started, else None (finished run, or a watcher is already live).
-        """
-        if manifest.get("state") != "running":
-            return None
-        with self._guard:
-            self._watch_touch[ref.key] = time.monotonic()
-            if ref.key in self._watching:
-                return None
-            self._watching.add(ref.key)
-        thread = threading.Thread(target=self._watch_worker, args=(ref,), daemon=True)
-        thread.start()
-        return thread
-
-    def _watch_worker(self, ref: RunRef) -> None:
-        try:
-            while True:
-                time.sleep(WATCH_INTERVAL)
-                with self._guard:
-                    idle = time.monotonic() - self._watch_touch.get(ref.key, 0.0)
-                if idle > WATCH_IDLE_TIMEOUT:
-                    logger.info("watch idle %.0fs, stopping for %s", idle, ref.key)
-                    return
-                try:
-                    with self._lock_for(ref.key):
-                        manifest = mirror_run(self._cfg, ref, refresh=True)
-                except Exception:
-                    logger.exception("watch refresh failed for %s", ref.key)
-                    continue
-                if manifest.get("state") in TERMINAL_STATES:
-                    logger.info("run %s reached %s; stopping watch", ref.key, manifest.get("state"))
-                    return
-        finally:
-            with self._guard:
-                self._watching.discard(ref.key)

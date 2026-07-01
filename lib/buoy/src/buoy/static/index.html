@@ -96,9 +96,6 @@
     .chart-bar .cbtn:hover { color: #4a5568; }
     .chart-bar .cbtn.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
     .chart-bar .sm-slider { width: 64px; accent-color: #0d3b66; margin: 0 .1em; }
-    .chart-bar .seg-mini { display: inline-flex; gap: 2px; }
-    .chart-bar .seg-mini button { font-size: 10px; width: 19px; padding: 1px 0; border: 1px solid #e2e8f0; background: #fff; color: #a0aec0; cursor: pointer; border-radius: 3px; }
-    .chart-bar .seg-mini button.active { background: #0d3b66; color: #fff; border-color: #0d3b66; }
     .chart-bar .close { font-weight: 700; margin-left: .15em; }
     .chart-bar .close:hover { color: #e53e3e; border-color: #e53e3e; }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
@@ -297,20 +294,28 @@
       profileStarted = false;
       current = null;
       showLoading("mirroring", runId, "starting…");
-      await fetch("api/mirror", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entity, project, run_id: runId }),
-      });
-      poll(r, "mirroring");
-    }
-
-    async function poll(r, verb) {
-      const s = await jget("api/mirror_status?" + qs(r));
-      if (r.run !== loadedRunId) return;  // a newer run was selected mid-poll — drop this stale loop
-      if (s.state === "running") { showLoading(verb, r.run, s.detail || "…"); setTimeout(() => poll(r, verb), 1500); return; }
+      const s = await mirrorJob(r, { onProgress: (d) => { if (r.run === loadedRunId) showLoading("mirroring", runId, d); } });
+      if (r.run !== loadedRunId) return;  // a newer run was selected mid-mirror — drop this stale load
       if (s.state === "error") { hideLoading(); $("status").textContent = "mirror failed: " + s.error; return; }
       if (s.state === "absent") { hideLoading(); $("status").textContent = "run not found"; return; }
       render(r);
+    }
+
+    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+    // POST a mirror for `r` and resolve with its terminal status ("done"/"error"/"absent").
+    // The one place that drives the mirror→poll loop, shared by load, refetch, and live refresh.
+    async function mirrorJob(r, { refresh = false, onProgress } = {}) {
+      await fetch("api/mirror", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run, refresh }),
+      });
+      for (;;) {
+        const s = await jget("api/mirror_status?" + qs(r));
+        if (s.state !== "running") return s;
+        if (onProgress) onProgress(s.detail || "…");
+        await sleep(1500);
+      }
     }
 
     // Force a re-mirror (refresh=true re-downloads everything incl. the profile
@@ -321,18 +326,10 @@
       clearTimeout(liveTimer);
       profileStarted = false;
       showLoading("refetching", r.run, "starting…");
-      await fetch("api/mirror", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run, refresh: true }),
-      });
-      const p = async () => {
-        if (!stillCurrent(r)) return;
-        const s = await jget("api/mirror_status?" + qs(r));
-        if (s.state === "running") { showLoading("refetching", r.run, s.detail || "…"); setTimeout(p, 1500); return; }
-        if (s.state === "error") { hideLoading(); $("status").textContent = "refetch failed: " + s.error; return; }
-        render(r);
-      };
-      p();
+      const s = await mirrorJob(r, { refresh: true, onProgress: (d) => { if (stillCurrent(r)) showLoading("refetching", r.run, d); } });
+      if (!stillCurrent(r)) return;
+      if (s.state === "error") { hideLoading(); $("status").textContent = "refetch failed: " + s.error; return; }
+      render(r);
     }
 
     // ---- render helpers (user-controlled text via textContent — no innerHTML) ----
@@ -514,6 +511,8 @@
     const stillCurrent = (r) =>
       current && current.r.entity === r.entity && current.r.project === r.project && current.r.run === r.run;
     async function refreshLive(r) {
+      if (!stillCurrent(r)) return;
+      await mirrorJob(r);  // browser drives the re-mirror (incremental → cheap); no server watcher
       if (!stillCurrent(r)) return;
       const m = await jget("api/manifest?" + qs(r));
       if (!stillCurrent(r)) return;
