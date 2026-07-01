@@ -39,6 +39,7 @@ from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.runtime import RLRuntimeHandles
+from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig, TeacherScoringMode
 from marin.rl.weight_transfer import WeightTransferConfig
 
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, RolloutWithCount
@@ -144,6 +145,7 @@ class TrainWorkerConfig:
     weight_transfer: WeightTransferConfig
     curriculum_config: CurriculumConfig
     loss: RLLossModule
+    teacher: TeacherConfig | None
     tokenizer: MarinTokenizer
     run_id: str
 
@@ -270,6 +272,7 @@ class TrainWorker:
     loss_module: RLLossModule
     initial_model: LmHeadModel | None
     reference_model: LmHeadModel | None
+    teacher_model: LmHeadModel | None
 
     def __init__(
         self,
@@ -337,9 +340,20 @@ class TrainWorker:
     def _build_models(self):
         """Build the initial policy model and optional retained reference model."""
         config = self.config
-        model_key = jrandom.PRNGKey(config.seed)
+        model_key, teacher_key = jrandom.split(jrandom.PRNGKey(config.seed))
         vocab_size = config.vocab_size if config.vocab_size is not None else self.tokenizer.vocab_size
         Vocab = hax.Axis("vocab", vocab_size)
+        loss_needs_teacher = self.loss_module.needs_teacher_model()
+        teacher_config = config.teacher
+
+        if not loss_needs_teacher and teacher_config is not None:
+            raise ValueError("TeacherConfig was provided, but the configured RL loss does not use a teacher model")
+        if loss_needs_teacher and teacher_config is None:
+            raise ValueError("TeacherConfig is required when the RL loss needs a teacher model")
+        if loss_needs_teacher and teacher_config.scoring_mode != TeacherScoringMode.LOCAL_SAMPLED_TOKEN:
+            raise ValueError(f"Unsupported teacher scoring mode: {teacher_config.scoring_mode}")
+        if loss_needs_teacher and teacher_config.checkpoint == INITIAL_POLICY_TEACHER_CHECKPOINT:
+            raise ValueError("TeacherConfig checkpoint marker was not resolved before TrainWorker model loading")
 
         if config.initial_checkpoint is not None:
             logger.info(f"Loading initial model from checkpoint: {config.initial_checkpoint}")
@@ -362,6 +376,23 @@ class TrainWorker:
         # Keep compatibility for callers that inspect the worker immediately after construction.
         # The zero-KL path clears this alias once trainer state has been materialized.
         self.reference_model = self.initial_model
+        self.teacher_model = None
+
+        if not loss_needs_teacher:
+            return
+
+        assert teacher_config is not None
+        logger.info("Loading teacher model from checkpoint: %s", teacher_config.checkpoint)
+        self.teacher_model = load_model_from_checkpoint(
+            checkpoint=teacher_config.checkpoint,
+            model_config=config.model,
+            trainer_config=config.trainer,
+            vocab_axis=Vocab,
+            tokenizer=self.tokenizer,
+            mesh=config.trainer.device_mesh,
+            axis_mapping=self.config.trainer.parameter_axis_mapping,
+            key=teacher_key,
+        )
 
     def _drop_bootstrap_model_references(self) -> None:
         """Release one-shot bootstrap model references once trainer state exists."""
@@ -450,7 +481,7 @@ class TrainWorker:
         try:
             config = self.config
             optimizer = config.optimizer.build(config.trainer.num_train_steps)
-            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None, teacher_model=self.teacher_model)
 
             @jax.jit
             def _loss_function(model, batch, key):

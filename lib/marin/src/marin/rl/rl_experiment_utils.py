@@ -35,6 +35,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
+from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.training.training import LevanterCheckpoint
 
@@ -78,6 +79,7 @@ class RLExperimentConfig:
     model_config: ModelConfig
     rl_loss: RLLossModule
     experiment_name_suffix: str
+    teacher: TeacherConfig | None = None
 
     # trainer params
     train_batch_size: int = 1024
@@ -173,6 +175,14 @@ def _vllm_load_format_for_model_path(model_path: str) -> str:
         return "runai_streamer"
 
     return "dummy"
+
+
+def _resolve_teacher_config(teacher: TeacherConfig | None, model_path: str) -> TeacherConfig | None:
+    if teacher is None:
+        return None
+    if teacher.checkpoint == INITIAL_POLICY_TEACHER_CHECKPOINT:
+        return dataclasses.replace(teacher, checkpoint=model_path)
+    return teacher
 
 
 def config_class_path(config_class: type[HFCompatConfig]) -> str:
@@ -325,6 +335,7 @@ def _build_rl_job_config(
             fallback_sampling=_build_vllm_fallback_sampling_config(config),
         ),
         initial_checkpoint=model_path,
+        teacher=_resolve_teacher_config(config.teacher, model_path),
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,

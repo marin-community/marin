@@ -32,6 +32,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig, RolloutWorkerConfig
+from marin.rl.teacher import TeacherConfig
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
@@ -117,6 +118,7 @@ class RLJobConfig:
 
     # Model & initialization (with defaults)
     initial_checkpoint: str | None = None
+    teacher: TeacherConfig | None = None
 
     # Infrastructure
     rollout_storage: RolloutStorageConfig = field(
@@ -204,6 +206,12 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
     can call it without importing :class:`~marin.rl.rl_job.RLJob`, which would
     re-introduce the rl_job <-> orchestration import cycle.
     """
+    loss_needs_teacher = config.train_params.rl_loss.needs_teacher_model()
+    if loss_needs_teacher and config.teacher is None:
+        raise ValueError("TeacherConfig is required when the RL loss needs a teacher model")
+    if not loss_needs_teacher and config.teacher is not None:
+        raise ValueError("TeacherConfig was provided, but the configured RL loss does not use a teacher model")
+
     # Create tokenizer
     tokenizer = make_tokenizer(config.tokenizer)
 
@@ -263,6 +271,7 @@ def build_worker_configs(config: RLJobConfig) -> tuple[TrainWorkerConfig, Rollou
         trainer=config.trainer,
         optimizer=config.train_params.optimizer,
         loss=config.train_params.rl_loss,
+        teacher=config.teacher,
         tokenizer=tokenizer,
         replay_buffer=config.train_params.replay_buffer,
         initial_checkpoint=config.initial_checkpoint,

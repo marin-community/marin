@@ -228,6 +228,10 @@ def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
     assert RLOOLoss(kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.01)).needs_reference_model()
 
 
+def test_rloo_loss_does_not_need_teacher_model():
+    assert not RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)).needs_teacher_model()
+
+
 @pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
 def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled(mode: KLMode):
     with pytest.raises(ValueError, match="reference_model is required"):

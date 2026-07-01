@@ -321,6 +321,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             clip_epsilon_low=5.0,
             clip_epsilon_high=5.0,
         ),
+        teacher=None,
         initial_checkpoint=None,
     )
 

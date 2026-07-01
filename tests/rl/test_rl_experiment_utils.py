@@ -23,6 +23,7 @@ from marin.rl.rl_experiment_utils import (
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
+from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig
 from marin.training.training import LevanterCheckpoint
 
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
@@ -229,6 +230,28 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
 
     assert job_config.inference_config.engine.load_format == "dummy"
     assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_resolves_initial_policy_teacher_checkpoint(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=dataclasses.replace(
+            _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+            teacher=TeacherConfig(checkpoint=INITIAL_POLICY_TEACHER_CHECKPOINT),
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.teacher == TeacherConfig(checkpoint="gs://marin-us-central1/models/test-model")
 
 
 def test_run_rl_experiment_step_returns_a_path_ref(monkeypatch):

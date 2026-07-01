@@ -44,7 +44,17 @@ class RLLossModule(Protocol):
         """Return whether this loss needs a separately retained reference model."""
         ...
 
-    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+    def needs_teacher_model(self) -> bool:
+        """Return whether this loss needs a separately retained teacher model."""
+        ...
+
+    def create_loss_fn(
+        self,
+        reference_model: eqx.Module | None,
+        train_model: eqx.Module,
+        *,
+        teacher_model: eqx.Module | None = None,
+    ) -> Callable:
         """Create the loss function for training."""
         ...
 
@@ -474,8 +484,19 @@ class RLOOLoss(RLLossModule):
         """Return whether KL regularization requires a reference model."""
         return self.kl.enabled()
 
-    def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
+    def needs_teacher_model(self) -> bool:
+        """Return whether this loss needs a separately retained teacher model."""
+        return False
+
+    def create_loss_fn(
+        self,
+        reference_model: eqx.Module | None,
+        train_model: eqx.Module,
+        *,
+        teacher_model: eqx.Module | None = None,
+    ) -> Callable:
         """Create the loss function for training."""
+        del teacher_model
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when KL regularization is enabled")
         if self.log_policy_entropy and self.vocab_tile_size is not None:

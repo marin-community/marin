@@ -142,6 +142,25 @@ def test_replay_buffer():
         assert rollouts is not None
 
 
+def test_replay_buffer_ignores_empty_rollout_batches():
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=4,
+        alpha=3.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        seed=42,
+    )
+
+    replay_buffer.add_batches([RolloutBatch(groups=[], metadata=RolloutMetadata())])
+
+    assert replay_buffer.size() == 0
+
+
 def test_replay_buffer_recency_bias():
     """Test that high recency bias strongly favors recent (higher index) samples."""
     # Create a batch with 100 rollouts across multiple groups for better testing
