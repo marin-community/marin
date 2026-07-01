@@ -132,6 +132,41 @@ def test_finished_run_uses_history_artifact(cfg, patch_wandb, tmp_path):
     assert list(frame["train/loss"]) == [3.0, 2.0, 1.0]
 
 
+def test_running_run_incremental_history(cfg, patch_wandb):
+    # A running run's refresh fetches only new steps and appends a shard.
+    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
+    api = patch_wandb(run)
+    m1 = mirror_run(cfg, REF)
+    assert m1["history"]["rows"] == 3 and m1["history"]["last_step"] == 2 and m1["history"]["parts"] == 1
+
+    run.rows = _rows(5, ("train/loss",))  # run advanced to steps 0..4
+    m2 = mirror_run(cfg, REF, refresh=True)
+    assert m2["history"]["rows"] == 5  # 3 kept + 2 appended
+    assert m2["history"]["last_step"] == 4
+    assert m2["history"]["parts"] == 2  # a new shard for steps 3,4 (old shard untouched)
+    assert api.run_calls == 2
+
+    prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
+    frame = cache.read_history(prefix, ["_step", "train/loss"])
+    assert sorted(frame["_step"].tolist()) == [0, 1, 2, 3, 4]
+
+
+def test_read_history_tolerates_column_absent_from_all_shards(cfg, patch_wandb):
+    # A metric can be advertised in the manifest (summary) yet appear in no shard —
+    # e.g. it turns numeric on a refresh that adds no new rows. read_history must
+    # still return it (all-NaN), not omit it (which would KeyError get_metrics).
+    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
+    patch_wandb(run)
+    mirror_run(cfg, REF)
+    run.summary_dict = {"train/loss": 1.0, "eval/acc": 0.5}  # newly advertised, no new rows
+    manifest = mirror_run(cfg, REF, refresh=True)
+    assert "eval/acc" in manifest["history"]["columns"]
+
+    prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
+    frame = cache.read_history(prefix, ["_step", "eval/acc"])
+    assert "eval/acc" in frame.columns and frame["eval/acc"].isna().all()
+
+
 def test_running_run_scans_despite_history_artifact(cfg, patch_wandb, tmp_path):
     # A running run's history artifact is a stale snapshot — mirror must scan for freshness.
     art_dir = tmp_path / "h"
