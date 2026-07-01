@@ -72,8 +72,10 @@ function bars(rows,labelFn,countFn){
   const max=Math.max(1,...rows.map(countFn));
   return rows.map(r=>`<div class="barrow"><span class="lbl">${esc(labelFn(r))}</span><span class="bar" style="width:${Math.round(260*countFn(r)/max)}px"></span><span class="cnt">${fmt(countFn(r))}</span></div>`).join('');
 }
-function sourceSelect(id){
-  return `<select id="${id}">${OV.sources.map(s=>`<option>${esc(s)}</option>`).join('')}</select>`;
+function sourceInput(id,sources){
+  const dl=id+'-dl';
+  return `<input list="${dl}" id="${id}" placeholder="type to filter source…" autocomplete="off" spellcheck="false" style="width:280px">`+
+    `<datalist id="${dl}">${sources.map(s=>`<option value="${esc(s)}"></option>`).join('')}</datalist>`;
 }
 function sampleTable(rows,cols){
   if(!rows||!rows.length)return '<p class="muted">no rows</p>';
@@ -148,14 +150,15 @@ function renderSources(m){
 function renderStageSource(m,stage){
   const resolved=new Set(OV.resolved[stage==='normalized'?'normalize':stage]||[]);
   m.innerHTML=`<div class="card"><div class="controls">
-    <label>source ${sourceSelect('src')}</label>
+    <label>source ${sourceInput('src',OV.sources)}</label>
     ${stage==='normalized'?'<input type="search" id="q" placeholder="search text…">':''}
     <button class="primary" id="go">load</button></div>
-    <div id="out"><p class="muted">pick a source and load</p></div></div>`;
+    <div id="out"><p class="muted">type a source name and load</p></div></div>`;
   const out=document.getElementById('out');
   document.getElementById('go').onclick=async()=>{
-    const src=document.getElementById('src').value;
-    if(!resolved.has(src)){out.innerHTML=`<p class="muted">${stage} not resolved for ${esc(src)}</p>`;return;}
+    const src=document.getElementById('src').value.trim();
+    if(!src){out.innerHTML='<p class="muted">type a source name</p>';return;}
+    if(!resolved.has(src)){out.innerHTML=`<p class="muted">${stage} not resolved for ${esc(src)} (unknown or unresolved source)</p>`;return;}
     loading(out);
     try{
       if(stage==='normalized')await loadNormalized(out,src);
@@ -214,11 +217,11 @@ function renderDedup(m){
      <div class="stat"><b>${fmt(c['datakit_store/records_out'])}</b><span>kept (canonical/singleton)</span></div>
    </div>
    <p class="muted">fuzzy-dup dataset: <code>${OV.dedup?esc(OV.dedup):'unresolved'}</code></p></div>
-   <div class="card"><div class="controls"><label>source <select id="ds">${ds.map(s=>`<option>${esc(s)}</option>`).join('')}</select></label>
+   <div class="card"><div class="controls"><label>source ${sourceInput('ds',ds)}</label>
      <button class="primary" id="dgo">load duplicate clusters</button></div>
-     <div id="dout"><p class="muted">pick a source to inspect its duplicate clusters (canonical kept vs dropped)</p></div></div>`;
+     <div id="dout"><p class="muted">type a source to inspect its duplicate clusters (canonical kept vs dropped)</p></div></div>`;
   const out=document.getElementById('dout');
-  document.getElementById('dgo').onclick=()=>loadDedup(out,document.getElementById('ds').value);
+  document.getElementById('dgo').onclick=()=>{const s=document.getElementById('ds').value.trim();if(s)loadDedup(out,s);};
 }
 async function loadDedup(out,src){
   const s=(OV.source_summary||[]).find(r=>r.source===src)||{};
