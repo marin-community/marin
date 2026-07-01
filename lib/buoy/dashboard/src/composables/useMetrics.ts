@@ -19,13 +19,24 @@ export function useMetrics() {
     data.value = {}
   }
 
+  async function fetchKeys(r: RunRef, keys: string[]): Promise<Record<string, Series>> {
+    if (!keys.length) return {}
+    const res = await api<{ metrics: MetricSeries }>(
+      `api/metrics?${qs({ entity: r.entity, project: r.project, run: r.run_id, keys: keys.join(',') })}`,
+    )
+    return Object.fromEntries(keys.map((k) => [k, res.metrics[k] ?? { x: [], y: [] }]))
+  }
+
   async function ensure(r: RunRef) {
     const need = selected.value.filter((k) => !(k in data.value))
-    if (!need.length) return
-    const res = await api<{ metrics: MetricSeries }>(
-      `api/metrics?${qs({ entity: r.entity, project: r.project, run: r.run_id, keys: need.join(',') })}`,
-    )
-    for (const k of need) data.value[k] = res.metrics[k] ?? { x: [], y: [] }
+    if (need.length) data.value = { ...data.value, ...(await fetchKeys(r, need)) }
+  }
+
+  // Live refresh: refetch every selected series and swap them in atomically — no
+  // intermediate empty state, so charts update in place instead of flashing.
+  async function refetchSelected(r: RunRef) {
+    const next = await fetchKeys(r, selected.value)
+    data.value = { ...data.value, ...next }
   }
 
   function add(key: string) {
@@ -36,5 +47,5 @@ export function useMetrics() {
     selected.value = selected.value.filter((k) => k !== key)
   }
 
-  return { selected, data, reset, ensure, add, remove }
+  return { selected, data, reset, ensure, refetchSelected, add, remove }
 }

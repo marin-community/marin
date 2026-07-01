@@ -15,7 +15,7 @@ const DEFAULTS = [
   'run_progress',
 ]
 
-const { selected, data, reset, ensure, add, remove } = useMetrics()
+const { selected, data, reset, ensure, refetchSelected, add, remove } = useMetrics()
 const search = ref('')
 
 function seed() {
@@ -29,7 +29,8 @@ watch(() => props.runRef, seed) // switching runs reseeds default charts
 watch(selected, () => ensure(props.runRef), { deep: true })
 
 // A running run grew (live refresh bumped last_step): if metrics just appeared,
-// seed the defaults; otherwise drop the cached series so ensure refetches them.
+// seed the defaults; otherwise refetch selected series in place (atomic swap +
+// Plotly uirevision keep each chart's zoom/pan/toggles — no full redraw).
 watch(
   () => props.lastStep,
   () => {
@@ -37,8 +38,7 @@ watch(
       seed()
       return
     }
-    for (const k of selected.value) delete data.value[k]
-    ensure(props.runRef)
+    refetchSelected(props.runRef)
   },
 )
 

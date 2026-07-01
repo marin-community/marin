@@ -27,6 +27,9 @@ function layout() {
   return {
     title: { text: props.metricKey, font: { size: 12.5 }, x: 0.02, xanchor: 'left', y: 0.98 },
     height: props.height,
+    // Keep the user's zoom/pan/toggles across live-update re-renders — Plotly only
+    // resets interaction when uirevision changes, and it's constant per chart.
+    uirevision: props.metricKey,
     margin: { l: 52, r: 14, t: 26, b: 32 },
     dragmode: 'pan',
     template: 'plotly_white',
