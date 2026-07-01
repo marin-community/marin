@@ -39,9 +39,15 @@ from zephyr.stage_io import (
     PickleDiskChunk,
     ShardTask,
     TaskResult,
+    ZephyrTaskResources,
 )
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
+
+# Default ZephyrContext worker: 1 CPU, 1 GiB RAM, one concurrent task per actor.
+_TEST_WORKER_RAM = 1 << 30
+_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+_TEST_WORKER_AVAILABLE = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
 
 
 class _UnpicklableError(Exception):
@@ -277,6 +283,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
 
@@ -286,11 +293,11 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 
     status = coord.get_status()
     assert len(status.workers) == 3
-    assert all(w["state"] == "ready" for w in status.workers.values())
+    assert all(w["state"] == "active" for w in status.workers.values())
 
     # worker-0 pulls the task so it becomes in-flight
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
 
     # Simulate 2 workers dying via heartbeat timeout
     coord._last_seen["worker-0"] = 0.0
@@ -300,32 +307,32 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     status = coord.get_status()
     assert status.workers["worker-0"]["state"] == "failed"
     assert status.workers["worker-1"]["state"] == "failed"
-    assert status.workers["worker-2"]["state"] == "ready"
+    assert status.workers["worker-2"]["state"] == "active"
 
     # Total workers in dict is still 3, but only 1 is alive
-    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
+    alive = sum(1 for w in status.workers.values() if w["state"] == "active")
     assert alive == 1
     assert len(status.workers) == 3
 
     # worker-2 picks up the requeued task
-    pulled2 = coord.pull_task("worker-2")
-    assert isinstance(pulled2, tuple)
+    status2, _work2 = coord.pull_task("worker-2", _TEST_WORKER_AVAILABLE)
+    assert status2 == PullStatus.RUN_TASK
 
     # Simulate worker-0 re-registering while worker-2 holds the task in-flight
     # (race between heartbeat requeue and re-registration).
     # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
     coord.register_worker("worker-0", MagicMock())
     status = coord.get_status()
-    assert status.workers["worker-0"]["state"] == "ready"
-    alive = sum(1 for w in status.workers.values() if w["state"] in ("ready", "busy"))
-    assert alive == 2  # worker-0 ready, worker-1 still failed, worker-2 busy
+    assert status.workers["worker-0"]["state"] == "active"
+    alive = sum(1 for w in status.workers.values() if w["state"] == "active")
+    assert alive == 2  # worker-0 active, worker-1 still failed, worker-2 active (has in-flight)
 
     # Now test the direct re-registration requeue path:
     # worker-2 dies while holding the task, and before heartbeat fires,
     # it re-registers — the in-flight task should be requeued.
-    assert "worker-2" in coord._in_flight  # worker-2 has the task
+    assert 0 in coord._in_flight  # worker-2 holds shard 0
     coord.register_worker("worker-2", MagicMock())
-    assert "worker-2" not in coord._in_flight  # in-flight cleared
+    assert 0 not in coord._in_flight  # in-flight cleared
     assert len(coord._task_queue) == 1  # task was requeued
 
 
@@ -335,6 +342,7 @@ def _make_task(stage_name: str = "test", shard_idx: int = 0) -> ShardTask:
         total_shards=1,
         shard=ListShard(refs=[]),
         operations=[],
+        cost=_TEST_TASK_COST,
         stage_name=stage_name,
     )
 
@@ -351,10 +359,12 @@ def test_pull_task_returns_shutdown_on_last_stage_tail(actor_context, tmp_path):
     coord._start_stage("tail", 0, [_make_task("tail")], is_last_stage=True)
 
     coord.register_worker("worker-0", MagicMock())
-    assert isinstance(coord.pull_task("worker-0"), tuple)  # drain the queue
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK  # drain the queue
 
     coord.register_worker("worker-1", MagicMock())
-    assert coord.pull_task("worker-1") == PullStatus.SHUTDOWN
+    status, _work = coord.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.SHUTDOWN
 
 
 def test_pull_task_returns_no_work_backoff_mid_non_last_stage(actor_context, tmp_path):
@@ -369,10 +379,12 @@ def test_pull_task_returns_no_work_backoff_mid_non_last_stage(actor_context, tmp
     coord._start_stage("mid", 0, [_make_task("mid")], is_last_stage=False)
 
     coord.register_worker("worker-0", MagicMock())
-    assert isinstance(coord.pull_task("worker-0"), tuple)  # drain the queue
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK  # drain the queue
 
     coord.register_worker("worker-1", MagicMock())
-    assert coord.pull_task("worker-1") == PullStatus.NO_WORK_BACKOFF
+    status, _work = coord.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.NO_WORK_BACKOFF
 
 
 def test_pull_task_returns_stage_completed_after_mark_stage_complete(actor_context, tmp_path):
@@ -386,27 +398,11 @@ def test_pull_task_returns_stage_completed_after_mark_stage_complete(actor_conte
     coord._start_stage("mid", 0, [_make_task("mid")], is_last_stage=False)
 
     coord.register_worker("worker-0", MagicMock())
-    coord.pull_task("worker-0")  # drain the queue
+    coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)  # drain the queue
     coord._mark_stage_complete()
 
-    assert coord.pull_task("worker-0") == PullStatus.STAGE_COMPLETED
-
-
-def test_pull_task_returns_stage_completed_on_epoch_mismatch(actor_context, tmp_path):
-    """A slot that woke late and is still tagged with a stale epoch must get
-    STAGE_COMPLETED, not SHUTDOWN — the worker should re-register under the new
-    epoch and continue, not exit.
-    """
-    coord = ZephyrCoordinator()
-    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
-    coord._start_stage("first", 0, [_make_task("first")], is_last_stage=False)
-    stale_epoch = coord._stage_epoch
-    coord._start_stage("second", 1, [_make_task("second")], is_last_stage=False)
-    assert coord._stage_epoch != stale_epoch
-
-    coord.register_worker("worker-0", MagicMock())
-    assert coord.pull_task("worker-0", epoch=stale_epoch) == PullStatus.STAGE_COMPLETED
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.STAGE_COMPLETED
 
 
 def test_pull_task_returns_shutdown_on_coordinator_shutdown(actor_context, tmp_path):
@@ -420,7 +416,8 @@ def test_pull_task_returns_shutdown_on_coordinator_shutdown(actor_context, tmp_p
     coord._shutdown_event.set()
 
     coord.register_worker("worker-0", MagicMock())
-    assert coord.pull_task("worker-0") == PullStatus.SHUTDOWN
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.SHUTDOWN
 
 
 def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_path, caplog):
@@ -437,6 +434,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="map_only",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("map_only", 0, [task])
 
@@ -481,13 +479,14 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
-    pulled = coord.pull_task("worker-A")
-    assert isinstance(pulled, tuple)
-    _task_a, attempt_a, _config = pulled
+    status_a, work_a = coord.pull_task("worker-A", _TEST_WORKER_AVAILABLE)
+    assert status_a == PullStatus.RUN_TASK
+    assert work_a is not None
 
     # Simulate heartbeat timeout: mark worker-A stale and requeue
     coord._last_seen["worker-A"] = 0.0
@@ -497,16 +496,16 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
     assert coord._task_attempts[0] == 1
 
     # Worker B picks up the requeued task (attempt 1)
-    pulled_b = coord.pull_task("worker-B")
-    assert isinstance(pulled_b, tuple)
-    _task_b, attempt_b, _config = pulled_b
-    assert attempt_b == 1
+    status_b, work_b = coord.pull_task("worker-B", _TEST_WORKER_AVAILABLE)
+    assert status_b == PullStatus.RUN_TASK
+    assert work_b is not None
+    assert work_b.attempt == 1
 
     # Worker B reports success
-    coord.report_result("worker-B", 0, attempt_b, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    coord.report_result("worker-B", 0, work_b.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Worker A's stale result (attempt 0) should be ignored
-    coord.report_result("worker-A", 0, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    coord.report_result("worker-A", 0, work_a.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     # Only one completion should be counted
     assert coord._completed_shards == 1
@@ -543,12 +542,14 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
 
     # Worker A pulls task (attempt 0)
-    pulled_a = coord.pull_task("worker-A")
-    _task_a, attempt_a, _config = pulled_a
+    status_a, work_a = coord.pull_task("worker-A", _TEST_WORKER_AVAILABLE)
+    assert status_a == PullStatus.RUN_TASK
+    assert work_a is not None
 
     # Worker A writes a chunk (simulating slow completion)
     stale_ref = PickleDiskChunk.write(str(tmp_path / "stale-chunk.pkl"), [1, 2, 3])
@@ -559,15 +560,16 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     coord.check_heartbeats(timeout=0.0)
 
     # Worker B pulls and completes the re-queued task (attempt 1)
-    pulled_b = coord.pull_task("worker-B")
-    _task_b, attempt_b, _config = pulled_b
+    status_b, work_b = coord.pull_task("worker-B", _TEST_WORKER_AVAILABLE)
+    assert status_b == PullStatus.RUN_TASK
+    assert work_b is not None
 
     winner_ref = PickleDiskChunk.write(str(tmp_path / "winner-chunk.pkl"), [4, 5, 6])
 
     coord.report_result(
         "worker-B",
         0,
-        attempt_b,
+        work_b.attempt,
         TaskResult(shard=ListShard(refs=[winner_ref])),
         CounterSnapshot.empty(),
     )
@@ -576,7 +578,7 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     coord.report_result(
         "worker-A",
         0,
-        attempt_a,
+        work_a.attempt,
         TaskResult(shard=ListShard(refs=[stale_ref])),
         CounterSnapshot.empty(),
     )
@@ -588,6 +590,41 @@ def test_coordinator_accepts_winner_ignores_stale(actor_context, tmp_path):
     # Stale file still exists (cleaned up by context-dir cleanup, not coordinator)
     assert Path(stale_ref.path).exists()
     assert coord._completed_shards == 1
+
+
+def test_stale_result_ignored_while_reassigned_worker_in_flight(actor_context, tmp_path):
+    """A slow worker's stale result must be dropped even when another worker
+    still holds the shard in ``_in_flight`` (shard_idx-keyed tracking)."""
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=_TEST_TASK_COST,
+    )
+    coord._start_stage("test", 0, [task])
+
+    status_a, work_a = coord.pull_task("worker-A", _TEST_WORKER_AVAILABLE)
+    assert status_a == PullStatus.RUN_TASK
+    assert work_a is not None
+
+    coord._last_seen["worker-A"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+
+    status_b, work_b = coord.pull_task("worker-B", _TEST_WORKER_AVAILABLE)
+    assert status_b == PullStatus.RUN_TASK
+    assert work_b is not None
+    assert coord._in_flight[0].worker_id == "worker-B"
+
+    coord.report_result("worker-A", 0, work_a.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+
+    assert coord._completed_shards == 0
+    assert 0 in coord._in_flight
+    assert coord._in_flight[0].worker_id == "worker-B"
 
 
 def test_shard_streaming_low_memory(tmp_path):
@@ -628,23 +665,23 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Each failure should re-queue until the limit
     for i in range(MAX_SHARD_FAILURES - 1):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
-        _task, _attempt, _config = pulled
-        coord.report_error("worker-0", 0, f"error-{i}")
+        status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        coord.report_error("worker-0", 0, work.attempt, f"error-{i}")
         assert coord._fatal_error is None, f"Should not abort on failure {i + 1}"
-        assert coord._worker_states["worker-0"] == WorkerState.READY
+        assert coord._worker_states["worker-0"] == WorkerState.ACTIVE
 
     # The final failure should set _fatal_error
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
-    coord.report_error("worker-0", 0, "final-error")
+    status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    coord.report_error("worker-0", 0, work.attempt, "final-error")
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
     assert "final-error" in coord._fatal_error
@@ -661,24 +698,25 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
     for _ in range(MAX_SHARD_FAILURES * 5):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
+        status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
         assert coord._fatal_error is None
 
     # Task-error budget is untouched; a successful completion closes the shard.
     assert coord._task_error_attempts[0] == 0
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
-    _task, attempt, _config = pulled
-    coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+    status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work is not None
+    coord.report_result("worker-0", 0, work.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
     assert coord._completed_shards == 1
     assert coord._fatal_error is None
 
@@ -701,21 +739,22 @@ def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, t
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # One short of the cap: still re-queues, no abort yet.
     for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
+        status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
         assert coord._fatal_error is None
 
     # The next failure crosses the cap and aborts.
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
     coord._last_seen["worker-0"] = 0.0
     coord.check_heartbeats(timeout=0.0)
 
@@ -734,6 +773,8 @@ def test_max_shard_failures_override_via_initialize(actor_context, tmp_path):
     coord.initialize(
         chunk_prefix=str(tmp_path / "chunks"),
         coordinator_handle=MagicMock(),
+        map_cost=_TEST_TASK_COST,
+        reduce_cost=_TEST_TASK_COST,
         max_shard_failures=2,
     )
 
@@ -743,20 +784,21 @@ def test_max_shard_failures_override_via_initialize(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # First failure: re-queues, no abort.
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
-    coord.report_error("worker-0", 0, "error-1")
+    status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    coord.report_error("worker-0", 0, work.attempt, "error-1")
     assert coord._fatal_error is None
 
     # Second failure: hits the custom cap of 2 → abort.
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
-    coord.report_error("worker-0", 0, "error-2")
+    status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    coord.report_error("worker-0", 0, work.attempt, "error-2")
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
     assert "error-2" in coord._fatal_error
@@ -772,6 +814,8 @@ def test_max_shard_infra_failures_override_via_initialize(actor_context, tmp_pat
     coord.initialize(
         chunk_prefix=str(tmp_path / "chunks"),
         coordinator_handle=MagicMock(),
+        map_cost=_TEST_TASK_COST,
+        reduce_cost=_TEST_TASK_COST,
         max_shard_infra_failures=2,
     )
 
@@ -781,20 +825,21 @@ def test_max_shard_infra_failures_override_via_initialize(actor_context, tmp_pat
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # First infra failure: re-queues, no abort.
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
     coord._last_seen["worker-0"] = 0.0
     coord.check_heartbeats(timeout=0.0)
     assert coord._fatal_error is None
 
     # Second infra failure: hits the custom cap of 2 → abort.
-    pulled = coord.pull_task("worker-0")
-    assert isinstance(pulled, tuple)
+    status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
     coord._last_seen["worker-0"] = 0.0
     coord.check_heartbeats(timeout=0.0)
     assert coord._fatal_error is not None
@@ -813,17 +858,18 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(actor_contex
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     for _ in range(MAX_SHARD_FAILURES * 5):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
+        status, _work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
         # Simulate preemption + Iris reconstruction: worker re-registers while
         # a task is still recorded as in-flight on the old handle.
         coord.register_worker("worker-0", MagicMock())
-        assert "worker-0" not in coord._in_flight
+        assert 0 not in coord._in_flight
         assert coord._fatal_error is None
 
     assert coord._task_error_attempts[0] == 0
@@ -840,14 +886,15 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
     coord.register_worker("worker-0", MagicMock())
 
     # Several preemption cycles first — these must not count.
     for _ in range(5):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
+        status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
 
@@ -855,9 +902,9 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor
 
     # Now MAX_SHARD_FAILURES explicit task errors should abort.
     for i in range(MAX_SHARD_FAILURES):
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
-        coord.report_error("worker-0", 0, f"boom-{i}")
+        status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        coord.report_error("worker-0", 0, work.attempt, f"boom-{i}")
 
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
@@ -876,6 +923,7 @@ def test_wait_for_stage_fails_when_all_workers_die(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
 
@@ -909,6 +957,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         shard=ListShard(refs=[]),
         operations=[],
         stage_name="test",
+        cost=_TEST_TASK_COST,
     )
     coord._start_stage("test", 0, [task])
 
@@ -923,10 +972,10 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
     def recover_and_complete():
         time.sleep(0.1)
         coord.register_worker("worker-0", MagicMock())
-        pulled = coord.pull_task("worker-0")
-        assert isinstance(pulled, tuple)
-        _task, attempt, _config = pulled
-        coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
+        status, work = coord.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+        assert status == PullStatus.RUN_TASK
+        assert work is not None
+        coord.report_result("worker-0", 0, work.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 
     t = threading.Thread(target=recover_and_complete)
     t.start()
@@ -1058,7 +1107,14 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
 
     tasks = [
-        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
+        ShardTask(
+            shard_idx=i,
+            total_shards=2,
+            shard=ListShard(refs=[]),
+            operations=[],
+            cost=_TEST_TASK_COST,
+            stage_name="test",
+        )
         for i in range(2)
     ]
     coord._start_stage("last-stage", 0, tasks)
@@ -1071,13 +1127,15 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
     # Two workers pull both tasks.
     coord.heartbeat("worker-A")
     coord.heartbeat("worker-B")
-    pulled_a = coord.pull_task("worker-A")
-    coord.pull_task("worker-B")
+    status_a, work_a = coord.pull_task("worker-A", _TEST_WORKER_AVAILABLE)
+    status_b, _work_b = coord.pull_task("worker-B", _TEST_WORKER_AVAILABLE)
+    assert status_a == PullStatus.RUN_TASK
+    assert status_b == PullStatus.RUN_TASK
 
     # Worker A finishes its task.
-    _task_a, attempt_a, _ = pulled_a
+    assert work_a is not None
     coord.report_result(
-        "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
+        "worker-A", work_a.task.shard_idx, work_a.attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
 
     # Worker B crashes → heartbeat timeout → shard 1 requeued.
@@ -1124,7 +1182,7 @@ def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):
 def test_run_pipeline_rejects_concurrent_calls(actor_context, tmp_path):
     """Calling run_pipeline while another is already running raises RuntimeError."""
     coord = ZephyrCoordinator()
-    coord.initialize(str(tmp_path / "chunks"), MagicMock())
+    coord.initialize(str(tmp_path / "chunks"), MagicMock(), _TEST_TASK_COST, _TEST_TASK_COST)
 
     gate = threading.Event()
     ds = Dataset.from_list([42]).map(lambda x: gate.wait(timeout=5) or x)
@@ -1350,7 +1408,10 @@ def test_heartbeat_failures_fail_actor_context():
     worker = ZephyrWorker.__new__(ZephyrWorker)
     worker._actor_ctx = actor_ctx
     worker._shutdown_event = threading.Event()
-    worker._active_sub_ids = []
+    worker._active_runners = []
+    worker._resources_lock = threading.Lock()
+    worker._last_reported_counters = {}
+    worker._counter_generation = 0
     worker._worker_id = "test-worker-0"
     worker._report_worker_iris_status = lambda: None
 

@@ -92,14 +92,14 @@ class _InProcessWorkerContext:
     of the task.
     """
 
-    def __init__(self, chunk_prefix: str, execution_id: str, stage_name: str, num_workers: int = 1):
+    def __init__(self, chunk_prefix: str, execution_id: str, stage_name: str, task_memory_bytes: int = 0):
         self._chunk_prefix = chunk_prefix
         self._execution_id = execution_id
         self._stage_name = stage_name
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
         self._generation = 0
-        self.num_workers = num_workers
+        self.task_memory_bytes = task_memory_bytes
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
@@ -281,8 +281,7 @@ class InlineRunner:
     here, and tests run dramatically faster than under ``SubprocessRunner``.
     """
 
-    def __init__(self, num_workers: int = 1) -> None:
-        self._num_workers = num_workers
+    def __init__(self) -> None:
         self._ctx: _InProcessWorkerContext | None = None
 
     def execute(
@@ -291,7 +290,7 @@ class InlineRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, CounterEntry]]:
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, num_workers=self._num_workers)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, task.stage_name, task_memory_bytes=task.cost.memory)
         self._ctx = ctx
         worker_token = _worker_ctx_var.set(ctx)
         _set_counter_aggregations()
@@ -361,14 +360,9 @@ class SubprocessRunner:
     imports plus pickle round-trip; reserve for stages with leak-prone or
     crash-prone user code.
 
-    Args:
-        num_workers: Total number of concurrent subprocess workers sharing this
-            actor's RAM. Passed to child processes via ``ZEPHYR_NUM_WORKERS_PER_ACTOR``
-            so each child scales its scatter-write buffer budget proportionally.
     """
 
-    def __init__(self, num_workers: int = 1) -> None:
-        self._num_workers = num_workers
+    def __init__(self) -> None:
         self._counter_file: str | None = None
 
     def execute(
@@ -391,7 +385,7 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file, str(self._num_workers)],
+                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )
