@@ -40,7 +40,7 @@ gs://marin-public/<user>/<slug>/<version>/artifact.json   # ArtifactRecord, so r
 gs://marin-public/<user>/<slug>/<version>/<asset>         # optional js/css/data
 ```
 
-`<user>` is the author's short handle (`held`, `rav`), `<slug>` is kebab-case, `<version>` is CalVer `YYYY.MM.DD[.N]`. Public URL is the explicit index: `https://storage.googleapis.com/marin-public/<user>/<slug>/<version>/index.html`.
+`<user>` is the author's short handle (`held`, `rav`) and `<slug>` is kebab-case — both coerced to that shape from whatever the caller passes (`"Foo Bar"` → `foo-bar`), `<version>` is CalVer `YYYY.MM.DD[.N]`. Public URL is the explicit index: `https://storage.googleapis.com/marin-public/<user>/<slug>/<version>/index.html`.
 
 **Helper — one library function, thin CLI wrapper.** New module `lib/marin/src/marin/publish/sites.py`:
 
@@ -48,7 +48,7 @@ gs://marin-public/<user>/<slug>/<version>/<asset>         # optional js/css/data
 
 ```python
 def publish_site(
-    source: str | Path,          # a local .html file, or a local dir whose index.html is the entrypoint
+    source: Path,                # a local .html file, or a local dir whose index.html is the entrypoint
     *, user: str, slug: str,
     version: str,                # CalVer YYYY.MM.DD[.N]
     title: str,                  # human label for the discovery index
@@ -100,7 +100,7 @@ page = Artifact.raw_load(site_uri("held", "datakit-sidebyside", "2026.07.01"))
 
 _Agents make mistakes — how do we catch them?_
 
-- Unit: `publish_site` against a local-FS / `memory://` root — asserts files land at `<user>/<slug>/<version>/`, the `artifact.json` record carries `name = sites/<user>/<slug>` and `result_type = Artifact`, a multi-file source dir keeps its relative asset paths, `index.json` gains one entry with the `title`/`summary` (and a re-publish upserts, not duplicates), and the returned `url` matches the public template. Rejected before any upload: bad handle (`Foo/Bar`, empty), missing `index.html`, non-CalVer version (`v1`, `2026.7.1`), empty `title`, a symlink in the source dir, and a caller-supplied `artifact.json`.
+- Unit: `publish_site` against a local-FS / `memory://` root — asserts files land at `<user>/<slug>/<version>/`, the `artifact.json` record carries `name = sites/<user>/<slug>` and `result_type = Artifact`, a multi-file source dir keeps its relative asset paths, `index.json` gains one entry with the `title`/`summary` (and a re-publish upserts, not duplicates), mixed-case/spaced handles are coerced (`"Foo Bar"` → `foo-bar`), and the returned `url` matches the public template. Rejected before any upload: a handle that coerces to nothing (empty, `!!!`), missing `index.html`, non-CalVer version (`v1`, `2026.7.1`), empty `title`, a symlink in the source dir, and a caller-supplied `artifact.json`.
 - Round-trip: after `publish_site`, `Artifact.raw_load(site_uri(...))` returns a handle whose `.path` is the version dir and whose `.record.config` matches; `site_artifact(...).path()` equals the same uri.
 - The migration is the end-to-end check: after publishing Held's page, fetch the `…/index.html` URL and confirm 200 **and `Content-Type: text/html`** + expected bytes. Known coverage hole: the `memory://` unit test can validate placement but not the served content-type or the bare-directory serving quirk — those two genuinely risky behaviors are only exercised by this manual ops step, not CI.
 

@@ -5,6 +5,15 @@ and then curated by hand.
 
 This page includes only experiments that have at least one run or report.
 
+## Published analysis sites
+
+One-off analysis pages published to durable public hosting (see
+[Publishing an Analysis Site](../tutorials/publish-analysis-site.md)). The machine-readable list is
+[`gs://marin-public/index.json`](https://storage.googleapis.com/marin-public/index.json).
+
+- [DataKit side-by-side](https://storage.googleapis.com/marin-public/held/datakit-sidebyside/2026.07.01/index.html) — cluster examples, side by side (held)
+- [Delphi mid-training dossier](https://storage.googleapis.com/marin-public/ahmad/delphi-midtraining/2026.07.01/index.html) — mid-training analysis dossier (ahmad)
+
 ## Marin 8B Base
 
 - Tootsie 8B (Main Issue) [![#600](https://img.shields.io/github/issues/detail/state/marin-community/marin/600)](https://github.com/marin-community/marin/issues/600)

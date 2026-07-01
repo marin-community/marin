@@ -13,8 +13,9 @@ SITE_ENTRYPOINT = "index.html"                                   # the served en
 SITE_NAME_PREFIX = "sites"                                       # ArtifactRecord.name = sites/<user>/<slug>
 PUBLIC_INDEX_KEY = "index.json"                                  # gs://marin-public/index.json — discovery manifest
 
-# <user> and <slug> are single path segments, lowercase kebab.
-_HANDLE_RE = r"^[a-z0-9][a-z0-9-]*$"
+# <user>/<slug> are coerced to lowercase kebab (non-[a-z0-9] runs -> '-', trimmed); rejected only
+# if nothing usable remains. e.g. "Foo Bar" -> "foo-bar", "datakit_sidebyside" -> "datakit-sidebyside".
+_NON_KEBAB = r"[^a-z0-9]+"
 
 # Content types are set explicitly, NOT via platform `mimetypes` (whose .js/.wasm mappings drift).
 CONTENT_TYPES = {
@@ -37,7 +38,7 @@ DEFAULT_CONTENT_TYPE = "application/octet-stream"
 - **URI (record location + fetch address):** `gs://marin-public/<user>/<slug>/<version>/` — a version-pinned directory. Because `marin-public` is fixed and the path is a pure function of `(user, slug, version)`, this address needs no lookup.
 - **Public URL:** `<PUBLIC_URL_BASE>/<user>/<slug>/<version>/index.html`.
 - **Artifact name:** `sites/<user>/<slug>` (recorded as `ArtifactRecord.name`; also the `name` of the optional `adopt` handle). Internal slashes are legal in a `name` segment (`_validate_segment` rejects only `..`, URL schemes, and leading/trailing `/`), so no separator encoding is needed.
-- **Version:** CalVer `YYYY.MM.DD[.N]` (or mutable `dev`/`<label>-dev`). `publish_site` validates the shape locally via the same rule the execution layer uses (`_CALVER_RE`), rejecting `v1`, `2026.7.1`, etc., before any upload.
+- **Version:** CalVer `YYYY.MM.DD[.N]`. `publish_site` validates the shape via the shared `marin.execution.artifact.CALVER_RE` (the one canonical CalVer form, also used by `lazy._validate_version`), rejecting `v1`, `2026.7.1`, etc., before any upload. Unlike the execution layer it does not accept mutable `dev` versions — a durable public site should pin a real date.
 
 ## Public API — `lib/marin/src/marin/publish/sites.py`
 
@@ -63,7 +64,7 @@ class PublishedSite:
 
 
 def publish_site(
-    source: str | Path,
+    source: Path,
     *,
     user: str,
     slug: str,
@@ -93,8 +94,12 @@ def publish_site(
          ``{name, version, url, title, summary}``. This read-modify-write is **not atomic**;
          concurrent publishes are last-writer-wins (acceptable given how rarely sites are published).
 
+    ``user``/``slug`` are coerced to lowercase kebab (``"Foo Bar"`` → ``"foo-bar"``); the coerced
+    form is what appears in the path, record, and index.
+
     Preconditions, all raised **before any upload**:
-      * ``user`` and ``slug`` must match ``_HANDLE_RE`` — else :class:`InvalidSiteError`.
+      * ``user``/``slug`` must retain at least one usable ``[a-z0-9]`` character after coercion —
+        else :class:`InvalidSiteError`.
       * ``version`` must be valid CalVer ``YYYY.MM.DD[.N]`` — else :class:`InvalidSiteError`.
       * ``title`` must be non-empty — else :class:`InvalidSiteError` (every indexed site needs a label).
       * a ``source`` directory must contain ``index.html``, must not contain a file named
@@ -110,16 +115,16 @@ def publish_site(
 
 def site_url(user: str, slug: str, version: str) -> str:
     """Canonical public URL: ``<PUBLIC_URL_BASE>/<user>/<slug>/<version>/index.html``.
-    Pure string construction; validates handles/version, does not check existence."""
+    Pure string construction; coerces handles, validates version, does not check existence."""
 
 
 def site_uri(user: str, slug: str, version: str) -> str:
     """The page's ``gs://`` directory (record location + ``raw_load`` address):
-    ``gs://marin-public/<user>/<slug>/<version>/``. Pure; validates handles/version."""
+    ``gs://marin-public/<user>/<slug>/<version>/``. Pure; coerces handles, validates version."""
 
 
 def site_name(user: str, slug: str) -> str:
-    """The artifact name ``sites/<user>/<slug>``. Pure; validates handles."""
+    """The artifact name ``sites/<user>/<slug>``. Pure; coerces handles."""
 ```
 
 `site_artifact()` (an `ArtifactStep.adopt(...)` handle for step-graph deps) is **deferred** — it would pull the heavy `marin.execution.lazy` / Fray import onto the publish path, has no consumer, and remains an Open Question in `design.md`. Fetching needs only `site_uri` + `raw_load`.
@@ -142,9 +147,9 @@ Discovery: read `gs://marin-public/index.json` for the list of all published sit
 
 ```python
 class InvalidSiteError(ValueError):
-    """Raised before any network/GCS access for: a malformed ``user``/``slug`` (fails
-    ``_HANDLE_RE``); a non-CalVer ``version``; an empty ``title``; or a source directory that
-    lacks ``index.html``, contains a reserved ``artifact.json``, or contains a symlink."""
+    """Raised before any network/GCS access for: a ``user``/``slug`` that coerces to nothing
+    (e.g. ``""`` or ``"!!!"``); a non-CalVer ``version``; an empty ``title``; or a source directory
+    that lacks ``index.html``, contains a reserved ``artifact.json``, or contains a symlink."""
 ```
 
 Propagated unchanged (not wrapped): `FileNotFoundError` (missing `source`) and any `rigging.filesystem` upload error.
