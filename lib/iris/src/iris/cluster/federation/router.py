@@ -39,8 +39,7 @@ _LOCAL = SubmitRouting()
 class PeerRouter:
     """Chooses local execution or a peer for each submission.
 
-    Holds the live peer registry (the seam peer matching reads) and selects local
-    execution for every job.
+    Selects local execution for every job.
     """
 
     def __init__(self, peers: Sequence[FederationPeer]):
