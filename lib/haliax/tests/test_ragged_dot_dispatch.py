@@ -6,9 +6,11 @@ import importlib
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from haliax.nn import ragged_dot
+from haliax.quantization import Fp8RaggedDotOp, _jax_supports_mixed_fp8_wgmma, partition_for_grad_overwrite
 
 ragged_dot_module = importlib.import_module("haliax.nn.ragged_dot")
 
@@ -137,3 +139,88 @@ def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
         ragged_dot_module._DLHS_DIM_NUMS,
         ragged_dot_module._DRHS_DIM_NUMS,
     ]
+
+
+# ---------------------------------------------------------------------------
+# FP8 op dispatch tests (routing, op=None reference, state plumbing)
+# ---------------------------------------------------------------------------
+
+
+def _fp8_inputs(T=48, K=16, E=4, N=24, seed=0):
+    rng = np.random.default_rng(seed)
+    lhs = jnp.asarray(rng.standard_normal((T, K)), jnp.bfloat16)
+    rhs = jnp.asarray(rng.standard_normal((E, K, N)), jnp.bfloat16)
+    group_sizes = jnp.asarray([13, 5, 17, 13], jnp.int32)  # non-uniform, sums to T
+    return lhs, rhs, group_sizes
+
+
+def test_op_none_matches_xla_reference():
+    """The default path (op=None) matches jax.lax.ragged_dot_general on non-uniform groups."""
+    lhs, rhs, gs = _fp8_inputs()
+    out = ragged_dot(lhs, rhs, gs, op=None)
+    ref = jax.lax.ragged_dot_general(
+        lhs=lhs,
+        rhs=rhs,
+        group_sizes=gs,
+        ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
+            dot_dimension_numbers=(((1,), (1,)), ((), ())),
+            lhs_ragged_dimensions=(0,),
+            rhs_group_dimensions=(0,),
+        ),
+    )
+    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
+
+
+def test_op_routes_to_op_and_runs_end_to_end():
+    lhs, rhs, gs = _fp8_inputs()
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
+    # The op is still a bf16 placeholder at this point; FP8 kernels land in later commits.
+    out = ragged_dot(lhs, rhs, gs, op=op)
+    ref = ragged_dot(lhs, rhs, gs, op=None)
+    assert out.shape == ref.shape
+    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
+
+
+def test_op_with_explicit_implementation_raises():
+    lhs, rhs, gs = _fp8_inputs()
+    # Uniform rev_dtype so the op constructs on jax 0.10.x too; the dtype
+    # recipe is irrelevant to the dispatch contract under test.
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ragged_dot(lhs, rhs, gs, implementation="xla", op=op)
+
+
+@pytest.mark.skipif(_jax_supports_mixed_fp8_wgmma(), reason="guard only fires on jax < 0.11.0")
+def test_init_mixed_rev_dtype_fails_fast_on_old_jax():
+    # On jax without mixed-dtype wgmma (jax-ml/jax#38859) the default mixed
+    # recipe must fail at init with an actionable error, not deep inside
+    # Mosaic lowering on the first backward pass.
+    with pytest.raises(ValueError, match="38859"):
+        Fp8RaggedDotOp.init()
+    # The uniform approximation stays constructible.
+    Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e4m3fn)
+
+
+@pytest.mark.skipif(not _jax_supports_mixed_fp8_wgmma(), reason="mixed wgmma needs jax >= 0.11.0")
+def test_init_defaults_to_mixed_backward():
+    op = Fp8RaggedDotOp.init()
+    assert jnp.dtype(op.fwd_dtype) == jnp.dtype(jnp.float8_e4m3fn)
+    assert jnp.dtype(op.rev_dtype) == jnp.dtype(jnp.float8_e5m2)
+
+
+def test_op_state_partitions_as_overwrite():
+    """Fp8RaggedDotOp's scale/amax state goes to the overwrite partition, not the optimizer gradient."""
+    op = Fp8RaggedDotOp.init(amax_history_length=4, rev_dtype=jnp.float8_e4m3fn)
+    regular_param = jnp.array([1.0, 2.0])
+
+    # Partition a tree containing both the op and a regular parameter.
+    tree = {"op": op, "weight": regular_param}
+    overwrites, grads = partition_for_grad_overwrite(tree)
+
+    # The op (OverwriteWithGradient) lands in overwrites, not in grads.
+    assert isinstance(overwrites["op"], Fp8RaggedDotOp)
+    assert grads["op"] is None
+
+    # Regular parameters are not overwritten; they stay in the grad/optimizer partition.
+    assert overwrites["weight"] is None
+    np.testing.assert_array_equal(np.asarray(grads["weight"]), np.asarray(regular_param))
