@@ -269,6 +269,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
     jobs_table.c.backend_id,
+    jobs_table.c.child_cluster,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -516,6 +517,7 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
             jobs_table.c.backend_id,
+            jobs_table.c.child_cluster,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -1028,6 +1030,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
     tasks_table.c.backend_id,
+    tasks_table.c.child_cluster,
 )
 
 

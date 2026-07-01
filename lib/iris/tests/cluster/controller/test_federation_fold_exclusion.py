@@ -227,6 +227,23 @@ def test_federated_terminal_job_is_not_pruned_locally(state):
         assert query_tasks_for_job(state, fed_done)[0].child_cluster == PEER
 
 
+def test_status_projections_surface_child_cluster(state):
+    """The job/task detail reads carry ``child_cluster``, so a peer-owned row is
+    distinguishable from a locally unrouted one on the status API — a local job
+    reports "", a federated one reports its peer."""
+    submit_direct_job(state, "local-status")
+    local_job = JobName.root("test-user", "local-status")
+
+    fed_job = JobName.root("test-user", "fed-status")
+    [fed_task] = submit_direct_job(state, "fed-status")
+    _mark_federated(state, fed_job, task_states={0: job_pb2.TASK_STATE_RUNNING})
+
+    with state._db.read_snapshot() as tx:
+        assert reads.get_job_detail(tx, local_job).child_cluster == ""
+        assert reads.get_job_detail(tx, fed_job).child_cluster == PEER
+        assert reads.get_task_detail(tx, fed_task).child_cluster == PEER
+
+
 def test_reconcile_snapshot_loader_excludes_federated_tasks(state):
     """The reconcile snapshot's per-job task load excludes federated rows, so a
     federated job seeded into the fold contributes no local task histogram."""

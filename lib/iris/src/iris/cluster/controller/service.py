@@ -258,6 +258,7 @@ class TaskWithAttempts:
     current_worker_address: str | None
     container_id: str | None
     backend_id: str
+    child_cluster: str
     attempts: tuple[Any, ...]
 
     @classmethod
@@ -282,6 +283,7 @@ class TaskWithAttempts:
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
             backend_id=str(row.backend_id or ""),
+            child_cluster=str(row.child_cluster or ""),
             attempts=attempts,
         )
 
@@ -347,6 +349,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
         attempts=attempts,
         failure_count=task.failure_count,
         backend_id=task.backend_id,
+        child_cluster=task.child_cluster,
     )
     if current_attempt and current_attempt.started_at_ms:
         proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
@@ -1489,6 +1492,7 @@ class ControllerServiceImpl:
             has_children=has_children,
             parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
             backend_id=job.backend_id or "",
+            child_cluster=job.child_cluster or "",
             **_job_status_counts(summary, job.job_id),
         )
         if job.started_at_ms:
@@ -1587,6 +1591,7 @@ class ControllerServiceImpl:
             pending_reason=pending_reason,
             has_children=has_children,
             backend_id=j.backend_id or "",
+            child_cluster=j.child_cluster or "",
             **_job_status_counts(task_summary, j.job_id),
         )
         if j.started_at_ms:
