@@ -139,23 +139,6 @@ def _time_forward(fn, warmup: int = 3, iters: int = 10) -> float:
     return float(np.min(times))
 
 
-def _time_throughput(fn, warmup: int = 5, iters: int = 50) -> float:
-    """Throughput timer (seconds per call): enqueue ``iters`` calls, block once.
-
-    Represents a pipelined training step where the host overlaps host/device work.
-    This is the methodology under which the ≥1.2× fwd+bwd acceptance target was
-    defined (measures 1.28× at the operating point vs 1.14× with per-call latency).
-    """
-    jfn = jax.jit(fn)
-    for _ in range(warmup):
-        jax.block_until_ready(jfn())
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        out = jfn()
-    jax.block_until_ready(out)
-    return (time.perf_counter() - t0) / iters
-
-
 @gpu_only
 def test_fp8_forward_faster_than_bf16():
     # w13-like shape: T=4096 tokens, K=2560, E=8 experts, N=2560 (multiple of 128).

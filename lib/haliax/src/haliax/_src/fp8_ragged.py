@@ -273,7 +273,6 @@ def fp8_scaled_ragged_dot(
     lhs_amax_history,
     rhs_amax_history,
     grad_amax_history,
-    quantize_compute_type=jnp.float32,
     fwd_dtype=_E4M3,
     rev_dtype=_E4M3,
 ):
@@ -299,7 +298,6 @@ def fp8_scaled_ragged_dot(
     input, kernel, and output-gradient scale / amax-history all update through the
     custom VJPs as ``OverwriteWithGradient`` overwrites.
     """
-    del quantize_compute_type  # CT kernel uses float32 internally; parameter kept for API parity.
     # Fused cast-transpose+amax: reads each bf16 tile once, folds the amax reduction, and
     # stores both the natural and the transposed FP8 tile in one pass.  VJP threading matches in_q.
     # The forward uses q_lhs [T,K] and q_rhs_t [E,N,K]; the dgrad uses q_rhs [E,K,N] (natural

@@ -307,7 +307,6 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             lhs_amax_history=self.input_amax_history,
             rhs_amax_history=self.kernel_amax_history,
             grad_amax_history=self.output_grad_amax_history,
-            quantize_compute_type=comp_dtype,
             fwd_dtype=self.fwd_dtype,
             rev_dtype=self.rev_dtype,
         )
