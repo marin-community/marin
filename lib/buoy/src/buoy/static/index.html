@@ -43,12 +43,12 @@
     .run-empty { color: #aecbe8; font-size: 12px; padding: .5em; }
 
     /* ---- main area ---- */
-    .main { flex: 1; overflow: auto; display: flex; flex-direction: column; }
+    .main { flex: 1; overflow: auto; display: flex; flex-direction: column; position: relative; }
     #status { display: flex; align-items: center; gap: .6em; padding: .85em 1.5em; color: #4a5568; font-size: 13px; }
     .spinner { width: 16px; height: 16px; border: 2px solid #d7e0ea; border-top-color: #0d3b66; border-radius: 50%; animation: spin .8s linear infinite; flex: 0 0 auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .loading-row { display: flex; align-items: center; gap: .6em; color: #4a5568; font-size: 13px; }
-    .overlay { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+    .overlay { position: absolute; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
       background: rgba(247, 249, 252, .82); backdrop-filter: blur(2px); }
     .overlay.hidden { display: none; }
     .overlay-box { text-align: center; padding: 2em; }
@@ -160,15 +160,15 @@
       </div>
 
       <div id="profile-pane" class="pane hidden"></div>
-    </main>
-  </div>
 
-  <div id="overlay" class="overlay hidden">
-    <div class="overlay-box">
-      <div class="spinner-lg"></div>
-      <div class="overlay-msg"><span id="ov-verb"></span> <span class="run" id="ov-run"></span></div>
-      <div class="overlay-detail" id="ov-detail"></div>
-    </div>
+      <div id="overlay" class="overlay hidden">
+        <div class="overlay-box">
+          <div class="spinner-lg"></div>
+          <div class="overlay-msg"><span id="ov-verb"></span> <span class="run" id="ov-run"></span></div>
+          <div class="overlay-detail" id="ov-detail"></div>
+        </div>
+      </div>
+    </main>
   </div>
 
   <script>
