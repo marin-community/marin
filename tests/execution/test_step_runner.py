@@ -7,13 +7,15 @@ import os
 import threading
 from pathlib import Path
 
+import marin.execution.step_runner as step_runner_module
 import pytest
 from fray.current_client import current_client, set_current_client
 from fray.types import ResourceConfig
-from marin.execution.artifact import Artifact, read_artifact, write_artifact
+from marin.execution.artifact import FINGERPRINT_KEY, VERSION_KEY, Artifact, read_artifact, write_artifact
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import STATUS_SUCCESS, StatusFile, worker_id
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -401,6 +403,122 @@ def test_runner_walks_transitive_deps_with_cache_hit(tmp_path: Path):
     # Pass only ``downstream``; the runner walks deps and cache-hits ``dep``.
     StepRunner().run([downstream])
     assert downstream_ran == [(tmp_path / "downstream").as_posix()]
+
+
+# ---------------------------------------------------------------------------
+# Pruning already-built subtrees
+# ---------------------------------------------------------------------------
+
+
+def _recording_step(name: str, out: str, executed: list[str], deps: list[StepSpec] | None = None) -> StepSpec:
+    """A StepSpec whose fn appends ``name`` to ``executed`` when (and only when) it runs."""
+
+    def _fn(output_path: str) -> Artifact:
+        executed.append(name)
+        return Artifact(path=output_path)
+
+    return StepSpec(name=name, override_output_path=out, deps=deps or [], fn=_fn)
+
+
+def _download_normalize_tokenize(tmp_path: Path, executed: list[str]) -> tuple[StepSpec, StepSpec, StepSpec]:
+    download = _recording_step("download", (tmp_path / "download").as_posix(), executed)
+    normalize = _recording_step("normalize", (tmp_path / "normalize").as_posix(), executed, deps=[download])
+    tokenize = _recording_step("tokenize", (tmp_path / "tokenize").as_posix(), executed, deps=[normalize])
+    return download, normalize, tokenize
+
+
+def test_runner_prunes_built_terminal_subtree(tmp_path: Path):
+    """A cached terminal must not rebuild its unbuilt intermediate ancestors.
+
+    Regression for #6783: ``download → normalize → tokenize`` with only ``tokenize``
+    cached used to rebuild the unpinned ``normalize`` (and ``download``) anyway.
+    """
+    executed: list[str] = []
+    _download, _normalize, tokenize = _download_normalize_tokenize(tmp_path, executed)
+
+    # Prime ONLY the terminal as a cached SUCCESS; its ancestors stay unbuilt.
+    StatusFile(tokenize.output_path, worker_id()).write_status(STATUS_SUCCESS)
+
+    StepRunner().run([tokenize])
+
+    # Terminal served from cache, ancestors pruned: nothing ran.
+    assert executed == []
+
+
+def test_runner_builds_unbuilt_ancestors(tmp_path: Path):
+    """With nothing cached, the full chain runs in dependency order (no over-pruning)."""
+    executed: list[str] = []
+    _download, _normalize, tokenize = _download_normalize_tokenize(tmp_path, executed)
+
+    StepRunner().run([tokenize])
+
+    assert executed == ["download", "normalize", "tokenize"]
+
+
+def test_runner_prune_keeps_unbuilt_sibling_branch(tmp_path: Path):
+    """A shared dep feeding a cached branch and an unbuilt branch still runs once.
+
+    Diamond ``a → {b, c}``, ``b → d``, ``c → d``: ``c`` is cached but its dep ``d``
+    is not. Pruning ``c`` must not strand ``d`` — ``d`` is still needed by ``b``.
+    """
+    executed: list[str] = []
+    d = _recording_step("d", (tmp_path / "d").as_posix(), executed)
+    b = _recording_step("b", (tmp_path / "b").as_posix(), executed, deps=[d])
+    c = _recording_step("c", (tmp_path / "c").as_posix(), executed, deps=[d])
+    a = _recording_step("a", (tmp_path / "a").as_posix(), executed, deps=[b, c])
+
+    # ``c`` is already built; its dep ``d`` is not.
+    StatusFile(c.output_path, worker_id()).write_status(STATUS_SUCCESS)
+
+    StepRunner().run([a])
+
+    assert "c" not in executed  # served from cache, not rebuilt
+    assert executed.count("d") == 1  # built once, for the unbuilt ``b`` branch
+    assert sorted(executed) == ["a", "b", "d"]
+
+
+def test_runner_does_not_prune_dev_node(tmp_path: Path):
+    """A mutable (dev) artifact at SUCCESS always rebuilds, so its deps are not pruned."""
+    executed: list[str] = []
+    dep = StepSpec(
+        name="dep",
+        override_output_path=(tmp_path / "dep").as_posix(),
+        hash_attrs={FINGERPRINT_KEY: "dep-fp", VERSION_KEY: "2026.01.01"},
+        fn=lambda output_path: executed.append("dep") or Artifact(path=output_path),
+    )
+    dev = StepSpec(
+        name="dev",
+        override_output_path=(tmp_path / "dev").as_posix(),
+        deps=[dep],
+        hash_attrs={FINGERPRINT_KEY: "dev-fp", VERSION_KEY: "dev"},
+        fn=lambda output_path: executed.append("dev") or Artifact(path=output_path),
+    )
+
+    # Even with a SUCCESS status on disk, a dev version is rebuilt — and pulls its dep.
+    StatusFile(dev.output_path, worker_id()).write_status(STATUS_SUCCESS)
+
+    StepRunner().run([dev])
+
+    assert "dev" in executed
+    assert "dep" in executed
+
+
+def test_runner_prune_cache_vanished_fails(tmp_path: Path, monkeypatch):
+    """If a pruned node's cached output is gone at confirm time, the run fails loudly
+    rather than running the node with its inputs pruned away."""
+    executed: list[str] = []
+    dep = _recording_step("dep", (tmp_path / "dep").as_posix(), executed)
+    terminal = _recording_step("terminal", (tmp_path / "terminal").as_posix(), executed, deps=[dep])
+
+    # Treat ``terminal`` as built (pruning ``dep``) although nothing is on disk — the
+    # state if its cached output vanished between scheduling and confirmation.
+    monkeypatch.setattr(step_runner_module, "_is_built", lambda s: s.output_path == terminal.output_path)
+
+    with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
+        StepRunner().run([terminal])
+
+    # The pruned node is not run (its inputs were dropped), and neither is its dep.
+    assert executed == []
 
 
 def test_runner_consumes_unbounded_iterator(tmp_path: Path):
