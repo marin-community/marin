@@ -77,7 +77,10 @@ class DuckyClient:
         token_provider: returns a bearer token per request, or ``None`` for no
             auth (in-cluster direct endpoint). Defaults to the IAP SA token.
         poll_interval: seconds between ``/result`` polls.
-        timeout: overall seconds to wait for a query to finish.
+        timeout: overall seconds to wait for a query to finish. Kept above
+            ducky's own ``query_timeout`` (600 s) so a genuinely slow query is
+            interrupted server-side (a clean error) rather than tripping this
+            client deadline first.
     """
 
     def __init__(
@@ -86,7 +89,7 @@ class DuckyClient:
         *,
         token_provider: TokenProvider | None = iap_token_provider(),
         poll_interval: float = 1.0,
-        timeout: float = 180.0,
+        timeout: float = 900.0,
     ):
         self._base_url = base_url.rstrip("/")
         self._token_provider = token_provider

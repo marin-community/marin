@@ -238,8 +238,9 @@ def _build_ducky(explicit_url: str | None) -> DuckyClient:
         url, needs_iap = f"{os.environ['IRIS_CONTROLLER_URL'].rstrip('/')}/proxy/ducky", False
     else:
         url, needs_iap = DEFAULT_BASE_URL, True
-    logger.info("ducky endpoint %s (iap=%s)", url, needs_iap)
-    return DuckyClient(url, token_provider=iap_token_provider() if needs_iap else None)
+    timeout = float(os.environ.get("DATAVIZ_QUERY_TIMEOUT", "900"))
+    logger.info("ducky endpoint %s (iap=%s, timeout=%.0fs)", url, needs_iap, timeout)
+    return DuckyClient(url, token_provider=iap_token_provider() if needs_iap else None, timeout=timeout)
 
 
 def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[StoreLineage, ClusteredStoreData]:
