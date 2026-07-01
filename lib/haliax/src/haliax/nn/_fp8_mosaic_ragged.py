@@ -1,3 +1,7 @@
+# Copyright The Levanter Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Copyright 2025 The JAX Authors.
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -29,9 +33,7 @@ def _wgmma(acc: plgpu.WGMMAAccumulatorRef, lhs, rhs) -> None:
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
     if lhs.dtype != rhs.dtype and not is_mixed_fp8:
-        raise ValueError(
-            f"Mixed input dtypes for matrix multiplication unsupported: lhs={lhs.dtype}, rhs={rhs.dtype}"
-        )
+        raise ValueError(f"Mixed input dtypes for matrix multiplication unsupported: lhs={lhs.dtype}, rhs={rhs.dtype}")
 
     if isinstance(acc, pallas_core.TransformedRef):
         acc_transforms_leaves, acc_transforms_tree = jax.tree.flatten(acc.transforms)
@@ -127,16 +129,12 @@ def mosaic_ragged_dot(
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs_k_major.dtype in fp8_dtypes
     if lhs.dtype != rhs_k_major.dtype and not is_mixed_fp8:
-        raise NotImplementedError(
-            f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_k_major.dtype}"
-        )
+        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_k_major.dtype}")
 
     m, k = lhs.shape
     groups, n, k2 = rhs_k_major.shape
     if group_sizes.shape[0] != groups:
-        raise ValueError(
-            f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}"
-        )
+        raise ValueError(f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}")
     if k != k2:
         raise ValueError(f"lhs.shape={k} must match rhs.shape={k2}")
     if k % block_k != 0:
@@ -148,9 +146,7 @@ def mosaic_ragged_dot(
 
         @plgpu.nd_loop((grid_m * grid_n,), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
-            mi, ni = plgpu.planar_snake(
-                loop_info.index[0], (grid_m, grid_n), 1, grid_block_n
-            )
+            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
             group_info = _GroupInfo.create(rows_per_expert_gmem, block_m, mi)
 
             def acc_scope(acc_ref):
@@ -211,9 +207,7 @@ def mosaic_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(
-            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
-        ),
+        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
     return kernel(group_sizes, lhs, rhs_k_major)
 
@@ -241,9 +235,7 @@ def mosaic_ragged_dot_contract_major(
     m, k = lhs.shape
     groups, k2, n = rhs_contract_major.shape
     if group_sizes.shape[0] != groups:
-        raise ValueError(
-            f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}"
-        )
+        raise ValueError(f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}")
     if k != k2:
         raise ValueError(f"lhs.shape={k} must match rhs.shape={k2}")
     if k % block_k != 0:
@@ -255,9 +247,7 @@ def mosaic_ragged_dot_contract_major(
 
         @plgpu.nd_loop((grid_m * grid_n,), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
-            mi, ni = plgpu.planar_snake(
-                loop_info.index[0], (grid_m, grid_n), 1, grid_block_n
-            )
+            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
             group_info = _GroupInfo.create(rows_per_expert_gmem, block_m, mi)
 
             def acc_scope(acc_ref):
@@ -270,9 +260,7 @@ def mosaic_ragged_dot_contract_major(
                             lambda kk: (group_info.block, kk),
                             delay_release=1,
                         ),
-                        plgpu.BlockSpec(
-                            (block_k, block_n), lambda kk: (kk, ni), delay_release=1
-                        ),
+                        plgpu.BlockSpec((block_k, block_n), lambda kk: (kk, ni), delay_release=1),
                     ],
                     max_concurrent_steps=max_concurrent_steps,
                 )(lhs_gmem, rhs_gmem.at[group_info.group_id])
@@ -311,9 +299,7 @@ def mosaic_ragged_dot_contract_major(
         out_shape=jax.ShapeDtypeStruct((m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(
-            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
-        ),
+        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
     return kernel(group_sizes, lhs, rhs_contract_major)
 
@@ -336,9 +322,7 @@ def mosaic_transposed_ragged_dot(
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs_t.dtype in fp8_dtypes
     if lhs_t.dtype != rhs_t.dtype and not is_mixed_fp8:
-        raise NotImplementedError(
-            f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs_t.dtype}"
-        )
+        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs_t.dtype}")
 
     m, tokens = lhs_t.shape
     n, tokens2 = rhs_t.shape
@@ -351,9 +335,7 @@ def mosaic_transposed_ragged_dot(
         raise ValueError(f"n={n} must be a multiple of block_n={block_n}")
 
     group_sizes = group_sizes.astype(int)
-    group_starts = jnp.concatenate(
-        [jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]
-    ).astype(int)
+    group_starts = jnp.concatenate([jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]).astype(int)
     group_ends = jnp.cumsum(group_sizes)
     if exact_token_start:
         group_block_starts = group_starts
@@ -379,9 +361,7 @@ def mosaic_transposed_ragged_dot(
         @plgpu.nd_loop((groups, grid_m * grid_n), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
             group = loop_info.index[0]
-            m_i, n_i = plgpu.planar_snake(
-                loop_info.index[1], (grid_m, grid_n), 1, grid_block_n
-            )
+            m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
             group_block_start = group_block_starts_gmem[group] // block_k
             token_slice = pl.ds(group_block_starts_gmem[group], tokens)
 
@@ -396,9 +376,7 @@ def mosaic_transposed_ragged_dot(
                             start_index = lax.rem(group_starts_gmem[group], block_k)
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_m, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             lhs_reg = jnp.where(
@@ -409,9 +387,7 @@ def mosaic_transposed_ragged_dot(
                             lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_n, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_reg = jnp.where(
@@ -428,14 +404,10 @@ def mosaic_transposed_ragged_dot(
                         def _():
                             last_index = lax.rem(group_ends_gmem[group] - 1, block_k)
                             if exact_token_start:
-                                last_index = lax.rem(
-                                    group_sizes_gmem[group] - 1, block_k
-                                )
+                                last_index = lax.rem(group_sizes_gmem[group] - 1, block_k)
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_m, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             lhs_reg = jnp.where(
@@ -446,9 +418,7 @@ def mosaic_transposed_ragged_dot(
                             lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_n, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_reg = jnp.where(
@@ -527,9 +497,7 @@ def mosaic_transposed_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((groups, m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(
-            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
-        ),
+        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
     return kernel(
         group_sizes,
@@ -559,9 +527,7 @@ def mosaic_wgrad_ragged_dot(
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
     if lhs_t.dtype != rhs.dtype and not is_mixed_fp8:
-        raise NotImplementedError(
-            f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs.dtype}"
-        )
+        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs.dtype}")
 
     m, tokens = lhs_t.shape
     tokens2, n = rhs.shape
@@ -574,9 +540,7 @@ def mosaic_wgrad_ragged_dot(
         raise ValueError(f"n={n} must be a multiple of block_n={block_n}")
 
     group_sizes = group_sizes.astype(int)
-    group_starts = jnp.concatenate(
-        [jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]
-    ).astype(int)
+    group_starts = jnp.concatenate([jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]).astype(int)
     group_ends = jnp.cumsum(group_sizes)
     group_block_starts = group_starts // block_k * block_k
     group_block_ends = -(group_ends // -block_k) * block_k
@@ -598,9 +562,7 @@ def mosaic_wgrad_ragged_dot(
         @plgpu.nd_loop((groups, grid_m * grid_n), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
             group = loop_info.index[0]
-            m_i, n_i = plgpu.planar_snake(
-                loop_info.index[1], (grid_m, grid_n), 1, grid_block_n
-            )
+            m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
             group_block_start = group_block_starts_gmem[group] // block_k
 
             def acc_scope(acc_ref):
@@ -614,9 +576,7 @@ def mosaic_wgrad_ragged_dot(
                             start_index = lax.rem(group_starts_gmem[group], block_k)
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_m, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             lhs_reg = jnp.where(
@@ -627,9 +587,7 @@ def mosaic_wgrad_ragged_dot(
                             lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_k, block_n), 0
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_k, block_n), 0),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_reg = jnp.where(
@@ -645,9 +603,7 @@ def mosaic_wgrad_ragged_dot(
                             last_index = lax.rem(group_ends_gmem[group] - 1, block_k)
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_m, block_k), 1
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
                                 plgpu.Layout.WGMMA,
                             )
                             lhs_reg = jnp.where(
@@ -658,9 +614,7 @@ def mosaic_wgrad_ragged_dot(
                             lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(
-                                    jnp.int32, (block_k, block_n), 0
-                                ),
+                                jax.lax.broadcasted_iota(jnp.int32, (block_k, block_n), 0),
                                 plgpu.Layout.WGMMA,
                             )
                             rhs_reg = jnp.where(
@@ -720,9 +674,7 @@ def mosaic_wgrad_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((groups, m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(
-            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
-        ),
+        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
     )
     return kernel(
         group_sizes,

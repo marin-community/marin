@@ -343,3 +343,58 @@ transposed-wgrad path that otherwise runs, the confirmed
 `jnp.where(cond, fp8_fragment, 0)` zeroing pattern still lowers as an unsupported
 FP8 pointwise select on this pod. The f16-upcast boundary zeroing works but does
 not clear the >=1.2x fwd+bwd bar.
+
+## Fourth resume findings
+
+The arbitrary-ragged mixed-FP8 Mosaic wgrad is now treated as solved. The f16
+boundary-zeroing path is the correct compiled form for this Mosaic build; raw
+FP8 `jnp.where` remains unsupported.
+
+I focused on the remaining forward gap. The current default forward path still
+measures only about `1.1x` because it uses the existing row-major quantization
+path and lets the Mosaic forward consume a K-major view of the rhs.
+
+I added two env-gated fused quantization experiments:
+
+- `FP8_MOSAIC_PRETRANSPOSE=1`: fused quantize+transpose+amax kernels that emit
+  both natural and transposed FP8 layouts for lhs/rhs/g and thread those layouts
+  through forward, dgrad, and wgrad.
+- `FP8_MOSAIC_FUSED_QUANT=1`: fused row-major quantize+amax kernels that avoid
+  the separate delayed-scaling amax scan without writing the extra transposed
+  layout.
+
+Both variants compile and are correct on a small non-uniform H100 custom-VJP
+probe. They are not defaults because they are slower than the existing XLA
+quantize path at the 1024 operating point.
+
+Forward-only target measurements:
+
+| Variant | Tile env | w13 fwd speedup | w2 fwd speedup |
+| --- | --- | ---: | ---: |
+| default Mosaic quantize | default | 1.118x | 1.042x |
+| fused pretranspose+amax | `32x64` 2D/3D quant tiles | 0.818x | 0.781x |
+| fused row-major quantize+amax | `32x64` 2D/3D quant tiles | 0.781x | 0.759x |
+
+The scratch-reduce amax version and the scalar `tl.atomic_max`/`zeroed_outputs`
+version both worked; scalar atomic avoided the extra JAX reduction but did not
+change the conclusion. Larger quantize tile sweeps (`16x128`, `16x256`,
+`32x128`, `32x256`, `64x64`, `64x128`, plus separate 2D/3D tile mixes) did not
+produce a stable improvement over the default path. One short `32x64` run showed
+`1.387x` w13 forward, but a repeated `warmups=3,iters=10` run measured only
+`0.796x`, so I treat the earlier value as noise.
+
+`FP8_MOSAIC_OUTPUT_FP8=1` improved one w2 forward-only run but hurt w13 and
+faulted with a CUDA misaligned-address error in fwd+bwd, so it is not usable.
+
+Clean default fwd+bwd after these changes, with fused paths disabled:
+
+| GEMM | bf16 fwd+bwd | fp8 fwd+bwd | speedup |
+| --- | ---: | ---: | ---: |
+| w13 K=2560 N=2560 | 5.896 ms | 6.006 ms | 0.982x |
+| w2 K=1280 N=2560 | 3.247 ms | 3.427 ms | 0.947x |
+
+Current blocker: a straightforward Triton fused cast-once implementation is
+memory/write dominated because it writes both full FP8 layouts. It does not
+recover the expected 1.4x forward. The next useful hint would be the intended
+layout/quantization structure that avoids the extra full-layout write cost while
+still supplying the no-transpose layouts needed by forward, dgrad, and wgrad.

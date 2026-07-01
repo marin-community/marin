@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from jax.typing import DTypeLike
 
 from haliax._src.fp8 import (
+    compute_scale,
     dequantize,
     get_fp8_max,
     in_q,
@@ -73,9 +74,7 @@ except (ImportError, ModuleNotFoundError):
 # _ragged_dot_kernel/_ragged_dot for the default layout,
 # _ragged_contracting_dim_dot_kernel/_ragged_contracting_dim_dot for drhs, and
 # PallasTritonRaggedDot._fwd for the VJP layout dispatch.
-Implementation: TypeAlias = Literal[
-    "auto", "megablox", "mosaic", "padded_dense", "triton", "triton_native", "xla"
-]
+Implementation: TypeAlias = Literal["auto", "megablox", "mosaic", "padded_dense", "triton", "triton_native", "xla"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
@@ -102,9 +101,7 @@ def _is_blackwell_gpu_backend() -> bool:
     return any(name in device_kind for name in ("B200", "B300", "GB200", "GB300"))
 
 
-def _ragged_dot_megablox_impl(
-    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array
-) -> jax.Array:
+def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
     tile_size = (512, 1024, 1024)  # (m, k, n)
@@ -159,11 +156,7 @@ def _triton_ragged_dot_kernel(
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
     block_m = min(128, int(pl.next_power_of_2(m)))
-    max_block_n = (
-        _TRITON_BLACKWELL_BLOCK_N
-        if _is_blackwell_gpu_backend()
-        else _TRITON_DEFAULT_BLOCK_N
-    )
+    max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
     block_n = min(max_block_n, int(pl.next_power_of_2(n)))
     block_k = min(32, int(pl.next_power_of_2(k)))
     return block_m, block_n, block_k
@@ -184,9 +177,7 @@ def _triton_default_pallas_call(
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
 
-    default_block_m, default_block_n, default_block_k = _triton_default_block_sizes(
-        m, k, n
-    )
+    default_block_m, default_block_n, default_block_k = _triton_default_block_sizes(m, k, n)
     block_m = default_block_m if block_m_override is None else block_m_override
     block_n = default_block_n if block_n_override is None else block_n_override
     block_k = default_block_k if block_k_override is None else block_k_override
@@ -196,9 +187,7 @@ def _triton_default_pallas_call(
     grid_m = m if max_group_size is None else max_group_size
 
     return pl.pallas_call(
-        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(
-            a, b, lo, hi, out, block_m=block_m, block_k=block_k
-        ),
+        lambda a, b, lo, hi, out: _triton_ragged_dot_kernel(a, b, lo, hi, out, block_m=block_m, block_k=block_k),
         out_shape=jax.ShapeDtypeStruct((m, n), out_dtype),
         in_specs=[
             pl.no_block_spec,
@@ -238,9 +227,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
         return acc + pl.dot(a.T, b)
 
-    num_k_blocks = jnp.maximum(
-        pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1)
-    )
+    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
     acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
     acc = body(num_k_blocks - 1, acc, mask_k=True)
@@ -261,21 +248,9 @@ def _triton_ragged_contracting_dim_pallas_call(
     k, m = lhs.shape
     _, n = rhs.shape
 
-    block_m = (
-        min(128, int(pl.next_power_of_2(m)))
-        if block_m_override is None
-        else block_m_override
-    )
-    block_n = (
-        min(128, int(pl.next_power_of_2(n)))
-        if block_n_override is None
-        else block_n_override
-    )
-    block_k = (
-        min(32, int(pl.next_power_of_2(k)))
-        if block_k_override is None
-        else block_k_override
-    )
+    block_m = min(128, int(pl.next_power_of_2(m))) if block_m_override is None else block_m_override
+    block_n = min(128, int(pl.next_power_of_2(n))) if block_n_override is None else block_n_override
+    block_k = min(32, int(pl.next_power_of_2(k))) if block_k_override is None else block_k_override
     block_m = min(block_m, m)
     block_n = min(block_n, n)
 
@@ -305,9 +280,7 @@ def _triton_ragged_contracting_dim_pallas_call(
             compiler_params=plgpu.CompilerParams(num_warps=4, num_stages=4),
         )(lhs, rhs, lo, hi)
 
-    return jax.vmap(one_group, in_axes=(None, None, 0, 0))(
-        lhs, rhs, cum_rows[:-1], cum_rows[1:]
-    )
+    return jax.vmap(one_group, in_axes=(None, None, 0, 0))(lhs, rhs, cum_rows[:-1], cum_rows[1:])
 
 
 _DEFAULT_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
@@ -353,9 +326,7 @@ if triton is not None and tl is not None:
         offs_col = pid_col * block_cols + tl.arange(0, block_cols)
         mask = (offs_row[:, None] < rows) & (offs_col[None, :] < cols)
 
-        x = tl.load(
-            x_ptr + offs_row[:, None] * cols + offs_col[None, :], mask=mask, other=0.0
-        ).to(tl.float32)
+        x = tl.load(x_ptr + offs_row[:, None] * cols + offs_col[None, :], mask=mask, other=0.0).to(tl.float32)
         scale = tl.load(scale_ptr).to(tl.float32)
         q = x / scale
         q = tl.minimum(tl.maximum(q, -fp8_max), fp8_max)
@@ -366,6 +337,75 @@ if triton is not None and tl is not None:
             tl.trans(q),
             mask=tl.trans(mask),
         )
+
+    @triton.jit
+    def _native_quantize_amax_2d_kernel(
+        x_ptr,
+        scale_ptr,
+        q_ptr,
+        amax_ptr,
+        rows: tl.constexpr,
+        cols: tl.constexpr,
+        fp8_max: tl.constexpr,
+        block_rows: tl.constexpr,
+        block_cols: tl.constexpr,
+    ):
+        pid_row = tl.program_id(0)
+        pid_col = tl.program_id(1)
+        offs_row = pid_row * block_rows + tl.arange(0, block_rows)
+        offs_col = pid_col * block_cols + tl.arange(0, block_cols)
+        mask = (offs_row[:, None] < rows) & (offs_col[None, :] < cols)
+
+        x = tl.load(
+            x_ptr + offs_row[:, None] * cols + offs_col[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        block_amax = tl.max(tl.max(tl.abs(x), axis=0), axis=0)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        q = x / scale
+        q = tl.minimum(tl.maximum(q, -fp8_max), fp8_max)
+
+        tl.store(q_ptr + offs_row[:, None] * cols + offs_col[None, :], q, mask=mask)
+        tl.atomic_max(amax_ptr, block_amax, sem="relaxed")
+
+    @triton.jit
+    def _native_quantize_transpose_amax_2d_kernel(
+        x_ptr,
+        scale_ptr,
+        q_ptr,
+        qt_ptr,
+        amax_ptr,
+        rows: tl.constexpr,
+        cols: tl.constexpr,
+        fp8_max: tl.constexpr,
+        block_rows: tl.constexpr,
+        block_cols: tl.constexpr,
+    ):
+        pid_row = tl.program_id(0)
+        pid_col = tl.program_id(1)
+        offs_row = pid_row * block_rows + tl.arange(0, block_rows)
+        offs_col = pid_col * block_cols + tl.arange(0, block_cols)
+        mask = (offs_row[:, None] < rows) & (offs_col[None, :] < cols)
+
+        x = tl.load(
+            x_ptr + offs_row[:, None] * cols + offs_col[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        abs_x = tl.abs(x)
+        block_amax = tl.max(tl.max(abs_x, axis=0), axis=0)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        q = x / scale
+        q = tl.minimum(tl.maximum(q, -fp8_max), fp8_max)
+
+        tl.store(q_ptr + offs_row[:, None] * cols + offs_col[None, :], q, mask=mask)
+        tl.store(
+            qt_ptr + offs_col[:, None] * rows + offs_row[None, :],
+            tl.trans(q),
+            mask=tl.trans(mask),
+        )
+        tl.atomic_max(amax_ptr, block_amax, sem="relaxed")
 
     @triton.jit
     def _native_quantize_transpose_3d_kernel(
@@ -402,13 +442,91 @@ if triton is not None and tl is not None:
             mask=mask,
         )
         tl.store(
-            qt_ptr
-            + expert * out_dim * contract_dim
-            + offs_out[:, None] * contract_dim
-            + offs_contract[None, :],
+            qt_ptr + expert * out_dim * contract_dim + offs_out[:, None] * contract_dim + offs_contract[None, :],
             tl.trans(q),
             mask=tl.trans(mask),
         )
+
+    @triton.jit
+    def _native_quantize_amax_3d_kernel(
+        x_ptr,
+        scale_ptr,
+        q_ptr,
+        amax_ptr,
+        contract_dim: tl.constexpr,
+        out_dim: tl.constexpr,
+        fp8_max: tl.constexpr,
+        block_contract: tl.constexpr,
+        block_out: tl.constexpr,
+    ):
+        expert = tl.program_id(0)
+        pid_contract = tl.program_id(1)
+        pid_out = tl.program_id(2)
+        offs_contract = pid_contract * block_contract + tl.arange(0, block_contract)
+        offs_out = pid_out * block_out + tl.arange(0, block_out)
+        mask = (offs_contract[:, None] < contract_dim) & (offs_out[None, :] < out_dim)
+
+        expert_base = expert * contract_dim * out_dim
+        x = tl.load(
+            x_ptr + expert_base + offs_contract[:, None] * out_dim + offs_out[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        block_amax = tl.max(tl.max(tl.abs(x), axis=0), axis=0)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        q = x / scale
+        q = tl.minimum(tl.maximum(q, -fp8_max), fp8_max)
+
+        tl.store(
+            q_ptr + expert_base + offs_contract[:, None] * out_dim + offs_out[None, :],
+            q,
+            mask=mask,
+        )
+        tl.atomic_max(amax_ptr, block_amax, sem="relaxed")
+
+    @triton.jit
+    def _native_quantize_transpose_amax_3d_kernel(
+        x_ptr,
+        scale_ptr,
+        q_ptr,
+        qt_ptr,
+        amax_ptr,
+        contract_dim: tl.constexpr,
+        out_dim: tl.constexpr,
+        fp8_max: tl.constexpr,
+        block_contract: tl.constexpr,
+        block_out: tl.constexpr,
+    ):
+        expert = tl.program_id(0)
+        pid_contract = tl.program_id(1)
+        pid_out = tl.program_id(2)
+        offs_contract = pid_contract * block_contract + tl.arange(0, block_contract)
+        offs_out = pid_out * block_out + tl.arange(0, block_out)
+        mask = (offs_contract[:, None] < contract_dim) & (offs_out[None, :] < out_dim)
+
+        expert_base = expert * contract_dim * out_dim
+        x = tl.load(
+            x_ptr + expert_base + offs_contract[:, None] * out_dim + offs_out[None, :],
+            mask=mask,
+            other=0.0,
+        ).to(tl.float32)
+        abs_x = tl.abs(x)
+        block_amax = tl.max(tl.max(abs_x, axis=0), axis=0)
+        scale = tl.load(scale_ptr).to(tl.float32)
+        q = x / scale
+        q = tl.minimum(tl.maximum(q, -fp8_max), fp8_max)
+
+        tl.store(
+            q_ptr + expert_base + offs_contract[:, None] * out_dim + offs_out[None, :],
+            q,
+            mask=mask,
+        )
+        tl.store(
+            qt_ptr + expert * out_dim * contract_dim + offs_out[:, None] * contract_dim + offs_contract[None, :],
+            tl.trans(q),
+            mask=tl.trans(mask),
+        )
+        tl.atomic_max(amax_ptr, block_amax, sem="relaxed")
 
     @triton.jit
     def _native_block_pad_transpose_2d_kernel(
@@ -435,19 +553,14 @@ if triton is not None and tl is not None:
         padded_group_start = tl.load(padded_group_starts_ptr + expert)
 
         load_mask = (token_offsets[:, None] < group_size) & (dim_offsets[None, :] < dim)
-        store_mask = (token_offsets[None, :] < padded_group_size) & (
-            dim_offsets[:, None] < dim
-        )
+        store_mask = (token_offsets[None, :] < padded_group_size) & (dim_offsets[:, None] < dim)
         values = tl.load(
             x_ptr + (group_start + token_offsets[:, None]) * dim + dim_offsets[None, :],
             mask=load_mask,
             other=0.0,
         )
         tl.store(
-            out_t_ptr
-            + dim_offsets[:, None] * padded_tokens_bound
-            + padded_group_start
-            + token_offsets[None, :],
+            out_t_ptr + dim_offsets[:, None] * padded_tokens_bound + padded_group_start + token_offsets[None, :],
             tl.trans(values),
             mask=store_mask,
         )
@@ -588,6 +701,10 @@ if triton is not None and tl is not None:
 else:
     _native_quantize_transpose_2d_kernel = None
     _native_quantize_transpose_3d_kernel = None
+    _native_quantize_amax_2d_kernel = None
+    _native_quantize_amax_3d_kernel = None
+    _native_quantize_transpose_amax_2d_kernel = None
+    _native_quantize_transpose_amax_3d_kernel = None
     _native_block_pad_transpose_2d_kernel = None
     _native_ragged_dot_kernel = None
     _native_ragged_dlhs_kernel = None
@@ -605,16 +722,8 @@ def _triton_quantize_transpose_2d(
     if not _has_jax_triton or jt is None:
         raise NotImplementedError("jax_triton native Triton backend is not available")
     rows, cols = x.shape
-    block_rows = (
-        int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16"))
-        if block_rows is None
-        else block_rows
-    )
-    block_cols = (
-        int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64"))
-        if block_cols is None
-        else block_cols
-    )
+    block_rows = int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16")) if block_rows is None else block_rows
+    block_cols = int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64")) if block_cols is None else block_cols
     fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
     return jt.triton_call(
         x,
@@ -633,6 +742,79 @@ def _triton_quantize_transpose_2d(
         block_rows=block_rows,
         block_cols=block_cols,
     )
+
+
+def _triton_quantize_amax_2d(
+    x: jax.Array,
+    q_dtype: DTypeLike,
+    scale: jax.Array,
+    *,
+    block_rows: int | None = None,
+    block_cols: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    if not _has_jax_triton or jt is None:
+        raise NotImplementedError("jax_triton native Triton backend is not available")
+    rows, cols = x.shape
+    block_rows = int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "32")) if block_rows is None else block_rows
+    block_cols = int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64")) if block_cols is None else block_cols
+    fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
+    q, amax = jt.triton_call(
+        x,
+        scale,
+        kernel=_native_quantize_amax_2d_kernel,
+        out_shape=(
+            jax.ShapeDtypeStruct(x.shape, q_dtype),
+            jax.ShapeDtypeStruct((), jnp.float32),
+        ),
+        grid=(triton.cdiv(rows, block_rows), triton.cdiv(cols, block_cols)),
+        num_warps=4,
+        num_stages=4,
+        zeroed_outputs=(1,),
+        rows=rows,
+        cols=cols,
+        fp8_max=fp8_max,
+        block_rows=block_rows,
+        block_cols=block_cols,
+    )
+    return q, amax
+
+
+def _triton_quantize_transpose_amax_2d(
+    x: jax.Array,
+    q_dtype: DTypeLike,
+    scale: jax.Array,
+    *,
+    block_rows: int | None = None,
+    block_cols: int | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    if not _has_jax_triton or jt is None:
+        raise NotImplementedError("jax_triton native Triton backend is not available")
+    rows, cols = x.shape
+    block_rows = int(os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16")) if block_rows is None else block_rows
+    block_cols = int(os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64")) if block_cols is None else block_cols
+    row_blocks = triton.cdiv(rows, block_rows)
+    col_blocks = triton.cdiv(cols, block_cols)
+    fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
+    q, qt, amax = jt.triton_call(
+        x,
+        scale,
+        kernel=_native_quantize_transpose_amax_2d_kernel,
+        out_shape=(
+            jax.ShapeDtypeStruct(x.shape, q_dtype),
+            jax.ShapeDtypeStruct((cols, rows), q_dtype),
+            jax.ShapeDtypeStruct((), jnp.float32),
+        ),
+        grid=(row_blocks, col_blocks),
+        num_warps=4,
+        num_stages=4,
+        zeroed_outputs=(2,),
+        rows=rows,
+        cols=cols,
+        fp8_max=fp8_max,
+        block_rows=block_rows,
+        block_cols=block_cols,
+    )
+    return q, qt, amax
 
 
 def _triton_quantize_transpose_3d(
@@ -690,6 +872,119 @@ def _triton_quantize_transpose_3d(
     )
 
 
+def _triton_quantize_amax_3d(
+    x: jax.Array,
+    q_dtype: DTypeLike,
+    scale: jax.Array,
+    *,
+    block_contract: int | None = None,
+    block_out: int | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    if not _has_jax_triton or jt is None:
+        raise NotImplementedError("jax_triton native Triton backend is not available")
+    experts, contract_dim, out_dim = x.shape
+    block_contract = (
+        int(
+            os.environ.get(
+                "FP8_QUANTIZE_BLOCK_CONTRACT",
+                os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "32"),
+            )
+        )
+        if block_contract is None
+        else block_contract
+    )
+    block_out = (
+        int(
+            os.environ.get(
+                "FP8_QUANTIZE_BLOCK_OUT",
+                os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64"),
+            )
+        )
+        if block_out is None
+        else block_out
+    )
+    fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
+    q, amax = jt.triton_call(
+        x,
+        scale,
+        kernel=_native_quantize_amax_3d_kernel,
+        out_shape=(
+            jax.ShapeDtypeStruct(x.shape, q_dtype),
+            jax.ShapeDtypeStruct((), jnp.float32),
+        ),
+        grid=(
+            experts,
+            triton.cdiv(contract_dim, block_contract),
+            triton.cdiv(out_dim, block_out),
+        ),
+        num_warps=4,
+        num_stages=4,
+        zeroed_outputs=(1,),
+        contract_dim=contract_dim,
+        out_dim=out_dim,
+        fp8_max=fp8_max,
+        block_contract=block_contract,
+        block_out=block_out,
+    )
+    return q, amax
+
+
+def _triton_quantize_transpose_amax_3d(
+    x: jax.Array,
+    q_dtype: DTypeLike,
+    scale: jax.Array,
+    *,
+    block_contract: int | None = None,
+    block_out: int | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    if not _has_jax_triton or jt is None:
+        raise NotImplementedError("jax_triton native Triton backend is not available")
+    experts, contract_dim, out_dim = x.shape
+    block_contract = (
+        int(
+            os.environ.get(
+                "FP8_QUANTIZE_BLOCK_CONTRACT",
+                os.environ.get("FP8_QUANTIZE_BLOCK_ROWS", "16"),
+            )
+        )
+        if block_contract is None
+        else block_contract
+    )
+    block_out = (
+        int(
+            os.environ.get(
+                "FP8_QUANTIZE_BLOCK_OUT",
+                os.environ.get("FP8_QUANTIZE_BLOCK_COLS", "64"),
+            )
+        )
+        if block_out is None
+        else block_out
+    )
+    contract_blocks = triton.cdiv(contract_dim, block_contract)
+    out_blocks = triton.cdiv(out_dim, block_out)
+    fp8_max = float(get_fp8_max(q_dtype, jnp.float32))
+    q, qt, amax = jt.triton_call(
+        x,
+        scale,
+        kernel=_native_quantize_transpose_amax_3d_kernel,
+        out_shape=(
+            jax.ShapeDtypeStruct(x.shape, q_dtype),
+            jax.ShapeDtypeStruct((experts, out_dim, contract_dim), q_dtype),
+            jax.ShapeDtypeStruct((), jnp.float32),
+        ),
+        grid=(experts, contract_blocks, out_blocks),
+        num_warps=4,
+        num_stages=4,
+        zeroed_outputs=(2,),
+        contract_dim=contract_dim,
+        out_dim=out_dim,
+        fp8_max=fp8_max,
+        block_contract=block_contract,
+        block_out=block_out,
+    )
+    return q, qt, amax
+
+
 def _triton_block_pad_transpose_2d(
     x: jax.Array,
     group_sizes: jax.Array,
@@ -702,22 +997,12 @@ def _triton_block_pad_transpose_2d(
         raise NotImplementedError("jax_triton native Triton backend is not available")
     tokens, dim = x.shape
     groups = group_sizes.shape[0]
-    block_dim = (
-        int(os.environ.get("FP8_WGRAD_PACK_BLOCK_DIM", "64"))
-        if block_dim is None
-        else block_dim
-    )
-    max_padded_group_size = (
-        (max_group_size + block_tokens - 1) // block_tokens
-    ) * block_tokens
+    block_dim = int(os.environ.get("FP8_WGRAD_PACK_BLOCK_DIM", "64")) if block_dim is None else block_dim
+    max_padded_group_size = ((max_group_size + block_tokens - 1) // block_tokens) * block_tokens
     padded_tokens_bound = groups * max_padded_group_size
     group_starts = jnp.cumulative_sum(group_sizes, include_initial=True)[:-1]
-    padded_group_sizes = (
-        (group_sizes + block_tokens - 1) // block_tokens
-    ) * block_tokens
-    padded_group_starts = jnp.cumulative_sum(padded_group_sizes, include_initial=True)[
-        :-1
-    ]
+    padded_group_sizes = ((group_sizes + block_tokens - 1) // block_tokens) * block_tokens
+    padded_group_starts = jnp.cumulative_sum(padded_group_sizes, include_initial=True)[:-1]
     out_t = jt.triton_call(
         x,
         group_sizes,
@@ -741,16 +1026,58 @@ def _triton_block_pad_transpose_2d(
     return out_t, padded_group_sizes
 
 
+def _delayed_scale(q_dtype: DTypeLike, scale: jax.Array, amax_history: jax.Array) -> jax.Array:
+    dtype_max = get_fp8_max(q_dtype, jnp.float32)
+    return compute_scale(jnp.max(amax_history, axis=0), scale, dtype_max)
+
+
+def _roll_amax_history(amax_history: jax.Array, amax_update: jax.Array) -> jax.Array:
+    return jnp.roll(amax_history, shift=-1, axis=0).at[0].set(amax_update.astype(amax_history.dtype))
+
+
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
-def _in_q_with_transpose(
-    rank: int, compute_dtype: DTypeLike, q_dtype: DTypeLike, inp, scale, amax_history
-):
+def _in_q_fused(rank: int, compute_dtype: DTypeLike, q_dtype: DTypeLike, inp, scale, amax_history):
     del compute_dtype
-    new_scale, _ = update_fp8_meta(inp, q_dtype, scale, amax_history)
+    new_scale = _delayed_scale(q_dtype, scale, amax_history)
     if rank == 2:
-        q, qt = _triton_quantize_transpose_2d(inp, q_dtype, new_scale)
+        q, _ = _triton_quantize_amax_2d(inp, q_dtype, new_scale)
     elif rank == 3:
-        q, qt = _triton_quantize_transpose_3d(inp, q_dtype, new_scale)
+        q, _ = _triton_quantize_amax_3d(inp, q_dtype, new_scale)
+    else:
+        raise ValueError(f"Unsupported FP8 quantize rank: {rank}")
+    return q, new_scale
+
+
+def _in_q_fused_fwd(rank, compute_dtype, q_dtype, inp, scale, amax_history):
+    del compute_dtype
+    new_scale = _delayed_scale(q_dtype, scale, amax_history)
+    if rank == 2:
+        q, amax_update = _triton_quantize_amax_2d(inp, q_dtype, new_scale)
+    elif rank == 3:
+        q, amax_update = _triton_quantize_amax_3d(inp, q_dtype, new_scale)
+    else:
+        raise ValueError(f"Unsupported FP8 quantize rank: {rank}")
+    new_history = _roll_amax_history(amax_history, amax_update)
+    return (q, new_scale), (new_scale, new_history)
+
+
+def _in_q_fused_bwd(rank, compute_dtype, q_dtype, res, cotangents):
+    del rank, compute_dtype, q_dtype, cotangents
+    new_scale, new_history = res
+    return None, new_scale, new_history
+
+
+_in_q_fused.defvjp(_in_q_fused_fwd, _in_q_fused_bwd)
+
+
+@functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
+def _in_q_with_transpose(rank: int, compute_dtype: DTypeLike, q_dtype: DTypeLike, inp, scale, amax_history):
+    del compute_dtype
+    new_scale = _delayed_scale(q_dtype, scale, amax_history)
+    if rank == 2:
+        q, qt, _ = _triton_quantize_transpose_amax_2d(inp, q_dtype, new_scale)
+    elif rank == 3:
+        q, qt, _ = _triton_quantize_transpose_amax_3d(inp, q_dtype, new_scale)
     else:
         raise ValueError(f"Unsupported FP8 quantize-transpose rank: {rank}")
     return q, qt, new_scale
@@ -758,13 +1085,14 @@ def _in_q_with_transpose(
 
 def _in_q_with_transpose_fwd(rank, compute_dtype, q_dtype, inp, scale, amax_history):
     del compute_dtype
-    new_scale, new_history = update_fp8_meta(inp, q_dtype, scale, amax_history)
+    new_scale = _delayed_scale(q_dtype, scale, amax_history)
     if rank == 2:
-        q, qt = _triton_quantize_transpose_2d(inp, q_dtype, new_scale)
+        q, qt, amax_update = _triton_quantize_transpose_amax_2d(inp, q_dtype, new_scale)
     elif rank == 3:
-        q, qt = _triton_quantize_transpose_3d(inp, q_dtype, new_scale)
+        q, qt, amax_update = _triton_quantize_transpose_amax_3d(inp, q_dtype, new_scale)
     else:
         raise ValueError(f"Unsupported FP8 quantize-transpose rank: {rank}")
+    new_history = _roll_amax_history(amax_history, amax_update)
     return (q, qt, new_scale), (new_scale, new_history)
 
 
@@ -910,15 +1238,11 @@ def _triton_pallas_call(
             block_n_override=block_n,
             block_k_override=block_k,
         )
-    raise NotImplementedError(
-        f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}"
-    )
+    raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Triton: {ragged_dot_dimension_numbers}")
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=())
-def _ragged_dot_triton_impl(
-    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array
-) -> jax.Array:
+def _ragged_dot_triton_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     """Pallas-Triton grouped matmul with explicit backward pass.
 
     Uses custom_vjp so JAX never tries to autodiff directly through pallas_call.
@@ -950,9 +1274,7 @@ def _ragged_dot_triton_bwd(residuals, dout):
 _ragged_dot_triton_impl.defvjp(_ragged_dot_triton_fwd, _ragged_dot_triton_bwd)
 
 
-def _ragged_dot_xla_impl(
-    lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array
-) -> jax.Array:
+def _ragged_dot_xla_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     return jax.lax.ragged_dot_general(
         lhs=lhs,
         rhs=rhs,
@@ -965,9 +1287,7 @@ def _ragged_dot_xla_impl(
     )
 
 
-def _pack_ragged_rows(
-    x: jax.Array, group_sizes: jax.Array, max_group_size: int
-) -> jax.Array:
+def _pack_ragged_rows(x: jax.Array, group_sizes: jax.Array, max_group_size: int) -> jax.Array:
     starts = jnp.cumulative_sum(group_sizes, include_initial=True)[:-1]
     padded = jnp.pad(x, ((0, max_group_size), (0, 0)))
 
@@ -979,9 +1299,7 @@ def _pack_ragged_rows(
     return jax.vmap(pack_one)(starts, group_sizes)
 
 
-def _scatter_packed_rows(
-    packed: jax.Array, group_sizes: jax.Array, tokens: int
-) -> jax.Array:
+def _scatter_packed_rows(packed: jax.Array, group_sizes: jax.Array, tokens: int) -> jax.Array:
     starts = jnp.cumulative_sum(group_sizes, include_initial=True)[:-1]
     max_group_size = packed.shape[1]
     offsets = jnp.arange(max_group_size, dtype=group_sizes.dtype)
@@ -989,9 +1307,7 @@ def _scatter_packed_rows(
     mask = offsets[None, :] < group_sizes[:, None]
     values = jnp.where(mask[:, :, None], packed, jnp.zeros((), dtype=packed.dtype))
     indices = jnp.where(mask, indices, jnp.zeros((), dtype=indices.dtype))
-    return (
-        jnp.zeros((tokens, packed.shape[2]), dtype=packed.dtype).at[indices].add(values)
-    )
+    return jnp.zeros((tokens, packed.shape[2]), dtype=packed.dtype).at[indices].add(values)
 
 
 def _block_pad_ragged_token_stream(
@@ -1004,29 +1320,17 @@ def _block_pad_ragged_token_stream(
     groups = group_sizes.shape[0]
     padded_bound = tokens + groups * (block_k - 1)
     group_ends = jnp.cumulative_sum(group_sizes)
-    group_starts = jnp.concatenate(
-        [jnp.zeros((1,), dtype=group_sizes.dtype), group_ends[:-1]]
-    )
+    group_starts = jnp.concatenate([jnp.zeros((1,), dtype=group_sizes.dtype), group_ends[:-1]])
     padded_group_sizes = ((group_sizes + block_k - 1) // block_k) * block_k
     padded_starts = jnp.cumulative_sum(padded_group_sizes, include_initial=True)[:-1]
 
     token_ids = jnp.arange(tokens, dtype=group_sizes.dtype)
-    group_ids = jnp.searchsorted(group_ends, token_ids, side="right").astype(
-        group_sizes.dtype
-    )
+    group_ids = jnp.searchsorted(group_ends, token_ids, side="right").astype(group_sizes.dtype)
     token_offsets = token_ids - group_starts[group_ids]
     padded_token_ids = padded_starts[group_ids] + token_offsets
 
-    padded_lhs = (
-        jnp.zeros((padded_bound, lhs.shape[1]), dtype=lhs.dtype)
-        .at[padded_token_ids]
-        .set(lhs)
-    )
-    padded_rhs = (
-        jnp.zeros((padded_bound, rhs.shape[1]), dtype=rhs.dtype)
-        .at[padded_token_ids]
-        .set(rhs)
-    )
+    padded_lhs = jnp.zeros((padded_bound, lhs.shape[1]), dtype=lhs.dtype).at[padded_token_ids].set(lhs)
+    padded_rhs = jnp.zeros((padded_bound, rhs.shape[1]), dtype=rhs.dtype).at[padded_token_ids].set(rhs)
     return padded_lhs, padded_rhs, padded_group_sizes
 
 
@@ -1040,9 +1344,7 @@ def _padded_dense_ragged_dot_impl(
 ) -> jax.Array:
     """FP8 ragged contractions via dynamic ragged pack + padded batched GEMM."""
     if max_group_size is None:
-        raise ValueError(
-            "max_group_size is required for the padded_dense FP8 ragged_dot path"
-        )
+        raise ValueError("max_group_size is required for the padded_dense FP8 ragged_dot path")
 
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
         packed_lhs = _pack_ragged_rows(lhs, group_sizes, max_group_size)
@@ -1052,9 +1354,7 @@ def _padded_dense_ragged_dot_impl(
             (((2,), (1,)), ((0,), (0,))),
             preferred_element_type=out_dtype,
         )
-        return _scatter_packed_rows(
-            packed_out.astype(out_dtype), group_sizes, lhs.shape[0]
-        )
+        return _scatter_packed_rows(packed_out.astype(out_dtype), group_sizes, lhs.shape[0])
 
     if ragged_dot_dimension_numbers == _DLHS_DIM_NUMS:
         packed_lhs = _pack_ragged_rows(lhs, group_sizes, max_group_size)
@@ -1064,9 +1364,7 @@ def _padded_dense_ragged_dot_impl(
             (((2,), (2,)), ((0,), (0,))),
             preferred_element_type=out_dtype,
         )
-        return _scatter_packed_rows(
-            packed_out.astype(out_dtype), group_sizes, lhs.shape[0]
-        )
+        return _scatter_packed_rows(packed_out.astype(out_dtype), group_sizes, lhs.shape[0])
 
     if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
         packed_lhs = _pack_ragged_rows(lhs, group_sizes, max_group_size)
@@ -1099,9 +1397,7 @@ def _mosaic_fp8_ragged_dot_impl(
     block_k = 64 if block_k is None else block_k
     max_concurrent_steps = int(os.environ.get("FP8_MOSAIC_MAX_CONCURRENT_STEPS", "4"))
     grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"))
-    mosaic_out_dtype = (
-        lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
-    )
+    mosaic_out_dtype = lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
 
     if ragged_dot_dimension_numbers == _DEFAULT_DIM_NUMS:
         if os.environ.get("FP8_MOSAIC_FORWARD_IMPL") == "official":
@@ -1157,9 +1453,7 @@ def _mosaic_fp8_ragged_dot_impl(
             )
         if wgrad_impl == "triton_native":
             wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_TOKEN_BLOCK", "128"))
-            wgrad_block_k = int(
-                os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", str(block_k))
-            )
+            wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", str(block_k)))
             return _triton_native_pallas_call(
                 lhs,
                 rhs,
@@ -1171,23 +1465,15 @@ def _mosaic_fp8_ragged_dot_impl(
                 block_n=block_n,
                 block_k=wgrad_block_k,
             )
-        token_block = int(
-            os.environ.get(
-                "FP8_MOSAIC_WGRAD_BLOCK_K", str(block_m if block_m <= 128 else 128)
-            )
-        )
+        token_block = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", str(block_m if block_m <= 128 else 128)))
         wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k)))
         wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n)))
         if wgrad_impl == "mosaic_block_pad":
             padded_lhs, padded_rhs, padded_group_sizes = _block_pad_ragged_token_stream(
                 lhs, rhs, group_sizes, token_block
             )
-            padded_lhs_t = padded_lhs.T + jnp.zeros(
-                (padded_lhs.shape[1], padded_lhs.shape[0]), dtype=padded_lhs.dtype
-            )
-            padded_rhs_t = padded_rhs.T + jnp.zeros(
-                (padded_rhs.shape[1], padded_rhs.shape[0]), dtype=padded_rhs.dtype
-            )
+            padded_lhs_t = padded_lhs.T + jnp.zeros((padded_lhs.shape[1], padded_lhs.shape[0]), dtype=padded_lhs.dtype)
+            padded_rhs_t = padded_rhs.T + jnp.zeros((padded_rhs.shape[1], padded_rhs.shape[0]), dtype=padded_rhs.dtype)
             return mosaic_transposed_ragged_dot(
                 padded_lhs_t,
                 padded_rhs_t,
@@ -1211,8 +1497,7 @@ def _mosaic_fp8_ragged_dot_impl(
                 block_k=token_block,
                 max_concurrent_steps=max_concurrent_steps,
                 grid_block_n=grid_block_n,
-                mask_boundaries=os.environ.get("FP8_MOSAIC_WGRAD_MASK_BOUNDARIES", "1")
-                == "1",
+                mask_boundaries=os.environ.get("FP8_MOSAIC_WGRAD_MASK_BOUNDARIES", "1") == "1",
             )
         return mosaic_transposed_ragged_dot(
             lhs.T + jnp.zeros((lhs.shape[1], lhs.shape[0]), dtype=lhs.dtype),
@@ -1225,8 +1510,7 @@ def _mosaic_fp8_ragged_dot_impl(
             max_concurrent_steps=max_concurrent_steps,
             grid_block_n=grid_block_n,
             mask_boundaries=wgrad_impl != "mosaic_nomask",
-            exact_token_start=os.environ.get("FP8_MOSAIC_WGRAD_EXACT_START", "0")
-            == "1",
+            exact_token_start=os.environ.get("FP8_MOSAIC_WGRAD_EXACT_START", "0") == "1",
         )
 
     raise NotImplementedError(
@@ -1248,9 +1532,7 @@ def _mosaic_fp8_ragged_dot_k_major_impl(
     block_k = 64 if block_k is None else block_k
     max_concurrent_steps = int(os.environ.get("FP8_MOSAIC_MAX_CONCURRENT_STEPS", "4"))
     grid_block_n = int(os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"))
-    mosaic_out_dtype = (
-        lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
-    )
+    mosaic_out_dtype = lhs.dtype if os.environ.get("FP8_MOSAIC_OUTPUT_FP8", "0") == "1" else out_dtype
     return mosaic_ragged_dot(
         lhs,
         rhs_k_major,
@@ -1285,16 +1567,8 @@ def _mosaic_fp8_ragged_wgrad_transposed_impl(
             os.environ.get("FP8_MOSAIC_GRID_BLOCK_N", "8"),
         )
     )
-    wgrad_block_m = int(
-        os.environ.get(
-            "FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k if block_k is not None else 128)
-        )
-    )
-    wgrad_block_n = int(
-        os.environ.get(
-            "FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)
-        )
-    )
+    wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k if block_k is not None else 128)))
+    wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)))
     wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", "128"))
     return mosaic_transposed_ragged_dot(
         lhs_t,
@@ -1323,16 +1597,8 @@ def _mosaic_fp8_ragged_wgrad_block_pad_impl(
     if max_group_size is None:
         raise ValueError("max_group_size is required for FP8 Mosaic block-padded wgrad")
     del block_m
-    wgrad_block_m = int(
-        os.environ.get(
-            "FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k if block_k is not None else 128)
-        )
-    )
-    wgrad_block_n = int(
-        os.environ.get(
-            "FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)
-        )
-    )
+    wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k if block_k is not None else 128)))
+    wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n if block_n is not None else 128)))
     wgrad_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", "128"))
     lhs_t, padded_group_sizes = _triton_block_pad_transpose_2d(
         lhs,
@@ -1450,12 +1716,8 @@ def _raw_ragged_dot_impl(
                 block_n,
                 block_k,
             )
-        return _raw_ragged_dot_impl(
-            lhs, rhs, group_sizes, ragged_dot_dimension_numbers, "xla", out_dtype
-        )
-    raise ValueError(
-        f"Unknown ragged_dot implementation for FP8 path: {implementation}"
-    )
+        return _raw_ragged_dot_impl(lhs, rhs, group_sizes, ragged_dot_dimension_numbers, "xla", out_dtype)
+    raise ValueError(f"Unknown ragged_dot implementation for FP8 path: {implementation}")
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(9, 10, 11, 12, 13, 14, 15))
@@ -1559,13 +1821,18 @@ def _quantized_ragged_dot_bwd(
         group_sizes,
     ) = res
     del rhs
-    new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
-        g,
-        rev_dtype,
-        out_grad_scale,
-        out_grad_amax_history,
-    )
-    q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_FUSED_QUANT", "0") == "1":
+        new_out_grad_scale = _delayed_scale(rev_dtype, out_grad_scale, out_grad_amax_history)
+        q_g, out_grad_amax = _triton_quantize_amax_2d(g, rev_dtype, new_out_grad_scale)
+        new_out_grad_amax_history = _roll_amax_history(out_grad_amax_history, out_grad_amax)
+    else:
+        new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
+            g,
+            rev_dtype,
+            out_grad_scale,
+            out_grad_amax_history,
+        )
+        q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
     if implementation == "mosaic":
         wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "mosaic")
         q_lhs_for_grad = (
@@ -1603,14 +1870,9 @@ def _quantized_ragged_dot_bwd(
         grad_lhs_block_n,
         grad_lhs_block_k,
     )
-    grad_lhs = dequantize(
-        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
-    )
+    grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
 
-    if (
-        implementation == "mosaic"
-        and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic") == "bf16_triton"
-    ):
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic") == "bf16_triton":
         grad_rhs_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", "64"))
         grad_rhs = _raw_ragged_dot_impl(
             lhs.astype(preferred_element_type),
@@ -1625,9 +1887,7 @@ def _quantized_ragged_dot_bwd(
             grad_rhs_block_k,
         )
     elif (
-        implementation == "mosaic"
-        and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic")
-        == "mosaic_block_pad_pretransposed"
+        implementation == "mosaic" and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic") == "mosaic_block_pad_pretransposed"
     ):
         grad_rhs = _mosaic_fp8_ragged_wgrad_block_pad_impl(
             q_lhs,
@@ -1639,9 +1899,7 @@ def _quantized_ragged_dot_bwd(
             block_n,
             block_k,
         )
-        grad_rhs = dequantize(
-            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
-        )
+        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
     else:
         grad_rhs = _raw_ragged_dot_impl(
             q_lhs_for_grad,
@@ -1655,9 +1913,7 @@ def _quantized_ragged_dot_bwd(
             block_n,
             block_k,
         )
-        grad_rhs = dequantize(
-            grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
-        )
+        grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
 
     return (
         grad_lhs,
@@ -1698,15 +1954,13 @@ def _quantized_ragged_dot_pretransposed(
     block_n,
     block_k,
 ):
-    del (
-        lhs,
-        lhs_scale,
-        rhs,
-        q_rhs,
-        rhs_scale,
-        out_grad_scale,
-        out_grad_amax_history,
-    )
+    del lhs
+    del lhs_scale
+    del rhs
+    del q_rhs
+    del rhs_scale
+    del out_grad_scale
+    del out_grad_amax_history
     del lhs_amax_history, rhs_amax_history, rev_dtype
     if implementation != "mosaic":
         raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
@@ -1791,13 +2045,9 @@ def _quantized_ragged_dot_pretransposed_bwd(
     del lhs, rhs, max_group_size
     if implementation != "mosaic":
         raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
-    new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
-        g,
-        rev_dtype,
-        out_grad_scale,
-        out_grad_amax_history,
-    )
-    q_g, q_g_t = _triton_quantize_transpose_2d(g, rev_dtype, new_out_grad_scale)
+    new_out_grad_scale = _delayed_scale(rev_dtype, out_grad_scale, out_grad_amax_history)
+    q_g, q_g_t, out_grad_amax = _triton_quantize_transpose_amax_2d(g, rev_dtype, new_out_grad_scale)
+    new_out_grad_amax_history = _roll_amax_history(out_grad_amax_history, out_grad_amax)
 
     grad_lhs_block_n = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_N", str(block_n)))
     grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "64"))
@@ -1813,9 +2063,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
         grad_lhs_block_n,
         grad_lhs_block_k,
     )
-    grad_lhs = dequantize(
-        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
-    )
+    grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
 
     grad_rhs = _mosaic_fp8_ragged_wgrad_transposed_impl(
         q_lhs_t,
@@ -1826,9 +2074,7 @@ def _quantized_ragged_dot_pretransposed_bwd(
         block_n,
         block_k,
     )
-    grad_rhs = dequantize(
-        grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
-    )
+    grad_rhs = dequantize(grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale)
     return (
         grad_lhs,
         None,
@@ -1874,10 +2120,7 @@ def fp8_scaled_ragged_dot(
     rev_dtype: DTypeLike = jnp.float8_e5m2,
 ) -> jax.Array:
     """Ragged grouped matmul with delayed-scaling FP8 operands and custom VJP."""
-    if (
-        implementation == "mosaic"
-        and os.environ.get("FP8_MOSAIC_PRETRANSPOSE", "0") == "1"
-    ):
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_PRETRANSPOSE", "0") == "1":
         q_lhs, q_lhs_t, new_lhs_scale = _in_q_with_transpose(
             2, quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history
         )
@@ -1908,12 +2151,12 @@ def fp8_scaled_ragged_dot(
         )
         return out_dq(preferred_element_type, new_lhs_scale, new_rhs_scale, y)
 
-    q_lhs, new_lhs_scale = in_q(
-        quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history
-    )
-    q_rhs, new_rhs_scale = in_q(
-        quantize_compute_type, fwd_dtype, rhs, rhs_scale, rhs_amax_history
-    )
+    if implementation == "mosaic" and os.environ.get("FP8_MOSAIC_FUSED_QUANT", "0") == "1":
+        q_lhs, new_lhs_scale = _in_q_fused(2, quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history)
+        q_rhs, new_rhs_scale = _in_q_fused(3, quantize_compute_type, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
+    else:
+        q_lhs, new_lhs_scale = in_q(quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history)
+        q_rhs, new_rhs_scale = in_q(quantize_compute_type, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
     y = _quantized_ragged_dot(
         lhs,
         q_lhs,
@@ -1957,25 +2200,17 @@ def _preferred_implementations(
     return ("xla",)
 
 
-def _run_impl(
-    name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array
-) -> jax.Array:
+def _run_impl(name: Implementation, lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if name == "megablox":
         return _ragged_dot_megablox_impl(lhs, rhs, group_sizes)
     if name == "mosaic":
-        raise NotImplementedError(
-            "mosaic is currently implemented only for the opt-in FP8 ragged_dot path"
-        )
+        raise NotImplementedError("mosaic is currently implemented only for the opt-in FP8 ragged_dot path")
     if name == "padded_dense":
-        raise NotImplementedError(
-            "padded_dense is currently implemented only for the opt-in FP8 ragged_dot path"
-        )
+        raise NotImplementedError("padded_dense is currently implemented only for the opt-in FP8 ragged_dot path")
     if name == "triton":
         return _ragged_dot_triton_impl(lhs, rhs, group_sizes)
     if name == "triton_native":
-        raise NotImplementedError(
-            "triton_native is currently implemented only for the opt-in FP8 ragged_dot path"
-        )
+        raise NotImplementedError("triton_native is currently implemented only for the opt-in FP8 ragged_dot path")
     if name == "xla":
         return _ragged_dot_xla_impl(lhs, rhs, group_sizes)
     raise ValueError(f"Unknown ragged_dot implementation: {name}")
@@ -2012,9 +2247,7 @@ def ragged_dot(
     hs_shape = lhs_.shape
     if hs_shape[0] % 512:
         pad_length = 512 - hs_shape[0] % 512
-        lhs_ = jax.lax.pad(
-            lhs_, jnp.zeros((), dtype=lhs_.dtype), [(0, pad_length, 0), (0, 0, 0)]
-        )
+        lhs_ = jax.lax.pad(lhs_, jnp.zeros((), dtype=lhs_.dtype), [(0, pad_length, 0), (0, 0, 0)])
 
     if fp8_dot is not None:
         out = fp8_dot(
