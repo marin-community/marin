@@ -36,24 +36,34 @@ from .ragged_dot_mgpu import mgpu_ragged_dot
 _E4M3 = jnp.float8_e4m3fn
 
 
-def _fixed_config(m: int, n: int, k: int) -> dict:
-    """Conservative (untuned) Mosaic block config for the ragged FP8 wgmma kernel.
+@functools.cache
+def _autotuned_config(num_experts: int, m: int, n: int, k: int) -> dict:
+    """Static Mosaic block config for the ragged FP8 wgmma forward kernel.
 
-    Block sizes divide the operand shapes: ``block_k`` must divide ``k``; ``block_n``
-    must divide ``n`` (and ``n`` must be swizzle-aligned -- a multiple of 128 for the
-    bf16 output store's TMA descriptor); ``block_m`` divides ``m`` here, though the
-    ragged kernel also masks a non-dividing final m-tile. Autotuning (including the
-    tuned ``block_m=192`` and ``max_concurrent_steps`` sweep) is a later change.
+    Tuned on H100 for the d2560 grug-MoE shapes. Cached per ``(num_experts, m, n, k)``
+    so the selection cost is paid once. Key choices:
+
+    - ``block_m=192``: the ragged kernel masks a non-dividing final m-tile, so 192
+      is safe even when ``m`` is not divisible by 192; measured ~832 vs ~739 TFLOP/s
+      at ``block_m=128`` on the d2560 operating point.
+    - ``block_k=128``: measured ~852 vs ~832 TFLOP/s at ``block_k=64``. With
+      ``block_m=192`` and ``max_concurrent_steps=6`` the SMEM budget is exceeded
+      (``(192+128)*128*6 = 245760 > 232448``); using ``max_concurrent_steps=5``
+      reduces it to 204800 bytes and keeps the ``block_k=128`` gain.
     """
-    block_m = next((b for b in (128, 64, 32, 16) if m % b == 0), 16)
+    block_m = 192 if m >= 192 else next((b for b in (128, 64, 32, 16) if m % b == 0), 16)
     block_n = next((b for b in (128, 64, 32, 16) if n % b == 0), 16)
-    block_k = next((b for b in (64, 32, 16) if k % b == 0), 16)
+    block_k = 128 if k % 128 == 0 else next((b for b in (64, 32, 16) if k % b == 0), 16)
     grid_block_n = next((gb for gb in (4, 2, 1) if n % (gb * block_n) == 0), 1)
+    # With block_m=192 and block_k=128, SMEM = (block_m+block_n)*block_k*mcs.
+    # mcs=6 gives 245760 bytes which exceeds H100's 232448-byte per-block limit;
+    # drop to mcs=5 (204800 bytes) when block_k=128 is in use.
+    max_concurrent_steps = 5 if block_k == 128 else 6
     return dict(
         block_m=block_m,
         block_n=block_n,
         block_k=block_k,
-        max_concurrent_steps=6,
+        max_concurrent_steps=max_concurrent_steps,
         grid_block_n=grid_block_n,
     )
 
@@ -71,7 +81,7 @@ def _ragged_fp8(lhs, rhs_nk, group_sizes, out_dtype, out_scale):
         raise ValueError(
             f"n={n} must be a multiple of 128 for bf16 TMA swizzle alignment in the Mosaic ragged wgmma kernel"
         )
-    cfg = _fixed_config(m, n, k)
+    cfg = _autotuned_config(g, m, n, k)
     return mgpu_ragged_dot(
         lhs,
         rhs_nk,

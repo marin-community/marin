@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -95,3 +97,32 @@ def test_output_grad_scale_preserved_across_steps():
     assert not np.allclose(np.asarray(op2.input_scale), 1.0, atol=1e-6) and not np.allclose(
         np.asarray(op2.kernel_scale), 1.0, atol=1e-6
     ), "both input_scale and kernel_scale should have updated from 1.0 via in_q delayed scaling"
+
+
+def _time_forward(fn, warmup: int = 3, iters: int = 10) -> float:
+    """Steady-state wall-clock timer (seconds) for a JIT-compiled JAX forward.
+
+    Warms up ``warmup`` times to compile and prime caches, then returns the
+    minimum over ``iters`` timed calls (``jax.block_until_ready`` ensures device
+    completion before the clock stops).
+    """
+    for _ in range(warmup):
+        jax.block_until_ready(fn())
+    times = []
+    for _ in range(iters):
+        t0 = time.perf_counter()
+        jax.block_until_ready(fn())
+        times.append(time.perf_counter() - t0)
+    return float(np.min(times))
+
+
+@gpu_only
+def test_fp8_forward_faster_than_bf16():
+    # w13-like shape: T=4096 tokens, K=2560, E=8 experts, N=2560 (multiple of 128).
+    lhs, rhs, gs = _nonuniform(4096, 2560, 8, 2560)
+    op = Fp8RaggedDotOp.init()
+    f8 = _time_forward(lambda: ragged_dot(lhs, rhs, gs, op=op))
+    bf = _time_forward(lambda: ragged_dot(lhs, rhs, gs, op=None))
+    assert (
+        bf / f8 > 1.5
+    ), f"expected FP8 forward >1.5x faster than bf16; got {bf / f8:.3f}x (bf16={bf * 1e3:.2f}ms, fp8={f8 * 1e3:.2f}ms)"
