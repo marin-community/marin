@@ -59,8 +59,8 @@ class SliceLifecycleState(StrEnum):
     - BOOTING: At least one VM is booting (VM_STATE_BOOTING)
     - INITIALIZING: At least one VM is initializing (VM_STATE_INITIALIZING)
     - READY: All VMs are ready (VM_STATE_READY)
-    - DRAINING: Cross-variant preemption is tearing the slice down; its VMs are
-      being deleted but still count against the reservation pool until reaped.
+    - DRAINING: The slice is being torn down; its VMs are being deleted but it
+      still counts against its reservation pool (if any) until reaped.
     - FAILED: At least one VM has failed (VM_STATE_FAILED or VM_STATE_PREEMPTED)
 
     Note: These are slice-level aggregate states, not direct VM states.
@@ -152,10 +152,10 @@ class SliceState:
     # Memory-only.
     unknown_since: Timestamp | None = None
     error_message: str = ""
-    # Timestamp at which the slice was marked DRAINING for cross-variant
-    # preemption. The reap-timeout fallback is measured from here; None (e.g. a
-    # DRAINING slice restored from a checkpoint) makes refresh measure from the
-    # first describe instead. Memory-only.
+    # Timestamp at which the slice was marked DRAINING. The reap-timeout
+    # fallback is measured from here; None (e.g. a DRAINING slice restored from
+    # a checkpoint) makes refresh measure from the first describe instead.
+    # Memory-only.
     drain_started: Timestamp | None = None
 
 
@@ -951,7 +951,7 @@ class ScalingGroup:
         eligible: list[tuple[SliceState, int]] = []
         for slice_id, state in snapshot:
             # Only READY slices are reclaimable as idle capacity — this also excludes
-            # a DRAINING slice, which is already being torn down for preemption.
+            # a DRAINING slice, which is already being torn down.
             if state.lifecycle != SliceLifecycleState.READY:
                 continue
             if not self.is_slice_eligible_for_scaledown(slice_id, timestamp):

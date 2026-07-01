@@ -5,16 +5,12 @@
 
 On a fungible reservation, the per-size scale groups sharing a ``quota_pool`` draw
 from one physical pool of interchangeable TPU chips. This module builds, once per
-control tick, the single chip ledger both the scheduler's cross-variant preemption
-pass and the autoscaler's launch planner read.
+control tick, a chip ledger over those pools from live scale-group state.
 
 The ledger buckets every pool's chips into live (READY), in-flight
-(REQUESTING/BOOTING/INITIALIZING), and draining (DRAINING) slices. The launch
-planner asks how many chips are free *now* to bound new launches; the preemption
-pass asks whether a pool's deficit is already being addressed — by chips that are
-free or about to be freed by a drain, or by a replacement slice of the preemptor's
-own variant already booting — so it does not re-preempt across the drain-and-
-reprovision window. It changes no scaling decision on its own.
+(REQUESTING/BOOTING/INITIALIZING), and draining (DRAINING) slices, and exposes how
+many are free now versus free-or-draining. It is a pure accounting view: building
+it changes no scaling decision on its own.
 """
 
 import logging
@@ -65,10 +61,9 @@ class PoolLedger:
 class ReservationLedger:
     """Single per-tick chip ledger over all fungible reservation pools.
 
-    The one capacity view both the scheduler's cross-variant preemption pass and
-    the autoscaler's launch planner read. The pass asks ``incoming_chips`` /
-    ``inflight_slices`` ("is the deficit already being addressed?"); the planner
-    asks ``free_chips`` ("how many new slices may I launch now?").
+    Exposes each pool's chip accounting (``free_chips``, ``incoming_chips``,
+    ``draining_chips``, ``inflight_slices``) plus lookup maps from worker/variant
+    to the pool and physical slice they belong to.
     """
 
     pools: dict[str, PoolLedger]
