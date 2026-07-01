@@ -36,6 +36,29 @@ DEFAULT_BASE_URL = "https://iris.oa.dev/proxy/ducky"
 
 TokenProvider = Callable[[], str | None]
 
+# Substrings that mark a *transient* ducky/GCS failure worth retrying (network /
+# DNS / object-store blips), as opposed to a deterministic error (SQL binder,
+# file-not-found) where a retry is pointless.
+_TRANSIENT_MARKERS = (
+    "could not resolve hostname",
+    "connection reset",
+    "connection refused",
+    "connection aborted",
+    "timed out",
+    "temporarily unavailable",
+    "network is unreachable",
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+)
+
+
+def _is_transient(message: str) -> bool:
+    m = message.lower()
+    return any(marker in m for marker in _TRANSIENT_MARKERS)
+
 
 class DuckyError(RuntimeError):
     """A ducky query failed, timed out, or the service returned an HTTP error."""
@@ -90,11 +113,15 @@ class DuckyClient:
         token_provider: TokenProvider | None = iap_token_provider(),
         poll_interval: float = 1.0,
         timeout: float = 900.0,
+        max_retries: int = 2,
+        retry_backoff: float = 3.0,
     ):
         self._base_url = base_url.rstrip("/")
         self._token_provider = token_provider
         self._poll_interval = poll_interval
         self._timeout = timeout
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
         data = json.dumps(body).encode() if body is not None else None
@@ -115,7 +142,30 @@ class DuckyClient:
             raise DuckyError(f"ducky {method} {path} unreachable: {e.reason}") from e
 
     def run(self, sql: str) -> QueryResult:
-        """Submit ``sql`` and poll until done. Raises :class:`DuckyError` on failure/timeout."""
+        """Submit ``sql`` and poll until done, retrying transient failures.
+
+        ducky reads object storage per query, so a one-off DNS/network blip
+        (``Could not resolve hostname …``) surfaces as a query error; those are
+        retried up to ``max_retries`` times. Deterministic errors (SQL, missing
+        file) and timeouts are raised immediately.
+        """
+        for attempt in range(self._max_retries + 1):
+            try:
+                return self._run_once(sql)
+            except DuckyError as e:
+                if attempt < self._max_retries and _is_transient(str(e)):
+                    logger.warning(
+                        "transient ducky error (attempt %d/%d), retrying: %s",
+                        attempt + 1,
+                        self._max_retries + 1,
+                        str(e).splitlines()[0][:160],
+                    )
+                    time.sleep(self._retry_backoff * (attempt + 1))
+                    continue
+                raise
+        raise AssertionError("unreachable")  # loop either returns or raises
+
+    def _run_once(self, sql: str) -> QueryResult:
         query_id = self._request("POST", "/query", {"sql": sql})["query_id"]
         deadline = time.monotonic() + self._timeout
         while True:
