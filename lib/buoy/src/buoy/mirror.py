@@ -18,7 +18,9 @@ Two halves:
 from __future__ import annotations
 
 import logging
+import os
 import posixpath
+import tarfile
 import threading
 import time
 from dataclasses import dataclass
@@ -28,7 +30,7 @@ import pyarrow as pa
 import wandb
 
 from buoy import cache
-from buoy.config import HISTORY_PAGE_ROWS, PROFILE_ARTIFACT_TYPE, BuoyConfig
+from buoy.config import HISTORY_PAGE_ROWS, PROFILE_ARTIFACT_TYPES, BuoyConfig
 
 logger = logging.getLogger("buoy.mirror")
 
@@ -116,18 +118,39 @@ def _mirror_history(run: object, prefix: str, columns: list[str]) -> dict:
     return {"parts": part, "rows": rows, "columns": [c for c in columns if c != "_step"]}
 
 
+def _profile_logdir(local: str) -> str:
+    """Return the xprof logdir for a downloaded profile artifact.
+
+    ``jax_profile`` ships it pre-unpacked (``plugins/profile/…`` at the root);
+    ``profiler`` ships a single ``.tgz`` of the same tree, which we extract. Returns
+    the directory that contains ``plugins/profile`` so xprof reads either uniformly.
+    """
+    tarballs = [e for e in os.listdir(local) if e.endswith((".tgz", ".tar.gz"))]
+    if not tarballs:
+        return local
+    dest = os.path.join(local, "_unpacked")
+    os.makedirs(dest, exist_ok=True)
+    for name in tarballs:
+        with tarfile.open(os.path.join(local, name)) as tar:
+            tar.extractall(dest, filter="data")
+    for root, _dirs, _files in os.walk(dest):
+        if os.path.isdir(os.path.join(root, "plugins", "profile")):
+            return root
+    return dest
+
+
 def _mirror_profile(run: object, prefix: str, existing: dict | None = None) -> dict | None:
     for art in run.logged_artifacts():  # type: ignore[attr-defined]
-        if art.type != PROFILE_ARTIFACT_TYPE:
+        if art.type not in PROFILE_ARTIFACT_TYPES:
             continue
         # Skip the (hundreds-of-MB) re-download when we already hold this exact
         # artifact version — critical for the running-run refresh loop.
         if existing and existing.get("artifact_name") == art.name and cache.exists(existing.get("logdir", "")):
             return existing
-        local = art.download()
+        logdir = _profile_logdir(art.download())
         safe = art.name.replace(":", "_").replace("/", "_")
         dst = posixpath.join(prefix, "artifacts", safe)
-        cache.upload_tree(local, dst)
+        cache.upload_tree(logdir, dst)
         return {"artifact_name": art.name, "logdir": dst, "size_bytes": int(getattr(art, "size", 0) or 0)}
     return None
 

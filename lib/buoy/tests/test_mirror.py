@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import tarfile
 import threading
 
 import pytest
@@ -107,6 +108,27 @@ def test_profile_reuse_skips_redownload(cfg, patch_wandb, profile_logdir):
     assert art.download_calls == 1
     mirror_run(cfg, REF, refresh=True)  # same artifact version → reuse, no re-download
     assert art.download_calls == 1
+
+
+def test_profiler_tarball_extracted(cfg, patch_wandb, tmp_path):
+    # A `profiler`-type artifact ships a single .tgz of the xprof logdir; the mirror
+    # must extract it so xprof can read plugins/profile.
+    logdir = tmp_path / "profiler" / "plugins" / "profile" / "2026_01_01"
+    logdir.mkdir(parents=True)
+    (logdir / "host.xplane.pb").write_bytes(b"\x00xplane")
+    download = tmp_path / "download"
+    download.mkdir()
+    with tarfile.open(download / "prof.tgz", "w:gz") as tar:
+        tar.add(tmp_path / "profiler", arcname="profiler")
+
+    art = FakeArtifact("profiler", "myprof:v0", str(download))
+    run = FakeRun(summary_dict={"train/loss": 1.0}, rows=_rows(2, ("train/loss",)), artifacts=[art])
+    patch_wandb(run)
+    manifest = mirror_run(cfg, REF)
+
+    assert manifest["profile"]["artifact_name"] == "myprof:v0"
+    gcs_logdir = manifest["profile"]["logdir"]
+    assert cache.exists(f"{gcs_logdir}/plugins/profile/2026_01_01/host.xplane.pb")
 
 
 def test_touch_running_noop_when_finished(cfg):

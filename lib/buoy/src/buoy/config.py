@@ -16,9 +16,10 @@ from dataclasses import dataclass
 
 from rigging.filesystem import marin_temp_bucket
 
-# wandb artifact type that carries a JAX/xprof profile. Its downloaded root is
-# already a valid xprof logdir (contains plugins/profile/<ts>/<host>.xplane.pb).
-PROFILE_ARTIFACT_TYPE = "jax_profile"
+# wandb artifact types that carry a JAX/xprof profile. Run families differ:
+# `jax_profile` ships the xprof logdir pre-unpacked (plugins/profile/<ts>/….xplane.pb
+# at the root); `profiler` ships a single .tgz of the same logdir that we extract.
+PROFILE_ARTIFACT_TYPES = frozenset({"jax_profile", "profiler"})
 
 # GCS cache TTL (days) under marin_temp_bucket; the cache is refetchable, not an
 # archive — anything evicted is re-pulled from wandb on next view.
