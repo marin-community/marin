@@ -21,6 +21,11 @@ from rigging.filesystem import marin_temp_bucket
 # at the root); `profiler` ships a single .tgz of the same logdir that we extract.
 PROFILE_ARTIFACT_TYPES = frozenset({"jax_profile", "profiler"})
 
+# wandb auto-logs the full run history as a single-parquet artifact of this type.
+# Downloading it is ~100x faster than paginating scan_history for a large run
+# (a 180 MB / 145k-row parquet downloads in ~2s vs minutes of scan pagination).
+HISTORY_ARTIFACT_TYPE = "wandb-history"
+
 # GCS cache TTL (days) under marin_temp_bucket; the cache is refetchable, not an
 # archive — anything evicted is re-pulled from wandb on next view.
 CACHE_TTL_DAYS = 30
