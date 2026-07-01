@@ -1019,13 +1019,10 @@ def _resolve_max_slices(
 ) -> int:
     """Resolve one size's ``max_slices``, defaulting fungible members to the reservation ceiling.
 
-    On a fungible reservation, a single size can never legitimately place more
-    than ``reservation_chips // topo.chip_count`` slices — the shared budget is
-    the real constraint, so that ceiling is a safe default and an override may
-    only tighten it, never loosen it (a looser override would just be the same
-    hand-computed number the ceiling already gives you, restated and liable to
-    drift). Non-fungible pools (``reservation_chips == 0``) still require
-    ``max_slices`` explicitly.
+    Defaults to ``reservation_chips // topo.chip_count`` when ``reservation_chips``
+    is set; an explicit override may only tighten that ceiling, never loosen it —
+    raises otherwise. Non-fungible pools (``reservation_chips == 0``) still require
+    ``max_slices`` explicitly; raises if it is missing.
     """
     default_max_slices = reservation_chips // topo.chip_count if reservation_chips else None
     max_slices = size_overrides.get("max_slices", default_max_slices)
