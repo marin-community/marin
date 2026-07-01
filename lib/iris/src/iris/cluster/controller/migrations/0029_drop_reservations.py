@@ -121,14 +121,17 @@ def _accelerator_variants(reservation: dict) -> list[str]:
     Mirrors the field names ``MessageToDict(..., preserving_proto_field_name=True)``
     produced for the now-removed ``ReservationConfig`` proto: each entry is
     ``{"resources": {"device": {"tpu"|"gpu": {"variant": "..."}}}}``. Entries with no
-    accelerator device (e.g. plain CPU) contribute nothing.
+    accelerator device (e.g. plain CPU) contribute nothing, and neither does a GPU
+    entry left at the ``auto`` variant ("any GPU") — no worker or group ever
+    advertises ``availability:auto``, so folding it in would make the job permanently
+    unschedulable.
     """
     variants: list[str] = []
     seen: set[str] = set()
     for entry in reservation.get("entries", []):
         device = entry.get("resources", {}).get("device", {})
         variant = device.get("tpu", {}).get("variant") or device.get("gpu", {}).get("variant")
-        if not variant or variant in seen:
+        if not variant or variant == "auto" or variant in seen:
             continue
         seen.add(variant)
         variants.append(variant)
