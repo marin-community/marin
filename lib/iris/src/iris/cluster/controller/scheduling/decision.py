@@ -60,10 +60,19 @@ def apply_preemptions(
 
     # Only preemptors the same-variant pass did not already satisfy fall through
     # to the cross-variant reserved pass (the freed slot otherwise double-counts).
-    # Key on the preemptor *job* (parent), matching the reserved pass's own dedup,
-    # so a coscheduled preemptor satisfied via one sibling excludes all siblings.
-    satisfied_jobs = {preemptor.parent or preemptor for preemptor, _ in pairs}
-    remaining = [c for c in unscheduled if (c.job_name.parent or c.job_name) not in satisfied_jobs]
+    # A coscheduled preemptor satisfied via one sibling excludes all its siblings
+    # (keyed on the parent job); a non-coscheduled replica excludes only itself
+    # (keyed on its own task id), matching the reserved pass's own dedup.
+    candidates_by_task = {c.job_name: c for c in unscheduled}
+
+    def _dedup_key(task_id: JobName) -> JobName:
+        candidate = candidates_by_task.get(task_id)
+        if candidate is not None and candidate.requirements.is_coscheduled and task_id.parent is not None:
+            return task_id.parent
+        return task_id
+
+    satisfied_jobs = {_dedup_key(preemptor) for preemptor, _ in pairs}
+    remaining = [c for c in unscheduled if _dedup_key(c.job_name) not in satisfied_jobs]
     reserved_pairs, drain_workers = run_reserved_pool_preemption(remaining, running_for_preemption, ledger)
     return pairs + reserved_pairs, drain_workers
 

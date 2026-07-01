@@ -353,6 +353,71 @@ def test_slice_with_a_higher_band_task_is_not_evicted():
     assert drain == set()
 
 
+def test_non_coscheduled_replicas_each_need_their_own_slice():
+    # Two replicas of the same non-coscheduled job are independent preemptors:
+    # each needs its own slice's worth of chips, unlike a coscheduled job's
+    # siblings which share one dedup key and one slice's worth of need.
+    preemptors = [
+        _candidate("/alice/prod/0", "v4-8", PRODUCTION),
+        _candidate("/alice/prod/1", "v4-8", PRODUCTION),
+    ]
+    victims = [
+        _running("/bob/batch-a/0", "wa", "v4-8", BATCH),
+        _running("/bob/batch-b/0", "wb", "v4-8", BATCH),
+    ]
+    ledger = _ledger(free_chips=0, worker_slice={"wa": "sa", "wb": "sb"})
+
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
+
+    assert {p.to_wire() for p, _ in pairs} == {"/alice/prod/0", "/alice/prod/1"}
+    assert drain == {WorkerId("wa"), WorkerId("wb")}
+
+
+def test_own_replacement_preferred_over_shared_incoming_chips():
+    # A v4-8 preemptor's own replacement is already booting even though the pool
+    # also has free chips that would separately cover it. Spending the
+    # replacement first (not the shared free chips) leaves those free chips
+    # available to reduce a later v4-16 preemptor's deficit, letting a single
+    # v4-8 victim slice cover it instead of the eviction failing outright.
+    preemptors = [
+        _candidate("/alice/prod-a/0", "v4-8", PRODUCTION),
+        _candidate("/alice/prod-b/0", "v4-16", PRODUCTION),
+    ]
+    victims = [_running("/bob/batch/0", "w0", "v4-8", BATCH)]
+    ledger = _ledger(free_chips=4, worker_slice={"w0": "s0"}, inflight_slices={"v4-8": 1})
+
+    pairs, drain = run_reserved_pool_preemption(preemptors, victims, ledger)
+
+    assert {p.to_wire() for p, _ in pairs} == {"/alice/prod-b/0"}
+    assert drain == {WorkerId("w0")}
+
+
+def test_cpu_co_tenant_first_in_list_does_not_hide_tpu_victim():
+    # A CPU-only task (device_variant=None) shares a physical slice with a TPU
+    # task and sorts first. The slice must still be evictable via its TPU
+    # member's variant, not skipped because the first member has no variant.
+    preemptor = _candidate("/alice/prod/0", "v4-8", PRODUCTION)
+    cpu_task = RunningTaskInfo(
+        task_id=JobName.from_wire("/bob/cpu/0"),
+        worker_id=WorkerId("w0"),
+        band_sort_key=BATCH,
+        resource_value=1,
+        is_coscheduled=False,
+        cpu_millicores=500,
+        memory_bytes=1024,
+        gpu_count=0,
+        tpu_count=0,
+        device_variant=None,
+    )
+    tpu_task = _running("/bob/batch/0", "w0", "v4-8", BATCH)
+    ledger = _ledger(free_chips=0, worker_slice={"w0": "shared"})
+
+    pairs, drain = run_reserved_pool_preemption([preemptor], [cpu_task, tpu_task], ledger)
+
+    assert {v.to_wire() for _, v in pairs} == {"/bob/cpu/0", "/bob/batch/0"}
+    assert drain == {WorkerId("w0")}
+
+
 def test_slice_chips_counted_once_for_colocated_tasks():
     # Two independent batch tasks on one physical slice free that slice's chips
     # once (not once per task). A v4-16 preemptor needs 8 chips; the shared v4-16

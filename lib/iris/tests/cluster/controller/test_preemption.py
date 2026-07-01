@@ -5,13 +5,16 @@
 
 from iris.cluster.constraints import AttributeValue, Constraint, ConstraintIndex, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller import ops, reads
+from iris.cluster.controller.autoscaler.reserved_pool import PoolLedger, ReservationLedger
 from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.ops.task import Assignment, finalize
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.reconcile.task import resolve_task_failure_state as _resolve_task_failure_state
+from iris.cluster.controller.scheduling.decision import apply_preemptions
 from iris.cluster.controller.scheduling.policy import (
     PreemptionCandidate,
+    SchedulingOrder,
     _sort_pending_tasks_by_resolved_band,
     get_running_tasks_with_band_and_value,
     run_preemption_pass,
@@ -599,6 +602,80 @@ def test_solo_preemptor_does_not_tear_down_slice():
 
     preemptions = run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
+
+
+# ---------------------------------------------------------------------------
+# apply_preemptions: handoff from the same-variant pass to the cross-variant
+# reserved-pool pass.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_preemptions_unsatisfied_sibling_reaches_reserved_pass():
+    """Two non-coscheduled replicas of one job: the same-variant pass satisfies
+    replica 0 with a same-variant victim; replica 1 still needs its own slice's
+    worth of chips and must still reach the cross-variant reserved-pool pass,
+    not be excluded just because its sibling (same parent job) was satisfied."""
+    w_same = WorkerId("w-same")
+    ctx = _make_simple_context([_tpu_capacity(w_same)])
+
+    same_variant_victim = RunningTaskInfo(
+        task_id=JobName.from_wire("/carol/batch-job/0"),
+        worker_id=w_same,
+        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        resource_value=1000,
+        is_coscheduled=False,
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=4,
+        device_variant="v4-8",
+    )
+    w_reserved = WorkerId("w-reserved")
+    reserved_victim = RunningTaskInfo(
+        task_id=JobName.from_wire("/dave/batch-slice/0"),
+        worker_id=w_reserved,
+        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
+        resource_value=8,
+        is_coscheduled=False,
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=8,
+        device_variant="v4-16",
+    )
+
+    t0 = JobName.from_wire("/alice/prod-job/0")
+    t1 = JobName.from_wire("/alice/prod-job/1")
+    jobs = {JobName.from_wire("/alice/prod-job"): _tpu_requirements("v4-8", count=4, is_coscheduled=False)}
+    order = SchedulingOrder(
+        ordered_task_ids=[t0, t1],
+        task_band_map={t0: job_pb2.PRIORITY_BAND_PRODUCTION, t1: job_pb2.PRIORITY_BAND_PRODUCTION},
+        user_spend={},
+        user_budget_limits={},
+    )
+    pool = "v4-res/zone"
+    ledger = ReservationLedger(
+        pools={
+            pool: PoolLedger(
+                pool_id=pool,
+                reservation_chips=0,
+                live_chips=0,
+                inflight_chips=0,
+                draining_chips=0,
+                inflight_slices_by_variant={},
+            )
+        },
+        worker_pool={str(w_reserved): pool},
+        worker_slice={str(w_reserved): "s-reserved"},
+        variant_pool={"v4-8": pool, "v4-16": pool},
+        chips_per_variant={"v4-8": 4, "v4-16": 8},
+    )
+
+    pairs, drain_workers = apply_preemptions(order, jobs, [], [same_variant_victim, reserved_victim], ctx, ledger)
+
+    assert {preemptor for preemptor, _ in pairs} == {t0, t1}
+    assert {victim for _, victim in pairs} == {same_variant_victim.task_id, reserved_victim.task_id}
+    assert drain_workers == {w_reserved}
 
 
 # ---------------------------------------------------------------------------

@@ -726,7 +726,10 @@ def _victim_slices_by_pool(
     for slice_id, members in slice_members.items():
         if slice_id in entangled:
             continue
-        variant = members[0].device_variant
+        # A member's device_variant is None for a CPU-only co-tenant sharing the
+        # slice's hosts; use the first TPU member's variant so such a co-tenant
+        # (which may sort first) never hides an evictable TPU slice.
+        variant = next((m.device_variant for m in members if m.device_variant is not None), None)
         if variant is None or variant not in ledger.chips_per_variant:
             continue
         worker_pools = {ledger.worker_pool.get(str(m.worker_id)) for m in members}
@@ -794,7 +797,13 @@ def run_reserved_pool_preemption(
         # slice's worth of chips. Mark the job handled up front so a later sibling
         # candidate never re-consumes incoming/replacement capacity already spent
         # on this job, regardless of which branch below this job resolves through.
-        preemptor_job = candidate.job_name.parent or candidate.job_name
+        # A non-coscheduled replica needs its own slice's worth, so it dedups on
+        # its own task id instead of the parent.
+        preemptor_job = (
+            candidate.job_name.parent
+            if candidate.requirements.is_coscheduled and candidate.job_name.parent is not None
+            else candidate.job_name
+        )
         if preemptor_job in handled_preemptor_jobs:
             continue
         handled_preemptor_jobs.add(preemptor_job)
@@ -810,13 +819,14 @@ def run_reserved_pool_preemption(
         pool_replacement = replacement.setdefault(pool, {})
         pool_replacement.setdefault(variant, ledger.inflight_slices(pool, variant))
 
+        if pool_replacement[variant] >= 1:
+            # A same-variant replacement already booting covers this candidate
+            # without spending the pool's shared incoming chips on it.
+            pool_replacement[variant] -= 1
+            continue
         if incoming[pool] >= need:
             # Covered by free chips or chips a drain is already freeing; no preemption.
             incoming[pool] -= need
-            continue
-        if pool_replacement[variant] >= 1:
-            # A replacement slice of the preemptor's variant is already booting.
-            pool_replacement[variant] -= 1
             continue
 
         deficit = need - incoming[pool]
