@@ -42,11 +42,16 @@ def test_fp8_forward_rel_fro():
 
 
 @gpu_only
-def test_fp8_backward_matches_bf16():
-    # The backward is bf16-exact: it differentiates the reference bf16
-    # ragged_dot, so the operand gradients match bf16 ragged_dot's to roundoff.
-    lhs, rhs, gs = _nonuniform(64, 128, 4, 128)
-    op = Fp8RaggedDotOp.init()
+def test_fp8_grad_lhs_rel_fro():
+    # The input gradient (grad_lhs) now runs on the FP8 tensor cores: the output
+    # gradient is quantized to e4m3 (uniform, stock-jaxlib-safe) and contracted
+    # against the pre-cast weight, so grad_lhs is approximate vs the bf16 grad.
+    # The weight gradient (grad_rhs) stays bf16, so it still matches to roundoff.
+    # T is a multiple of 64 so the ragged wgmma accumulator tile is valid; the
+    # groups are still genuinely non-uniform (including a small 5-token expert).
+    lhs, rhs, _ = _nonuniform(64, 128, 4, 128, seed=3)
+    gs = jnp.asarray([13, 5, 17, 29], jnp.int32)  # genuine non-uniform, sums to T=64
+    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e4m3 (uniform dgrad)
 
     def loss(l, r, o):
         return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
@@ -54,20 +59,19 @@ def test_fp8_backward_matches_bf16():
     g_lhs_fp8, g_rhs_fp8 = jax.grad(lambda l, r: loss(l, r, op), argnums=(0, 1))(lhs, rhs)
     g_lhs_ref, g_rhs_ref = jax.grad(lambda l, r: loss(l, r, None), argnums=(0, 1))(lhs, rhs)
 
-    assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 1e-3
-    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 1e-3
+    assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 6e-2, "FP8 dgrad grad_lhs out of tolerance"
+    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 1e-3, "bf16 wgrad grad_rhs should match bf16 to roundoff"
 
 
 @gpu_only
-def test_output_grad_scale_preserved_across_steps():
-    """output_grad_scale must stay ≈ 1.0 (preserved), not collapse to 0.
+def test_output_grad_scale_updates_across_steps():
+    """output_grad_scale is now live: it updates from the gradient magnitudes.
 
-    Before the fix, fp8_scaled_ragged_dot deleted grad_scale/grad_amax_history
-    unused; JAX returned a zero cotangent for them, and apply_updates overwrote
-    output_grad_scale with 0 on every step — a silent state-corruption hazard.
-    After the fix, quantized_ragged_dot threads them as differentiable args and
-    _qrd_bwd returns identity cotangents, so apply_updates leaves the value unchanged
-    until the FP8-backward commit replaces them with updated scale/history.
+    The FP8 dgrad quantizes the output gradient with delayed scaling, so
+    _qrd_bwd returns the rolled grad_scale/grad_amax_history as the
+    OverwriteWithGradient cotangents. output_grad_scale therefore moves away from
+    1.0 once the amax history accumulates a non-zero gradient magnitude — exactly
+    like input_scale/kernel_scale. It must still never be zeroed.
     """
     lhs, rhs, gs = _nonuniform(64, 128, 4, 128)
     op = Fp8RaggedDotOp.init()
@@ -84,19 +88,16 @@ def test_output_grad_scale_preserved_across_steps():
     op1 = step(op)
     op2 = step(op1)
 
-    # output_grad_scale must be preserved at 1.0, not zeroed by apply_updates
-    np.testing.assert_allclose(
-        np.asarray(op2.output_grad_scale),
-        np.ones_like(np.asarray(op2.output_grad_scale)),
-        atol=1e-6,
-        err_msg="output_grad_scale was zeroed after apply_updates (state corruption)",
-    )
-    # both input_scale and kernel_scale must have updated via in_q (non-trivially different from
-    # 1.0 once the amax history accumulates non-zero values from the actual operand magnitudes);
-    # require BOTH to move so a regression in either operand's in_q path is caught
-    assert not np.allclose(np.asarray(op2.input_scale), 1.0, atol=1e-6) and not np.allclose(
-        np.asarray(op2.kernel_scale), 1.0, atol=1e-6
-    ), "both input_scale and kernel_scale should have updated from 1.0 via in_q delayed scaling"
+    # output_grad_scale must not be zeroed (the delayed-scaling state stays valid).
+    assert not np.allclose(np.asarray(op2.output_grad_scale), 0.0), "output_grad_scale was zeroed (state corruption)"
+    # input_scale, kernel_scale, and output_grad_scale must all have moved away from
+    # 1.0 — the input/kernel via in_q, the output gradient via the FP8 dgrad's delayed
+    # scaling. Require all three so a regression in any delayed-scaling path is caught.
+    assert (
+        not np.allclose(np.asarray(op2.input_scale), 1.0, atol=1e-6)
+        and not np.allclose(np.asarray(op2.kernel_scale), 1.0, atol=1e-6)
+        and not np.allclose(np.asarray(op2.output_grad_scale), 1.0, atol=1e-6)
+    ), "input_scale, kernel_scale, and output_grad_scale should all update from 1.0 via delayed scaling"
 
 
 def _time_forward(fn, warmup: int = 3, iters: int = 10) -> float:
