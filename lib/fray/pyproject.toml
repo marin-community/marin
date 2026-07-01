@@ -16,6 +16,7 @@ dependencies = [
 test = [
     "pytest-timeout",
     "pytest>=8.3.2",
+    "pytest-xdist",
 ]
 fray_tpu_test = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41", { include-group = "test" }]
 
