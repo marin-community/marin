@@ -383,21 +383,22 @@ class RpcTaskBackend:
         return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
-        """Tear down dead workers' slices, or run one provisioning cycle.
+        """Drain dead workers' slices, or run one provisioning cycle.
 
-        With ``request.dead_workers`` set the autoscaler terminates their slices
-        and returns the dead workers plus their healthy siblings as
-        ``removed_workers`` (no provisioning this call). Stubs for the removed
-        workers are not evicted here: a dead worker's stub was already dropped as
-        it accrued UNREACHABLE reconcile rounds, and a healthy sibling's stub
-        self-evicts on the next reconcile RPC once its slice is gone. Otherwise it
-        runs a refresh + probe_health + update cycle against
-        ``request.residual_demand``, reading its own worker status.
+        With ``request.dead_workers`` set the autoscaler drains their slices —
+        marked DRAINING and reaped by a later refresh — and returns the dead
+        workers plus their healthy siblings as ``removed_workers`` (no
+        provisioning this call). Stubs for the removed workers are not evicted
+        here: a dead worker's stub was already dropped as it accrued UNREACHABLE
+        reconcile rounds, and a healthy sibling's stub self-evicts on the next
+        reconcile RPC once its slice is gone. Otherwise it runs a refresh +
+        probe_health + update cycle against ``request.residual_demand``, reading
+        its own worker status.
         """
         if self.autoscaler is None:
             return AutoscaleResult()
         if request.dead_workers:
-            siblings = self.autoscaler.terminate_slices_for_workers([str(wid) for wid in request.dead_workers])
+            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in request.dead_workers])
             removed = list(request.dead_workers) + [WorkerId(wid) for wid in siblings]
             return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
         assert self._store is not None, "RpcTaskBackend.autoscale called before worker store attached"

@@ -245,7 +245,7 @@ const lastEvalMs = computed(() => timestampMs(autoscaler.value?.lastEvaluation))
 function formatSliceSummary(totals: Record<string, number>): string {
   const total = Object.values(totals).reduce((a, b) => a + b, 0)
   if (total === 0) return '0'
-  const order = ['ready', 'requesting', 'booting', 'initializing', 'failed']
+  const order = ['ready', 'requesting', 'booting', 'initializing', 'draining', 'failed']
   const parts = order
     .filter(state => (totals[state] ?? 0) > 0)
     .map(state => `${totals[state]} ${state}`)

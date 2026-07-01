@@ -1902,6 +1902,146 @@ def test_smoke_gcp_config_boots_locally():
         client.close()
 
 
+class TestFungibleReservation:
+    """Tests for the optional fungible-reservation chip budget on tpu_pools."""
+
+    _BASE = """\
+platform:
+  gcp:
+    project_id: test
+
+defaults:
+  worker:
+    docker_image: ghcr.io/test/iris-worker:latest
+
+tpu_pools:
+  {pool_yaml}
+"""
+
+    _DEFAULT_SIZES = """\
+      8:  { max_slices: 256 }
+      16: { max_slices: 128 }"""
+
+    def _reserved_pool(self, *, fungible: str, chips: str, capacity: str = "reserved", sizes: str | None = None) -> str:
+        sizes = self._DEFAULT_SIZES if sizes is None else sizes
+        return f"""\
+v4-res:
+    family: v4
+    zones: [us-central2-b]
+    base_priority: 1000
+    resources: {{ cpu: 240, ram: 400GB, disk: 100GB, capacity_type: {capacity} }}
+    slice_template:
+      gcp:
+        service_account: test@test.iam.gserviceaccount.com
+        runtime_version: tpu-ubuntu2204-base
+{fungible}{chips}    sizes:
+{sizes}"""
+
+    def test_expands_reservation_chips_onto_every_member(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n", chips="    reservation_chips: 1024\n"
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        members = {n: g for n, g in config.scale_groups.items() if n.startswith("tpu_v4-res_")}
+        assert len(members) == 2
+        for g in members.values():
+            assert g.reservation_chips == 1024
+            assert g.quota_pool == "v4-res/us-central2-b"
+
+    def test_absent_reservation_leaves_chips_zero(self, tmp_path: Path):
+        # A pool without fungible_reservation must not set reservation_chips.
+        pool_yaml = self._reserved_pool(fungible="", chips="")
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+        for n, g in config.scale_groups.items():
+            if n.startswith("tpu_v4-res_"):
+                assert g.reservation_chips == 0
+
+    def test_max_slices_defaults_to_reservation_ceiling_when_omitted(self, tmp_path: Path):
+        # v4-8 is 4 chips/slice, v4-16 is 8: 1024 // 4 = 256, 1024 // 8 = 128.
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: {}\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        assert config.scale_groups["tpu_v4-res_8-us-central2-b"].max_slices == 256
+        assert config.scale_groups["tpu_v4-res_16-us-central2-b"].max_slices == 128
+
+    def test_max_slices_override_within_ceiling_is_honored(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: { max_slices: 10 }\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        config = load_config(p)
+
+        assert config.scale_groups["tpu_v4-res_8-us-central2-b"].max_slices == 10
+        assert config.scale_groups["tpu_v4-res_16-us-central2-b"].max_slices == 128
+
+    def test_max_slices_override_exceeding_ceiling_rejected(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(
+            fungible="    fungible_reservation: true\n",
+            chips="    reservation_chips: 1024\n",
+            sizes="      8: { max_slices: 300 }\n      16: {}",
+        )
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="exceeds"):
+            load_config(p)
+
+    def test_max_slices_required_when_not_fungible(self, tmp_path: Path):
+        pool_yaml = self._reserved_pool(fungible="", chips="", sizes="      8: {}\n      16: {}")
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match="'max_slices' is required"):
+            load_config(p)
+
+    _FUNGIBLE = "    fungible_reservation: true\n"
+
+    @pytest.mark.parametrize(
+        "fungible, chips, capacity, match",
+        [
+            pytest.param(
+                "", "    reservation_chips: 1024\n", "reserved", "reservation_chips set without", id="chips-without-flag"
+            ),
+            pytest.param(
+                _FUNGIBLE, "    reservation_chips: 1024\n", "preemptible", "capacity_type=reserved", id="on-preemptible"
+            ),
+            # Largest slice is v4-16 = 8 chips, so a 4-chip budget can never place it.
+            pytest.param(
+                _FUNGIBLE,
+                "    reservation_chips: 4\n",
+                "reserved",
+                "smaller than the largest slice",
+                id="budget-too-small",
+            ),
+            pytest.param(
+                _FUNGIBLE,
+                "    reservation_chips: 0\n",
+                "reserved",
+                "positive integer reservation_chips",
+                id="nonpositive-chips",
+            ),
+        ],
+    )
+    def test_invalid_reservation_rejected(self, tmp_path: Path, fungible: str, chips: str, capacity: str, match: str):
+        pool_yaml = self._reserved_pool(fungible=fungible, chips=chips, capacity=capacity)
+        p = tmp_path / "config.yaml"
+        p.write_text(self._BASE.format(pool_yaml=pool_yaml))
+        with pytest.raises(ValueError, match=match):
+            load_config(p)
+
+
 def _worker_daemon_backend(**overrides) -> BackendConfig:
     """A minimal valid worker_daemon backend (worker_provider present, in_process)."""
     fields = {"kind": "worker_daemon", "worker_provider": WorkerProviderConfig()}

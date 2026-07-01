@@ -1493,7 +1493,7 @@ class K8sTaskProvider:
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         """No-op: the cluster autoscaler + Kueue provision nodes; K8s has no
-        Iris-managed slices to tear down."""
+        Iris-managed slices to tear down or drain."""
         return AutoscaleResult()
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:

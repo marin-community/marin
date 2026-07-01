@@ -146,7 +146,7 @@ def test_runtime_worker_loss_records_preempted():
     table = FakeTable()
     autoscaler = make_autoscaler({group.name: group}, provisioning_table=table)
     try:
-        autoscaler.terminate_slices_for_workers(["slice-001-vm-0"])
+        autoscaler.drain_slices_for_workers(["slice-001-vm-0"])
     finally:
         autoscaler.shutdown()
 

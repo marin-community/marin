@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SliceTerminationRequest:
-    """A detached slice handle scheduled for termination."""
+    """A DRAINING slice handle whose VMs the caller must terminate."""
 
     slice_id: str
     group: ScalingGroup
@@ -27,27 +27,33 @@ class SliceTerminationRequest:
 
 @dataclass(frozen=True)
 class SliceTerminationResult:
-    """Batch termination work derived from a set of failed workers."""
+    """Drain work derived from a set of workers leaving their slices."""
 
     sibling_worker_ids: list[str]
     termination_requests: list[SliceTerminationRequest]
 
 
-def terminate_slices_for_workers(
+def drain_slices_for_workers(
     groups: dict[str, ScalingGroup],
     worker_ids: Sequence[str],
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
 ) -> SliceTerminationResult:
-    """Detach and schedule slice termination for the given failed workers.
+    """Mark every slice holding ``worker_ids`` DRAINING and collect its handle.
 
-    Every observed slice termination is reported to the group's churn detector
-    as :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
+    Workers are grouped by physical slice because the teardown removes a whole
+    slice: every task on it goes together and its chips free once. Each slice is
+    drained at most once. The slice stays tracked — counted against its reservation
+    pool as DRAINING — until ``refresh`` observes its VMs are gone and reaps it; the
+    caller terminates the returned handles to start that deletion.
+
+    Every observed drain is reported to the group's churn detector as
+    :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
     The detector classifies internally based on slice age — short-lived deaths
-    move churn rate; long-lived deaths count as positive samples.
+    move churn rate; long-lived deaths count as positive samples. Returns the
+    drained slices' sibling worker ids for the caller to fail immediately.
     """
-
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
 
@@ -67,17 +73,17 @@ def terminate_slices_for_workers(
 
         slice_worker_ids = group.get_slice_worker_ids(slice_id)
         sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
-        failed_workers = sorted(primary_workers & set(slice_worker_ids))
+        affected_workers = sorted(primary_workers & set(slice_worker_ids))
 
-        logger.info("Workers %s triggered slice termination for %s", failed_workers, slice_id)
+        logger.info("Workers %s triggered slice drain for %s", affected_workers, slice_id)
         log_action(
             "worker_failed",
             group.name,
             slice_id=slice_id,
-            reason=f"workers failed: {', '.join(failed_workers)}",
+            reason=f"workers failed: {', '.join(affected_workers)}",
         )
         group.record_slice_preempted(slice_id, timestamp)
-        handle = group.detach_slice(slice_id)
+        handle = group.drain_slice(slice_id, timestamp)
         unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))
