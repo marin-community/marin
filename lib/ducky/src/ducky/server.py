@@ -39,7 +39,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ducky.config import DuckyConfig
+from ducky.config import ENDPOINT_NAME, PORT_NAME, DuckyConfig
 from ducky.runner import DuckyError, QueryResult, QueryRunner
 
 logger = logging.getLogger(__name__)
@@ -119,10 +119,13 @@ class QueryManager:
         while len(self._cache) > self._max_cache_entries:
             self._cache.popitem(last=False)
 
-    def submit(self, sql: str) -> str:
+    def submit(self, sql: str, use_cache: bool = True) -> str:
+        """Submit ``sql`` and return a query_id. With ``use_cache`` (default), identical SQL
+        served earlier returns instantly from the cache; pass ``use_cache=False`` to force a
+        fresh run (e.g. when the underlying data changed) — it still refreshes the cache."""
         query_id = uuid.uuid4().hex
         with self._lock:
-            cached = self._cached_result(sql)
+            cached = self._cached_result(sql) if use_cache else None
             if cached is not None:
                 self._set_state(query_id, QueryState(QueryStatus.DONE, result=cached, cached=True))
                 logger.info(
@@ -265,7 +268,8 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
         sql = body.get("sql")
         if not isinstance(sql, str) or not sql.strip():
             return JSONResponse({"error": "missing 'sql'"}, status_code=400)
-        return JSONResponse({"query_id": manager.submit(sql)}, status_code=202)
+        use_cache = body.get("use_cache", True)
+        return JSONResponse({"query_id": manager.submit(sql, use_cache=bool(use_cache))}, status_code=202)
 
     @requires_auth
     async def result(request: Request) -> JSONResponse:
@@ -321,11 +325,11 @@ def _serve() -> None:
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("No Iris job info available — ducky must run inside an Iris job")
-    port = ctx.get_port(config.port_name)
+    port = ctx.get_port(PORT_NAME)
     address = f"http://{job_info.advertise_host}:{port}"
 
-    endpoint_id = ctx.registry.register(config.endpoint_name, address, {"job_id": ctx.job_id.to_wire()})
-    logger.info("ducky registered as %s at %s", config.endpoint_name, address)
+    endpoint_id = ctx.registry.register(ENDPOINT_NAME, address, {"job_id": ctx.job_id.to_wire()})
+    logger.info("ducky registered as %s at %s", ENDPOINT_NAME, address)
 
     async def _on_shutdown() -> None:
         ctx.registry.unregister(endpoint_id)

@@ -90,26 +90,6 @@ class QueryResult:
     result_bytes: int  # on-disk size of the spilled result parquet
 
 
-@dataclasses.dataclass(frozen=True)
-class DuckDBResourceSettings:
-    """DuckDB execution limits derived from the host envelope."""
-
-    threads: int
-    memory_limit_bytes: int
-
-
-def duckdb_resource_settings(resources: TaskResources, memory_fraction: float) -> DuckDBResourceSettings:
-    """Map a host resource snapshot to DuckDB ``threads`` / ``memory_limit``.
-
-    ``threads`` is the host CPU count (at least 1). ``memory_limit_bytes`` is
-    ``memory_fraction`` of host RAM, leaving headroom for Python/Arrow/OS; it is 0
-    (meaning "leave DuckDB's default") when host memory is unknown.
-    """
-    threads = max(1, int(resources.cpu_cores))
-    memory_limit_bytes = int(resources.memory_bytes * memory_fraction) if resources.memory_bytes > 0 else 0
-    return DuckDBResourceSettings(threads=threads, memory_limit_bytes=memory_limit_bytes)
-
-
 def _sql_literal(value: str) -> str:
     """Quote a string as a SQL literal, escaping embedded single quotes."""
     escaped = value.replace("'", "''")
@@ -139,10 +119,14 @@ class QueryRunner:
     def __init__(self, config: DuckyConfig, resources: TaskResources | None = None) -> None:
         self._config = config
         self._con = duckdb.connect()
-        settings = duckdb_resource_settings(resources or TaskResources.from_environment(), config.memory_fraction)
-        self._con.execute(f"SET threads = {settings.threads}")
-        if settings.memory_limit_bytes > 0:
-            self._con.execute(f"SET memory_limit = '{settings.memory_limit_bytes}B'")
+        host = resources or TaskResources.from_environment()
+        # threads = host CPU count; memory_limit = memory_fraction of host RAM (headroom for
+        # Python/Arrow/OS). 0 memory leaves DuckDB's default (host memory unknown).
+        threads = max(1, int(host.cpu_cores))
+        memory_limit_bytes = int(host.memory_bytes * config.memory_fraction) if host.memory_bytes > 0 else 0
+        self._con.execute(f"SET threads = {threads}")
+        if memory_limit_bytes > 0:
+            self._con.execute(f"SET memory_limit = '{memory_limit_bytes}B'")
         # Spill to local disk when a query exceeds memory_limit, so big sorts/joins/aggregates
         # go out-of-core instead of OOM-failing; a query that still doesn't fit fails alone.
         # DuckDB clears a query's spill on normal end (success or failure), but a process
@@ -154,7 +138,7 @@ class QueryRunner:
         # Bound the spill so a runaway query can't fill the (small, ~100 GB) boot disk and
         # crash the container; over the cap the query fails cleanly (caught per-query).
         self._con.execute(f"SET max_temp_directory_size = {_sql_literal(config.spill_limit)}")
-        logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", settings.threads, settings.memory_limit_bytes)
+        logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", threads, memory_limit_bytes)
         self._install_secrets()
         # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;
         # object stores create the prefix implicitly.
@@ -178,7 +162,7 @@ class QueryRunner:
         # Retry transient object-store failures (5xx, throttling, brief DNS/connection
         # blips — more likely on cross-region reads) with exponential backoff, so a
         # network hiccup doesn't fail an expensive query outright. Defaults are 3/100ms;
-        # 10 retries at 200ms × 2^n backoff spans ~100s of transient unavailability.
+        # 10 retries at 200ms * 2^n backoff spans ~100s of transient unavailability.
         # SET GLOBAL because these are connection-local settings: run_query uses a per-query
         # cursor, which only inherits the global scope, not this connection's local SETs.
         self._con.execute("SET GLOBAL http_retries = 10")
@@ -190,18 +174,16 @@ class QueryRunner:
                 f"(TYPE GCS, KEY_ID {_sql_literal(cfg.gcs_hmac_key_id)}, SECRET {_sql_literal(cfg.gcs_hmac_secret)})"
             )
         # R2 and CoreWeave are both s3://, so each S3 secret is SCOPE-d to its bucket prefix;
-        # DuckDB routes an s3:// URI to the secret with the longest matching scope.
+        # DuckDB routes an s3:// URI to the secret with the longest matching scope. URL_STYLE is
+        # a fixed property of each endpoint: R2's account endpoint is path-style; CoreWeave
+        # rejects path-style and needs vhost.
         if cfg.r2_enabled:
             self._con.execute(
-                self._s3_secret(
-                    "ducky_r2", cfg.r2_endpoint, cfg.r2_url_style, cfg.r2_scope, cfg.r2_access_key, cfg.r2_secret_key
-                )
+                self._s3_secret("ducky_r2", cfg.r2_endpoint, "path", cfg.r2_scope, cfg.r2_access_key, cfg.r2_secret_key)
             )
         if cfg.cw_enabled:
             self._con.execute(
-                self._s3_secret(
-                    "ducky_cw", cfg.cw_endpoint, cfg.cw_url_style, cfg.cw_scope, cfg.cw_access_key, cfg.cw_secret_key
-                )
+                self._s3_secret("ducky_cw", cfg.cw_endpoint, "vhost", cfg.cw_scope, cfg.cw_access_key, cfg.cw_secret_key)
             )
 
     @staticmethod

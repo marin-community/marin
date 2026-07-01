@@ -6,8 +6,13 @@ import StatusBar from './components/StatusBar.vue'
 import { useQuery } from './composables/useQuery'
 
 const sqlText = ref('')
+const useCache = ref(true)
 const ttlDays = ref<number | null>(null)
 const { phase, error, result, running, run } = useQuery()
+
+function runQuery() {
+  run(sqlText.value, useCache.value)
+}
 
 const dark = ref(document.documentElement.classList.contains('dark'))
 function toggleDark() {
@@ -46,17 +51,21 @@ onMounted(async () => {
       </button>
     </header>
 
-    <SqlEditor v-model="sqlText" :dark="dark" @run="run(sqlText)" />
+    <SqlEditor v-model="sqlText" :dark="dark" @run="runQuery" />
 
     <div class="flex items-center gap-3">
       <button
         class="rounded-md bg-accent px-4 py-1.5 text-sm font-semibold text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="running"
-        @click="run(sqlText)"
+        @click="runQuery"
       >
         {{ running ? 'Running…' : 'Run' }}
       </button>
       <span class="text-xs text-text-muted">⌘/Ctrl-Enter</span>
+      <label class="flex items-center gap-1.5 text-sm text-text-secondary" title="Reuse a prior identical query's result; uncheck to force a fresh run">
+        <input type="checkbox" v-model="useCache" />
+        use cached results
+      </label>
       <span v-if="phase === 'submitting'" class="text-sm text-text-muted">Submitting…</span>
       <span v-else-if="phase === 'running'" class="text-sm text-text-muted">Running…</span>
     </div>

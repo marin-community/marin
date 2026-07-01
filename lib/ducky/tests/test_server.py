@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-from concurrent.futures import Future
 
 import pytest
 from ducky.config import DuckyConfig
@@ -19,16 +18,12 @@ _CONFIG = DuckyConfig(
 
 
 class _InlineExecutor:
-    """Runs submitted work synchronously, so a query finishes during ``submit`` — the
-    test reads ``/result`` once with no polling or ``time.sleep`` (per root TESTING.md)."""
+    """Runs submitted work synchronously, so a query finishes during ``submit`` — the test
+    reads ``/result`` once with no polling or ``time.sleep`` (per root TESTING.md). The manager
+    ignores the returned future and ``_run`` records its own errors, so this just calls ``fn``."""
 
     def submit(self, fn, *args, **kwargs):
-        future: Future = Future()
-        try:
-            future.set_result(fn(*args, **kwargs))
-        except Exception as e:  # mirror ThreadPoolExecutor: capture into the future
-            future.set_exception(e)
-        return future
+        fn(*args, **kwargs)
 
     def shutdown(self, wait=True, **kwargs):
         pass
@@ -132,18 +127,20 @@ def test_query_result_delivered_via_result_endpoint():
     assert fake.received_query_id is not None
 
 
+class _CountingRunner(_FakeRunner):
+    """A _FakeRunner that counts how many times it actually executed (to tell cache hits apart)."""
+
+    def __init__(self, result):
+        super().__init__(result=result)
+        self.calls = 0
+
+    def run_query(self, sql, query_id):
+        self.calls += 1
+        return super().run_query(sql, query_id)
+
+
 def test_identical_sql_served_from_cache():
     """A second run of the same SQL is served from cache without re-executing."""
-
-    class _CountingRunner(_FakeRunner):
-        def __init__(self, result):
-            super().__init__(result=result)
-            self.calls = 0
-
-        def run_query(self, sql, query_id):
-            self.calls += 1
-            return super().run_query(sql, query_id)
-
     runner = _CountingRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/ducky/first.parquet", 50, 99))
     client = _client(runner)
 
@@ -154,6 +151,18 @@ def test_identical_sql_served_from_cache():
     assert first["cached"] is False
     assert second["cached"] is True
     assert second["result_path"] == "gs://b/ducky/first.parquet"  # reuses the spilled file
+
+
+def test_use_cache_false_forces_fresh_run():
+    """use_cache=False bypasses the cache and re-executes identical SQL (still refreshing it)."""
+    runner = _CountingRunner(QueryResult(["x"], [[1]], 1, False, "gs://b/x.parquet", 1, 1))
+    manager = QueryManager(runner, executor=_InlineExecutor())
+
+    manager.submit("SELECT 1")  # runs + caches
+    manager.submit("SELECT 1")  # cache hit
+    assert runner.calls == 1
+    manager.submit("SELECT 1", use_cache=False)  # forced fresh run
+    assert runner.calls == 2
 
 
 def test_query_error_surfaces_in_result():

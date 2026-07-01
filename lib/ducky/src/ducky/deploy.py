@@ -29,6 +29,7 @@ from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 from iris.rpc import job_pb2
 
+from ducky.config import PORT_NAME
 from ducky.tunnel import cluster_tunnel
 
 logger = logging.getLogger(__name__)
@@ -44,12 +45,6 @@ DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 DEFAULT_TPU = "v6e-4"
 DEFAULT_CPU = 180.0
 DEFAULT_MEMORY = "690GB"
-
-# The Iris named port and endpoint name the server binds/registers. Must match
-# DuckyConfig.port_name (the server calls ctx.get_port(config.port_name)), and is
-# independent of the job --name. The dashboard resolves to the namespaced endpoint
-# wire name "<job-namespace>/ducky" through the controller proxy.
-PORT_NAME = "ducky"
 
 
 def _ducky_env_vars() -> dict[str, str]:

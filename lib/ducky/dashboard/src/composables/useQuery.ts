@@ -46,7 +46,7 @@ export function useQuery() {
     phase.value = 'done'
   }
 
-  async function run(sql: string): Promise<void> {
+  async function run(sql: string, useCache = true): Promise<void> {
     const trimmed = sql.trim()
     if (!trimmed || running.value) return
     phase.value = 'submitting'
@@ -56,7 +56,7 @@ export function useQuery() {
       const resp = await fetch('query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql: trimmed }),
+        body: JSON.stringify({ sql: trimmed, use_cache: useCache }),
       })
       const data = await resp.json()
       if (!resp.ok) {

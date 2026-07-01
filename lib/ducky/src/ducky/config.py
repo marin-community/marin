@@ -42,6 +42,13 @@ _BACKEND_ENV = {
 }
 
 
+# Fixed Iris identifiers (not configurable): the named port ducky binds/publishes, and the
+# cluster-global endpoint it registers — the leading slash makes it reachable at
+# ``/proxy/ducky/`` rather than a per-job path.
+PORT_NAME = "ducky"
+ENDPOINT_NAME = "/ducky"
+
+
 @dataclasses.dataclass(frozen=True)
 class DuckyConfig:
     """Resolved ducky configuration. Construct directly, or via :meth:`from_environment`."""
@@ -69,12 +76,8 @@ class DuckyConfig:
 
     r2_scope: str = "s3://marin-na"
     """DuckDB SECRET scope for the R2 backend (the s3:// bucket prefix it serves)."""
-    r2_url_style: str = "path"
-    """S3 addressing for R2: ``path`` (R2 account endpoint serves the bucket in the path)."""
     cw_scope: str = "s3://marin-us-east-02a"
     """DuckDB SECRET scope for the CoreWeave backend."""
-    cw_url_style: str = "vhost"
-    """S3 addressing for CoreWeave: ``vhost``. CoreWeave endpoints reject path-style."""
 
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
@@ -106,13 +109,6 @@ class DuckyConfig:
 
     result_ttl_days: int = 7
     """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
-
-    port_name: str = "ducky"
-    """Iris named port, bound via ``ctx.get_port(port_name)``."""
-
-    endpoint_name: str = "/ducky"
-    """Endpoint registry name. A leading slash registers a cluster-global (non-namespaced)
-    endpoint so the dashboard is reachable at ``/proxy/ducky/`` instead of a per-job path."""
 
     @property
     def gcs_enabled(self) -> bool:
@@ -166,10 +162,7 @@ class DuckyConfig:
             spill_limit=os.environ.get(f"{_ENV_PREFIX}SPILL_LIMIT", cls.spill_limit),
             query_timeout=int(os.environ.get(f"{_ENV_PREFIX}QUERY_TIMEOUT", cls.query_timeout)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
-            endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
-            r2_url_style=os.environ.get(f"{_ENV_PREFIX}R2_URL_STYLE", cls.r2_url_style),
             cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
-            cw_url_style=os.environ.get(f"{_ENV_PREFIX}CW_URL_STYLE", cls.cw_url_style),
             **creds,
         )

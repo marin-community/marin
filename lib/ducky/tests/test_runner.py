@@ -9,7 +9,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from ducky.config import DuckyConfig
-from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris, duckdb_resource_settings
+from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris
 from iris.env_resources import TaskResources
 
 _SMALL_HOST = TaskResources(memory_bytes=2 * 1024**3, cpu_cores=2, gpu_count=0, tpu_count=0)
@@ -48,19 +48,6 @@ def make_runner(tmp_path: Path) -> Callable[..., QueryRunner]:
         runner.close()
 
 
-def test_duckdb_resource_settings_scales_memory():
-    settings = duckdb_resource_settings(_SMALL_HOST, memory_fraction=0.8)
-    assert settings.threads == 2
-    assert settings.memory_limit_bytes == int(2 * 1024**3 * 0.8)
-
-
-def test_duckdb_resource_settings_unknown_memory_leaves_default():
-    host = TaskResources(memory_bytes=0, cpu_cores=4, gpu_count=0, tpu_count=0)
-    settings = duckdb_resource_settings(host, memory_fraction=0.8)
-    assert settings.threads == 4
-    assert settings.memory_limit_bytes == 0
-
-
 def test_run_query_caps_preview_and_spills(make_runner):
     runner = make_runner(preview_row_cap=3)
     result = runner.run_query("SELECT * FROM range(5) t(x)", uuid.uuid4().hex)
@@ -95,32 +82,27 @@ def test_remote_scratch_blocks_local_filesystem_access(tmp_path):
         runner.close()
 
 
-def test_disallowed_uris_flags_only_unlisted_buckets():
-    allowed = ("gs://marin-us-east5", "r2://")
-    sql = (
-        "SELECT * FROM read_parquet('gs://marin-us-central2/a.parquet') "
-        "JOIN read_parquet('gs://marin-us-east5/b.parquet') USING (id) "
-        "JOIN read_parquet('r2://anybucket/c.parquet') USING (id)"
-    )
-    assert disallowed_uris(sql, allowed) == ["gs://marin-us-central2/a.parquet"]
-
-
-def test_disallowed_uris_prefix_semantics():
-    # entries are prefixes: 'gs://marin-' allows every marin-* bucket
-    allowed = ("gs://marin-", "s3://marin-na")
-    assert disallowed_uris("read('gs://marin-us-east5/x') read('gs://marin-us-central2/y')", allowed) == []
-    assert disallowed_uris("read('s3://marin-na/z')", allowed) == []
-    assert disallowed_uris("read('gs://other-bucket/x')", allowed) == ["gs://other-bucket/x"]
-
-
-def test_disallowed_uris_trailing_slash_bounds_to_bucket():
-    # a bare prefix is loose; a trailing slash bounds the match to one bucket
-    assert disallowed_uris("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5",)) == []
-    assert disallowed_uris("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5/",))
-
-
-def test_disallowed_uris_empty_allowlist_allows_all():
-    assert disallowed_uris("read_parquet('gs://anywhere/x.parquet')", ()) == []
+@pytest.mark.parametrize(
+    "sql, allowed, expected",
+    [
+        # only the unlisted bucket is flagged; listed gs:// prefix and all-of-r2 pass
+        (
+            "read('gs://marin-us-central2/a') read('gs://marin-us-east5/b') read('r2://any/c')",
+            ("gs://marin-us-east5", "r2://"),
+            ["gs://marin-us-central2/a"],
+        ),
+        # entries are prefixes: 'gs://marin-' allows every marin-* bucket
+        ("read('gs://marin-us-east5/x') read('gs://marin-us-central2/y')", ("gs://marin-",), []),
+        ("read('gs://other-bucket/x')", ("gs://marin-",), ["gs://other-bucket/x"]),
+        # a bare prefix is loose; a trailing slash bounds the match to one bucket
+        ("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5",), []),
+        ("read('gs://marin-us-east5-evil/x')", ("gs://marin-us-east5/",), ["gs://marin-us-east5-evil/x"]),
+        # empty allowlist disables enforcement (allow all)
+        ("read('gs://anywhere/x')", (), []),
+    ],
+)
+def test_disallowed_uris(sql, allowed, expected):
+    assert disallowed_uris(sql, allowed) == expected
 
 
 def test_run_query_refuses_bucket_outside_allowlist(make_runner):

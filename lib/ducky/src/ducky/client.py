@@ -56,9 +56,9 @@ def _error_message(response: httpx.Response) -> str:
         return f"HTTP {response.status_code}: {response.text[:200]}"
 
 
-def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int) -> None:
+def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int, use_cache: bool) -> None:
     base = base.rstrip("/")
-    submit = httpx.post(f"{base}/query", json={"sql": sql}, timeout=_HTTP_TIMEOUT)
+    submit = httpx.post(f"{base}/query", json={"sql": sql, "use_cache": use_cache}, timeout=_HTTP_TIMEOUT)
     if submit.status_code != 202:
         raise click.ClickException(_error_message(submit))
     query_id = submit.json()["query_id"]
@@ -101,6 +101,7 @@ def _run_query(base: str, sql: str, output_format: str, poll_interval: float, ti
 @click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
 @click.option("--poll-interval", default=1.0, show_default=True, help="Seconds between status polls.")
 @click.option("--timeout", default=3600, show_default=True, help="Max seconds to wait for the query to finish.")
+@click.option("--no-cache", is_flag=True, help="Force a fresh run instead of reusing a prior identical query's result.")
 def query(
     sql: str | None,
     cluster: str | None,
@@ -109,6 +110,7 @@ def query(
     output_format: str,
     poll_interval: float,
     timeout: int,
+    no_cache: bool,
 ) -> None:
     """Run SQL against a ducky service and print the result. SQL comes from the argument or stdin."""
     if cluster and base_url:
@@ -119,12 +121,13 @@ def query(
     if not sql:
         raise click.UsageError("No SQL provided — pass it as an argument or via stdin.")
 
+    use_cache = not no_cache
     if cluster:
         with cluster_tunnel(cluster) as controller_url:
-            _run_query(f"{controller_url}/proxy/{endpoint}", sql, output_format, poll_interval, timeout)
+            _run_query(f"{controller_url}/proxy/{endpoint}", sql, output_format, poll_interval, timeout, use_cache)
     else:
         base = base_url or os.environ.get("DUCKY_BASE_URL", DEFAULT_BASE_URL)
-        _run_query(base, sql, output_format, poll_interval, timeout)
+        _run_query(base, sql, output_format, poll_interval, timeout, use_cache)
 
 
 if __name__ == "__main__":
