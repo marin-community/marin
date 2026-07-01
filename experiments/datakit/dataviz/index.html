@@ -84,6 +84,10 @@ function sampleTable(rows,cols){
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 function loading(node){node.innerHTML='<p class="spin">running query…</p>';}
+function fillSection(id,promise,render){
+  promise.then(r=>{const el=document.getElementById(id);if(!el)return;el.classList.remove('spin');el.innerHTML=render(r);})
+    .catch(e=>{const el=document.getElementById(id);if(el){el.classList.remove('spin');el.innerHTML=`<span style="color:#b00">error: ${esc(e.message)}</span>`;}});
+}
 function fail(node,e){node.innerHTML=`<p style="color:#b00">error: ${esc(e.message)}</p>`;}
 
 const TABS=[['overview','Overview'],['sources','Sources'],['normalized','Normalized'],['decontam','Decontamination'],['dedup','Deduplication'],['quality','Classifier'],['store','Store']];
@@ -167,28 +171,27 @@ function renderStageSource(m,stage){
     }catch(e){fail(out,e);}
   };
 }
-async function loadNormalized(out,src){
-  const [st,hist,samp]=await Promise.all([
-    runQuery('normalized_stats',{source:src}),
-    runQuery('normalized_hist',{source:src}),
-    runQuery('normalized_samples',{source:src,n:20,search:document.getElementById('q').value}),
-  ]);
-  out.innerHTML=`<div class="stats">
-     <div class="stat"><b>${fmt(st.docs)}</b><span>docs</span></div>
-     <div class="stat"><b>${fmt(st.avg_chars)}</b><span>avg chars</span></div>
+function loadNormalized(out,src){
+  const search=document.getElementById('q').value;
+  out.innerHTML=`<div id="nst" class="spin">stats…</div>
+    <h4>char-length distribution <span class="muted">(sampled)</span></h4><div id="nhi" class="spin">loading…</div>
+    <h4>samples</h4><div id="nsa" class="spin">loading…</div>`;
+  fillSection('nst',runQuery('normalized_stats',{source:src}),st=>`<div class="stats">
+     <div class="stat"><b>${fmt(st.docs)}</b><span>docs${st.docs==null?' (n/a)':''}</span></div>
+     <div class="stat"><b>${fmt(st.avg_chars)}</b><span>avg chars (sampled)</span></div>
      <div class="stat"><b>${fmt(st.median_chars)}</b><span>median chars</span></div>
-     <div class="stat"><b>${fmt(st.max_chars)}</b><span>max chars</span></div></div>
-   <h4>char-length distribution (log buckets)</h4>${bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs)}
-   <h4>samples</h4>${sampleTable(samp,['id','chars','text'])}`;
+     <div class="stat"><b>${fmt(st.max_chars)}</b><span>max chars (sampled)</span></div></div>`);
+  fillSection('nhi',runQuery('normalized_hist',{source:src}),hist=>bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs));
+  fillSection('nsa',runQuery('normalized_samples',{source:src,n:20,search}),samp=>sampleTable(samp,['id','chars','text']));
 }
-async function loadDecontam(out,src){
-  const [st,samp]=await Promise.all([runQuery('decontam_stats',{source:src}),runQuery('decontam_samples',{source:src,n:20})]);
-  out.innerHTML=`<div class="stats">
-     <div class="stat"><b>${fmt(st.docs)}</b><span>docs</span></div>
-     <div class="stat"><b>${fmt(st.contaminated)}</b><span>contaminated</span></div>
-     <div class="stat"><b>${st.contaminated_pct}%</b><span>contaminated</span></div>
-     <div class="stat"><b>${st.max_overlap}</b><span>max overlap</span></div></div>
-   <h4>most-contaminated samples</h4>${sampleTable(samp,['id','max_overlap','text'])}`;
+function loadDecontam(out,src){
+  out.innerHTML=`<div id="dst" class="spin">stats…</div><h4>most-contaminated samples</h4><div id="dsa" class="spin">loading…</div>`;
+  fillSection('dst',runQuery('decontam_stats',{source:src}),st=>`<div class="stats">
+     <div class="stat"><b>${fmt(st.docs)}</b><span>docs${st.docs==null?' (n/a)':''}</span></div>
+     <div class="stat"><b>${st.contaminated_pct}%</b><span>contaminated (sampled)</span></div>
+     <div class="stat"><b>${st.avg_overlap}</b><span>avg overlap (sampled)</span></div>
+     <div class="stat"><b>${st.max_overlap}</b><span>max overlap (sampled)</span></div></div>`);
+  fillSection('dsa',runQuery('decontam_samples',{source:src,n:20}),samp=>sampleTable(samp,['id','max_overlap','text']));
 }
 async function loadQuality(out,src){
   const hist=await runQuery('quality_hist',{source:src});

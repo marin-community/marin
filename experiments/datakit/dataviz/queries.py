@@ -69,20 +69,27 @@ class Dataviz:
         }
 
     # -- normalized ---------------------------------------------------------
+    # Char-length aggregates over the whole source would scan all text (multi-TB
+    # for big sources), so they sample the first _SAMPLE rows; the exact doc
+    # count comes from the baked summary (self.source_docs), no scan.
+    _SAMPLE = 200_000
+
     def normalized_stats(self, source: str) -> dict:
         r = self.ducky.run(
-            f"SELECT count(*) AS docs, round(avg(length(text)),1) AS avg_chars, "
-            f"min(length(text)) AS min_chars, max(length(text)) AS max_chars, "
-            f"approx_quantile(length(text), 0.5) AS median_chars "
-            f"FROM read_parquet('{self._normalize_glob(source)}')"
+            f"SELECT round(avg(len),1) AS avg_chars, min(len) AS min_chars, max(len) AS max_chars, "
+            f"approx_quantile(len, 0.5) AS median_chars "
+            f"FROM (SELECT length(text) AS len FROM read_parquet('{self._normalize_glob(source)}') LIMIT {self._SAMPLE})"
         )
-        return r.dicts()[0]
+        stats = r.dicts()[0]
+        stats["docs"] = self.source_docs.get(source)
+        stats["sampled_rows"] = self._SAMPLE
+        return stats
 
     def normalized_length_hist(self, source: str, buckets: int = 20) -> QueryResult:
-        # log-scaled char-length histogram (floor bucketing; +1 guards len 0).
+        # log-scaled char-length histogram over a bounded sample (floor bucketing).
         b = int(buckets)
         return self.ducky.run(
-            f"WITH d AS (SELECT length(text) AS n FROM read_parquet('{self._normalize_glob(source)}')), "
+            f"WITH d AS (SELECT length(text) AS n FROM read_parquet('{self._normalize_glob(source)}') LIMIT {self._SAMPLE}), "
             f"m AS (SELECT ln(max(n)+1) AS lg FROM d) "
             f"SELECT least(floor(ln(n+1)/(SELECT lg FROM m)*{b}), {b - 1}) AS bucket, "
             f"min(n) AS lo, max(n) AS hi, count(*) AS docs FROM d GROUP BY bucket ORDER BY bucket"
@@ -103,15 +110,20 @@ class Dataviz:
 
     # -- decontamination ----------------------------------------------------
     def decontam_stats(self, source: str) -> dict:
+        # Sampled: scanning the contaminated flag over billions of rows is slow.
+        # Contamination is rare, so a sampled rate can read 0% — it's a rough
+        # gauge, not the exact count (labelled "sampled" in the UI).
         glob = self._flat_glob(self.lineage.decontam, source)
         r = self.ducky.run(
-            f"SELECT count(*) AS docs, sum(attributes.contaminated::int) AS contaminated, "
-            f"round(100.0*avg(attributes.contaminated::int), 4) AS contaminated_pct, "
+            f"SELECT round(100.0*avg(attributes.contaminated::int), 4) AS contaminated_pct, "
             f"round(avg(attributes.max_overlap), 4) AS avg_overlap, "
             f"round(max(attributes.max_overlap), 4) AS max_overlap "
-            f"FROM read_parquet('{glob}')"
+            f"FROM (SELECT attributes FROM read_parquet('{glob}') LIMIT {self._SAMPLE})"
         )
-        return r.dicts()[0]
+        stats = r.dicts()[0]
+        stats["docs"] = self.source_docs.get(source)
+        stats["sampled_rows"] = self._SAMPLE
+        return stats
 
     def decontam_samples(self, source: str, n: int = 20) -> QueryResult:
         """Sample contaminated docs, joined back to their normalized text."""
@@ -131,7 +143,7 @@ class Dataviz:
         return self.ducky.run(
             f"SELECT least(floor(score*{b}), {b - 1}) AS bucket, "
             f"round(min(score),3) AS lo, round(max(score),3) AS hi, count(*) AS docs "
-            f"FROM read_parquet('{glob}') GROUP BY bucket ORDER BY bucket"
+            f"FROM (SELECT score FROM read_parquet('{glob}') LIMIT {self._SAMPLE}) GROUP BY bucket ORDER BY bucket"
         )
 
     def quality_samples(self, source: str, lo: float, hi: float, n: int = 20) -> QueryResult:
