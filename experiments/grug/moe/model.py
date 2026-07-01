@@ -107,6 +107,11 @@ class GrugModelConfig:
     cheaper communication at large EP scale. The router (on full ``D``) and the shared
     expert are unchanged; only the routed-expert path is compressed. Each routed expert
     is then ``l -> intermediate_dim -> l``."""
+    moe_latent_norm: bool = False
+    """When True (and ``moe_latent_dim`` is set), apply a learnable per-channel RMSNorm
+    to the down-projected MoE latent ``c`` before expert dispatch (analogous to
+    DeepSeek's ``a_layernorm`` on compressed latents). Adds ``(moe_latent_dim,)`` params
+    per layer."""
     num_layers: int = 6
     num_heads: int = 4
     head_dim: int | None = None
@@ -692,6 +697,7 @@ class MoEMLP(eqx.Module):
     expert_mlp: MoEExpertMlp
     moe_down: jax.Array | None  # (D, l) shared down-proj; None unless moe_latent_dim set
     moe_up: jax.Array | None  # (l, D) shared up-proj; None unless moe_latent_dim set
+    moe_latent_rms: RMSNorm | None  # learnable RMSNorm on the latent c; None unless moe_latent_norm
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -721,6 +727,12 @@ class MoEMLP(eqx.Module):
             if cfg.moe_latent_dim is not None
             else None
         )
+        # Learnable RMSNorm on the down-projected latent (DeepSeek a_layernorm style).
+        moe_latent_rms = (
+            RMSNorm.init(cfg.moe_latent_dim, cfg.layer_norm_eps)
+            if (cfg.moe_latent_dim is not None and cfg.moe_latent_norm)
+            else None
+        )
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
@@ -737,6 +749,7 @@ class MoEMLP(eqx.Module):
             ),
             moe_down=moe_down,
             moe_up=moe_up,
+            moe_latent_rms=moe_latent_rms,
             cfg=cfg,
         )
 
@@ -795,6 +808,8 @@ class MoEMLP(eqx.Module):
         expert_in = x_flat
         if self.moe_down is not None:
             expert_in = reshard(jnp.einsum("td,dl->tl", x_flat, self.moe_down), P(_BATCH_AXES, None))
+            if self.moe_latent_rms is not None:
+                expert_in = self.moe_latent_rms(expert_in)
 
         routed_flat, dropped_assignments = self.expert_mlp(
             expert_in,
