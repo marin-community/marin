@@ -234,8 +234,97 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
         )
 
 
-class Int8DotGeneralOp(OverwriteWithGradient):
+class RaggedDotOp(Protocol):
+    """Signature of the optional ``op=`` argument to [haliax.nn.ragged_dot][].
 
+    The grouped-matmul analog of [DotGeneralOp][]: an implementation owns the
+    entire contraction (forward, backward, and its own layout/padding
+    requirements) and is called with the genuine non-uniform per-expert
+    ``group_sizes``.
+    """
+
+    def __call__(self, lhs, rhs, group_sizes) -> jnp.ndarray: ...
+
+
+class Fp8RaggedDotOp(OverwriteWithGradient):
+    """Direct-quantization FP8 ``ragged_dot`` op for MoE grouped matmuls.
+
+    The expert-grouped analog of [Fp8DotGeneralOp][]. Casts activations (``lhs``)
+    and expert weights (``rhs``) to FP8 with delayed per-tensor scaling and
+    contracts them over dynamic non-uniform ``group_sizes`` (each expert may
+    receive a different number of tokens), then dequantizes the result. Output
+    gradients are quantized to FP8 in the custom VJP. All state (per-tensor
+    scale + amax history for the input, kernel, and output gradient) is carried
+    as [OverwriteWithGradient][] so it threads through
+    ``partition_for_grad_overwrite`` / ``apply_updates`` and stays out of the
+    optimizer/EMA state.
+
+    The FP8 fast path is a Mosaic-GPU ``wgmma`` kernel and therefore requires
+    Hopper (SM90). Ports of this recipe to other architectures should plug in
+    as additional kernels dispatched behind this same op (analogous to
+    ``ragged_dot``'s ``implementation="auto"``); a different scaling recipe
+    (e.g. Blackwell hardware block scaling, which carries no delayed-scaling
+    state) is a new op class.
+
+    Unlike [Fp8DotGeneralOp][], whose output-gradient dtype defaults to E5M2,
+    ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
+    Mosaic ``wgmma`` requires both operands of a contraction to share one
+    dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
+    costs too much mantissa. The uniform ``e4m3 × e4m3`` backward is therefore
+    an approximation; ``init`` rejects mixed dtype pairs until mixed-dtype
+    ``wgmma`` is available upstream (jax-ml/jax#38859).
+    """
+
+    input_scale: jnp.ndarray
+    output_grad_scale: jnp.ndarray
+    kernel_scale: jnp.ndarray
+    input_amax_history: jnp.ndarray
+    output_grad_amax_history: jnp.ndarray
+    kernel_amax_history: jnp.ndarray
+    compute_dtype: DTypeLike | None = eqx.field(static=True)
+    fwd_dtype: DTypeLike = eqx.field(static=True)
+    rev_dtype: DTypeLike = eqx.field(static=True)
+
+    @classmethod
+    def init(
+        cls,
+        amax_history_length: int = 1024,
+        compute_dtype: DTypeLike | None = None,
+        fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e4m3fn,
+    ):
+        if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
+            raise ValueError(
+                "Fp8RaggedDotOp requires fwd_dtype == rev_dtype: stock-jaxlib Mosaic wgmma only "
+                "contracts same-dtype operands, so the backward runs uniform GEMMs in fwd_dtype. "
+                f"Got fwd_dtype={jnp.dtype(fwd_dtype).name}, rev_dtype={jnp.dtype(rev_dtype).name}. "
+                "The genuine mixed E5M2×E4M3 backward needs mixed-dtype wgmma (jax-ml/jax#38859)."
+            )
+        return cls(
+            input_scale=jnp.ones(1, dtype=jnp.float32),
+            output_grad_scale=jnp.ones(1, dtype=jnp.float32),
+            kernel_scale=jnp.ones(1, dtype=jnp.float32),
+            input_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            output_grad_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            kernel_amax_history=jnp.zeros(amax_history_length, dtype=jnp.float32),
+            compute_dtype=compute_dtype,
+            fwd_dtype=fwd_dtype,
+            rev_dtype=rev_dtype,
+        )
+
+    def __call__(self, lhs, rhs, group_sizes):
+        comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
+        lhs = jnp.asarray(lhs, comp_dtype)
+        rhs = jnp.asarray(rhs, comp_dtype)
+        # Local import to break the quantization ↔ nn.ragged_dot import cycle;
+        # this is the sanctioned exception to the all-imports-at-top rule.
+        from .nn.ragged_dot import ragged_dot as _ragged_dot  # noqa: PLC0415
+
+        # TODO: swap this bf16 matmul for fp8_scaled_ragged_dot (delayed-scaling FP8) in a follow-up.
+        return _ragged_dot(lhs, rhs, group_sizes, op=None)
+
+
+class Int8DotGeneralOp(OverwriteWithGradient):
     cfg: DotGeneral
 
     @classmethod
@@ -311,7 +400,9 @@ def _quantize_linear_layers(tree: T, config: QuantizationConfig, dot_general_cls
         path = path_prefix + path
         if isinstance(module, hnn.Stacked):
             new_inner = jax.tree_util.tree_map_with_path(
-                functools.partial(quantize_module, path_prefix + (GetAttrKey("stacked"),), batch_dims + (module.Block,)),  # type: ignore
+                functools.partial(
+                    quantize_module, path_prefix + (GetAttrKey("stacked"),), batch_dims + (module.Block,)
+                ),  # type: ignore
                 module.stacked,
                 is_leaf=_is_special_module,
             )
