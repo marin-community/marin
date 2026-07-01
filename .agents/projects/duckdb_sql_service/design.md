@@ -7,7 +7,7 @@ object storage (GCS / R2) — checking a dataset's row counts, schemas, or
 distributions — and today that means hand-rolling a DuckDB script and finding a
 big enough box to run it on. `ducky` is a small always-on Iris service that
 exposes a dashboard: paste SQL, hit run, get results. The query executes in an
-embedded DuckDB on a **full v6e-8 host** (~180 vCPU / ~1.4 TB RAM), so queries
+embedded DuckDB on a **full v6e-4 host** (~180 vCPU / ~720 GB RAM), so queries
 that would OOM or crawl on a laptop finish quickly with no setup. It is
 deliberately minimal — a textarea, a run button, a result table — in the spirit of
 `finelog`'s `StatsService.Query` (`lib/finelog/rust/proto/finelog_stats.proto:176`),
@@ -120,14 +120,18 @@ Because a routable service needs a *named* Iris port and `iris job run` has no
 # python -m ducky.deploy
 client.submit(
     entrypoint="python -m ducky.server",
-    resources=ResourceSpec(cpu=ALL_CPU, memory=ALL_MEM, device=tpu_device("v6e-8")),
+    resources=ResourceSpec(cpu=ALL_CPU, memory=ALL_MEM, device=tpu_device("v6e-4")),
     ports=["ducky"], region=["us-east5"], enable_extra_resources=True, no_wait=True,
 )
 ```
 
-The job requests the whole v6e-8 host (`ResourceSpec`,
+> Note: implementation settled on **v6e-4** (`ct6e-standard-4t`, 180 vCPU / 720 GB), the
+> largest *single-VM* v6e on marin. v6e-8 is a 2-VM slice and single-node DuckDB can only
+> use one VM, so it gains nothing. Deploy defaults: `v6e-4` / 180 vCPU / 690 GB.
+
+The job requests the whole v6e-4 host (`ResourceSpec`,
 `lib/iris/src/iris/cluster/types.py:529`). The `cpu`/`memory` request is a declared
-constant that must match the real `ct6e-standard-8t` host shape — if it overshoots
+constant that must match the real `ct6e-standard-4t` host shape — if it overshoots
 the job never schedules; if it undershoots, `TaskResources.from_environment()`
 reports the smaller request and silently caps DuckDB below the host. On boot the
 server binds `ctx.get_port("ducky")` (not a hardcoded port) and registers

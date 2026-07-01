@@ -11,7 +11,6 @@ from ducky.server import QueryManager, create_app
 from starlette.testclient import TestClient
 
 _CONFIG = DuckyConfig(
-    region="us-east5",
     scratch_bucket="gs://marin-ducky-us-east5",
     gcs_hmac_key_id="k",
     gcs_hmac_secret="s",

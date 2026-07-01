@@ -6,7 +6,7 @@ import os
 import pytest
 from ducky.config import DuckyConfig
 
-_BASE_ENV = {"DUCKY_REGION": "us-east5", "DUCKY_SCRATCH_BUCKET": "/tmp/ducky"}
+_BASE_ENV = {"DUCKY_SCRATCH_BUCKET": "/tmp/ducky"}
 _GCS_ENV = {"DUCKY_GCS_HMAC_KEY_ID": "k", "DUCKY_GCS_HMAC_SECRET": "s"}
 
 
@@ -22,8 +22,8 @@ def _set(monkeypatch, env: dict[str, str]) -> None:
         monkeypatch.setenv(key, value)
 
 
-def test_requires_region_and_scratch_bucket(monkeypatch):
-    with pytest.raises(ValueError, match="DUCKY_REGION"):
+def test_requires_scratch_bucket(monkeypatch):
+    with pytest.raises(ValueError, match="DUCKY_SCRATCH_BUCKET"):
         DuckyConfig.from_environment()
 
 

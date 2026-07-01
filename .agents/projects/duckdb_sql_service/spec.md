@@ -240,7 +240,7 @@ bare CLI:
 # python -m ducky.deploy
 client.submit(
     entrypoint="python -m ducky.server",
-    resources=ResourceSpec(cpu=ALL_CPU, memory=ALL_MEM, device=tpu_device("v6e-8")),
+    resources=ResourceSpec(cpu=ALL_CPU, memory=ALL_MEM, device=tpu_device("v6e-4")),  # single-VM; v6e-8 is 2 VMs
     ports=["ducky"],
     region=["us-east5"],
     enable_extra_resources=True,

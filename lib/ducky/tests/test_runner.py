@@ -6,6 +6,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import duckdb
 import pytest
 from ducky.config import DuckyConfig
 from ducky.runner import BucketNotAllowedError, QueryError, QueryRunner, disallowed_uris, duckdb_resource_settings
@@ -16,7 +17,6 @@ _SMALL_HOST = TaskResources(memory_bytes=2 * 1024**3, cpu_cores=2, gpu_count=0, 
 
 def _make_config(scratch_bucket: str, **overrides) -> DuckyConfig:
     base = dict(
-        region="us-east5",
         scratch_bucket=scratch_bucket,
         gcs_hmac_key_id="key",
         gcs_hmac_secret="secret",
@@ -82,6 +82,24 @@ def test_run_query_full_result_not_truncated(make_runner):
     assert result.total_rows == 5
     assert len(result.preview_rows) == 5
     assert result.truncated is False
+
+
+def test_run_query_caps_result_rows(make_runner):
+    # the row cap bounds the materialized object; a broad query is truncated to it
+    runner = make_runner(max_result_rows=10)
+    result = runner.run_query("SELECT * FROM range(100) t(x)", uuid.uuid4().hex)
+    assert result.total_rows == 10
+
+
+def test_remote_scratch_blocks_local_filesystem_access(tmp_path):
+    # results to object storage → user SQL must not read local files (e.g. /proc/self/environ)
+    config = _make_config("gs://marin-us-east5/tmp/ttl=7d", spill_directory=str(tmp_path / "spill"))
+    runner = QueryRunner(config, resources=_SMALL_HOST)
+    try:
+        with pytest.raises(duckdb.Error):
+            runner._con.execute("SELECT * FROM read_text('/proc/self/environ')").fetchall()
+    finally:
+        runner.close()
 
 
 def test_disallowed_uris_flags_only_unlisted_buckets():

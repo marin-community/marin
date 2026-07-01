@@ -379,7 +379,9 @@ class _QuietPolls(logging.Filter):
         return '"GET /result/' not in message and '"GET /health ' not in message
 
 
-_RESTART_DELAY = 3  # seconds between supervised server restarts
+_RESTART_DELAY = 3  # base seconds between supervised server restarts
+_RESTART_DELAY_MAX = 300  # cap on the backoff for a crash-looping server
+_HEALTHY_RUNTIME = 60  # a child that ran at least this long is "healthy" → reset the backoff
 
 
 def _serve() -> None:
@@ -414,14 +416,20 @@ def main() -> None:
     A cgroup OOM-kill reaps the largest process — the server child — while this tiny
     supervisor survives, so ducky restarts in-process without consuming an Iris job
     retry. If the whole cgroup is killed the Iris task retry is the backstop.
+
+    Restarts back off exponentially (capped) so a server that crash-loops on a permanent
+    fault (e.g. bad config) doesn't hot-loop; the backoff resets once a child stays up.
     """
     logging.basicConfig(level=logging.INFO)
+    delay = _RESTART_DELAY
     while True:
+        started = time.monotonic()
         server = multiprocessing.Process(target=_serve, name="ducky-server")
         server.start()
         server.join()
-        logger.error("ducky server exited (exitcode=%s) — restarting in %ds", server.exitcode, _RESTART_DELAY)
-        time.sleep(_RESTART_DELAY)
+        delay = _RESTART_DELAY if time.monotonic() - started >= _HEALTHY_RUNTIME else min(delay * 2, _RESTART_DELAY_MAX)
+        logger.error("ducky server exited (exitcode=%s) — restarting in %ds", server.exitcode, delay)
+        time.sleep(delay)
 
 
 if __name__ == "__main__":

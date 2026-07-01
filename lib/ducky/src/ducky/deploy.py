@@ -6,7 +6,7 @@
 A routable service needs a *named* Iris port, which ``iris job run`` cannot declare
 (no ``--ports`` flag). So deploy goes through the Python submit path
 (``client.submit(..., ports=["ducky"])``), the same mechanism the actor worker pool
-uses. The job is pinned to a single region and grabs a whole v6e-8 host (or a
+uses. The job is pinned to a single region and grabs a whole v6e-4 host (or a
 smaller CPU-only shape for a smoke); the ``DUCKY_*`` config env vars are forwarded
 to the task.
 
@@ -100,9 +100,6 @@ def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memor
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
-    # The task requires DUCKY_REGION; default it from --region so deploys don't need a
-    # separate export (an explicit DUCKY_REGION export still wins).
-    env_vars.setdefault("DUCKY_REGION", region)
 
     client = IrisClient.remote(controller_url, workspace=Path.cwd())
     job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)

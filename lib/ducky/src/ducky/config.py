@@ -15,7 +15,7 @@ picks the right endpoint per URI:
 
 Each backend is optional: it is enabled only when its full credential set is
 present, which lets a cred-free smoke deploy query DuckDB built-ins and spill to a
-local scratch dir. ``region`` and ``scratch_bucket`` are always required.
+local scratch dir. ``scratch_bucket`` is always required.
 """
 
 from __future__ import annotations
@@ -45,10 +45,6 @@ _BACKEND_ENV = {
 @dataclasses.dataclass(frozen=True)
 class DuckyConfig:
     """Resolved ducky configuration. Construct directly, or via :meth:`from_environment`."""
-
-    region: str
-    """Service region (e.g. ``us-east5``). Operational pin; the same-region guardrail is
-    the allowlist below, since GCS HMAC keys are region-agnostic and can't enforce it."""
 
     scratch_bucket: str
     """Prefix where full results spill (``gs://…`` in prod, a local dir for smoke). Carries a lifecycle TTL rule."""
@@ -82,6 +78,10 @@ class DuckyConfig:
 
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
+
+    max_result_rows: int = 50_000_000
+    """Hard cap on rows written to the spilled result parquet, so a broad ``SELECT *`` can't
+    materialize an unbounded (multi-TB) object to the store. Beyond it the result is truncated."""
 
     memory_fraction: float = 0.6
     """DuckDB ``memory_limit`` = this fraction of host RAM, a hard self-cap. Leaves generous
@@ -134,19 +134,13 @@ class DuckyConfig:
     def from_environment(cls) -> DuckyConfig:
         """Build from ``DUCKY_*`` env vars.
 
-        ``DUCKY_REGION`` and ``DUCKY_SCRATCH_BUCKET`` are required. Each backend's
-        credentials are optional but all-or-nothing: a partially-configured backend
-        raises ``ValueError`` rather than silently disabling itself.
+        ``DUCKY_SCRATCH_BUCKET`` is required. Each backend's credentials are optional but
+        all-or-nothing: a partially-configured backend raises ``ValueError`` rather than
+        silently disabling itself.
         """
-        region = os.environ.get(f"{_ENV_PREFIX}REGION")
         scratch_bucket = os.environ.get(f"{_ENV_PREFIX}SCRATCH_BUCKET")
-        missing = [
-            env_key
-            for env_key, value in [(f"{_ENV_PREFIX}REGION", region), (f"{_ENV_PREFIX}SCRATCH_BUCKET", scratch_bucket)]
-            if not value
-        ]
-        if missing:
-            raise ValueError(f"Missing required ducky env vars: {', '.join(missing)}")
+        if not scratch_bucket:
+            raise ValueError(f"Missing required ducky env var: {_ENV_PREFIX}SCRATCH_BUCKET")
 
         creds: dict[str, str | None] = {}
         for backend, env_map in _BACKEND_ENV.items():
@@ -165,10 +159,10 @@ class DuckyConfig:
         allowed_buckets = tuple(b.strip() for b in allowed.split(",") if b.strip())
 
         return cls(
-            region=region,  # pyrefly: ignore  # non-None after the check above
-            scratch_bucket=scratch_bucket,  # pyrefly: ignore  # non-None after the check above
+            scratch_bucket=scratch_bucket,
             allowed_buckets=allowed_buckets,
             preview_row_cap=int(os.environ.get(f"{_ENV_PREFIX}PREVIEW_ROW_CAP", cls.preview_row_cap)),
+            max_result_rows=int(os.environ.get(f"{_ENV_PREFIX}MAX_RESULT_ROWS", cls.max_result_rows)),
             memory_fraction=float(os.environ.get(f"{_ENV_PREFIX}MEMORY_FRACTION", cls.memory_fraction)),
             max_concurrent_queries=int(
                 os.environ.get(f"{_ENV_PREFIX}MAX_CONCURRENT_QUERIES", cls.max_concurrent_queries)

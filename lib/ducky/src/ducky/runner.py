@@ -158,8 +158,17 @@ class QueryRunner:
         self._install_secrets()
         # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;
         # object stores create the prefix implicitly.
-        if "://" not in config.scratch_bucket:
+        scratch_is_remote = "://" in config.scratch_bucket
+        if not scratch_is_remote:
             os.makedirs(f"{config.scratch_bucket.rstrip('/')}/ducky", exist_ok=True)
+        # Harden: when results go to object storage, block user SQL from touching the local
+        # filesystem (e.g. read_text('/proc/self/environ') to exfil the injected creds). Object
+        # stores are separate DuckDB filesystems and spilling is internal, so both still work.
+        # Skipped for a local scratch dir, which needs LocalFileSystem for the result write.
+        if scratch_is_remote:
+            self._con.execute("SET disabled_filesystems = 'LocalFileSystem'")
+        # Lock the configuration last so a query can't SET any of these guards back off.
+        self._con.execute("SET lock_configuration = true")
 
     def _install_secrets(self) -> None:
         """Load httpfs and create a DuckDB SECRET for each configured object-store backend."""
@@ -229,8 +238,9 @@ class QueryRunner:
         try:
             # Run the user SQL as a relation and write it out, rather than wrapping it in a
             # COPY (...) string — DuckDB parses it as a complete statement, so a trailing
-            # ';' or '-- comment' just works.
-            cursor.sql(sql).write_parquet(result_path)
+            # ';' or '-- comment' just works. The row cap bounds the materialized object so a
+            # broad SELECT * can't write an unbounded (multi-TB) result to the store.
+            cursor.sql(sql).limit(self._config.max_result_rows).write_parquet(result_path)
             count_row = cursor.execute(f"SELECT count(*) FROM {readback}").fetchone()
             assert count_row is not None  # count(*) always returns exactly one row
             total_rows = int(count_row[0])
