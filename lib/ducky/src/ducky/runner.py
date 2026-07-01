@@ -146,6 +146,9 @@ class QueryRunner:
         # go out-of-core instead of OOM-failing; a query that still doesn't fit fails alone.
         os.makedirs(config.spill_directory, exist_ok=True)
         self._con.execute(f"SET temp_directory = {_sql_literal(config.spill_directory)}")
+        # Bound the spill so a runaway query can't fill the (small, ~100 GB) boot disk and
+        # crash the container; over the cap the query fails cleanly (caught per-query).
+        self._con.execute(f"SET max_temp_directory_size = {_sql_literal(config.spill_limit)}")
         logger.info("DuckDB configured: threads=%d memory_limit_bytes=%d", settings.threads, settings.memory_limit_bytes)
         self._install_secrets()
         # A local scratch dir (smoke deploy / tests) needs the ducky/ subdir to exist;

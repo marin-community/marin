@@ -94,6 +94,11 @@ class DuckyConfig:
     execution). ``/var/tmp`` rather than ``/tmp`` because ``/tmp`` is often tmpfs — spilling
     there consumes RAM and defeats the point."""
 
+    spill_limit: str = "60GB"
+    """Cap on DuckDB's on-disk spill (``max_temp_directory_size``). Bounded well under the
+    ~100 GB boot disk so a runaway spill fails *that query* cleanly instead of filling the
+    disk and crashing the whole container."""
+
     max_concurrent_queries: int = 8
     """How many queries run at once. Each gets its own DuckDB cursor (sharing the instance's
     secrets/settings); they share the host's thread pool and memory budget."""
@@ -169,6 +174,7 @@ class DuckyConfig:
                 os.environ.get(f"{_ENV_PREFIX}MAX_CONCURRENT_QUERIES", cls.max_concurrent_queries)
             ),
             spill_directory=os.environ.get(f"{_ENV_PREFIX}SPILL_DIR", cls.spill_directory),
+            spill_limit=os.environ.get(f"{_ENV_PREFIX}SPILL_LIMIT", cls.spill_limit),
             query_timeout=int(os.environ.get(f"{_ENV_PREFIX}QUERY_TIMEOUT", cls.query_timeout)),
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             endpoint_name=os.environ.get(f"{_ENV_PREFIX}ENDPOINT_NAME", cls.endpoint_name),
