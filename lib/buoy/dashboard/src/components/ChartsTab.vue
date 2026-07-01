@@ -4,7 +4,7 @@ import MetricChart from './MetricChart.vue'
 import { useMetrics } from '../composables/useMetrics'
 import type { RunRef } from '../composables/useRun'
 
-const props = defineProps<{ runRef: RunRef; columns: string[]; state: string }>()
+const props = defineProps<{ runRef: RunRef; columns: string[]; lastStep: number | null }>()
 
 const DEFAULTS = [
   'train/cross_entropy_loss',
@@ -27,6 +27,20 @@ function seed() {
 onMounted(seed)
 watch(() => props.runRef, seed) // switching runs reseeds default charts
 watch(selected, () => ensure(props.runRef), { deep: true })
+
+// A running run grew (live refresh bumped last_step): if metrics just appeared,
+// seed the defaults; otherwise drop the cached series so ensure refetches them.
+watch(
+  () => props.lastStep,
+  () => {
+    if (!selected.value.length && props.columns.length) {
+      seed()
+      return
+    }
+    for (const k of selected.value) delete data.value[k]
+    ensure(props.runRef)
+  },
+)
 
 const options = computed(() => {
   const q = search.value.toLowerCase()

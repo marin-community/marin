@@ -5,6 +5,7 @@ import RunHeader from './components/RunHeader.vue'
 import Tabs from './components/Tabs.vue'
 import SummaryTab from './components/SummaryTab.vue'
 import ChartsTab from './components/ChartsTab.vue'
+import ProfileTab from './components/ProfileTab.vue'
 import { useRun, type RunRef } from './composables/useRun'
 import type { TabId } from './types'
 
@@ -43,9 +44,10 @@ function select(entity: string, project: string, name: string) {
             v-else-if="activeTab === 'charts' && runRef"
             :run-ref="runRef"
             :columns="manifest.history.columns"
-            :state="manifest.state"
+            :last-step="manifest.history.last_step"
           />
-          <p v-else class="text-text-muted">profile — coming in phase 4</p>
+          <ProfileTab v-else-if="activeTab === 'profile' && runRef" :run-ref="runRef" />
+          <p v-else class="text-text-muted">no profile on this run</p>
         </div>
       </div>
 

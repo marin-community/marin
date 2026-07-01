@@ -17,6 +17,7 @@ interface MirrorStatus {
   error?: string
 }
 
+const LIVE_INTERVAL = 30_000
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The query params buoy's API expects (it accepts either `run` or `run_id`).
@@ -39,7 +40,9 @@ function flatten(obj: unknown, prefix = ''): Flat {
 }
 
 // Loads one run: POST /api/mirror, poll status to done, then read manifest/config/
-// summary. A newer load() supersedes an in-flight one (guards against nav races).
+// summary. A newer load() supersedes an in-flight one (seq guard). While a run is
+// running, a browser-driven timer re-mirrors it every LIVE_INTERVAL (no server
+// watcher) and refreshes the manifest in place.
 export function useRun() {
   const manifest = shallowRef<Manifest | null>(null)
   const config = ref<Flat>({})
@@ -48,8 +51,9 @@ export function useRun() {
   const error = ref<string | null>(null)
   let seq = 0
   let current: RunRef | null = null
+  let liveTimer: ReturnType<typeof setTimeout> | null = null
 
-  async function mirrorJob(r: RunRef, refresh: boolean, verb: string, mine: number): Promise<string> {
+  async function mirrorJob(r: RunRef, refresh: boolean, verb: string, silent = false): Promise<string> {
     await fetch('api/mirror', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -58,34 +62,59 @@ export function useRun() {
     for (;;) {
       const s = await api<MirrorStatus>(`api/mirror_status?${query(r)}`)
       if (s.state !== 'running') return s.state
-      if (mine === seq) loading.value = { verb, detail: s.detail ?? '…' }
+      if (!silent) loading.value = { verb, detail: s.detail ?? '…' }
       await sleep(1500)
     }
+  }
+
+  async function readSnapshot(r: RunRef): Promise<Manifest> {
+    const [m, cfg, summ] = await Promise.all([
+      api<Manifest>(`api/manifest?${query(r)}`),
+      apiOr<Record<string, unknown>>(`api/config?${query(r)}`, {}),
+      apiOr<Record<string, unknown>>(`api/summary?${query(r)}`, {}),
+    ])
+    manifest.value = m
+    config.value = flatten(cfg)
+    summary.value = flatten(summ)
+    return m
+  }
+
+  function scheduleLive() {
+    if (liveTimer) clearTimeout(liveTimer)
+    liveTimer = null
+    if (current && manifest.value?.state === 'running') {
+      liveTimer = setTimeout(refreshLive, LIVE_INTERVAL)
+    }
+  }
+
+  async function refreshLive() {
+    if (!current) return
+    const r = current
+    const mine = seq
+    const state = await mirrorJob(r, false, 'mirroring', true) // silent: no overlay
+    if (mine !== seq) return
+    if (state === 'done') await readSnapshot(r)
+    scheduleLive()
   }
 
   async function load(r: RunRef, refresh = false) {
     const mine = ++seq
     current = r
+    if (liveTimer) clearTimeout(liveTimer)
     error.value = null
     const verb = refresh ? 'refetching' : 'mirroring'
     loading.value = { verb, detail: 'starting…' }
-    const state = await mirrorJob(r, refresh, verb, mine)
+    const state = await mirrorJob(r, refresh, verb)
     if (mine !== seq) return // superseded by a newer selection
     if (state === 'error' || state === 'absent') {
       error.value = state === 'absent' ? 'run not found' : 'mirror failed'
       loading.value = null
       return
     }
-    const [m, cfg, summ] = await Promise.all([
-      api<Manifest>(`api/manifest?${query(r)}`),
-      apiOr<Record<string, unknown>>(`api/config?${query(r)}`, {}),
-      apiOr<Record<string, unknown>>(`api/summary?${query(r)}`, {}),
-    ])
+    await readSnapshot(r)
     if (mine !== seq) return
-    manifest.value = m
-    config.value = flatten(cfg)
-    summary.value = flatten(summ)
     loading.value = null
+    scheduleLive()
   }
 
   const refetch = () => (current ? load(current, true) : undefined)
