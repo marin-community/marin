@@ -23,7 +23,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_LOG_EVERY=1          train progress/scalar logging cadence
     MAY_LOG_JAXPRS=false     disable JAXPR dumps for throughput probes
     MAY_LOG_XLA_HLO=false    disable HLO dumps for throughput probes
-    MAY_REMAT=save_moe       none | recompute_all | save_moe
+    MAY_REMAT=recompute_all  none | recompute_all | save_moe
     MAY_USE_PKO=true         enable PKO/doc-start mask path on long layers
     MAY_PKO_ON_LAST_LAYER=true
     MAY_INPUT_EMBED_SHARDING=hidden_batch  hidden_batch | replicated diagnostic
@@ -149,7 +149,7 @@ def may_data_mode() -> str:
 def build_may_model() -> GrugModelConfig:
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
     seq_len = env_int("MAY_SEQ_LEN", DEFAULT_SEQ_LEN)
-    remat_mode = os.environ.get("MAY_REMAT", "save_moe")
+    remat_mode = os.environ.get("MAY_REMAT", "recompute_all")
     if remat_mode not in VALID_REMAT_MODES:
         raise ValueError(f"MAY_REMAT={remat_mode!r} must be one of {VALID_REMAT_MODES}")
     output_proj_sharding = os.environ.get("MAY_OUTPUT_PROJ_SHARDING", "lm_head")

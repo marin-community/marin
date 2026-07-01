@@ -29,7 +29,7 @@ NUM_LAYERS=""
 STEPS=30
 CHECKPOINTS="none"
 DATA="slimpajama"
-REMAT="save_moe"
+REMAT="recompute_all"
 USE_PKO="${MAY_USE_PKO:-true}"
 PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
 INPUT_EMBED_SHARDING="${MAY_INPUT_EMBED_SHARDING:-hidden_batch}"
@@ -80,7 +80,7 @@ Options:
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
   --checkpoints MODE        MAY_CHECKPOINTS: none, local, or s3 (default: none).
-  --remat MODE              MAY_REMAT: save_moe or recompute_all (default: save_moe).
+  --remat MODE              MAY_REMAT: save_moe or recompute_all (default: recompute_all).
   --use-pko BOOL            MAY_USE_PKO diagnostic toggle (default: true).
   --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
   --input-embed-sharding MODE MAY_INPUT_EMBED_SHARDING: hidden_batch or replicated (default: hidden_batch).

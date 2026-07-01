@@ -40,11 +40,10 @@ it through to `fa4_cute_attention_forward`.
 
 ## Changes to make
 
-Pass `valid` from `_fa4_cute.py` into the custom-VJP boundary. Keep the forward
-CUTLASS launcher at four runtime tensor arguments because invalid queries are
-encoded in `lower_bounds`; the `valid` tensor is consumed by the backward sparse
-metadata path. Remove the stray `valid` reference from the non-SM90 backward
-fallback launcher so pyrefly sees a consistent contract.
+Pass `valid` from `_fa4_cute.py` into the custom-VJP boundary and into the
+forward CUTLASS launcher as `valid.astype(jnp.int32)`. Remove the stray `valid`
+reference from the non-SM90 backward fallback launcher so pyrefly sees a
+consistent contract.
 
 ## Results
 
@@ -58,9 +57,34 @@ signature error and failed in the CUTLASS JAX primitive with:
 
 `ValueError: Must have the same number of specs (5) as tensors (4).`
 
-The forward launcher input spec still expects `valid`, so the backend call must
-pass `valid.astype(jnp.int32)` into `cutlass_call`; the "valid only for backward"
-hypothesis was wrong for this version of the kernel boundary.
+The forward launcher input spec still expects `valid`, so the backend call now
+passes `valid.astype(jnp.int32)` into `cutlass_call`; the "valid only for
+backward" hypothesis was wrong for this version of the kernel boundary.
+
+## Hypothesis 3
+
+The 8-node synthetic job `/dlwh/iris-run-job-20260701-190730` got past FA4
+signature/spec errors and selected fused CE `batched_xla`, but failed before any
+completed step. The babysitter found the primary failure during `jit_train_step`
+at `jax.block_until_ready(metrics["train/loss"])`: NCCL `ncclCommSplit` failed
+with an unhandled CUDA error whose last NCCL warning was CUDA out-of-memory.
+The later shutdown-barrier and peer-disconnect logs are fallout.
+
+The profile default `MAY_REMAT=save_moe` may be saving too much forward state:
+it keeps MoE dispatch input, expert hidden, dispatch output, and MoE output for
+each block so backward avoids recomputing expert dispatch/collectives. At this
+shape, that tradeoff can exceed HBM before step 1. `MAY_REMAT=recompute_all` is
+the supported lower-memory mode.
+
+## Changes to make
+
+Change the d=2560 CoreWeave profile default remat mode to `recompute_all` in
+the Python launcher and shell wrapper, then resubmit the same 8-node synthetic
+probe with explicit `--remat recompute_all`.
+
+## Results
+
+Pending.
 
 ## Future work
 
