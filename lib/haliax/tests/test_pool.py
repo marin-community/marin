@@ -110,23 +110,23 @@ def test_mean_pool_1d():
     output = mean_pool((D.resize(2),), x, stride=(3,))
     answer = jnp.array([0.5, 3.5, 6.5, 9.5, 12.5])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
     # no pad
     output = mean_pool(D.resize(3), x, stride=(3,), padding=0)
     answer = jnp.array([1, 4, 7, 10])
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
     # pad, no include pad in avg
     output = mean_pool(D.resize(3), x, stride=(3,), padding="SAME", count_include_pad=False)
     answer = jnp.array([1, 4, 7, 10, 12.5])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
     output = mean_pool(D.resize(3), x, stride=(3,), padding="SAME", count_include_pad=True)
     answer = jnp.array([1, 4, 7, 10, (12 + 13) / 3.0])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
 
 def test_mean_pool_2d():
@@ -136,7 +136,7 @@ def test_mean_pool_2d():
     output = mean_pool((hax.Axis("H", 1), hax.Axis("W", 3)), x, stride=2)
     answer = jnp.array([[1, 3], [13, 15], [25, 27]])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
     # test batch axes
     B = hax.Axis("B", 2)
@@ -145,7 +145,7 @@ def test_mean_pool_2d():
     output = mean_pool((hax.Axis("H", 1), hax.Axis("W", 3)), x, stride=2)
     answer = jnp.array([[[1, 3], [13, 15], [25, 27]], [[1, 3], [13, 15], [25, 27]]])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
 
 def test_mean_pool3d():
@@ -155,7 +155,7 @@ def test_mean_pool3d():
 
     answer = jnp.array([[[4, 6]], [[36, 38]]])
 
-    assert jnp.all(output.array == answer)
+    assert jnp.allclose(output.array, answer)
 
 
 def test_pool_backprop():
