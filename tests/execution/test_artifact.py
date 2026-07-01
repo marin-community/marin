@@ -171,13 +171,6 @@ def test_read_artifact_missing_raises(tmp_path):
         read_artifact((tmp_path / "nothing").as_posix(), _Doc)
 
 
-def test_read_artifact_reads_legacy_bare_payload(tmp_path):
-    """Old outputs wrote a bare ``.artifact`` payload; the manual API still loads them."""
-    (tmp_path / ".artifact").write_text('{"title": "legacy", "tokens": 3}')
-    loaded = read_artifact(tmp_path.as_posix(), _Doc)
-    assert loaded == _Doc(title="legacy", tokens=3)
-
-
 # --- the legacy Ray executor .executor_info fallback ---------------------------
 
 # A trimmed per-step ``.executor_info`` in the old ``ExecutorStepInfo`` schema, as written for the
@@ -208,9 +201,9 @@ def test_read_record_recovers_config_from_executor_info(tmp_path):
 
 
 def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
-    """``.executor_info`` is a last resort: a modern ``artifact.json`` still wins."""
+    """``.executor_info`` is a last resort: a modern ``.artifact.json`` still wins."""
     (tmp_path / ".executor_info").write_text(_EXECUTOR_INFO)
-    (tmp_path / "artifact.json").write_text('{"name": "modern", "config": {"tokenizer": "gpt2"}}')
+    (tmp_path / ".artifact.json").write_text('{"name": "modern", "config": {"tokenizer": "gpt2"}}')
 
     record = read_record(tmp_path.as_posix())
     assert record.name == "modern"

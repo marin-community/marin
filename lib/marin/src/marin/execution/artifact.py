@@ -40,14 +40,13 @@ M = TypeVar("M", bound=BaseModel)
 # JSON-shaped value, used for the human-readable config and the value payload.
 type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
 
-# The record file written next to every output. Legacy names are read for back-compat
-# with already-materialized outputs, never written.
-RECORD_FILENAME = "artifact.json"
-_LEGACY_RECORD_FILENAMES = (".artifact_record.json", ".artifact")
-_LEGACY_PAYLOAD_FILENAMES = (".artifact.json", ".artifact")
+# The record file written next to every output, and the only record name read back. Dot-prefixed so
+# the datakit ``normalize._discover_files`` walk and the tokenizer file filter — both skip dotfiles —
+# never mistake it for training data and parse it as JSONL.
+RECORD_FILENAME = ".artifact.json"
 
 # The old Ray executor wrote a per-step ``.executor_info`` sidecar (the ``ExecutorStepInfo``
-# schema) instead of an ``artifact.json``. Caches built that way — e.g. the pinned llama3
+# schema) instead of an ``.artifact.json``. Caches built that way — e.g. the pinned llama3
 # Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
 # so we read it as a last resort to recover the record. Never written.
 _LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
@@ -208,17 +207,16 @@ def _record_from_executor_info(text: str) -> ArtifactRecord:
 
 
 def read_record(output_path: str) -> ArtifactRecord | None:
-    """The full record at ``{output_path}/artifact.json`` (or a legacy name), else ``None``.
+    """The record at ``{output_path}/.artifact.json``, else ``None``.
 
-    Falls back to an old Ray executor ``.executor_info`` sidecar when no modern or legacy record
-    file is present, so caches built before ``artifact.json`` existed still resolve their config.
-    A corrupt/partial file raises :class:`pydantic.ValidationError`.
+    Falls back to an old Ray executor ``.executor_info`` sidecar when no record file is present, so
+    caches built before the record file existed still resolve their config. A corrupt/partial file
+    raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
-    for filename in (RECORD_FILENAME, *_LEGACY_RECORD_FILENAMES):
-        text = _read_text(output_path, filename)
-        if text is not None:
-            return ArtifactRecord.model_validate_json(text)
+    text = _read_text(output_path, RECORD_FILENAME)
+    if text is not None:
+        return ArtifactRecord.model_validate_json(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)
@@ -226,7 +224,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 
 def write_record(record: ArtifactRecord) -> None:
-    """Write ``record`` to ``{record.output_path}/artifact.json``."""
+    """Write ``record`` to ``{record.output_path}/.artifact.json``."""
     with open_url(_join(record.output_path, RECORD_FILENAME), "w") as f:
         f.write(record.model_dump_json(indent=2))
 
@@ -242,8 +240,7 @@ def _payload_json(value: object) -> JSONValue:
 def read_artifact(output_path: str, schema: type[M]) -> M:
     """Load a typed payload: ``read_record(output_path).result`` validated as ``schema``.
 
-    Falls back to a legacy bare-payload sidecar when the record carries no ``result``.
-    Raises :class:`FileNotFoundError` if nothing is present.
+    Raises :class:`FileNotFoundError` if no record carrying a ``result`` is present.
     """
     if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
         raise TypeError(f"schema must be a pydantic BaseModel subclass, got {schema!r}")
@@ -251,10 +248,6 @@ def read_artifact(output_path: str, schema: type[M]) -> M:
     record = read_record(output_path)
     if record is not None and record.result is not None:
         return cast(M, schema.model_validate(record.result))
-    for filename in _LEGACY_PAYLOAD_FILENAMES:
-        text = _read_text(output_path, filename)
-        if text is not None:
-            return cast(M, schema.model_validate_json(text))
     raise FileNotFoundError(f"no artifact payload at {output_path}")
 
 
