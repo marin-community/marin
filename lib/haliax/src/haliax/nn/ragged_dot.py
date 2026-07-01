@@ -14,7 +14,10 @@ import jax.numpy as jnp
 from jax.typing import DTypeLike
 
 from haliax._src.fp8 import dequantize, in_q, out_dq, quantize, update_fp8_meta
-from haliax.nn._fp8_mosaic_ragged import mosaic_ragged_dot
+from haliax.nn._fp8_mosaic_ragged import (
+    mosaic_ragged_dot,
+    mosaic_transposed_ragged_dot,
+)
 from haliax.partitioning import ResourceAxis
 
 logger = logging.getLogger(__name__)
@@ -716,13 +719,28 @@ def _mosaic_fp8_ragged_dot_impl(
         )
 
     if ragged_dot_dimension_numbers == _DRHS_DIM_NUMS:
-        return _padded_dense_ragged_dot_impl(
-            lhs,
+        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "triton")
+        if wgrad_impl == "triton":
+            return _triton_ragged_contracting_dim_pallas_call(
+                lhs,
+                rhs,
+                group_sizes,
+                out_dtype=out_dtype,
+                block_m_override=128,
+                block_n_override=block_n,
+                block_k_override=block_k,
+            )
+        return mosaic_transposed_ragged_dot(
+            lhs.T,
             rhs,
-            group_sizes,
-            ragged_dot_dimension_numbers,
-            out_dtype,
-            max_group_size,
+            group_sizes=group_sizes,
+            out_dtype=out_dtype,
+            block_m=block_k,
+            block_n=block_n,
+            block_k=block_m if block_m <= 128 else 128,
+            max_concurrent_steps=max_concurrent_steps,
+            grid_block_n=grid_block_n,
+            mask_boundaries=wgrad_impl != "mosaic_nomask",
         )
 
     raise NotImplementedError(f"Unsupported ragged dot dimension numbers for Mosaic FP8: {ragged_dot_dimension_numbers}")
@@ -898,8 +916,13 @@ def _quantized_ragged_dot_bwd(
         out_grad_amax_history,
     )
     q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
-    q_lhs_for_grad = q_lhs.astype(rev_dtype)
-    q_rhs_for_grad = q_rhs.astype(rev_dtype)
+    if implementation == "mosaic":
+        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "triton")
+        q_lhs_for_grad = q_lhs if wgrad_impl in ("mosaic", "mosaic_nomask") else q_lhs.astype(rev_dtype)
+        q_rhs_for_grad = q_rhs
+    else:
+        q_lhs_for_grad = q_lhs.astype(rev_dtype)
+        q_rhs_for_grad = q_rhs.astype(rev_dtype)
 
     grad_lhs = _raw_ragged_dot_impl(
         q_g,
