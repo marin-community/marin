@@ -9,9 +9,10 @@ The forward contracts activations and expert weights as same-dtype ``e4m3 x e4m3
 on the Hopper FP8 tensor cores via the genuine ragged Mosaic ``wgmma`` kernel
 (``_src/ragged_dot_mgpu``), which handles genuinely **non-uniform, dynamic**
 ``group_sizes`` (no equal-size / batched-dense reshape). The backward is computed
-in **bf16** (numerically exact) by differentiating the reference bf16
-``ragged_dot`` against the operands, so the operand gradients match the bf16
-training default bit-for-bit.
+in **bf16** (numerically exact) by directly invoking the Triton kernels from the
+bf16 ``ragged_dot`` backward (``_DLHS_DIM_NUMS`` / ``_DRHS_DIM_NUMS`` via
+``_triton_pallas_call``), so the operand gradients match the bf16 training default
+bit-for-bit with no forward recompute.
 
 Delayed per-tensor scaling (TE-style scale + amax history) is reused verbatim
 from the dense helpers in ``_src/fp8.py`` (``in_q`` / ``quantize``): the input and
@@ -26,7 +27,6 @@ cast to FP8; no strided FP8 transpose or fused cast-transpose kernel is used yet
 
 import functools
 
-import jax
 import jax.numpy as jnp
 from jax import custom_vjp
 
@@ -100,7 +100,7 @@ def quantized_ragged_dot(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_a
     ``q_lhs`` is ``[T,K]`` E4M3, ``q_rhs_t`` is ``[E,N,K]`` E4M3 (the transpose_rhs
     layout). ``out_scale`` is the folded per-tensor dequant ``lhs_scale*rhs_scale``.
     ``lhs``/``rhs`` are the original compute-dtype (bf16) operands, carried so the
-    backward can differentiate the reference bf16 ``ragged_dot``.
+    backward can compute gradients directly with the bf16 Triton kernels.
     ``grad_scale``/``grad_amax_history`` are the output-gradient delayed-scaling state;
     threaded as differentiable args so the backward can return identity cotangents
     (preserving the current values) until the FP8-backward step updates them.
@@ -115,12 +115,16 @@ def _qrd_fwd(q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history,
 
 def _qrd_bwd(group_sizes, res, g):
     lhs, rhs, grad_scale, grad_amax_history = res
-    # bf16-exact operand gradients: differentiate the reference bf16 ragged_dot.
+    # Direct bf16 operand gradients: call the same Triton kernels used by the bf16
+    # ragged_dot backward. lhs/rhs are already in the residuals, so there is no
+    # forward recompute.
     # Local import breaks the quantization <-> nn.ragged_dot import cycle.
-    from haliax.nn.ragged_dot import ragged_dot as _bf16_ragged_dot  # noqa: PLC0415
+    from haliax.nn.ragged_dot import _DLHS_DIM_NUMS, _DRHS_DIM_NUMS, _triton_pallas_call  # noqa: PLC0415
 
-    _, vjp_fn = jax.vjp(lambda lo, ro: _bf16_ragged_dot(lo, ro, group_sizes, op=None), lhs, rhs)
-    grad_lhs, grad_rhs = vjp_fn(g)
+    # dlhs[M,K] = dout[M,N] @ rhs[G,K,N]^T  (contracts N)
+    grad_lhs = _triton_pallas_call(g, rhs, group_sizes, _DLHS_DIM_NUMS)
+    # drhs[G,K,N] = lhs[M,K]^T @ dout[M,N]  (contracts M, ragged)
+    grad_rhs = _triton_pallas_call(lhs, g, group_sizes, _DRHS_DIM_NUMS)
     # Cotangents for (q_lhs, q_rhs_t, out_scale, lhs, rhs, grad_scale, grad_amax_history):
     # - quantized operands and the folded scale are intermediate (overwrites handled by in_q)
     # - operand grads flow to lhs/rhs
