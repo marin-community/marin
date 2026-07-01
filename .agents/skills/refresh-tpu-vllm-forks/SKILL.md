@@ -11,9 +11,12 @@ Read first:
 
 ## Mission
 
-Marin maintains forks of `vllm` and `tpu-inference` with required patches.
-Update those forks to the latest tested upstream pair, reconcile Marin overlay
-commits, then open the Marin PR that pins the refreshed fork tips.
+Marin maintains forks of `vllm` and `tpu-inference` with required patches. Use
+this skill to update those forks to the latest tested upstream pair, reconcile
+Marin overlay commits, then open the Marin PR that pins the refreshed fork tips.
+
+Manual fixed-base overlay changes are a separate workflow; see
+`docs/overlay-only-pr.md`.
 
 Example run: [marin-community/marin#6453](https://github.com/marin-community/marin/pull/6453).
 
@@ -166,9 +169,15 @@ Push the finished branch to the corresponding `marin-community` fork.
 
 Update Marin root `pyproject.toml` so `tool.uv.sources` pins exact fork branch
 tip SHAs. Add adjacent compare comments that show the retained overlay commits
-against the selected upstream base:
+against the selected upstream base. Keep the short workflow pointer immediately
+above the TPU-vLLM pins so future editors know which procedure owns the SHAs:
 
 ```toml
+# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
+# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
+# if this is a fixed-base overlay PR, then follow
+# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
+# temporary and must be replaced by the landed fork main SHA.
 # https://github.com/marin-community/vllm/compare/<vllm-upstream-base-sha>...<vllm-branch-tip-sha>
 vllm = { git = "https://github.com/marin-community/vllm.git", rev = "<vllm-branch-tip-sha>" }
 # https://github.com/marin-community/tpu-inference/compare/<tpu-inference-upstream-base-sha>...<tpu-inference-branch-tip-sha>
