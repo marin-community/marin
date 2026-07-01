@@ -3,27 +3,65 @@
 
 """Shared lowering helpers for JAX Splash Attention."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import cast
 
+import equinox as eqx
 import jax
+import numpy as np
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask_info
+from jax import numpy as jnp
 from jax.sharding import Mesh, PartitionSpec
 
 
 SPLASH_BLOCK_GRANULARITY = 128
 DEFAULT_SPLASH_BLOCK_SIZE = 512
+BLOCK_MASK_EMPTY = 0
+BLOCK_MASK_PARTIAL = 1
+BLOCK_MASK_FULL = 2
+PARTIAL_MASK_SLOTS_PER_Q_BLOCK = 2
+CAUSAL_PARTIAL_MASK_SLOT_OFFSET = 0
+PREFIX_PARTIAL_MASK_SLOT_OFFSET = 1
+PARTIAL_BLOCK_CAPACITY_ERROR = "Packed Splash metadata partial block capacity exceeded."
 PartitionSpecEntry = str | Sequence[str | None] | None
+
+
+class SplashDynamicPrefixMask(StrEnum):
+    """Runtime prefix controls represented outside static Splash mask objects.
+
+    `PREFIX_LENGTHS` is one prefix length per batch element.
+    """
+
+    NONE = "none"
+    PREFIX_LENGTHS = "prefix_lengths"
+    PREFIX_LENGTHS_PER_SEGMENT = "prefix_lengths_per_segment"
+
+
+@dataclass(frozen=True)
+class SplashPrefixLmMaskSpec:
+    """Prefix-LM controls visible to Splash mask planning.
+
+    `prefix_length` is a compile-time scalar prefix shared by the batch.
+    `dynamic_prefix` records which runtime control exists when the exact prefix
+    differs per example or per packed document.
+    """
+
+    prefix_length: int | None = None
+    dynamic_prefix: SplashDynamicPrefixMask = SplashDynamicPrefixMask.NONE
 
 
 @dataclass(frozen=True)
 class SplashAttentionMaskSpec:
-    """Static mask fields consumed by Splash Attention lowering."""
+    """Structured mask fields used to choose and lower a Splash kernel plan."""
 
     is_causal: bool = False
     causal_offset: int | None = None
     sliding_window: int | None = None
+    prefix_lm: SplashPrefixLmMaskSpec | None = None
     has_explicit_mask: bool = False
 
 
@@ -36,12 +74,1014 @@ class SplashAttentionMaskLowering:
 
 
 @dataclass(frozen=True)
+class SplashPrefixControls:
+    """Runtime prefix inputs for Splash kernel planning."""
+
+    prefix_lengths: jax.Array | None
+    physical_axes_prefix_lengths: PartitionSpec | None
+    prefix_lengths_per_segment: jax.Array | None
+    physical_axes_prefix_lengths_per_segment: PartitionSpec | None
+
+
+@dataclass(frozen=True)
+class SplashSegmentRunControls:
+    """Runtime contiguous segment-run inputs for Splash kernel planning."""
+
+    segment_lengths: jax.Array | None
+    physical_axes_segment_lengths: PartitionSpec | None
+    num_segments: jax.Array | None
+
+
+@dataclass(frozen=True)
+class SplashKernelPlan:
+    """Splash kernel pytree plus metadata needed by the caller's shard_map."""
+
+    kernel: object
+    kernel_specs: object
+    kernel_vmap_axis: int | None
+    segment_id_lowering: "SplashSegmentIdsLowering"
+
+
+@dataclass(frozen=True)
+class SplashKernelContext:
+    """Shape, sharding, and block-size inputs for Splash kernel selection."""
+
+    q_seq_len: int
+    kv_seq_len: int
+    num_heads: int
+    block_sizes: splash_attention_kernel.BlockSizes
+    head_shards: int
+    q_seq_shards: int
+    physical_axes_q: PartitionSpec
+    logits_soft_cap: float | None
+
+
+@dataclass(frozen=True)
+class _PackedSegmentIds:
+    q: jax.Array
+    kv: jax.Array
+    q_vmap_axis: int | None
+    kv_vmap_axis: int | None
+
+
+def splash_attention_mask_spec_from_fields(
+    *,
+    is_causal: bool,
+    causal_offset: object | None = None,
+    sliding_window: int | None = None,
+    prefix_length: int | None = None,
+    prefix_lengths: object | None = None,
+    prefix_lengths_per_segment: object | None = None,
+    explicit_mask: object | None = None,
+) -> SplashAttentionMaskSpec:
+    dynamic_prefix = SplashDynamicPrefixMask.NONE
+    if prefix_lengths is not None and prefix_lengths_per_segment is not None:
+        raise ValueError("Splash attention mask spec cannot combine prefix_lengths and prefix_lengths_per_segment.")
+    if prefix_lengths is not None:
+        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS
+    elif prefix_lengths_per_segment is not None:
+        dynamic_prefix = SplashDynamicPrefixMask.PREFIX_LENGTHS_PER_SEGMENT
+
+    return SplashAttentionMaskSpec(
+        is_causal=is_causal,
+        causal_offset=causal_offset,
+        sliding_window=sliding_window,
+        prefix_lm=(
+            None
+            if prefix_length is None and dynamic_prefix == SplashDynamicPrefixMask.NONE
+            else SplashPrefixLmMaskSpec(prefix_length=prefix_length, dynamic_prefix=dynamic_prefix)
+        ),
+        has_explicit_mask=explicit_mask is not None,
+    )
+
+
+@dataclass(frozen=True)
 class SplashSegmentIdsLowering:
     """Segment ID arrays and sharding metadata for Splash Attention."""
 
     segment_ids: SplashSegmentIds | None
     segment_ids_axes: SplashSegmentIds | None
     segment_batch_axis: SplashSegmentIds | None
+
+
+@dataclass(frozen=True)
+class SplashDynamicMaskMetadata:
+    """Compact block metadata for a dynamic Splash mask."""
+
+    fwd_mask_info: splash_attention_mask_info.MaskInfo
+    dq_mask_info: splash_attention_mask_info.MaskInfo
+    dkv_mask_info: splash_attention_mask_info.MaskInfo
+
+
+@dataclass(frozen=True)
+class _PrefixLmMaskInfoComponents:
+    """Arrays used to assemble a Splash `MaskInfo` for prefix-LM masks.
+
+    `block_mask` marks empty, partial, and full q/kv blocks. `partial_mask_blocks`
+    stores the concrete boolean masks for partial blocks. `data_next` and
+    `mask_next` are Splash's compact lookup tables: for each non-empty q/kv
+    block they tell the kernel which data block and which partial-mask block to
+    load next.
+    """
+
+    data_next: jax.Array
+    mask_next: jax.Array
+    block_mask: jax.Array
+    partial_mask_blocks: jax.Array
+
+
+@dataclass(frozen=True)
+class _PackedDynamicMaskContext:
+    """Common shape and sharding inputs for packed dynamic mask metadata."""
+
+    q_seq_len: int
+    kv_seq_len: int
+    block_sizes: splash_attention_kernel.BlockSizes
+    head_shards: int
+    q_seq_shards: int
+
+
+@dataclass(frozen=True)
+class _PartialMaskCapacities:
+    """Partial-mask slot counts for forward, dQ, and dKV metadata."""
+
+    fwd: int
+    dq: int
+    dkv: int
+
+
+@dataclass(frozen=True)
+class _SegmentRunBoundaries:
+    """Start/end positions for active contiguous document runs in one packed row."""
+
+    active: jax.Array
+    starts: jax.Array
+    ends: jax.Array
+
+
+class _PrefixLmDataNextAxis(StrEnum):
+    Q = "q"
+    KV = "kv"
+
+
+class _DynamicMaskInfoRole(StrEnum):
+    FWD_OR_DQ = "fwd_or_dq"
+    DKV = "dkv"
+
+
+def _packed_dynamic_mask_context(
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int,
+    q_seq_shards: int,
+    caller: str,
+) -> _PackedDynamicMaskContext:
+    if not block_sizes.has_backward_blocks:
+        raise ValueError(f"{caller} requires backward block sizes.")
+    return _PackedDynamicMaskContext(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+    )
+
+
+def prefix_lm_mask_infos(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+) -> SplashDynamicMaskMetadata:
+    """Build compact Splash mask metadata for dynamic prefix-LM attention."""
+    if not block_sizes.has_backward_blocks:
+        raise ValueError("prefix_lm_mask_infos requires backward block sizes.")
+
+    fwd_mask_info = prefix_lm_forward_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q,
+        block_kv=block_sizes.block_kv,
+    )
+    dq_mask_info = prefix_lm_forward_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q_dq,
+        block_kv=block_sizes.block_kv_dq,
+    )
+    dkv_mask_info = prefix_lm_dkv_mask_info(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_sizes.block_q_dkv,
+        block_kv=block_sizes.block_kv_dkv,
+    )
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
+
+
+def packed_prefix_lm_segment_run_mask_infos(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build packed prefix-LM metadata from contiguous segment lengths and per-segment prefix lengths."""
+    if q_seq_len != kv_seq_len:
+        raise NotImplementedError("Segment-run Splash metadata currently supports self-attention only.")
+    context = _packed_dynamic_mask_context(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        caller="packed_prefix_lm_segment_run_mask_infos",
+    )
+
+    prefix_lengths = jnp.asarray(prefix_lengths, dtype=jnp.int32)
+    segment_lengths = jnp.asarray(segment_lengths, dtype=jnp.int32)
+    if prefix_lengths.ndim != 1:
+        raise ValueError(f"prefix_lengths must be rank 1 after batching, got shape {prefix_lengths.shape}.")
+    if segment_lengths.ndim != 1:
+        raise ValueError(f"segment_lengths must be rank 1 after batching, got shape {segment_lengths.shape}.")
+    if prefix_lengths.shape != segment_lengths.shape:
+        raise ValueError(
+            f"prefix_lengths shape {prefix_lengths.shape} must match segment_lengths shape {segment_lengths.shape}."
+        )
+
+    max_segments = segment_lengths.shape[0]
+    partial_capacities = _segment_run_partial_capacities(
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+        block_sizes=context.block_sizes,
+        max_segments=max_segments,
+    )
+
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=context.block_sizes.block_q,
+            block_kv=context.block_sizes.block_kv,
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.fwd,
+        ),
+        dq_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dq, "block_q_dq"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dq, "block_kv_dq"),
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dq,
+        ),
+        dkv_mask_info=_segment_run_prefix_lm_dynamic_mask_info(
+            prefix_lengths=prefix_lengths,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dkv, "block_q_dkv"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dkv, "block_kv_dkv"),
+            role=_DynamicMaskInfoRole.DKV,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dkv,
+        ),
+    )
+
+
+def packed_causal_segment_block_mask_blocks(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    """Build mask blocks for ``same_segment(q, kv) & (kv <= q)``."""
+    mask_inputs = _blocked_packed_segment_mask_inputs(
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    return mask_inputs.same_segment & (mask_inputs.kv_positions <= mask_inputs.q_positions)
+
+
+@dataclass(frozen=True)
+class _BlockedPackedSegmentMaskInputs:
+    kv_blocks: int
+    q_positions: jax.Array
+    kv_positions: jax.Array
+    same_segment: jax.Array
+
+
+def _blocked_packed_segment_mask_inputs(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+) -> _BlockedPackedSegmentMaskInputs:
+    q_segment_ids = jnp.asarray(q_segment_ids)
+    kv_segment_ids = jnp.asarray(kv_segment_ids)
+
+    if q_segment_ids.ndim != 1 or kv_segment_ids.ndim != 1:
+        raise ValueError(
+            "q_segment_ids and kv_segment_ids must be rank 1 after batching, "
+            f"got {q_segment_ids.shape} and {kv_segment_ids.shape}."
+        )
+    if q_segment_ids.shape[0] != q_seq_len:
+        raise ValueError(f"q_segment_ids length {q_segment_ids.shape[0]} must match q_seq_len={q_seq_len}.")
+    if kv_segment_ids.shape[0] != kv_seq_len:
+        raise ValueError(f"kv_segment_ids length {kv_segment_ids.shape[0]} must match kv_seq_len={kv_seq_len}.")
+    if q_seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide q_seq_len={q_seq_len}.")
+    if kv_seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide kv_seq_len={kv_seq_len}.")
+
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    q_segment_blocks = q_segment_ids.reshape(q_blocks, block_q)
+    kv_segment_blocks = kv_segment_ids.reshape(kv_blocks, block_kv)
+    same_segment = q_segment_blocks[:, None, :, None] == kv_segment_blocks[None, :, None, :]
+
+    q_positions = jnp.arange(q_seq_len, dtype=jnp.int32).reshape(q_blocks, block_q)
+    kv_positions = jnp.arange(kv_seq_len, dtype=jnp.int32).reshape(kv_blocks, block_kv)
+    return _BlockedPackedSegmentMaskInputs(
+        kv_blocks=kv_blocks,
+        q_positions=q_positions[:, None, :, None],
+        kv_positions=kv_positions[None, :, None, :],
+        same_segment=same_segment,
+    )
+
+
+def _blocked_packed_dynamic_mask_infos(
+    *,
+    mask_block_builder: Callable[..., jax.Array],
+    context: _PackedDynamicMaskContext,
+    partial_capacities: _PartialMaskCapacities | None = None,
+) -> SplashDynamicMaskMetadata:
+    fwd_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            block_q=context.block_sizes.block_q,
+            block_kv=context.block_sizes.block_kv,
+        ),
+        role=_DynamicMaskInfoRole.FWD_OR_DQ,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.fwd,
+    )
+    dq_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            block_q=context.block_sizes.block_q_dq,
+            block_kv=context.block_sizes.block_kv_dq,
+        ),
+        role=_DynamicMaskInfoRole.FWD_OR_DQ,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.dq,
+    )
+    dkv_mask_info = _blocked_packed_dynamic_mask_info(
+        mask_block_builder(
+            block_q=context.block_sizes.block_q_dkv,
+            block_kv=context.block_sizes.block_kv_dkv,
+        ),
+        role=_DynamicMaskInfoRole.DKV,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+        partial_capacity=None if partial_capacities is None else partial_capacities.dkv,
+    )
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=fwd_mask_info,
+        dq_mask_info=dq_mask_info,
+        dkv_mask_info=dkv_mask_info,
+    )
+
+
+def _blocked_packed_dynamic_mask_info(
+    partial_mask_blocks: jax.Array,
+    *,
+    role: _DynamicMaskInfoRole,
+    head_shards: int,
+    q_seq_shards: int,
+    partial_capacity: int | None,
+) -> splash_attention_mask_info.MaskInfo:
+    if partial_mask_blocks.ndim != 4:
+        raise ValueError(f"Expected blocked mask with rank 4, got {partial_mask_blocks.shape}.")
+    if partial_mask_blocks.dtype != jnp.bool_:
+        raise ValueError(f"Expected bool blocked mask, got {partial_mask_blocks.dtype}.")
+    if head_shards != 1:
+        raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
+
+    q_blocks, kv_blocks, _, _ = partial_mask_blocks.shape
+    if q_blocks % q_seq_shards != 0:
+        raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
+
+    is_full_mask = jnp.all(partial_mask_blocks, axis=(-1, -2))
+    is_empty_mask = jnp.logical_not(jnp.any(partial_mask_blocks, axis=(-1, -2)))
+
+    block_mask = jnp.ones((1, q_blocks, kv_blocks), dtype=jnp.int32)
+    block_mask = jnp.where(is_full_mask[None, :, :], BLOCK_MASK_FULL, block_mask)
+    block_mask = jnp.where(is_empty_mask[None, :, :], BLOCK_MASK_EMPTY, block_mask)
+
+    compact_mask_blocks, mask_next = _compact_partial_mask_blocks(
+        partial_mask_blocks,
+        block_mask=block_mask,
+        partial_capacity=partial_capacity or (q_blocks * kv_blocks),
+    )
+
+    return _packed_dynamic_mask_info_from_components(
+        block_mask=block_mask,
+        compact_mask_blocks=compact_mask_blocks,
+        mask_next=mask_next,
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        role=role,
+        partial_capacity=partial_capacity or (q_blocks * kv_blocks),
+    )
+
+
+def _compact_partial_mask_blocks(
+    partial_mask_blocks: jax.Array,
+    *,
+    block_mask: jax.Array,
+    partial_capacity: int,
+) -> tuple[jax.Array, jax.Array]:
+    q_blocks, kv_blocks, block_q, block_kv = partial_mask_blocks.shape
+    flat_blocks = partial_mask_blocks.reshape(q_blocks * kv_blocks, block_q, block_kv)
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
+
+    partial_flat_indices = jnp.nonzero(partial_indexing.is_partial, size=partial_capacity, fill_value=0)[0]
+    compact_blocks = flat_blocks[partial_flat_indices]
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < partial_indexing.num_partial
+    compact_blocks = jnp.where(valid_slots[:, None, None], compact_blocks, False)
+    compact_blocks = eqx.error_if(
+        compact_blocks,
+        partial_indexing.num_partial > partial_capacity,
+        PARTIAL_BLOCK_CAPACITY_ERROR,
+    )
+
+    return compact_blocks, partial_indexing.mask_next
+
+
+@dataclass(frozen=True)
+class _PartialBlockIndexing:
+    is_partial: jax.Array
+    num_partial: jax.Array
+    mask_next: jax.Array
+
+
+def _partial_block_indexing(block_mask: jax.Array, *, q_blocks: int, kv_blocks: int) -> _PartialBlockIndexing:
+    is_partial = block_mask.reshape(-1) == BLOCK_MASK_PARTIAL
+    partial_indices = jnp.cumsum(is_partial.astype(jnp.int32), dtype=jnp.int32) - 1
+    num_partial = jnp.sum(is_partial.astype(jnp.int32), dtype=jnp.int32)
+    mask_next = jnp.where(is_partial, partial_indices, 0).reshape(1, q_blocks, kv_blocks)
+    return _PartialBlockIndexing(is_partial=is_partial, num_partial=num_partial, mask_next=mask_next)
+
+
+def _packed_dynamic_mask_info_from_components(
+    *,
+    block_mask: jax.Array,
+    compact_mask_blocks: jax.Array,
+    mask_next: jax.Array,
+    q_blocks: int,
+    kv_blocks: int,
+    role: _DynamicMaskInfoRole,
+    partial_capacity: int,
+) -> splash_attention_mask_info.MaskInfo:
+    if role == _DynamicMaskInfoRole.DKV:
+        data_next = jnp.arange(q_blocks, dtype=jnp.int32)[None, :, None]
+        data_next = jnp.broadcast_to(data_next, (1, q_blocks, kv_blocks))
+        compact_mask_blocks = compact_mask_blocks.swapaxes(-1, -2)
+    else:
+        data_next = jnp.arange(kv_blocks, dtype=jnp.int32)[None, None, :]
+        data_next = jnp.broadcast_to(data_next, (1, q_blocks, kv_blocks))
+    data_next = jnp.where(block_mask == BLOCK_MASK_EMPTY, 0, data_next)
+
+    return splash_attention_mask_info.MaskInfo(
+        data_next=_downcast_dynamic_mask_index(
+            data_next,
+            q_blocks if role == _DynamicMaskInfoRole.DKV else kv_blocks,
+        ),
+        mask_next=_downcast_dynamic_mask_index(mask_next, partial_capacity),
+        block_mask=block_mask.astype(jnp.int8),
+        partial_mask_blocks=compact_mask_blocks,
+        q_sequence=None,
+        is_dynamic_mask=True,
+    )
+
+
+def _downcast_dynamic_mask_index(array: jax.Array, max_value: int) -> jax.Array:
+    if array.size == 0:
+        return array
+    if max_value <= np.iinfo(np.int8).max:
+        return array.astype(jnp.int8)
+    if max_value <= np.iinfo(np.int16).max:
+        return array.astype(jnp.int16)
+    return array.astype(jnp.int32)
+
+
+def packed_causal_segment_mask_infos(
+    *,
+    q_segment_ids: jax.Array,
+    kv_segment_ids: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build Splash metadata for packed causal masks.
+
+    The represented mask is ``same_segment(q, kv) & (kv <= q)``.
+    """
+    context = _packed_dynamic_mask_context(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        caller="packed_causal_segment_mask_infos",
+    )
+
+    def mask_block_builder(*, block_q: int, block_kv: int) -> jax.Array:
+        return packed_causal_segment_block_mask_blocks(
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_q=block_q,
+            block_kv=block_kv,
+        )
+
+    return _blocked_packed_dynamic_mask_infos(mask_block_builder=mask_block_builder, context=context)
+
+
+def packed_causal_segment_run_mask_infos(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    head_shards: int = 1,
+    q_seq_shards: int = 1,
+) -> SplashDynamicMaskMetadata:
+    """Build packed causal metadata from fixed-shape contiguous segment lengths."""
+    if q_seq_len != kv_seq_len:
+        raise NotImplementedError("Segment-run Splash metadata currently supports self-attention only.")
+    context = _packed_dynamic_mask_context(
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        caller="packed_causal_segment_run_mask_infos",
+    )
+
+    segment_lengths = jnp.asarray(segment_lengths, dtype=jnp.int32)
+    if segment_lengths.ndim != 1:
+        raise ValueError(f"segment_lengths must be rank 1 after batching, got shape {segment_lengths.shape}.")
+
+    max_segments = segment_lengths.shape[0]
+    partial_capacities = _segment_run_partial_capacities(
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+        block_sizes=context.block_sizes,
+        max_segments=max_segments,
+    )
+
+    return SplashDynamicMaskMetadata(
+        fwd_mask_info=_segment_run_dynamic_mask_info(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=context.block_sizes.block_q,
+            block_kv=context.block_sizes.block_kv,
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.fwd,
+        ),
+        dq_mask_info=_segment_run_dynamic_mask_info(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dq, "block_q_dq"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dq, "block_kv_dq"),
+            role=_DynamicMaskInfoRole.FWD_OR_DQ,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dq,
+        ),
+        dkv_mask_info=_segment_run_dynamic_mask_info(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            seq_len=context.q_seq_len,
+            block_q=_required_block_size(context.block_sizes.block_q_dkv, "block_q_dkv"),
+            block_kv=_required_block_size(context.block_sizes.block_kv_dkv, "block_kv_dkv"),
+            role=_DynamicMaskInfoRole.DKV,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+            partial_capacity=partial_capacities.dkv,
+        ),
+    )
+
+
+def _segment_run_dynamic_mask_info(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    block_q: int,
+    block_kv: int,
+    role: _DynamicMaskInfoRole,
+    head_shards: int,
+    q_seq_shards: int,
+    partial_capacity: int,
+) -> splash_attention_mask_info.MaskInfo:
+    if head_shards != 1:
+        raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
+    if seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide seq_len={seq_len}.")
+    if seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide seq_len={seq_len}.")
+
+    q_blocks = seq_len // block_q
+    kv_blocks = seq_len // block_kv
+    if q_blocks % q_seq_shards != 0:
+        raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
+
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    block_mask = _segment_run_block_mask(
+        active=boundaries.active,
+        segment_starts=boundaries.starts,
+        segment_ends=boundaries.ends,
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
+
+    compact_mask_blocks = _segment_run_partial_mask_blocks(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+        is_partial=partial_indexing.is_partial,
+        num_partial=partial_indexing.num_partial,
+        partial_capacity=partial_capacity,
+    )
+    compact_mask_blocks = eqx.error_if(
+        compact_mask_blocks,
+        partial_indexing.num_partial > partial_capacity,
+        PARTIAL_BLOCK_CAPACITY_ERROR,
+    )
+
+    return _packed_dynamic_mask_info_from_components(
+        block_mask=block_mask,
+        compact_mask_blocks=compact_mask_blocks,
+        mask_next=partial_indexing.mask_next,
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        role=role,
+        partial_capacity=partial_capacity,
+    )
+
+
+def _segment_run_prefix_lm_dynamic_mask_info(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    block_q: int,
+    block_kv: int,
+    role: _DynamicMaskInfoRole,
+    head_shards: int,
+    q_seq_shards: int,
+    partial_capacity: int,
+) -> splash_attention_mask_info.MaskInfo:
+    """Build dynamic Splash metadata for packed prefix-LM segment runs.
+
+    Each segment run is one contiguous packed document. Full blocks are detected
+    from interval overlaps, while partial blocks are materialized only for the
+    compact slots selected by `_partial_block_indexing`.
+    """
+    if head_shards != 1:
+        raise NotImplementedError("Packed dynamic Splash metadata with shared heads currently requires head_shards=1.")
+    if seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide seq_len={seq_len}.")
+    if seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide seq_len={seq_len}.")
+
+    q_blocks = seq_len // block_q
+    kv_blocks = seq_len // block_kv
+    if q_blocks % q_seq_shards != 0:
+        raise ValueError(f"q_seq_shards={q_seq_shards} must divide q block count {q_blocks}.")
+
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    block_mask = _segment_run_prefix_lm_block_mask(
+        active=boundaries.active,
+        segment_starts=boundaries.starts,
+        segment_ends=boundaries.ends,
+        prefix_lengths=jnp.minimum(prefix_lengths, segment_lengths),
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+    )
+    partial_indexing = _partial_block_indexing(block_mask, q_blocks=q_blocks, kv_blocks=kv_blocks)
+
+    compact_mask_blocks = _segment_run_prefix_lm_partial_mask_blocks(
+        prefix_lengths=prefix_lengths,
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+        kv_blocks=kv_blocks,
+        block_q=block_q,
+        block_kv=block_kv,
+        is_partial=partial_indexing.is_partial,
+        num_partial=partial_indexing.num_partial,
+        partial_capacity=partial_capacity,
+    )
+    compact_mask_blocks = eqx.error_if(
+        compact_mask_blocks,
+        partial_indexing.num_partial > partial_capacity,
+        PARTIAL_BLOCK_CAPACITY_ERROR,
+    )
+
+    return _packed_dynamic_mask_info_from_components(
+        block_mask=block_mask,
+        compact_mask_blocks=compact_mask_blocks,
+        mask_next=partial_indexing.mask_next,
+        q_blocks=q_blocks,
+        kv_blocks=kv_blocks,
+        role=role,
+        partial_capacity=partial_capacity,
+    )
+
+
+def _segment_run_boundaries(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+) -> _SegmentRunBoundaries:
+    num_segments = jnp.asarray(num_segments, dtype=jnp.int32)
+    active = jnp.arange(segment_lengths.shape[0], dtype=jnp.int32) < num_segments
+    lengths = jnp.where(active, segment_lengths, jnp.zeros_like(segment_lengths))
+    lengths = eqx.error_if(
+        lengths,
+        jnp.sum(lengths, dtype=jnp.int32) != seq_len,
+        "Packed Splash segment lengths must cover the full sequence.",
+    )
+    segment_ends = jnp.cumsum(lengths, dtype=jnp.int32)
+    segment_starts = segment_ends - lengths
+    return _SegmentRunBoundaries(active=active, starts=segment_starts, ends=segment_ends)
+
+
+def _segment_run_block_mask(
+    *,
+    active: jax.Array,
+    segment_starts: jax.Array,
+    segment_ends: jax.Array,
+    q_blocks: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    q_start = (jnp.arange(q_blocks, dtype=jnp.int32) * block_q)[:, None, None]
+    q_end = q_start + block_q - 1
+    kv_start = (jnp.arange(kv_blocks, dtype=jnp.int32) * block_kv)[None, :, None]
+    kv_end = kv_start + block_kv - 1
+    segment_start = segment_starts[None, None, :]
+    segment_end = segment_ends[None, None, :] - 1
+    active = active[None, None, :]
+
+    q_overlap_start = jnp.maximum(q_start, segment_start)
+    q_overlap_end = jnp.minimum(q_end, segment_end)
+    kv_overlap_start = jnp.maximum(kv_start, segment_start)
+    kv_overlap_end = jnp.minimum(kv_end, segment_end)
+
+    q_intersects = q_overlap_start <= q_overlap_end
+    kv_intersects = kv_overlap_start <= kv_overlap_end
+    non_empty = active & q_intersects & kv_intersects & (kv_overlap_start <= q_overlap_end)
+    full = active & (q_start >= segment_start) & (q_end <= segment_end) & (kv_start >= segment_start)
+    full = full & (kv_end <= segment_end) & (kv_end <= q_start)
+
+    any_non_empty = jnp.any(non_empty, axis=-1)
+    any_full = jnp.any(full, axis=-1)
+    block_mask = jnp.where(any_full, BLOCK_MASK_FULL, jnp.where(any_non_empty, BLOCK_MASK_PARTIAL, BLOCK_MASK_EMPTY))
+    return block_mask[None, :, :].astype(jnp.int32)
+
+
+def _segment_run_prefix_lm_block_mask(
+    *,
+    active: jax.Array,
+    segment_starts: jax.Array,
+    segment_ends: jax.Array,
+    prefix_lengths: jax.Array,
+    q_blocks: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+) -> jax.Array:
+    q_start = (jnp.arange(q_blocks, dtype=jnp.int32) * block_q)[:, None, None]
+    q_end = q_start + block_q - 1
+    kv_start = (jnp.arange(kv_blocks, dtype=jnp.int32) * block_kv)[None, :, None]
+    kv_end = kv_start + block_kv - 1
+    segment_start = segment_starts[None, None, :]
+    segment_end = segment_ends[None, None, :] - 1
+    prefix_end = segment_start + prefix_lengths[None, None, :]
+    active = active[None, None, :]
+
+    q_overlap_start = jnp.maximum(q_start, segment_start)
+    q_overlap_end = jnp.minimum(q_end, segment_end)
+    kv_overlap_start = jnp.maximum(kv_start, segment_start)
+    kv_overlap_end = jnp.minimum(kv_end, segment_end)
+
+    q_intersects = q_overlap_start <= q_overlap_end
+    kv_intersects = kv_overlap_start <= kv_overlap_end
+    causal_non_empty = kv_overlap_start <= q_overlap_end
+    prefix_non_empty = kv_overlap_start < prefix_end
+    non_empty = active & q_intersects & kv_intersects & (causal_non_empty | prefix_non_empty)
+
+    same_segment_block = (
+        (q_start >= segment_start) & (q_end <= segment_end) & (kv_start >= segment_start) & (kv_end <= segment_end)
+    )
+    full = active & same_segment_block & ((kv_end <= q_start) | (kv_end < prefix_end))
+
+    any_non_empty = jnp.any(non_empty, axis=-1)
+    any_full = jnp.any(full, axis=-1)
+    block_mask = jnp.where(any_full, BLOCK_MASK_FULL, jnp.where(any_non_empty, BLOCK_MASK_PARTIAL, BLOCK_MASK_EMPTY))
+    return block_mask[None, :, :].astype(jnp.int32)
+
+
+def _segment_run_partial_mask_blocks(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+    is_partial: jax.Array,
+    num_partial: jax.Array,
+    partial_capacity: int,
+) -> jax.Array:
+    partial_flat_indices = jnp.nonzero(is_partial, size=partial_capacity, fill_value=0)[0]
+    q_block_ids = partial_flat_indices // kv_blocks
+    kv_block_ids = partial_flat_indices % kv_blocks
+
+    q_positions = q_block_ids[:, None] * block_q + jnp.arange(block_q, dtype=jnp.int32)[None, :]
+    kv_positions = kv_block_ids[:, None] * block_kv + jnp.arange(block_kv, dtype=jnp.int32)[None, :]
+    segment_ids = _segment_ids_from_lengths(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    q_segment_ids = segment_ids[q_positions]
+    kv_segment_ids = segment_ids[kv_positions]
+    compact_blocks = (q_segment_ids[:, :, None] == kv_segment_ids[:, None, :]) & (
+        kv_positions[:, None, :] <= q_positions[:, :, None]
+    )
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
+    return jnp.where(valid_slots[:, None, None], compact_blocks, False)
+
+
+def _segment_run_prefix_lm_partial_mask_blocks(
+    *,
+    prefix_lengths: jax.Array,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+    kv_blocks: int,
+    block_q: int,
+    block_kv: int,
+    is_partial: jax.Array,
+    num_partial: jax.Array,
+    partial_capacity: int,
+) -> jax.Array:
+    partial_flat_indices = jnp.nonzero(is_partial, size=partial_capacity, fill_value=0)[0]
+    q_block_ids = partial_flat_indices // kv_blocks
+    kv_block_ids = partial_flat_indices % kv_blocks
+
+    q_positions = q_block_ids[:, None] * block_q + jnp.arange(block_q, dtype=jnp.int32)[None, :]
+    kv_positions = kv_block_ids[:, None] * block_kv + jnp.arange(block_kv, dtype=jnp.int32)[None, :]
+    segment_ids = _segment_ids_from_lengths(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    q_segment_ids = segment_ids[q_positions]
+    kv_segment_ids = segment_ids[kv_positions]
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    prefix_ends = boundaries.starts + jnp.minimum(prefix_lengths, segment_lengths)
+    kv_prefix_ends = prefix_ends[kv_segment_ids]
+    compact_blocks = (q_segment_ids[:, :, None] == kv_segment_ids[:, None, :]) & (
+        (kv_positions[:, None, :] <= q_positions[:, :, None]) | (kv_positions[:, None, :] < kv_prefix_ends[:, None, :])
+    )
+    valid_slots = jnp.arange(partial_capacity, dtype=jnp.int32) < num_partial
+    return jnp.where(valid_slots[:, None, None], compact_blocks, False)
+
+
+def _segment_ids_from_lengths(
+    *,
+    segment_lengths: jax.Array,
+    num_segments: jax.Array,
+    seq_len: int,
+) -> jax.Array:
+    boundaries = _segment_run_boundaries(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        seq_len=seq_len,
+    )
+    positions = jnp.arange(seq_len, dtype=jnp.int32)
+    return jnp.sum(positions[:, None] >= boundaries.ends[None, :], axis=1, dtype=jnp.int32)
+
+
+def _segment_run_partial_capacities(
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_sizes: splash_attention_kernel.BlockSizes,
+    max_segments: int,
+) -> _PartialMaskCapacities:
+    return _PartialMaskCapacities(
+        fwd=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // block_sizes.block_q,
+            kv_blocks=kv_seq_len // block_sizes.block_kv,
+            max_segments=max_segments,
+        ),
+        dq=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // _required_block_size(block_sizes.block_q_dq, "block_q_dq"),
+            kv_blocks=kv_seq_len // _required_block_size(block_sizes.block_kv_dq, "block_kv_dq"),
+            max_segments=max_segments,
+        ),
+        dkv=_segment_run_partial_capacity(
+            q_blocks=q_seq_len // _required_block_size(block_sizes.block_q_dkv, "block_q_dkv"),
+            kv_blocks=kv_seq_len // _required_block_size(block_sizes.block_kv_dkv, "block_kv_dkv"),
+            max_segments=max_segments,
+        ),
+    )
+
+
+def _required_block_size(block_size: int | None, name: str) -> int:
+    if block_size is None:
+        raise ValueError(f"{name} must be set.")
+    return block_size
+
+
+def _segment_run_partial_capacity(*, q_blocks: int, kv_blocks: int, max_segments: int) -> int:
+    dense_capacity = q_blocks * kv_blocks
+    segment_capacity = max_segments * (q_blocks + kv_blocks + 1)
+    return min(dense_capacity, segment_capacity)
 
 
 def lower_splash_attention_mask(
@@ -56,18 +1096,24 @@ def lower_splash_attention_mask(
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
     else:
+        prefix_lm = mask.prefix_lm
+        if prefix_lm is not None and prefix_lm.dynamic_prefix != SplashDynamicPrefixMask.NONE:
+            raise NotImplementedError("Dynamic prefix-LM masks are not yet supported for splash attention")
+        if prefix_lm is not None and prefix_lm.prefix_length is not None and not mask.is_causal:
+            raise NotImplementedError("Splash prefix-LM masks must also be causal.")
+
         if mask.is_causal:
             if mask.causal_offset is not None:
                 raise NotImplementedError(
                     "Causal offsets are not supported for splash attention. Please use a standard causal mask."
                 )
-            base_mask = splash_attention_mask.CausalMask(
+            causal_mask = splash_attention_mask.CausalMask(
                 (q_seq_len, kv_seq_len),
                 offset=0,
                 shard_count=q_seq_shards,
             )
         else:
-            base_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
+            causal_mask = splash_attention_mask.FullMask(_shape=(q_seq_len, kv_seq_len))
 
         if mask.sliding_window is not None:
             local_mask = splash_attention_mask.LocalMask(
@@ -76,13 +1122,658 @@ def lower_splash_attention_mask(
                 offset=0,
                 shard_count=q_seq_shards,
             )
-            base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
+            causal_mask = splash_attention_mask.LogicalAnd(causal_mask, local_mask)
+
+        if prefix_lm is not None and prefix_lm.prefix_length is not None:
+            static_prefix = PrefixMask(
+                shape=(q_seq_len, kv_seq_len),
+                prefix_length=prefix_lm.prefix_length,
+                shard_count=q_seq_shards,
+            )
+            base_mask = splash_attention_mask.LogicalOr(causal_mask, static_prefix)
+        else:
+            base_mask = causal_mask
 
         if mask.has_explicit_mask:
             raise NotImplementedError("Explicit masks are not yet supported for splash attention")
 
     kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(num_heads)])
     return SplashAttentionMaskLowering(base_mask=base_mask, kernel_mask=kernel_mask)
+
+
+def prepare_splash_kernel_plan(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    mesh: Mesh,
+) -> SplashKernelPlan:
+    """Choose and build the concrete Splash kernel plan for a lowered mask."""
+    if _can_use_packed_prefix_lm_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_prefix_lm_segment_run_kernel_plan(
+            prefix_controls=prefix_controls,
+            segment_run_controls=segment_run_controls,
+            context=context,
+        )
+
+    if prefix_controls.prefix_lengths_per_segment is not None:
+        raise NotImplementedError("Splash attention could not use the packed prefix-LM segment-run fast path.")
+
+    if prefix_controls.prefix_lengths is not None:
+        assert prefix_controls.physical_axes_prefix_lengths is not None
+        return _prefix_length_kernel_plan(
+            prefix_lengths=prefix_controls.prefix_lengths,
+            physical_axes_prefix_lengths=prefix_controls.physical_axes_prefix_lengths,
+            segment_id_lowering=segment_id_lowering,
+            context=context,
+        )
+
+    if _can_use_packed_causal_segment_run_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_run_controls=segment_run_controls,
+        context=context,
+    ):
+        return _packed_causal_segment_run_kernel_plan(
+            segment_run_controls=segment_run_controls,
+            context=context,
+        )
+
+    if _can_use_packed_causal_segment_kernel(
+        mask=mask,
+        prefix_controls=prefix_controls,
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+    ):
+        return _packed_causal_segment_kernel_plan(
+            segment_id_lowering=segment_id_lowering,
+            context=context,
+        )
+
+    return _static_splash_kernel_plan(
+        mask=mask,
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+        mesh=mesh,
+    )
+
+
+def _batched_splash_kernel_specs(
+    kernel,
+    *,
+    batch_spec,
+    head_spec,
+    q_seq_spec,
+    num_heads: int,
+):
+    def spec_for_leaf(leaf):
+        if leaf is None:
+            return None
+        if not isinstance(leaf, jax.Array):
+            return PartitionSpec()
+        if leaf.ndim == 0:
+            return PartitionSpec()
+        if leaf.ndim >= 4 and leaf.shape[1] == num_heads:
+            return PartitionSpec(batch_spec, head_spec, q_seq_spec, *([None] * (leaf.ndim - 3)))
+        return PartitionSpec(batch_spec, *([None] * (leaf.ndim - 1)))
+
+    return jax.tree_util.tree_map(spec_for_leaf, kernel)
+
+
+def _splash_kernel_from_dynamic_metadata(metadata, block_sizes, logits_soft_cap):
+    return splash_attention_kernel.SplashAttentionKernel(
+        metadata.fwd_mask_info,
+        None if block_sizes.use_fused_bwd_kernel else metadata.dq_mask_info,
+        metadata.dkv_mask_info,
+        block_sizes=block_sizes,
+        is_mqa=False,
+        save_residuals=False,
+        mask_value=splash_attention_kernel.DEFAULT_MASK_VALUE,
+        attn_logits_soft_cap=logits_soft_cap,
+        residual_checkpoint_name=None,
+        mask_function=None,
+        interpret=False,
+    )
+
+
+def _segment_ids_for_packed_mask(
+    segment_id_lowering: SplashSegmentIdsLowering,
+    *,
+    q_seq_len: int,
+    kv_seq_len: int,
+) -> _PackedSegmentIds:
+    if segment_id_lowering.segment_ids is None:
+        q_segment_ids = jnp.zeros((q_seq_len,), dtype=jnp.int32)
+        kv_segment_ids = jnp.zeros((kv_seq_len,), dtype=jnp.int32)
+        return _PackedSegmentIds(q=q_segment_ids, kv=kv_segment_ids, q_vmap_axis=None, kv_vmap_axis=None)
+
+    assert segment_id_lowering.segment_batch_axis is not None
+    return _PackedSegmentIds(
+        q=segment_id_lowering.segment_ids.q,
+        kv=segment_id_lowering.segment_ids.kv,
+        q_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.q),
+        kv_vmap_axis=cast(int | None, segment_id_lowering.segment_batch_axis.kv),
+    )
+
+
+def _packed_dynamic_mask_kernel_plan(
+    *,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    metadata_values: tuple[jax.Array, ...],
+    metadata_in_axes: tuple[int | None, ...],
+    metadata_builder,
+    batch_spec,
+) -> SplashKernelPlan:
+    segment_ids = _segment_ids_for_packed_mask(
+        segment_id_lowering,
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+    )
+    if batch_spec is None:
+        assert segment_id_lowering.segment_ids_axes is not None
+        assert segment_ids.q_vmap_axis is not None
+        batch_spec = segment_id_lowering.segment_ids_axes.q[segment_ids.q_vmap_axis]
+
+    def make_kernel(*args):
+        *metadata_args, q_segment_ids, kv_segment_ids = args
+        return metadata_builder(*metadata_args, q_segment_ids, kv_segment_ids)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=metadata_values + (segment_ids.q, segment_ids.kv),
+        metadata_in_axes=metadata_in_axes + (segment_ids.q_vmap_axis, segment_ids.kv_vmap_axis),
+        metadata_builder=make_kernel,
+        batch_spec=batch_spec,
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _dynamic_metadata_kernel_plan(
+    *,
+    context: SplashKernelContext,
+    metadata_values: tuple[jax.Array, ...],
+    metadata_in_axes: tuple[int | None, ...],
+    metadata_builder,
+    batch_spec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+) -> SplashKernelPlan:
+    def make_kernel(*metadata_args):
+        metadata = metadata_builder(*metadata_args)
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    splash_kernel = jax.vmap(make_kernel, in_axes=metadata_in_axes)(*metadata_values)
+    kernel_specs = _batched_splash_kernel_specs(
+        splash_kernel,
+        batch_spec=batch_spec,
+        head_spec=context.physical_axes_q[1],
+        q_seq_spec=context.physical_axes_q[2],
+        num_heads=context.num_heads,
+    )
+    return SplashKernelPlan(
+        kernel=splash_kernel,
+        kernel_specs=kernel_specs,
+        kernel_vmap_axis=0,
+        segment_id_lowering=segment_id_lowering,
+    )
+
+
+def _can_use_packed_causal_segment_kernel(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    prefix_controls: SplashPrefixControls,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if segment_id_lowering.segment_ids is None or segment_id_lowering.segment_batch_axis is None:
+        return False
+    if segment_id_lowering.segment_batch_axis.q is None or segment_id_lowering.segment_batch_axis.kv is None:
+        return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _is_plain_causal_splash_mask(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    prefix_controls: SplashPrefixControls,
+) -> bool:
+    return (
+        mask is not None
+        and mask.is_causal
+        and mask.causal_offset is None
+        and mask.sliding_window is None
+        and mask.prefix_lm is None
+        and not mask.has_explicit_mask
+        and prefix_controls.prefix_lengths is None
+        and prefix_controls.prefix_lengths_per_segment is None
+    )
+
+
+def _can_use_packed_prefix_lm_segment_run_kernel(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+
+    prefix_lm = None if mask is None else mask.prefix_lm
+    return (
+        mask is not None
+        and mask.is_causal
+        and mask.causal_offset is None
+        and mask.sliding_window is None
+        and not mask.has_explicit_mask
+        and prefix_lm is not None
+        and prefix_lm.prefix_length is None
+        and prefix_lm.dynamic_prefix == SplashDynamicPrefixMask.PREFIX_LENGTHS_PER_SEGMENT
+        and prefix_controls.prefix_lengths_per_segment is not None
+    )
+
+
+def _can_use_packed_causal_segment_run_kernel(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> bool:
+    if context.q_seq_shards != 1:
+        return False
+    if context.q_seq_len != context.kv_seq_len:
+        return False
+    if segment_run_controls.segment_lengths is None or segment_run_controls.num_segments is None:
+        return False
+    return _is_plain_causal_splash_mask(mask=mask, prefix_controls=prefix_controls)
+
+
+def _packed_causal_segment_run_kernel_plan(
+    *,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+    assert segment_run_controls.physical_axes_segment_lengths is not None
+
+    def make_kernel(segment_lengths, num_segments):
+        metadata = packed_causal_segment_run_mask_infos(
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(segment_run_controls.segment_lengths, segment_run_controls.num_segments),
+        metadata_in_axes=(0, 0),
+        metadata_builder=make_kernel,
+        batch_spec=segment_run_controls.physical_axes_segment_lengths[0],
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _packed_prefix_lm_segment_run_kernel_plan(
+    *,
+    prefix_controls: SplashPrefixControls,
+    segment_run_controls: SplashSegmentRunControls,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    assert prefix_controls.prefix_lengths_per_segment is not None
+    assert prefix_controls.physical_axes_prefix_lengths_per_segment is not None
+    assert segment_run_controls.segment_lengths is not None
+    assert segment_run_controls.num_segments is not None
+
+    def make_kernel(prefix_lengths_per_segment, segment_lengths, num_segments):
+        metadata = packed_prefix_lm_segment_run_mask_infos(
+            prefix_lengths=prefix_lengths_per_segment,
+            segment_lengths=segment_lengths,
+            num_segments=num_segments,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+        return _splash_kernel_from_dynamic_metadata(metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(
+            prefix_controls.prefix_lengths_per_segment,
+            segment_run_controls.segment_lengths,
+            segment_run_controls.num_segments,
+        ),
+        metadata_in_axes=(0, 0, 0),
+        metadata_builder=make_kernel,
+        batch_spec=prefix_controls.physical_axes_prefix_lengths_per_segment[0],
+        segment_id_lowering=lower_splash_segment_ids(),
+    )
+
+
+def _packed_causal_segment_kernel_plan(
+    *,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    def causal_metadata(q_segment_ids, kv_segment_ids):
+        return packed_causal_segment_mask_infos(
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            block_sizes=context.block_sizes,
+            head_shards=context.head_shards,
+            q_seq_shards=context.q_seq_shards,
+        )
+
+    return _packed_dynamic_mask_kernel_plan(
+        segment_id_lowering=segment_id_lowering,
+        context=context,
+        metadata_values=(),
+        metadata_in_axes=(),
+        metadata_builder=causal_metadata,
+        batch_spec=None,
+    )
+
+
+def _prefix_length_kernel_plan(
+    *,
+    prefix_lengths: jax.Array,
+    physical_axes_prefix_lengths: PartitionSpec,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+) -> SplashKernelPlan:
+    def make_prefix_lm_kernel(prefix_length):
+        prefix_metadata = prefix_lm_mask_infos(
+            prefix_length=prefix_length,
+            q_seq_len=context.q_seq_len,
+            kv_seq_len=context.kv_seq_len,
+            num_heads=context.num_heads,
+            block_sizes=context.block_sizes,
+        )
+        return _splash_kernel_from_dynamic_metadata(prefix_metadata, context.block_sizes, context.logits_soft_cap)
+
+    return _dynamic_metadata_kernel_plan(
+        context=context,
+        metadata_values=(prefix_lengths,),
+        metadata_in_axes=(0,),
+        metadata_builder=make_prefix_lm_kernel,
+        batch_spec=physical_axes_prefix_lengths[0],
+        segment_id_lowering=segment_id_lowering,
+    )
+
+
+def _static_splash_kernel_plan(
+    *,
+    mask: SplashAttentionMaskSpec | None,
+    segment_id_lowering: SplashSegmentIdsLowering,
+    context: SplashKernelContext,
+    mesh: Mesh,
+) -> SplashKernelPlan:
+    mask_lowering = lower_splash_attention_mask(
+        mask=mask,
+        q_seq_len=context.q_seq_len,
+        kv_seq_len=context.kv_seq_len,
+        num_heads=context.num_heads,
+        q_seq_shards=context.q_seq_shards,
+    )
+
+    splash_kernel = splash_attention_kernel.make_splash_mha(
+        mask=mask_lowering.kernel_mask,
+        head_shards=context.head_shards,
+        q_seq_shards=context.q_seq_shards,
+        block_sizes=context.block_sizes,
+        attn_logits_soft_cap=context.logits_soft_cap,
+    )
+
+    kernel_sharding = jax.sharding.NamedSharding(
+        mesh, PartitionSpec(context.physical_axes_q[1], context.physical_axes_q[2])
+    )
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    return SplashKernelPlan(
+        kernel=splash_kernel,
+        kernel_specs=kernel_specs,
+        kernel_vmap_axis=None,
+        segment_id_lowering=segment_id_lowering,
+    )
+
+
+def prefix_lm_forward_mask_info(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+) -> splash_attention_mask_info.MaskInfo:
+    """Build forward Splash metadata for ``kv < prefix_length OR kv <= q``."""
+    components = _prefix_lm_mask_info_components(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_q,
+        block_kv=block_kv,
+        data_next_axis=_PrefixLmDataNextAxis.KV,
+    )
+    return _prefix_lm_mask_info_from_components(components)
+
+
+def prefix_lm_dkv_mask_info(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+) -> splash_attention_mask_info.MaskInfo:
+    """Build compact dKV Splash metadata for a prefix-LM mask."""
+    components = _prefix_lm_mask_info_components(
+        prefix_length=prefix_length,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        num_heads=num_heads,
+        block_q=block_q,
+        block_kv=block_kv,
+        data_next_axis=_PrefixLmDataNextAxis.Q,
+    )
+    return _prefix_lm_mask_info_from_components(
+        _PrefixLmMaskInfoComponents(
+            data_next=components.data_next,
+            mask_next=components.mask_next,
+            block_mask=components.block_mask,
+            partial_mask_blocks=jnp.swapaxes(components.partial_mask_blocks, -1, -2),
+        )
+    )
+
+
+def _prefix_lm_mask_info_from_components(
+    components: _PrefixLmMaskInfoComponents,
+) -> splash_attention_mask_info.MaskInfo:
+    return splash_attention_mask_info.MaskInfo(
+        data_next=components.data_next,
+        mask_next=components.mask_next,
+        block_mask=components.block_mask.astype(jnp.int8),
+        partial_mask_blocks=components.partial_mask_blocks,
+        q_sequence=None,
+        is_dynamic_mask=None,
+    )
+
+
+def _prefix_lm_mask_info_components(
+    *,
+    prefix_length: jax.Array,
+    q_seq_len: int,
+    kv_seq_len: int,
+    num_heads: int,
+    block_q: int,
+    block_kv: int,
+    data_next_axis: _PrefixLmDataNextAxis,
+) -> _PrefixLmMaskInfoComponents:
+    """Compute compact block metadata for a batch-dependent prefix length.
+
+    Prefix-LM has two partial-block sources per query block: the causal boundary
+    and, when distinct, the prefix boundary. We reserve two partial-mask slots
+    per query block and point `mask_next` at the right slot for each partial
+    q/kv block. `data_next` uses q-block indices for dKV and kv-block indices
+    for forward/dQ, matching Splash's expected traversal direction.
+    """
+    if block_q != block_kv:
+        raise NotImplementedError("Compact prefix-LM metadata currently requires block_q == block_kv.")
+    if q_seq_len % block_q != 0:
+        raise ValueError(f"block_q={block_q} must divide q_seq_len={q_seq_len}.")
+    if kv_seq_len % block_kv != 0:
+        raise ValueError(f"block_kv={block_kv} must divide kv_seq_len={kv_seq_len}.")
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    prefix_length = jnp.asarray(prefix_length, dtype=jnp.int32)
+
+    q_block_ids = jnp.arange(q_blocks, dtype=jnp.int32)[:, None]
+    kv_block_ids = jnp.arange(kv_blocks, dtype=jnp.int32)[None, :]
+    q_start = q_block_ids * block_q
+    q_end = q_start + block_q - 1
+    kv_start = kv_block_ids * block_kv
+    kv_end = kv_start + block_kv - 1
+
+    has_prefix = kv_start < prefix_length
+    causal_nonzero = kv_start <= q_end
+    nonzero = has_prefix | causal_nonzero
+
+    full_prefix = kv_end < prefix_length
+    full_causal = kv_end <= q_start
+    full = full_prefix | full_causal
+    partial = nonzero & ~full
+
+    block_mask = jnp.where(full, BLOCK_MASK_FULL, jnp.where(partial, BLOCK_MASK_PARTIAL, BLOCK_MASK_EMPTY)).astype(
+        jnp.int32
+    )
+    block_mask = jnp.broadcast_to(block_mask[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    # Splash interprets data_next in the traversal direction of the kernel role:
+    # forward/dQ advance over KV blocks, while dKV advances over Q blocks.
+    data_block_ids = kv_block_ids if data_next_axis == _PrefixLmDataNextAxis.KV else q_block_ids
+    data_next = jnp.broadcast_to(data_block_ids, (q_blocks, kv_blocks))
+    data_next = jnp.where(block_mask[0] != BLOCK_MASK_EMPTY, data_next, 0).astype(jnp.int32)
+    data_next = jnp.broadcast_to(data_next[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    causal_slot = q_block_ids * PARTIAL_MASK_SLOTS_PER_Q_BLOCK + CAUSAL_PARTIAL_MASK_SLOT_OFFSET
+    prefix_boundary_block = prefix_length // block_kv
+    is_prefix_boundary = kv_block_ids == prefix_boundary_block
+    mask_next = jnp.where(
+        is_prefix_boundary & (kv_block_ids != q_block_ids),
+        causal_slot + PREFIX_PARTIAL_MASK_SLOT_OFFSET,
+        causal_slot,
+    )
+    mask_next = jnp.where(partial, mask_next, 0).astype(jnp.int32)
+    mask_next = jnp.broadcast_to(mask_next[None, :, :], (num_heads, q_blocks, kv_blocks))
+
+    q_offsets = jnp.arange(block_q, dtype=jnp.int32)[:, None]
+    kv_offsets = jnp.arange(block_kv, dtype=jnp.int32)[None, :]
+    q_global = jnp.arange(q_blocks, dtype=jnp.int32)[:, None, None] * block_q + q_offsets[None, :, :]
+    causal_kv_global = jnp.arange(q_blocks, dtype=jnp.int32)[:, None, None] * block_kv + kv_offsets[None, :, :]
+    causal_blocks = (causal_kv_global <= q_global) | (causal_kv_global < prefix_length)
+
+    prefix_kv_start = prefix_boundary_block * block_kv
+    prefix_kv_global = prefix_kv_start + kv_offsets
+    prefix_block = prefix_kv_global < prefix_length
+    prefix_blocks = jnp.broadcast_to(prefix_block[None, :, :], (q_blocks, block_q, block_kv))
+    prefix_blocks = prefix_blocks | (prefix_kv_global[None, :, :] <= q_global)
+
+    partial_mask_blocks = jnp.zeros((PARTIAL_MASK_SLOTS_PER_Q_BLOCK * q_blocks, block_q, block_kv), dtype=jnp.bool_)
+    partial_mask_blocks = partial_mask_blocks.at[CAUSAL_PARTIAL_MASK_SLOT_OFFSET::PARTIAL_MASK_SLOTS_PER_Q_BLOCK].set(
+        causal_blocks
+    )
+    partial_mask_blocks = partial_mask_blocks.at[PREFIX_PARTIAL_MASK_SLOT_OFFSET::PARTIAL_MASK_SLOTS_PER_Q_BLOCK].set(
+        prefix_blocks
+    )
+
+    return _PrefixLmMaskInfoComponents(
+        data_next=data_next,
+        mask_next=mask_next,
+        block_mask=block_mask,
+        partial_mask_blocks=partial_mask_blocks,
+    )
+
+
+class PrefixMask(splash_attention_mask.Mask):
+    """Static Splash mask that allows every query to attend to shared prefix keys.
+
+    Packed or batch-dependent prefix-LM masks use compact dynamic metadata
+    instead; this class only covers the cheap static-prefix case.
+    """
+
+    _shape: tuple[int, int]
+    prefix_length: int
+    q_sequence: np.ndarray
+
+    def __init__(self, *, shape: tuple[int, int], prefix_length: int, shard_count: int = 1):
+        if prefix_length < 0:
+            raise ValueError(f"prefix_length must be non-negative, got {prefix_length}.")
+        if prefix_length > shape[1]:
+            raise ValueError(f"prefix_length must be <= kv sequence length {shape[1]}, got {prefix_length}.")
+        q_seq_len = shape[0]
+        if q_seq_len % (shard_count * shard_count) != 0:
+            raise ValueError(
+                f"Shard count squared ({shard_count * shard_count}) must divide Q seq_len ({q_seq_len}) evenly."
+            )
+        self._shape = shape
+        self.prefix_length = prefix_length
+        self.q_sequence = np.arange(q_seq_len, dtype=np.int32)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self._shape
+
+    def __getitem__(self, idx) -> np.ndarray:
+        if len(idx) != 2:
+            raise NotImplementedError(f"Unsupported slice: {idx}")
+        q_slice, kv_slice = idx
+        if not isinstance(q_slice, slice) or not isinstance(kv_slice, slice):
+            raise NotImplementedError(f"Unsupported slice: {idx}")
+
+        q_start, q_stop, q_step = q_slice.indices(self.shape[0])
+        kv_start, kv_stop, kv_step = kv_slice.indices(self.shape[1])
+        if q_step != 1 or kv_step != 1:
+            raise NotImplementedError(f"Unsupported strided slice: {idx}")
+
+        q_size = q_stop - q_start
+        kv_ids = np.arange(kv_start, kv_stop, dtype=np.int32)
+        prefix = kv_ids < self.prefix_length
+        return np.broadcast_to(prefix[None, :], (q_size, kv_stop - kv_start))
+
+    def mask_function(self, _q_ids, kv_ids):
+        return kv_ids < self.prefix_length
+
+    def __eq__(self, other: object):
+        if not isinstance(other, type(self)):
+            return NotImplemented
+        return self.shape == other.shape and self.prefix_length == other.prefix_length
+
+    def __hash__(self):
+        return hash((type(self), self.shape, self.prefix_length))
 
 
 def lower_splash_segment_ids(

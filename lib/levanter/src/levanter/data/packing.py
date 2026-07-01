@@ -35,6 +35,11 @@ from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadc
 T = TypeVar("T", bound=PyTree)
 
 
+def _packed_causal_attention_mask(segment_ids: hax.NamedArray, *, max_segments_per_example: int) -> AttentionMask:
+    # Padding is represented as a trailing -1 segment, so partially filled packs need one extra run.
+    return AttentionMask.causal().with_segment_runs(segment_ids, max_segments=max_segments_per_example + 1)
+
+
 class SequencePacker:
     """
     Packs sequences into a single LmExample.
@@ -88,7 +93,7 @@ class SequencePacker:
             segment_ids = hax.named(segment_ids, self.Pos).astype(jnp.int32)
             loss_weight = hax.named(loss_weight, self.Pos).astype(jnp.float32)
 
-            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+            attn_mask = _packed_causal_attention_mask(segment_ids, max_segments_per_example=self.max_pack_size)
 
             return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
@@ -294,7 +299,7 @@ def greedy_pack_prompt_completions(
         tokens = hax.named(np.array(concat_ids), Pos)
         loss_weight = hax.named(np.array(concat_loss_weight), Pos)
         segment_ids = hax.named(np.array(segment_ids), Pos)
-        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        attn_mask = _packed_causal_attention_mask(segment_ids, max_segments_per_example=max_segments_per_example)
 
         out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
 

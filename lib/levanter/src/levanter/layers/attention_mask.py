@@ -5,13 +5,18 @@
 
 import warnings
 from numbers import Integral
-from typing import Optional, cast, overload
+from typing import Callable, Optional, TypeVar, cast, overload
 
 import equinox as eqx
 import haliax
 import haliax as hax
+import jax
+import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
+
+T = TypeVar("T")
+SEGMENT_RUN_AXIS_NAME = "segment_run"
 
 
 def _materialize_segment_mask(
@@ -49,6 +54,51 @@ def _materialize_sliding_window_mask(
     return (diff >= 0) & (diff < window)
 
 
+def _materialize_segment_run_prefix_mask(
+    prefix_lengths_per_segment: NamedArray,
+    segment_run_metadata: "SegmentRunMetadata",
+    QPos: Axis,
+    KPos: Axis,
+    q_slice: haliax.dslice,
+    k_slice: haliax.dslice,
+) -> NamedArray:
+    _check_prefix_lengths_per_segment_axes(prefix_lengths_per_segment, segment_run_metadata)
+    segment_axis = prefix_lengths_per_segment.axes[-1]
+    segment_lengths = segment_run_metadata.segment_lengths
+    prefix_lengths = hax.minimum(prefix_lengths_per_segment, segment_lengths)
+    segment_ends = hax.cumsum(segment_lengths, axis=segment_axis)
+    segment_starts = segment_ends - segment_lengths
+
+    active = hax.arange(segment_axis) < segment_run_metadata.num_segments.broadcast_axis(segment_axis)
+    prefix_ends = segment_starts + prefix_lengths
+    sub_k = KPos.resize(k_slice.size)
+    kv_positions = hax.arange(sub_k) + k_slice.start
+    kv_positions = kv_positions.broadcast_axis(prefix_lengths_per_segment.axes)
+    prefix_by_segment = (
+        active.broadcast_axis(sub_k)
+        & (kv_positions >= segment_starts.broadcast_axis(sub_k))
+        & (kv_positions < prefix_ends.broadcast_axis(sub_k))
+    )
+    prefix_by_key = hax.any(prefix_by_segment, axis=segment_axis)
+    sub_q = QPos.resize(q_slice.size)
+    batch_axes = prefix_lengths_per_segment.axes[:-1]
+    return prefix_by_key.broadcast_axis(sub_q).rearrange((sub_q, *batch_axes, sub_k))
+
+
+class PrefixLmMaskSpec(eqx.Module):
+    """Structured prefix-LM visibility controls."""
+
+    prefix_length: Optional[int] = eqx.field(default=None, static=True)
+    prefix_lengths: Optional[NamedArray] = None
+    prefix_lengths_per_segment: Optional[NamedArray] = None
+
+    def __post_init__(self):
+        if self.prefix_length is None and self.prefix_lengths is None and self.prefix_lengths_per_segment is None:
+            raise ValueError("PrefixLmMaskSpec requires prefix_length, prefix_lengths, or prefix_lengths_per_segment.")
+        if self.prefix_length is not None and self.prefix_length < 0:
+            raise ValueError(f"prefix_length must be non-negative, got {self.prefix_length}.")
+
+
 class AttentionMask(eqx.Module):
     """
 
@@ -63,9 +113,11 @@ class AttentionMask(eqx.Module):
     1) Materialization: An AttentionMask can be materialized for a particular slice of the query and key position axes.
        Most naively, you can just get the whole mask as a NamedArray. However, in some cases, you might want to
        only get a particular chunk (e.g. for flash attention).
-    2) Combination: AttentionMasks are represented as an implicit conjunction of multiple masks, each with different
-        kinds of structure. You can combine masks with `&` and `|`. Due to the way jit works, we don't use inheritance
-        or similar to represent different kinds of masks. Instead, we use a single class with different fields.
+    2) Combination: AttentionMasks are represented as structured mask fields, then combined by the mask's semantics.
+        Most fields restrict attention by conjunction. Prefix-LM masks first OR prefix visibility with causal/local
+        visibility, then still apply explicit and segment masks. You can combine masks with `&` and `|`. Due to the way
+        jit works, we don't use inheritance or similar to represent different kinds of masks. Instead, we use a single
+        class with different fields.
 
     In general, it should be safe to batch Attention Masks, but it is important that *all members of a batch have the
     same set of combined masks*. Otherwise, the batching will not work and you'll get weird errors
@@ -82,10 +134,9 @@ class AttentionMask(eqx.Module):
     causal_offset: None | NamedArray = None
     explicit_mask: Optional[NamedArray] = None
     segment_ids: tuple[NamedArray, NamedArray] | None = None
+    segment_run_metadata: Optional["SegmentRunMetadata"] = None
     sliding_window: Optional[int] = eqx.field(default=None, static=True)
-    # CF https://github.com/jax-ml/jax/blob/47858c4ac2fd4757a3b6fc5bb2981b71a71f00c2/jax/experimental/pallas/ops/tpu/flash_attention.py#L34
-    # TODO: add prefixlm
-    # cf https://github.com/google-research/t5x/blob/51a99bff8696c373cc03918707ada1e98cbca407/t5x/examples/decoder_only/layers.py#L978
+    prefix_lm_spec: Optional[PrefixLmMaskSpec] = None
 
     def materialize(
         self,
@@ -125,18 +176,47 @@ class AttentionMask(eqx.Module):
         else:
             causal = None
 
+        if self.sliding_window is not None:
+            sliding_window_mask = _materialize_sliding_window_mask(
+                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
+            )
+            causal = combine_masks_and(causal, sliding_window_mask)
+
+        prefix = None
+        prefix_lm = self.prefix_lm_spec
+        if prefix_lm is not None and prefix_lm.prefix_length is not None:
+            sub_k = KPos.resize(k_slice.size)
+            prefix = hax.arange(sub_k) + k_slice.start < prefix_lm.prefix_length
+            prefix = prefix.broadcast_axis(QPos.resize(q_slice.size))
+
+        if prefix_lm is not None and prefix_lm.prefix_lengths is not None:
+            sub_k = KPos.resize(k_slice.size)
+            kv_positions = hax.arange(sub_k) + k_slice.start
+            dynamic_prefix = kv_positions < prefix_lm.prefix_lengths.broadcast_axis(sub_k)
+            dynamic_prefix = dynamic_prefix.broadcast_axis(QPos.resize(q_slice.size))
+            prefix = combine_masks_or(prefix, dynamic_prefix)
+
+        if prefix_lm is not None and prefix_lm.prefix_lengths_per_segment is not None:
+            if self.segment_run_metadata is None:
+                raise ValueError("prefix_lengths_per_segment requires segment-run metadata.")
+            dynamic_prefix = _materialize_segment_run_prefix_mask(
+                prefix_lm.prefix_lengths_per_segment,
+                self.segment_run_metadata,
+                QPos,
+                KPos,
+                q_slice,
+                k_slice,
+            )
+            prefix = combine_masks_or(prefix, dynamic_prefix)
+
+        causal = combine_masks_or(causal, prefix)
+
         if self.explicit_mask is not None:
             explicit = self.explicit_mask[QPos, q_slice, KPos, k_slice]
         else:
             explicit = None
 
         mask = combine_masks_and(causal, explicit)
-
-        if self.sliding_window is not None:
-            sw_mask = _materialize_sliding_window_mask(
-                self.sliding_window, QPos, KPos, q_slice=q_slice, k_slice=k_slice
-            )
-            mask = combine_masks_and(mask, sw_mask)
 
         if self.segment_ids is not None:
             segment_mask = _materialize_segment_mask(self.segment_ids, QPos, KPos, q_slice, k_slice)
@@ -173,6 +253,37 @@ class AttentionMask(eqx.Module):
         )
 
     @staticmethod
+    def prefix_lm(
+        *,
+        prefix_length: int | None = None,
+        prefix_lengths: NamedArray | None = None,
+        prefix_lengths_per_segment: NamedArray | None = None,
+        sliding_window: Optional[int] = None,
+        segment_ids: tuple[NamedArray, NamedArray] | None = None,
+    ) -> "AttentionMask":
+        """Create a prefix-LM mask.
+
+        Keys marked as prefix pass the prefix/causal portion of the mask for every query.
+        Non-prefix keys use causal masking, optionally constrained by ``sliding_window``.
+        Segment IDs and explicit masks are still applied afterward.
+        """
+        if prefix_length is None and prefix_lengths is None and prefix_lengths_per_segment is None:
+            raise ValueError("prefix_lm requires prefix_length, prefix_lengths, or prefix_lengths_per_segment.")
+        if prefix_length is not None and prefix_length < 0:
+            raise ValueError(f"prefix_length must be non-negative, got {prefix_length}.")
+
+        return AttentionMask(
+            is_causal=True,
+            prefix_lm_spec=PrefixLmMaskSpec(
+                prefix_length=prefix_length,
+                prefix_lengths=prefix_lengths,
+                prefix_lengths_per_segment=prefix_lengths_per_segment,
+            ),
+            sliding_window=sliding_window,
+            segment_ids=segment_ids,
+        )
+
+    @staticmethod
     def explicit(mask: NamedArray) -> "AttentionMask":
         return AttentionMask(is_causal=False, causal_offset=None, explicit_mask=mask)
 
@@ -201,6 +312,52 @@ class AttentionMask(eqx.Module):
             explicit_mask=self.explicit_mask,
             segment_ids=seg_field,
             sliding_window=self.sliding_window,
+            prefix_lm_spec=self.prefix_lm_spec,
+        )
+
+    def with_segment_runs(
+        self,
+        segment_ids: NamedArray,
+        *,
+        max_segments: int,
+        kv_segment_ids: NamedArray | None = None,
+    ) -> "AttentionMask":
+        """Attach segment IDs plus fixed-shape contiguous segment-run metadata."""
+        if kv_segment_ids is not None:
+            segment_ids = _check_matching_segment_ids_for_runs(segment_ids, kv_segment_ids)
+        return self.with_segment_ids(segment_ids, kv_segment_ids)._replace_segment_run_metadata(
+            segment_run_metadata_from_segment_ids(segment_ids, max_segments=max_segments)
+        )
+
+    def _replace_segment_run_metadata(self, segment_run_metadata: "SegmentRunMetadata") -> "AttentionMask":
+        return AttentionMask(
+            is_causal=self.is_causal,
+            causal_offset=self.causal_offset,
+            explicit_mask=self.explicit_mask,
+            segment_ids=self.segment_ids,
+            segment_run_metadata=segment_run_metadata,
+            sliding_window=self.sliding_window,
+            prefix_lm_spec=self.prefix_lm_spec,
+        )
+
+    def with_prefix_lengths_per_segment(self, prefix_lengths_per_segment: NamedArray) -> "AttentionMask":
+        """Attach per-run prefix lengths for packed prefix-LM attention."""
+        if self.segment_run_metadata is None:
+            raise ValueError("with_prefix_lengths_per_segment requires segment-run metadata.")
+        _check_prefix_lengths_per_segment_axes(prefix_lengths_per_segment, self.segment_run_metadata)
+        prefix_lm = self.prefix_lm_spec
+        return AttentionMask(
+            is_causal=True,
+            causal_offset=self.causal_offset,
+            explicit_mask=self.explicit_mask,
+            segment_ids=self.segment_ids,
+            segment_run_metadata=self.segment_run_metadata,
+            sliding_window=self.sliding_window,
+            prefix_lm_spec=PrefixLmMaskSpec(
+                prefix_length=None if prefix_lm is None else prefix_lm.prefix_length,
+                prefix_lengths=None if prefix_lm is None else prefix_lm.prefix_lengths,
+                prefix_lengths_per_segment=prefix_lengths_per_segment,
+            ),
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
@@ -210,7 +367,9 @@ class AttentionMask(eqx.Module):
             causal_offset=self.causal_offset,
             explicit_mask=self.explicit_mask,
             segment_ids=self.segment_ids,
+            segment_run_metadata=self.segment_run_metadata,
             sliding_window=sliding_window,
+            prefix_lm_spec=self.prefix_lm_spec,
         )
 
     def __and__(self, other) -> "AttentionMask":
@@ -237,6 +396,8 @@ class AttentionMask(eqx.Module):
             is_causal = False
         explicit_mask = combine_masks_and(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
+        segment_run_metadata = self._segment_run_metadata_for_combination(other)
+        prefix_lm = _combine_prefix_lm_and(self.prefix_lm_spec, other.prefix_lm_spec)
         if self.sliding_window is None:
             sliding_window = other.sliding_window
         elif other.sliding_window is None:
@@ -249,7 +410,9 @@ class AttentionMask(eqx.Module):
             causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
+            segment_run_metadata=segment_run_metadata,
             sliding_window=sliding_window,
+            prefix_lm_spec=prefix_lm,
         )
 
     def __or__(self, other) -> "AttentionMask":
@@ -269,6 +432,8 @@ class AttentionMask(eqx.Module):
             causal_offset = None
         explicit_mask = combine_masks_or(self.explicit_mask, other.explicit_mask)
         segment_ids = self._check_for_same_segment_ids(other)
+        segment_run_metadata = self._segment_run_metadata_for_combination(other)
+        prefix_lm = _combine_prefix_lm_or(self.prefix_lm_spec, other.prefix_lm_spec)
         if self.sliding_window is None or other.sliding_window is None:
             sliding_window = None
         else:
@@ -278,7 +443,9 @@ class AttentionMask(eqx.Module):
             causal_offset=causal_offset,
             explicit_mask=explicit_mask,
             segment_ids=segment_ids,
+            segment_run_metadata=segment_run_metadata,
             sliding_window=sliding_window,
+            prefix_lm_spec=prefix_lm,
         )
 
     def _check_for_same_segment_ids(self, other):
@@ -308,6 +475,169 @@ class AttentionMask(eqx.Module):
         else:
             segment_ids = other_si
         return segment_ids
+
+    def _segment_run_metadata_for_combination(self, other):
+        if self.segment_run_metadata is not None:
+            return self.segment_run_metadata
+        return other.segment_run_metadata
+
+
+class SegmentRunMetadata(eqx.Module):
+    """Fixed-shape contiguous segment lengths for packed attention."""
+
+    segment_lengths: NamedArray
+    num_segments: NamedArray
+
+
+class SegmentRunArrayMetadata(eqx.Module):
+    """Raw JAX-array segment-run metadata before Haliax axes are attached."""
+
+    segment_lengths: jax.Array
+    num_segments: jax.Array
+
+
+def segment_run_metadata_from_segment_id_array(
+    segment_ids: jax.Array,
+    *,
+    max_segments: int,
+) -> SegmentRunArrayMetadata:
+    """Compute fixed-shape contiguous run lengths from a raw segment-id array.
+
+    `segment_ids` may have any batch prefix but must end in a sequence dimension.
+    Runs are detected along that final dimension and padded to `max_segments`.
+    This helper is intentionally colocated with `AttentionMask` because the
+    metadata is an optimized representation of packed segment masks.
+    """
+    if max_segments <= 0:
+        raise ValueError(f"max_segments must be positive, got {max_segments}.")
+
+    segment_ids = jnp.asarray(segment_ids)
+    if segment_ids.ndim == 0:
+        raise ValueError("segment_ids must include a sequence dimension.")
+
+    seq_len = segment_ids.shape[-1]
+    flat_segment_ids = segment_ids.reshape((-1, seq_len))
+
+    def one_row(row_segment_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
+        first = jnp.zeros((seq_len,), dtype=jnp.bool_).at[0].set(True)
+        previous = jnp.concatenate([row_segment_ids[:1], row_segment_ids[:-1]], axis=0)
+        starts = first | (row_segment_ids != previous)
+        num_segments = jnp.sum(starts, dtype=jnp.int32)
+        start_positions = jnp.nonzero(starts, size=max_segments, fill_value=seq_len)[0].astype(jnp.int32)
+        end_positions = jnp.concatenate([start_positions[1:], jnp.asarray([seq_len], dtype=jnp.int32)], axis=0)
+        lengths = jnp.maximum(end_positions - start_positions, 0)
+        lengths = jnp.where(jnp.arange(max_segments, dtype=jnp.int32) < num_segments, lengths, 0)
+        lengths = eqx.error_if(
+            lengths,
+            num_segments > max_segments,
+            "packed segment_ids contain more contiguous runs than max_segments.",
+        )
+        return lengths.astype(jnp.int32), num_segments
+
+    lengths, num_segments = jax.vmap(one_row)(flat_segment_ids)
+    out_shape = segment_ids.shape[:-1]
+    return SegmentRunArrayMetadata(
+        segment_lengths=lengths.reshape((*out_shape, max_segments)),
+        num_segments=num_segments.reshape(out_shape),
+    )
+
+
+def segment_run_metadata_from_segment_ids(segment_ids: NamedArray, *, max_segments: int) -> SegmentRunMetadata:
+    if not segment_ids.axes:
+        raise ValueError("segment_ids must include a sequence axis.")
+
+    batch_axes = segment_ids.axes[:-1]
+    segment_axis = Axis(SEGMENT_RUN_AXIS_NAME, max_segments)
+    metadata = segment_run_metadata_from_segment_id_array(segment_ids.array, max_segments=max_segments)
+    return SegmentRunMetadata(
+        segment_lengths=hax.named(metadata.segment_lengths, (*batch_axes, segment_axis)),
+        num_segments=hax.named(metadata.num_segments, batch_axes),
+    )
+
+
+def _check_matching_segment_ids_for_runs(segment_ids: NamedArray, kv_segment_ids: NamedArray) -> NamedArray:
+    if len(segment_ids.axes) != len(kv_segment_ids.axes):
+        raise ValueError(
+            "Segment-run metadata requires q/kv segment IDs with matching rank, "
+            f"got {segment_ids.axes} and {kv_segment_ids.axes}."
+        )
+    if segment_ids.axes[:-1] != kv_segment_ids.axes[:-1]:
+        raise ValueError(
+            "Segment-run metadata requires q/kv segment IDs with matching batch axes, "
+            f"got {segment_ids.axes} and {kv_segment_ids.axes}."
+        )
+    if segment_ids.axes[-1].size != kv_segment_ids.axes[-1].size:
+        raise ValueError(
+            "Segment-run metadata requires q/kv segment IDs with equal sequence lengths, "
+            f"got {segment_ids.axes[-1].size} and {kv_segment_ids.axes[-1].size}."
+        )
+
+    checked_segment_ids = eqx.error_if(
+        segment_ids.array,
+        jnp.any(segment_ids.array != kv_segment_ids.array),
+        "Segment-run metadata requires matching q/kv segment ID values.",
+    )
+    return hax.named(checked_segment_ids, segment_ids.axes)
+
+
+def _check_prefix_lengths_per_segment_axes(
+    prefix_lengths_per_segment: NamedArray,
+    segment_run_metadata: SegmentRunMetadata,
+) -> None:
+    if prefix_lengths_per_segment.axes != segment_run_metadata.segment_lengths.axes:
+        raise ValueError(
+            "prefix_lengths_per_segment axes must match segment-run lengths axes, "
+            f"got {prefix_lengths_per_segment.axes} and {segment_run_metadata.segment_lengths.axes}."
+        )
+
+
+def _combine_prefix_lm_and(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpec | None) -> PrefixLmMaskSpec | None:
+    return _combine_prefix_lm_specs(
+        left,
+        right,
+        combine_length=min,
+        combine_lengths=hax.minimum,
+    )
+
+
+def _combine_prefix_lm_or(left: PrefixLmMaskSpec | None, right: PrefixLmMaskSpec | None) -> PrefixLmMaskSpec | None:
+    return _combine_prefix_lm_specs(
+        left,
+        right,
+        combine_length=max,
+        combine_lengths=hax.maximum,
+    )
+
+
+def _combine_prefix_lm_specs(
+    left: PrefixLmMaskSpec | None,
+    right: PrefixLmMaskSpec | None,
+    *,
+    combine_length: Callable[[int, int], int],
+    combine_lengths: Callable[[NamedArray, NamedArray], NamedArray],
+) -> PrefixLmMaskSpec | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+
+    return PrefixLmMaskSpec(
+        prefix_length=_combine_optional_prefix_values(left.prefix_length, right.prefix_length, combine_length),
+        prefix_lengths=_combine_optional_prefix_values(left.prefix_lengths, right.prefix_lengths, combine_lengths),
+        prefix_lengths_per_segment=_combine_optional_prefix_values(
+            left.prefix_lengths_per_segment,
+            right.prefix_lengths_per_segment,
+            combine_lengths,
+        ),
+    )
+
+
+def _combine_optional_prefix_values(left: T | None, right: T | None, combine: Callable[[T, T], T]) -> T | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return combine(left, right)
 
 
 @overload

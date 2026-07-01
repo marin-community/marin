@@ -18,11 +18,14 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
-    SplashAttentionMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    splash_attention_mask_spec_from_fields,
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
+)
+from levanter.layers.attention_mask import (
+    segment_run_metadata_from_segment_id_array as _segment_run_metadata_from_segment_id_array,
 )
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
@@ -61,35 +64,10 @@ def thd_segment_metadata_from_segment_ids(
     *,
     max_segments: int,
 ) -> ThdSegmentMetadata:
-    if max_segments <= 0:
-        raise ValueError(f"max_segments must be positive, got {max_segments}")
-    if segment_ids.ndim == 0:
-        raise ValueError("segment_ids must include a sequence dimension.")
-
-    seq_len = segment_ids.shape[-1]
-    flat_segment_ids = jnp.reshape(segment_ids, (-1, seq_len))
-
-    def _one_row(row_segment_ids: jax.Array) -> tuple[jax.Array, jax.Array]:
-        first = jnp.zeros((seq_len,), dtype=jnp.bool_).at[0].set(True)
-        previous = jnp.concatenate([row_segment_ids[:1], row_segment_ids[:-1]], axis=0)
-        starts = first | (row_segment_ids != previous)
-        num_segments = jnp.sum(starts, dtype=jnp.int32)
-        start_positions = jnp.nonzero(starts, size=max_segments, fill_value=seq_len)[0].astype(jnp.int32)
-        end_positions = jnp.concatenate([start_positions[1:], jnp.asarray([seq_len], dtype=jnp.int32)], axis=0)
-        lengths = jnp.maximum(end_positions - start_positions, 0)
-        lengths = jnp.where(jnp.arange(max_segments, dtype=jnp.int32) < num_segments, lengths, 0)
-        lengths = eqx.error_if(
-            lengths,
-            num_segments > max_segments,
-            "packed segment_ids contain more contiguous runs than max_segments.",
-        )
-        return lengths.astype(jnp.int32), num_segments
-
-    lengths, num_segments = jax.vmap(_one_row)(flat_segment_ids)
-    out_shape = segment_ids.shape[:-1]
+    metadata = _segment_run_metadata_from_segment_id_array(segment_ids, max_segments=max_segments)
     return ThdSegmentMetadata(
-        segment_lengths=jnp.reshape(lengths, (*out_shape, max_segments)),
-        num_segments=jnp.reshape(num_segments, out_shape),
+        segment_lengths=metadata.segment_lengths,
+        num_segments=metadata.num_segments,
     )
 
 
@@ -368,7 +346,7 @@ def _tpu_splash_attention(
             if mask.sliding_window <= 0:
                 raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
 
-        mask_spec = SplashAttentionMaskSpec(
+        mask_spec = splash_attention_mask_spec_from_fields(
             is_causal=mask.is_causal,
             sliding_window=mask.sliding_window,
         )

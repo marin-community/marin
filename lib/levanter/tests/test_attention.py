@@ -3,6 +3,7 @@
 
 import math
 from contextlib import ExitStack
+from dataclasses import dataclass
 
 import equinox
 import equinox as eqx
@@ -86,6 +87,73 @@ def test_sliding_window_mask():
     diff = q_pos.broadcast_axis(KeyPos) - k_pos.broadcast_axis(Pos)
     expected = (diff >= 0) & (diff < window)
     assert hax.all(mat == expected)
+
+
+def test_prefix_lm_mask_materializes_prefix_or_causal():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    mask = AttentionMask.prefix_lm(prefix_length=3)
+
+    mat = mask.materialize(Pos, KeyPos)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    expected = (k <= q) | (k < 3)
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
+def test_prefix_lm_mask_keeps_prefix_outside_sliding_window():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    mask = AttentionMask.prefix_lm(prefix_length=2, sliding_window=3)
+
+    mat = mask.materialize(Pos, KeyPos)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    expected = (k < 2) | ((k <= q) & (k >= q - 2))
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
+def test_prefix_lm_mask_materializes_dynamic_prefix_lengths():
+    Batch = hax.Axis("batch", 2)
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    prefix_lengths = hax.named(jnp.array([2, 5], dtype=jnp.int32), Batch)
+    mask = AttentionMask.prefix_lm(prefix_lengths=prefix_lengths)
+
+    mat = mask.materialize(Pos, KeyPos).rearrange((Batch, Pos, KeyPos))
+
+    q = np.arange(Pos.size)[None, :, None]
+    k = np.arange(KeyPos.size)[None, None, :]
+    lengths = np.array([2, 5])[:, None, None]
+    expected = (k <= q) | (k < lengths)
+    np.testing.assert_array_equal(np.asarray(mat.array), expected)
+
+
+def test_prefix_lm_mask_materializes_segment_run_prefix_lengths_with_segment_ids():
+    Pos = hax.Axis("pos", 8)
+    KeyPos = Pos.alias("key_pos")
+    segment_ids = hax.named(jnp.array([0, 0, 0, 1, 1, 1, 1, 2], dtype=jnp.int32), Pos)
+    kv_segment_ids = hax.named(segment_ids.array, KeyPos)
+    structured_mask = AttentionMask.causal().with_segment_runs(
+        segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        max_segments=3,
+    )
+    assert structured_mask.segment_run_metadata is not None
+    prefix_lengths_per_segment = hax.named(
+        jnp.array([2, 1, 0], dtype=jnp.int32),
+        structured_mask.segment_run_metadata.segment_lengths.axes,
+    )
+    structured_mask = structured_mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+
+    q = np.arange(Pos.size)[:, None]
+    k = np.arange(KeyPos.size)[None, :]
+    segments = np.array([0, 0, 0, 1, 1, 1, 1, 2])
+    prefix_by_key = np.array([True, True, False, True, False, False, False, False])
+    expected = (segments[:, None] == segments[None, :]) & ((k <= q) | prefix_by_key[None, :])
+    np.testing.assert_array_equal(np.asarray(structured_mask.materialize(Pos, KeyPos).array), expected)
 
 
 def test_attention_sink():
@@ -247,7 +315,10 @@ def test_te_bin_and_group_axes_by_function():
     k = hax.zeros((B, KPos, H, D))
     v = hax.zeros((B, KPos, H, D))
 
-    q_c, k_c, v_c = _bin_and_group_axes_by_function(q, k, v, "QPos", "KPos", "D")
+    axis_bins = _bin_and_group_axes_by_function(q, k, v, "QPos", "KPos", "D")
+    q_c = axis_bins.q
+    k_c = axis_bins.k
+    v_c = axis_bins.v
     assert q_c["B"] == [B]
     assert k_c["B"] == [B]
     assert v_c["B"] == [B]
@@ -353,7 +424,10 @@ def test_mqa_te_bin_and_group_axes_by_function():
     k = hax.zeros((B, KPos, D))
     v = hax.zeros((B, KPos, D))
 
-    q_c, k_c, v_c = _bin_and_group_axes_by_function(gq, k, v, "QPos", "KPos", "D")
+    axis_bins = _bin_and_group_axes_by_function(gq, k, v, "QPos", "KPos", "D")
+    q_c = axis_bins.q
+    k_c = axis_bins.k
+    v_c = axis_bins.v
     assert q_c["H"] == [G]
     assert k_c["H"] == []
     assert v_c["H"] == []
@@ -519,6 +593,186 @@ def test_tpu_splash_attention_sliding_window():
         hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
         assert hax_out.axes == flash_out.axes
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def _assert_tpu_splash_matches_reference(QPos, KPos, Key, q, k, v, mask, block_size):
+    flash_out = _tpu_splash_attention(
+        QPos,
+        KPos,
+        Key,
+        q,
+        k,
+        v,
+        inference=True,
+        mask=mask,
+        block_size=block_size,
+        scaling_factor=1 / math.sqrt(Key.size),
+    )
+    hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
+    assert hax_out.axes == flash_out.axes
+    assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+@dataclass(frozen=True)
+class _TpuSplashMaskCase:
+    batch: Axis
+    head: Axis
+    key: Axis
+    q_pos: Axis
+    k_pos: Axis
+    block_size: int
+
+
+@dataclass(frozen=True)
+class _TpuSplashSegmentIds:
+    q: hax.NamedArray
+    kv: hax.NamedArray
+
+
+TPU_SPLASH_TEST_INPUT_SCALE = 0.02
+
+
+def _tpu_splash_mask_case() -> _TpuSplashMaskCase:
+    block_size = 256
+    return _TpuSplashMaskCase(
+        batch=hax.Axis("Batch", 2),
+        head=hax.Axis("Head", 8),
+        key=hax.Axis("Key", 128),
+        q_pos=hax.Axis("QPos", block_size * 2),
+        k_pos=hax.Axis("KPos", block_size * 2),
+        block_size=block_size,
+    )
+
+
+def _packed_segment_ids_for_splash_case(case: _TpuSplashMaskCase) -> _TpuSplashSegmentIds:
+    segment_ids = jnp.stack(
+        [
+            jnp.array([0] * case.block_size + [1] * case.block_size, dtype=jnp.int32),
+            jnp.array([2] * 128 + [3] * (case.block_size * 2 - 128), dtype=jnp.int32),
+        ]
+    )
+    return _TpuSplashSegmentIds(
+        q=hax.named(segment_ids, (case.batch, case.q_pos)),
+        kv=hax.named(segment_ids, (case.batch, case.k_pos)),
+    )
+
+
+def _run_batched_tpu_splash_mask_case(mask: AttentionMask, case: _TpuSplashMaskCase, seed: int):
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(seed), (case.batch, case.q_pos, case.head, case.key))
+        k = hax.random.normal(jrandom.PRNGKey(seed + 1), (case.batch, case.k_pos, case.head, case.key))
+        v = hax.random.normal(jrandom.PRNGKey(seed + 2), (case.batch, case.k_pos, case.head, case.key))
+        q = q * TPU_SPLASH_TEST_INPUT_SCALE
+        k = k * TPU_SPLASH_TEST_INPUT_SCALE
+        v = v * TPU_SPLASH_TEST_INPUT_SCALE
+        _assert_tpu_splash_matches_reference(case.q_pos, case.k_pos, case.key, q, k, v, mask, case.block_size)
+
+
+def _dynamic_prefix_lm_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    prefix_lengths = hax.named(jnp.array([0, 300], dtype=jnp.int32), case.batch)
+    return AttentionMask.prefix_lm(prefix_lengths=prefix_lengths)
+
+
+def _dynamic_prefix_lm_with_segment_ids_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    prefix_lengths = hax.named(jnp.array([128, 300], dtype=jnp.int32), case.batch)
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    return AttentionMask.prefix_lm(
+        prefix_lengths=prefix_lengths,
+        segment_ids=(segment_ids.q, segment_ids.kv),
+    )
+
+
+def _packed_prefix_lm_with_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    mask = AttentionMask.causal().with_segment_runs(
+        segment_ids.q,
+        kv_segment_ids=segment_ids.kv,
+        max_segments=2,
+    )
+    assert mask.segment_run_metadata is not None
+    prefix_lengths_per_segment = hax.named(
+        jnp.array([[64, 96], [96, 64]], dtype=jnp.int32),
+        mask.segment_run_metadata.segment_lengths.axes,
+    )
+    return mask.with_prefix_lengths_per_segment(prefix_lengths_per_segment)
+
+
+def _packed_causal_segment_ids_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    return AttentionMask.causal(segment_ids=(segment_ids.q, segment_ids.kv))
+
+
+def _packed_causal_segment_runs_mask(case: _TpuSplashMaskCase) -> AttentionMask:
+    segment_ids = _packed_segment_ids_for_splash_case(case)
+    return AttentionMask.causal().with_segment_runs(
+        segment_ids.q,
+        kv_segment_ids=segment_ids.kv,
+        max_segments=2,
+    )
+
+
+def _run_tpu_splash_attention_batched_mask(build_mask, *, seed: int):
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    case = _tpu_splash_mask_case()
+    _run_batched_tpu_splash_mask_case(build_mask(case), case, seed=seed)
+
+
+def test_tpu_splash_attention_dynamic_prefix_lm_mask():
+    _run_tpu_splash_attention_batched_mask(_dynamic_prefix_lm_mask, seed=10)
+
+
+def test_tpu_splash_attention_dynamic_prefix_lm_segment_ids_mask():
+    _run_tpu_splash_attention_batched_mask(_dynamic_prefix_lm_with_segment_ids_mask, seed=20)
+
+
+def test_tpu_splash_attention_packed_prefix_lm_segment_runs_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_prefix_lm_with_segment_runs_mask, seed=24)
+
+
+def test_tpu_splash_attention_packed_causal_segment_ids_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_causal_segment_ids_mask, seed=26)
+
+
+def test_tpu_splash_attention_packed_causal_segment_runs_mask():
+    _run_tpu_splash_attention_batched_mask(_packed_causal_segment_runs_mask, seed=28)
+
+
+def test_attention_mask_segment_runs_match_segment_ids():
+    batch = hax.Axis("Batch", 2)
+    pos = hax.Axis("Pos", 8)
+    key_pos = pos.alias("KeyPos")
+    segment_ids_array = jnp.array(
+        [
+            [0, 0, 1, 1, 2, 2, 2, 2],
+            [3, 3, 3, 4, 4, 5, 5, 5],
+        ],
+        dtype=jnp.int32,
+    )
+    q_segment_ids = hax.named(segment_ids_array, (batch, pos))
+    kv_segment_ids = hax.named(segment_ids_array, (batch, key_pos))
+
+    segment_run_mask = AttentionMask.causal().with_segment_runs(
+        q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        max_segments=4,
+    )
+    segment_id_mask = AttentionMask.causal(segment_ids=(q_segment_ids, kv_segment_ids))
+
+    metadata = segment_run_mask.segment_run_metadata
+    assert metadata is not None
+    assert metadata.segment_lengths.axes == (batch, hax.Axis("segment_run", 4))
+    assert metadata.num_segments.axes == (batch,)
+    assert_trees_all_close(
+        metadata.segment_lengths.array,
+        jnp.array([[2, 2, 4, 0], [3, 2, 3, 0]], dtype=jnp.int32),
+    )
+    assert_trees_all_close(metadata.num_segments.array, jnp.array([3, 3], dtype=jnp.int32))
+    assert_trees_all_close(
+        segment_run_mask.materialize(pos, key_pos).array,
+        segment_id_mask.materialize(pos, key_pos).array,
+    )
 
 
 @pytest.mark.parametrize("impl", ["default", "jax_flash", "vanilla"])

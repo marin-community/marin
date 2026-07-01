@@ -8,20 +8,26 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, TypedDict, Union
 
 import equinox as eqx
 import jax
 import jax.random as jrandom
 from jax import numpy as jnp
-from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 
 from levanter.kernels.pallas.splash_attention import (
     DEFAULT_SPLASH_BLOCK_SIZE,
+    SPLASH_BLOCK_GRANULARITY,
     SplashAttentionMaskSpec,
-    lower_splash_attention_mask,
+    SplashKernelContext,
+    SplashKernelPlan,
+    SplashPrefixControls,
+    SplashSegmentRunControls,
+    SplashSegmentIdsLowering,
     lower_splash_segment_ids,
+    prepare_splash_kernel_plan,
     splash_attention_block_sizes,
+    splash_attention_mask_spec_from_fields,
     splash_partition_spec_shard_factor,
 )
 from levanter.inference.utils import is_valid
@@ -42,7 +48,7 @@ from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis, shard_map
 from haliax.types import PrecisionLike
-from jax.sharding import PartitionSpec
+from jax.sharding import Mesh, PartitionSpec
 from jaxtyping import PRNGKeyArray
 
 try:
@@ -70,6 +76,8 @@ class AttentionBackend(StrEnum):
 
 
 _SPLASH_FALLBACK_WARNINGS_EMITTED: set[str] = set()
+SPLASH_BATCH_AXIS_NAME = "splash_batch"
+SPLASH_HEAD_AXIS_NAME = "splash_head"
 
 
 def _warn_splash_fallback_once(message: str) -> None:
@@ -549,7 +557,10 @@ def _te_flash_attention(
     # references: https://github.com/NVIDIA/TransformerEngine/blob/8255f87f3ee8076db21777795ce15b6ddf8754c0/transformer_engine/jax/fused_attn.py#L31
     # https://github.com/NVIDIA/TransformerEngine/blob/8255f87f3ee8076db21777795ce15b6ddf8754c0/transformer_engine/jax/flax/transformer.py#L269
 
-    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    axis_bins = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_class = axis_bins.q
+    k_class = axis_bins.k
+    v_class = axis_bins.v
     q_: jax.Array = _reshape_axes_for_bshd_bins(query, q_class).array
     k_ = _reshape_axes_for_bshd_bins(key, k_class).array
     v_ = _reshape_axes_for_bshd_bins(value, v_class).array
@@ -681,7 +692,21 @@ _DUMMY_HEAD = "__head__"
 _DUMMY_BATCH = "__batch__"
 
 
-def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
+class _AxisBins(TypedDict):
+    B: list[Axis]
+    S: list[Axis]
+    H: list[Axis]
+    D: list[Axis]
+
+
+@dataclass(frozen=True)
+class _QkvAxisBins:
+    q: _AxisBins
+    k: _AxisBins
+    v: _AxisBins
+
+
+def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key) -> _QkvAxisBins:
     """
     NVTE and the Splash Attention kernel require the Q, K, and V to be in a specific format. This function groups the axes
     of Q, K, and V into the right bins to match that format.
@@ -708,9 +733,9 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     KPos = k.resolve_axis(KPos)
     Key = q.resolve_axis(Key)
 
-    q_class = {"B": [], "S": [QPos], "H": [], "D": [Key]}
-    k_class = {"B": [], "S": [KPos], "H": [], "D": [Key]}
-    v_class = {"B": [], "S": [KPos], "H": [], "D": [Key]}
+    q_class: _AxisBins = {"B": [], "S": [QPos], "H": [], "D": [Key]}
+    k_class: _AxisBins = {"B": [], "S": [KPos], "H": [], "D": [Key]}
+    v_class: _AxisBins = {"B": [], "S": [KPos], "H": [], "D": [Key]}
 
     present_in_all: set[str] = q.shape.keys() & k.shape.keys() & v.shape.keys()
     spoken_for: set[str] = {QPos.name, KPos.name, Key.name}
@@ -759,7 +784,7 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
         if a.name not in spoken_for:
             raise ValueError(f"Axis {a.name} is present in v but not in q and/or k")
 
-    return q_class, k_class, v_class
+    return _QkvAxisBins(q=q_class, k=k_class, v=v_class)
 
 
 def _maybe_flatten(q, axes, name):
@@ -807,21 +832,257 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
             sink_axis_names.add(ax.name)
 
     if batch_axes:
-        sink = _maybe_flatten(sink, batch_axes, "splash_batch")
+        sink = _maybe_flatten(sink, batch_axes, SPLASH_BATCH_AXIS_NAME)
     else:
-        sink = _maybe_flatten(sink, (), "splash_batch")
+        sink = _maybe_flatten(sink, (), SPLASH_BATCH_AXIS_NAME)
 
     if head_axes:
-        sink = _maybe_flatten(sink, head_axes, "splash_head")
+        sink = _maybe_flatten(sink, head_axes, SPLASH_HEAD_AXIS_NAME)
     else:
-        sink = _maybe_flatten(sink, (), "splash_head")
+        sink = _maybe_flatten(sink, (), SPLASH_HEAD_AXIS_NAME)
 
-    sink = sink.rearrange(("splash_batch", "splash_head"))
+    sink = sink.rearrange((SPLASH_BATCH_AXIS_NAME, SPLASH_HEAD_AXIS_NAME))
 
     sinks_array = sink.astype(jnp.float32).array  # also cast to fp32 inside splash
     physical_axes_sink = PartitionSpec(physical_axes_q[0], physical_axes_q[1])
 
     return sinks_array, physical_axes_sink
+
+
+def _prepare_prefix_lengths_for_splash(prefix_lengths: NamedArray, q_class, physical_axes_q: PartitionSpec):
+    batch_axes = tuple(q_class["B"])
+    lengths = _prepare_splash_batch_value(
+        prefix_lengths,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes},
+        value_name="Prefix lengths",
+    )
+    lengths = lengths.rearrange((SPLASH_BATCH_AXIS_NAME,))
+    return lengths.astype(jnp.int32).array, PartitionSpec(physical_axes_q[0])
+
+
+def _prepare_splash_batch_value(
+    value: NamedArray,
+    *,
+    batch_axes: tuple[Axis, ...],
+    allowed_axis_names: set[str],
+    value_name: str,
+) -> NamedArray:
+    extra_axes = tuple(ax for ax in value.axes if ax.name not in allowed_axis_names)
+    if extra_axes:
+        raise NotImplementedError(
+            f"{value_name} contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
+
+    axis_names = {ax.name for ax in value.axes}
+    for ax in batch_axes:
+        if ax.name not in axis_names:
+            value = value.broadcast_axis(ax)
+            axis_names.add(ax.name)
+
+    if batch_axes:
+        return _maybe_flatten(value, batch_axes, SPLASH_BATCH_AXIS_NAME)
+    return _maybe_flatten(value, (), SPLASH_BATCH_AXIS_NAME)
+
+
+@dataclass(frozen=True)
+class _SplashPreparedLayout:
+    q: jax.Array
+    k: jax.Array
+    v: jax.Array
+    q_class: _AxisBins
+    k_class: _AxisBins
+    v_class: _AxisBins
+    QPos: Axis
+    KPos: Axis
+    batch: int
+    heads: int
+    q_seq_len: int
+    kv_seq_len: int
+    physical_axes_q: PartitionSpec
+    physical_axes_k: PartitionSpec
+    physical_axes_v: PartitionSpec
+
+
+@dataclass(frozen=True)
+class _SplashInvocationPlan:
+    mesh: Mesh
+    kernel_plan: SplashKernelPlan
+    sinks: jax.Array | None
+    physical_axes_sink: PartitionSpec | None
+
+
+def _flatten_partition_spec_entries(entries):
+    if entries is None:
+        return entries
+    result = []
+    for entry in entries:
+        if isinstance(entry, tuple):
+            result += list(entry)
+        else:
+            result.append(entry)
+    return tuple(result)
+
+
+def _physical_axis_for_binning(axis_groups):
+    b_out = _flatten_partition_spec_entries(
+        tuple(ax for ax in pspec_for_axis(axis_groups["B"]) if ax is not None) or None
+    )
+    h_out = _flatten_partition_spec_entries(
+        tuple(ax for ax in pspec_for_axis(axis_groups["H"]) if ax is not None) or None
+    )
+    s_out = _flatten_partition_spec_entries(
+        tuple(ax for ax in pspec_for_axis(axis_groups["S"]) if ax is not None) or None
+    )
+    d_out = _flatten_partition_spec_entries(
+        tuple(ax for ax in pspec_for_axis(axis_groups["D"]) if ax is not None) or None
+    )
+    return PartitionSpec(b_out, h_out, s_out, d_out)
+
+
+def _prepare_splash_prefix_controls(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    q_class,
+    physical_axes_q: PartitionSpec,
+) -> SplashPrefixControls:
+    prefix_lengths = None
+    physical_axes_prefix_lengths = None
+    prefix_lengths_per_segment = None
+    physical_axes_prefix_lengths_per_segment = None
+
+    prefix_lm = mask.prefix_lm_spec if isinstance(mask, AttentionMask) else None
+    if prefix_lm is not None and prefix_lm.prefix_lengths_per_segment is not None:
+        if prefix_lm.prefix_length is not None or prefix_lm.prefix_lengths is not None:
+            raise NotImplementedError(
+                "Splash attention does not support prefix_lengths_per_segment combined with other prefix controls."
+            )
+        if mask.sliding_window is not None:
+            raise NotImplementedError(
+                "Splash attention does not support prefix_lengths_per_segment with sliding windows."
+            )
+        if mask.segment_run_metadata is None:
+            raise ValueError("prefix_lengths_per_segment requires segment-run metadata for Splash attention.")
+
+        batch_axes = tuple(q_class["B"])
+        segment_run_axis = prefix_lm.prefix_lengths_per_segment.axes[-1]
+        prefix_lengths_per_segment = _prepare_splash_batch_value(
+            prefix_lm.prefix_lengths_per_segment,
+            batch_axes=batch_axes,
+            allowed_axis_names={ax.name for ax in batch_axes + (segment_run_axis,)},
+            value_name="Per-segment prefix lengths",
+        )
+        prefix_lengths_per_segment = prefix_lengths_per_segment.rearrange(
+            (SPLASH_BATCH_AXIS_NAME, segment_run_axis.name)
+        )
+        prefix_lengths_per_segment = prefix_lengths_per_segment.astype(jnp.int32).array
+        physical_axes_prefix_lengths_per_segment = PartitionSpec(physical_axes_q[0], None)
+
+    if prefix_lm is not None and prefix_lm.prefix_lengths is not None:
+        if mask.sliding_window is not None:
+            raise NotImplementedError("Splash attention does not support dynamic prefix lengths with sliding windows.")
+        prefix_lengths, physical_axes_prefix_lengths = _prepare_prefix_lengths_for_splash(
+            prefix_lm.prefix_lengths, q_class, physical_axes_q
+        )
+        if prefix_lm.prefix_length is not None:
+            prefix_lengths = jnp.maximum(prefix_lengths, prefix_lm.prefix_length)
+
+    return SplashPrefixControls(
+        prefix_lengths=prefix_lengths,
+        physical_axes_prefix_lengths=physical_axes_prefix_lengths,
+        prefix_lengths_per_segment=prefix_lengths_per_segment,
+        physical_axes_prefix_lengths_per_segment=physical_axes_prefix_lengths_per_segment,
+    )
+
+
+def _prepare_splash_segment_run_controls(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    q_class,
+    physical_axes_q: PartitionSpec,
+) -> SplashSegmentRunControls:
+    if not isinstance(mask, AttentionMask) or mask.segment_run_metadata is None:
+        return SplashSegmentRunControls(
+            segment_lengths=None,
+            physical_axes_segment_lengths=None,
+            num_segments=None,
+        )
+
+    batch_axes = tuple(q_class["B"])
+    segment_lengths = mask.segment_run_metadata.segment_lengths
+    if not segment_lengths.axes:
+        raise ValueError("segment_run_metadata.segment_lengths must include a segment-run axis.")
+
+    segment_run_axis = segment_lengths.axes[-1]
+    segment_lengths = _prepare_splash_batch_value(
+        segment_lengths,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes + (segment_run_axis,)},
+        value_name="Segment-run lengths",
+    )
+    segment_lengths = segment_lengths.rearrange((SPLASH_BATCH_AXIS_NAME, segment_run_axis.name))
+
+    num_segments = _prepare_splash_batch_value(
+        mask.segment_run_metadata.num_segments,
+        batch_axes=batch_axes,
+        allowed_axis_names={ax.name for ax in batch_axes},
+        value_name="Segment-run counts",
+    )
+    num_segments = num_segments.rearrange((SPLASH_BATCH_AXIS_NAME,))
+
+    return SplashSegmentRunControls(
+        segment_lengths=segment_lengths.astype(jnp.int32).array,
+        physical_axes_segment_lengths=PartitionSpec(physical_axes_q[0], None),
+        num_segments=num_segments.astype(jnp.int32).array,
+    )
+
+
+def _lower_splash_attention_segment_ids(
+    *,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    QPos: Axis,
+    KPos: Axis,
+) -> SplashSegmentIdsLowering:
+    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+    if segment_ids is None:
+        return lower_splash_segment_ids()
+
+    q_segment_ids, kv_segment_ids = segment_ids
+    kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})
+
+    q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
+    kv_segment_batch_axis = _find_batch_axis_for_segment_ids(KPos, kv_segment_ids)
+
+    return lower_splash_segment_ids(
+        q_segment_ids=q_segment_ids.array,
+        kv_segment_ids=kv_segment_ids.array,
+        q_segment_ids_axes=pspec_for_axis(q_segment_ids.axes),
+        kv_segment_ids_axes=pspec_for_axis(kv_segment_ids.axes),
+        q_segment_batch_axis=q_segment_batch_axis,
+        kv_segment_batch_axis=kv_segment_batch_axis,
+    )
+
+
+def _splash_attention_mask_spec_from_mask(
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+) -> SplashAttentionMaskSpec | None:
+    if mask is None:
+        return None
+    if isinstance(mask, NamedArray):
+        raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
+    if not isinstance(mask, AttentionMask):
+        raise ValueError(f"Unknown mask type: {mask}")
+
+    prefix_lm = mask.prefix_lm_spec
+    return splash_attention_mask_spec_from_fields(
+        is_causal=mask.is_causal,
+        causal_offset=mask.causal_offset,
+        sliding_window=mask.sliding_window,
+        prefix_length=None if prefix_lm is None else prefix_lm.prefix_length,
+        prefix_lengths=None if prefix_lm is None else prefix_lm.prefix_lengths,
+        prefix_lengths_per_segment=None if prefix_lm is None else prefix_lm.prefix_lengths_per_segment,
+        explicit_mask=mask.explicit_mask,
+    )
 
 
 def _unflatten_bshd(attn_output, q_class, v_class):
@@ -830,6 +1091,143 @@ def _unflatten_bshd(attn_output, q_class, v_class):
     attn_output = attn_output.unflatten_axis("H", q_class["H"])
     attn_output = attn_output.unflatten_axis("D", v_class["D"])
     return attn_output
+
+
+def _prepare_splash_layout(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    *,
+    scaling_factor: float,
+    block_size: int | None,
+) -> _SplashPreparedLayout:
+    axis_bins = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+    q_class = axis_bins.q
+    k_class = axis_bins.k
+    v_class = axis_bins.v
+    query = query * scaling_factor
+
+    q: jax.Array = _reshape_axes_for_bshd_bins(query, q_class, output_order=list("BHSD")).array
+    k = _reshape_axes_for_bshd_bins(key, k_class, output_order=list("BHSD")).array
+    v = _reshape_axes_for_bshd_bins(value, v_class, output_order=list("BHSD")).array
+
+    batch, heads, q_seq_len, dim = q.shape
+    key_batch, _, kv_seq_len, key_dim = k.shape
+
+    if kv_seq_len % SPLASH_BLOCK_GRANULARITY != 0:
+        raise NotImplementedError(f"Splash attention requires KPos to be a multiple of {SPLASH_BLOCK_GRANULARITY}")
+    if block_size is not None and block_size % SPLASH_BLOCK_GRANULARITY != 0:
+        raise NotImplementedError(
+            f"Splash attention requires block_size to be a multiple of {SPLASH_BLOCK_GRANULARITY}, got {block_size}"
+        )
+
+    QPos = query.resolve_axis(QPos)
+    KPos = key.resolve_axis(KPos)
+
+    if k.shape != v.shape:
+        raise ValueError("k and v must have the same axes")
+    if batch != key_batch:
+        raise ValueError(f"Batch axes must be the same for q, k, and v: {q_class['B']} != {k_class['B']}")
+    if dim != key_dim:
+        raise ValueError(f"Embedding axes must be the same for q, k, and v: {q_class['D']} != {k_class['D']}")
+
+    return _SplashPreparedLayout(
+        q=q,
+        k=k,
+        v=v,
+        q_class=q_class,
+        k_class=k_class,
+        v_class=v_class,
+        QPos=QPos,
+        KPos=KPos,
+        batch=batch,
+        heads=heads,
+        q_seq_len=q_seq_len,
+        kv_seq_len=kv_seq_len,
+        physical_axes_q=_physical_axis_for_binning(q_class),
+        physical_axes_k=_physical_axis_for_binning(k_class),
+        physical_axes_v=_physical_axis_for_binning(v_class),
+    )
+
+
+def _prepare_splash_invocation_plan(
+    *,
+    layout: _SplashPreparedLayout,
+    mask: Optional[Union[NamedArray, "AttentionMask"]],
+    block_size: int,
+    logits_soft_cap: float | None,
+    attn_sink: Optional[NamedArray],
+) -> _SplashInvocationPlan:
+    if attn_sink is not None and not _SPLASH_KERNEL_SUPPORTS_SINKS:
+        raise NotImplementedError(
+            "Attention sinks are not supported by the installed Splash kernel. Update JAX to >= 0.7.2."
+        )
+
+    if attn_sink is not None:
+        sinks, physical_axes_sink = _prepare_sinks_for_splash(attn_sink, layout.q_class, layout.physical_axes_q)
+    else:
+        sinks = None
+        physical_axes_sink = None
+
+    prefix_controls = _prepare_splash_prefix_controls(
+        mask=mask,
+        q_class=layout.q_class,
+        physical_axes_q=layout.physical_axes_q,
+    )
+    segment_id_lowering = _lower_splash_attention_segment_ids(mask=mask, QPos=layout.QPos, KPos=layout.KPos)
+    segment_run_controls = _prepare_splash_segment_run_controls(
+        mask=mask,
+        q_class=layout.q_class,
+        physical_axes_q=layout.physical_axes_q,
+    )
+
+    mesh = hax.partitioning._get_mesh()
+    if mesh is None or mesh.empty:
+        raise NotImplementedError("Splash attention requires a non-empty mesh")
+    head_shards = splash_partition_spec_shard_factor(layout.physical_axes_q[1], mesh)
+    q_seq_shards = splash_partition_spec_shard_factor(layout.physical_axes_q[2], mesh)
+    kv_seq_shards = splash_partition_spec_shard_factor(layout.physical_axes_k[2], mesh)
+
+    if layout.physical_axes_k[2] is not None:
+        raise NotImplementedError(
+            "Splash attention does not support sharding the KV sequence dimension. "
+            f"Got KV sequence spec: {layout.physical_axes_k[2]}"
+        )
+
+    block_sizes = splash_attention_block_sizes(
+        q_seq_len=layout.q_seq_len,
+        kv_seq_len=layout.kv_seq_len,
+        q_seq_shards=q_seq_shards,
+        kv_seq_shards=kv_seq_shards,
+        max_block_size=block_size,
+    )
+    kernel_context = SplashKernelContext(
+        q_seq_len=layout.q_seq_len,
+        kv_seq_len=layout.kv_seq_len,
+        num_heads=layout.heads,
+        block_sizes=block_sizes,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        physical_axes_q=layout.physical_axes_q,
+        logits_soft_cap=logits_soft_cap,
+    )
+
+    return _SplashInvocationPlan(
+        mesh=mesh,
+        kernel_plan=prepare_splash_kernel_plan(
+            mask=_splash_attention_mask_spec_from_mask(mask),
+            prefix_controls=prefix_controls,
+            segment_run_controls=segment_run_controls,
+            segment_id_lowering=segment_id_lowering,
+            context=kernel_context,
+            mesh=mesh,
+        ),
+        sinks=sinks,
+        physical_axes_sink=physical_axes_sink,
+    )
 
 
 def _try_tpu_splash_attention(
@@ -938,168 +1336,131 @@ def _tpu_splash_attention(
 
     # attention_dtype = jnp.float32
 
-    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
-
-    query = query * scaling_factor
-
-    q_: jax.Array = _reshape_axes_for_bshd_bins(query, q_class, output_order=list("BHSD")).array
-    k_ = _reshape_axes_for_bshd_bins(key, k_class, output_order=list("BHSD")).array
-    v_ = _reshape_axes_for_bshd_bins(value, v_class, output_order=list("BHSD")).array
-
-    B, Hq, Sq, D = q_.shape
-    Bk, Hk, Sk, Dk = k_.shape
-
-    # number
-    if Sk % 128 != 0:
-        raise NotImplementedError("Splash attention requires KPos to be a multiple of 128")
-
-    if block_size is not None and block_size % 128 != 0:
-        raise NotImplementedError(f"Splash attention requires block_size to be a multiple of 128, got {block_size}")
-
-    QPos = query.resolve_axis(QPos)
-    KPos = key.resolve_axis(KPos)
-
-    # TODO: must Dk == Dv?
-    if k_.shape != v_.shape:
-        raise ValueError("k and v must have the same axes")
-
-    # TODO: this isn't really necessary on TPU?
-    if B != Bk:
-        raise ValueError(f"Batch axes must be the same for q, k, and v: {q_class['B']} != {k_class['B']}")
-
-    if D != Dk:
-        raise ValueError(f"Embedding axes must be the same for q, k, and v: {q_class['D']} != {k_class['D']}")
-
-    def _physical_axis_for_binning(d):
-        def flatten(axes):
-            if axes is None:
-                return axes
-            result = []
-            for ax in axes:
-                if isinstance(ax, tuple):
-                    result += list(ax)
-                else:
-                    result.append(ax)
-            return tuple(result)
-
-        b_out = flatten(tuple(ax for ax in pspec_for_axis(d["B"]) if ax is not None) or None)
-        h_out = flatten(tuple(ax for ax in pspec_for_axis(d["H"]) if ax is not None) or None)
-        s_out = flatten(tuple(ax for ax in pspec_for_axis(d["S"]) if ax is not None) or None)
-        d_out = flatten(tuple(ax for ax in pspec_for_axis(d["D"]) if ax is not None) or None)
-
-        return PartitionSpec(b_out, h_out, s_out, d_out)
-
-    # BHSD
-    physical_axes_q = _physical_axis_for_binning(q_class)
-    physical_axes_k = _physical_axis_for_binning(k_class)
-    physical_axes_v = _physical_axis_for_binning(v_class)
-
-    if attn_sink is not None and not _SPLASH_KERNEL_SUPPORTS_SINKS:
-        raise NotImplementedError(
-            "Attention sinks are not supported by the installed Splash kernel. Update JAX to >= 0.7.2."
-        )
-
-    if attn_sink is not None:
-        sinks, physical_axes_sink = _prepare_sinks_for_splash(attn_sink, q_class, physical_axes_q)
-    else:
-        sinks = None
-        physical_axes_sink = None
-
-    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-    # do we have a batch axis in segment_ids? (needed for vmap below)
-
-    if segment_ids is not None:
-        q_segment_ids, kv_segment_ids = segment_ids
-        kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})
-
-        q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
-        kv_segment_batch_axis = _find_batch_axis_for_segment_ids(KPos, kv_segment_ids)
-
-        segment_id_lowering = lower_splash_segment_ids(
-            q_segment_ids=q_segment_ids.array,
-            kv_segment_ids=kv_segment_ids.array,
-            q_segment_ids_axes=pspec_for_axis(q_segment_ids.axes),
-            kv_segment_ids_axes=pspec_for_axis(kv_segment_ids.axes),
-            q_segment_batch_axis=q_segment_batch_axis,
-            kv_segment_batch_axis=kv_segment_batch_axis,
-        )
-    else:
-        segment_id_lowering = lower_splash_segment_ids()
-
-    # MaxText uses a block size of 512
-    block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
-
-    # Compute sharding factors from the mesh (OUTSIDE shard_map)
-    mesh = hax.partitioning._get_mesh()
-    if mesh is None or mesh.empty:
-        raise NotImplementedError("Splash attention requires a non-empty mesh")
-    head_shards = splash_partition_spec_shard_factor(physical_axes_q[1], mesh)
-    q_seq_shards = splash_partition_spec_shard_factor(physical_axes_q[2], mesh)
-    kv_seq_shards = splash_partition_spec_shard_factor(physical_axes_k[2], mesh)
-
-    # K should not be sharded for splash attention
-    if physical_axes_k[2] is not None:
-        raise NotImplementedError(
-            "Splash attention does not support sharding the KV sequence dimension. "
-            f"Got KV sequence spec: {physical_axes_k[2]}"
-        )
-
-    block_sizes = splash_attention_block_sizes(
-        q_seq_len=Sq,
-        kv_seq_len=Sk,
-        q_seq_shards=q_seq_shards,
-        kv_seq_shards=kv_seq_shards,
-        max_block_size=block_size,
+    layout = _prepare_splash_layout(
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        scaling_factor=scaling_factor,
+        block_size=block_size,
+    )
+    invocation = _prepare_splash_invocation_plan(
+        layout=layout,
+        mask=mask,
+        block_size=block_size or DEFAULT_SPLASH_BLOCK_SIZE,
+        logits_soft_cap=logits_soft_cap,
+        attn_sink=attn_sink,
+    )
+    return _run_prepared_tpu_splash_attention(
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        mask=mask,
+        bias=bias,
+        dropout=dropout,
+        inference=inference,
+        prng=prng,
+        attention_dtype=attention_dtype,
+        precision=precision,
+        scaling_factor=scaling_factor,
+        layout=layout,
+        invocation=invocation,
     )
 
-    # Create mask with GLOBAL shapes (outside shard_map)
-    if mask is None:
-        mask_spec = None
-    elif isinstance(mask, AttentionMask):
-        mask_spec = SplashAttentionMaskSpec(
-            is_causal=mask.is_causal,
-            causal_offset=mask.causal_offset,
-            sliding_window=mask.sliding_window,
-            has_explicit_mask=mask.explicit_mask is not None,
-        )
-    elif isinstance(mask, NamedArray):
-        raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
-    else:
-        raise ValueError(f"Unknown mask type: {mask}")
 
-    mask_lowering = lower_splash_attention_mask(
-        mask=mask_spec,
-        q_seq_len=Sq,
-        kv_seq_len=Sk,
-        num_heads=Hq,
-        q_seq_shards=q_seq_shards,
+def _run_prepared_tpu_splash_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    scaling_factor: float,
+    layout: _SplashPreparedLayout,
+    invocation: _SplashInvocationPlan,
+) -> NamedArray:
+    """Run Splash Attention with a precomputed mask/kernel invocation plan."""
+    if dropout != 0.0:
+        raise NotImplementedError("Splash attention does not support dropout")
+
+    if bias is not None:
+        raise NotImplementedError("Splash attention does not support bias")
+
+    scaled_query = query * scaling_factor
+    q: jax.Array = _reshape_axes_for_bshd_bins(scaled_query, layout.q_class, output_order=list("BHSD")).array
+    k = _reshape_axes_for_bshd_bins(key, layout.k_class, output_order=list("BHSD")).array
+    v = _reshape_axes_for_bshd_bins(value, layout.v_class, output_order=list("BHSD")).array
+
+    return _run_prepared_tpu_splash_attention_arrays(
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        q,
+        k,
+        v,
+        mask=mask,
+        bias=bias,
+        dropout=dropout,
+        inference=inference,
+        prng=prng,
+        attention_dtype=attention_dtype,
+        precision=precision,
+        layout=layout,
+        invocation=invocation,
     )
 
-    # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
-    splash_kernel = splash_attention_kernel.make_splash_mha(
-        mask=mask_lowering.kernel_mask,
-        head_shards=head_shards,
-        q_seq_shards=q_seq_shards,
-        block_sizes=block_sizes,
-        attn_logits_soft_cap=logits_soft_cap,
-    )
 
-    # Get partition specs for the kernel (it's a pytree with mask_info arrays)
-    kernel_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec(physical_axes_q[1], physical_axes_q[2]))
-    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+def _run_prepared_tpu_splash_attention_arrays(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    layout: _SplashPreparedLayout,
+    invocation: _SplashInvocationPlan,
+) -> NamedArray:
+    kernel_plan = invocation.kernel_plan
 
     @functools.partial(
         shard_map,
-        mesh=mesh,
+        mesh=invocation.mesh,
         in_specs=(
-            physical_axes_q,
-            physical_axes_k,
-            physical_axes_v,
-            segment_id_lowering.segment_ids_axes,
-            physical_axes_sink,
-            kernel_specs,
+            layout.physical_axes_q,
+            layout.physical_axes_k,
+            layout.physical_axes_v,
+            kernel_plan.segment_id_lowering.segment_ids_axes,
+            invocation.physical_axes_sink,
+            kernel_plan.kernel_specs,
         ),
-        out_specs=physical_axes_q,
+        out_specs=layout.physical_axes_q,
         check_rep=False,
     )
     def wrap_flash_attention(q, k, v, segment_ids, sinks, kernel):
@@ -1108,22 +1469,36 @@ def _tpu_splash_attention(
         v = v.astype(attention_dtype)
         sink_in_axes = 0 if sinks is not None else None
 
-        def call_kernel(q_b, k_b, v_b, si, sink):
+        def call_kernel(q_b, k_b, v_b, segment_ids_for_batch, sink, kernel_b):
             if sink is None:
-                return kernel(q_b, k_b, v_b, segment_ids=si)
-            return kernel(q_b, k_b, v_b, segment_ids=si, sinks=sink)
+                return kernel_b(q_b, k_b, v_b, segment_ids=segment_ids_for_batch)
+            return kernel_b(q_b, k_b, v_b, segment_ids=segment_ids_for_batch, sinks=sink)
 
         return jax.vmap(
             call_kernel,
-            in_axes=(0, 0, 0, segment_id_lowering.segment_batch_axis, sink_in_axes),
-        )(q, k, v, segment_ids, sinks)
+            in_axes=(
+                0,
+                0,
+                0,
+                kernel_plan.segment_id_lowering.segment_batch_axis,
+                sink_in_axes,
+                kernel_plan.kernel_vmap_axis,
+            ),
+        )(q, k, v, segment_ids, sinks, kernel)
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_id_lowering.segment_ids, sinks, splash_kernel)
+    attn_output = wrap_flash_attention(
+        q,
+        k,
+        v,
+        kernel_plan.segment_id_lowering.segment_ids,
+        invocation.sinks,
+        kernel_plan.kernel,
+    )
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v
     # we can reshape it to match our expected output
-    attn_output = _unflatten_bshd(attn_output, q_class, v_class)
+    attn_output = _unflatten_bshd(attn_output, layout.q_class, layout.v_class)
     with haliax.axis_mapping({}):
         reference_out_shape = eqx.filter_eval_shape(
             simple_attention_with_dropout,

@@ -1,16 +1,28 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from enum import StrEnum
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask
+from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
 from jax.sharding import PartitionSpec as P
 
 from levanter.kernels.pallas.splash_attention import (
+    BLOCK_MASK_EMPTY,
+    BLOCK_MASK_FULL,
+    BLOCK_MASK_PARTIAL,
     SplashAttentionMaskSpec,
+    SplashPrefixLmMaskSpec,
     lower_splash_attention_mask,
     lower_splash_segment_ids,
+    packed_causal_segment_mask_infos,
+    packed_causal_segment_run_mask_infos,
+    packed_prefix_lm_segment_run_mask_infos,
+    prefix_lm_dkv_mask_info,
+    prefix_lm_forward_mask_info,
     splash_attention_block_sizes,
 )
 
@@ -29,6 +41,310 @@ def test_lower_splash_attention_mask_builds_multi_head_mask():
     expected &= np.arange(256)[None, :] >= np.arange(256)[:, None] - 127
     np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
     np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[1]), expected)
+
+
+def test_lower_splash_attention_mask_builds_static_prefix_lm_mask():
+    lowering = lower_splash_attention_mask(
+        mask=SplashAttentionMaskSpec(is_causal=True, prefix_lm=SplashPrefixLmMaskSpec(prefix_length=64)),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=2,
+        q_seq_shards=1,
+    )
+
+    expected = np.tril(np.ones((256, 256), dtype=bool))
+    expected |= np.arange(256)[None, :] < 64
+    np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
+
+
+def test_lower_splash_attention_mask_combines_static_prefix_lm_and_sliding_window():
+    lowering = lower_splash_attention_mask(
+        mask=SplashAttentionMaskSpec(
+            is_causal=True,
+            sliding_window=32,
+            prefix_lm=SplashPrefixLmMaskSpec(prefix_length=64),
+        ),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=1,
+        q_seq_shards=1,
+    )
+
+    q = np.arange(256)[:, None]
+    kv = np.arange(256)[None, :]
+    expected = (kv < 64) | ((kv <= q) & (kv >= q - 31))
+    np.testing.assert_array_equal(_materialize_splash_mask(lowering.kernel_mask.masks[0]), expected)
+
+
+@pytest.mark.parametrize("prefix_length", [0, 64, 130, 256])
+def test_prefix_lm_forward_mask_info_matches_dense_prefix_lm(prefix_length):
+    mask_info = prefix_lm_forward_mask_info(
+        prefix_length=jnp.asarray(prefix_length, dtype=jnp.int32),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=2,
+        block_q=64,
+        block_kv=64,
+    )
+
+    actual = _materialize_mask_info(mask_info, head=0, q_seq_len=256, kv_seq_len=256, block_q=64, block_kv=64)
+    q = np.arange(256)[:, None]
+    kv = np.arange(256)[None, :]
+    expected = (kv < prefix_length) | (kv <= q)
+    np.testing.assert_array_equal(actual, expected)
+
+
+@pytest.mark.parametrize("prefix_length", [0, 64, 130, 256])
+def test_prefix_lm_dkv_mask_info_matches_dense_prefix_lm(prefix_length):
+    mask_info = prefix_lm_dkv_mask_info(
+        prefix_length=jnp.asarray(prefix_length, dtype=jnp.int32),
+        q_seq_len=256,
+        kv_seq_len=256,
+        num_heads=2,
+        block_q=64,
+        block_kv=64,
+    )
+
+    actual = _materialize_mask_info(
+        mask_info,
+        head=0,
+        q_seq_len=256,
+        kv_seq_len=256,
+        block_q=64,
+        block_kv=64,
+        partial_block_layout=_PartialBlockLayout.COMPACT_TRANSPOSED,
+    )
+    q = np.arange(256)[:, None]
+    kv = np.arange(256)[None, :]
+    expected = (kv < prefix_length) | (kv <= q)
+    np.testing.assert_array_equal(actual, expected)
+
+    data_next = np.asarray(mask_info.data_next)
+    block_mask = np.asarray(mask_info.block_mask)
+    q_block_ids = np.arange(4, dtype=data_next.dtype)[:, None]
+    np.testing.assert_array_equal(data_next[0], np.where(block_mask[0] > 0, q_block_ids, 0))
+
+
+@pytest.mark.parametrize("case_name", ["aligned", "ragged"])
+def test_packed_causal_segment_mask_info_matches_dense_packed_causal(case_name):
+    seq_len = 128
+    block_size = 16
+    segment_ids, block_expectations = _packed_causal_case(case_name)
+
+    metadata = packed_causal_segment_mask_infos(
+        q_segment_ids=segment_ids,
+        kv_segment_ids=segment_ids,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    segments = np.asarray(segment_ids)
+    expected = (segments[:, None] == segments[None, :]) & (kv <= q)
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        **block_expectations,
+    )
+
+
+@pytest.mark.parametrize(
+    ("segment_lengths", "num_segments", "block_expectations"),
+    [
+        (
+            [37, 93, 151, 231],
+            4,
+            {"partial_q_block": 2, "partial_kv_block": 0, "full_q_block": 15, "full_kv_block": 9},
+        ),
+        (
+            [128, 64, 320, 0, 0],
+            3,
+            {"partial_q_block": 0, "partial_kv_block": 0, "full_q_block": 20, "full_kv_block": 13},
+        ),
+        (
+            [17, 31, 29, 53, 97, 285],
+            6,
+            {"partial_q_block": 1, "partial_kv_block": 0, "full_q_block": 20, "full_kv_block": 18},
+        ),
+    ],
+)
+def test_packed_causal_segment_run_mask_info_uses_compact_partial_payload(
+    segment_lengths,
+    num_segments,
+    block_expectations,
+):
+    seq_len = 512
+    block_size = 16
+    segment_lengths = jnp.array(segment_lengths, dtype=jnp.int32)
+    num_segments = jnp.array(num_segments, dtype=jnp.int32)
+
+    metadata = packed_causal_segment_run_mask_infos(
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    segment_ids = np.repeat(np.arange(segment_lengths.shape[0], dtype=np.int32), np.asarray(segment_lengths))
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    expected = (segment_ids[:, None] == segment_ids[None, :]) & (kv <= q)
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        **block_expectations,
+    )
+
+    block_count = seq_len // block_size
+    assert metadata.fwd_mask_info.partial_mask_blocks.shape[0] < block_count * block_count
+
+
+def test_packed_prefix_lm_segment_run_mask_info_matches_dense_packed_prefix_lm():
+    seq_len = 128
+    block_size = 16
+    segment_lengths = jnp.array([64, 64], dtype=jnp.int32)
+    prefix_lengths = jnp.array([20, 16], dtype=jnp.int32)
+    num_segments = jnp.array(2, dtype=jnp.int32)
+
+    metadata = packed_prefix_lm_segment_run_mask_infos(
+        prefix_lengths=prefix_lengths,
+        segment_lengths=segment_lengths,
+        num_segments=num_segments,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_sizes=_packed_metadata_test_block_sizes(block_size),
+    )
+
+    segment_ids = np.repeat(np.arange(segment_lengths.shape[0], dtype=np.int32), np.asarray(segment_lengths))
+    prefix_by_key = np.zeros((seq_len,), dtype=bool)
+    prefix_by_key[:20] = True
+    prefix_by_key[64:80] = True
+    q = np.arange(seq_len)[:, None]
+    kv = np.arange(seq_len)[None, :]
+    expected = (segment_ids[:, None] == segment_ids[None, :]) & ((kv <= q) | prefix_by_key[None, :])
+    _assert_packed_metadata_matches_dense(
+        metadata,
+        expected,
+        seq_len=seq_len,
+        block_size=block_size,
+        partial_q_block=0,
+        partial_kv_block=1,
+        full_q_block=1,
+        full_kv_block=0,
+    )
+
+
+def _two_segment_ids():
+    return jnp.concatenate(
+        [
+            jnp.zeros((64,), dtype=jnp.int32),
+            jnp.ones((64,), dtype=jnp.int32),
+        ]
+    )
+
+
+def _ragged_segment_ids():
+    return jnp.concatenate(
+        [
+            jnp.zeros((19,), dtype=jnp.int32),
+            jnp.ones((23,), dtype=jnp.int32),
+            jnp.full((41,), 2, dtype=jnp.int32),
+            jnp.full((45,), 3, dtype=jnp.int32),
+        ]
+    )
+
+
+def _packed_causal_case(case_name):
+    if case_name == "aligned":
+        return _two_segment_ids(), _block_expectations(
+            partial_q_block=1,
+            partial_kv_block=1,
+            full_q_block=5,
+            full_kv_block=4,
+        )
+    if case_name == "ragged":
+        return _ragged_segment_ids(), _block_expectations(
+            partial_q_block=1,
+            partial_kv_block=0,
+            full_q_block=4,
+            full_kv_block=3,
+        )
+    raise ValueError(f"Unknown packed causal case: {case_name}.")
+
+
+def _block_expectations(
+    *,
+    partial_q_block: int,
+    partial_kv_block: int,
+    full_q_block: int,
+    full_kv_block: int,
+):
+    return {
+        "partial_q_block": partial_q_block,
+        "partial_kv_block": partial_kv_block,
+        "full_q_block": full_q_block,
+        "full_kv_block": full_kv_block,
+    }
+
+
+def _packed_metadata_test_block_sizes(block_size):
+    return splash_attention_kernel.BlockSizes(
+        block_q=block_size,
+        block_kv_compute=block_size,
+        block_kv=block_size,
+        block_q_dkv=block_size,
+        block_kv_dkv=block_size,
+        block_kv_dkv_compute=block_size,
+        block_q_dq=block_size,
+        block_kv_dq=block_size,
+    )
+
+
+def _assert_packed_metadata_matches_dense(
+    metadata,
+    expected,
+    *,
+    seq_len: int,
+    block_size: int,
+    partial_q_block: int,
+    partial_kv_block: int,
+    full_q_block: int,
+    full_kv_block: int,
+):
+    actual_fwd = _materialize_mask_info(
+        metadata.fwd_mask_info,
+        head=0,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_q=block_size,
+        block_kv=block_size,
+        partial_block_layout=_PartialBlockLayout.COMPACT,
+    )
+    actual_dkv = _materialize_mask_info(
+        metadata.dkv_mask_info,
+        head=0,
+        q_seq_len=seq_len,
+        kv_seq_len=seq_len,
+        block_q=block_size,
+        block_kv=block_size,
+        partial_block_layout=_PartialBlockLayout.COMPACT_TRANSPOSED,
+    )
+
+    np.testing.assert_array_equal(actual_fwd, expected)
+    np.testing.assert_array_equal(actual_dkv, expected)
+
+    block_mask = np.asarray(metadata.fwd_mask_info.block_mask)
+    # The helper's contract includes block skipping, not only dense mask parity.
+    assert block_mask[0, 0, 4] == BLOCK_MASK_EMPTY  # noqa: ml-slop-test
+    assert block_mask[0, full_q_block, full_kv_block] == BLOCK_MASK_FULL  # noqa: ml-slop-test
+    assert block_mask[0, partial_q_block, partial_kv_block] == BLOCK_MASK_PARTIAL  # noqa: ml-slop-test
 
 
 def test_lower_splash_attention_mask_rejects_unsupported_structured_fields():
@@ -89,7 +405,45 @@ def test_splash_attention_block_sizes_match_existing_defaults():
 def _materialize_splash_mask(mask):
     if isinstance(mask, splash_attention_mask.LogicalAnd):
         return _materialize_splash_mask(mask.left) & _materialize_splash_mask(mask.right)
+    if isinstance(mask, splash_attention_mask.LogicalOr):
+        return _materialize_splash_mask(mask.left) | _materialize_splash_mask(mask.right)
 
     q_indices = jnp.arange(mask.shape[0])[:, None]
     kv_indices = jnp.arange(mask.shape[1])[None, :]
     return np.asarray(mask.mask_function(q_indices, kv_indices))
+
+
+class _PartialBlockLayout(StrEnum):
+    COMPACT = "compact"
+    COMPACT_TRANSPOSED = "compact_transposed"
+
+
+def _materialize_mask_info(
+    mask_info,
+    *,
+    head: int,
+    q_seq_len: int,
+    kv_seq_len: int,
+    block_q: int,
+    block_kv: int,
+    partial_block_layout: _PartialBlockLayout = _PartialBlockLayout.COMPACT,
+):
+    q_blocks = q_seq_len // block_q
+    kv_blocks = kv_seq_len // block_kv
+    out = np.zeros((q_seq_len, kv_seq_len), dtype=bool)
+    block_mask = np.asarray(mask_info.block_mask)
+    mask_next = np.asarray(mask_info.mask_next)
+    partial_mask_blocks = np.asarray(mask_info.partial_mask_blocks)
+    for q_block in range(q_blocks):
+        q_slice = slice(q_block * block_q, (q_block + 1) * block_q)
+        for kv_block in range(kv_blocks):
+            kv_slice = slice(kv_block * block_kv, (kv_block + 1) * block_kv)
+            block_kind = int(block_mask[head, q_block, kv_block])
+            if block_kind == BLOCK_MASK_FULL:
+                out[q_slice, kv_slice] = True
+            elif block_kind == BLOCK_MASK_PARTIAL:
+                partial_block = partial_mask_blocks[int(mask_next[head, q_block, kv_block])]
+                if partial_block_layout == _PartialBlockLayout.COMPACT_TRANSPOSED:
+                    partial_block = partial_block.T
+                out[q_slice, kv_slice] = partial_block
+    return out
