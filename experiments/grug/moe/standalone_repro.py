@@ -264,14 +264,15 @@ def build_run_config(args: argparse.Namespace) -> GrugRunConfig:
         process_id=args.process_id,
     )
     tracker = WandbConfig(project=WANDB_PROJECT, tags=["grug-moe-standalone"]) if args.wandb else NoopConfig()
-    # Profile rank 0 only, and skip the perfetto trace: writing it is slow and, for a
-    # large multi-process trace, corrupts/hangs (BadGzipFile). The xplane .pb that xprof
-    # reads is still written. Every rank still adds the callback so the stop barrier syncs.
+    # Profile rank 0 only (every rank still adds the callback so the stop barrier syncs).
+    # The perfetto trace is opt-in: at 8 ranks the concurrent write corrupts/hangs
+    # (BadGzipFile), but a single-rank write is safe (just slow). The xplane .pb that
+    # xprof reads is always written.
     profiler = ProfilerConfig(
         enabled=args.profiler_steps > 0,
         start_step=args.profiler_start,
         num_steps=args.profiler_steps,
-        create_perfetto_trace=False,
+        create_perfetto_trace=args.perfetto_trace,
         profile_process_index=0,
     )
     # Local-only checkpointer with no periodic saves: _run_grug_local always builds
@@ -376,6 +377,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     prof = p.add_argument_group("profiler (off by default)")
     prof.add_argument("--profiler-steps", type=int, default=0, help="steps to profile; 0 disables")
     prof.add_argument("--profiler-start", type=int, default=8, help="step to start profiling at")
+    prof.add_argument(
+        "--perfetto-trace",
+        action="store_true",
+        help="also write a perfetto trace (viewable at ui.perfetto.dev), not just the xplane .pb; "
+        "adds a slow (~minutes) single-rank conversion at profiler stop",
+    )
 
     return p.parse_args(argv)
 
