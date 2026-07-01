@@ -753,11 +753,7 @@ class MoEMLP(eqx.Module):
             else None
         )
         # Single learnable scalar on the latent (init 1.0).
-        moe_latent_scale = (
-            jnp.ones(())
-            if (cfg.moe_latent_dim is not None and cfg.moe_latent_scale)
-            else None
-        )
+        moe_latent_scale = jnp.ones(()) if (cfg.moe_latent_dim is not None and cfg.moe_latent_scale) else None
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
