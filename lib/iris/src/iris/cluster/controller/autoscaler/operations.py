@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from rigging.timing import Timestamp
 
 from iris.cluster.backends.types import SliceHandle
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, SliceLifecycleState
 from iris.rpc import vm_pb2
 
 logger = logging.getLogger(__name__)
@@ -43,12 +43,16 @@ def drain_slices_for_workers(
     """Mark every slice holding ``worker_ids`` DRAINING and collect its handle.
 
     Workers are grouped by physical slice because the teardown removes a whole
-    slice: every task on it goes together and its chips free once. Each slice is
-    drained at most once. The slice stays tracked — counted against its reservation
-    pool as DRAINING — until ``refresh`` observes its VMs are gone and reaps it; the
-    caller terminates the returned handles to start that deletion.
+    slice: every task on it goes together and its chips free once. A slice
+    already DRAINING (e.g. a prior call drained it and this one reports another
+    of its sibling workers dead) is not re-entered — only its sibling worker ids
+    are collected — so the reap-timeout clock and the churn detector are each
+    charged once per slice. The slice stays tracked — counted against its
+    reservation pool as DRAINING — until ``refresh`` observes its VMs are gone
+    and reaps it; the caller terminates the returned handles to start that
+    deletion.
 
-    Every observed drain is reported to the group's churn detector as
+    Every newly observed drain is reported to the group's churn detector as
     :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
     The detector classifies internally based on slice age — short-lived deaths
     move churn rate; long-lived deaths count as positive samples. Returns the
@@ -73,8 +77,12 @@ def drain_slices_for_workers(
 
         slice_worker_ids = group.get_slice_worker_ids(slice_id)
         sibling_worker_ids.update(wid for wid in slice_worker_ids if wid not in primary_workers)
-        affected_workers = sorted(primary_workers & set(slice_worker_ids))
+        unregister_slice_workers(slice_id, slice_worker_ids)
 
+        if group.slice_lifecycle(slice_id) == SliceLifecycleState.DRAINING:
+            continue
+
+        affected_workers = sorted(primary_workers & set(slice_worker_ids))
         logger.info("Workers %s triggered slice drain for %s", affected_workers, slice_id)
         log_action(
             "worker_failed",
@@ -84,7 +92,6 @@ def drain_slices_for_workers(
         )
         group.record_slice_preempted(slice_id, timestamp)
         handle = group.drain_slice(slice_id, timestamp)
-        unregister_slice_workers(slice_id, slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))
 

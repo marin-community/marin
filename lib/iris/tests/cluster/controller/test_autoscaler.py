@@ -21,6 +21,7 @@ from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
+from iris.cluster.controller.autoscaler.operations import drain_slices_for_workers
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
@@ -546,6 +547,48 @@ class TestAutoscalerWorkerFailure:
 
         assert group.slice_lifecycle("slice-001") == SliceLifecycleState.DRAINING
         assert siblings == []
+
+    def test_second_call_on_already_draining_slice_does_not_reset_reap_clock_or_double_count(
+        self, scale_group_config: ScaleGroupConfig
+    ):
+        """A slice's VMs shut down one at a time, so a second dead-worker report for
+        the same (already-draining) slice arrives on a later tick. It must not
+        re-stamp the reap-timeout clock or record a second churn-detector failure."""
+
+        def make_group() -> ScalingGroup:
+            handle = make_mock_slice_handle(
+                "slice-001",
+                all_ready=True,
+                vm_states=[vm_pb2.VM_STATE_READY] * 2,
+                created_at_ms=Timestamp.now().epoch_ms(),
+            )
+            platform = make_mock_platform(slices_to_discover=[handle])
+            g = ScalingGroup(scale_group_config, platform)
+            g.reconcile()
+            _mark_discovered_ready(g, [handle])
+            return g
+
+        def drain(group: ScalingGroup, worker_id: str, timestamp: Timestamp) -> None:
+            drain_slices_for_workers(
+                {group.name: group},
+                [worker_id],
+                lambda *_: None,
+                lambda *_, **__: vm_pb2.AutoscalerAction(),
+                timestamp,
+            )
+
+        t0 = Timestamp.from_ms(1_000_000)
+        t1 = Timestamp.from_ms(1_060_000)
+
+        once_group = make_group()
+        drain(once_group, "slice-001-vm-0", t0)
+
+        twice_group = make_group()
+        drain(twice_group, "slice-001-vm-0", t0)
+        drain(twice_group, "slice-001-vm-1", t1)
+
+        assert twice_group.draining_for("slice-001", t1) == Duration.from_ms(60_000)
+        assert twice_group.health(t1) == once_group.health(t1)
 
 
 class TestAutoscalerDrainReap:
