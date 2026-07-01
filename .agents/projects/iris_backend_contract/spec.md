@@ -1,334 +1,222 @@
-# Spec: BackendWorkerStore contract
+# Spec: Iris multi-backend contract
 
-Pins the public surface of the encapsulated-sub-controller backend contract
-([`design.md`](design.md)). Signatures are the **target**; phases (§Phasing) land
-them incrementally, each preserving the same **semantic behavior** (N=1 suite green) —
-byte-identity is **not** required; a clean implementation beats a byte-preserving hack.
-Types referenced without definition are existing (`WorkerId`, `WorkerStatusMap`,
-`ControlSnapshot`, `BackendSchedulingInputs`, `AutoscalerState`, `ControllerEffects`,
-`TaskTarget`, `Assignment`, `EndpointsProjection`, `WorkerAttrsProjection`,
-`RunTemplateCache`, `WorkerHealthTracker`).
+Pins the controller ↔ backend surface for multi-backend Iris (`design.md`). Reads as
+**today → end state**. The architecture is **decided: Model D** (§1) — *backends are local
+execution substrates that share the controller's one DAG; remote Iris clusters are separate
+federation peers, not backends*. §2 the control contract, §3 the WorkerJobService split, §4 the
+store, §5 the status projection are the local backend work (Track 1); remote is a separate
+federation project (Track 2). Decision + rejected alternatives (A/B/C): the `delegation-model`
+weaver artifact.
 
-## 0. Target: the controller becomes a proxy over self-contained backends
+## 0. Today vs end state
 
-The end state is a thin **controller-as-proxy**: each backend is a self-contained
-sub-controller that owns its workers, worker-attributes, endpoints, liveness,
-autoscaler, slices, and its tasks' **execution** state — and **commits its own
-effects**. The controller keeps only the cross-backend concerns: the job/task **DAG**,
-budgets, the **routing** map (job → backend), and a **proxy** layer that forwards
-endpoint / exec / profile / dashboard requests to the owning backend.
+**Today.** `TaskBackend` (`controller/backend.py`) is an interface drawn around a monolith
+whose *state was never partitioned*. Workers, placement, liveness, the autoscaler, and slices
+all live in the one `ControllerDB`; the in-process backend reaches into that DB to read
+(scale-group scoped) and write (teardown). The same `ControllerService` is the single network
+endpoint for **users** (LaunchJob, GetJobStatus…), **workers** (Register, RegisterEndpoint),
+and **on-demand worker RPCs** (ProfileTask, GetProcessStatus, ExecInContainer, GetWorkerStatus,
+BeginCheckpoint) — the controller resolves `task→worker→address` and forwards each of the last
+group into the backend method-by-method (`_read_worker`, `service.py:452/2184/2233/2362/2573`).
 
-| Controller keeps | Each backend owns |
+**End state.** The controller keeps only cross-backend concerns; each backend owns its worker
+state + execution behind a typed seam (a *self-contained sub-controller* only in Model B — under
+Models A/D a local backend shares the controller's DAG). What the controller keeps depends on the
+§1 fork — the *settled* part is below the line, the *forked* part (DAG ownership) is called out:
+
+| Controller keeps (settled) | Each backend owns |
 |---|---|
-| job/task DAG, budgets | workers, worker_attributes, endpoints, liveness, slices, autoscaler |
-| routing (job → backend) | task **execution** state (assigned/building/running/failed) |
-| proxy/forwarding + meta-scheduling | commit of its own reconcile/teardown effects |
-| a reported per-backend status projection (§2) | the published status it reports up |
+| routing (job → backend), meta-scheduling | workers, worker_attributes, endpoints, liveness, slices, autoscaler |
+| a **service router** (task/worker/scale-group → backend) | task **execution** state |
+| budget enforcement, a reported per-backend status projection | its **WorkerJobService** (§3) |
+| *the job/task **DAG*** — **only in Model A** (§1); in Model B the backend owns it | *the DAG* — **only in Model B** (§1) |
 
-**Storage.** Backends share one `ControllerDB` **instance** (one connection pool, one
-write lock — locking stays opaque to consumers) until a backend goes *remote*. Table
-**ownership** moves to the backend (it becomes the sole writer of its workers / attrs /
-endpoints / execution tables) well before any file split. A **separate DB file** per
-backend is forced only by cross-machine remote and lands with the remote transport
-(final phase) — it is explicitly **not** a prerequisite for the in-process steps.
+Two structural moves get us to the settled part: **(a)** the backend owns its worker *state*
+behind a typed store (P1–P5), and **(b)** the backend owns the worker/execution-facing *service*
+while the controller becomes a router (§3). After both, the controller never opens a worker table
+— not for control, not for forwarding. Whether it *also* stops owning the DAG is §1.
 
-> **What the store actually is (codex-corrected).** It is **not** a worker-table-only
-> partition. In-process the backend's `scheduling_inputs`/`reconcile_snapshot` read
-> controller task/job/budget tables (the scheduler joins pending tasks + budgets +
-> run-templates against `workers` in one SQLite — `policy.py:743-750`,
-> `worker_source.py:187-195`), and teardown mutates controller task/endpoint
-> projections (`backend.py:96-153`). So the store is an **operation-scoped snapshot +
-> effects provider** over the shared DB: a fixed set of named operations the backend
-> calls instead of holding a raw `ControllerDB`. The structural win is that the remote
-> impl swaps those named operations for RPCs; the in-process impl keeps the in-SQL
-> joins. The boundary is "the backend never holds a raw `db`," not "the backend can't
-> read task tables."
+## 1. The model — federation ≠ backend (Model D, decided)
 
-## 1. `BackendWorkerStore` — the operation-scoped, thread-aware surface
+`TaskBackend` splits into two method families. Family 1 — **the control fold** — is the real
+multi-backend seam (§2). Family 2 — **worker/execution forwards** — leaves the control interface
+and becomes the backend's own service (§3). The decided architecture:
 
-New Protocol, `lib/iris/src/iris/cluster/controller/backend_store.py`. Replaces the raw
-`ControllerDB` a worker-daemon backend holds today (via `BackendRuntime` →
-`DbWorkerSource`). Two impls: in-process `DbBackendWorkerStore` over the shared DB, and
-(P9, remote) a `RemoteBackendWorkerStore` RPC client. Each method documents which thread
-may call it.
+- **Backends are local execution substrates.** GCP workers, k8s. Tasks on a backend live in *this*
+  Iris's one DAG; the backend authors effects, the controller folds them. This is the classic
+  effects-up model, and it is correct and cheap for the local case.
+- **Remote Iris clusters are federation peers, not backends.** A remote cluster is a full Iris that
+  owns its own DAG + its own backends. Whole root jobs are *handed off* to it; it runs the entire
+  tree and reports status + spend back. The federating Iris tracks a *federated-job handle*, never
+  remote task rows. There is no `RemoteTaskBackend`; **the backend contract does not have to be
+  remote-safe** — the single biggest simplification (no per-backend DB-file split, no
+  `RemoteBackendWorkerStore`).
+- **Job trees are locked to the parent's peer.** A federated root and its whole subtree run on the
+  one peer. This is largely self-enforcing: a running task's Iris client targets
+  `job_info.controller_address` — the controller that launched it (`client/client.py:1190`) — so a
+  child spawned on a peer submits back to the *peer*, materialized in the peer's DAG. Federation
+  only handles the root handoff and refuses the two escapes (re-pointing a child at the federating
+  Iris; a cross-cluster constraint on a non-root job).
+
+Rejected alternatives — **A** (controller owns every backend's DAG, remote ships effects up; made
+#353 the capstone) and **B/C** (every backend a mini-iris) — and the full rationale are in the
+`delegation-model` artifact (2× codex-reviewed). Consequence for **#353**: it becomes lower-priority
+*local* cross-backend-tree fold hardening (not a remote blocker) and is **stood down** — PR #6805
+closed, branch preserved for salvage.
+
+## 2. The control contract — `TaskBackend` is the meta-scheduler fold
+
+`controller/backend.py`. End-state control interface, four methods, none opening a worker table:
+
+| Method | In | Out |
+|---|---|---|
+| `schedule` | routed pending tasks + budgets | placements — each carries the backend-authored `worker_id` + `address` |
+| `reconcile` | request | task-state `effects` (Model A) / a status delta (Model B) |
+| `autoscale` | demand | capacity + autoscaler state |
+| `status` | — | cached `BackendWorkerReport` projection (§5) |
+
+`register_worker`, `teardown(dead_workers)`, and the on-demand `profile`/`process`/`exec`
+methods **leave** this interface: registration/teardown become store-internal (P2, landed),
+and the on-demand RPCs move to the WorkerJobService (§3). *(Under Models A/B a `RemoteTaskBackend`
+would implement these four over connect RPC; under the recommended Model D there is no
+`RemoteTaskBackend` — remote is a federation peer, §1, not a backend, so this interface stays
+in-process.)*
+
+## 3. The WorkerJobService — backend-owned, controller-routed
+
+The worker/execution-facing slice of `ControllerService` becomes a service the **backend
+defines and serves**; the controller stops forwarding it method-by-method and instead
+**routes** at the service edge.
+
+- **Surface:** `Register` (worker→controller) and the on-demand `ProfileTask` /
+  `GetProcessStatus` / `ExecInContainer` / `GetWorkerStatus` — the RPCs that need
+  `task/worker → address` resolution, which is backend-owned state. The endpoint RPCs
+  (`RegisterEndpoint`/`UnregisterEndpoint`/`ListEndpoints`) already live on a **separate**
+  `EndpointService` (`controller.proto:689`); P5 makes its backing projection backend-owned and
+  turns the service into a router. **Not included:** `BeginCheckpoint` — it snapshots the
+  *controller's* DB (`controller.py:1427`), not worker state, and stays controller-side.
+- **In-process:** the backend's service impl runs in the controller's uvicorn server; the
+  controller dispatches at the *service* level (register by scale-group → backend; on-demand by
+  `task → backend`) and the backend resolves the address internally. This deletes `_read_worker`
+  / `_read_worker_detail` / `bulk_get_worker_addresses` from the controller.
+- **The routing lookup itself is fork-sensitive.** Dispatching an on-demand RPC needs a
+  `task_id → backend` (and `root_id → backend`) map. In Model A the controller owns the task rows,
+  so this is a local read of `task.backend_id`. In Model B the meta owns no task rows, so it must
+  keep its own routing index (root → backend, extended to any task in that tree) — the spec for B
+  must define where that index lives and how it stays consistent with sub-Iris job trees.
+- **Remote (Model D):** a remote Iris peer serves its *own* WorkerJobService internally; the
+  federating Iris does **not** route worker RPCs into it as a backend. On-demand exec/profile/logs
+  against a *federated* job reach the peer at the **federation** layer (proxy vs. redirect — §7),
+  keyed by the federated-job handle, not by `task.backend_id`. (Under Models A/B this would instead
+  be a `RemoteTaskBackend` serving the same WorkerJobService and P9 a transport swap; D drops that.)
+
+This supersedes the earlier plan that kept the on-demand RPCs as `TaskBackend` methods routed via
+`store.worker_address`; naming the whole family as one backend-owned service is the cleaner seam.
+
+## 4. `BackendWorkerStore` — the operation-scoped, thread-aware boundary
+
+`controller/backend_store.py`. Replaces the raw `ControllerDB` a worker-daemon backend held via
+`BackendRuntime`. **Not** a worker-table-only partition: in-process its snapshot reads join the
+controller's task/job/budget tables (the scheduler join, `policy.py:743`), so it is an
+*operation-scoped snapshot + effects provider* over the shared DB. The structural win is that the
+remote impl swaps these named operations for RPCs; the boundary is "the backend never holds a raw
+`db`," not "the backend can't read task tables." Each method documents its calling thread.
 
 ```python
 class BackendWorkerStore(Protocol):
-    """A worker-daemon backend's owned worker state + the cross-seam snapshots/effects
-    it needs to schedule, reconcile, and tear down its workers.
-
-    In-process backed by the shared DB (so the scheduler's task<->worker joins survive);
-    remote, an RPC client to the backend's own store. The backend writes worker rows only
-    through this surface; the controller reads worker state only through a backend's
-    published status (see §2).
-    """
-
-    # --- Snapshot reads (any thread; each opens its own scoped read snapshot) ---
+    # Snapshot reads (any thread; each opens its own scoped read snapshot)
     def owned_worker_ids(self) -> set[WorkerId]: ...
-    def scheduling_inputs(self) -> BackendSchedulingInputs:
-        """The backend's live workers + building counts + preemption rows joined with
-        the controller's pending tasks/budgets into a SchedulingContext. Reads task/job
-        tables in-process (the scheduler join); remote, the request payload carries them."""
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        """The assigned-row + run-template snapshot reconcile folds against."""
+    def scheduling_inputs(self) -> BackendSchedulingInputs: ...     # live workers ⋈ pending tasks/budgets
+    def reconcile_snapshot(self) -> ControlSnapshot: ...            # assigned rows + run-templates
+    def transition_snapshot(self, *, now, seed_worker_ids, observation_uids,
+                            seed_task_ids, extra_attempt_keys) -> TransitionSnapshot: ...
     def worker_status(self) -> WorkerStatusMap: ...
-    def transition_snapshot(
-        self,
-        *,
-        now: Timestamp,
-        seed_worker_ids: set[WorkerId],
-        observation_uids: dict[WorkerId, str],
-        seed_task_ids: set[str],
-        extra_attempt_keys: set[tuple[str, int]],
-    ) -> TransitionSnapshot:
-        """The k8s/transition-reader snapshot (exact current seeds — `worker_source.py:114`)."""
-    def worker_address(self, worker_id: WorkerId) -> str | None:
-        """Resolve a worker's address for on-demand RPC routing (profile/exec/process/status)."""
+    def worker_address(self, worker_id: WorkerId) -> str | None: ...  # on-demand RPC routing
 
-    # --- Writes ---
-    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
-        """ANY THREAD (runs in the Register RPC handler). Persist a worker (workers +
-        worker_attributes), seed liveness, detect a recycled-IP address conflict, and
-        QUEUE the stale prior owner for eviction (do NOT tear down here — slice teardown
-        is control-thread-only)."""
-    def drain_pending_evictions(self) -> list[WorkerId]:
-        """CONTROL THREAD ONLY. Tear down the workers register_worker queued: fail them,
-        terminate slices + healthy siblings, forget them. Called once per control tick."""
-    def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
-        """CONTROL THREAD ONLY. The full existing teardown algorithm (`backend.py:96-153`):
-        fail_workers + commit_effects (endpoint projection drain) + worker-attrs eviction
-        + autoscaler slice termination + persist_autoscaler_state + health.forget_many.
-        Returns the removed set (dead + siblings)."""
-    def prune_dead_workers(self) -> list[WorkerId]:
-        """CONTROL THREAD ONLY. Per-backend dead-worker GC (P3)."""
-    def persist_autoscaler_state(self, state: AutoscalerState) -> None:
-        """CONTROL THREAD ONLY. Persist slices + scaling_groups (P8)."""
-
-    def publish_status(self) -> BackendStatus:
-        """CONTROL THREAD ONLY. Author the cached worker projection (§2) from an immutable
-        snapshot so RPC-thread reads never race the control tick."""
+    # Writes
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome: ...  # ANY THREAD; queues eviction
+    def drain_pending_evictions(self) -> list[WorkerId]: ...        # CONTROL THREAD; per tick
+    def reap_workers(self, worker_ids, *, reason) -> list[WorkerId]: ...  # CONTROL THREAD; full teardown algo
+    def prune_dead_workers(self) -> list[WorkerId]: ...             # CONTROL THREAD (P3, landed)
+    def persist_autoscaler_state(self, state: AutoscalerState) -> None: ...  # CONTROL THREAD (P8)
+    def publish_status(self) -> BackendWorkerReport: ...                  # CONTROL THREAD; immutable snapshot
 ```
 
-`WorkerSource` (`controller/backend.py:433`) is **removed**; its read methods move onto
-the store, and its raw `db`/`endpoints`/`worker_attrs` properties are deleted.
+**Thread safety.** The autoscaler has no object-level lock; control-thread `refresh` mutates
+group state while RPC threads read. So `publish_status` runs on the control thread and returns
+an immutable snapshot, and all views are served from the last published snapshot — never by an
+RPC thread calling `autoscaler.get_status()`.
 
-**Thread safety (codex #13).** DB writes are serialized by `ControllerDB`'s write lock
-and `WorkerHealthTracker` has its own lock, but the autoscaler has no object-level
-locking — control-thread `refresh`/`terminate_slices_for_workers` mutate group state
-while RPC threads read status today (`autoscaler/runtime.py:625`, `service.py:2058`).
-So `publish_status` runs on the control thread and returns an immutable snapshot; the
-controller serves all views from the last published snapshot, never by calling
-`autoscaler.get_status()` from an RPC thread.
+`BackendRuntime` collapses to `store` + `budget_defaults`; each backend builds its store from the
+shared `ControllerDB` plus **its own** endpoints / worker_attrs projections + liveness tracker.
+Bootstrap constructs these so the store is non-Optional (no two-phase `bind_runtime`).
 
-## 2. `BackendStatus` — the cached worker projection
+## 5. `BackendWorkerReport` — the cached worker projection
 
-New, `controller/backend_status.py`. Generalizes #6773's aggregate `BackendSummary` into
-the per-worker projection the controller serves all worker views from. Field set is the
-union of what `_worker_roster`/`_read_worker_detail`/`list_workers`/`get_autoscaler_status`
-read today (codex #9-#11):
+`controller/backend_status.py`. Generalizes the aggregate `BackendSummary` into the per-worker
+projection the controller serves *all* worker views from — the union of what
+`_worker_roster`/`_read_worker_detail`/`list_workers`/`get_autoscaler_status` read today.
 
 ```python
 @dataclass(frozen=True)
 class WorkerView:
-    worker_id: WorkerId
-    address: str
-    backend_id: str
-    scale_group: str
-    metadata: worker_pb2.WorkerMetadata   # full typed metadata (device/provenance/attrs), not a lossy dict
-    attributes: dict[str, AttrValue]      # typed worker_attributes
-    running_task_ids: frozenset[str]
-    healthy: bool
-    usability: WorkerUsability
-    consecutive_failures: int
-    last_heartbeat_ms: int
-    status_message: str
+    worker_id: WorkerId; address: str; backend_id: str; scale_group: str
+    metadata: worker_pb2.WorkerMetadata; attributes: dict[str, AttrValue]
+    running_task_ids: frozenset[str]; healthy: bool; usability: WorkerUsability
+    consecutive_failures: int; last_heartbeat_ms: int; status_message: str
 
 @dataclass(frozen=True)
-class BackendStatus:
+class BackendWorkerReport:
     workers_by_id: dict[WorkerId, WorkerView]
-    autoscaler_vm_overlay: dict[WorkerId, int]   # running-task counts for VMs in autoscaler
-                                                 # status but absent from the roster (codex #10)
+    autoscaler_vm_overlay: dict[WorkerId, int]   # task counts for VMs in autoscaler status, absent from roster
     autoscaler_status: AutoscalerStatus
     counts: BackendCounts
 ```
 
-Worker-detail rendering still performs a **controller-owned** task/job read for recent
-attempts (`_attempts_for_worker` reads job-config resources — `service.py:843`); that
-join stays controller-side and is not worker state (codex #11).
+Worker-detail rendering still does a **controller-owned** task/job read for recent attempts
+(`task_attempts` joined with job-config resources) — that is task history, not worker state.
 
-## 3. `BackendRuntime` change
+## 6. PR sequence
 
-`controller/backend.py:485`. The raw `db` and its DB-derived siblings move into the
-store's construction; `run_template_cache` is honestly a reconcile-snapshot input the
-store provides (not "worker state" — codex #8), which is consistent with the store being
-a snapshot provider rather than a worker-table partition.
+**Landed:** P1 store wrap (#6788) · P2 backend-authored registration + eviction drain (#6792) ·
+P3 per-backend prune (#6795) · P4 backend owns `WorkerAttrsProjection` (#6799).
 
-```python
-@dataclass(frozen=True)
-class BackendRuntime:
-    store: BackendWorkerStore
-    budget_defaults: UserBudgetDefaults
-```
+**Track 1 — local backend hygiene (continue now):**
 
-Each worker-daemon backend builds and owns its store from the shared `ControllerDB`
-instance plus **its own** `endpoints` / `worker_attrs` projections and liveness tracker.
-The `endpoints` and `worker_attributes` projections are **backend-owned** — endpoints
-are keyed by `task_id`, attrs by worker, both backend-tied — not controller singletons;
-the controller's `EndpointService` becomes a router that resolves the owning backend and
-reads through it. (This supersedes the earlier "composer builds one shared projection
-set" sketch: moving the projections into the backend dissolves the shared-singleton
-coherence question rather than relocating its ownership within the controller process.)
+- **P5 — WorkerJobService: backend owns endpoints + the on-demand RPC surface; `EndpointService`
+  and the on-demand handlers become controller routers (§3).** Supersedes the old "P5 endpoints
+  only" + "P6 on-demand via store.worker_address" split — move the whole worker/execution-facing
+  family as one unit. First concrete controller-as-router move.
+- **P7 published `BackendWorkerReport` · P8 autoscaler single-writer** — local hygiene.
+- **P6 / #353 — stood down.** The controller-side DAG fold over local backends is *local* robustness
+  (no subtree pinning today, so a GCP+k8s job *tree* can span backends); it no longer gates anything.
+  PR #6805 closed; branch `weaver/iris-mb-6-commit-pivot` + commits preserved to salvage the
+  reconcile-kernel cleanup opportunistically. Resume only if local cross-backend-tree correctness
+  becomes a priority.
+- **~~P9 remote-as-a-backend~~ — deleted.** Remote is not a backend: no per-backend DB-file split,
+  no `RemoteBackendWorkerStore`.
 
-## 4. `TaskBackend` control-interface delta
+**Track 2 — federation (new, greenfield, later):** a `remote Iris peer` concept — root-job handoff
+(exactly-once), federated-job handle + status/spend sync, cross-peer cancel, budget admission, peer
+auth. Whole-subtree lock is largely free via `controller_address` inheritance (§1). Designed on its
+own when a real remote cluster is on the table.
 
-`controller/backend.py:512`.
+## 7. Out of scope / open questions
 
-- **ADD** `register_worker(registration) -> RegisterAck` — the `register` RPC keeps auth
-  + scale-group→backend routing and calls this (`store.register_worker`).
-- **ADD** `status() -> BackendStatus` — publishes the cached projection (§2).
-- **`teardown(dead_workers, *, reason)` stays through P1-P2** and is deleted only in the
-  phase that internalizes eviction; `run_teardown()` (drains the backend's own
-  `_pending_dead`) stays.
-- **`get_process_status`/`profile_task`/`exec_in_container`** keep their `TaskTarget`
-  signature; the controller stops filling `TaskTarget.address` from the DB — the backend
-  resolves it via `store.worker_address`.
-- **`GetTaskStatus` (codex #12)** — currently reads the live worker address from `workers`
-  (`service.py:1673`). Switch it to the **denormalized task address** that `ListTasks`
-  already uses (`service.py:1714`), closing the last view-path worker read.
+**Out of scope (this spec is Track 1 — local backend hygiene):** the entire federation project
+(Track 2 — remote Iris peers, handoff, federated-job handle, cross-peer cancel/budget/auth);
+meta-scheduler constraint language; k8s/`CLUSTER_VIEW` changes beyond conforming to the worker-less
+store. There is **no** per-backend DB-file split and **no** `RemoteBackendWorkerStore` under Model D.
 
-## 5. `Assignment` change — the commit-time worker read
+**Open (Track 1):**
+1. **Worker-detail staleness** — served from the last-tick `WorkerView` + a controller-owned attempt
+   read. Acceptable, or does the detail page need a live fetch?
 
-`controller/ops/task.py:42`. Today `assign` re-reads `health.all()` AND
-`bulk_get_worker_addresses` (`task.py:80-84`). That recheck guards a **real intra-tick
-race** (codex #5-#6): schedule runs before reconcile, reconcile can fold a worker bad,
-and only then does commit run — so blindly trusting a schedule-time address can assign to
-a just-reaped/missing worker (and would hit the `workers` FK, `schema.py:348`).
-
-So the backend authors the address into the placement, but commit still validates:
-
-```python
-@dataclass(frozen=True)
-class Assignment:
-    task_id: JobName
-    worker_id: WorkerId
-    address: str              # NEW — backend-authored at schedule time
-    priority_band: int | None = None
-```
-
-**Open fork (P6):** either (a) `assign` keeps a cheap commit-time liveness/existence
-recheck against the backend's tracker (drops only the address *read*, not the validation),
-or (b) the store exposes `validate_assignments(assignments) -> list[Assignment]` that
-returns the surviving placements and commit trusts that. (a) is the smaller P3; (b) is the
-cleaner seam for remote. `lease_deadline_ms` is **not** added here — there is no task/attempt
-lease column today and nothing in the in-process phases reads one; it is deferred to the
-remote placement-projection contract (P9), where it gets persistence + an expiry reader.
-
-## 6. Registration types + flow
-
-```python
-@dataclass(frozen=True)
-class WorkerRegistration:
-    worker_id: WorkerId
-    address: str
-    scale_group: str
-    metadata: worker_pb2.WorkerMetadata
-    resources: ResourceSpec
-    attributes: dict[str, AttrValue]
-
-@dataclass(frozen=True)
-class RegisterOutcome:
-    worker_id: WorkerId
-    queued_eviction: list[WorkerId]   # stale prior owners of a recycled address
-
-RegisterAck = RegisterOutcome
-```
-
-`service.register` (auth + routing) → `backend.register_worker` → `store.register_worker`
-(any-thread DB write + conflict queue). The control tick calls
-`store.drain_pending_evictions()` (control-thread), preserving the current deferral
-(`service.py:1869`, `controller.py:487`).
-
-## 7. Phasing
-
-Each phase preserves the same semantic behavior (N=1 suite green); byte-identity is not
-required. P1-P2 are landed; the remaining phases move ownership from the controller to the
-backend, table-group by table-group, until the controller commits no execution state
-(the §0 target).
-
-- **P1 — faithful store wrap.** [DONE] `BackendWorkerStore`/`DbBackendWorkerStore`
-  preserving the exact current surface plus `reap_workers` carrying the full teardown
-  algorithm. `BackendRuntime.db`→`store`; `WorkerSource` deleted.
-- **P2 — backend-authored registration + control-thread eviction drain.** [DONE, #6792]
-  Registration routes to the owning backend; a recycled-address collision is detected at
-  registration and **routed by the controller to the stale worker's owning backend**
-  (address reuse can cross backends), reaped on the control tick. `teardown(dead_workers)`
-  deleted.
-- **P3 — split the pruner per-backend.** Each backend prunes its own dead workers; the
-  controller retains only the global orphan-slice GC. Pulled to the front: the pruner is
-  the one controller-side reader of the worker_attrs/endpoints lifecycle, so splitting it
-  unblocks moving those projections into the backend.
-- **P4 — backend owns its `WorkerAttrsProjection`.** Smallest projection-ownership
-  transfer; after P3 the only readers are the backend's own scheduling/register/fail paths.
-- **P5 — backend owns its `EndpointsProjection`; `EndpointService` routes to backends.**
-  Endpoints are task-keyed (backend-tied); the proxy resolves task → backend and reads the
-  owning backend's endpoints (in-process now, RPC at the remote phase). First concrete
-  controller-as-proxy move.
-- **P6 — backend commits its own execution effects (the commit-ownership pivot).**
-  `reconcile`/teardown write tasks/attempts/endpoints/attrs through the backend's own
-  projections + the shared DB instance; the controller receives only the DAG-relevant
-  summary (terminal transitions, completions, budget deltas) and folds it into the job
-  tree. Subsumes `Assignment.address` + the commit-validation fork (§5). After this the
-  controller commits no execution state.
-- **P7 — published cached `BackendStatus` (§2).** Views + routing read the per-backend
-  reported projection (incl. the autoscaler VM overlay), never the worker tables —
-  required once P6 means the controller no longer holds live worker/endpoint detail.
-- **P8 — autoscaler persistence single-writer through the store.**
-- **P9 (remote)** — placement-projection contract (opaque `backend_id + worker_id +
-  address (+ lease)`, no SQLite FK) + a **separate-file DB per remote backend**; in-process
-  backend calls become connect RPC. The DB file split lands here, not before; the
-  controller is now a pure proxy/router.
-
-## 8. Persisted shapes
-
-- **In-process: no new tables.** The store spans the existing `workers`,
-  `worker_attributes`, `slices`, `scaling_groups` plus the read-only task/job/budget joins.
-  `BackendStatus` is in-memory, republished each control tick.
-- **Remote (P9):** the controller-owned task projection stores opaque `backend_id,
-  worker_id, address (+ lease)` instead of a SQLite FK into a (nonexistent local) worker
-  row; the wire contract is specced with the remote transport (out of scope here).
-
-## 9. Errors
-
-- Recycled-IP collision returns via `RegisterOutcome.queued_eviction` (no exception).
-- Commit-time validation (P3) **skips** an assignment whose worker no longer validates
-  (matching today's silent skip — `task.py:92`); it does not raise.
-- `ProviderUnsupportedError` (existing) still signals on-demand RPCs a backend can't serve.
-
-## 10. File paths
-
-| Piece | Path |
-|---|---|
-| `BackendWorkerStore` + `DbBackendWorkerStore` + `WorkerRegistration`/`RegisterOutcome` | `controller/backend_store.py` |
-| `WorkerView` / `BackendStatus` / `BackendCounts` | `controller/backend_status.py` |
-| `BackendRuntime` (store field), `TaskBackend` delta | `controller/backend.py` |
-| `Assignment` (+address), `assign` (validate not read) | `controller/ops/task.py` |
-| Controller deletions (eviction plumbing, direct worker reads) | `controller/controller.py`, `controller/service.py` |
-| Per-backend prune + retained global orphan-slice GC | `controller/pruner.py` |
-
-## 11. Out of scope
-
-- Remote transport wire (the #6731 stack); meta-scheduler constraint language; the
-  per-backend DB **file** split (deferred to the remote phase P9 — in-process steps keep
-  one shared `ControllerDB` instance; table *ownership* moves to the backend, the *file*
-  does not); k8s/`CLUSTER_VIEW` changes beyond conforming to the (worker-less) store
-  interface.
-
-## 12. Open questions (for review)
-
-- **P6 commit-validation fork** (§5): keep a cheap liveness/existence recheck in `assign`,
-  or move to `store.validate_assignments`? The recheck guards a real intra-tick race, so
-  one of the two is mandatory — which seam?
-- **Worker-detail staleness:** served from the last-tick cached `WorkerView` + the
-  controller-owned attempt/job read. Acceptable, or does the detail page need a live fetch?
-- **Remote placement-projection (P9):** the per-worker view + freshness a remote backend
-  reports so on-demand routing (exec/profile to a remote worker) stays correct.
+**Open (Track 2 — federation, when designed):**
+2. **On-demand RPC to a federated job: proxy or redirect?** Proxy through the federating Iris
+   (uniform auth, one endpoint, on the data path) or redirect the client to the peer (off the hot
+   path, client needs reach + auth). Shapes the federation router.
+3. **Budget admission across peers** — grant-per-root with a reservation vs report-and-throttle;
+   overspend bound while a spend report is in flight.
+4. **Federated-job handle durability + re-attach** — the handle survives a federating-Iris restart
+   and re-syncs to still-running peers (fields in the `delegation-model` artifact).

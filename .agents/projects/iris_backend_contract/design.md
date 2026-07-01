@@ -1,4 +1,13 @@
-# Backend contract: encapsulated sub-controllers
+# Backend contract: local execution substrates (Model D)
+
+> **DECIDED 2026-07-01 — Model D (see the `delegation-model` artifact + `spec.md`).** A backend is a
+> **local execution substrate** (GCP, k8s) that shares the controller's one job DAG. A **remote Iris
+> cluster is NOT a backend** — it is a *federation peer* (owns its own DAG + backends; whole jobs are
+> handed off to it), designed as a separate project (Track 2). This **rejects** the earlier
+> "in-process and remote are the same modulo transport" north star below: unifying them was the
+> source of the DAG-ownership confusion. Consequence: **the backend contract does not have to be
+> remote-safe** — this doc's store/projection work (Track 1) is pure local hygiene; the DB-file split
+> and any `Remote*Store` are dropped.
 
 _Why are we doing this? What's the benefit?_
 
@@ -9,9 +18,10 @@ controller DB, and the in-process backend reaches into that DB to read (scoped)
 and write (teardown). The boundary holds only by convention, so concerns leak
 across it. We want it to be **structural**: each backend owns its worker state
 behind a typed store, the controller never independently reads worker state, and
-worker views are served from an opaque published projection. Then an in-process
-backend and a remote (possibly unreachable) Iris are the same thing modulo
-transport — the multi-backend north star.
+worker views are served from an opaque published projection — clean ownership of *local*
+worker state, so the controller's in-process multi-backend layering (GCP + k8s) stops leaking.
+(The original goal here was "in-process and remote are the same modulo transport"; Model D
+retires that — remote is federation, not a backend — see the banner above.)
 
 ## Background
 
