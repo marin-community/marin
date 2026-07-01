@@ -133,6 +133,9 @@ def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
             lambda p: dv.quality_samples(p["source"], float(p["lo"]), float(p["hi"]), int(p.get("n", 20))).dicts()
         ),
         "store_samples": lambda p: dv.store_cluster_samples(int(p["cluster"]), int(p.get("n", 12))),
+        "store_bucket_samples": lambda p: dv.store_bucket_samples(
+            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12))
+        ),
         "dedup_examples": lambda p: dv.dedup_examples(p["source"], int(p.get("n_clusters", 6))),
     }
 

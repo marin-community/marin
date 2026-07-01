@@ -218,3 +218,41 @@ class Dataviz:
             for row in res.dicts():
                 out.append({**row, "source": source})
         return out
+
+    def store_bucket_samples(self, cluster: int, quality_bucket: int, n: int = 12, max_sources: int = 8) -> list[dict]:
+        """Sample docs in a specific (cluster, quality) bucket, with score + text.
+
+        The bucket is ``cluster_<view> == cluster`` AND the quality score in that
+        bucket's threshold range, so this needs cluster_assign ⋈ quality ⋈
+        normalize per source. (Assignment view — it does not re-apply the
+        decontam/dedup drops the store did, so counts are looser than the bucket
+        totals.)
+        """
+        th = self.lineage.quality_thresholds
+        q = int(quality_bucket)
+        lo = 0.0 if q == 0 else th[q - 1]
+        hi = 1.01 if q >= len(th) else th[q]
+        view = self.lineage.cluster_view
+        srcs = [
+            s
+            for s in self.lineage.source_names
+            if s in self.lineage.cluster_assign and s in self.lineage.quality and s in self.lineage.normalize
+        ]
+        srcs.sort(key=lambda s: self.source_docs.get(s, 1 << 62))
+        out: list[dict] = []
+        for source in srcs[:max_sources]:
+            remaining = n - len(out)
+            if remaining <= 0:
+                break
+            assign = self._flat_glob(self.lineage.cluster_assign, source)
+            qual = self._flat_glob(self.lineage.quality, source)
+            norm = self._normalize_glob(source)
+            res = self.ducky.run(
+                f"SELECT round(q.score, 4) AS score, substr(n.text, 1, 2000) AS text "
+                f"FROM read_parquet('{assign}') a JOIN read_parquet('{qual}') q USING (id) "
+                f"JOIN read_parquet('{norm}') n USING (id) "
+                f"WHERE a.cluster_{view} = {int(cluster)} AND q.score >= {lo} AND q.score < {hi} LIMIT {remaining}"
+            )
+            for row in res.dicts():
+                out.append({**row, "source": source})
+        return out

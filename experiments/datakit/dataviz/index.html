@@ -261,7 +261,8 @@ function renderStore(m){
     return `<span style="display:inline-flex;width:80px;border-radius:2px;overflow:hidden;vertical-align:middle">${s}</span>`;};
   const th=(kk,l,al)=>`<th data-k="${kk}" style="cursor:pointer;text-align:${al||'right'}">${l}${STORESORT.key===kk?(STORESORT.dir>0?' ▲':' ▼'):''}</th>`;
   let head=th('cluster','cluster','left');for(let q=0;q<nq;q++)head+=th(String(q),'q'+q);head+=th('docs','docs')+'<th>quality mix</th>'+th('tokens','tokens');
-  const rowHtml=r=>{let t=`<td style="text-align:left">c${r.cluster}</td>`;for(let q=0;q<nq;q++)t+=`<td style="text-align:right">${cnum(r.q[q]||0)}</td>`;
+  const rowHtml=r=>{let t=`<td style="text-align:left">c${r.cluster}</td>`;
+    for(let q=0;q<nq;q++)t+=`<td class="qcell" data-c="${r.cluster}" data-q="${q}" title="sample cluster ${r.cluster} × q${q}" style="text-align:right;cursor:pointer">${cnum(r.q[q]||0)}</td>`;
     return `<tr>${t}<td style="text-align:right"><b>${cnum(r.docs)}</b></td><td>${qmix(r)}</td><td style="text-align:right">${cnum(r.tokens)}</td></tr>`;};
   let totrow=`<tr style="font-weight:600;border-top:2px solid var(--border)"><td style="text-align:left">all</td>`;
   for(let q=0;q<nq;q++)totrow+=`<td style="text-align:right">${cnum(tot.q[q]||0)}</td>`;
@@ -273,16 +274,24 @@ function renderStore(m){
      <div class="stat"><b>${OV.buckets.length}</b><span>buckets</span></div></div>
    <p class="muted">q0..q${nq-1} = quality score ranges ${[...Array(nq).keys()].map(q=>esc(qr(q))).join(' · ')}; click a header to sort</p>
    <table><thead><tr>${head}</tr></thead><tbody>${rows.map(rowHtml).join('')}${totrow}</tbody></table></div>
-   <div class="card"><div class="controls"><label>sample cluster <select id="sc">${rows.map(r=>`<option value="${r.cluster}">c${r.cluster} · ${cnum(r.docs)} docs</option>`).join('')}</select></label>
-     <input type="number" id="sn" value="12" min="1" max="50" style="width:64px"><button class="primary" id="sgo">sample documents</button></div>
-     <div id="ss"><p class="muted">exact original text of documents assigned to a cluster (joined across sources)</p></div></div>`;
+   <div class="card"><div class="controls">
+     <label>cluster <select id="sc">${rows.map(r=>`<option value="${r.cluster}">c${r.cluster} · ${cnum(r.docs)} docs</option>`).join('')}</select></label>
+     <label>quality <select id="sq"><option value="">any</option>${[...Array(nq).keys()].map(q=>`<option value="${q}">q${q} ${esc(qr(q))}</option>`).join('')}</select></label>
+     <input type="number" id="sn" value="12" min="1" max="50" style="width:64px"><button class="primary" id="sgo">sample</button></div>
+     <div id="ss"><p class="muted">pick a cluster + quality (or click a cell in the table above) to sample its documents</p></div></div>`;
   m.querySelectorAll('th[data-k]').forEach(t=>t.onclick=()=>{const kk=t.dataset.k;STORESORT=(STORESORT.key===kk)?{key:kk,dir:-STORESORT.dir}:{key:kk,dir:(kk==='cluster'?1:-1)};render();});
-  document.getElementById('sgo').onclick=()=>sampleCluster(+document.getElementById('sc').value,+document.getElementById('sn').value);
+  const go=()=>sampleBucket(+document.getElementById('sc').value,document.getElementById('sq').value,+document.getElementById('sn').value);
+  document.getElementById('sgo').onclick=go;
+  m.querySelectorAll('.qcell').forEach(c=>c.onclick=()=>{document.getElementById('sc').value=c.dataset.c;document.getElementById('sq').value=c.dataset.q;
+    sampleBucket(+c.dataset.c,c.dataset.q,+document.getElementById('sn').value);});
 }
-async function sampleCluster(cluster,n){
+async function sampleBucket(cluster,q,n){
   const ss=document.getElementById('ss');loading(ss);
-  try{const rows=await runQuery('store_samples',{cluster:cluster,n:n||12});
-    ss.innerHTML=`<h4>cluster ${cluster} — ${rows.length} sample documents (exact text)</h4>${sampleTable(rows,['source','text'])}`;
+  try{
+    let rows,cols,label;
+    if(q===''||q==null){rows=await runQuery('store_samples',{cluster,n:n||12});cols=['source','text'];label=`cluster ${cluster} · any quality`;}
+    else{rows=await runQuery('store_bucket_samples',{cluster,quality_bucket:+q,n:n||12});cols=['source','score','text'];label=`cluster ${cluster} · q${q}`;}
+    ss.innerHTML=`<h4>${label} — ${rows.length} sample documents (exact text)</h4>${rows.length?sampleTable(rows,cols):'<p class="muted">no documents matched in the sampled sources</p>'}`;
   }catch(e){fail(ss,e);}
 }
 
