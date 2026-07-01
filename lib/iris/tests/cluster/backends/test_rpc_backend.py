@@ -12,7 +12,6 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.backend import BackendRuntime, ScheduleRequest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.run_template import new_run_template_cache
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
@@ -53,7 +52,6 @@ def _bound_backend(db: ControllerDB, autoscaler: _StubAutoscaler) -> RpcTaskBack
             db=db,
             endpoints=EndpointsProjection(db),
             run_template_cache=new_run_template_cache(),
-            worker_attrs=WorkerAttrsProjection(db),
             owns_scale_group=lambda _: True,
             budget_defaults=UserBudgetDefaults(),
         )
@@ -101,12 +99,7 @@ def test_reserved_pool_drain_only_committed_when_autoscale_runs(tmp_path: Path):
     """
     db = ControllerDB(db_dir=tmp_path)
     try:
-        test_state = ControllerTestState(
-            db,
-            endpoints=EndpointsProjection(db),
-            worker_attrs=WorkerAttrsProjection(db),
-            run_template_cache=new_run_template_cache(),
-        )
+        test_state = ControllerTestState(db, run_template_cache=new_run_template_cache())
 
         # A running v4-8 BATCH task on a worker belonging to the fungible pool.
         register_worker(
