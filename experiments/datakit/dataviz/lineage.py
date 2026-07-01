@@ -118,7 +118,10 @@ def _discover_hashes(ducky: DuckyClient, data_prefix: str, stage_root: str) -> d
     depths and index by the hash-stripped stem to disambiguate later.
     """
     out: dict[str, list[str]] = {}
-    for depth in ("*", "*/*"):
+    # Source names have 1-3 slash-separated parts (nsf_awards / cp/foodista /
+    # safety_pt/moral_education/score_5_morals), so datasets sit 1-3 levels under
+    # the stage root — glob all three depths.
+    for depth in ("*", "*/*", "*/*/*"):
         sql = f"SELECT file FROM glob('{data_prefix}/{stage_root}/{depth}/.artifact.json')"
         for row in ducky.run(sql).rows:
             rel = _relativize(row[0].rsplit("/.artifact.json", 1)[0], data_prefix)
