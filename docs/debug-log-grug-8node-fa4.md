@@ -53,6 +53,15 @@ Focused local checks pass:
 - `./infra/pre-commit.py --files ... --fix`
 - `uv run pytest lib/levanter/tests/grug/test_fa4_cute_attention.py -k "passes_valid_mask_to_backend or forward_backend_does_not_pass_valid"`
 
+The next run `/dlwh/iris-run-job-20260701-190324` got past the frontend
+signature error and failed in the CUTLASS JAX primitive with:
+
+`ValueError: Must have the same number of specs (5) as tensors (4).`
+
+The forward launcher input spec still expects `valid`, so the backend call must
+pass `valid.astype(jnp.int32)` into `cutlass_call`; the "valid only for backward"
+hypothesis was wrong for this version of the kernel boundary.
+
 ## Future work
 
 - [ ] Capture W&B link, step time, throughput, MFU, and FA4/CE routing once the

@@ -400,7 +400,7 @@ def _cutlass_attention_forward_specs(
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec), (qkv_spec, lse_spec)
+    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec), (qkv_spec, lse_spec)
 
 
 def _cutlass_attention_backward_specs(
