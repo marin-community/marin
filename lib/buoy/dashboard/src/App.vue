@@ -4,17 +4,19 @@ import Sidebar from './components/Sidebar.vue'
 import RunHeader from './components/RunHeader.vue'
 import Tabs from './components/Tabs.vue'
 import SummaryTab from './components/SummaryTab.vue'
-import { useRun } from './composables/useRun'
+import ChartsTab from './components/ChartsTab.vue'
+import { useRun, type RunRef } from './composables/useRun'
 import type { TabId } from './types'
 
-// Phase 2: run selection → mirror/poll/load → header + summary tab. Charts and
-// profile land in phases 3–4 (see the migration plan under .agents/projects/).
+// Profile lands in phase 4 (see the migration plan under .agents/projects/).
 const { manifest, config, summary, loading, error, load, refetch } = useRun()
 const activeTab = ref<TabId>('summary')
+const runRef = ref<RunRef | null>(null)
 
 function select(entity: string, project: string, name: string) {
   activeTab.value = 'summary'
-  load({ entity, project, run_id: name })
+  runRef.value = { entity, project, run_id: name }
+  load(runRef.value)
 }
 </script>
 
@@ -37,7 +39,12 @@ function select(entity: string, project: string, name: string) {
         <Tabs :active="activeTab" :has-profile="!!manifest.profile" @change="(t) => (activeTab = t)" />
         <div class="p-6">
           <SummaryTab v-if="activeTab === 'summary'" :summary="summary" :config="config" />
-          <p v-else-if="activeTab === 'charts'" class="text-text-muted">charts — coming in phase 3</p>
+          <ChartsTab
+            v-else-if="activeTab === 'charts' && runRef"
+            :run-ref="runRef"
+            :columns="manifest.history.columns"
+            :state="manifest.state"
+          />
           <p v-else class="text-text-muted">profile — coming in phase 4</p>
         </div>
       </div>
