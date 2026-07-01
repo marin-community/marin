@@ -563,7 +563,7 @@ user_budgets_table = Table(
 
 
 # ---------------------------------------------------------------------------
-# Federation sidecars (Model D, Track 2).
+# Federation sidecars.
 #
 # The federated job/task rows live in ``jobs``/``tasks`` with ``child_cluster``
 # set; state/timing/counts are the single source of truth there. These tables

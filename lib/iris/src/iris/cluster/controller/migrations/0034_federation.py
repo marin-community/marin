@@ -3,8 +3,8 @@
 
 """Add the federation ``child_cluster`` discriminator and its sidecar tables.
 
-Federation (Model D, Track 2) hands whole jobs off to a peer cluster. Such rows
-carry ``child_cluster = '<peer>'`` on ``jobs``/``tasks`` (with ``backend_id = ''``)
+Federation hands whole jobs off to a peer cluster. Such rows carry
+``child_cluster = '<peer>'`` on ``jobs``/``tasks`` (with ``backend_id = ''``)
 and must be structurally invisible to the local scheduler fold, which reads the
 ``local_tasks`` selectable (``child_cluster = ''``) backed by the partial indexes
 created here. The ``federated_jobs``/``federation_sync_state``/``federated_tasks``
