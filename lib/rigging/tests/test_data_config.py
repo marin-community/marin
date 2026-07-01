@@ -181,14 +181,26 @@ def test_marin_temp_bucket_unknown_s3_bucket_falls_back(monkeypatch):
 # --- config-driven S3 bucket registry --------------------------------------
 
 
-def test_s3_data_buckets_reads_store_types_from_config(monkeypatch):
-    """The R2/CoreWeave registry is aggregated from config, with regions preserved."""
-    monkeypatch.delenv("MARIN_CLUSTER", raising=False)
-    buckets = s3_data_buckets()
-    assert buckets["marin-na"] == BucketSpec("marin-na", StoreType.R2)
-    assert buckets["marin-us-east-02a"] == BucketSpec("marin-us-east-02a", StoreType.COREWEAVE, "US-EAST-02A")
-    # GCS buckets are not S3-managed and must not appear.
-    assert not any(spec.store == StoreType.GCS for spec in buckets.values())
+def test_s3_data_buckets_aggregates_across_configs(tmp_path, monkeypatch):
+    """The registry unions R2/CoreWeave buckets from every config, drops GCS, keeps signing_region."""
+    cluster_dir = tmp_path / "clusters"
+    cluster_dir.mkdir()
+    (cluster_dir / "gcs.yaml").write_text("data:\n  scheme: gs\n  region_buckets: {r1: {bucket: b-gcs, store: gcs}}\n")
+    (cluster_dir / "s3.yaml").write_text(
+        "data:\n"
+        "  scheme: s3\n"
+        "  region_buckets:\n"
+        "    na: {bucket: b-r2, store: r2}\n"
+        "    e: {bucket: b-cw, store: coreweave, signing_region: US-EAST-02A}\n"
+    )
+    monkeypatch.setattr(fs, "MARIN_CLUSTER_CONFIG_DIRS", (str(cluster_dir),))
+    reset_data_config_cache()
+
+    # Aggregated across both configs; the GCS bucket is excluded; CoreWeave keeps its signing_region.
+    assert s3_data_buckets() == {
+        "b-r2": BucketSpec("b-r2", StoreType.R2),
+        "b-cw": BucketSpec("b-cw", StoreType.COREWEAVE, "US-EAST-02A"),
+    }
 
 
 def test_bucket_entry_requires_explicit_store(tmp_path, monkeypatch):
