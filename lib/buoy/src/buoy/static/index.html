@@ -8,120 +8,129 @@
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <style>
     :root { font-family: system-ui, -apple-system, sans-serif; }
+    * { box-sizing: border-box; }
     body { margin: 0; color: #1a1a1a; background: #f7f9fc; }
-    header {
-      padding: 1em 1.5em; background: #0d3b66; color: #fff; display: flex; gap: 1.25em;
-      align-items: flex-end; flex-wrap: wrap; box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+    .app { display: flex; height: 100vh; }
+
+    /* ---- left sidebar: selectors + run list ---- */
+    .sidebar { width: 340px; min-width: 300px; background: #0d3b66; color: #fff; display: flex; flex-direction: column; padding: 1em 1em .6em; }
+    .brand-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: .7em; }
+    .sidebar .brand { font-size: 1.35em; font-weight: 700; letter-spacing: .5px; }
+    #side-toggle { border: 0; background: rgba(255, 255, 255, .15); color: #fff; border-radius: 6px; width: 27px; height: 27px; cursor: pointer; font-size: 15px; line-height: 1; }
+    #side-toggle:hover { background: rgba(255, 255, 255, .32); }
+    .side-open { display: none; align-self: flex-start; margin: .8em 0 0 1.5em; padding: .45em .9em; border: 1px solid #cbd5e0; border-radius: 7px; background: #fff; color: #0d3b66; cursor: pointer; font-size: 13px; }
+    .side-open:hover { background: #eef4fb; }
+    .app.collapsed .sidebar { display: none; }
+    .app.collapsed .side-open { display: inline-block; }
+    .field { display: flex; flex-direction: column; gap: .3em; margin-bottom: .55em; }
+    .field > span { font-size: .66rem; text-transform: uppercase; letter-spacing: .07em; color: #aecbe8; }
+    .field input, .sidebar .search {
+      width: 100%; font-size: 13px; padding: .5em .65em; border: 1px solid #2c5d8a; border-radius: 7px;
+      background: #fff; color: #1a1a1a;
     }
-    header h1 { font-size: 1.2em; margin: 0 .6em 0 0; align-self: center; font-weight: 650; letter-spacing: .4px; }
-    .field { display: flex; flex-direction: column; gap: .35em; }
-    .field > span { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; color: #aecbe8; }
-    .field input {
-      font-size: 13px; padding: .55em .7em; border: 1px solid #2c5d8a; border-radius: 7px;
-      background: #fff; color: #1a1a1a; transition: box-shadow .12s, border-color .12s;
-    }
-    .field input::placeholder { color: #9aa7b4; }
-    .field input:focus { outline: none; border-color: #f4d35e; box-shadow: 0 0 0 3px rgba(244, 211, 94, .35); }
-    #entity { width: 150px; } #project { width: 140px; } #user { width: 120px; } #run { width: 440px; max-width: 60vw; }
-    header button {
-      padding: .6em 1.3em; border: 0; border-radius: 7px; background: #f4d35e; color: #0d3b66;
-      font-weight: 650; font-size: 13px; cursor: pointer; transition: background .12s;
-    }
-    header button:hover { background: #f8e08a; }
-    #status { padding: .7em 1.5em; color: #555; }
-    #meta { padding: .3em 1.5em .6em; color: #333; }
-    .tabs { display: flex; gap: .5em; padding: .4em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
+    .field input::placeholder, .search::placeholder { color: #9aa7b4; }
+    .field input:focus, .search:focus { outline: none; border-color: #f4d35e; box-shadow: 0 0 0 3px rgba(244, 211, 94, .3); }
+    .sidebar .search { margin: .5em 0 .5em; }
+    #run-count { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: #aecbe8; margin-bottom: .3em; }
+    #run-panel { flex: 1; overflow: auto; margin: 0 -.5em; padding: 0 .5em; }
+    .run-item { display: flex; gap: .5em; align-items: flex-start; padding: .45em .5em; border-radius: 7px; cursor: pointer; }
+    .run-item:hover { background: rgba(255, 255, 255, .09); }
+    .run-item.active { background: #f4d35e; }
+    .run-item .ic { flex: 0 0 auto; line-height: 1.3; }
+    .run-item .rid { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; line-height: 1.3; }
+    .run-item .sub { font-size: 11px; color: #aecbe8; margin-top: .1em; }
+    .run-item.active .rid, .run-item.active .sub { color: #0d3b66; }
+    .run-empty { color: #aecbe8; font-size: 12px; padding: .5em; }
+
+    /* ---- main area ---- */
+    .main { flex: 1; overflow: auto; display: flex; flex-direction: column; }
+    #status { padding: .8em 1.5em; color: #555; }
+    .tabs { display: flex; gap: .5em; padding: .5em 1.5em 0; border-bottom: 1px solid #e2e8f0; background: #fff; }
     .tab { padding: .6em 1.2em; cursor: pointer; border: 1px solid transparent; border-bottom: 0; color: #4a5568; }
     .tab.active { border-color: #e2e8f0; border-radius: 6px 6px 0 0; background: #f7f9fc; font-weight: 650; color: #0d3b66; }
     .live { margin-left: auto; align-self: center; padding-right: 1em; font-size: 12px; color: #2f855a; font-weight: 600; }
-    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
-    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
-    #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
-    .hidden { display: none; }
-    a { color: #0d3b66; }
     .pane { padding: 1.25em 1.5em; }
-    .search {
-      width: min(560px, 92vw); padding: .55em .8em; font-size: 13px; border: 1px solid #cbd5e0;
-      border-radius: 7px; margin-bottom: 1em; display: block;
-    }
-    .search:focus { outline: none; border-color: #0d3b66; box-shadow: 0 0 0 3px rgba(13, 59, 102, .15); }
+    a { color: #0d3b66; }
+    .hidden { display: none; }
+    .search { font-size: 13px; padding: .55em .8em; border: 1px solid #cbd5e0; border-radius: 7px; margin-bottom: 1em; }
+
     #info { display: flex; flex-wrap: wrap; gap: .5em 1.4em; align-items: baseline; margin-bottom: 1.1em; }
     #info .name { font-size: 1.15em; font-weight: 650; color: #0d3b66; word-break: break-all; }
-    #info .pill {
-      font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; padding: .2em .65em;
-      border-radius: 999px; background: #edf2f7; color: #2d3748; font-weight: 600;
-    }
+    #info .pill { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; padding: .2em .65em; border-radius: 999px; background: #edf2f7; color: #2d3748; font-weight: 600; }
     #info .kv { color: #4a5568; font-size: .9em; }
     #info .kv b { color: #1a1a1a; font-weight: 600; }
+    .refetch-btn { padding: .3em .7em; border: 1px solid #cbd5e0; border-radius: 6px; background: #fff; color: #0d3b66; font-size: 12px; cursor: pointer; }
+    .refetch-btn:hover { background: #eef4fb; }
+    #summary-search { display: block; width: min(560px, 100%); }
     .kv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5em; align-items: start; }
     .kv-col h3 { margin: 0 0 .5em; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: #718096; }
     .kv-col table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
     .kv-col td { padding: .32em .5em; border-bottom: 1px solid #eef2f6; vertical-align: top; word-break: break-word; }
     .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
     .kv-col td.v { font-family: ui-monospace, monospace; }
+
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); gap: .9em; }
+    .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); }
     .chips { display: flex; flex-wrap: wrap; gap: .4em; margin-bottom: .6em; }
-    .chip {
-      display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff;
-      border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace;
-    }
-    .chip button {
-      border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px;
-      line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0;
-    }
+    .chip { display: inline-flex; align-items: center; gap: .45em; background: #0d3b66; color: #fff; border-radius: 999px; padding: .25em .35em .25em .75em; font-size: 12px; font-family: ui-monospace, monospace; }
+    .chip button { border: 0; background: rgba(255, 255, 255, .25); color: #fff; border-radius: 999px; width: 16px; height: 16px; line-height: 14px; text-align: center; cursor: pointer; font-size: 12px; padding: 0; }
     .chip button:hover { background: rgba(255, 255, 255, .5); }
-    .combo { position: relative; width: min(560px, 92vw); margin-bottom: 1.1em; }
-    .combo .search { margin-bottom: 0; width: 100%; box-sizing: border-box; }
-    .options {
-      position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: #fff;
-      border: 1px solid #cbd5e0; border-radius: 8px; box-shadow: 0 8px 22px rgba(0, 0, 0, .14);
-      max-height: 300px; overflow: auto;
-    }
+    .combo { position: relative; width: min(560px, 100%); margin-bottom: 1.1em; }
+    .combo .search { margin-bottom: 0; width: 100%; }
+    .options { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: #fff; border: 1px solid #cbd5e0; border-radius: 8px; box-shadow: 0 8px 22px rgba(0, 0, 0, .14); max-height: 300px; overflow: auto; }
     .option { padding: .5em .8em; font-size: 12.5px; font-family: ui-monospace, monospace; cursor: pointer; }
     .option:hover { background: #eef4fb; }
     .option.muted { color: #94a3b8; font-style: italic; cursor: default; }
-    @media (max-width: 760px) { .kv-cols { grid-template-columns: 1fr; } }
+    #profile-pane iframe { width: 100%; height: 82vh; border: 1px solid #ccc; }
+    @media (max-width: 760px) { .kv-cols { grid-template-columns: 1fr; } .sidebar { width: 260px; min-width: 220px; } }
   </style>
 </head>
 <body>
-  <header>
-    <h1>buoy</h1>
-    <label class="field"><span>entity</span><input id="entity" list="entity-list" autocomplete="off"></label>
-    <datalist id="entity-list"></datalist>
-    <label class="field"><span>project</span><input id="project" list="project-list" autocomplete="off"></label>
-    <datalist id="project-list"></datalist>
-    <label class="field"><span>user</span><input id="user" list="user-list" placeholder="(any)" autocomplete="off"></label>
-    <datalist id="user-list"></datalist>
-    <label class="field"><span>run</span><input id="run" list="run-list" placeholder="type to filter…" autocomplete="off"></label>
-    <datalist id="run-list"></datalist>
-    <button id="load">load</button>
-  </header>
-  <div id="status"></div>
-  <div class="tabs hidden" id="tabs">
-    <div class="tab active" data-pane="summary-pane">summary</div>
-    <div class="tab" data-pane="charts-pane">charts</div>
-    <div class="tab" data-pane="profile-pane">profile</div>
-    <span id="live" class="live"></span>
-  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand-row"><span class="brand">buoy</span><button id="side-toggle" title="hide sidebar">«</button></div>
+      <label class="field"><span>entity</span><input id="entity" list="entity-list" autocomplete="off"></label>
+      <datalist id="entity-list"></datalist>
+      <label class="field"><span>project</span><input id="project" list="project-list" autocomplete="off"></label>
+      <datalist id="project-list"></datalist>
+      <label class="field"><span>user</span><input id="user" list="user-list" placeholder="(any)" autocomplete="off"></label>
+      <datalist id="user-list"></datalist>
+      <input id="run-search" class="search" placeholder="search runs…" autocomplete="off">
+      <div id="run-count"></div>
+      <div id="run-panel"></div>
+    </aside>
 
-  <div id="summary-pane" class="pane">
-    <div id="info"></div>
-    <input id="summary-search" class="search" placeholder="filter summary metrics &amp; config…">
-    <div class="kv-cols">
-      <div class="kv-col"><h3>summary metrics</h3><table id="summary-table"></table></div>
-      <div class="kv-col"><h3>config</h3><table id="config-table"></table></div>
-    </div>
-  </div>
+    <main class="main">
+      <button id="side-open" class="side-open" title="show runs">☰ runs</button>
+      <div id="status">pick an entity / project, then a run from the list</div>
+      <div class="tabs hidden" id="tabs">
+        <div class="tab active" data-pane="summary-pane">summary</div>
+        <div class="tab" data-pane="charts-pane">charts</div>
+        <div class="tab" data-pane="profile-pane">profile</div>
+        <span id="live" class="live"></span>
+      </div>
 
-  <div id="charts-pane" class="pane hidden">
-    <div id="metric-chips" class="chips"></div>
-    <div class="combo">
-      <input id="metric-search" class="search" placeholder="add a metric to plot…" autocomplete="off">
-      <div id="metric-options" class="options hidden"></div>
-    </div>
-    <div id="charts"></div>
-  </div>
+      <div id="summary-pane" class="pane hidden">
+        <div id="info"></div>
+        <input id="summary-search" class="search" placeholder="filter summary metrics &amp; config…">
+        <div class="kv-cols">
+          <div class="kv-col"><h3>summary metrics</h3><table id="summary-table"></table></div>
+          <div class="kv-col"><h3>config</h3><table id="config-table"></table></div>
+        </div>
+      </div>
 
-  <div id="profile-pane" class="pane hidden"></div>
+      <div id="charts-pane" class="pane hidden">
+        <div id="metric-chips" class="chips"></div>
+        <div class="combo">
+          <input id="metric-search" class="search" placeholder="add a metric to plot…" autocomplete="off">
+          <div id="metric-options" class="options hidden"></div>
+        </div>
+        <div id="charts"></div>
+      </div>
+
+      <div id="profile-pane" class="pane hidden"></div>
+    </main>
+  </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
@@ -131,47 +140,32 @@
     ];
     const qs = (o) => new URLSearchParams(o).toString();
     let current = null;          // { r, m } for the loaded run
+    let loadedRunId = null;      // highlighted run in the sidebar
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
     let liveTimer = null;        // running-run auto-refresh timer
+    let searchTimer = null;
     const LIVE_INTERVAL = 30000;
 
-    // wandb run state -> status glyph, shown as a prefix in the run datalist.
-    const STATE_ICON = {
-      running: "🟢", finished: "🏁", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡",
-    };
-    const ICONS = Object.values(STATE_ICON).concat("⚪");
+    const STATE_ICON = { running: "🟢", finished: "🏁", crashed: "💥", failed: "❌", killed: "⛔", preempted: "🟡" };
     const stateIcon = (s) => STATE_ICON[s] || "⚪";
-    // Strip a leading status glyph so the bare run id reaches the API (run ids have
-    // no spaces, so this only removes the icon we prepended).
-    function cleanRunId(v) {
-      v = (v || "").trim();
-      for (const ic of ICONS) if (v.startsWith(ic + " ")) return v.slice(ic.length + 1).trim();
-      return v;
-    }
 
     const jget = (url) => fetch(url).then((r) => r.json()).catch(() => ({}));
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
     function fillList(id, values) {
       const dl = $(id);
       dl.innerHTML = "";
-      for (const v of values) {
-        const o = document.createElement("option");
-        o.value = v;
-        dl.appendChild(o);
-      }
+      for (const v of values) { const o = document.createElement("option"); o.value = v; dl.appendChild(o); }
     }
 
     async function loadEntities() { fillList("entity-list", (await jget("api/entities")).entities || []); }
-
     async function loadProjects() {
       const e = $("entity").value.trim();
       if (!e) return;
-      fillList("project-list", []);
       fillList("project-list", (await jget("api/projects?" + qs({ entity: e }))).projects || []);
     }
-
-    // Fuller author list for the user filter — scans more runs than the picker so
-    // contributors with only older runs still appear. Best-effort, in background.
+    // Fuller author list — scans more runs than the picker so contributors with only
+    // older runs still appear. Best-effort, in background.
     async function loadUsers() {
       const e = $("entity").value.trim(), p = $("project").value.trim();
       if (!e || !p) return;
@@ -179,21 +173,42 @@
       if (users && users.length) fillList("user-list", users);
     }
 
-    let searchTimer;
-
     // Runs are filtered server-side (user + name search) so any run is findable
-    // regardless of recency; results arrive newest-first.
+    // regardless of recency; results arrive newest-first and render as a clickable list.
     async function fetchRuns({ search = "" } = {}) {
       const e = $("entity").value.trim(), p = $("project").value.trim();
-      if (!e || !p) return;
+      if (!e || !p) { renderRunPanel([]); return; }
       const user = $("user").value.trim();
-      const params = { entity: e, project: p, limit: 50 };
+      const params = { entity: e, project: p, limit: 100 };
       if (user) params.user = user;
       if (search) params.search = search;
+      $("run-count").textContent = "loading…";
       const runs = (await jget("api/runs?" + qs(params))).runs || [];
-      // Seed the user suggestions from an unfiltered listing only.
       if (!user && !search) fillList("user-list", [...new Set(runs.map((r) => r.user).filter(Boolean))].sort());
-      fillList("run-list", runs.map((r) => `${stateIcon(r.state)} ${r.id}`));
+      renderRunPanel(runs);
+    }
+
+    function renderRunPanel(runs) {
+      const panel = $("run-panel");
+      panel.textContent = "";
+      $("run-count").textContent = runs.length ? `${runs.length} runs` : "";
+      if (!runs.length) { panel.appendChild(el("div", "run-empty", "no runs")); return; }
+      for (const rn of runs) {
+        const item = el("div", "run-item");
+        item.dataset.id = rn.id;
+        if (rn.id === loadedRunId) item.classList.add("active");
+        const body = el("div", "run-body");
+        body.appendChild(el("div", "rid", rn.id));
+        const sub = [rn.user, (rn.created_at || "").replace("T", " ").replace("Z", "")].filter(Boolean).join(" · ");
+        if (sub) body.appendChild(el("div", "sub", sub));
+        item.append(el("span", "ic", stateIcon(rn.state)), body);
+        item.addEventListener("click", () => load(rn.id));
+        panel.appendChild(item);
+      }
+    }
+
+    function highlightRun(runId) {
+      document.querySelectorAll(".run-item").forEach((it) => it.classList.toggle("active", it.dataset.id === runId));
     }
 
     async function init() {
@@ -205,55 +220,63 @@
       loadEntities();
       await loadProjects();
       if ($("project").value) { await fetchRuns(); loadUsers(); }
-      if (p.get("run")) { $("run").value = p.get("run"); load(); }
+      if (p.get("run")) load(p.get("run"));
     }
 
-    function refs() {
-      return { entity: $("entity").value.trim(), project: $("project").value.trim(), run: cleanRunId($("run").value) };
-    }
-
-    function setTab(pane) {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.pane === pane));
-      document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("hidden", p.id !== pane));
-      if (pane === "profile-pane" && current && current.m.profile && !profileStarted) {
-        profileStarted = true;
-        prepareProfile(current.r, $("profile-pane"));
-      }
-    }
-    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.pane)));
-
-    async function load() {
-      const r = refs();
-      if (!r.project || !r.run) { $("status").textContent = "enter a project and run id"; return; }
-      // Keep the SPA URL a shareable deep-link (the wrap frame stops xprof from clobbering it).
+    // ---- load a run ----
+    async function load(runId) {
+      const entity = $("entity").value.trim(), project = $("project").value.trim();
+      if (!project || !runId) return;
+      loadedRunId = runId;
+      highlightRun(runId);
+      const r = { entity, project, run: runId };
       const u = $("user").value.trim();
-      history.replaceState(null, "", "?" + qs(u ? { ...r, user: u } : r));
-      $("charts").innerHTML = "";
+      history.replaceState(null, "", "?" + qs(u ? { ...r, user: u } : r));  // shareable deep-link
       $("info").textContent = "";
       $("live").textContent = "";
       $("tabs").classList.add("hidden");
       clearTimeout(liveTimer);
       profileStarted = false;
       current = null;
-      $("status").textContent = "mirroring " + r.run + " … (first load of a large run can take ~1 min)";
-
+      $("status").textContent = "mirroring " + runId + " … (first load of a large run can take ~1 min)";
       await fetch("api/mirror", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run }),
+        body: JSON.stringify({ entity, project, run_id: runId }),
       });
       poll(r);
     }
 
     async function poll(r) {
-      const s = await fetch("api/mirror_status?" + qs(r)).then((x) => x.json());
+      const s = await jget("api/mirror_status?" + qs(r));
       if (s.state === "running") { setTimeout(() => poll(r), 2000); return; }
       if (s.state === "error") { $("status").textContent = "mirror failed: " + s.error; return; }
       if (s.state === "absent") { $("status").textContent = "run not found"; return; }
       render(r);
     }
 
-    // ---- helpers (all user-controlled text via textContent — no innerHTML) ----
-    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    // Force a re-mirror (refresh=true re-downloads everything incl. the profile
+    // artifact), then re-render — for a finished run whose cache predates a fix.
+    async function refetch() {
+      if (!current) return;
+      const r = current.r;
+      clearTimeout(liveTimer);
+      profileStarted = false;
+      $("status").textContent = "refetching " + r.run + " …";
+      await fetch("api/mirror", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run, refresh: true }),
+      });
+      const p = async () => {
+        if (!stillCurrent(r)) return;
+        const s = await jget("api/mirror_status?" + qs(r));
+        if (s.state === "running") { setTimeout(p, 1500); return; }
+        if (s.state === "error") { $("status").textContent = "refetch failed: " + s.error; return; }
+        render(r);
+      };
+      p();
+    }
+
+    // ---- render helpers (user-controlled text via textContent — no innerHTML) ----
     const fmtVal = (v) =>
       v == null ? "" : typeof v === "object" ? JSON.stringify(v)
         : typeof v === "number" ? (Number.isInteger(v) ? String(v) : String(+v.toFixed(6))) : String(v);
@@ -286,6 +309,10 @@
       a.target = "_blank"; a.rel = "noopener";
       if (/^https?:\/\//.test(m.url || "")) a.href = m.url;
       info.appendChild(a);
+      const btn = el("button", "refetch-btn", "↻ refetch");
+      btn.title = "re-pull this run from wandb (metrics, config, summary, profile artifact)";
+      btn.addEventListener("click", refetch);
+      info.appendChild(btn);
       if (m.notes) { const n = el("div", "kv", "notes: " + m.notes); n.style.flexBasis = "100%"; info.appendChild(n); }
     }
 
@@ -343,7 +370,6 @@
       } else {
         for (const c of matches.slice(0, 50)) {
           const o = el("div", "option", c);
-          // mousedown (not click) so it fires before the input blur
           o.addEventListener("mousedown", (e) => { e.preventDefault(); addMetric(c); });
           opts.appendChild(o);
         }
@@ -354,9 +380,18 @@
     async function plotSelected() {
       const charts = $("charts");
       charts.textContent = "";
-      if (!selectedMetrics.length) { charts.textContent = "select metrics above to plot"; return; }
+      if (!selectedMetrics.length) { charts.textContent = "add metrics above to plot"; return; }
       const data = (await jget("api/metrics?" + qs({ ...current.r, keys: selectedMetrics.join(",") }))).metrics || {};
       for (const key of selectedMetrics) drawChart(key, data[key] || []);
+    }
+
+    function setTab(pane) {
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.pane === pane));
+      document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("hidden", p.id !== pane));
+      if (pane === "profile-pane" && current && current.m.profile && !profileStarted) {
+        profileStarted = true;
+        prepareProfile(current.r, $("profile-pane"));
+      }
     }
 
     async function render(r) {
@@ -377,13 +412,11 @@
       renderChips();
       plotSelected();
 
-      $("profile-pane").textContent = m.profile ? "open the profile tab to load xprof" : "no jax_profile artifact on this run";
+      $("profile-pane").textContent = m.profile ? "open the profile tab to load xprof" : "no profile artifact on this run";
       scheduleLive(r);
     }
 
-    // While the run is still running, poll for fresh data and redraw (the server
-    // keeps re-mirroring the cache until the run finishes; the poll also keeps that
-    // watcher alive). Selected chips and the active tab are preserved.
+    // ---- live auto-refresh for running runs ----
     const liveStamp = () => "live · updated " + new Date().toLocaleTimeString();
     function scheduleLive(r) {
       clearTimeout(liveTimer);
@@ -394,10 +427,10 @@
     const stillCurrent = (r) =>
       current && current.r.entity === r.entity && current.r.project === r.project && current.r.run === r.run;
     async function refreshLive(r) {
-      if (!stillCurrent(r)) return;  // user navigated to another run
+      if (!stillCurrent(r)) return;
       const m = await jget("api/manifest?" + qs(r));
       if (!stillCurrent(r)) return;
-      if (!m || m.error || !m.history) { scheduleLive(r); return; }  // transient failure — keep polling
+      if (!m || m.error || !m.history) { scheduleLive(r); return; }
       current.m = m;
       renderInfo(m);
       const [cfg, summ] = await Promise.all([jget("api/config?" + qs(r)), jget("api/summary?" + qs(r))]);
@@ -417,7 +450,7 @@
         body: JSON.stringify({ entity: r.entity, project: r.project, run_id: r.run }),
       });
       const poll = async () => {
-        const s = await fetch("api/profile_status?" + qs(r)).then((x) => x.json());
+        const s = await jget("api/profile_status?" + qs(r));
         if (s.state === "ready") {
           pane.textContent = "";
           pane.style.padding = "0";
@@ -445,23 +478,26 @@
       }, { displayModeBar: false, responsive: true });
     }
 
+    // ---- events ----
+    const app = document.querySelector(".app");
+    const toggleSidebar = (collapsed) => {
+      app.classList.toggle("collapsed", collapsed);
+      window.dispatchEvent(new Event("resize"));  // let Plotly reflow to the new width
+    };
+    $("side-toggle").addEventListener("click", () => toggleSidebar(true));
+    $("side-open").addEventListener("click", () => toggleSidebar(false));
+    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.pane)));
     $("entity").addEventListener("change", () => { loadProjects(); fetchRuns(); loadUsers(); });
     $("project").addEventListener("change", () => { fetchRuns(); loadUsers(); });
     $("user").addEventListener("change", () => fetchRuns());
-    // Search server-side as the run name is typed (debounced); selecting an option loads it.
-    $("run").addEventListener("input", () => {
+    $("run-search").addEventListener("input", () => {
       clearTimeout(searchTimer);
-      const txt = cleanRunId($("run").value);
-      searchTimer = setTimeout(() => fetchRuns({ search: txt }), 350);
+      searchTimer = setTimeout(() => fetchRuns({ search: $("run-search").value.trim() }), 350);
     });
-    $("run").addEventListener("change", () => {
-      const id = cleanRunId($("run").value);  // drop the status glyph once a run is picked
-      if (id) { $("run").value = id; load(); }
+    $("run-search").addEventListener("keydown", (e) => {
+      // paste a full run id + Enter loads it directly, even if not in the list
+      if (e.key === "Enter" && $("run-search").value.trim()) load($("run-search").value.trim());
     });
-    $("load").addEventListener("click", load);
-    $("run").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
-
-    // summary tab: filter both tables; charts tab: filter the metric list + toggle plots
     $("summary-search").addEventListener("input", () => { if (current) renderKV(); });
     $("metric-search").addEventListener("input", showOptions);
     $("metric-search").addEventListener("focus", showOptions);
