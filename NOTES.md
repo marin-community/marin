@@ -180,3 +180,85 @@ lowerer. I added a local `_wgmma` wrapper in `_fp8_mosaic_ragged.py` to bypass
 the Python guard for E4M3/E5M2, and patched the pod venv lowerer check in
 `/app/.venv/lib/python3.12/site-packages/jax/experimental/mosaic/gpu/wgmma.py`
 to allow the E4M3/E5M2 pair. After that, direct mixed dgrad compiled again.
+
+I decoupled backward tile sizes from the forward tile so forward can use
+`block_k=128` while dgrad and the bf16 wgrad fallback keep known-safe
+`block_k=64`. With `block_m=192, block_n=128, block_k=128`, fwd+bwd compiles
+and measures about `0.95x`/`1.00x` for w13/w2 in quick runs. With
+`block_m=128, block_n=128, block_k=128`, w13 can reach about `1.09x` in a
+short run, but w2 stays below `1.0x`.
+
+The generic masked Mosaic wgrad now compiles after the mixed-lowering patch, but
+it still measures around `1.00x`/`0.96x` at `block_m=192, block_n=128,
+block_k=64`. The block-padded Mosaic wgrad path was not stable above `1.0x` on
+repeat. The official `jax.experimental.pallas.ops.gpu.ragged_dot_mgpu` helper was
+competitive for raw same-dtype forward, but slower in the full quantized forward
+path, so I did not keep it in the op.
+
+## Second resume findings
+
+Important measurement hygiene correction: `./h100` does not forward local
+one-shot environment prefixes. This:
+
+```bash
+FP8_MOSAIC_WGRAD=triton ./h100 python ...
+```
+
+arrives on the pod without `FP8_MOSAIC_WGRAD`. Use:
+
+```bash
+./h100 env FP8_MOSAIC_WGRAD=triton python ...
+```
+
+or the benchmark is measuring the default selector.
+
+With correctly propagated env vars, the best working default at the 1024
+non-uniform operating point remains the Mosaic FP8 forward + mixed-FP8 dgrad
+with bf16 Triton wgrad fallback:
+
+```bash
+./h100 python bench_fp8_ragged_dot.py --quick --mode fwd_bwd \
+  --warmups 1 --iters 3 --fp8-implementation mosaic \
+  --fp8-block-m 192 --fp8-block-n 128 --fp8-block-k 128
+```
+
+Measured:
+
+| GEMM | bf16 fwd+bwd | fp8 fwd+bwd | speedup |
+| --- | ---: | ---: | ---: |
+| w13 K=2560 N=2560 | 5.901 ms | 6.018 ms | 0.981x |
+| w2 K=1280 N=2560 | 3.228 ms | 3.211 ms | 1.005x |
+
+Forward-only tuning with real remote envs:
+
+- best measured full-forward config remains
+  `block_m=192, block_n=128, block_k=128, max_concurrent_steps=4,
+  grid_block_n=8`;
+- measured full-forward speedup was about `1.10x` for w13 and `1.06-1.09x`
+  for w2, including quantize/dequantize;
+- `block_m=256`, `block_n=64`, and `block_n=256` were all slower;
+- `block_n=96` triggered a CUDA misaligned-address failure and should not be
+  reused without a fresh process and a specific reason.
+
+I added experimental, non-default selectors for the remaining wgrad attempts:
+
+- `FP8_MOSAIC_WGRAD=mosaic_block_pad_pretransposed`: a native Triton kernel
+  packs each expert token stream to the wgrad token tile and writes transposed
+  FP8 operands, then calls no-mask Mosaic wgrad. This still fails Mosaic layout
+  inference in `mosaic_transposed_ragged_dot`, even for small already-materialized
+  block-aligned same-dtype FP8 inputs:
+  `ValueError: Failed to infer a possible set of layouts.`
+- `FP8_MOSAIC_WGRAD=triton`: Pallas-Triton wgrad rejects the required mixed
+  E4M3 x E5M2 operands before lowering:
+  `TypePromotionError: Input dtypes ('float8_e4m3fn', 'float8_e5m2') have no
+  available implicit dtype promotion path.`
+- `FP8_MOSAIC_WGRAD=triton_native`: native Triton accepts mixed FP8, but is
+  much too slow at the 1024 operating point (`0.47x`/`0.46x` fwd+bwd for
+  w13/w2 with `block_m=192, block_n=128, block_k=128`).
+
+The current specific blocker for the >=1.2x target is therefore a fast
+arbitrary-ragged mixed-FP8 wgrad. I have a standalone pack+transpose kernel that
+materializes token-tile-padded FP8 operands outside Mosaic, but the existing
+transposed Mosaic wgrad kernel still fails layout inference when consuming those
+operands. The native Triton mixed-FP8 fallback is correct enough to compile, but
+far below the needed performance.
