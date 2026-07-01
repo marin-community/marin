@@ -55,8 +55,7 @@ def main(config: LoraLmConfig):
     tokenizer = config.data.the_tokenizer
 
     converter = HFCheckpointConverter.from_hf(config.initialize_from_hf, trust_remote_code=config.trust_remote_code)
-    if tokenizer.vocab != converter.tokenizer.vocab:
-        logger.warning("The tokenizers appear to be different. You may want to check this.")
+    converter.warn_if_tokenizer_mismatch(tokenizer)
 
     converter = converter.replaced(tokenizer=tokenizer)
 
