@@ -354,30 +354,6 @@ def availability_constraint(variant: str) -> Constraint:
     )
 
 
-def availability_constraints_from_reservation(reservation: job_pb2.ReservationConfig) -> list[Constraint]:
-    """Map a deprecated ``ReservationConfig`` to hard ``availability:<variant>`` constraints.
-
-    Back-compat shim for pre-availability clients (see job.proto): each reservation
-    entry's accelerator variant becomes one hard availability constraint. Entries
-    with no accelerator device contribute nothing (availability is accelerators
-    only). Deduplicated by key so duplicate entries collapse to a single constraint.
-    """
-    constraints: list[Constraint] = []
-    seen: set[str] = set()
-    for entry in reservation.entries:
-        if not entry.resources.HasField("device"):
-            continue
-        variant = get_device_variant(entry.resources.device)
-        if not variant or variant == "auto":
-            continue
-        key = availability_key(variant)
-        if key in seen:
-            continue
-        seen.add(key)
-        constraints.append(availability_constraint(variant))
-    return constraints
-
-
 def region_constraint(regions: list[str]) -> Constraint:
     """Constraint requiring workers to be in one of the given regions.
 

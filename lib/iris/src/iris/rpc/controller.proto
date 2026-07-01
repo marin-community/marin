@@ -88,12 +88,7 @@ message Controller {
     // removed and replaced with the new submission.
     bool fail_if_exists = 22;
 
-    // DEPRECATED, back-compat only. Reservations were replaced by the hard
-    // availability:<variant> constraint. Current clients leave this empty; when a
-    // pre-availability client sets it, the server converts each entry into a hard
-    // availability constraint at ingestion and discards the field. Scheduled for
-    // removal once stragglers have upgraded — do not add new uses.
-    iris.job.ReservationConfig reservation = 30;
+    reserved 30;  // was: iris.job.ReservationConfig reservation (replaced by hard availability:<variant> constraints)
 
     iris.job.JobPreemptionPolicy preemption_policy = 31;
     iris.job.ExistingJobPolicy existing_job_policy = 32;

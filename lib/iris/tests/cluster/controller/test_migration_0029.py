@@ -15,7 +15,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-from google.protobuf import json_format
 from iris.cluster.constraints import ConstraintOp, availability_key
 from iris.cluster.controller.codec import constraints_from_json
 from iris.rpc import job_pb2
@@ -71,10 +70,8 @@ CREATE TABLE reservation_claims (worker_id VARCHAR PRIMARY KEY, job_id VARCHAR N
 
 
 def _reservation_json(variant: str) -> str:
-    """Build a ``reservation_json`` blob the way the old codec stored it."""
-    config = job_pb2.ReservationConfig()
-    config.entries.add().resources.device.tpu.variant = variant
-    return json.dumps(json_format.MessageToDict(config, preserving_proto_field_name=True))
+    """Build a ``reservation_json`` blob the way the old (now-removed) codec stored it."""
+    return json.dumps({"entries": [{"resources": {"device": {"tpu": {"variant": variant}}}}]})
 
 
 def _load_migration():
