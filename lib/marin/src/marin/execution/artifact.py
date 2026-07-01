@@ -42,9 +42,8 @@ type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, J
 
 # The record file written next to every output. Dot-prefixed so the datakit
 # ``normalize._discover_files`` walk and the tokenizer file filter — both skip dotfiles — never
-# mistake it for training data and parse it as JSONL (#5864). Legacy names are read for back-compat
-# with already-materialized outputs, never written — including the brief un-dotted ``artifact.json``
-# form that shipped between #6649 and this change.
+# mistake it for training data and parse it as JSONL. Legacy names are read for back-compat with
+# already-materialized outputs, never written — including a brief un-dotted ``artifact.json`` form.
 RECORD_FILENAME = ".artifact.json"
 _LEGACY_RECORD_FILENAMES = (".artifact_record.json", "artifact.json", ".artifact")
 _LEGACY_PAYLOAD_FILENAMES = (".artifact.json", ".artifact")
