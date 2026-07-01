@@ -701,12 +701,10 @@ def _victim_slices_by_pool(
 ) -> dict[str, list[_VictimSlice]]:
     """Group evictable running tasks into per-pool victim slices.
 
-    Victims are grouped by physical slice because the drain tears down a whole
-    slice: every task on it is evicted together and its chips free once (grouping
-    by task would double-count chips and silently kill a sibling task the pass
-    never checked). A coscheduled job spanning multiple slices is excluded —
-    preempting one slice's tasks cascades to siblings on the others, which the
-    drain never reaps. Tasks the same-variant pass already claimed this tick are
+    Victims are grouped by physical slice: draining one evicts every task on it
+    and frees its chips once. A coscheduled job spanning multiple slices is
+    excluded, since evicting one of its slices would still strand its tasks on
+    the others. Tasks the same-variant pass already claimed this tick are
     skipped so their chips are not double-counted.
     """
     slice_members: dict[str, list[RunningTaskInfo]] = defaultdict(list)
@@ -763,9 +761,7 @@ def run_reserved_pool_preemption(
     The pass does not re-preempt a pool whose deficit is already being addressed:
     its incoming chips (free now plus chips a drain is in the middle of freeing)
     already cover the need, or a replacement slice of the preemptor's own variant
-    is already booting. That direct observation of in-flight recovery — not a
-    timer — is what holds further preemptions back across the drain-and-reprovision
-    window.
+    is already booting.
 
     A preemptor evicts only strictly lower-priority victims
     (``band_sort_key > candidate.band``), and a BATCH preemptor never preempts.
