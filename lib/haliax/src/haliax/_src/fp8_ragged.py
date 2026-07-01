@@ -20,9 +20,11 @@ kernel scale + amax_history update through ``in_q``'s custom VJP as
 ``OverwriteWithGradient`` overwrites. The output-gradient scaling state is unused
 here (the backward is bf16) and threads through unchanged.
 
-To get the expert weights contracting-dim-contiguous -- as FP8 ``wgmma`` requires
--- the weight is transposed in **bf16** (a hardware-legal transpose) and only then
-cast to FP8; no strided FP8 transpose or fused cast-transpose kernel is used yet.
+The activation (lhs) quantize goes through ``in_q_qa`` (``_src/fp8_cast_transpose``),
+a fused Pallas-Triton kernel that reads the bf16 tile once, folds the amax reduction
+via ``atomic_max``, and stores the natural FP8 tile.  The expert weight (rhs) still
+gets its transposed layout via bf16-transpose-then-cast; a fused cast-transpose kernel
+is deferred to a later commit.
 """
 
 import functools
@@ -31,6 +33,7 @@ import jax.numpy as jnp
 from jax import custom_vjp
 
 from .fp8 import in_q, quantize
+from .fp8_cast_transpose import in_q_qa
 from .ragged_dot_mgpu import mgpu_ragged_dot
 
 _E4M3 = jnp.float8_e4m3fn
@@ -172,7 +175,9 @@ def fp8_scaled_ragged_dot(
     """
     del rev_dtype  # FP8 output-grad dtype is reserved for the FP8-backward path; unused while backward is bf16.
     comp = quantize_compute_type
-    q_lhs, new_lhs_scale = in_q(comp, fwd_dtype, lhs, lhs_scale, lhs_amax_history)
+    # Fused quantize+amax kernel: reads the bf16 tile once, folds the amax reduction,
+    # and stores the natural FP8 tile.  VJP threading matches in_q.
+    q_lhs, new_lhs_scale = in_q_qa(fwd_dtype, lhs, lhs_scale, lhs_amax_history)
     # in_q on rhs threads the kernel scale + amax_history overwrite; the naturally
     # quantized weight it returns is unused (the forward needs the transposed
     # layout), so it is dropped and DCE'd.
