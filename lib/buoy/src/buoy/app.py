@@ -184,7 +184,6 @@ async def get_manifest(request: Request) -> JSONResponse:
     manifest = cache.read_manifest(_prefix(cfg, ref))
     if manifest is None:
         return JSONResponse({"error": "not mirrored"}, status_code=404)
-    request.app.state.mirror.touch_running(ref, manifest)
     return JSONResponse(manifest)
 
 

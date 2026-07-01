@@ -218,26 +218,6 @@ def test_profiler_tarball_extracted(cfg, patch_wandb, tmp_path):
     assert cache.exists(f"{gcs_logdir}/plugins/profile/2026_01_01/host.xplane.pb")
 
 
-def test_touch_running_noop_when_finished(cfg):
-    mgr = MirrorManager(cfg)
-    assert mgr.touch_running(REF, {"state": "finished"}) is None
-
-
-def test_watcher_refreshes_until_terminal(cfg, patch_wandb, monkeypatch):
-    monkeypatch.setattr("buoy.mirror.WATCH_INTERVAL", 0.001)
-    run = FakeRun(state="running", summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
-    patch_wandb(run)
-    mgr = MirrorManager(cfg)
-    mirror_run(cfg, REF)  # initial running manifest
-    run.state = "finished"  # the watcher's next refresh observes a terminal state
-    thread = mgr.touch_running(REF, {"state": "running"})
-    assert thread is not None
-    thread.join(5)
-    assert not thread.is_alive()
-    prefix = cache.run_prefix(cfg.cache_root, *REF.key.split("/"))
-    assert cache.read_manifest(prefix)["state"] == "finished"
-
-
 def test_manager_coalesces_concurrent(cfg, patch_wandb, monkeypatch):
     run = FakeRun(summary_dict={"train/loss": 1.0}, rows=_rows(3, ("train/loss",)))
     patch_wandb(run)
