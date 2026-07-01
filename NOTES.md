@@ -262,3 +262,84 @@ materializes token-tile-padded FP8 operands outside Mosaic, but the existing
 transposed Mosaic wgrad kernel still fails layout inference when consuming those
 operands. The native Triton mixed-FP8 fallback is correct enough to compile, but
 far below the needed performance.
+
+## Third resume findings
+
+I applied the coordinator's suggested wgrad structure to the production
+transposed Mosaic wgrad path:
+
+- full refs with dynamic block indices instead of dynamic sliced refs;
+- genuine non-uniform groups with no uniform batching and no pad-to-capacity;
+- mixed `float8_e4m3fn` lhs activations and `float8_e5m2` output gradients;
+- boundary masking only on first/last token blocks.
+
+The full-ref scheduling is important: it compiles and runs on small arbitrary
+non-uniform groups when the boundary select upcasts the FP8 fragment to f16
+before selecting zero, then casts back to FP8. Direct small H100 probe:
+
+```bash
+./h100 env FP8_MOSAIC_WGRAD=mosaic python -c '... group_sizes=[96,160,128,128] ...'
+```
+
+returned `(4, 128, 128) bfloat16`.
+
+However, the exact zero-constant form from the hint still fails in this
+transposed-wgrad implementation:
+
+```python
+lhs_reg = jnp.where(lhs_indices >= start_index, lhs_reg, 0)
+```
+
+On the H100 pod this lowers to an FP8 fragmented-array pointwise select, not to
+a special zeroing operation:
+
+```text
+NotImplementedError: Pointwise operations on 8-bit types are unsupported
+(except bitwise operations). Upcast to a 16- or 32-bit type before performing
+the operation.
+```
+
+I also tried bitcasting the FP8 fragment to `uint8` and zeroing with bitwise-and,
+but the bitcast itself lowers as an unsupported 8-bit pointwise operation:
+
+```text
+NotImplementedError: Pointwise operations on 8-bit types are unsupported
+(except bitwise operations).
+```
+
+An exact-token-start dynamic-slice variant, intended to remove the low-boundary
+mask entirely, fails Mosaic layout inference even with masks disabled:
+
+```text
+ValueError: Failed to infer a possible set of layouts.
+```
+
+I added an env-gated pretransposed custom-VJP path
+(`FP8_MOSAIC_PRETRANSPOSE=1`) that quantizes lhs/rhs into both row-major and
+transposed/K-major layouts and feeds already-transposed operands to the working
+Mosaic wgrad. It is correct on a small non-uniform custom-VJP probe, but slower
+at the 1024 target because the native Triton quantize+transpose pass dominates.
+
+Clean measured 1024 non-uniform run with the best working default
+(`FP8_MOSAIC_WGRAD=mosaic`, `block_m=192`, `block_n=128`, `block_k=128`,
+`FP8_MOSAIC_MAX_CONCURRENT_STEPS=4`, `FP8_MOSAIC_GRID_BLOCK_N=8`):
+
+| GEMM | bf16 fwd | fp8 fwd | fwd speedup | bf16 fwd+bwd | fp8 fwd+bwd | fwd+bwd speedup | fwd rel-Fro error |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| w13 K=2560 N=2560 | 1.859 ms | 1.662 ms | 1.118x | 5.898 ms | 5.990 ms | 0.985x | 0.0424 |
+| w2 K=1280 N=2560 | 1.053 ms | 1.011 ms | 1.042x | 3.231 ms | 3.418 ms | 0.945x | 0.0393 |
+
+The same target with `FP8_MOSAIC_PRETRANSPOSE=1` measured `0.917x` for w13 and
+`0.825x` for w2 fwd+bwd, so it is not the headline path.
+
+Additional short wgrad tile sweeps around
+`FP8_MOSAIC_WGRAD_BLOCK_{M,N,K}` did not improve the target. The best repeated
+short run stayed near `0.98x`/`0.96x`; asymmetric `256x64`, `64x256`, and
+`128x256` wgrad tiles were all slower, and `WGRAD_BLOCK_K=64` only helped w2
+slightly while badly hurting w13.
+
+Current blocker requiring coordinator input: in the specific compiled
+transposed-wgrad path that otherwise runs, the confirmed
+`jnp.where(cond, fp8_fragment, 0)` zeroing pattern still lowers as an unsupported
+FP8 pointwise select on this pod. The f16-upcast boundary zeroing works but does
+not clear the >=1.2x fwd+bwd bar.

@@ -303,9 +303,7 @@ def main() -> None:
     target = [
         row
         for row in all_rows
-        if row["shape"]["experts"] == 64
-        and row["shape"]["tokens_per_expert"] == 1024
-        and row["mode"] == target_mode
+        if row["shape"]["experts"] == 64 and row["shape"]["tokens_per_expert"] == 1024 and row["mode"] == target_mode
     ]
     for name in ("w13", "w2"):
         bf16 = next(row for row in target if row["shape"]["name"] == name and row["implementation"] == "bf16_triton")

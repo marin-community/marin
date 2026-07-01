@@ -24,6 +24,7 @@ from haliax._src.fp8 import (
 from haliax.nn._fp8_mosaic_ragged import (
     mosaic_ragged_dot,
     mosaic_transposed_ragged_dot,
+    mosaic_wgrad_ragged_dot,
 )
 from haliax.partitioning import ResourceAxis
 
@@ -1170,7 +1171,13 @@ def _mosaic_fp8_ragged_dot_impl(
                 block_n=block_n,
                 block_k=wgrad_block_k,
             )
-        token_block = block_m if block_m <= 128 else 128
+        token_block = int(
+            os.environ.get(
+                "FP8_MOSAIC_WGRAD_BLOCK_K", str(block_m if block_m <= 128 else 128)
+            )
+        )
+        wgrad_block_m = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_M", str(block_k)))
+        wgrad_block_n = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_N", str(block_n)))
         if wgrad_impl == "mosaic_block_pad":
             padded_lhs, padded_rhs, padded_group_sizes = _block_pad_ragged_token_stream(
                 lhs, rhs, group_sizes, token_block
@@ -1186,24 +1193,40 @@ def _mosaic_fp8_ragged_dot_impl(
                 padded_rhs_t,
                 group_sizes=padded_group_sizes,
                 out_dtype=out_dtype,
-                block_m=block_k,
-                block_n=block_n,
+                block_m=wgrad_block_m,
+                block_n=wgrad_block_n,
                 block_k=token_block,
                 max_concurrent_steps=max_concurrent_steps,
                 grid_block_n=grid_block_n,
                 mask_boundaries=False,
+            )
+        if wgrad_impl == "mosaic_no_transpose":
+            return mosaic_wgrad_ragged_dot(
+                lhs.T + jnp.zeros((lhs.shape[1], lhs.shape[0]), dtype=lhs.dtype),
+                rhs,
+                group_sizes=group_sizes,
+                out_dtype=out_dtype,
+                block_m=wgrad_block_m,
+                block_n=wgrad_block_n,
+                block_k=token_block,
+                max_concurrent_steps=max_concurrent_steps,
+                grid_block_n=grid_block_n,
+                mask_boundaries=os.environ.get("FP8_MOSAIC_WGRAD_MASK_BOUNDARIES", "1")
+                == "1",
             )
         return mosaic_transposed_ragged_dot(
             lhs.T + jnp.zeros((lhs.shape[1], lhs.shape[0]), dtype=lhs.dtype),
             rhs.T + jnp.zeros((rhs.shape[1], rhs.shape[0]), dtype=rhs.dtype),
             group_sizes=group_sizes,
             out_dtype=out_dtype,
-            block_m=block_k,
-            block_n=block_n,
+            block_m=wgrad_block_m,
+            block_n=wgrad_block_n,
             block_k=token_block,
             max_concurrent_steps=max_concurrent_steps,
             grid_block_n=grid_block_n,
             mask_boundaries=wgrad_impl != "mosaic_nomask",
+            exact_token_start=os.environ.get("FP8_MOSAIC_WGRAD_EXACT_START", "0")
+            == "1",
         )
 
     raise NotImplementedError(
@@ -1544,7 +1567,7 @@ def _quantized_ragged_dot_bwd(
     )
     q_g = quantize(g, rev_dtype, new_out_grad_scale, preferred_element_type)
     if implementation == "mosaic":
-        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "bf16_triton")
+        wgrad_impl = os.environ.get("FP8_MOSAIC_WGRAD", "mosaic")
         q_lhs_for_grad = (
             q_lhs
             if wgrad_impl
@@ -1586,7 +1609,7 @@ def _quantized_ragged_dot_bwd(
 
     if (
         implementation == "mosaic"
-        and os.environ.get("FP8_MOSAIC_WGRAD", "bf16_triton") == "bf16_triton"
+        and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic") == "bf16_triton"
     ):
         grad_rhs_block_k = int(os.environ.get("FP8_MOSAIC_WGRAD_BLOCK_K", "64"))
         grad_rhs = _raw_ragged_dot_impl(
@@ -1603,7 +1626,7 @@ def _quantized_ragged_dot_bwd(
         )
     elif (
         implementation == "mosaic"
-        and os.environ.get("FP8_MOSAIC_WGRAD", "bf16_triton")
+        and os.environ.get("FP8_MOSAIC_WGRAD", "mosaic")
         == "mosaic_block_pad_pretransposed"
     ):
         grad_rhs = _mosaic_fp8_ragged_wgrad_block_pad_impl(
@@ -1652,6 +1675,183 @@ def _quantized_ragged_dot_bwd(
 _quantized_ragged_dot.defvjp(_quantized_ragged_dot_fwd, _quantized_ragged_dot_bwd)
 
 
+@functools.partial(jax.custom_vjp, nondiff_argnums=(13, 14, 15, 16, 17, 18, 19))
+def _quantized_ragged_dot_pretransposed(
+    lhs,
+    q_lhs,
+    q_lhs_t,
+    lhs_scale,
+    rhs,
+    q_rhs,
+    q_rhs_t,
+    rhs_scale,
+    out_grad_scale,
+    out_grad_amax_history,
+    group_sizes,
+    lhs_amax_history,
+    rhs_amax_history,
+    implementation,
+    preferred_element_type,
+    rev_dtype,
+    max_group_size,
+    block_m,
+    block_n,
+    block_k,
+):
+    del (
+        lhs,
+        lhs_scale,
+        rhs,
+        q_rhs,
+        rhs_scale,
+        out_grad_scale,
+        out_grad_amax_history,
+    )
+    del lhs_amax_history, rhs_amax_history, rev_dtype
+    if implementation != "mosaic":
+        raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
+    del q_lhs_t
+    return _mosaic_fp8_ragged_dot_k_major_impl(
+        q_lhs, q_rhs_t, group_sizes, preferred_element_type, block_m, block_n, block_k
+    )
+
+
+def _quantized_ragged_dot_pretransposed_fwd(
+    lhs,
+    q_lhs,
+    q_lhs_t,
+    lhs_scale,
+    rhs,
+    q_rhs,
+    q_rhs_t,
+    rhs_scale,
+    out_grad_scale,
+    out_grad_amax_history,
+    group_sizes,
+    lhs_amax_history,
+    rhs_amax_history,
+    implementation,
+    preferred_element_type,
+    rev_dtype,
+    max_group_size,
+    block_m,
+    block_n,
+    block_k,
+):
+    del lhs_amax_history, rhs_amax_history
+    if implementation != "mosaic":
+        raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
+    out = _mosaic_fp8_ragged_dot_k_major_impl(
+        q_lhs,
+        q_rhs_t,
+        group_sizes,
+        preferred_element_type,
+        block_m,
+        block_n,
+        block_k,
+    )
+    res = (
+        lhs,
+        q_lhs,
+        q_lhs_t,
+        lhs_scale,
+        rhs,
+        q_rhs,
+        rhs_scale,
+        out_grad_scale,
+        out_grad_amax_history,
+        group_sizes,
+    )
+    return out, res
+
+
+def _quantized_ragged_dot_pretransposed_bwd(
+    implementation,
+    preferred_element_type,
+    rev_dtype,
+    max_group_size,
+    block_m,
+    block_n,
+    block_k,
+    res,
+    g,
+):
+    (
+        lhs,
+        q_lhs,
+        q_lhs_t,
+        lhs_scale,
+        rhs,
+        q_rhs,
+        rhs_scale,
+        out_grad_scale,
+        out_grad_amax_history,
+        group_sizes,
+    ) = res
+    del lhs, rhs, max_group_size
+    if implementation != "mosaic":
+        raise ValueError("pretransposed FP8 ragged_dot is only implemented for Mosaic")
+    new_out_grad_scale, new_out_grad_amax_history = update_fp8_meta(
+        g,
+        rev_dtype,
+        out_grad_scale,
+        out_grad_amax_history,
+    )
+    q_g, q_g_t = _triton_quantize_transpose_2d(g, rev_dtype, new_out_grad_scale)
+
+    grad_lhs_block_n = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_N", str(block_n)))
+    grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "64"))
+    grad_lhs = _raw_ragged_dot_impl(
+        q_g,
+        q_rhs,
+        group_sizes,
+        _DLHS_DIM_NUMS,
+        implementation,
+        preferred_element_type,
+        None,
+        block_m,
+        grad_lhs_block_n,
+        grad_lhs_block_k,
+    )
+    grad_lhs = dequantize(
+        grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale
+    )
+
+    grad_rhs = _mosaic_fp8_ragged_wgrad_transposed_impl(
+        q_lhs_t,
+        q_g_t,
+        group_sizes,
+        preferred_element_type,
+        block_m,
+        block_n,
+        block_k,
+    )
+    grad_rhs = dequantize(
+        grad_rhs, preferred_element_type, lhs_scale * new_out_grad_scale
+    )
+    return (
+        grad_lhs,
+        None,
+        None,
+        None,
+        grad_rhs,
+        None,
+        None,
+        None,
+        new_out_grad_scale,
+        new_out_grad_amax_history,
+        None,
+        None,
+        None,
+    )
+
+
+_quantized_ragged_dot_pretransposed.defvjp(
+    _quantized_ragged_dot_pretransposed_fwd,
+    _quantized_ragged_dot_pretransposed_bwd,
+)
+
+
 def fp8_scaled_ragged_dot(
     lhs: jax.Array,
     rhs: jax.Array,
@@ -1674,6 +1874,40 @@ def fp8_scaled_ragged_dot(
     rev_dtype: DTypeLike = jnp.float8_e5m2,
 ) -> jax.Array:
     """Ragged grouped matmul with delayed-scaling FP8 operands and custom VJP."""
+    if (
+        implementation == "mosaic"
+        and os.environ.get("FP8_MOSAIC_PRETRANSPOSE", "0") == "1"
+    ):
+        q_lhs, q_lhs_t, new_lhs_scale = _in_q_with_transpose(
+            2, quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history
+        )
+        q_rhs, q_rhs_t, new_rhs_scale = _in_q_with_transpose(
+            3, quantize_compute_type, fwd_dtype, rhs, rhs_scale, rhs_amax_history
+        )
+        y = _quantized_ragged_dot_pretransposed(
+            lhs,
+            q_lhs,
+            q_lhs_t,
+            new_lhs_scale,
+            rhs,
+            q_rhs,
+            q_rhs_t,
+            new_rhs_scale,
+            grad_scale,
+            grad_amax_history,
+            group_sizes,
+            lhs_amax_history,
+            rhs_amax_history,
+            implementation,
+            preferred_element_type,
+            rev_dtype,
+            max_group_size,
+            block_m,
+            block_n,
+            block_k,
+        )
+        return out_dq(preferred_element_type, new_lhs_scale, new_rhs_scale, y)
+
     q_lhs, new_lhs_scale = in_q(
         quantize_compute_type, fwd_dtype, lhs, lhs_scale, lhs_amax_history
     )

@@ -22,12 +22,16 @@ def _wgmma(acc: plgpu.WGMMAAccumulatorRef, lhs, rhs) -> None:
     m2, k = lhs.shape
     k2, n2 = rhs.shape
     if m != m2 or n != n2 or k != k2:
-        raise ValueError(f"Incompatible shapes for matrix multiplication: lhs={lhs.shape}, rhs={rhs.shape}, acc={acc.shape}")
+        raise ValueError(
+            f"Incompatible shapes for matrix multiplication: lhs={lhs.shape}, rhs={rhs.shape}, acc={acc.shape}"
+        )
 
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
     if lhs.dtype != rhs.dtype and not is_mixed_fp8:
-        raise ValueError(f"Mixed input dtypes for matrix multiplication unsupported: lhs={lhs.dtype}, rhs={rhs.dtype}")
+        raise ValueError(
+            f"Mixed input dtypes for matrix multiplication unsupported: lhs={lhs.dtype}, rhs={rhs.dtype}"
+        )
 
     if isinstance(acc, pallas_core.TransformedRef):
         acc_transforms_leaves, acc_transforms_tree = jax.tree.flatten(acc.transforms)
@@ -123,12 +127,16 @@ def mosaic_ragged_dot(
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs_k_major.dtype in fp8_dtypes
     if lhs.dtype != rhs_k_major.dtype and not is_mixed_fp8:
-        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_k_major.dtype}")
+        raise NotImplementedError(
+            f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_k_major.dtype}"
+        )
 
     m, k = lhs.shape
     groups, n, k2 = rhs_k_major.shape
     if group_sizes.shape[0] != groups:
-        raise ValueError(f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}")
+        raise ValueError(
+            f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}"
+        )
     if k != k2:
         raise ValueError(f"lhs.shape={k} must match rhs.shape={k2}")
     if k % block_k != 0:
@@ -140,7 +148,9 @@ def mosaic_ragged_dot(
 
         @plgpu.nd_loop((grid_m * grid_n,), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
-            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
+            mi, ni = plgpu.planar_snake(
+                loop_info.index[0], (grid_m, grid_n), 1, grid_block_n
+            )
             group_info = _GroupInfo.create(rows_per_expert_gmem, block_m, mi)
 
             def acc_scope(acc_ref):
@@ -169,7 +179,10 @@ def mosaic_ragged_dot(
 
             acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
 
-            @functools.partial(pl.run_scoped, out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype))
+            @functools.partial(
+                pl.run_scoped,
+                out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype),
+            )
             def store_scope(out_smem):
                 out_smem[...] = acc.astype(out_smem.dtype)
                 plgpu.commit_smem()
@@ -198,7 +211,9 @@ def mosaic_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
+        ),
     )
     return kernel(group_sizes, lhs, rhs_k_major)
 
@@ -219,12 +234,16 @@ def mosaic_ragged_dot_contract_major(
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs_contract_major.dtype in fp8_dtypes
     if lhs.dtype != rhs_contract_major.dtype and not is_mixed_fp8:
-        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_contract_major.dtype}")
+        raise NotImplementedError(
+            f"lhs and rhs must have compatible dtypes, got {lhs.dtype} and {rhs_contract_major.dtype}"
+        )
 
     m, k = lhs.shape
     groups, k2, n = rhs_contract_major.shape
     if group_sizes.shape[0] != groups:
-        raise ValueError(f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}")
+        raise ValueError(
+            f"Expected group_sizes to have shape {groups} but got {group_sizes.shape}"
+        )
     if k != k2:
         raise ValueError(f"lhs.shape={k} must match rhs.shape={k2}")
     if k % block_k != 0:
@@ -236,7 +255,9 @@ def mosaic_ragged_dot_contract_major(
 
         @plgpu.nd_loop((grid_m * grid_n,), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
-            mi, ni = plgpu.planar_snake(loop_info.index[0], (grid_m, grid_n), 1, grid_block_n)
+            mi, ni = plgpu.planar_snake(
+                loop_info.index[0], (grid_m, grid_n), 1, grid_block_n
+            )
             group_info = _GroupInfo.create(rows_per_expert_gmem, block_m, mi)
 
             def acc_scope(acc_ref):
@@ -244,8 +265,14 @@ def mosaic_ragged_dot_contract_major(
                     lambda _, lhs_smem, rhs_smem: _wgmma(acc_ref, lhs_smem, rhs_smem),
                     grid=(k // block_k,),
                     in_specs=[
-                        plgpu.BlockSpec((block_m, block_k), lambda kk: (group_info.block, kk), delay_release=1),
-                        plgpu.BlockSpec((block_k, block_n), lambda kk: (kk, ni), delay_release=1),
+                        plgpu.BlockSpec(
+                            (block_m, block_k),
+                            lambda kk: (group_info.block, kk),
+                            delay_release=1,
+                        ),
+                        plgpu.BlockSpec(
+                            (block_k, block_n), lambda kk: (kk, ni), delay_release=1
+                        ),
                     ],
                     max_concurrent_steps=max_concurrent_steps,
                 )(lhs_gmem, rhs_gmem.at[group_info.group_id])
@@ -253,7 +280,10 @@ def mosaic_ragged_dot_contract_major(
 
             acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
 
-            @functools.partial(pl.run_scoped, out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype))
+            @functools.partial(
+                pl.run_scoped,
+                out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype),
+            )
             def store_scope(out_smem):
                 out_smem[...] = acc.astype(out_smem.dtype)
                 plgpu.commit_smem()
@@ -281,7 +311,9 @@ def mosaic_ragged_dot_contract_major(
         out_shape=jax.ShapeDtypeStruct((m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
+        ),
     )
     return kernel(group_sizes, lhs, rhs_contract_major)
 
@@ -298,12 +330,15 @@ def mosaic_transposed_ragged_dot(
     max_concurrent_steps: int,
     grid_block_n: int,
     mask_boundaries: bool = True,
+    exact_token_start: bool = False,
 ) -> jax.Array:
     """Ragged grouped `lhs_t[:, group] @ rhs_t[:, group].T` with K-contiguous RHS."""
     fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
     is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs_t.dtype in fp8_dtypes
     if lhs_t.dtype != rhs_t.dtype and not is_mixed_fp8:
-        raise NotImplementedError(f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs_t.dtype}")
+        raise NotImplementedError(
+            f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs_t.dtype}"
+        )
 
     m, tokens = lhs_t.shape
     n, tokens2 = rhs_t.shape
@@ -316,11 +351,17 @@ def mosaic_transposed_ragged_dot(
         raise ValueError(f"n={n} must be a multiple of block_n={block_n}")
 
     group_sizes = group_sizes.astype(int)
-    group_starts = jnp.concatenate([jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]).astype(int)
+    group_starts = jnp.concatenate(
+        [jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]
+    ).astype(int)
     group_ends = jnp.cumsum(group_sizes)
-    group_block_starts = group_starts // block_k * block_k
-    group_block_ends = -(group_ends // -block_k) * block_k
-    group_num_blocks = (group_block_ends - group_block_starts) // block_k
+    if exact_token_start:
+        group_block_starts = group_starts
+        group_num_blocks = -(group_sizes // -block_k)
+    else:
+        group_block_starts = group_starts // block_k * block_k
+        group_block_ends = -(group_ends // -block_k) * block_k
+        group_num_blocks = (group_block_ends - group_block_starts) // block_k
 
     def body(
         group_sizes_gmem,
@@ -338,73 +379,145 @@ def mosaic_transposed_ragged_dot(
         @plgpu.nd_loop((groups, grid_m * grid_n), collective_axes="sm")
         def mn_loop(loop_info: plgpu.NDLoopInfo):
             group = loop_info.index[0]
-            m_i, n_i = plgpu.planar_snake(loop_info.index[1], (grid_m, grid_n), 1, grid_block_n)
+            m_i, n_i = plgpu.planar_snake(
+                loop_info.index[1], (grid_m, grid_n), 1, grid_block_n
+            )
+            group_block_start = group_block_starts_gmem[group] // block_k
             token_slice = pl.ds(group_block_starts_gmem[group], tokens)
 
             def acc_scope(acc_ref):
                 def block_matmul(block_idx, lhs_smem, rhs_smem):
                     block_idx = block_idx[0]
 
-                    if mask_boundaries:
+                    if mask_boundaries and not exact_token_start:
+
                         @pl.when(block_idx == 0)
                         def _():
                             start_index = lax.rem(group_starts_gmem[group], block_k)
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_m, block_k), 1
+                                ),
                                 plgpu.Layout.WGMMA,
                             )
-                            lhs_smem[...] = jnp.where(lhs_indices >= start_index, lhs_reg, jnp.zeros_like(lhs_reg))
+                            lhs_reg = jnp.where(
+                                lhs_indices >= start_index,
+                                lhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(lhs_reg.dtype)
+                            lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_n, block_k), 1
+                                ),
                                 plgpu.Layout.WGMMA,
                             )
-                            rhs_smem[...] = jnp.where(rhs_indices >= start_index, rhs_reg, jnp.zeros_like(rhs_reg))
+                            rhs_reg = jnp.where(
+                                rhs_indices >= start_index,
+                                rhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(rhs_reg.dtype)
+                            rhs_smem[...] = rhs_reg
                             plgpu.commit_smem()
+
+                    if mask_boundaries:
 
                         @pl.when(block_idx == group_num_blocks_gmem[group] - 1)
                         def _():
                             last_index = lax.rem(group_ends_gmem[group] - 1, block_k)
+                            if exact_token_start:
+                                last_index = lax.rem(
+                                    group_sizes_gmem[group] - 1, block_k
+                                )
                             lhs_reg = lhs_smem[...]
                             lhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_m, block_k), 1),
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_m, block_k), 1
+                                ),
                                 plgpu.Layout.WGMMA,
                             )
-                            lhs_smem[...] = jnp.where(lhs_indices <= last_index, lhs_reg, jnp.zeros_like(lhs_reg))
+                            lhs_reg = jnp.where(
+                                lhs_indices <= last_index,
+                                lhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(lhs_reg.dtype)
+                            lhs_smem[...] = lhs_reg
                             rhs_reg = rhs_smem[...]
                             rhs_indices = plgpu.layout_cast(
-                                jax.lax.broadcasted_iota(jnp.int32, (block_n, block_k), 1),
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_n, block_k), 1
+                                ),
                                 plgpu.Layout.WGMMA,
                             )
-                            rhs_smem[...] = jnp.where(rhs_indices <= last_index, rhs_reg, jnp.zeros_like(rhs_reg))
+                            rhs_reg = jnp.where(
+                                rhs_indices <= last_index,
+                                rhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(rhs_reg.dtype)
+                            rhs_smem[...] = rhs_reg
                             plgpu.commit_smem()
 
                     _wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(rhs_smem, (1, 0)))
 
                 @pl.when(group_sizes_gmem[group] > 0)
                 def _():
-                    plgpu.emit_pipeline(
-                        block_matmul,
-                        grid=(group_num_blocks_gmem[group],),
-                        in_specs=[
-                            plgpu.BlockSpec((block_m, block_k), lambda kk: (m_i, kk), delay_release=1),
-                            plgpu.BlockSpec((block_n, block_k), lambda kk: (n_i, kk), delay_release=1),
-                        ],
-                        max_concurrent_steps=max_concurrent_steps,
-                    )(lhs_t_gmem.at[:, token_slice], rhs_t_gmem.at[:, token_slice])
+                    if exact_token_start:
+                        plgpu.emit_pipeline(
+                            block_matmul,
+                            grid=(group_num_blocks_gmem[group],),
+                            in_specs=[
+                                plgpu.BlockSpec(
+                                    (block_m, block_k),
+                                    lambda kk: (m_i, kk),
+                                    delay_release=1,
+                                ),
+                                plgpu.BlockSpec(
+                                    (block_n, block_k),
+                                    lambda kk: (n_i, kk),
+                                    delay_release=1,
+                                ),
+                            ],
+                            max_concurrent_steps=max_concurrent_steps,
+                        )(lhs_t_gmem.at[:, token_slice], rhs_t_gmem.at[:, token_slice])
+                    else:
+                        plgpu.emit_pipeline(
+                            block_matmul,
+                            grid=(group_num_blocks_gmem[group],),
+                            in_specs=[
+                                plgpu.BlockSpec(
+                                    (block_m, block_k),
+                                    lambda kk: (m_i, group_block_start + kk),
+                                    delay_release=1,
+                                ),
+                                plgpu.BlockSpec(
+                                    (block_n, block_k),
+                                    lambda kk: (n_i, group_block_start + kk),
+                                    delay_release=1,
+                                ),
+                            ],
+                            max_concurrent_steps=max_concurrent_steps,
+                        )(lhs_t_gmem, rhs_t_gmem)
 
                 return acc_ref[...]
 
             acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
 
-            @functools.partial(pl.run_scoped, out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype))
+            @functools.partial(
+                pl.run_scoped,
+                out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype),
+            )
             def store_scope(out_smem):
                 out_smem[...] = acc.astype(out_smem.dtype)
                 plgpu.commit_smem()
                 plgpu.copy_smem_to_gmem(
                     out_smem,
-                    out_gmem.at[group, pl.ds(m_i * block_m, block_m), pl.ds(n_i * block_n, block_n)],
+                    out_gmem.at[
+                        group,
+                        pl.ds(m_i * block_m, block_m),
+                        pl.ds(n_i * block_n, block_n),
+                    ],
                 )
                 plgpu.wait_smem_to_gmem(0, wait_read_only=True)
 
@@ -414,6 +527,209 @@ def mosaic_transposed_ragged_dot(
         out_shape=jax.ShapeDtypeStruct((groups, m, n), out_dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=plgpu.CompilerParams(lowering_semantics=plgpu.LoweringSemantics.Warpgroup),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
+        ),
     )
-    return kernel(group_sizes, group_starts, group_ends, group_num_blocks, group_block_starts, lhs_t, rhs_t)
+    return kernel(
+        group_sizes,
+        group_starts,
+        group_ends,
+        group_num_blocks,
+        group_block_starts,
+        lhs_t,
+        rhs_t,
+    )
+
+
+def mosaic_wgrad_ragged_dot(
+    lhs_t: jax.Array,
+    rhs: jax.Array,
+    *,
+    group_sizes: jax.Array,
+    out_dtype: DTypeLike,
+    block_m: int,
+    block_n: int,
+    block_k: int,
+    max_concurrent_steps: int,
+    grid_block_n: int,
+    mask_boundaries: bool = True,
+) -> jax.Array:
+    """Ragged grouped `lhs_t[:, group] @ rhs[group, :]` without FP8 WGMMA transpose."""
+    fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    is_mixed_fp8 = lhs_t.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
+    if lhs_t.dtype != rhs.dtype and not is_mixed_fp8:
+        raise NotImplementedError(
+            f"lhs and rhs must have compatible dtypes, got {lhs_t.dtype} and {rhs.dtype}"
+        )
+
+    m, tokens = lhs_t.shape
+    tokens2, n = rhs.shape
+    groups = group_sizes.shape[0]
+    if tokens != tokens2:
+        raise ValueError(f"lhs_t.shape={tokens} must match rhs.shape={tokens2}")
+    if m % block_m != 0:
+        raise ValueError(f"m={m} must be a multiple of block_m={block_m}")
+    if n % block_n != 0:
+        raise ValueError(f"n={n} must be a multiple of block_n={block_n}")
+
+    group_sizes = group_sizes.astype(int)
+    group_starts = jnp.concatenate(
+        [jnp.zeros(1, dtype=int), jnp.cumsum(group_sizes)[:-1]]
+    ).astype(int)
+    group_ends = jnp.cumsum(group_sizes)
+    group_block_starts = group_starts // block_k * block_k
+    group_block_ends = -(group_ends // -block_k) * block_k
+    group_num_blocks = (group_block_ends - group_block_starts) // block_k
+
+    def body(
+        group_sizes_gmem,
+        group_starts_gmem,
+        group_ends_gmem,
+        group_num_blocks_gmem,
+        group_block_starts_gmem,
+        lhs_t_gmem,
+        rhs_gmem,
+        out_gmem,
+    ):
+        grid_m = pl.cdiv(m, block_m)
+        grid_n = pl.cdiv(n, block_n)
+
+        @plgpu.nd_loop((groups, grid_m * grid_n), collective_axes="sm")
+        def mn_loop(loop_info: plgpu.NDLoopInfo):
+            group = loop_info.index[0]
+            m_i, n_i = plgpu.planar_snake(
+                loop_info.index[1], (grid_m, grid_n), 1, grid_block_n
+            )
+            group_block_start = group_block_starts_gmem[group] // block_k
+
+            def acc_scope(acc_ref):
+                def block_matmul(block_idx, lhs_smem, rhs_smem):
+                    block_idx = block_idx[0]
+
+                    if mask_boundaries:
+
+                        @pl.when(block_idx == 0)
+                        def _():
+                            start_index = lax.rem(group_starts_gmem[group], block_k)
+                            lhs_reg = lhs_smem[...]
+                            lhs_indices = plgpu.layout_cast(
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_m, block_k), 1
+                                ),
+                                plgpu.Layout.WGMMA,
+                            )
+                            lhs_reg = jnp.where(
+                                lhs_indices >= start_index,
+                                lhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(lhs_reg.dtype)
+                            lhs_smem[...] = lhs_reg
+                            rhs_reg = rhs_smem[...]
+                            rhs_indices = plgpu.layout_cast(
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_k, block_n), 0
+                                ),
+                                plgpu.Layout.WGMMA,
+                            )
+                            rhs_reg = jnp.where(
+                                rhs_indices >= start_index,
+                                rhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(rhs_reg.dtype)
+                            rhs_smem[...] = rhs_reg
+                            plgpu.commit_smem()
+
+                        @pl.when(block_idx == group_num_blocks_gmem[group] - 1)
+                        def _():
+                            last_index = lax.rem(group_ends_gmem[group] - 1, block_k)
+                            lhs_reg = lhs_smem[...]
+                            lhs_indices = plgpu.layout_cast(
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_m, block_k), 1
+                                ),
+                                plgpu.Layout.WGMMA,
+                            )
+                            lhs_reg = jnp.where(
+                                lhs_indices <= last_index,
+                                lhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(lhs_reg.dtype)
+                            lhs_smem[...] = lhs_reg
+                            rhs_reg = rhs_smem[...]
+                            rhs_indices = plgpu.layout_cast(
+                                jax.lax.broadcasted_iota(
+                                    jnp.int32, (block_k, block_n), 0
+                                ),
+                                plgpu.Layout.WGMMA,
+                            )
+                            rhs_reg = jnp.where(
+                                rhs_indices <= last_index,
+                                rhs_reg.astype(jnp.float16),
+                                0,
+                            ).astype(rhs_reg.dtype)
+                            rhs_smem[...] = rhs_reg
+                            plgpu.commit_smem()
+
+                    _wgmma(acc_ref, lhs_smem, rhs_smem)
+
+                @pl.when(group_sizes_gmem[group] > 0)
+                def _():
+                    plgpu.emit_pipeline(
+                        block_matmul,
+                        grid=(group_num_blocks_gmem[group],),
+                        in_specs=[
+                            plgpu.BlockSpec(
+                                (block_m, block_k),
+                                lambda kk: (m_i, group_block_start + kk),
+                                delay_release=1,
+                            ),
+                            plgpu.BlockSpec(
+                                (block_k, block_n),
+                                lambda kk: (group_block_start + kk, n_i),
+                                delay_release=1,
+                            ),
+                        ],
+                        max_concurrent_steps=max_concurrent_steps,
+                    )(lhs_t_gmem, rhs_gmem)
+
+                return acc_ref[...]
+
+            acc = pl.run_scoped(acc_scope, plgpu.ACC((block_m, block_n)))
+
+            @functools.partial(
+                pl.run_scoped,
+                out_smem=plgpu.SMEM((block_m, block_n), dtype=out_gmem.dtype),
+            )
+            def store_scope(out_smem):
+                out_smem[...] = acc.astype(out_smem.dtype)
+                plgpu.commit_smem()
+                plgpu.copy_smem_to_gmem(
+                    out_smem,
+                    out_gmem.at[
+                        group,
+                        pl.ds(m_i * block_m, block_m),
+                        pl.ds(n_i * block_n, block_n),
+                    ],
+                )
+                plgpu.wait_smem_to_gmem(0, wait_read_only=True)
+
+    num_sms = jax.devices()[0].core_count
+    kernel = plgpu.kernel(
+        body,
+        out_shape=jax.ShapeDtypeStruct((groups, m, n), out_dtype),
+        grid=(num_sms,),
+        grid_names=("sm",),
+        compiler_params=plgpu.CompilerParams(
+            lowering_semantics=plgpu.LoweringSemantics.Warpgroup
+        ),
+    )
+    return kernel(
+        group_sizes,
+        group_starts,
+        group_ends,
+        group_num_blocks,
+        group_block_starts,
+        lhs_t,
+        rhs,
+    )
