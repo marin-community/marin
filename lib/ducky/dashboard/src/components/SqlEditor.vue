@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { EditorState, Prec } from '@codemirror/state'
 import { EditorView, keymap, placeholder } from '@codemirror/view'
+import { autocompletion } from '@codemirror/autocomplete'
 import { basicSetup } from 'codemirror'
 import { PostgreSQL, sql } from '@codemirror/lang-sql'
 
@@ -24,6 +25,9 @@ onMounted(() => {
       extensions: [
         basicSetup,
         sql({ dialect: PostgreSQL }), // DuckDB SQL is close to Postgres
+        // completion stays available on Ctrl-Space, but doesn't pop up on every
+        // keystroke (the default was an intrusive symbol dropdown while typing)
+        autocompletion({ activateOnTyping: false }),
         placeholder(PLACEHOLDER),
         EditorView.lineWrapping,
         // high precedence so Mod-Enter runs the query instead of inserting a newline
