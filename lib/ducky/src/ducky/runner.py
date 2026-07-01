@@ -175,6 +175,15 @@ class QueryRunner:
         cfg = self._config
         self._con.execute("INSTALL httpfs")
         self._con.execute("LOAD httpfs")
+        # Retry transient object-store failures (5xx, throttling, brief DNS/connection
+        # blips — more likely on cross-region reads) with exponential backoff, so a
+        # network hiccup doesn't fail an expensive query outright. Defaults are 3/100ms;
+        # 10 retries at 200ms × 2^n backoff spans ~100s of transient unavailability.
+        # SET GLOBAL because these are connection-local settings: run_query uses a per-query
+        # cursor, which only inherits the global scope, not this connection's local SETs.
+        self._con.execute("SET GLOBAL http_retries = 10")
+        self._con.execute("SET GLOBAL http_retry_wait_ms = 200")
+        self._con.execute("SET GLOBAL http_retry_backoff = 2")
         if cfg.gcs_enabled:
             self._con.execute(
                 f"CREATE OR REPLACE SECRET ducky_gcs "

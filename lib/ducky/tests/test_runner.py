@@ -163,6 +163,14 @@ def test_startup_wipes_orphaned_spill_files(tmp_path):
         runner.close()
 
 
+def test_httpfs_retries_are_configured(make_runner):
+    # transient object-store failures (incl. brief DNS/connection blips) should be retried.
+    # queries run on a cursor, so the setting must be GLOBAL to be inherited — check via one.
+    runner = make_runner()
+    cursor = runner._con.cursor()
+    assert cursor.execute("SELECT current_setting('http_retries')").fetchone()[0] == 10
+
+
 def test_run_query_is_concurrency_safe(make_runner):
     runner = make_runner()  # one runner shared across threads; each query uses its own cursor
 
