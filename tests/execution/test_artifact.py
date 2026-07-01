@@ -208,10 +208,18 @@ def test_read_record_recovers_config_from_executor_info(tmp_path):
 
 
 def test_read_record_prefers_modern_record_over_executor_info(tmp_path):
-    """``.executor_info`` is a last resort: a modern ``artifact.json`` still wins."""
+    """``.executor_info`` is a last resort: a modern ``.artifact.json`` still wins."""
     (tmp_path / ".executor_info").write_text(_EXECUTOR_INFO)
-    (tmp_path / "artifact.json").write_text('{"name": "modern", "config": {"tokenizer": "gpt2"}}')
+    (tmp_path / ".artifact.json").write_text('{"name": "modern", "config": {"tokenizer": "gpt2"}}')
 
     record = read_record(tmp_path.as_posix())
     assert record.name == "modern"
     assert record.config == {"tokenizer": "gpt2"}
+
+
+def test_read_record_reads_legacy_undotted_record(tmp_path):
+    """Outputs materialized while the record was briefly written un-dotted still resolve."""
+    (tmp_path / "artifact.json").write_text('{"name": "undotted", "config": {"tokenizer": "gpt2"}}')
+
+    record = read_record(tmp_path.as_posix())
+    assert record.name == "undotted"
