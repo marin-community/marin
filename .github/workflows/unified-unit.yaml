@@ -1,0 +1,83 @@
+name: "Marin - Unit (unified)"
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_run_all:
+        description: "Bypass the analyzer; run every package's full suite."
+        type: boolean
+        default: false
+
+concurrency:
+  group: unified-unit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.analyze.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: analyze
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.sha || github.event.before }}"
+          ARGS=(--emit-github-output)
+          if [ "${{ inputs.force_run_all }}" = "true" ] \
+              || [ -z "$BASE_REF" ] \
+              || [ "$BASE_REF" = "0000000000000000000000000000000000000000" ]; then
+            ARGS+=(--force-run-all)
+          else
+            ARGS+=(--base-ref "$BASE_REF")
+          fi
+          python3 infra/ci/select_tests.py "${ARGS[@]}"
+
+  unit:
+    needs: select
+    if: ${{ needs.select.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - id: prepare
+        run: |
+          python3 infra/ci/prepare.py \
+            "${{ matrix.package }}" \
+            --tests "${{ join(matrix.tests, ' ') }}"
+
+      - run: >-
+          uv run
+          --package ${{ steps.prepare.outputs.package }}
+          ${{ steps.prepare.outputs.extras }}
+          --group test
+          pytest --durations=5 -n auto --dist=worksteal --tb=short
+          ${{ steps.prepare.outputs.test_paths }}
+
+  aggregate:
+    needs: unit
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          case "${{ needs.unit.result }}" in
+            success|skipped) exit 0 ;;
+            *) exit 1 ;;
+          esac
