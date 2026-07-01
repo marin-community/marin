@@ -28,6 +28,8 @@ from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, tpu_device
 
+from ducky.tunnel import cluster_tunnel
+
 logger = logging.getLogger(__name__)
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
@@ -99,10 +101,14 @@ def _build_dashboard() -> None:
 
 @click.command()
 @click.option(
+    "--cluster",
+    default=None,
+    help="Iris cluster to auto-tunnel to (opens `iris cluster dashboard`); exclusive with --controller-url.",
+)
+@click.option(
     "--controller-url",
     default=lambda: os.environ.get("IRIS_CONTROLLER_URL"),
-    required=True,
-    help="Iris controller URL, e.g. a tunnel from `iris --cluster=<name>` (default $IRIS_CONTROLLER_URL).",
+    help="Explicit Iris controller URL (default $IRIS_CONTROLLER_URL); mutually exclusive with --cluster.",
 )
 @click.option("--region", default="us-east5", show_default=True, help="Region to pin the job to.")
 @click.option("--name", default="ducky", show_default=True, help="Job name.")
@@ -115,9 +121,26 @@ def _build_dashboard() -> None:
 @click.option("--cpu", default=DEFAULT_CPU, show_default=True, type=float, help="CPUs to request.")
 @click.option("--memory", default=DEFAULT_MEMORY, show_default=True, help="Memory to request (e.g. 16GB).")
 @click.option("--skip-build", is_flag=True, help="Skip the dashboard `npm run build` (use an already-built dist).")
-def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memory: str, skip_build: bool) -> None:
-    """Submit the always-on ducky service to an Iris cluster."""
+def cli(
+    cluster: str | None,
+    controller_url: str | None,
+    region: str,
+    name: str,
+    tpu: str,
+    cpu: float,
+    memory: str,
+    skip_build: bool,
+) -> None:
+    """Submit the always-on ducky service to an Iris cluster.
+
+    Pass ``--cluster <name>`` to auto-open a controller tunnel, or ``--controller-url``
+    to target one you already have.
+    """
     logging.basicConfig(level=logging.INFO)
+    if cluster and controller_url:
+        raise click.UsageError("Pass --cluster or --controller-url, not both.")
+    if not cluster and not controller_url:
+        raise click.UsageError("Pass --cluster <name> to auto-tunnel, or --controller-url <url>.")
     env_vars = _ducky_env_vars()
     if "DUCKY_SCRATCH_BUCKET" not in env_vars:
         raise click.UsageError("DUCKY_* env vars not set — export ducky config before deploying.")
@@ -125,13 +148,21 @@ def cli(controller_url: str, region: str, name: str, tpu: str, cpu: float, memor
     if not skip_build:
         _build_dashboard()
 
-    client = IrisClient.remote(controller_url, workspace=Path.cwd())
-    job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)
-    logger.info(
-        "submitted ducky job %s (endpoint %r) — reachable via the controller endpoint proxy once running",
-        job.job_id,
-        PORT_NAME,
-    )
+    def _submit(url: str) -> None:
+        client = IrisClient.remote(url, workspace=Path.cwd())
+        job = submit_ducky(client, name=name, region=region, tpu=tpu, cpu=cpu, memory=memory, env_vars=env_vars)
+        logger.info(
+            "submitted ducky job %s (endpoint %r) — reachable via the controller endpoint proxy once running",
+            job.job_id,
+            PORT_NAME,
+        )
+
+    if cluster:
+        with cluster_tunnel(cluster) as url:
+            _submit(url)
+    else:
+        assert controller_url is not None  # guarded above
+        _submit(controller_url)
 
 
 if __name__ == "__main__":

@@ -18,25 +18,19 @@ the full-result GCS path) to stderr.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import re
-import shlex
-import subprocess
-import threading
 import time
-from collections.abc import Iterator
 
 import click
 import httpx
+
+from ducky.tunnel import cluster_tunnel
 
 DEFAULT_BASE_URL = "http://127.0.0.1:10000/proxy/ducky"
 # Per-request HTTP timeout. Each submit/poll call is fast (the query runs async on the
 # server), so this only bounds a single round-trip — not the query.
 _HTTP_TIMEOUT = 30
-# matches the local tunnel address the iris CLI prints (port varies)
-_TUNNEL_URL_RE = re.compile(r"https?://127\.0\.0\.1:\d+")
 
 
 def _render_table(columns: list[str], rows: list[list]) -> str:
@@ -60,48 +54,6 @@ def _error_message(response: httpx.Response) -> str:
         return str(response.json().get("error", response.text))
     except (ValueError, KeyError):
         return f"HTTP {response.status_code}: {response.text[:200]}"
-
-
-@contextlib.contextmanager
-def _cluster_tunnel(cluster: str, endpoint: str, timeout: float = 90.0) -> Iterator[str]:
-    """Open a controller tunnel via ``iris cluster dashboard`` and yield the proxied base URL.
-
-    Spawns the iris CLI (override with ``$DUCKY_IRIS_CMD``), reads its output until the
-    local tunnel URL appears, and tears the tunnel down on exit. The iris CLI owns the
-    tunnel + auth, so ducky needs no iris Python imports.
-    """
-    iris_cmd = shlex.split(os.environ.get("DUCKY_IRIS_CMD", "iris"))
-    proc = subprocess.Popen(
-        [*iris_cmd, "--cluster", cluster, "cluster", "dashboard"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    # Reading proc.stdout line-by-line blocks if iris emits nothing, so a wall-clock
-    # check inside the loop never fires — enforce the startup timeout by terminating
-    # the process (which EOFs the read) if the URL hasn't appeared in time.
-    startup_kill = threading.Timer(timeout, proc.terminate)
-    startup_kill.start()
-    base = None
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            match = _TUNNEL_URL_RE.search(line)
-            if match:
-                base = f"{match.group(0)}/proxy/{endpoint}"
-                break
-    finally:
-        startup_kill.cancel()  # startup done (found or EOF); stop guarding it
-
-    if base is None:
-        proc.terminate()
-        raise click.ClickException(f"Could not open a tunnel to cluster {cluster!r} via `iris cluster dashboard`.")
-    try:
-        yield base
-    finally:
-        proc.terminate()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=10)
 
 
 def _run_query(base: str, sql: str, output_format: str, poll_interval: float, timeout: int) -> None:
@@ -168,8 +120,8 @@ def query(
         raise click.UsageError("No SQL provided — pass it as an argument or via stdin.")
 
     if cluster:
-        with _cluster_tunnel(cluster, endpoint) as base:
-            _run_query(base, sql, output_format, poll_interval, timeout)
+        with cluster_tunnel(cluster) as controller_url:
+            _run_query(f"{controller_url}/proxy/{endpoint}", sql, output_format, poll_interval, timeout)
     else:
         base = base_url or os.environ.get("DUCKY_BASE_URL", DEFAULT_BASE_URL)
         _run_query(base, sql, output_format, poll_interval, timeout)
