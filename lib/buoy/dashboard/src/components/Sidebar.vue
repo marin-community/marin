@@ -2,11 +2,16 @@
 import { onMounted } from 'vue'
 import { useRuns } from '../composables/useRuns'
 
-const emit = defineEmits<{ select: [entity: string, project: string, name: string] }>()
+const props = defineProps<{ initialEntity?: string; initialProject?: string; initialUser?: string }>()
+const emit = defineEmits<{ select: [entity: string, project: string, name: string]; collapse: [] }>()
 const { entity, project, user, search, entities, projects, users, runs, loading, loadEntities, fetchRuns } = useRuns()
 
 onMounted(async () => {
   await loadEntities()
+  // A deep-link prefills the picker; the entity/project watches load the rest.
+  if (props.initialEntity) entity.value = props.initialEntity
+  if (props.initialProject) project.value = props.initialProject
+  if (props.initialUser) user.value = props.initialUser
   fetchRuns()
 })
 
@@ -23,7 +28,16 @@ const glyph = (state: string) => GLYPH[state] ?? '·'
 
 <template>
   <aside class="flex w-[340px] shrink-0 flex-col gap-2 bg-accent p-4 text-white">
-    <div class="text-2xl font-bold tracking-wide">buoy</div>
+    <div class="flex items-center justify-between">
+      <div class="text-2xl font-bold tracking-wide">buoy</div>
+      <button
+        class="rounded bg-white/15 px-2 py-0.5 text-sm hover:bg-white/30"
+        title="hide sidebar"
+        @click="emit('collapse')"
+      >
+        «
+      </button>
+    </div>
 
     <label class="mt-1 text-xs uppercase tracking-wide text-white/70">entity</label>
     <input v-model="entity" list="ents" class="rounded bg-surface-raised px-2 py-1 text-text" @change="fetchRuns" />
