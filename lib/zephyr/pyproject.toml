@@ -43,6 +43,7 @@ packages = ["src/zephyr"]
 packages = ["src/zephyr"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
 timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
@@ -52,4 +53,4 @@ log_cli_level = "INFO"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow and not tpu_ci' --import-mode=importlib"

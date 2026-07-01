@@ -1,12 +1,27 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Protobuf enum utilities."""
+"""Protobuf enum and value display helpers."""
+
+import signal
 
 import humanfriendly
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 
 from iris.rpc import job_pb2, vm_pb2
+
+
+def signal_name(signum: int) -> str:
+    """Return the canonical signal name for ``signum`` (e.g. 9 -> 'SIGKILL').
+
+    Falls back to ``'signal N'`` for numbers that are not valid signals. Used to
+    interpret process exit codes above 128, where the killing signal is
+    ``exit_code - 128``.
+    """
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
 
 
 def _enum_name(enum_wrapper: EnumTypeWrapper, value: int) -> str:

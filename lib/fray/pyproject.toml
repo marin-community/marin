@@ -13,13 +13,17 @@ dependencies = [
 ]
 
 [dependency-groups]
-fray_test = [
+test = [
     "pytest-timeout",
     "pytest>=8.3.2",
 ]
-fray_tpu_test = ["jax==0.10.0", "jaxlib==0.10.0", "libtpu==0.0.40", { include-group = "fray_test" }]
+fray_tpu_test = ["jax==0.10.1", "jaxlib==0.10.1", "libtpu==0.0.41", { include-group = "test" }]
 
-dev = [{ include-group = "fray_test" }]
+dev = [{ include-group = "test" }]
+
+[tool.pytest.ini_options]
+addopts = "-m 'not slow and not tpu_ci' --import-mode=importlib"
+pythonpath = ["src", "tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]

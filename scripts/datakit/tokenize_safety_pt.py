@@ -15,7 +15,7 @@ import logging
 
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -35,7 +35,7 @@ def _tokenize_step(source: DatakitSource) -> StepSpec:
         hash_attrs={"tokenizer": TOKENIZER},
         fn=lambda output_path, n=normalized: tokenize(
             TokenizeConfig(
-                train_paths=[Artifact.from_path(n, NormalizedData).main_output_dir],
+                train_paths=[read_artifact(n.output_path, NormalizedData).main_output_dir],
                 validation_paths=[],
                 cache_path=output_path,
                 tokenizer=TOKENIZER,

@@ -17,7 +17,6 @@ from rigging.filesystem import atomic_rename, open_url
 from zephyr import Dataset, ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
 
@@ -86,11 +85,11 @@ class UncheatableEvalDataset:
 class UncheatableEvalDownloadConfig:
     """Configuration for downloading and normalizing Uncheatable Eval dumps."""
 
-    output_path: str | VersionedValue[str] = THIS_OUTPUT_PATH
-    repo_owner: str | VersionedValue[str] = "Jellyfish042"
-    repo_name: str | VersionedValue[str] = "uncheatable_eval"
-    data_path: str | VersionedValue[str] = "data"
-    branch: str | VersionedValue[str] = "master"
+    output_path: str = ""
+    repo_owner: str = "Jellyfish042"
+    repo_name: str = "uncheatable_eval"
+    data_path: str = "data"
+    branch: str = "master"
     max_concurrent_downloads: int = 8
     request_timeout: int = 120
     github_token: str | None = None
@@ -391,32 +390,3 @@ def uncheatable_eval_step(
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )
-
-
-def make_uncheatable_eval_step(
-    *,
-    name: str = "raw/uncheatable-eval/latest",
-    repo_owner: str = "ziqing-huang",
-    repo_name: str = "uncheatable_eval",
-    data_path: str = "data",
-    branch: str = "master",
-    max_concurrent_downloads: int = 8,
-    request_timeout: int = 120,
-    github_token: str | None = None,
-    skip_existing: bool = True,
-) -> ExecutorStep:
-    """Create an ExecutorStep that downloads the latest Uncheatable Eval dumps.
-
-    Backward-compat wrapper around uncheatable_eval_step().
-    """
-    return uncheatable_eval_step(
-        name=name,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        data_path=data_path,
-        branch=branch,
-        max_concurrent_downloads=max_concurrent_downloads,
-        request_timeout=request_timeout,
-        github_token=github_token,
-        skip_existing=skip_existing,
-    ).as_executor_step()

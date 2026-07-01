@@ -46,65 +46,50 @@ Marin experiments are defined as a set of steps that can depend on each other an
 like a Makefile.
 
 As a brief example of how you can use Marin, here is a complete script for training a tiny model on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
-You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model_cpu.py) for more details.
+You can check out the [full script](https://github.com/marin-community/marin/blob/main/experiments/tutorials/train_tiny_model.py) for more details.
 
 <!--marin-example-start-->
 
 ```python
 from fray.cluster import ResourceConfig
+from levanter.optim import AdamConfig
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import tokenized
+from marin.experiment.train import train_lm
 
-from experiments.defaults import default_train
-from experiments.llama import llama3_tokenizer, llama_nano
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tokenization import default_tokenize
-from marin.execution.executor import executor_main
+from experiments.llama import llama_nano
+from experiments.marin_tokenizer import marin_tokenizer
 
-# 1. Choose a dataset
-tinystories_hf_id = "roneneldan/TinyStories"
-
-# 2. Tokenize the dataset
-tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
-    dataset=tinystories_hf_id,  # HF dataset id
-    tokenizer=llama3_tokenizer,
+# 1. Tokenize the dataset as a lazy handle — nothing downloads yet.
+tinystories_tokenized = tokenized(
+    name="tokenized/tinystories",
+    source="roneneldan/TinyStories",
+    tokenizer=marin_tokenizer,
+    sample_count=1000,  # cap at 1 000 samples per shard to keep the tutorial fast
 )
 
-# 3. Define training configuration
-nano_train_config = SimpleTrainConfig(
-    # Here we define the hardware resources we need.
-    resources=ResourceConfig.with_cpu(),
-    train_batch_size=4,
-    num_train_steps=100,
-    # set hyperparameters
-    learning_rate=6e-4,
-    weight_decay=0.1,
-    # keep eval quick for tutorial
-    max_eval_batches=4,
-)
-
-# 4. Train the model
-nano_tinystories_model = default_train(
-    name="marin-nano-tinystories",
+# 2. Train the model — depends on the tokenized dataset above.
+nano_tinystories_model = train_lm(
+    name="checkpoints/marin-nano-tinystories",
+    version="v1",
+    model=llama_nano,
+    optimizer=AdamConfig(learning_rate=6e-4, weight_decay=0.1),
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
-    tokenized=tinystories_tokenized,
-    model_config=llama_nano,
-    train_config=nano_train_config,
-    # wandb tags
-    tags=["llama", "nano", "tinystories", "tutorial"],
-    # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
-    # during training, but there's no point in running evals on such a tiny model
-    eval_harness_tasks=[],
-    # to keep tutorial fast, skip default validation sets
-    use_default_validation=False,
+    datasets={tinystories_tokenized: 1.0},
+    batch_size=4,
+    seq_len=2048,
+    num_train_steps=100,
+    z_loss_weight=None,
+    evals=None,  # no point evaluating such a tiny model
+    resources=ResourceConfig.with_cpu(),
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[
-        nano_tinystories_model,
-    ])
+    StepRunner().run([lower(nano_tinystories_model)])
 ```
 
-Here, we create two [steps](docs/explanations/executor.md#steps), one for tokenizing the dataset and one for training the model.
+Here, we create two steps, one for tokenizing the dataset and one for training the model.
 The training step depends on the tokenized dataset step, so it will be executed after the tokenization step is completed.
 
 <!--marin-example-end-->

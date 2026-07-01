@@ -2,11 +2,72 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+from collections.abc import Sequence
 
-from marin.execution.executor import infer_tpu_variant_regions_from_iris
+from fray.current_client import current_client
+from fray.iris_backend import FrayIrisClient
 from rigging.filesystem import data_config, marin_region
 
 logger = logging.getLogger(__name__)
+
+
+def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
+    try:
+        client = current_client()
+    except Exception:
+        return None
+    if not isinstance(client, FrayIrisClient):
+        return None
+
+    variant = variant.lower()
+    try:
+        # TODO: expose autoscaler status through a public Fray API.
+        autoscaler_status = client._iris._cluster_client.get_autoscaler_status()
+    except Exception:
+        logger.warning("Could not query Iris autoscaler status for TPU region inference", exc_info=True)
+        return None
+
+    regions: set[str] = set()
+    for group in autoscaler_status.status.groups:
+        if group.device_type != "tpu":
+            continue
+        group_variant = group.device_variant.lower().strip()
+        if group_variant and group_variant != variant:
+            continue
+
+        region = group.region.strip().lower()
+        if region:
+            regions.add(region)
+
+    return regions or None
+
+
+def _regions_for_tpu_variants_from_iris(
+    variants: list[str],
+    *,
+    variant_region_cache: dict[str, set[str] | None],
+) -> set[str] | None:
+    inferred_regions: set[str] = set()
+    for variant in variants:
+        normalized_variant = variant.lower()
+        if normalized_variant not in variant_region_cache:
+            variant_region_cache[normalized_variant] = _regions_for_tpu_variant_from_iris(normalized_variant)
+        cached = variant_region_cache[normalized_variant]
+        if cached is None:
+            return None
+        inferred_regions |= cached
+    return inferred_regions
+
+
+def infer_tpu_variant_regions_from_iris(variants: Sequence[str]) -> list[str] | None:
+    """Return sorted TPU-capable regions for the requested variants, if known."""
+    inferred_regions = _regions_for_tpu_variants_from_iris(
+        list(variants),
+        variant_region_cache={},
+    )
+    if not inferred_regions:
+        return None
+    return sorted(inferred_regions)
 
 
 def requested_tpu_variants(train_tpu_type: str, inference_tpu_type: str | None) -> list[str]:
@@ -61,10 +122,10 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
 
 def marin_prefix_for_region(region: str) -> str:
     """Return the canonical Marin bucket prefix for a region."""
-    bucket = data_config().region_buckets.get(region.lower())
-    if bucket is None:
+    spec = data_config().region_buckets.get(region.lower())
+    if spec is None:
         raise ValueError(f"No Marin data bucket configured for region {region!r}.")
-    return f"gs://{bucket}"
+    return f"gs://{spec.name}"
 
 
 def singleton_region_list(region: str) -> list[str]:

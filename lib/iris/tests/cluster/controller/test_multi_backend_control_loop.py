@@ -16,7 +16,6 @@ from iris.cluster.config import BackendConfig
 from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
 from tests.cluster.controller._test_support import ControllerTestState
 from tests.cluster.controller.conftest import (
     FakeProvider,
@@ -52,14 +51,13 @@ def two_backend_controller(make_controller):
 
 @pytest.fixture
 def state(two_backend_controller) -> ControllerTestState:
-    # Each backend owns its own tracker, so workers register through
-    # ``register_worker_into_backend`` (routed by scale group); this state's own
-    # ``_health`` is unused for these multi-backend cases.
+    # Each backend owns its own tracker and attrs projection, so workers register
+    # through ``register_worker_into_backend`` (routed by scale group); this state's
+    # own ``_health``/``_worker_attrs`` are unused for these multi-backend cases.
     controller = two_backend_controller
     return ControllerTestState(
         controller._db,
         endpoints=controller._endpoints,
-        worker_attrs=controller._worker_attrs,
         run_template_cache=controller._run_template_cache,
     )
 

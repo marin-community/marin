@@ -19,7 +19,6 @@ from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, 
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.rpc import job_pb2
 from rigging.timing import Duration, Timestamp
-
 from tests.cluster.controller.conftest import (
     advance_all_tpus,
     make_autoscaler,

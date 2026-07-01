@@ -57,7 +57,6 @@ from iris.cluster.controller.ops.task import (
     finalize,
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.pruner import prune_old_data
 from iris.cluster.controller.reconcile import dispatch
 from iris.cluster.controller.reconcile.commit import commit_effects
@@ -80,7 +79,7 @@ from iris.cluster.controller.scheduling.scheduler import (
     SchedulingContext,
 )
 from iris.cluster.controller.service import ControllerServiceImpl, PendingKick
-from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -351,8 +350,6 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._endpoints = EndpointsProjection(self._db)
-        self._worker_attrs = WorkerAttrsProjection(self._db)
-        writes.validate()
 
         self._threads = threads if threads is not None else get_thread_container()
 
@@ -381,6 +378,10 @@ class Controller:
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.bind_runtime(self._build_runtime(backend_id))
 
+        # Runs after binding so the per-backend WorkerAttrsProjection each backend
+        # registers in bind_runtime is present in PROJECTIONS for the owned-table check.
+        writes.validate()
+
         # Seed each backend's liveness from its persisted workers so the scheduler
         # sees them at startup, and reseed after a DB reopen (checkpoint restore).
         # ``find_prunable`` relies on this to keep every ``workers`` row tracked.
@@ -401,7 +402,6 @@ class Controller:
             db=self._db,
             endpoints=self._endpoints,
             endpoint_service=self._endpoint_service,
-            worker_attrs=self._worker_attrs,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
         )
@@ -522,14 +522,6 @@ class Controller:
         for backend in self._backends.values():
             if BackendCapability.WORKER_DAEMON in backend.capabilities:
                 backend.seed_liveness()
-
-    def _worker_daemon_healths(self) -> list[WorkerHealthTracker]:
-        """Each worker-daemon backend's liveness tracker (disjoint by scale group)."""
-        return [
-            backend.health
-            for backend in self._backends.values()
-            if BackendCapability.WORKER_DAEMON in backend.capabilities and backend.health is not None
-        ]
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
         """Union of every worker-daemon backend's liveness (the trackers are disjoint).
@@ -714,9 +706,8 @@ class Controller:
                 try:
                     prune_old_data(
                         self._db,
-                        self._worker_daemon_healths(),
+                        self._backends.values(),
                         self._endpoints,
-                        self._worker_attrs,
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
                         slice_retention=self._config.slice_retention,
@@ -931,7 +922,6 @@ class Controller:
             db=self._db,
             endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
-            worker_attrs=self._worker_attrs,
             owns_scale_group=owns_scale_group,
             budget_defaults=self._config.user_budget_defaults,
         )

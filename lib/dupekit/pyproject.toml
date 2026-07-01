@@ -56,3 +56,6 @@ benchmark = [
     "pytest-benchmark>=5.2.3",
     "pytest-memray>=1.8.0"
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]

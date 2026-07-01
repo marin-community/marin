@@ -5,6 +5,7 @@
 
 import shutil
 import tempfile
+import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,10 +16,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from finelog.client.log_client import Table
 from finelog.rpc.logging_connect import LogServiceClientSync
-from iris.cluster.backends.rpc.backend import (
-    WORKER_RECONCILE_TEARDOWN_REASON,
-    teardown_dead_workers,
-)
+from iris.cluster.backends.rpc.backend import WORKER_RECONCILE_TEARDOWN_REASON
 from iris.cluster.backends.types import CloudSliceState
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import (
@@ -60,17 +58,18 @@ from iris.cluster.controller.backend import (
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
-    WorkerSource,
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
 )
+from iris.cluster.controller.backend_store import BackendWorkerStore, DbBackendWorkerStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import WorkerReconcilePlan, WorkerReconcileResult
@@ -89,7 +88,6 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthTracker,
     WorkerLiveness,
 )
-from iris.cluster.controller.worker_source import DbWorkerSource
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.service_mode import ServiceMode
@@ -99,6 +97,7 @@ from iris.cluster.types import (
     AcceleratorType,
     CapacityType,
     JobName,
+    UserBudgetDefaults,
     WorkerId,
     is_job_finished,
 )
@@ -107,7 +106,6 @@ from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, RateLimiter, Timestamp
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
-
 from tests.cluster.backends.conftest import make_mock_platform
 from tests.cluster.controller._test_support import ControllerTestState, set_task_state_for_test
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
@@ -131,12 +129,12 @@ def check_is_job_finished(j) -> bool:
 
 
 def run_worker_daemon_schedule(
-    scheduler: Scheduler, worker_source: WorkerSource | None, request: ScheduleRequest
+    scheduler: Scheduler, store: BackendWorkerStore | None, request: ScheduleRequest
 ) -> ScheduleResult:
-    """Assemble the scheduling context from the attached source and run the Iris
+    """Assemble the scheduling context from the attached store and run the Iris
     pipeline — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.schedule``."""
-    assert worker_source is not None, "worker-daemon backend scheduled before worker source attached"
-    context = assemble_scheduling_context(worker_source.scheduling_inputs(), request)
+    assert store is not None, "worker-daemon backend scheduled before worker store attached"
+    context = assemble_scheduling_context(store.scheduling_inputs(), request)
     return run_scheduling_decision(
         scheduler,
         ScheduleInput(
@@ -148,61 +146,47 @@ def run_worker_daemon_schedule(
 
 
 def run_worker_daemon_reconcile(
-    worker_source: WorkerSource | None,
+    store: BackendWorkerStore | None,
+    health: WorkerHealthTracker,
     worker_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
     transport_events: list[WorkerHealthEvent],
 ) -> tuple[ReconcileResult, list[WorkerId]]:
     """Author reconcile effects from a fake's worker results and fold the observed
     liveness — the worker-daemon fakes' shared mirror of ``RpcTaskBackend.reconcile``'s
-    tail (resolve observations into effects, then fold transport + BUILD_FAILED
-    through the shared tracker reached via the source).
+    tail (resolve observations into effects through the store, then fold transport +
+    BUILD_FAILED through the backend's own tracker).
 
     Returns the committable result plus the workers the fold reaped; the caller
     stashes the latter for its ``run_teardown``, the way the real backend stashes
     on ``self._pending_dead``."""
-    assert worker_source is not None, "worker-daemon backend reconciled before worker source attached"
+    assert store is not None, "worker-daemon backend reconciled before worker store attached"
     now = Timestamp.now()
-    effects = apply_reconcile(worker_source, worker_results, now=now)
+    effects = apply_reconcile(store, worker_results, now=now)
     events = transport_events + [
         WorkerHealthEvent(wid, WorkerHealthEventKind.BUILD_FAILED) for wid in effects.health.build_failed
     ]
-    dead = worker_source.health.apply(events, now_ms=now.epoch_ms())
+    dead = health.apply(events, now_ms=now.epoch_ms())
     return ReconcileResult(effects=effects), dead
 
 
-def run_worker_daemon_teardown(
-    worker_source: WorkerSource | None,
-    dead_workers: list[WorkerId],
+def store_from_runtime(
+    runtime: BackendRuntime,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult],
-    *,
-    reason: str,
-) -> None:
-    """Tear down ``dead_workers`` through the production teardown — the fakes'
-    shared mirror of ``RpcTaskBackend.teardown`` (source the failure-write
-    collaborators from the worker source, drive the fake's own ``autoscale``)."""
-    assert worker_source is not None, "worker-daemon backend teardown before worker source attached"
-    teardown_dead_workers(
-        dead_workers,
-        db=worker_source.db,
-        health=worker_source.health,
-        endpoints=worker_source.endpoints,
-        worker_attrs=worker_source.worker_attrs,
-        autoscale=autoscale,
-        reason=reason,
-    )
-
-
-def worker_source_from_runtime(runtime: BackendRuntime, health: WorkerHealthTracker) -> DbWorkerSource:
-    """Build a fake's worker source from the controller runtime + its own tracker —
-    the worker-daemon fakes' shared mirror of ``RpcTaskBackend.bind_runtime``."""
-    return DbWorkerSource(
+) -> DbBackendWorkerStore:
+    """Build a fake's worker store from the controller runtime + its own tracker,
+    attrs projection, and ``autoscale`` — the worker-daemon fakes' shared mirror of
+    ``RpcTaskBackend.bind_runtime``."""
+    return DbBackendWorkerStore(
         db=runtime.db,
         owns_scale_group=runtime.owns_scale_group,
         health=health,
-        worker_attrs=runtime.worker_attrs,
+        worker_attrs=worker_attrs,
         endpoints=runtime.endpoints,
         run_template_cache=runtime.run_template_cache,
         defaults=runtime.budget_defaults,
+        autoscale=autoscale,
     )
 
 
@@ -220,10 +204,13 @@ class FakeProvider:
         self._scheduler = Scheduler()
         # Attached by the controller, exactly as for RpcTaskBackend; the fake
         # sources its own workers through it rather than the controller slicing one.
-        self.worker_source: WorkerSource | None = None
+        self._store: BackendWorkerStore | None = None
         # This backend's own liveness tracker (the controller builds its worker
-        # source over this same object), mirroring RpcTaskBackend.
+        # store over this same object), mirroring RpcTaskBackend.
         self.health: WorkerHealthTracker = WorkerHealthTracker()
+        # This backend's own attributes projection, built in ``bind_runtime`` once
+        # ``runtime.db``/``owns_scale_group`` are known, mirroring RpcTaskBackend.
+        self.worker_attrs: WorkerAttrsProjection | None = None
         self.advertised: dict[str, set[str]] = {}
         self.allowed_users: frozenset[str] = frozenset({"*"})
         # Workers this fake's reconcile fold reaped, awaiting run_teardown.
@@ -240,19 +227,19 @@ class FakeProvider:
         self.allowed_users = allowed_users
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
-        return run_worker_daemon_schedule(self._scheduler, self.worker_source, request)
+        return run_worker_daemon_schedule(self._scheduler, self._store, request)
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
         # Mirror RpcTaskBackend: source the snapshot, build plans, report every
         # reached worker healthy with no observations (these tests drive task
         # transitions directly via the transition driver, not through RPCs), then
         # author effects + fold liveness exactly as the real backend does.
-        assert self.worker_source is not None, "FakeProvider.reconcile called before worker source attached"
-        snapshot = self.worker_source.reconcile_snapshot()
+        assert self._store is not None, "FakeProvider.reconcile called before worker store attached"
+        snapshot = self._store.reconcile_snapshot()
         plans = plans_from_snapshot(snapshot)
         worker_results = [(p, WorkerReconcileResult(worker_id=p.worker_id, observations=[], error=None)) for p in plans]
         events = [WorkerHealthEvent(p.worker_id, WorkerHealthEventKind.REACHED) for p in plans]
-        result, dead = run_worker_daemon_reconcile(self.worker_source, worker_results, events)
+        result, dead = run_worker_daemon_reconcile(self._store, self.health, worker_results, events)
         self._pending_dead.extend(dead)
         return result
 
@@ -262,17 +249,23 @@ class FakeProvider:
     def run_teardown(self) -> None:
         dead = self._pending_dead
         self._pending_dead = []
-        run_worker_daemon_teardown(self.worker_source, dead, self.autoscale, reason=WORKER_RECONCILE_TEARDOWN_REASON)
+        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        run_worker_daemon_teardown(self.worker_source, dead_workers, self.autoscale, reason=reason)
+        assert self._store is not None, "FakeProvider.teardown called before worker store attached"
+        self._store.reap_workers(dead_workers, reason=reason)
+
+    def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
+        assert self._store is not None, "FakeProvider.prune_dead_workers called before worker store attached"
+        return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
-        self.worker_source = worker_source_from_runtime(runtime, self.health)
+        self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
+        self._store = store_from_runtime(runtime, self.health, self.worker_attrs, self.autoscale)
 
     def seed_liveness(self) -> None:
-        assert self.worker_source is not None, "FakeProvider.seed_liveness called before worker source attached"
-        worker_ids = self.worker_source.owned_worker_ids()
+        assert self._store is not None, "FakeProvider.seed_liveness called before worker store attached"
+        worker_ids = self._store.owned_worker_ids()
         if worker_ids:
             self.health.heartbeat(worker_ids, Timestamp.now().epoch_ms())
 
@@ -293,6 +286,25 @@ class FakeProvider:
 
     def close(self) -> None:
         pass
+
+
+def worker_daemon_backends_for_prune(state: ControllerTestState) -> list[FakeProvider]:
+    """A single worker-daemon backend bound to ``state``'s db/health, for tests
+    that drive ``prune_old_data``'s per-backend dead-worker GC. The backend builds
+    its own attrs projection (claiming every worker, like ``state._worker_attrs``)
+    since pruning never reads attribute content."""
+    provider = FakeProvider()
+    provider.health = state._health
+    provider.bind_runtime(
+        BackendRuntime(
+            db=state._db,
+            endpoints=state._endpoints,
+            run_template_cache=state._run_template_cache,
+            owns_scale_group=lambda _scale_group: True,
+            budget_defaults=UserBudgetDefaults(),
+        )
+    )
+    return [provider]
 
 
 @pytest.fixture
@@ -360,18 +372,19 @@ def log_service(embedded_log_server) -> LogServiceClientSync:
 def controller_service(state, log_client, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller.
 
-    The service registers workers into and reads liveness through the controller's
-    backend tracker, so point the mock backend's tracker at this state's ``_health``
-    so liveness writes and reads land on the same object the test inspects.
+    The service registers workers into and reads liveness/attrs through the
+    controller's backend, so point the mock backend's tracker and attrs projection
+    at this state's ``_health``/``_worker_attrs`` so writes and reads land on the
+    same objects the test inspects.
     """
     mock_controller.provider.health = state._health
+    mock_controller.provider.worker_attrs = state._worker_attrs
     return ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=log_client,
         db=state._db,
         endpoints=state._endpoints,
-        worker_attrs=state._worker_attrs,
         endpoint_service=EndpointServiceImpl(db=state._db, endpoints=state._endpoints),
     )
 
@@ -737,14 +750,16 @@ def register_worker_into_backend(
     healthy: bool = True,
     slice_id: str = "",
 ) -> WorkerId:
-    """Register a worker into the liveness tracker owned by the backend that owns its scale group.
+    """Register a worker into the liveness tracker and attrs projection owned by the
+    backend that owns its scale group.
 
     The multi-backend equivalent of :func:`register_worker`: each backend owns its
-    own tracker, so a worker must land in the tracker of the backend its scale group
-    routes to (rather than one shared tracker).
+    own tracker and attrs projection, so a worker must land in the backend its
+    scale group routes to (rather than one shared tracker/projection).
     """
     backend = controller.backends[controller.backend_id_for_scale_group(scale_group)]
     assert backend.health is not None, f"backend for scale group {scale_group!r} has no liveness tracker"
+    assert backend.worker_attrs is not None, f"backend for scale group {scale_group!r} has no attrs projection"
     wid = WorkerId(worker_id)
     with controller._db.transaction() as cur:
         ops.worker.register(
@@ -754,7 +769,7 @@ def register_worker_into_backend(
             metadata=metadata,
             ts=Timestamp.now(),
             health=backend.health,
-            worker_attrs=controller._worker_attrs,
+            worker_attrs=backend.worker_attrs,
             slice_id=slice_id,
             scale_group=scale_group,
         )

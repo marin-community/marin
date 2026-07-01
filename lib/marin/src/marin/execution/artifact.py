@@ -1,190 +1,301 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""The realized artifact, its on-disk record, and the drift check.
+
+An :class:`Artifact` is the produced, persisted output of a step; an ``ArtifactStep`` is the
+inert handle that builds one. This module owns the
+framework — one base type and the record around it — while concrete artifact types live with
+their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``TokenizedCache`` in
+``marin.processing.tokenize.tokenize``):
+
+- :class:`Artifact` — a directory with a record (provenance + an optional JSON payload) and a
+  ``raw_load`` that reads it back. The default ``raw_load`` returns a handle into the path; a subclass
+  that declares value fields round-trips them through the record's ``result`` automatically.
+- :class:`ArtifactRecord` — the single descriptor written next to a step's output: its config,
+  fingerprint, provenance, and (for a value artifact) its ``result``.
+- ``read_record``/``write_record`` (the full record) and ``read_artifact``/``write_artifact``
+  (the manual typed-payload API), two entry points over one serialization scheme.
+- :func:`check_drift` — the advisory recipe-drift guard the runner applies before serving a
+  cached output.
+"""
+
+import functools
 import json
 import logging
-from dataclasses import asdict, dataclass, is_dataclass
-from typing import Any, TypeVar, cast, overload
+from dataclasses import asdict, is_dataclass
+from typing import Self, TypeVar, cast
 
-from pydantic import BaseModel
-from rigging.filesystem import marin_prefix, open_url
+from pydantic import BaseModel, ConfigDict, Field
+from rigging.filesystem import marin_prefix, open_url, url_to_fs
+from rigging.provenance import Provenance
 
-from marin.execution.artifact_registry import ArtifactRegistry, get_default_registry
-from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
+from marin.execution.fingerprint import describe_drift
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
+M = TypeVar("M", bound=BaseModel)
+
+# JSON-shaped value, used for the human-readable config and the value payload.
+type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
+
+# The record file written next to every output. Legacy names are read for back-compat
+# with already-materialized outputs, never written.
+RECORD_FILENAME = "artifact.json"
+_LEGACY_RECORD_FILENAMES = (".artifact_record.json", ".artifact")
+_LEGACY_PAYLOAD_FILENAMES = (".artifact.json", ".artifact")
+
+# The old Ray executor wrote a per-step ``.executor_info`` sidecar (the ``ExecutorStepInfo``
+# schema) instead of an ``artifact.json``. Caches built that way — e.g. the pinned llama3
+# Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
+# so we read it as a last resort to recover the record. Never written.
+_LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
+
+# Keys under ``StepSpec.hash_attrs`` carrying the artifact's identity, so the runner can
+# apply the drift check without knowing about the lazy layer.
+FINGERPRINT_KEY = "fingerprint"
+VERSION_KEY = "version"
+RESULT_TYPE_KEY = "result_type"
+EXPECTED_FINGERPRINT_KEY = "expected_fingerprint"
 
 
-class Artifact:
-    # Dot-prefix keeps the sidecar out of data-discovery passes that match by
-    # extension (e.g. ``normalize._discover_files`` would otherwise read
-    # ``artifact.json`` as JSONL — see #5864).
-    __artifact_file_name = ".artifact.json"
-    # Legacy filenames written before the rename; read-only fallbacks so historical
-    # GCS outputs remain loadable. ``artifact.json`` was the short-lived form from
-    # #5843; ``.artifact`` predates the JSON-extension convention. Safe to remove
-    # once those prefixes are gone.
-    __legacy_artifact_file_names = ("artifact.json", ".artifact")
-
-    @overload
-    @classmethod
-    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
-
-    @overload
-    @classmethod
-    def from_path(cls, base_path: str | StepSpec) -> "PathMetadata | dict[str, Any]": ...
-
-    @classmethod
-    def from_path(
-        cls, base_path: str | StepSpec, artifact_type: type[T] | None = None
-    ) -> "T | PathMetadata | dict[str, Any]":
-        """Load an Artifact instance from the specified output base path.
-
-        If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
-        it is resolved against ``marin_prefix()``.
-
-        If ``base_path`` has no ``.artifact.json`` (or legacy ``artifact.json`` /
-        ``.artifact``) file but its ``.executor_status`` file contains ``SUCCESS``,
-        returns a :class:`PathMetadata` pointing at ``base_path`` — provided the
-        caller asked for no specific type or for ``PathMetadata``.
-        """
-
-        if isinstance(base_path, StepSpec):
-            base_path = base_path.output_path
-        elif _is_relative_path(base_path):
-            base_path = f"{marin_prefix()}/{base_path}"
-
-        for file_name in (cls.__artifact_file_name, *cls.__legacy_artifact_file_names):
-            try:
-                with open_url(f"{base_path}/{file_name}", "rb") as fd:
-                    if artifact_type is None:
-                        return json.load(fd)
-                    if not issubclass(artifact_type, BaseModel):
-                        raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
-                    return cast(T, artifact_type.model_validate_json(fd.read()))
-            except FileNotFoundError:
-                continue
-        return cls._from_executor_status(base_path, artifact_type)
-
-    @overload
-    @classmethod
-    def from_id(
-        cls, artifact_id: str, version: str, /, artifact_type: type[T], *, registry: ArtifactRegistry | None = None
-    ) -> T: ...
-
-    @overload
-    @classmethod
-    def from_id(
-        cls, artifact_id: str, version: str, /, *, registry: ArtifactRegistry | None = None
-    ) -> "PathMetadata | dict[str, Any]": ...
-
-    @classmethod
-    def from_id(
-        cls,
-        artifact_id: str,
-        version: str,
-        /,
-        artifact_type: type[T] | None = None,
-        *,
-        registry: ArtifactRegistry | None = None,
-    ) -> "T | PathMetadata | dict[str, Any]":
-        """Load an artifact by registry id + version.
-
-        Resolves ``(artifact_id, version)`` against ``registry`` (or the module-level default when
-        ``registry is None``) to an :class:`ArtifactEntry`, then delegates to :meth:`from_path` —
-        so the return value, the ``PathMetadata`` fallback, and the ``artifact_type``
-        deserialization semantics are identical to the path-based loader.
-
-        Region-aware resolution: when the entry recorded a ``relative_path`` (its uri was under
-        ``marin_prefix()`` at registration), this resolves that path against THIS process's
-        ``marin_prefix()`` first, so a reader loads the region-local replica instead of reading
-        across regions. If no region-local copy exists, it falls back to the absolute
-        ``entry.uri`` — logging a warning when that fallback crosses regions (the absolute uri is
-        under a different ``marin_prefix()``).
-
-        ``artifact_id`` and ``version`` are positional-only. ``artifact_type``, if provided, MUST be
-        a pydantic ``BaseModel`` subclass (the existing :meth:`from_path` contract). The registry
-        does not record the type; the caller asserts it on read.
-
-        Raises whatever :meth:`ArtifactRegistry.lookup` raises (``ArtifactNotFoundError``,
-        ``InvalidArtifactIdError``, ``ArtifactRegistryError``), plus whatever :meth:`from_path`
-        raises on the resolved uri.
-        """
-        reg = registry or get_default_registry()
-        entry = reg.lookup(artifact_id, version)
-
-        if entry.relative_path is not None:
-            try:
-                return cls.from_path(entry.relative_path, artifact_type)
-            except FileNotFoundError:
-                # No region-local replica under this process's marin_prefix(); fall through to the
-                # absolute uri, warning if that means reading from another region.
-                if not entry.uri.startswith(marin_prefix().rstrip("/")):
-                    logger.warning(
-                        "artifact %s@%s has no region-local replica under %s; falling back to cross-region uri %s",
-                        artifact_id,
-                        version,
-                        marin_prefix(),
-                        entry.uri,
-                    )
-        return cls.from_path(entry.uri, artifact_type)
-
-    @classmethod
-    def _from_executor_status(cls, base_path: str, artifact_type: type[T] | None) -> "T | PathMetadata":
-        """Fallback when no artifact file is present: synthesize a :class:`PathMetadata`
-        if the step published ``.executor_status = SUCCESS``.
-
-        Only valid when the caller wants no type or ``PathMetadata`` — other types
-        cannot be reconstructed from a bare path.
-        """
-        if artifact_type is not None and artifact_type is not PathMetadata:
-            raise FileNotFoundError(
-                f"No {cls.__artifact_file_name} at {base_path}; cannot synthesize "
-                f"{artifact_type!r} from {get_status_path(base_path)!r}"
-            )
-        with open_url(get_status_path(base_path), "r") as fd:
-            status = fd.read().strip()
-        if status != STATUS_SUCCESS:
-            raise FileNotFoundError(
-                f"No {cls.__artifact_file_name} at {base_path} and "
-                f"{get_status_path(base_path)!r} is {status!r} (not {STATUS_SUCCESS!r})"
-            )
-        return PathMetadata(path=base_path)
-
-    @classmethod
-    def save(cls, artifact: T, base_path: str) -> None:
-        """Saves an Artifact instance to the specified output base path"""
-        with open_url(f"{base_path}/{cls.__artifact_file_name}", "wb") as fd:
-            if isinstance(artifact, BaseModel):
-                fd.write(artifact.model_dump_json().encode("utf-8"))
-            elif is_dataclass(artifact):
-                # `asdict` recursively converts nested dataclasses (for example ResourceConfig),
-                # avoiding non-serializable objects in `__dict__`.
-                fd.write(json.dumps(asdict(artifact)).encode("utf-8"))
-            else:
-                # TODO: should the error to serialize be ignored/logged instead of raising an exception?
-                fd.write(json.dumps(artifact).encode("utf-8"))
+class FingerprintMismatchError(Exception):
+    """The opt-in hard identity gate: an ``expected_fingerprint`` pin differs from the
+    computed fingerprint (at ``lower``) or from a pinned artifact's recorded fingerprint
+    (in :func:`check_drift`)."""
 
 
-class PathMetadata(BaseModel):
-    """Represents a single output path.
+class ArtifactTypeMismatchError(Exception):
+    """A served record's ``result_type`` differs from the requested handle's ``result_type``."""
 
-    Also used as the synthetic return type of :meth:`Artifact.from_path` when the
-    step published a ``.executor_status = SUCCESS`` marker but no ``.artifact``.
+
+def result_type_name(artifact_type: "type[Artifact]") -> str:
+    """The canonical ``module.Qualname`` recorded as a value artifact's ``result_type``.
+
+    The single source of truth for both sides of the round-trip: written into the record when a
+    step succeeds and compared against on :meth:`Artifact.raw_load`.
+    """
+    return f"{artifact_type.__module__}.{artifact_type.__qualname__}"
+
+
+class Artifact(BaseModel):
+    """A produced, persisted artifact: a directory with a record and a ``raw_load``.
+
+    The default ``raw_load`` is a data ref — it returns a handle into ``path`` whose ``.record``
+    carries provenance and the run's config, pulling no weights/caches into the launcher. A
+    subclass that declares value fields persists and reloads them through ``record.result`` with
+    no override (see :meth:`result_payload`). Not frozen: ``raw_load`` sets ``path``.
     """
 
-    path: str
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    path: str = ""
+
+    @functools.cached_property
+    def record(self) -> "ArtifactRecord | None":
+        """The record sidecar at ``path`` (read once), or ``None`` if absent."""
+        return read_record(self.path)
+
+    def result_payload(self) -> dict | None:
+        """What the record stores as ``result``: this artifact's *declared* value fields
+        (every field but ``path``), or ``None`` for a pure data ref that declares none.
+
+        Uses ``type(self).model_fields`` rather than ``model_dump()`` so ``extra="allow"`` extras
+        (e.g. the cached ``record``) never leak into the payload. Override to persist something
+        else.
+        """
+        keys = {name for name in type(self).model_fields if name != "path"}
+        if not keys:
+            return None
+        return self.model_dump(mode="json", include=keys) or None
+
+    @classmethod
+    def raw_load(cls, source: str) -> Self:
+        """The raw, unguarded loader: a handle into ``source`` whose value fields a subclass
+        repopulates from ``record.result``. Prefer :func:`run`/:func:`resolve` (driver) or
+        :meth:`StepContext.resolved` (inside a step) — reach for ``raw_load`` only to read an
+        artifact you already know is built.
+
+        Tolerant of a missing record by design: an adopted or pinned artifact resolves to its
+        pre-existing data location (:meth:`ArtifactStep.path`) — real data, but no marin record
+        there — and its resolved value is intentionally path-only, so a missing record yields a
+        path handle rather than an error. A normal computed handle is never loaded before it is
+        built (``run``/``resolve`` build first; ``StepContext.resolved`` reads only
+        runner-materialized deps), so a missing record cannot arise through the supported paths.
+
+        When a record *is* present it must agree: raises :class:`ArtifactTypeMismatchError` if it
+        was written by a different artifact class (a value type that changed under a reused
+        version).
+        """
+        rec = read_record(source)
+        if rec is not None and rec.result_type and rec.result_type != result_type_name(cls):
+            raise ArtifactTypeMismatchError(
+                f"{source}: recorded result_type is {rec.result_type}, but loading as "
+                f"{result_type_name(cls)}. The value type changed under a reused version — bump the version."
+            )
+        return cls(path=source, **((rec.result if rec is not None else None) or {}))
 
 
-@dataclass
-class PathsMetadata:
-    """Represents a list of paths to the output files
+class ArtifactRecord(BaseModel):
+    """The single descriptor written next to a step's output.
 
-    Useful for Zephyr steps to capture all the output shards.
+    All fields carry a default, so a minimal manual record (:func:`write_artifact`) and a
+    pre-existing legacy file both load without error; the lazy runner fills them all.
     """
 
-    parent_path: str
-    paths: list[str]
+    name: str = ""
+    version: str = ""
+    fingerprint: str = ""
+    result_type: str = ""
+    output_path: str = ""
+    deps: list[str] = Field(default_factory=list)
+    """Dependency identities as ``name@version`` strings."""
+    config: dict[str, JSONValue] | None = None
+    """The materialized config that ran (canonical-encoded), for humans and consumer metadata."""
+    source: str | None = None
+    """For an adopted artifact, the pre-existing data location this ``name@version`` aliases."""
+    result: dict[str, JSONValue] | None = None
+    """A value artifact's declared fields; ``None`` for a data artifact."""
+    fingerprint_payload: str | None = None
+    """The canonical config JSON the ``fingerprint`` hashes, kept for the drift diff."""
+    provenance: Provenance | None = None
+    """Who/when/which-commit/which-argv produced this — ``None`` for a minimal manual write."""
+
+
+def is_mutable_version(version: str) -> bool:
+    """A ``dev`` version is mutable: the drift check is skipped and it always rebuilds."""
+    return version == "dev" or version.endswith("-dev")
+
+
+def _resolved(output_path: str) -> str:
+    """A relative output path is rooted at ``marin_prefix()``; an absolute/URL path is used as-is.
+
+    Mirrors the launcher's path resolution so a manual ``read_artifact``/``read_record`` of a
+    relative step name reads the same location the runner wrote.
+    """
+    return f"{marin_prefix()}/{output_path}" if _is_relative_path(output_path) else output_path
+
+
+def _join(output_path: str, filename: str) -> str:
+    return f"{output_path.rstrip('/')}/{filename}"
+
+
+def _read_text(output_path: str, filename: str) -> str | None:
+    path = _join(output_path, filename)
+    fs = url_to_fs(path, use_listings_cache=False)[0]
+    if not fs.exists(path):
+        return None
+    with open_url(path, "r") as f:
+        return f.read()
+
+
+def _record_from_executor_info(text: str) -> ArtifactRecord:
+    """Map an old Ray executor ``.executor_info`` sidecar into an :class:`ArtifactRecord`.
+
+    Only the fields a consumer reads back are carried across: ``name``, the materialized
+    ``config`` (where a tokenized cache keeps its tokenizer/format/tags), ``output_path``, and
+    ``dependencies`` (recorded as output paths, not ``name@version``). The legacy ``version`` is a
+    per-dependency dict rather than a string, so it is dropped rather than coerced.
+    """
+    info = json.loads(text)
+    return ArtifactRecord(
+        name=info.get("name") or "",
+        config=info.get("config"),
+        output_path=info.get("output_path") or "",
+        deps=list(info.get("dependencies") or []),
+    )
+
+
+def read_record(output_path: str) -> ArtifactRecord | None:
+    """The full record at ``{output_path}/artifact.json`` (or a legacy name), else ``None``.
+
+    Falls back to an old Ray executor ``.executor_info`` sidecar when no modern or legacy record
+    file is present, so caches built before ``artifact.json`` existed still resolve their config.
+    A corrupt/partial file raises :class:`pydantic.ValidationError`.
+    """
+    output_path = _resolved(output_path)
+    for filename in (RECORD_FILENAME, *_LEGACY_RECORD_FILENAMES):
+        text = _read_text(output_path, filename)
+        if text is not None:
+            return ArtifactRecord.model_validate_json(text)
+    executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
+    if executor_info is not None:
+        return _record_from_executor_info(executor_info)
+    return None
+
+
+def write_record(record: ArtifactRecord) -> None:
+    """Write ``record`` to ``{record.output_path}/artifact.json``."""
+    with open_url(_join(record.output_path, RECORD_FILENAME), "w") as f:
+        f.write(record.model_dump_json(indent=2))
+
+
+def _payload_json(value: object) -> JSONValue:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    return value  # pyrefly: ignore[bad-return]
+
+
+def read_artifact(output_path: str, schema: type[M]) -> M:
+    """Load a typed payload: ``read_record(output_path).result`` validated as ``schema``.
+
+    Falls back to a legacy bare-payload sidecar when the record carries no ``result``.
+    Raises :class:`FileNotFoundError` if nothing is present.
+    """
+    if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
+        raise TypeError(f"schema must be a pydantic BaseModel subclass, got {schema!r}")
+    output_path = _resolved(output_path)
+    record = read_record(output_path)
+    if record is not None and record.result is not None:
+        return cast(M, schema.model_validate(record.result))
+    for filename in _LEGACY_PAYLOAD_FILENAMES:
+        text = _read_text(output_path, filename)
+        if text is not None:
+            return cast(M, schema.model_validate_json(text))
+    raise FileNotFoundError(f"no artifact payload at {output_path}")
+
+
+def write_artifact(value: object, output_path: str) -> None:
+    """Write a minimal record carrying ``value`` as its ``result`` — the manual save API."""
+    write_record(ArtifactRecord(output_path=output_path, result=_payload_json(value)))
+
+
+def check_drift(step: StepSpec) -> bool:
+    """Advisory recipe-drift guard, run before serving a cached SUCCESS.
+
+    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` for a mutable
+    (``dev``) version so the caller rebuilds. Otherwise, if a record exists whose fingerprint
+    differs from the step's: raises :class:`FingerprintMismatchError` if the step carries an
+    ``expected_fingerprint`` pin, else logs a field-level warning and returns ``False`` (the
+    cached output is served).
+    """
+    fingerprint = step.hash_attrs.get(FINGERPRINT_KEY)
+    if fingerprint is None:
+        return False
+    version = step.hash_attrs.get(VERSION_KEY, "")
+    if is_mutable_version(version):
+        return True
+    record = read_record(step.output_path)
+    if record is None or record.fingerprint == fingerprint:
+        return False
+
+    change = describe_drift(record.fingerprint_payload, step.fingerprint_payload)
+    if step.hash_attrs.get(EXPECTED_FINGERPRINT_KEY) is not None:
+        raise FingerprintMismatchError(
+            f"{step.name}@{version} is pinned to expected_fingerprint, but its recorded build has "
+            f"fingerprint {record.fingerprint} (now {fingerprint}).{change} "
+            f"Update the pin and bump the version if this is meant to be a different artifact."
+        )
+    logger.warning(
+        "%s@%s: recipe drift — recorded fingerprint %s, now %s; serving the cached output. "
+        "Bump the version to build the new recipe.%s",
+        step.name,
+        version,
+        record.fingerprint,
+        fingerprint,
+        change,
+    )
+    return False

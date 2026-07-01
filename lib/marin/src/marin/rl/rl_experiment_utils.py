@@ -18,10 +18,10 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-from marin.execution.artifact import PathMetadata
-from marin.execution.executor import ExecutorMainConfig
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
-from marin.execution.types import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.experiment.namespacing import user_namespaced_name
 from marin.rl.curriculum import CurriculumConfig
 from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
@@ -29,20 +29,21 @@ from marin.rl.environments.inference_ctx import (
     VLLMFallbackSamplingConfig,
     vLLMInferenceContextConfig,
 )
-from marin.rl.placement import marin_prefix_for_region, resolve_launcher_region, singleton_region_list
+from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from marin.training.training import LevanterCheckpoint
 
 logger = logging.getLogger(__name__)
 
 RL_EXECUTOR_STEP_RESOURCES = ResourceConfig.with_cpu(cpu=0.5, ram="4g", disk="30g")
 
 
-ModelArtifact = ExecutorStep | InputName | str
+ModelArtifact = ArtifactStep[LevanterCheckpoint] | str
 
 
 @dataclasses.dataclass
@@ -60,13 +61,14 @@ class ModelConfig:
 
 @dataclasses.dataclass
 class RLStepConfig:
-    """Runtime config for an RL executor step."""
+    """Runtime config for an RL launcher step."""
 
     name: str
     experiment_config: "RLExperimentConfig"
     curriculum: CurriculumConfig
     model_path: str
     output_path: str
+    resources: ResourceConfig
 
 
 @dataclasses.dataclass
@@ -145,12 +147,6 @@ def executor_step_resources_for_rl_experiment(config: RLExperimentConfig) -> Res
     )
 
 
-def executor_main_config_for_rl_experiment(config: RLExperimentConfig) -> ExecutorMainConfig:
-    """Return executor config with a region-local Marin prefix."""
-    region = launcher_region_for_rl_experiment(config)
-    return ExecutorMainConfig(prefix=marin_prefix_for_region(region))
-
-
 def get_stop_tokens(model_type: str) -> list[str]:
     """Get model-specific stop tokens."""
     if model_type == "llama":
@@ -161,10 +157,11 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
-def _resolve_model_artifact_path(artifact: ModelArtifact) -> InputName | str:
-    if isinstance(artifact, ExecutorStep):
-        return output_path_of(artifact)
-
+def _resolve_model_artifact_path(ctx: StepContext, artifact: ModelArtifact) -> str:
+    """Resolve a model artifact to a concrete path: an ``ArtifactStep[LevanterCheckpoint]`` handle
+    to its region-local output path, a string passes through unchanged."""
+    if isinstance(artifact, ArtifactStep):
+        return ctx.artifact_path(artifact)
     return artifact
 
 
@@ -357,7 +354,12 @@ def _build_rl_job_config(
     return job_config
 
 
-def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
+def _run_rl_experiment_step(config: RLStepConfig) -> Artifact:
+    """Build the RL job config and run it, returning a path ref to the output.
+
+    Runs inline on whatever host executes it; ``RLJob.run`` submits the coordinator
+    (and its trainer/rollout workers) as its own Fray jobs.
+    """
     instance_id = f"{config.name}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
     job_config = _build_rl_job_config(
         name=config.name,
@@ -367,25 +369,54 @@ def _run_rl_experiment_step(config: RLStepConfig) -> PathMetadata:
         output_path=config.output_path,
         instance_id=instance_id,
     )
-    logger.info("Launching RL executor step run %s with instance_id=%s", config.name, instance_id)
+    logger.info("Launching RL run %s with instance_id=%s", config.name, instance_id)
     RLJob(job_config).run(config.name)
-    return PathMetadata(path=config.output_path)
+    return Artifact(path=config.output_path)
 
 
-def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    model_path = _resolve_model_artifact_path(config.model_config.artifact)
-    runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
-    runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
+def _dispatch_rl_experiment_step(config: RLStepConfig) -> None:
+    """Dispatch the RL launcher as its own Fray job in the launch region.
 
-    return ExecutorStep(
-        name=f"rl_testing/{name}",
-        description=f"Async RL training: {name}",
-        fn=remote(resources=executor_step_resources_for_rl_experiment(config))(_run_rl_experiment_step),
-        config=RLStepConfig(
+    The launcher itself is cheap (it builds the job config and submits the RL
+    coordinator), so it rides a small CPU box pinned to the launch region via
+    ``config.resources``. Compute rides with the function, never on the step node,
+    so the resources stay out of the artifact fingerprint.
+    """
+    remote(_run_rl_experiment_step, resources=config.resources)(config)
+
+
+def make_rl_step(
+    name: str, config: RLExperimentConfig, curriculum: CurriculumConfig, *, version: str
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Assemble an async RL training run as an ``ArtifactStep[LevanterCheckpoint]``.
+
+    The model artifact resolves at run time: an ``ArtifactStep[LevanterCheckpoint]`` handle becomes
+    a dependency and resolves to its region-local path, a string passes through. The
+    launch-region resources are a runtime arg, so re-running on a different launch box never
+    re-fingerprints.
+    """
+    artifact = config.model_config.artifact
+    deps = (artifact,) if isinstance(artifact, ArtifactStep) else ()
+
+    def build_config(ctx: StepContext) -> RLStepConfig:
+        model_path = _resolve_model_artifact_path(ctx, artifact)
+        runtime_model_config = dataclasses.replace(config.model_config, artifact=model_path)
+        runtime_config = dataclasses.replace(config, model_config=runtime_model_config)
+        return RLStepConfig(
             name=name,
             experiment_config=runtime_config,
             curriculum=curriculum,
             model_path=model_path,
-            output_path=this_output_path(),
-        ),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg("resources"),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"rl_testing/{name}", version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=_dispatch_rl_experiment_step,
+        build_config=build_config,
+        deps=deps,
+        runtime_args={"resources": executor_step_resources_for_rl_experiment(config)},
     )
