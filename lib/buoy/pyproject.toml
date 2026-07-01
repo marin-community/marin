@@ -36,10 +36,6 @@ only-include = ["src/buoy", "tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/buoy"]
 
-# The no-build frontend ships inside the wheel so the serving process can find it.
-[tool.hatch.build.targets.wheel.force-include]
-"src/buoy/static" = "buoy/static"
-
 [tool.pytest.ini_options]
 pythonpath = ["src", "tests"]
 timeout = 30
