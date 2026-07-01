@@ -10,9 +10,54 @@ import math
 import jax
 import jax.numpy as jnp
 from jax import lax
+from jax._src.pallas import core as pallas_core
+from jax._src.pallas.mosaic_gpu import primitives as plgpu_primitives
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 from jax.typing import DTypeLike
+
+
+def _wgmma(acc: plgpu.WGMMAAccumulatorRef, lhs, rhs) -> None:
+    m, n = acc.shape
+    m2, k = lhs.shape
+    k2, n2 = rhs.shape
+    if m != m2 or n != n2 or k != k2:
+        raise ValueError(f"Incompatible shapes for matrix multiplication: lhs={lhs.shape}, rhs={rhs.shape}, acc={acc.shape}")
+
+    fp8_dtypes = (jnp.float8_e4m3fn, jnp.float8_e5m2)
+    is_mixed_fp8 = lhs.dtype in fp8_dtypes and rhs.dtype in fp8_dtypes
+    if lhs.dtype != rhs.dtype and not is_mixed_fp8:
+        raise ValueError(f"Mixed input dtypes for matrix multiplication unsupported: lhs={lhs.dtype}, rhs={rhs.dtype}")
+
+    if isinstance(acc, pallas_core.TransformedRef):
+        acc_transforms_leaves, acc_transforms_tree = jax.tree.flatten(acc.transforms)
+        acc = acc.ref
+    else:
+        acc_transforms_leaves, acc_transforms_tree = [], None
+
+    if isinstance(lhs, pallas_core.TransformedRef):
+        lhs_transforms_leaves, lhs_transforms_tree = jax.tree.flatten(lhs.transforms)
+        lhs = lhs.ref
+    else:
+        lhs_transforms_leaves, lhs_transforms_tree = [], None
+
+    if isinstance(rhs, pallas_core.TransformedRef):
+        rhs_transforms_leaves, rhs_transforms_tree = jax.tree.flatten(rhs.transforms)
+        rhs = rhs.ref
+    else:
+        rhs_transforms_leaves, rhs_transforms_tree = [], None
+
+    plgpu_primitives.wgmma_ref_p.bind(
+        acc,
+        lhs,
+        rhs,
+        *acc_transforms_leaves,
+        *lhs_transforms_leaves,
+        *rhs_transforms_leaves,
+        acc_transforms_tree=acc_transforms_tree,
+        a_transforms_tree=lhs_transforms_tree,
+        b_transforms_tree=rhs_transforms_tree,
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,7 +145,7 @@ def mosaic_ragged_dot(
 
             def acc_scope(acc_ref):
                 plgpu.emit_pipeline(
-                    lambda _, lhs_smem, rhs_smem: plgpu.wgmma(
+                    lambda _, lhs_smem, rhs_smem: _wgmma(
                         acc_ref,
                         lhs_smem,
                         plgpu.transpose_ref(rhs_smem, (1, 0)),
@@ -196,7 +241,7 @@ def mosaic_ragged_dot_contract_major(
 
             def acc_scope(acc_ref):
                 plgpu.emit_pipeline(
-                    lambda _, lhs_smem, rhs_smem: plgpu.wgmma(acc_ref, lhs_smem, rhs_smem),
+                    lambda _, lhs_smem, rhs_smem: _wgmma(acc_ref, lhs_smem, rhs_smem),
                     grid=(k // block_k,),
                     in_specs=[
                         plgpu.BlockSpec((block_m, block_k), lambda kk: (group_info.block, kk), delay_release=1),
@@ -335,7 +380,7 @@ def mosaic_transposed_ragged_dot(
                             rhs_smem[...] = jnp.where(rhs_indices <= last_index, rhs_reg, jnp.zeros_like(rhs_reg))
                             plgpu.commit_smem()
 
-                    plgpu.wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(rhs_smem, (1, 0)))
+                    _wgmma(acc_ref, lhs_smem, plgpu.transpose_ref(rhs_smem, (1, 0)))
 
                 @pl.when(group_sizes_gmem[group] > 0)
                 def _():

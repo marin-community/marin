@@ -156,3 +156,27 @@ Successful direct H100 probes:
 - `transpose_ref` variants also hit the same Mosaic layout-inference wall.
 - The working fallbacks are correct and genuinely ragged, but wgrad remains the
   bottleneck.
+
+## Resume findings
+
+After resuming, I isolated forward tuning first:
+
+- Raw Mosaic FP8 forward with pre-quantized operands is fast enough at the 1024
+  operating point:
+  - w13 `block_m=192, block_n=128, block_k=128`: `1.294 ms`, `664 TFLOP/s`,
+    `1.42x` vs bf16 forward.
+  - w2 `block_m=192, block_n=128, block_k=128`: `0.832 ms`, `516 TFLOP/s`,
+    `1.26x` vs bf16 forward.
+- Full forward is still much slower than raw WGMMA, so the next bottleneck is
+  quantize/layout work around the kernel, not the ragged WGMMA body itself.
+- `block_k=128` is valid and fast for forward-only, but the current custom-VJP
+  fwd+bwd compilation hits a Mosaic shared-memory limit (`requested 262144,
+  available 232448`). The backward-safe fwd+bwd tile remains
+  `block_m=192, block_n=128, block_k=64`.
+
+The pod had `jaxlib 0.10.0.dev0+selfbuilt`, but the installed Python sources
+still contained same-dtype guards in both the Pallas WGMMA wrapper and the Mosaic
+lowerer. I added a local `_wgmma` wrapper in `_fp8_mosaic_ragged.py` to bypass
+the Python guard for E4M3/E5M2, and patched the pod venv lowerer check in
+`/app/.venv/lib/python3.12/site-packages/jax/experimental/mosaic/gpu/wgmma.py`
+to allow the E4M3/E5M2 pair. After that, direct mixed dgrad compiled again.

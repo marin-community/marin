@@ -965,6 +965,10 @@ def _quantized_ragged_dot_bwd(
         q_lhs_for_grad = q_lhs.astype(rev_dtype)
         q_rhs_for_grad = q_rhs.astype(rev_dtype)
 
+    grad_lhs_block_k = block_k
+    if implementation == "mosaic":
+        grad_lhs_block_k = int(os.environ.get("FP8_MOSAIC_DGRAD_BLOCK_K", "64"))
+
     grad_lhs = _raw_ragged_dot_impl(
         q_g,
         q_rhs_for_grad,
@@ -975,7 +979,7 @@ def _quantized_ragged_dot_bwd(
         max_group_size,
         block_m,
         block_n,
-        block_k,
+        grad_lhs_block_k,
     )
     grad_lhs = dequantize(grad_lhs, preferred_element_type, rhs_scale * new_out_grad_scale)
 

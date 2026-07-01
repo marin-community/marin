@@ -121,6 +121,7 @@ def _bench_shape(
     fp8_block_n: int | None,
     fp8_block_k: int | None,
     fp8_implementation: str,
+    mode: str,
 ) -> list[dict]:
     lhs, rhs, cot, group_sizes = _make_inputs(shape, jnp.bfloat16)
     max_group_size = int(jnp.max(group_sizes))
@@ -166,12 +167,28 @@ def _bench_shape(
 
         return jax.value_and_grad(loss, argnums=(0, 1))(lhs, rhs)
 
-    bf16_compile_fwd, bf16_fwd_time, bf16_out = _time_jit(bf16_fwd, lhs, rhs, warmups=warmups, iters=iters)
-    fp8_compile_fwd, fp8_fwd_time, fp8_out = _time_jit(fp8_fwd, lhs, rhs, warmups=warmups, iters=iters)
-    fwd_rel_error = _relative_frobenius(fp8_out, bf16_out)
+    fwd_rel_error = None
+    timings = []
+    if mode in ("all", "fwd"):
+        bf16_compile_fwd, bf16_fwd_time, bf16_out = _time_jit(bf16_fwd, lhs, rhs, warmups=warmups, iters=iters)
+        fp8_compile_fwd, fp8_fwd_time, fp8_out = _time_jit(fp8_fwd, lhs, rhs, warmups=warmups, iters=iters)
+        fwd_rel_error = _relative_frobenius(fp8_out, bf16_out)
+        timings.extend(
+            [
+                ("fwd", "bf16_triton", bf16_compile_fwd, bf16_fwd_time, shape.fwd_flops),
+                ("fwd", f"fp8_{fp8_implementation}", fp8_compile_fwd, fp8_fwd_time, shape.fwd_flops),
+            ]
+        )
 
-    bf16_compile_fb, bf16_fb_time, _ = _time_jit(bf16_fwd_bwd, lhs, rhs, cot, warmups=warmups, iters=iters)
-    fp8_compile_fb, fp8_fb_time, _ = _time_jit(fp8_fwd_bwd, lhs, rhs, cot, warmups=warmups, iters=iters)
+    if mode in ("all", "fwd_bwd"):
+        bf16_compile_fb, bf16_fb_time, _ = _time_jit(bf16_fwd_bwd, lhs, rhs, cot, warmups=warmups, iters=iters)
+        fp8_compile_fb, fp8_fb_time, _ = _time_jit(fp8_fwd_bwd, lhs, rhs, cot, warmups=warmups, iters=iters)
+        timings.extend(
+            [
+                ("fwd_bwd", "bf16_triton", bf16_compile_fb, bf16_fb_time, shape.fwd_bwd_flops),
+                ("fwd_bwd", f"fp8_{fp8_implementation}", fp8_compile_fb, fp8_fb_time, shape.fwd_bwd_flops),
+            ]
+        )
 
     base = {
         "kernel": "ragged_dot",
@@ -203,16 +220,11 @@ def _bench_shape(
     }
 
     rows = []
-    for mode, implementation, compile_time, steady_state_time, flops in [
-        ("fwd", "bf16_triton", bf16_compile_fwd, bf16_fwd_time, shape.fwd_flops),
-        ("fwd", f"fp8_{fp8_implementation}", fp8_compile_fwd, fp8_fwd_time, shape.fwd_flops),
-        ("fwd_bwd", "bf16_triton", bf16_compile_fb, bf16_fb_time, shape.fwd_bwd_flops),
-        ("fwd_bwd", f"fp8_{fp8_implementation}", fp8_compile_fb, fp8_fb_time, shape.fwd_bwd_flops),
-    ]:
+    for row_mode, implementation, compile_time, steady_state_time, flops in timings:
         rows.append(
             {
                 **base,
-                "mode": mode,
+                "mode": row_mode,
                 "implementation": implementation,
                 "compile_time": compile_time,
                 "steady_state_time": steady_state_time,
@@ -221,13 +233,19 @@ def _bench_shape(
             }
         )
 
-    fwd_speedup = bf16_fwd_time / fp8_fwd_time
-    fb_speedup = bf16_fb_time / fp8_fb_time
+    speeds = {}
+    for row_mode in ("fwd", "fwd_bwd"):
+        mode_rows = [row for row in rows if row["mode"] == row_mode]
+        if len(mode_rows) == 2:
+            bf16 = next(row for row in mode_rows if row["implementation"] == "bf16_triton")
+            fp8 = next(row for row in mode_rows if row["implementation"].startswith("fp8_"))
+            speeds[row_mode] = bf16["steady_state_time"] / fp8["steady_state_time"]
     print(
         f"{shape.name} E={shape.experts} tpe={shape.tokens_per_expert} K={shape.k} N={shape.n}: "
         f"group[min={min_group_size}, max={max_group_size}] "
-        f"fwd speedup={fwd_speedup:.3f} fwd+bwd speedup={fb_speedup:.3f} "
-        f"fp8 fwd err={fwd_rel_error:.4f}"
+        f"fwd speedup={speeds.get('fwd', float('nan')):.3f} "
+        f"fwd+bwd speedup={speeds.get('fwd_bwd', float('nan')):.3f} "
+        f"fp8 fwd err={fwd_rel_error if fwd_rel_error is not None else float('nan'):.4f}"
     )
     for row in rows:
         print(json.dumps(row, sort_keys=True))
@@ -253,6 +271,7 @@ def main() -> None:
         default="mosaic",
         choices=("mosaic", "padded_dense", "triton", "triton_native", "xla"),
     )
+    parser.add_argument("--mode", default="all", choices=("all", "fwd", "fwd_bwd"))
     parser.add_argument("--quick", action="store_true", help="Run only the operating point E=64,tpe=1024.")
     args = parser.parse_args()
 
@@ -276,20 +295,22 @@ def main() -> None:
                         fp8_block_n=args.fp8_block_n,
                         fp8_block_k=args.fp8_block_k,
                         fp8_implementation=args.fp8_implementation,
+                        mode=args.mode,
                     )
                 )
 
+    target_mode = "fwd" if args.mode == "fwd" else "fwd_bwd"
     target = [
         row
         for row in all_rows
         if row["shape"]["experts"] == 64
         and row["shape"]["tokens_per_expert"] == 1024
-        and row["mode"] == "fwd_bwd"
+        and row["mode"] == target_mode
     ]
     for name in ("w13", "w2"):
         bf16 = next(row for row in target if row["shape"]["name"] == name and row["implementation"] == "bf16_triton")
         fp8 = next(row for row in target if row["shape"]["name"] == name and row["implementation"].startswith("fp8_"))
-        print(f"TARGET {name} fwd+bwd speedup={bf16['steady_state_time'] / fp8['steady_state_time']:.3f}")
+        print(f"TARGET {name} {target_mode} speedup={bf16['steady_state_time'] / fp8['steady_state_time']:.3f}")
 
 
 if __name__ == "__main__":
