@@ -46,7 +46,7 @@ onMounted(async () => {
       </button>
     </header>
 
-    <SqlEditor v-model="sqlText" @run="run(sqlText)" />
+    <SqlEditor v-model="sqlText" :dark="dark" @run="run(sqlText)" />
 
     <div class="flex items-center gap-3">
       <button

@@ -11,6 +11,7 @@
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/lang-sql": "^6.8.0",
     "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.36.2",
     "@fontsource-variable/noto-sans": "^5.2.10",
     "@fontsource-variable/noto-sans-mono": "^5.2.10",

@@ -10,11 +10,7 @@
     "esModuleInterop": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
-    "noEmit": true,
-    "paths": {
-      "@/*": ["./src/*"]
-    },
-    "baseUrl": "."
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "env.d.ts"]
 }
