@@ -82,8 +82,13 @@
     .kv-col td.k { color: #4a5568; width: 46%; font-family: ui-monospace, monospace; }
     .kv-col td.v { font-family: ui-monospace, monospace; }
 
-    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: .9em; align-items: start; }
+    #charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: .9em; align-items: start; }
     .chart { border: 1px solid #e7edf3; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .05); overflow: hidden; }
+    .cmodal { position: fixed; inset: 0; z-index: 300; background: #fff; padding: 1em 1.5em 1.5em; display: flex; flex-direction: column; }
+    .cmodal.hidden { display: none; }
+    .cmodal-close { align-self: flex-end; font-size: 20px; line-height: 1; width: 34px; height: 34px; border: 1px solid #cbd5e0; border-radius: 7px; background: #fff; color: #4a5568; cursor: pointer; margin-bottom: .4em; }
+    .cmodal-close:hover { color: #e53e3e; border-color: #e53e3e; }
+    #cmodal-plot { flex: 1; }
     /* discreet per-chart control bar */
     .chart-bar { display: flex; align-items: center; justify-content: flex-end; gap: .5em; padding: .3em .55em; border-bottom: 1px solid #f1f4f8; opacity: .5; transition: opacity .12s; }
     .chart:hover .chart-bar { opacity: 1; }
@@ -165,6 +170,11 @@
     </main>
   </div>
 
+  <div id="cmodal" class="cmodal hidden">
+    <button id="cmodal-close" class="cmodal-close" title="close (Esc)">×</button>
+    <div id="cmodal-plot"></div>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     const DEFAULT_METRICS = [
@@ -177,12 +187,11 @@
     let profileStarted = false;  // prepare the profile lazily, on first tab open
     let selectedMetrics = [];    // metrics chosen in the charts tab
     let metricData = {};         // key -> [{step,value}], cached so toolbar toggles don't refetch
-    let chartState = {};         // per-metric { logY, logX, smoothing, size } — every control is per chart
-    const CHART_H = { s: 190, m: 285, l: 400 };
-    const CHART_SPAN = { s: 1, m: 1, l: 2 };  // L spans two grid columns (wider)
-    // scrollZoom: trackpad-pinch / mouse-wheel zoom; drag still box-zooms, double-click autoscales.
+    let chartState = {};         // per-metric { logY, logX, smoothing } — every control is per chart
+    const CHART_HEIGHT = 400;    // charts default large
+    // dragmode pan: drag pans; scrollZoom adds pinch/wheel zoom; double-click autoscales.
     const CHART_CONFIG = { responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
-    const PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"];
+    const LINE_COLOR = "#1f77b4";  // one blue for every chart
     let liveTimer = null;        // running-run auto-refresh timer
     let searchTimer = null;
     const LIVE_INTERVAL = 30000;
@@ -438,9 +447,9 @@
     }
     function redrawCharts() {
       $("charts").textContent = "";
-      selectedMetrics.forEach((k, i) => drawChart(k, metricData[k] || [], i));
+      selectedMetrics.forEach((k) => drawChart(k, metricData[k] || []));
     }
-    const cstate = (key) => chartState[key] || (chartState[key] = { logY: false, logX: false, smoothing: 0, size: "l" });
+    const cstate = (key) => chartState[key] || (chartState[key] = { logY: false, logX: false, smoothing: 0 });
     // wandb-style debiased EMA smoothing.
     function ema(values, w) {
       if (w <= 0) return values;
@@ -451,6 +460,10 @@
     function setTab(pane) {
       document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.pane === pane));
       document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("hidden", p.id !== pane));
+      // Charts drawn while the pane was hidden have a stale (0) width — resize once shown.
+      if (pane === "charts-pane") {
+        requestAnimationFrame(() => document.querySelectorAll("#charts .chart-plot").forEach((p) => Plotly.Plots.resize(p)));
+      }
       if (pane === "profile-pane" && current && current.m.profile && !profileStarted) {
         profileStarted = true;
         prepareProfile(current.r, $("profile-pane"));
@@ -464,6 +477,7 @@
       $("status").textContent = "";
       renderInfo(m);
       $("tabs").classList.remove("hidden");
+      document.querySelector('.tab[data-pane="profile-pane"]').classList.toggle("hidden", !m.profile);
       setTab("summary-pane");
 
       const [cfg, summ] = await Promise.all([jget("api/config?" + qs(r)), jget("api/summary?" + qs(r))]);
@@ -550,20 +564,29 @@
       }
       return [{ x, y, mode: "lines", line: { width: 1.6, color }, name: key }];
     }
-    function chartLayout(key, st) {
+    function chartLayout(key, st, height) {
       const axis = (log) => ({ type: log ? "log" : "linear", showgrid: true, gridcolor: "#eef2f6", zeroline: false });
       return {
         title: { text: key, font: { size: 12.5 }, x: 0.02, xanchor: "left", y: 0.98 },
-        height: CHART_H[st.size], margin: { l: 52, r: 14, t: 26, b: 32 },
+        height, margin: { l: 52, r: 14, t: 26, b: 32 }, dragmode: "pan",
         template: "plotly_white", hovermode: "x unified", showlegend: false,
         xaxis: axis(st.logX), yaxis: axis(st.logY),
       };
     }
-    function drawChart(key, points, idx) {
+    function openFullscreen(key, color) {
       const st = cstate(key);
-      const color = PALETTE[idx % PALETTE.length];
+      $("cmodal").classList.remove("hidden");
+      const layout = chartLayout(key, st, Math.round(window.innerHeight * 0.86));
+      Plotly.newPlot($("cmodal-plot"), chartTraces(key, metricData[key] || [], st, color), layout, CHART_CONFIG);
+    }
+    function closeFullscreen() {
+      $("cmodal").classList.add("hidden");
+      Plotly.purge($("cmodal-plot"));
+    }
+    function drawChart(key, points) {
+      const st = cstate(key);
+      const color = LINE_COLOR;
       const card = el("div", "chart");
-      card.style.gridColumn = `span ${CHART_SPAN[st.size]}`;
       const plot = el("div", "chart-plot");
       const bar = el("div", "chart-bar");
 
@@ -582,23 +605,14 @@
       Object.assign(sm, { type: "range", min: "0", max: "0.97", step: "0.01", value: String(st.smoothing), className: "sm-slider", title: "smoothing" });
       sm.addEventListener("input", () => {
         st.smoothing = parseFloat(sm.value);
-        Plotly.react(plot, chartTraces(key, points, st, color), chartLayout(key, st), CHART_CONFIG);
+        Plotly.react(plot, chartTraces(key, points, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
       });
       bar.appendChild(sm);
 
-      const seg = el("span", "seg-mini");
-      for (const s of ["s", "m", "l"]) {
-        const b = el("button", s === st.size ? "active" : "", s.toUpperCase());
-        b.addEventListener("click", () => {
-          st.size = s;
-          seg.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
-          card.style.gridColumn = `span ${CHART_SPAN[s]}`;
-          Plotly.relayout(plot, { height: CHART_H[s] });
-          window.dispatchEvent(new Event("resize"));
-        });
-        seg.appendChild(b);
-      }
-      bar.appendChild(seg);
+      const fs = el("button", "cbtn", "⛶");
+      fs.title = "full screen";
+      fs.addEventListener("click", () => openFullscreen(key, color));
+      bar.appendChild(fs);
 
       const close = el("button", "cbtn close", "×");
       close.title = "remove this chart";
@@ -607,7 +621,7 @@
 
       card.append(bar, plot);
       $("charts").appendChild(card);
-      Plotly.newPlot(plot, chartTraces(key, points, st, color), chartLayout(key, st), CHART_CONFIG);
+      Plotly.newPlot(plot, chartTraces(key, points, st, color), chartLayout(key, st, CHART_HEIGHT), CHART_CONFIG);
     }
 
     // ---- events ----
@@ -643,6 +657,8 @@
       }
     });
     document.addEventListener("mousedown", (e) => { if (!e.target.closest(".combo")) hideOptions(); });
+    $("cmodal-close").addEventListener("click", closeFullscreen);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("cmodal").classList.contains("hidden")) closeFullscreen(); });
     init();
   </script>
 </body>
