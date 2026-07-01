@@ -25,6 +25,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.operations import SliceDrainCause
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -268,6 +269,10 @@ class RpcTaskBackend:
         assert self._store is not None, "RpcTaskBackend.schedule called before worker store attached"
         context = assemble_scheduling_context(self._store.scheduling_inputs(), request)
         zone_capabilities = self.autoscaler.zone_capabilities() if self.autoscaler is not None else None
+        # The reservation ledger drives cross-variant preemption, whose victim drain
+        # is applied by the autoscaler. Build it only on ticks the autoscaler runs,
+        # so a schedule-only mini-tick never commits a preemption the drain can't reap.
+        ledger = self.autoscaler.reservation_ledger() if self.autoscaler is not None and request.autoscale_runs else None
         return run_scheduling_decision(
             self._scheduler,
             ScheduleInput(
@@ -276,6 +281,7 @@ class RpcTaskBackend:
                 trace=request.trace,
             ),
             zone_capabilities,
+            ledger,
         )
 
     def _observe_fleet(self) -> "FleetObservation":
@@ -383,23 +389,33 @@ class RpcTaskBackend:
         return self._store.prune_dead_workers(cutoff_ms=cutoff_ms, stop_event=stop_event, pause=pause)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
-        """Drain dead workers' slices, or run one provisioning cycle.
+        """Drain dead/drained workers' slices, or run one provisioning cycle.
 
         With ``request.dead_workers`` set the autoscaler drains their slices —
-        marked DRAINING and reaped by a later refresh — and returns the dead
+        charging the loss to the group's churn detector — and returns the dead
         workers plus their healthy siblings as ``removed_workers`` (no
-        provisioning this call). Stubs for the removed workers are not evicted
-        here: a dead worker's stub was already dropped as it accrued UNREACHABLE
-        reconcile rounds, and a healthy sibling's stub self-evicts on the next
-        reconcile RPC once its slice is gone. Otherwise it runs a refresh +
-        probe_health + update cycle against ``request.residual_demand``, reading
-        its own worker status.
+        provisioning this call). With only ``request.drain_workers`` set
+        (cross-variant reserved-pool preemption), it drains those slices without
+        charging the group, so health and backoff signals stay clean, and returns
+        them the same way. Either way the slices are marked DRAINING and reaped by
+        a later refresh; stubs for removed workers are not evicted here — a
+        torn-down worker's stub self-evicts on its next reconcile RPC once its
+        slice is gone. Otherwise it runs a refresh + probe_health + update cycle
+        against ``request.residual_demand``, reading its own worker status.
         """
         if self.autoscaler is None:
             return AutoscaleResult()
-        if request.dead_workers:
-            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in request.dead_workers])
-            removed = list(request.dead_workers) + [WorkerId(wid) for wid in siblings]
+        assert not (
+            request.dead_workers and request.drain_workers
+        ), "AutoscaleRequest cannot carry both dead_workers and drain_workers in one tick"
+        if request.dead_workers or request.drain_workers:
+            workers, cause = (
+                (request.dead_workers, SliceDrainCause.WORKER_FAILED)
+                if request.dead_workers
+                else (request.drain_workers, SliceDrainCause.PREEMPTED)
+            )
+            siblings = self.autoscaler.drain_slices_for_workers([str(wid) for wid in workers], cause=cause)
+            removed = list(workers) + [WorkerId(wid) for wid in siblings]
             return AutoscaleResult(removed_workers=removed, autoscaler_state=self.autoscaler.persistable_state())
         assert self._store is not None, "RpcTaskBackend.autoscale called before worker store attached"
         self.autoscaler.refresh(self._store.worker_status())

@@ -44,6 +44,7 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingAction,
     ScalingDecision,
 )
+from iris.cluster.controller.autoscaler.operations import DRAIN_TELEMETRY, SliceDrainCause
 from iris.cluster.controller.autoscaler.operations import (
     drain_slices_for_workers as drain_slices_for_workers_operation,
 )
@@ -421,7 +422,9 @@ class Autoscaler:
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts, zone_capabilities=caps)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
 
-        # Log fungible-reservation chip utilization for operability.
+        # Log fungible-reservation chip utilization for operability. The same
+        # ledger is what the scheduler's cross-variant preemption pass consults;
+        # provisioning itself is still bounded by GCP, not this budget.
         log_reservation_ledger(build_reservation_ledger(self._groups.values()))
         # Build cached views eagerly here so dashboard/service RPCs never pay
         # the conversion cost on the hot path (#4844).
@@ -1035,7 +1038,7 @@ class Autoscaler:
         """All scale groups."""
         return self._groups
 
-    def drain_slices_for_workers(self, worker_ids: Sequence[str]) -> list[str]:
+    def drain_slices_for_workers(self, worker_ids: Sequence[str], *, cause: SliceDrainCause) -> list[str]:
         """Drain the unique slices holding the given workers and start their deletion.
 
         Each affected slice is marked DRAINING (kept tracked, still counted against
@@ -1046,8 +1049,10 @@ class Autoscaler:
         shared state, so a mass teardown stays within the phase budget without
         racing.
 
-        Returns the drained slices' sibling worker ids for the caller to fail
-        immediately.
+        ``cause`` distinguishes a worker-liveness failure (charged to the group as a
+        PREEMPTED provisioning outcome and churn) from a deliberate cross-variant
+        preemption (health and backoff signals stay clean). Returns the drained
+        slices' sibling worker ids for the caller to fail immediately.
         """
         result = drain_slices_for_workers_operation(
             groups=self._groups,
@@ -1055,18 +1060,19 @@ class Autoscaler:
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
+            cause=cause,
         )
-        # These slices had registered workers (so they reached READY) and lost
-        # them at runtime — the primary preemption path, which the probe_health
-        # backstop never sees. Record PREEMPTED so they don't pollute the create
-        # success rate (mirrors the probe_health termination path).
-        for req in result.termination_requests:
-            self._record_provisioning_outcome(
-                req.group, ProvisioningOutcome.PREEMPTED, error_message="worker liveness lost"
-            )
+        if cause is SliceDrainCause.WORKER_FAILED:
+            # Reached READY then lost liveness at runtime — record PREEMPTED so these
+            # don't pollute the create success rate.
+            for req in result.termination_requests:
+                self._record_provisioning_outcome(
+                    req.group, ProvisioningOutcome.PREEMPTED, error_message="worker liveness lost"
+                )
+        context = DRAIN_TELEMETRY[cause].terminate_context
         _run_io_batch(
             result.termination_requests,
-            lambda req: req.group.terminate_slice_handle(req.handle, context="cleaning up anyway"),
+            lambda req: req.group.terminate_slice_handle(req.handle, context=context),
             max_workers=_CLOUD_OP_MAX_WORKERS,
             thread_name_prefix="slice-drain",
         )
