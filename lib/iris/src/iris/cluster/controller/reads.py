@@ -12,37 +12,35 @@ Areas covered:
   budgets         — user budgets and roles
   dashboard       — job listing, task summaries, parent-child helpers
   jobs            — job/job_config lookups and CTEs
-  reservations    — reservation_claims reads
-  scheduling      — pending tasks, reservations, running tasks, per-user spend
+  scheduling      — pending tasks, running tasks, per-user spend
   task_attempts   — bulk attempt lookups
   tasks           — task detail and active-task projections
   workers         — worker detail, liveness helpers, schedulable workers
   control-cycle   — the per-tick ControlSnapshot built via load_control_snapshot
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from rigging.timing import Timestamp
-from sqlalchemy import Integer, Row, bindparam, case, cast, func, literal_column, select, tuple_
+from sqlalchemy import Integer, Row, bindparam, case, cast, exists, func, literal_column, select, tuple_
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import (
     device_counts_from_json,
-    reservation_entries_from_json,
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.db import Tx
+from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
-    ReservationClaim,
     hint_rare_state,
     job_config_table,
     job_workdir_files_table,
     jobs_table,
-    reservation_claims_table,
+    slices_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -57,7 +55,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerStatusMap
+from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -98,6 +96,9 @@ class PendingDispatchRow:
     # must mirror the band Iris actually enforces, and tasks.priority_band is
     # never UNSPECIFIED(0), so the provider's plain .get() resolves correctly.
     priority_band: int  # job_pb2.PriorityBand, effective
+    # Requested container security profile (job_config). UNSPECIFIED(0) resolves
+    # to DEFAULT when the backend applies it.
+    container_profile: int  # job_pb2.ContainerProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,13 +191,19 @@ def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
     return {str(row.user_id): int(row.budget_limit) for row in rows}
 
 
-def get_user_role(tx: Tx, user_id: str) -> str:
-    """Return the user's role, or ``USER_ROLE_DEFAULT`` if not found."""
+def get_user_role_or_none(tx: Tx, user_id: str) -> str | None:
+    """Return the user's stored role, or None if the user is not provisioned."""
     row = tx.execute(
         select(users_table.c.role).where(users_table.c.user_id == bindparam("user_id")),
         {"user_id": user_id},
     ).first()
-    return str(row.role) if row is not None else USER_ROLE_DEFAULT
+    return str(row.role) if row is not None else None
+
+
+def get_user_role(tx: Tx, user_id: str) -> str:
+    """Return the user's role, or ``USER_ROLE_DEFAULT`` if not found."""
+    role = get_user_role_or_none(tx, user_id)
+    return role if role is not None else USER_ROLE_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +267,7 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_memory_bytes,
     job_config_table.c.res_disk_bytes,
     job_config_table.c.res_device_json,
+    jobs_table.c.backend_id,
 )
 
 # Task states considered "completed" for dashboard task-summary counts.
@@ -274,6 +282,7 @@ def _apply_job_filters(
     state_ids: tuple[int, ...],
     name_filter: str,
     job_id_prefix: str,
+    backend_id_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -290,6 +299,8 @@ def _apply_job_filters(
     if job_id_prefix:
         escaped = job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
+    if backend_id_filter:
+        stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
     return stmt
 
 
@@ -347,6 +358,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     if needs_task_agg:
@@ -361,6 +373,7 @@ def list_jobs(
         state_ids=state_ids,
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
+        backend_id_filter=query.backend_id,
     )
 
     offset = max(query.offset, 0)
@@ -454,6 +467,31 @@ def find_prunable_job(tx: Tx, terminal_states: Iterable[int], before_ts: Timesta
     return row.job_id if row is not None else None
 
 
+def find_prunable_slice(tx: Tx, before_ms: int) -> str | None:
+    """Return one orphaned slice older than ``before_ms``, or None.
+
+    A ``slices`` row mirrors a set of live worker VMs. Once no ``workers`` row
+    references the slice (``workers.slice_id``), the slice has no VMs behind it
+    and the row is garbage — independent of whether its scale group still exists
+    in config. ``workers.slice_id`` (written at registration) is the authoritative
+    backing test, not ``slices.worker_ids``, which can go stale/empty while live
+    workers still point at the slice.
+
+    The ``created_at_ms`` floor protects a freshly-created slice whose VMs are
+    still booting and have not registered their workers yet.
+    """
+    row = tx.execute(
+        select(slices_table.c.slice_id)
+        .where(
+            slices_table.c.created_at_ms < bindparam("before_ms"),
+            ~exists().where(workers_table.c.slice_id == slices_table.c.slice_id),
+        )
+        .limit(1),
+        {"before_ms": before_ms},
+    ).first()
+    return row.slice_id if row is not None else None
+
+
 def get_job_detail(tx: Tx, job_id: JobName):
     """Return SA Row for ``job_id`` (joined with job_config) or None."""
     return tx.execute(
@@ -468,11 +506,10 @@ def get_job_detail(tx: Tx, job_id: JobName):
             jobs_table.c.error,
             jobs_table.c.exit_code,
             jobs_table.c.num_tasks,
-            jobs_table.c.is_reservation_holder,
-            jobs_table.c.has_reservation,
             jobs_table.c.name,
             jobs_table.c.depth,
             jobs_table.c.parent_job_id,
+            jobs_table.c.backend_id,
             job_config_table.c.res_cpu_millicores,
             job_config_table.c.res_memory_bytes,
             job_config_table.c.res_disk_bytes,
@@ -493,8 +530,8 @@ def get_job_detail(tx: Tx, job_id: JobName):
             job_config_table.c.existing_job_policy,
             job_config_table.c.priority_band,
             job_config_table.c.task_image,
+            job_config_table.c.container_profile,
             job_config_table.c.submit_argv_json,
-            job_config_table.c.reservation_json,
             job_config_table.c.fail_if_exists,
         )
         .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
@@ -615,47 +652,12 @@ def has_unfinished_worker_attempts(tx: Tx, job_id: JobName) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Reservation reads (previously reads/reservations.py)
-# ---------------------------------------------------------------------------
-
-
-def list_claims(tx: Tx) -> dict[WorkerId, ReservationClaim]:
-    """Return ``{WorkerId: ReservationClaim}`` for every reservation claim."""
-    rows = tx.execute(
-        select(
-            reservation_claims_table.c.worker_id,
-            reservation_claims_table.c.job_id,
-            reservation_claims_table.c.entry_idx,
-        )
-    ).all()
-    return {
-        row.worker_id: ReservationClaim(
-            job_id=str(row.job_id),
-            entry_idx=int(row.entry_idx),
-        )
-        for row in rows
-    }
-
-
-# ---------------------------------------------------------------------------
 # Scheduler-tick read helpers (previously reads/scheduler.py)
 # ---------------------------------------------------------------------------
 
 
 def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
-    """Aggregate resources held by unfinished worker-bound attempts.
-
-    Reservation-holder job rows are excluded (filtered in Python, not SQL).
-    Two-step approach: the inline ``JOIN jobs ON is_reservation_holder = 0``
-    is intentionally avoided because it drives SQLite from the ``jobs`` table
-    (full scan ~24k rows on production) and pushes the read from ~3 ms to
-    ~380 ms. The small set of reservation-holder job ids is fetched once and
-    filtered in Python.
-    """
-    holder_rows = tx.execute(
-        select(jobs_table.c.job_id).where(jobs_table.c.is_reservation_holder == True)  # noqa: E712
-    ).all()
-    holder_jobs: set[JobName] = {row.job_id for row in holder_rows}
+    """Aggregate resources held by unfinished worker-bound attempts, keyed by worker."""
     rows = tx.execute(
         select(
             task_attempts_table.c.worker_id,
@@ -680,8 +682,6 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
     gpu: dict[WorkerId, int] = {}
     tpu: dict[WorkerId, int] = {}
     for row in rows:
-        if row.job_id in holder_jobs:
-            continue
         wid: WorkerId = row.worker_id
         cpu[wid] = cpu.get(wid, 0) + int(row.res_cpu_millicores)
         mem[wid] = mem.get(wid, 0) + int(row.res_memory_bytes)
@@ -720,18 +720,16 @@ _BUILDING_COUNTS_STMT = (
         tasks_table.c.current_worker_id.label("worker_id"),
         func.count().label("cnt"),
     )
-    .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
     .where(
         tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
         tasks_table.c.state.in_(bindparam("states", expanding=True)),
-        jobs_table.c.is_reservation_holder == 0,
     )
     .group_by(tasks_table.c.current_worker_id)
 )
 
 
 def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, int]:
-    """Count BUILDING+ASSIGNED tasks per worker, excluding reservation-holder jobs."""
+    """Count BUILDING+ASSIGNED tasks per worker."""
     if not worker_ids:
         return {}
     rows = tx.execute(
@@ -756,7 +754,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
 
 
 # ---------------------------------------------------------------------------
-# Scheduling-policy reads (pending tasks, reservations, running tasks, budgets)
+# Scheduling-policy reads (pending tasks, running tasks, budgets)
 # ---------------------------------------------------------------------------
 
 # Task columns needed to evaluate scheduling priority and retry budget. Shared by
@@ -766,6 +764,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
 PENDING_TASK_COLS = (
     tasks_table.c.task_id,
     tasks_table.c.job_id,
+    tasks_table.c.backend_id,
     tasks_table.c.state,
     tasks_table.c.current_attempt_id,
     tasks_table.c.failure_count,
@@ -784,6 +783,7 @@ def _row_to_pending_task(row: Row) -> PendingTask:
     return PendingTask(
         task_id=row.task_id,
         job_id=row.job_id,
+        backend_id=str(row.backend_id),
         state=int(row.state),
         current_attempt_id=int(row.current_attempt_id),
         failure_count=int(row.failure_count),
@@ -797,8 +797,6 @@ def _row_to_pending_task(row: Row) -> PendingTask:
         priority_insertion=int(row.priority_insertion),
         job_state=int(row.job_state),
         scheduling_deadline_epoch_ms=row.scheduling_deadline_epoch_ms,
-        is_reservation_holder=bool(row.is_reservation_holder),
-        has_reservation=bool(row.has_reservation),
         scheduling_timeout_ms=row.scheduling_timeout_ms,
         has_coscheduling=bool(row.has_coscheduling),
         coscheduling_group_by=row.coscheduling_group_by,
@@ -816,8 +814,6 @@ _PENDING_TASKS_STMT = (
         # job columns (label job_state to avoid clash with tasks.state)
         jobs_table.c.state.label("job_state"),
         jobs_table.c.scheduling_deadline_epoch_ms,
-        jobs_table.c.is_reservation_holder,
-        jobs_table.c.has_reservation,
         # job_config columns
         job_config_table.c.scheduling_timeout_ms,
         job_config_table.c.has_coscheduling,
@@ -852,61 +848,6 @@ def pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
     rows = tx.execute(_PENDING_TASKS_STMT, {"state": job_pb2.TASK_STATE_PENDING}).all()
     pending_tasks = [_row_to_pending_task(row) for row in rows]
     return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
-
-
-def reserved_job_ids(tx: Tx) -> set[JobName]:
-    """Return the set of job_ids with ``has_reservation = 1`` on the jobs table."""
-    rows = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
-    return {row.job_id for row in rows}
-
-
-def reservation_entry_counts(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Return ``{job_id: reservation entry count}`` for the requested jobs.
-
-    Jobs with no reservation JSON are omitted.
-    """
-    ids = list(job_ids)
-    if not ids:
-        return {}
-    rows = tx.execute(
-        select(job_config_table.c.job_id, job_config_table.c.reservation_json).where(
-            job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))
-        ),
-        {"job_ids": ids},
-    ).all()
-    counts: dict[JobName, int] = {}
-    for row in rows:
-        if row.reservation_json is None:
-            continue
-        counts[row.job_id] = len(reservation_entries_from_json(row.reservation_json))
-    return counts
-
-
-def jobs_with_reservations(tx: Tx, states: Iterable[int]) -> Sequence[Row]:
-    """Return ``(job_id, reservation_json)`` rows for jobs in ``states`` that hold a reservation."""
-    return tx.execute(
-        select(jobs_table.c.job_id, job_config_table.c.reservation_json)
-        .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
-        .where(
-            jobs_table.c.state.in_(bindparam("states", expanding=True)),
-            jobs_table.c.has_reservation == 1,
-        ),
-        {"states": list(states)},
-    ).all()
-
-
-def job_states_by_id(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Return ``{job_id: state}`` for the given job IDs (no resource or config columns)."""
-    ids = list(job_ids)
-    if not ids:
-        return {}
-    rows = tx.execute(
-        select(jobs_table.c.job_id, jobs_table.c.state).where(
-            jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))
-        ),
-        {"job_ids": ids},
-    ).all()
-    return {row.job_id: int(row.state) for row in rows}
 
 
 _RUNNING_TASK_BAND_STMT = (
@@ -1078,6 +1019,7 @@ TASK_DETAIL_COLS = (
     tasks_table.c.current_worker_id,
     tasks_table.c.current_worker_address,
     tasks_table.c.container_id,
+    tasks_table.c.backend_id,
 )
 
 
@@ -1111,13 +1053,10 @@ _ACTIVE_TASK_COLS = (
     tasks_table.c.preemption_count,
     tasks_table.c.max_retries_failure,
     tasks_table.c.max_retries_preemption,
-    jobs_table.c.is_reservation_holder,
     job_config_table.c.has_coscheduling,
 )
 
-_ACTIVE_TASK_FROM = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-    job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-)
+_ACTIVE_TASK_FROM = tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id)
 
 
 def _row_to_active_task(row) -> ActiveTaskRow:
@@ -1131,7 +1070,6 @@ def _row_to_active_task(row) -> ActiveTaskRow:
         preemption_count=int(row.preemption_count),
         max_retries_failure=int(row.max_retries_failure),
         max_retries_preemption=int(row.max_retries_preemption),
-        is_reservation_holder=bool(row.is_reservation_holder),
         has_coscheduling=bool(row.has_coscheduling),
     )
 
@@ -1142,14 +1080,14 @@ def list_active_tasks(
     *,
     states: Iterable[int],
     exclude_task_id: JobName | None = None,
-    exclude_reservation_holders: bool = False,
     order_by_task_id: bool = False,
     limit: int | None = None,
+    backend_id: str | None = None,
 ) -> list[ActiveTaskRow]:
     """Return :class:`ActiveTaskRow` rows matching ``scope`` and ``states``.
 
     Exactly one scope field must be set. State filter is applied as an IN
-    predicate.
+    predicate. ``backend_id`` narrows to one backend's tasks (omit for all).
     """
     scope_set = sum(
         1 for x in (scope.job_id, scope.job_subtree, scope.worker_id, scope.worker_ids, scope.task_ids) if x is not None
@@ -1190,8 +1128,9 @@ def list_active_tasks(
 
     if exclude_task_id is not None:
         stmt = stmt.where(tasks_table.c.task_id != exclude_task_id)
-    if exclude_reservation_holders:
-        stmt = stmt.where(jobs_table.c.is_reservation_holder == False)  # noqa: E712
+
+    if backend_id is not None:
+        stmt = stmt.where(tasks_table.c.backend_id == backend_id)
 
     stmt = stmt.where(tasks_table.c.state.in_(bindparam("active_states", expanding=True)))
     params["active_states"] = list(states_tuple)
@@ -1239,6 +1178,20 @@ def list_active_tasks_for_jobs(
     return result
 
 
+def count_active_tasks_for_user(tx: Tx, user_id: str) -> int:
+    """Return the number of non-terminal tasks across all jobs owned by ``user_id``."""
+    return int(
+        tx.execute(
+            select(func.count())
+            .select_from(tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id))
+            .where(jobs_table.c.user_id == bindparam("user_id"))
+            .where(tasks_table.c.state.in_(bindparam("states", expanding=True))),
+            {"user_id": user_id, "states": list(NON_TERMINAL_TASK_STATES)},
+        ).scalar()
+        or 0
+    )
+
+
 # ---------------------------------------------------------------------------
 # Worker reads (previously reads/workers.py)
 # ---------------------------------------------------------------------------
@@ -1253,10 +1206,8 @@ class WorkerLivenessSource(Protocol):
 
 
 class _LivenessEntry(Protocol):
-    healthy: bool
-    active: bool
-    last_heartbeat_ms: int
-    consecutive_failures: int
+    @property
+    def usability(self) -> WorkerUsability: ...
 
 
 class WorkerAttrsSource(Protocol):
@@ -1288,8 +1239,9 @@ WORKER_DETAIL_COLS = (
     workers_table.c.md_gpu_memory_mb,
     workers_table.c.md_gce_instance_name,
     workers_table.c.md_gce_zone,
-    workers_table.c.md_git_hash,
     workers_table.c.md_device_json,
+    workers_table.c.md_provenance_json,
+    workers_table.c.scale_group,
 )
 
 
@@ -1302,28 +1254,28 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def _healthy_active_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Reconcile-target worker ids: every healthy+active worker.
+    """Reconcile-target worker ids: every non-``DEAD`` worker (``HEALTHY | DEGRADED``).
 
     The reconcile pass must keep probing a worker that is mid-failure (so its
-    liveness can recover or cross the teardown threshold), so it targets all
-    active workers — a climbing ``consecutive_failures`` does NOT drop a worker
-    here. Scheduling placement uses the stricter :func:`_schedulable_worker_ids`.
+    liveness can recover or cross the teardown threshold), so it targets degraded
+    workers too — only :data:`WorkerUsability.DEAD` drops out. Scheduling placement
+    uses the stricter :func:`_schedulable_worker_ids`.
 
     Callers post-filter the ``workers`` table in Python against this set rather than
     pushing a SQL ``IN`` — cheaper, since almost every persisted worker is healthy.
     """
-    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active}
+    return {wid for wid, ent in health.all().items() if ent.usability is not WorkerUsability.DEAD}
 
 
 def _schedulable_worker_ids(health: WorkerLivenessSource) -> set[WorkerId]:
-    """Scheduling-placement worker ids: healthy+active AND not currently failing.
+    """Scheduling-placement worker ids: only :data:`WorkerUsability.HEALTHY` workers.
 
-    Excludes workers with any consecutive reconcile failures so new tasks stop
-    landing on an unreachable worker immediately, rather than for the whole
-    detection window before teardown. Reconcile keeps probing them
-    (:func:`_healthy_active_worker_ids`); only placement is gated.
+    Excludes degraded (mid-failure) workers so new tasks stop landing on an
+    unreachable worker immediately, rather than for the whole detection window
+    before teardown. Reconcile keeps probing them (:func:`_healthy_active_worker_ids`);
+    only placement is gated.
     """
-    return {wid for wid, ent in health.all().items() if ent.healthy and ent.active and ent.consecutive_failures == 0}
+    return {wid for wid, ent in health.all().items() if ent.usability is WorkerUsability.HEALTHY}
 
 
 def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
@@ -1362,6 +1314,22 @@ def bulk_get_worker_addresses(tx: Tx, worker_ids: Iterable[WorkerId]) -> dict[Wo
         {"worker_ids": ids},
     ).all()
     return {row.worker_id: str(row.address) for row in rows}
+
+
+def worker_ids_at_address(tx: Tx, address: str, *, exclude: WorkerId) -> list[WorkerId]:
+    """Return worker ids whose row holds ``address``, excluding ``exclude``.
+
+    Detects a recycled internal IP: when GCP reuses a deleted VM's IP for a new
+    one, two rows end up sharing one ``address``. Passing the new registrant as
+    ``exclude`` yields the stale prior owners.
+    """
+    rows = tx.execute(
+        select(workers_table.c.worker_id).where(
+            workers_table.c.address == address,
+            workers_table.c.worker_id != exclude,
+        )
+    ).all()
+    return [WorkerId(str(row.worker_id)) for row in rows]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1456,6 +1424,7 @@ PENDING_DISPATCH_COLS = (
     # Effective band (tasks), not the immutable requested band (job_config):
     # see PendingDispatchRow.priority_band.
     tasks_table.c.priority_band,
+    job_config_table.c.container_profile,
 )
 
 
@@ -1483,6 +1452,7 @@ def pending_dispatch_row(r) -> PendingDispatchRow:
         has_coscheduling=bool(r.has_coscheduling),
         coscheduling_group_by=str(r.coscheduling_group_by),
         priority_band=int(r.priority_band),
+        container_profile=int(r.container_profile),
     )
 
 
@@ -1509,10 +1479,19 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-def all_worker_ids(tx: Tx) -> list[WorkerId]:
-    """Return every persisted worker id."""
-    rows = tx.execute(select(workers_table.c.worker_id)).all()
-    return [WorkerId(str(row.worker_id)) for row in rows]
+def worker_scale_groups(tx: Tx) -> dict[WorkerId, str]:
+    """Return ``{worker_id: scale_group}`` for every persisted worker.
+
+    The controller maps each worker's scale group to its owning backend to
+    partition the per-tick snapshot. Workers with no scale group map to ``""``.
+    """
+    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.scale_group)).all()
+    return {WorkerId(str(row.worker_id)): str(row.scale_group or "") for row in rows}
+
+
+def owned_worker_ids(tx: Tx, owns_scale_group: Callable[[str], bool]) -> set[WorkerId]:
+    """The workers whose scale group ``owns_scale_group`` claims, in the read ``tx``."""
+    return {wid for wid, scale_group in worker_scale_groups(tx).items() if owns_scale_group(scale_group)}
 
 
 _EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
@@ -1621,8 +1600,6 @@ class ControlSnapshot:
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
       rows, so a worker-daemon backend can build its per-worker reconcile plans.
-    * ``worker_status_map`` — per-worker idle/running state for the autoscale
-      phase (built only on the autoscaler tick).
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
@@ -1636,7 +1613,6 @@ class ControlSnapshot:
     reconcile_rows: list[ReconcileRow]
     timeout_rows: Sequence[Row]
     job_specs: dict[JobName, job_pb2.RunTaskRequest] = field(default_factory=dict)
-    worker_status_map: WorkerStatusMap = field(default_factory=dict)
     tasks_to_run: list[job_pb2.RunTaskRequest] = field(default_factory=list)
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 

@@ -19,16 +19,16 @@ _MOE_LOCAL_FNS = {
 
 
 def _moe_mlp_local(
-    x: Float[Array, "T D"],
+    x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
-    moe_w13: Float[Array, "E D I2"],
-    moe_w2: Float[Array, "E I D"],
+    moe_w13: Float[Array, "E H I2"],
+    moe_w2: Float[Array, "E I H"],
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     implementation: MoeImplementation,
-) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"
     return _MOE_LOCAL_FNS[local_key](
         x,

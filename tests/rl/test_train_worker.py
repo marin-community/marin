@@ -30,7 +30,7 @@ def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled
     assert worker.reference_model is None
 
 
-@pytest.mark.parametrize("mode", [KLMode.K2_LOSS, KLMode.K3_LOSS])
+@pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
 def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled(mode: KLMode):
     worker = TrainWorker.__new__(TrainWorker)
     model = object()

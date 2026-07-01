@@ -46,7 +46,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -60,7 +60,7 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/
+          uv run --package marin-iris --frozen --group test pytest --durations=5 --tb=short lib/iris/tests/
 
   iris-e2e-smoke:
     needs: changes
@@ -79,7 +79,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -96,7 +96,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
@@ -106,7 +106,7 @@ jobs:
         # have, so a warm cache stays fast, while a partial or stale cache self-heals
         # instead of leaving a missing browser binary. `--with-deps` reinstalls the system
         # libraries that the browser cache cannot hold.
-        run: cd lib/iris && uv run playwright install --with-deps chromium
+        run: uv run --package marin-iris playwright install --with-deps chromium
 
       - name: Run E2E smoke tests
         env:
@@ -114,8 +114,8 @@ jobs:
           PYTHONASYNCIODEBUG: "1"
         run: |
           mkdir -p ${{ github.workspace }}/iris-screenshots
-          cd lib/iris && uv run --group dev python -m pytest \
-            tests/e2e/test_smoke.py \
+          uv run --package marin-iris --frozen --group test pytest \
+            lib/iris/tests/e2e/test_smoke.py \
             -m requires_cluster -o "addopts=" --tb=short -v
 
       - name: Verify screenshots with Claude
@@ -129,7 +129,7 @@ jobs:
 
       - name: Upload screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: iris-smoke-screenshots
           path: iris-screenshots/

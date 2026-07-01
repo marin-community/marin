@@ -31,8 +31,6 @@ Examples:
 Output: prints a single JSON line ``RESULT: {...}`` for easy log scraping.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os

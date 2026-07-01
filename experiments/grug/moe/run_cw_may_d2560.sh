@@ -22,6 +22,7 @@ GPU_REPLICAS=32
 EXPERT_AXIS=8
 REPLICA_AXIS=1
 MODEL_AXIS=1
+PROCESSES_PER_TASK="${MAY_PROCESSES_PER_TASK:-8}"
 BATCH=256
 SEQ_LEN=4096
 NUM_LAYERS=""
@@ -68,6 +69,7 @@ Options:
   --expert-axis N           MAY_EXPERT_AXIS (default: 8).
   --replica-axis N          MAY_REPLICA_AXIS (default: 1).
   --model-axis N            MAY_MODEL_AXIS tensor/model-parallel axis size (default: 1).
+  --processes-per-task N    MAY_PROCESSES_PER_TASK: GPU processes per 8-GPU pod (default: 8).
   --batch N                 MAY_BATCH (default: 256).
   --seq-len N               MAY_SEQ_LEN (default: 4096).
   --layers N                MAY_NUM_LAYERS diagnostic override (default: May heuristic).
@@ -144,6 +146,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --model-axis)
             MODEL_AXIS="$2"
+            shift 2
+            ;;
+        --processes-per-task)
+            PROCESSES_PER_TASK="$2"
             shift 2
             ;;
         --batch)
@@ -305,6 +311,7 @@ ENV_ARGS=(
     -e MAY_EXPERT_AXIS "$EXPERT_AXIS"
     -e MAY_REPLICA_AXIS "$REPLICA_AXIS"
     -e MAY_MODEL_AXIS "$MODEL_AXIS"
+    -e MAY_PROCESSES_PER_TASK "$PROCESSES_PER_TASK"
     -e MAY_BATCH "$BATCH"
     -e MAY_SEQ_LEN "$SEQ_LEN"
     -e MAY_NUM_LAYERS "$NUM_LAYERS"
@@ -359,6 +366,7 @@ r2_endpoint: $AWS_ENDPOINT_URL
 nodes: $GPU_REPLICAS
 worker_cpu: $WORKER_CPU
 mesh axes: replica=$REPLICA_AXIS expert=$EXPERT_AXIS model=$MODEL_AXIS
+processes_per_task: $PROCESSES_PER_TASK
 batch: $BATCH
 seq_len: $SEQ_LEN
 layers: ${NUM_LAYERS:-default}

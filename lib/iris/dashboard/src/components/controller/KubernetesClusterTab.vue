@@ -304,67 +304,76 @@ function nodeDisplayClass(nodeName?: string, phase?: string): string {
       <EmptyState v-if="pods.length === 0" message="No iris-managed pods found." />
 
       <div v-else class="overflow-x-auto rounded-lg border border-surface-border">
-        <table class="w-full border-collapse">
+        <table class="w-full border-collapse lg:table-fixed">
           <thead>
             <tr class="border-b border-surface-border bg-surface">
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Pod</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Task ID</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-24">Phase</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Node</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Reason</th>
-              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">Message</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left lg:w-[22%]">Pod</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left lg:w-[20%]">Task ID</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-24 lg:w-[8%]">Phase</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left lg:w-[16%]">Node</th>
+              <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left lg:w-[24%]">Reason</th>
               <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left w-24">Age</th>
             </tr>
           </thead>
           <tbody>
-            <tr
+            <template
               v-for="pod in pods"
               :key="pod.podName"
-              :class="[
-                'border-b border-surface-border-subtle hover:bg-surface-raised transition-colors',
-                pod.phase === 'Failed' ? 'bg-status-danger-bg/30' : '',
-              ]"
             >
-              <!-- Pod name -->
-              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary truncate max-w-[200px]" :title="pod.podName">
-                {{ pod.podName }}
-              </td>
+              <tr
+                :class="[
+                  pod.message ? '' : 'border-b border-surface-border-subtle',
+                  'hover:bg-surface-raised transition-colors',
+                  pod.phase === 'Failed' ? 'bg-status-danger-bg/30' : '',
+                ]"
+              >
+                <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.podName">
+                  {{ pod.podName }}
+                </td>
 
-              <!-- Task ID -->
-              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary truncate max-w-[200px]" :title="pod.taskId">
-                {{ pod.taskId || '-' }}
-              </td>
+                <td class="px-3 pt-2 pb-1 text-[13px] font-mono text-text-secondary truncate" :title="pod.taskId">
+                  {{ pod.taskId || '-' }}
+                </td>
 
-              <!-- Phase with dot -->
-              <td class="px-3 py-2 text-[13px]">
-                <span class="inline-flex items-center gap-1.5">
-                  <span :class="['w-1.5 h-1.5 rounded-full flex-shrink-0', phaseDotClass(pod.phase)]" />
-                  <span :class="['font-semibold', phaseClass(pod.phase)]">{{ pod.phase }}</span>
-                </span>
-              </td>
+                <td class="px-3 pt-2 pb-1 text-[13px]">
+                  <span class="inline-flex items-center gap-1.5">
+                    <span :class="['w-1.5 h-1.5 rounded-full flex-shrink-0', phaseDotClass(pod.phase)]" />
+                    <span :class="['font-semibold', phaseClass(pod.phase)]">{{ pod.phase }}</span>
+                  </span>
+                </td>
 
-              <!-- Node -->
-              <td class="px-3 py-2 text-[13px] font-mono truncate max-w-[180px]" :title="pod.nodeName || undefined">
-                <span :class="nodeDisplayClass(pod.nodeName, pod.phase)">
-                  {{ nodeDisplayName(pod.nodeName, pod.phase) }}
-                </span>
-              </td>
+                <td class="px-3 pt-2 pb-1 text-[13px] font-mono truncate" :title="pod.nodeName || undefined">
+                  <span :class="nodeDisplayClass(pod.nodeName, pod.phase)">
+                    {{ nodeDisplayName(pod.nodeName, pod.phase) }}
+                  </span>
+                </td>
 
-              <!-- Reason -->
-              <td class="px-3 py-2 text-[13px] text-text-secondary">
-                {{ pod.reason || '-' }}
-              </td>
+                <td class="px-3 pt-2 pb-1 text-[13px] text-text-secondary truncate" :title="pod.reason || undefined">
+                  {{ pod.reason || '-' }}
+                </td>
 
-              <!-- Message -->
-              <td class="px-3 py-2 text-[13px] text-text-secondary truncate max-w-[250px]" :title="pod.message || undefined">
-                {{ pod.message || '-' }}
-              </td>
+                <td class="px-3 pt-2 pb-1 text-[13px] text-text-muted font-mono whitespace-nowrap">
+                  {{ formatTransition(pod.lastTransition) }}
+                </td>
+              </tr>
 
-              <!-- Age -->
-              <td class="px-3 py-2 text-[13px] text-text-muted font-mono">
-                {{ formatTransition(pod.lastTransition) }}
-              </td>
-            </tr>
+              <tr
+                v-if="pod.message"
+                :class="[
+                  'border-b border-surface-border-subtle',
+                  pod.phase === 'Failed' ? 'bg-status-danger-bg/30' : '',
+                ]"
+              >
+                <td colspan="6" class="px-3 pb-2 pt-0">
+                  <div class="pl-0 lg:pl-[42%]">
+                    <div class="rounded bg-surface-sunken px-2 py-1.5 text-[12px] leading-relaxed text-text-secondary">
+                      <span class="mr-2 font-semibold uppercase tracking-wider text-text-muted">Diagnostic</span>
+                      <span class="font-mono whitespace-pre-wrap break-words">{{ pod.message }}</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>

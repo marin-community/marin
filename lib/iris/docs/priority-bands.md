@@ -10,7 +10,7 @@ either delays your work or disrupts other people's.
 |---|---|---|
 | `PRODUCTION` | `--priority production` | Always scheduled before lower bands. Can preempt INTERACTIVE/BATCH. Never downgraded by the budget system. |
 | `INTERACTIVE` | default (or `--priority interactive`) | Normal work. Yields to PRODUCTION; preempts BATCH. |
-| `BATCH` | `--priority batch` | Opportunistic. Yields to anything else. Safe to launch in bulk. |
+| `BATCH` | `--priority batch` | Opportunistic. Yields to INTERACTIVE and PRODUCTION. Safe to launch in bulk. |
 
 ## When to use each band
 

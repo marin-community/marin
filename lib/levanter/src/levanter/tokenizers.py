@@ -27,13 +27,13 @@ import time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-import fsspec
 import jinja2
 import jinja2.ext
 import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+from rigging.filesystem import filesystem, open_url
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 logger = logging.getLogger(__name__)
@@ -682,7 +682,7 @@ def _fetch_file_atomic(src_url: str, dest_path: str) -> bool:
     """
     tmp = dest_path + ".tmp"
     try:
-        with fsspec.open(src_url, "rb") as src:
+        with open_url(src_url, "rb") as src:
             data = src.read()
         with open(tmp, "wb") as dst:
             dst.write(data)
@@ -711,7 +711,7 @@ def _copy_file_atomic(src_path: str, dest_path: str) -> None:
 def _populate_mirror_file(local_path: str, mirror_url: str) -> None:
     """Best-effort push of a local file to the mirror. Swallows any failure."""
     try:
-        with open(local_path, "rb") as src, fsspec.open(mirror_url, "wb") as dst:
+        with open(local_path, "rb") as src, open_url(mirror_url, "wb") as dst:
             dst.write(src.read())
     except Exception:
         logger.debug("Could not populate mirror at %s", mirror_url, exc_info=True)
@@ -746,7 +746,7 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     mirror_base = f"mirror://{mirror_dir}"
     copied = False
     try:
-        mirror_fs = fsspec.filesystem("mirror")
+        mirror_fs = filesystem("mirror")
         if mirror_fs.exists(mirror_dir):
             for entry in mirror_fs.ls(mirror_dir, detail=False):
                 filename = os.path.basename(entry.rstrip("/"))

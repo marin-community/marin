@@ -56,7 +56,7 @@ class Controller(_message.Message):
     WORKER_SORT_FIELD_LAST_HEARTBEAT: Controller.WorkerSortField
     WORKER_SORT_FIELD_DEVICE_TYPE: Controller.WorkerSortField
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "reservation", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date")
+        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "reservation", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile")
         NAME_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -80,6 +80,7 @@ class Controller(_message.Message):
         TASK_IMAGE_FIELD_NUMBER: _ClassVar[int]
         SUBMIT_ARGV_FIELD_NUMBER: _ClassVar[int]
         CLIENT_REVISION_DATE_FIELD_NUMBER: _ClassVar[int]
+        CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
         name: str
         entrypoint: _job_pb2.RuntimeEntrypoint
         resources: _job_pb2.ResourceSpecProto
@@ -103,7 +104,8 @@ class Controller(_message.Message):
         task_image: str
         submit_argv: _containers.RepeatedScalarFieldContainer[str]
         client_revision_date: str
-        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., reservation: _Optional[_Union[_job_pb2.ReservationConfig, _Mapping]] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ...) -> None: ...
+        container_profile: _job_pb2.ContainerProfile
+        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., reservation: _Optional[_Union[_job_pb2.ReservationConfig, _Mapping]] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -144,7 +146,7 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class JobQuery(_message.Message):
-        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix")
+        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix", "backend_id")
         SCOPE_FIELD_NUMBER: _ClassVar[int]
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
@@ -154,6 +156,7 @@ class Controller(_message.Message):
         OFFSET_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
         scope: Controller.JobQueryScope
         parent_job_id: str
         name_filter: str
@@ -163,7 +166,8 @@ class Controller(_message.Message):
         offset: int
         limit: int
         job_id_prefix: str
-        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ...) -> None: ...
+        backend_id: str
+        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ..., backend_id: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]
@@ -200,6 +204,31 @@ class Controller(_message.Message):
         TASKS_FIELD_NUMBER: _ClassVar[int]
         tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ...) -> None: ...
+    class KickTasksRequest(_message.Message):
+        __slots__ = ("targets", "desired_state", "reason")
+        TARGETS_FIELD_NUMBER: _ClassVar[int]
+        DESIRED_STATE_FIELD_NUMBER: _ClassVar[int]
+        REASON_FIELD_NUMBER: _ClassVar[int]
+        targets: _containers.RepeatedScalarFieldContainer[str]
+        desired_state: _job_pb2.TaskState
+        reason: str
+        def __init__(self, targets: _Optional[_Iterable[str]] = ..., desired_state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    class KickResult(_message.Message):
+        __slots__ = ("target", "task_id", "queued", "detail")
+        TARGET_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        QUEUED_FIELD_NUMBER: _ClassVar[int]
+        DETAIL_FIELD_NUMBER: _ClassVar[int]
+        target: str
+        task_id: str
+        queued: bool
+        detail: str
+        def __init__(self, target: _Optional[str] = ..., task_id: _Optional[str] = ..., queued: _Optional[bool] = ..., detail: _Optional[str] = ...) -> None: ...
+    class KickTasksResponse(_message.Message):
+        __slots__ = ("results",)
+        RESULTS_FIELD_NUMBER: _ClassVar[int]
+        results: _containers.RepeatedCompositeFieldContainer[Controller.KickResult]
+        def __init__(self, results: _Optional[_Iterable[_Union[Controller.KickResult, _Mapping]]] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
         __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
@@ -232,7 +261,7 @@ class Controller(_message.Message):
         registered_at: _time_pb2.Timestamp
         def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., registered_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
     class WorkerHealthStatus(_message.Message):
-        __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat", "running_job_ids", "address", "metadata", "status_message")
+        __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat", "running_job_ids", "address", "metadata", "status_message", "backend_id", "scale_group")
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
         CONSECUTIVE_FAILURES_FIELD_NUMBER: _ClassVar[int]
@@ -241,6 +270,8 @@ class Controller(_message.Message):
         ADDRESS_FIELD_NUMBER: _ClassVar[int]
         METADATA_FIELD_NUMBER: _ClassVar[int]
         STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+        SCALE_GROUP_FIELD_NUMBER: _ClassVar[int]
         worker_id: str
         healthy: bool
         consecutive_failures: int
@@ -249,20 +280,24 @@ class Controller(_message.Message):
         address: str
         metadata: _job_pb2.WorkerMetadata
         status_message: str
-        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ...) -> None: ...
+        backend_id: str
+        scale_group: str
+        def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., running_job_ids: _Optional[_Iterable[str]] = ..., address: _Optional[str] = ..., metadata: _Optional[_Union[_job_pb2.WorkerMetadata, _Mapping]] = ..., status_message: _Optional[str] = ..., backend_id: _Optional[str] = ..., scale_group: _Optional[str] = ...) -> None: ...
     class WorkerQuery(_message.Message):
-        __slots__ = ("contains", "sort_field", "sort_direction", "offset", "limit")
+        __slots__ = ("contains", "sort_field", "sort_direction", "offset", "limit", "backend_id")
         CONTAINS_FIELD_NUMBER: _ClassVar[int]
         SORT_FIELD_FIELD_NUMBER: _ClassVar[int]
         SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
         OFFSET_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
         contains: str
         sort_field: Controller.WorkerSortField
         sort_direction: Controller.SortDirection
         offset: int
         limit: int
-        def __init__(self, contains: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.WorkerSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+        backend_id: str
+        def __init__(self, contains: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.WorkerSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., backend_id: _Optional[str] = ...) -> None: ...
     class ListWorkersRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]
@@ -318,7 +353,7 @@ class Controller(_message.Message):
         metadata: _containers.ScalarMap[str, str]
         def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
     class RegisterEndpointRequest(_message.Message):
-        __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id")
+        __slots__ = ("name", "address", "task_id", "metadata", "attempt_id", "endpoint_id", "lease_duration")
         class MetadataEntry(_message.Message):
             __slots__ = ("key", "value")
             KEY_FIELD_NUMBER: _ClassVar[int]
@@ -332,38 +367,46 @@ class Controller(_message.Message):
         METADATA_FIELD_NUMBER: _ClassVar[int]
         ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
+        LEASE_DURATION_FIELD_NUMBER: _ClassVar[int]
         name: str
         address: str
         task_id: str
         metadata: _containers.ScalarMap[str, str]
         attempt_id: int
         endpoint_id: str
-        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., attempt_id: _Optional[int] = ..., endpoint_id: _Optional[str] = ...) -> None: ...
+        lease_duration: _time_pb2.Duration
+        def __init__(self, name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., attempt_id: _Optional[int] = ..., endpoint_id: _Optional[str] = ..., lease_duration: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class RegisterEndpointResponse(_message.Message):
-        __slots__ = ("endpoint_id",)
+        __slots__ = ("endpoint_id", "lease_duration")
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
+        LEASE_DURATION_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
-        def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
+        lease_duration: _time_pb2.Duration
+        def __init__(self, endpoint_id: _Optional[str] = ..., lease_duration: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
     class UnregisterEndpointRequest(_message.Message):
         __slots__ = ("endpoint_id",)
         ENDPOINT_ID_FIELD_NUMBER: _ClassVar[int]
         endpoint_id: str
         def __init__(self, endpoint_id: _Optional[str] = ...) -> None: ...
     class ListEndpointsRequest(_message.Message):
-        __slots__ = ("prefix", "exact")
+        __slots__ = ("prefix", "exact", "task_ids")
         PREFIX_FIELD_NUMBER: _ClassVar[int]
         EXACT_FIELD_NUMBER: _ClassVar[int]
+        TASK_IDS_FIELD_NUMBER: _ClassVar[int]
         prefix: str
         exact: bool
-        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ...) -> None: ...
+        task_ids: _containers.RepeatedScalarFieldContainer[str]
+        def __init__(self, prefix: _Optional[str] = ..., exact: _Optional[bool] = ..., task_ids: _Optional[_Iterable[str]] = ...) -> None: ...
     class ListEndpointsResponse(_message.Message):
         __slots__ = ("endpoints",)
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
         endpoints: _containers.RepeatedCompositeFieldContainer[Controller.Endpoint]
         def __init__(self, endpoints: _Optional[_Iterable[_Union[Controller.Endpoint, _Mapping]]] = ...) -> None: ...
     class GetAutoscalerStatusRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
+        __slots__ = ("backend_id",)
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+        backend_id: str
+        def __init__(self, backend_id: _Optional[str] = ...) -> None: ...
     class GetAutoscalerStatusResponse(_message.Message):
         __slots__ = ("status",)
         STATUS_FIELD_NUMBER: _ClassVar[int]
@@ -444,8 +487,10 @@ class Controller(_message.Message):
         resources: _job_pb2.ResourceSpecProto
         def __init__(self, task_id: _Optional[str] = ..., attempt: _Optional[_Union[_job_pb2.TaskAttempt, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ...) -> None: ...
     class GetKubernetesClusterStatusRequest(_message.Message):
-        __slots__ = ()
-        def __init__(self) -> None: ...
+        __slots__ = ("backend_id",)
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+        backend_id: str
+        def __init__(self, backend_id: _Optional[str] = ...) -> None: ...
     class KubernetesPodStatus(_message.Message):
         __slots__ = ("pod_name", "task_id", "phase", "reason", "message", "last_transition", "node_name")
         POD_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -549,29 +594,33 @@ class Controller(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
     class PendingTaskBucket(_message.Message):
-        __slots__ = ("band", "user_id", "job_id", "count")
+        __slots__ = ("band", "user_id", "job_id", "count", "backend_id")
         BAND_FIELD_NUMBER: _ClassVar[int]
         USER_ID_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         COUNT_FIELD_NUMBER: _ClassVar[int]
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
         band: _job_pb2.PriorityBand
         user_id: str
         job_id: str
         count: int
-        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
+        backend_id: str
+        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ..., backend_id: _Optional[str] = ...) -> None: ...
     class RunningTaskBucket(_message.Message):
-        __slots__ = ("band", "user_id", "worker_id", "job_id", "count")
+        __slots__ = ("band", "user_id", "worker_id", "job_id", "count", "backend_id")
         BAND_FIELD_NUMBER: _ClassVar[int]
         USER_ID_FIELD_NUMBER: _ClassVar[int]
         WORKER_ID_FIELD_NUMBER: _ClassVar[int]
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
         COUNT_FIELD_NUMBER: _ClassVar[int]
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
         band: _job_pb2.PriorityBand
         user_id: str
         worker_id: str
         job_id: str
         count: int
-        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
+        backend_id: str
+        def __init__(self, band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., user_id: _Optional[str] = ..., worker_id: _Optional[str] = ..., job_id: _Optional[str] = ..., count: _Optional[int] = ..., backend_id: _Optional[str] = ...) -> None: ...
     class SchedulerUserBudget(_message.Message):
         __slots__ = ("user_id", "budget_limit", "budget_spent", "max_band", "effective_band", "utilization_percent")
         USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -600,4 +649,72 @@ class Controller(_message.Message):
         pending_buckets: _containers.RepeatedCompositeFieldContainer[Controller.PendingTaskBucket]
         running_buckets: _containers.RepeatedCompositeFieldContainer[Controller.RunningTaskBucket]
         def __init__(self, user_budgets: _Optional[_Iterable[_Union[Controller.SchedulerUserBudget, _Mapping]]] = ..., total_pending: _Optional[int] = ..., total_running: _Optional[int] = ..., pending_buckets: _Optional[_Iterable[_Union[Controller.PendingTaskBucket, _Mapping]]] = ..., running_buckets: _Optional[_Iterable[_Union[Controller.RunningTaskBucket, _Mapping]]] = ...) -> None: ...
+    class ListBackendsRequest(_message.Message):
+        __slots__ = ()
+        def __init__(self) -> None: ...
+    class BackendSummary(_message.Message):
+        __slots__ = ("backend_id", "name", "kind", "capabilities", "advertised_attributes", "restricted", "allowed_user_count", "scale_groups", "worker_count", "pending_task_count", "running_task_count", "has_autoscaler", "capacity_health")
+        class AdvertisedAttributesEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: StringList
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[StringList, _Mapping]] = ...) -> None: ...
+        class CapacityHealthEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        BACKEND_ID_FIELD_NUMBER: _ClassVar[int]
+        NAME_FIELD_NUMBER: _ClassVar[int]
+        KIND_FIELD_NUMBER: _ClassVar[int]
+        CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+        ADVERTISED_ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+        RESTRICTED_FIELD_NUMBER: _ClassVar[int]
+        ALLOWED_USER_COUNT_FIELD_NUMBER: _ClassVar[int]
+        SCALE_GROUPS_FIELD_NUMBER: _ClassVar[int]
+        WORKER_COUNT_FIELD_NUMBER: _ClassVar[int]
+        PENDING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
+        RUNNING_TASK_COUNT_FIELD_NUMBER: _ClassVar[int]
+        HAS_AUTOSCALER_FIELD_NUMBER: _ClassVar[int]
+        CAPACITY_HEALTH_FIELD_NUMBER: _ClassVar[int]
+        backend_id: str
+        name: str
+        kind: str
+        capabilities: _containers.RepeatedScalarFieldContainer[str]
+        advertised_attributes: _containers.MessageMap[str, StringList]
+        restricted: bool
+        allowed_user_count: int
+        scale_groups: _containers.RepeatedScalarFieldContainer[str]
+        worker_count: int
+        pending_task_count: int
+        running_task_count: int
+        has_autoscaler: bool
+        capacity_health: _containers.ScalarMap[str, int]
+        def __init__(self, backend_id: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ..., advertised_attributes: _Optional[_Mapping[str, StringList]] = ..., restricted: _Optional[bool] = ..., allowed_user_count: _Optional[int] = ..., scale_groups: _Optional[_Iterable[str]] = ..., worker_count: _Optional[int] = ..., pending_task_count: _Optional[int] = ..., running_task_count: _Optional[int] = ..., has_autoscaler: _Optional[bool] = ..., capacity_health: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    class UnroutableJob(_message.Message):
+        __slots__ = ("job_id", "reason")
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        REASON_FIELD_NUMBER: _ClassVar[int]
+        job_id: str
+        reason: str
+        def __init__(self, job_id: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+    class ListBackendsResponse(_message.Message):
+        __slots__ = ("backends", "unroutable_job_count", "unroutable_sample")
+        BACKENDS_FIELD_NUMBER: _ClassVar[int]
+        UNROUTABLE_JOB_COUNT_FIELD_NUMBER: _ClassVar[int]
+        UNROUTABLE_SAMPLE_FIELD_NUMBER: _ClassVar[int]
+        backends: _containers.RepeatedCompositeFieldContainer[Controller.BackendSummary]
+        unroutable_job_count: int
+        unroutable_sample: _containers.RepeatedCompositeFieldContainer[Controller.UnroutableJob]
+        def __init__(self, backends: _Optional[_Iterable[_Union[Controller.BackendSummary, _Mapping]]] = ..., unroutable_job_count: _Optional[int] = ..., unroutable_sample: _Optional[_Iterable[_Union[Controller.UnroutableJob, _Mapping]]] = ...) -> None: ...
     def __init__(self) -> None: ...
+
+class StringList(_message.Message):
+    __slots__ = ("values",)
+    VALUES_FIELD_NUMBER: _ClassVar[int]
+    values: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, values: _Optional[_Iterable[str]] = ...) -> None: ...

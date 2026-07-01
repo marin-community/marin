@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scripts.canary.validate_canary_metrics import lookup_metric, main, read_summary
+from scripts.ci.validate_canary_metrics import lookup_metric, main, read_summary
 
 HEALTHY_SUMMARY = {
     "train": {"loss": 5.5},
@@ -25,8 +25,8 @@ def test_lookup_metric():
 def test_main_exits_nonzero_on_failure():
     bad_summary = {**HEALTHY_SUMMARY, "train": {"loss": 10.0}}
     with (
-        patch("scripts.canary.validate_canary_metrics.resolve_canary_output_path", return_value="gs://fake"),
-        patch("scripts.canary.validate_canary_metrics.read_summary", return_value=bad_summary),
+        patch("scripts.ci.validate_canary_metrics.resolve_canary_output_path", return_value="gs://fake"),
+        patch("scripts.ci.validate_canary_metrics.read_summary", return_value=bad_summary),
         pytest.raises(SystemExit, match="1"),
     ):
         main()

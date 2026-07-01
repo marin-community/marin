@@ -23,8 +23,6 @@ Before rewriting any artifact, the original is copied to
 Default is dry-run; pass ``--apply`` to actually write.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

@@ -39,4 +39,10 @@ def test_local_llm_inference():
         generation_params={"max_tokens": 16},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)
-    run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+    generated_texts = run_vllm_inference(model_name_or_path, **config.engine_kwargs)
+
+    # vLLM returns one RequestOutput for the single prompt; assert it actually
+    # decoded a non-empty completion rather than silently returning nothing.
+    assert len(generated_texts) == 1
+    assert generated_texts[0].outputs
+    assert generated_texts[0].outputs[0].text.strip()

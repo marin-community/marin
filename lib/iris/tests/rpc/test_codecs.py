@@ -3,8 +3,6 @@
 
 """Tests for the compact JSON codec installed via :mod:`iris.rpc.codecs`."""
 
-from __future__ import annotations
-
 from connectrpc._codec import (
     CODEC_NAME_JSON,
     CODEC_NAME_JSON_CHARSET_UTF8,

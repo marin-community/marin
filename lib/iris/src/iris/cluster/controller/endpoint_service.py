@@ -1,0 +1,197 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""EndpointService: the leased service-discovery registry.
+
+Registration grants a lease, returned as ``lease_duration``; re-registering with
+the same ``endpoint_id`` renews it, and an unrenewed endpoint expires (hidden
+from reads, swept by the pruner) independent of its task row. The legacy
+``ControllerService`` endpoint RPCs forward here in-process. ``/system/``
+endpoints are served from an in-memory map and never expire.
+"""
+
+import logging
+import uuid
+from typing import Any
+
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import (
+    AddEndpointOutcome,
+    EndpointQuery,
+    EndpointRow,
+    EndpointsProjection,
+)
+from iris.cluster.types import JobName
+from iris.rpc import controller_pb2, job_pb2
+from iris.time_proto import duration_from_proto, duration_to_proto
+
+logger = logging.getLogger(__name__)
+
+# Lease granted when the client does not request one. Long so an old client that
+# registers once and never renews keeps its endpoint served; a renewing client
+# requests a much shorter lease and gets it (see MIN_ENDPOINT_LEASE). This only
+# bounds the dead-but-non-terminal backstop case — a task's endpoints are still
+# reclaimed promptly when it goes terminal — so it is sized generously (5 days).
+ENDPOINT_LEASE = Duration.from_hours(120)
+# Floor on a granted lease: bounds how often a client may force the controller to
+# re-register by capping the renewal rate a short requested lease can ask for.
+MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
+
+
+class EndpointServiceImpl:
+    """Leased service-discovery registry over the shared endpoints projection."""
+
+    def __init__(
+        self,
+        *,
+        db: ControllerDB,
+        endpoints: EndpointsProjection,
+        system_endpoints: dict[str, str] | None = None,
+        lease: Duration = ENDPOINT_LEASE,
+    ) -> None:
+        self._db = db
+        self._endpoints = endpoints
+        self._system_endpoints: dict[str, str] = system_endpoints or {}
+        self._lease = lease
+
+    def register_system_endpoint(self, name: str, address: str) -> None:
+        """Register a never-expiring ``/system/`` endpoint (e.g. the log server)."""
+        self._system_endpoints[name] = address
+
+    def _granted_lease(self, request: controller_pb2.Controller.RegisterEndpointRequest) -> Duration:
+        """Lease to grant: the client's request clamped to ``[MIN_ENDPOINT_LEASE, self._lease]``.
+
+        Unset selects the default (``self._lease``), so old clients that never
+        set the field keep the long lease. A renewing client requests a short
+        one and gets it, down to the floor.
+        """
+        if not request.HasField("lease_duration"):
+            return self._lease
+        requested = duration_from_proto(request.lease_duration)
+        if requested < MIN_ENDPOINT_LEASE:
+            return MIN_ENDPOINT_LEASE
+        if requested > self._lease:
+            return self._lease
+        return requested
+
+    # --- RPC surface ---------------------------------------------------------
+
+    def register_endpoint(
+        self,
+        request: controller_pb2.Controller.RegisterEndpointRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.RegisterEndpointResponse:
+        """Register or renew a service endpoint, returning the granted lease.
+
+        Re-registering with the same ``endpoint_id`` renews the lease. The
+        endpoint is bound to ``request.task_id`` so retry cleanup removes
+        endpoints from superseded attempts. It is visible to lookup/list only
+        while that task is non-terminal and the lease is unexpired.
+        """
+        endpoint_id = request.endpoint_id or str(uuid.uuid4())
+
+        task_id = JobName.from_wire(request.task_id)
+        task_id.require_task()
+
+        granted = self._granted_lease(request)
+        endpoint = EndpointRow(
+            endpoint_id=endpoint_id,
+            name=request.name,
+            address=request.address,
+            task_id=task_id,
+            metadata=dict(request.metadata),
+            registered_at=Timestamp.now(),
+            lease_deadline=Timestamp.now().add(granted),
+        )
+
+        # Validation runs inside the writer transaction in
+        # ``EndpointsProjection.add``: NOT_FOUND if the task row is missing,
+        # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
+        with self._db.transaction() as cur:
+            outcome = self._endpoints.add(cur, endpoint, expected_attempt_id=request.attempt_id)
+        if outcome is AddEndpointOutcome.NOT_FOUND:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if outcome is AddEndpointOutcome.STALE_ATTEMPT:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt for task {request.task_id} (attempt {request.attempt_id})",
+            )
+        if outcome is AddEndpointOutcome.TERMINAL:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Task {request.task_id} is already terminal; endpoint not registered",
+            )
+
+        return controller_pb2.Controller.RegisterEndpointResponse(
+            endpoint_id=endpoint_id,
+            lease_duration=duration_to_proto(granted),
+        )
+
+    def unregister_endpoint(
+        self,
+        request: controller_pb2.Controller.UnregisterEndpointRequest,
+        ctx: Any,
+    ) -> job_pb2.Empty:
+        """Unregister a service endpoint. Idempotent."""
+        with self._db.transaction() as cur:
+            self._endpoints.remove(cur, request.endpoint_id)
+        return job_pb2.Empty()
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest,
+        ctx: Any,
+    ) -> controller_pb2.Controller.ListEndpointsResponse:
+        """List endpoints by name prefix (or exact name when ``request.exact`` is set).
+
+        ``request.task_ids``, if set, ANDs with the name match. Expired leases
+        are excluded; ``/system/`` names resolve from the in-memory map.
+        """
+        prefix = request.prefix
+        if prefix.startswith("/system/"):
+            return self._list_system_endpoints(prefix, exact=request.exact)
+
+        endpoints = self._endpoints.query(
+            EndpointQuery(
+                exact_name=prefix if request.exact else None,
+                name_prefix=None if request.exact else prefix,
+                task_ids=tuple(JobName.from_wire(t) for t in request.task_ids),
+            ),
+        )
+        return controller_pb2.Controller.ListEndpointsResponse(
+            endpoints=[
+                controller_pb2.Controller.Endpoint(
+                    endpoint_id=e.endpoint_id,
+                    name=e.name,
+                    address=e.address,
+                    task_id=e.task_id.to_wire(),
+                    metadata=e.metadata,
+                )
+                for e in endpoints
+            ]
+        )
+
+    # --- Internal helpers ----------------------------------------------------
+
+    def resolve_endpoint(self, name: str) -> str | None:
+        """Resolve an endpoint name to its address, or None.
+
+        Task endpoints (live leases) take priority over ``/system/`` endpoints.
+        """
+        row = self._endpoints.resolve(name)
+        if row is not None:
+            return row.address
+        return self._system_endpoints.get(name)
+
+    def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
+        """Resolve system endpoints from the in-memory map."""
+        results: list[controller_pb2.Controller.Endpoint] = []
+        for name, address in self._system_endpoints.items():
+            matches = name == prefix if exact else name.startswith(prefix)
+            if matches:
+                results.append(controller_pb2.Controller.Endpoint(endpoint_id=name, name=name, address=address))
+        return controller_pb2.Controller.ListEndpointsResponse(endpoints=results)

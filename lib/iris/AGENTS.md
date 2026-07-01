@@ -25,8 +25,8 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 ## Development
 
 ```bash
-# Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not requires_cluster' tests/
+# Unit tests
+uv run --package marin-iris --group test pytest --tb=short lib/iris/tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
@@ -90,13 +90,28 @@ Use Iris's built-in mechanisms instead:
 
 - **CLI**: `iris job run -e KEY VALUE -- python script.py`
 - **SDK**: `EnvironmentSpec(env_vars={"KEY": "value"})` passed to `client.submit(environment=...)`
+- **Cluster-wide literals**: `defaults.task_env` in the cluster config — injected into every task container.
+- **Cluster-wide from operator shell**: `defaults.inject_env` — a list of env var *names* captured from the operator's shell at `iris cluster start` and injected into every task (and the controller). A missing name aborts the launch. On Kubernetes the values go to the `iris-task-env` Secret and are projected via `envFrom` (they never enter the ConfigMap); on GCP/VM clusters they are folded into `task_env` in the bootstrap config. See `iris.cluster.inject_env`.
 
 Key behaviors:
 - `HF_TOKEN`, `WANDB_API_KEY`, `HF_DATASETS_TRUST_REMOTE_CODE`, and `TOKENIZERS_PARALLELISM` are auto-injected from the submitter's env by `EnvironmentSpec.to_proto()`.
+- `defaults.inject_env` values are *defaults*: a literal `defaults.task_env` entry of the same name and a per-job `-e`/`env_vars` both override them.
 - Child jobs inherit parent env vars automatically (child values take precedence).
 - The CLI also loads env vars from `.marin.yaml`'s `env:` section.
 
 See https://github.com/marin-community/marin/issues/3859 for context.
+
+## Task Setup
+
+Before the command runs, the worker executes a list of setup scripts (default: a
+`uv sync`) to prepare the environment. The worker is pure mechanism; the list is
+resolved client-side from `EnvironmentSpec.setup_scripts` — `None` for the default,
+`[]` to skip setup (bring-your-own image), or a verbatim list — and iris always
+appends its own runtime-deps step. The script builders, the `IRIS_*` env scripts
+parameterize against (notably `$IRIS_VENV`, the venv the run phase activates), child
+inheritance, and the Docker gotcha (setup runs in a separate container, so `export`
+does not reach the command — use `env_vars`) all live in `iris.cluster.setup_scripts`. See
+https://github.com/marin-community/marin/issues/6595.
 
 ## Architecture Notes
 

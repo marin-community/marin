@@ -870,8 +870,7 @@ class RolloutWorker:
         log_metrics.update(self._resume_safe_transfer_metrics())
         log_metrics.update(self._policy_ctx.get_metrics())
         log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
-        if hasattr(self._rollout_writer, "get_metrics"):
-            log_metrics.update(self._rollout_writer.get_metrics())
+        log_metrics.update(self._rollout_writer.get_metrics())
         log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
         log_metrics.update(throughput_metrics)
         log_metrics["inference.weight_step"] = self._current_weight_step
@@ -1091,8 +1090,7 @@ class RolloutWorker:
             faulthandler.cancel_dump_traceback_later()
             self._running = False
             try:
-                if hasattr(self.tracker, "finish"):
-                    self.tracker.finish()
+                self.tracker.finish()
             except Exception:
                 logger.exception("Failed to finish tracker")
             self._shutdown_complete.set()

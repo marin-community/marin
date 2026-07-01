@@ -523,38 +523,61 @@ pub fn sidecar_path(parquet_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Build the trigram index over `data_column` across `batches` and write it as
-/// the sidecar for `parquet_path`. `key_column` (when string-typed in `batches`)
-/// supplies the segment's key band, stored in the header for query-time scoping.
+/// Build a trigram index over each of `data_columns` across `batches` and write
+/// them as the single multi-column sidecar for `parquet_path`. `key_column`
+/// (when string-typed in `batches`) supplies the segment's key band, stored in
+/// the header for query-time scoping.
 ///
-/// Returns `Ok(true)` when a non-empty sidecar was written, `Ok(false)` when
-/// there was nothing to index (no such string column, or zero row groups).
+/// Columns that are absent or not UTF-8 string-typed are skipped (each yields no
+/// index, which is safe). Returns `Ok(true)` when a non-empty sidecar was
+/// written, `Ok(false)` when nothing was indexable (no such columns, or zero row
+/// groups). All surviving column indexes share the same row-group count — they
+/// chunk the same `batches` at the same `ROW_GROUP_SIZE` stride.
 ///
 /// The index is optional — a write failure is non-fatal to the caller (the
 /// segment just scans unpruned), so callers log rather than propagate.
 pub fn write_sidecar(
     parquet_path: &Path,
     batches: &[RecordBatch],
-    data_column: &str,
+    data_columns: &[&str],
     key_column: Option<&str>,
 ) -> std::io::Result<bool> {
-    let Some(index) = TrigramIndex::build(batches, data_column) else {
-        return Ok(false);
-    };
-    if index.is_empty() {
+    let indexes: Vec<TrigramIndex> = data_columns
+        .iter()
+        .filter_map(|col| {
+            let index = TrigramIndex::build(batches, col)?;
+            (!index.is_empty()).then_some(index)
+        })
+        .collect();
+    if indexes.is_empty() {
         return Ok(false);
     }
+    debug_assert!(
+        indexes.iter().all(|i| i.len() == indexes[0].len()),
+        "all indexed columns chunk the same batches into the same row-group count"
+    );
+    let rg_count = indexes[0].len() as u32;
     let (key_min, key_max) = key_column
         .map(|kc| string_key_bounds(batches, kc))
         .unwrap_or((None, None));
     let bytes = serialize_sidecar(
-        index.len() as u32,
+        rg_count,
         key_column.unwrap_or(""),
         key_min.as_deref(),
         key_max.as_deref(),
-        std::slice::from_ref(&index),
+        &indexes,
     );
-    std::fs::write(sidecar_path(parquet_path), bytes)?;
+    // Write to a temp file and rename into place so a reader never observes a
+    // half-written sidecar. The compaction path writes before the segment is
+    // query-visible, but the background backfill rebuilds sidecars for segments
+    // that are ALREADY visible; a partial read there would parse as absent (scan
+    // unpruned) — safe, but the rename makes the transition atomic regardless.
+    let final_path = sidecar_path(parquet_path);
+    let mut tmp_os = final_path.as_os_str().to_os_string();
+    tmp_os.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_os);
+    std::fs::write(&tmp_path, &bytes)?;
+    std::fs::rename(&tmp_path, &final_path)?;
     Ok(true)
 }
 
@@ -618,44 +641,69 @@ fn trigram_windows(bytes: &[u8]) -> impl Iterator<Item = [u8; 3]> + '_ {
     bytes.windows(3).map(|w| [w[0], w[1], w[2]])
 }
 
-/// A small dedup set over trigrams. Backed by a `HashSet` keyed on the packed
-/// 24-bit trigram value.
-#[derive(Default)]
+/// Number of `u64` words in the trigram bitset: one bit per possible 24-bit
+/// trigram (256^3 = 16,777,216 bits = exactly 2 MiB).
+const TRIGRAM_BITSET_WORDS: usize = (1 << 24) / 64;
+
+/// Dedup set over the 24-bit trigram universe, backed by a fixed 2 MiB bitset.
+///
+/// A log row group yields millions of trigram windows that are mostly
+/// duplicates; a `HashSet<u32>` pays a hash + probe (and periodic rehash growth)
+/// on every one. The bitset makes `insert` a single shift-and-or against a
+/// direct bit index, with no hashing and no allocation after construction, and
+/// turns the distinct count into a `popcount`. Memory is bounded at 2 MiB
+/// regardless of cardinality (vs. a `HashSet` that grows toward the 16.7M-entry
+/// universe for high-entropy text).
 struct TrigramSet {
-    seen: std::collections::HashSet<u32>,
+    // Boxed so the 2 MiB array lives on the heap, not the stack.
+    words: Box<[u64]>,
+}
+
+impl Default for TrigramSet {
+    fn default() -> Self {
+        TrigramSet {
+            words: vec![0u64; TRIGRAM_BITSET_WORDS].into_boxed_slice(),
+        }
+    }
 }
 
 impl TrigramSet {
     #[inline]
     fn insert(&mut self, t: [u8; 3]) {
-        let packed = (t[0] as u32) | ((t[1] as u32) << 8) | ((t[2] as u32) << 16);
-        self.seen.insert(packed);
+        let packed = (t[0] as usize) | ((t[1] as usize) << 8) | ((t[2] as usize) << 16);
+        self.words[packed >> 6] |= 1u64 << (packed & 63);
+    }
+
+    /// Number of distinct trigrams inserted.
+    fn len(&self) -> usize {
+        self.words.iter().map(|w| w.count_ones() as usize).sum()
+    }
+
+    /// Visit each set trigram once, unpacking its bit index back to bytes.
+    fn for_each(&self, mut f: impl FnMut([u8; 3])) {
+        for (word_index, &word) in self.words.iter().enumerate() {
+            let mut bits = word;
+            while bits != 0 {
+                let packed = (word_index << 6) | bits.trailing_zeros() as usize;
+                bits &= bits - 1; // clear the lowest set bit
+                f([
+                    (packed & 0xFF) as u8,
+                    ((packed >> 8) & 0xFF) as u8,
+                    ((packed >> 16) & 0xFF) as u8,
+                ]);
+            }
+        }
     }
 
     fn into_vec(self) -> Vec<[u8; 3]> {
-        self.seen
-            .into_iter()
-            .map(|p| {
-                [
-                    (p & 0xFF) as u8,
-                    ((p >> 8) & 0xFF) as u8,
-                    ((p >> 16) & 0xFF) as u8,
-                ]
-            })
-            .collect()
+        let mut out = Vec::with_capacity(self.len());
+        self.for_each(|t| out.push(t));
+        out
     }
 
     fn into_bloom(self, fpr: f64) -> RowGroupBloom {
-        let n = self.seen.len();
-        let mut bloom = RowGroupBloom::with_capacity(n, fpr);
-        for p in &self.seen {
-            let t = [
-                (*p & 0xFF) as u8,
-                ((*p >> 8) & 0xFF) as u8,
-                ((*p >> 16) & 0xFF) as u8,
-            ];
-            bloom.insert(t);
-        }
+        let mut bloom = RowGroupBloom::with_capacity(self.len(), fpr);
+        self.for_each(|t| bloom.insert(t));
         bloom
     }
 }
@@ -851,6 +899,31 @@ mod tests {
         for &t in &tris {
             assert!(bloom.contains(t), "false negative for {t:?}");
         }
+    }
+
+    #[test]
+    fn trigram_set_dedups_and_round_trips_bit_positions() {
+        // Values chosen to land in distinct bitset words and exercise the
+        // low/high byte unpacking: packed indices 0, 63 (word boundary), 64
+        // (next word), the maximum 2^24-1, and an arbitrary mid value.
+        let inputs = [
+            [0u8, 0, 0],
+            [63, 0, 0],
+            [64, 0, 0],
+            [255, 255, 255],
+            [1, 2, 3],
+        ];
+        let mut set = TrigramSet::default();
+        for &t in &inputs {
+            set.insert(t);
+            set.insert(t); // a repeated trigram must not change the distinct set
+        }
+        assert_eq!(set.len(), inputs.len());
+        let mut got = set.into_vec();
+        got.sort();
+        let mut want = inputs.to_vec();
+        want.sort();
+        assert_eq!(got, want, "every inserted trigram must round-trip exactly");
     }
 
     #[test]

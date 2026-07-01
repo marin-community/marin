@@ -17,8 +17,6 @@ preferable for scale; add them as separate slices if you need them.
   the dedicated UniProt helper here.
 """
 
-from __future__ import annotations
-
 from marin.datakit.download.bio_chem._runtime import (
     NotationFormat,
     NotationSliceSpec,

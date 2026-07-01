@@ -25,8 +25,6 @@ Submit:
           --output-dir gs://marin-eu-west4/datakit/llm-quality-classifier/model/sonnet46-thr05/
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging

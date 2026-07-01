@@ -26,11 +26,6 @@ from marin.training.training import (
     temporary_checkpoint_base_path,
 )
 
-from experiments.defaults import default_dpo
-from experiments.llama import llama_8b
-from experiments.simple_dpo_config import SimpleDPOConfig
-from experiments.tokenization import default_tokenize
-
 
 @pytest.fixture
 def trainer_config():
@@ -328,47 +323,3 @@ def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_
     assert resolved.train_config.trainer.num_train_steps == 100
     assert resolved.train_config.run_initial_eval is True
     assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
-
-
-def test_default_dpo_attaches_lm_validation_sets():
-    tokenized = default_tokenize(
-        name="test_prefs",
-        dataset="gs://example-bucket/preference/train.jsonl.gz",
-        tokenizer="marin-community/marin-tokenizer",
-        format=PreferenceChatLmDatasetFormat(),
-    )
-    lm_validation_steps = {
-        "paloma/c4_en": default_tokenize(
-            name="paloma/c4_en",
-            dataset="gs://example-bucket/paloma/c4_en/val.jsonl.gz",
-            tokenizer="marin-community/marin-tokenizer",
-        ),
-        "uncheatable_eval/github_python": default_tokenize(
-            name="uncheatable_eval/github_python",
-            dataset="gs://example-bucket/uncheatable/github_python.jsonl.gz",
-            tokenizer="marin-community/marin-tokenizer",
-        ),
-    }
-    with patch("experiments.defaults.default_validation_sets", return_value=lm_validation_steps):
-        step = default_dpo(
-            name="dpo/test",
-            tokenized=tokenized,
-            model_config=llama_8b,
-            dpo_config=SimpleDPOConfig(
-                resources=ResourceConfig.with_tpu("v4-8"),
-                tokenizer="marin-community/marin-tokenizer",
-                model_name_or_path="marin-community/marin-8b-instruct",
-                reference_model_path="marin-community/marin-8b-instruct",
-                reference_is_hf=True,
-                validation_split_fraction=None,
-            ),
-        )
-
-    lm_validation_data = step.config.train_config.lm_validation_data
-
-    assert lm_validation_data is not None
-    assert "paloma/c4_en" in lm_validation_data.components
-    assert "uncheatable_eval/github_python" in lm_validation_data.components
-    assert lm_validation_data.train_weights is not None
-    assert all(weight == 0.0 for weight in lm_validation_data.train_weights.values())
-    assert step.config.train_config.lm_validation_prefix == "lm_eval"

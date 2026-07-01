@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import marin.mcp.babysitter as babysitter
-from iris.cluster.token_store import store_token
 from iris.rpc import job_pb2, time_pb2
 from marin.mcp.babysitter import (
     _token_provider,
@@ -11,6 +10,7 @@ from marin.mcp.babysitter import (
     parse_zephyr_thread_state,
     task_status_to_json,
 )
+from rigging.credential_store import CredentialRecord
 
 
 def _timestamp(epoch_ms: int):
@@ -115,11 +115,19 @@ def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch
     assert "resource_requests" in payload
 
 
-def test_token_provider_loads_iris_token_store(tmp_path):
-    store_path = tmp_path / "tokens.json"
-    store_token("iris-prod", "https://controller.example.com", "stored-token", store_path=store_path)
+def test_token_provider_loads_app_token_from_credential_store(monkeypatch):
+    record = CredentialRecord(
+        cluster="iris-prod",
+        endpoint="https://controller.example.com",
+        app_token="stored-token",
+    )
+    monkeypatch.setattr(
+        babysitter,
+        "load_credentials",
+        lambda cluster: record if cluster == "iris-prod" else None,
+    )
 
-    provider = _token_provider("iris-prod", store_path=store_path)
+    provider = _token_provider("iris-prod")
 
     assert provider is not None
     assert provider.get_token() == "stored-token"

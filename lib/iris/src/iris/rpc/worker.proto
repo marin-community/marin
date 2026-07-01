@@ -66,20 +66,6 @@ message Worker {
     string error = 4;               // Non-empty if exec setup failed
   }
 
-  // --- Worker lifecycle / task RPCs ---
-
-  // Vestigial keep-alive. The controller no longer pings — Reconcile is the
-  // sole controller->worker channel and keep-alive. This RPC remains only so a
-  // pre-upgrade controller's ping loop keeps succeeding against an upgraded
-  // worker during a rolling deploy (workers first, controller second). Delete
-  // once the whole fleet is on the new controller.
-  message PingRequest {}
-  message PingResponse {
-    reserved 1;  // was: WorkerResourceSnapshot resource_snapshot (now in iris.worker stats)
-    bool healthy = 2;
-    string health_error = 3;
-  }
-
   // ============================================================
   // RECONCILE RPC (controller -> worker, unary)
   // ============================================================
@@ -161,10 +147,6 @@ service WorkerService {
   rpc ExecInContainer(Worker.ExecInContainerRequest) returns (Worker.ExecInContainerResponse);
 
   // --- Worker lifecycle / task RPCs (controller -> worker) ---
-  // Vestigial: a pre-upgrade controller's ping loop calls this against an
-  // upgraded worker during a rolling deploy. The new controller never calls it.
-  // Delete once the fleet is fully migrated.
-  rpc Ping(Worker.PingRequest) returns (Worker.PingResponse);
   // Reconcile RPC: controller -> worker, unary. The sole controller->worker
   // channel and the worker's keep-alive. One request carries the controller's
   // complete desired attempt set for this worker; one response carries the

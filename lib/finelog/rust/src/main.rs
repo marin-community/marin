@@ -38,8 +38,8 @@ struct Args {
     #[arg(long, env = "FINELOG_LOG_DIR")]
     log_dir: Option<String>,
 
-    /// Remote (e.g. gs://) directory for offloaded segments. Empty disables sync.
-    /// Read from `FINELOG_REMOTE_DIR`, set by the deploy environment.
+    /// Remote (gs:// or s3://) directory for offloaded segments. Empty disables
+    /// sync. Read from `FINELOG_REMOTE_DIR`, set by the deploy environment.
     #[arg(long, env = "FINELOG_REMOTE_DIR", default_value = "")]
     remote_log_dir: String,
 

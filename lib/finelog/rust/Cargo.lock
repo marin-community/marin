@@ -2674,6 +2674,7 @@ dependencies = [
  "humantime",
  "hyper",
  "itertools",
+ "md-5",
  "parking_lot",
  "percent-encoding",
  "quick-xml",

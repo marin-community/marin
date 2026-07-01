@@ -14,10 +14,11 @@ import logging
 from pathlib import Path
 
 import click
+from rigging.credentials import ClientCredentials
 
-from iris.cluster.backends.local.cluster import LocalCluster
-from iris.cluster.config import IrisConfig
-from iris.rpc.auth import TokenProvider, client_interceptors
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import IapAuthConfig, IrisClusterConfig
+from iris.cluster.local_cluster import LocalCluster
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
@@ -66,11 +67,15 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 
 def rpc_client(
     address: str,
-    token_provider: TokenProvider | None = None,
+    credentials: ClientCredentials | None = None,
     timeout_ms: int = 30_000,
 ) -> ControllerServiceClientSync:
-    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
-    interceptors = client_interceptors(token_provider)
+    """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``.
+
+    ``credentials`` carries the Iris JWT (``Authorization``) and, for an
+    IAP-fronted cluster, the IAP OIDC ID token (``Proxy-Authorization``).
+    """
+    interceptors = credentials.interceptors() if credentials is not None else []
     return ControllerServiceClientSync(
         address,
         timeout_ms=timeout_ms,
@@ -78,6 +83,33 @@ def rpc_client(
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
+
+
+def rpc_client_for_ctx(
+    ctx: click.Context,
+    *,
+    url: str | None = None,
+    timeout_ms: int = 30_000,
+) -> ControllerServiceClientSync:
+    """Build an RPC client from the CLI context, threading both auth tokens.
+
+    Resolves the controller URL (establishing a tunnel if needed, unless ``url``
+    is given) and attaches the ``ClientCredentials`` stashed on the context by the
+    ``iris`` group. Prefer this over ``rpc_client`` in subcommands so IAP-fronted
+    clusters work uniformly.
+    """
+    controller_url = url or require_controller_url(ctx)
+    obj = ctx.obj or {}
+    return rpc_client(controller_url, obj.get("credentials"), timeout_ms=timeout_ms)
+
+
+def iap_config(config: IrisClusterConfig | None) -> IapAuthConfig | None:
+    """Return the IAP auth config if this cluster is IAP-fronted, else None."""
+    if config is None or config.auth is None:
+        return None
+    if config.auth.provider_kind() != "iap":
+        return None
+    return config.auth.iap
 
 
 def require_controller_url(ctx: click.Context) -> str:
@@ -91,21 +123,30 @@ def require_controller_url(ctx: click.Context) -> str:
     if controller_url:
         return controller_url
 
-    # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
+
+    # IAP-fronted clusters are reachable directly over HTTPS (gated by IAP at the
+    # ingress) — no SSH tunnel. The public URL comes from the auth config.
+    iap = iap_config(config)
+    if iap is not None:
+        if not iap.url:
+            raise click.ClickException("IAP auth config is missing the ingress 'url'")
+        ctx.obj["controller_url"] = iap.url
+        return iap.url
+
+    # Lazy tunnel establishment from config
     if config:
-        iris_config = IrisConfig(config)
-        bundle = iris_config.provider_bundle()
+        bundle = provider_bundle(config)
         ctx.obj["provider_bundle"] = bundle
 
-        if iris_config.proto.controller.WhichOneof("controller") == "local":
-            cluster = LocalCluster(iris_config.proto)
+        if config.controller.controller_kind() == "local":
+            cluster = LocalCluster(config)
             controller_address = cluster.start()
             ctx.call_on_close(cluster.close)
         else:
-            controller_address = iris_config.controller_address()
+            controller_address = config.controller_address()
             if not controller_address:
-                controller_address = bundle.controller.discover_controller(iris_config.proto.controller)
+                controller_address = bundle.controller.discover_controller(config.controller)
 
         # Establish tunnel and keep it alive for command duration
         try:

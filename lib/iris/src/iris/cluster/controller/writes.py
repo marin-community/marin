@@ -31,11 +31,10 @@ from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
-    ReservationClaim,
     job_config_table,
     jobs_table,
     meta_table,
-    reservation_claims_table,
+    slices_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -179,9 +178,7 @@ def insert_job(
     error: str | None,
     exit_code: int | None,
     num_tasks: int,
-    is_reservation_holder: bool,
     name: str,
-    has_reservation: bool,
 ) -> None:
     """Insert one row into ``jobs``.
 
@@ -203,11 +200,22 @@ def insert_job(
             error=error,
             exit_code=exit_code,
             num_tasks=num_tasks,
-            is_reservation_holder=is_reservation_holder,
             name=name,
-            has_reservation=has_reservation,
         )
     )
+
+
+@writes_to(jobs_table, tasks_table)
+def stamp_backend(tx: Tx, pins: list[tuple[JobName, str]]) -> None:
+    """Stamp ``backend_id`` on each job and all of its tasks.
+
+    ``pins`` is a list of ``(job_id, backend_id)`` produced by the task->backend
+    meta-scheduler. Recording the pin lets later ticks skip routing the job; the
+    same id propagates to the job's tasks.
+    """
+    for job_id, backend_id in pins:
+        tx.execute(update(jobs_table).where(jobs_table.c.job_id == job_id).values(backend_id=backend_id))
+        tx.execute(update(tasks_table).where(tasks_table.c.job_id == job_id).values(backend_id=backend_id))
 
 
 @writes_to(job_config_table)
@@ -216,7 +224,6 @@ def insert_job_config(
     *,
     job_id: JobName,
     name: str,
-    has_reservation: bool,
     res_cpu_millicores: int,
     res_memory_bytes: int,
     res_disk_bytes: int,
@@ -237,8 +244,8 @@ def insert_job_config(
     existing_job_policy: int,
     priority_band: int,
     task_image: str,
+    container_profile: int = 0,
     submit_argv_json: list | None = None,
-    reservation_json: str | None = None,
     fail_if_exists: bool = False,
 ) -> None:
     """Insert one row into ``job_config``."""
@@ -246,7 +253,6 @@ def insert_job_config(
         insert(job_config_table).values(
             job_id=job_id,
             name=name,
-            has_reservation=has_reservation,
             res_cpu_millicores=res_cpu_millicores,
             res_memory_bytes=res_memory_bytes,
             res_disk_bytes=res_disk_bytes,
@@ -267,8 +273,8 @@ def insert_job_config(
             existing_job_policy=existing_job_policy,
             priority_band=priority_band,
             task_image=task_image,
+            container_profile=container_profile,
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
-            reservation_json=reservation_json,
             fail_if_exists=fail_if_exists,
         )
     )
@@ -278,6 +284,12 @@ def insert_job_config(
 def delete_job(tx: Tx, job_id: JobName) -> None:
     """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+
+
+@writes_to(slices_table)
+def delete_slice(tx: Tx, slice_id: str) -> None:
+    """Delete one slice row. Slices have no FK cascades, so this is a bare delete."""
+    tx.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
 
 
 @writes_to(jobs_table)
@@ -581,23 +593,3 @@ def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now:
         set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
     )
     tx.execute(stmt)
-
-
-# ---------------------------------------------------------------------------
-# Reservation claims
-# ---------------------------------------------------------------------------
-
-
-@writes_to(reservation_claims_table)
-def replace_reservation_claims(tx: Tx, claims: dict[WorkerId, ReservationClaim]) -> None:
-    """Replace all reservation claims atomically (DELETE + INSERT)."""
-    tx.execute(delete(reservation_claims_table))
-    if not claims:
-        return
-    tx.execute(
-        insert(reservation_claims_table),
-        [
-            {"worker_id": worker_id, "job_id": claim.job_id, "entry_idx": claim.entry_idx}
-            for worker_id, claim in claims.items()
-        ],
-    )

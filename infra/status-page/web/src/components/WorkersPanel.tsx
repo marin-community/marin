@@ -9,22 +9,16 @@ import {
   YAxis,
 } from "recharts";
 import type { WorkerResourceTotals, WorkerSample } from "../api";
+import { useProvisioningHistory } from "../hooks/useProvisioningHistory";
 import { useWorkers } from "../hooks/useWorkers";
 import { useWorkersHistory } from "../hooks/useWorkersHistory";
-import { displayedSpanLabel, formatClock, useContainerSize } from "./chartUtils";
-
-// Palette for per-region chart lines. Picked for good contrast on the
-// dark background; cycles if there are more regions than entries.
-const REGION_COLORS = [
-  "#10b981", // emerald-500
-  "#06b6d4", // cyan-500
-  "#8b5cf6", // violet-500
-  "#f59e0b", // amber-500
-  "#ec4899", // pink-500
-  "#f43f5e", // rose-500
-  "#14b8a6", // teal-500
-  "#3b82f6", // blue-500
-];
+import {
+  displayedSpanLabel,
+  formatClock,
+  regionColorMap,
+  useContainerSize,
+} from "./chartUtils";
+import { ProvisioningHistoryChart } from "./ProvisioningHistoryChart";
 
 // Turn total_cpu_millicores into a human-readable CPU-core count.
 // 1000 millicores = 1 full core. k-suffix for anything above ~10k.
@@ -141,14 +135,18 @@ export function WorkersPanel() {
     [data?.byRegion],
   );
   const { rows: chartRows, regions: chartRegions } = useChartData(samples, currentOrder);
-  // Color is keyed by region name (alphabetical), not display index, so a
-  // region keeps the same color even when worker counts reorder the legend.
+  // Share one color map across this chart and the sibling provisioning chart,
+  // built off the union of both charts' regions so a region reads the same
+  // color in both. Keyed by sorted name (not display index) so colors don't
+  // shift when counts reorder a legend.
+  const provisioningHistory = useProvisioningHistory();
   const colorByRegion = useMemo(() => {
-    const sorted = [...chartRegions].sort();
-    const map = new Map<string, string>();
-    sorted.forEach((r, i) => map.set(r, REGION_COLORS[i % REGION_COLORS.length]));
-    return map;
-  }, [chartRegions]);
+    const union = new Set(chartRegions);
+    for (const sample of provisioningHistory.data?.samples ?? []) {
+      for (const region of Object.keys(sample.regions)) union.add(region);
+    }
+    return regionColorMap([...union]);
+  }, [chartRegions, provisioningHistory.data]);
 
   return (
     <div>
@@ -156,11 +154,6 @@ export function WorkersPanel() {
         <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
           Workers
         </h3>
-        <span className="text-xs text-slate-500">
-          {samples.length > 1
-            ? `${samples.length} samples · ${displayedSpanLabel(samples)}`
-            : "history warming up"}
-        </span>
       </div>
       <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
         {isLoading && <div className="text-slate-400">loading…</div>}
@@ -174,8 +167,20 @@ export function WorkersPanel() {
               <span className="text-4xl font-bold text-emerald-300">{data.healthy}</span>
               <ResourceLine resources={data.resources} />
             </div>
-            <div ref={chartRef} className="mt-4 h-56 w-full">
-              {samples.length > 1 && chartSize && chartRegions.length > 0 ? (
+            <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div>
+                <div className="mb-2 flex items-baseline justify-between">
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Availability by region
+                  </h4>
+                  <span className="text-xs text-slate-600">
+                    {samples.length > 1
+                      ? `${samples.length} samples · ${displayedSpanLabel(samples)}`
+                      : "history warming up"}
+                  </span>
+                </div>
+                <div ref={chartRef} className="h-56 w-full">
+                  {samples.length > 1 && chartSize && chartRegions.length > 0 ? (
                 <LineChart
                   width={chartSize.width}
                   height={chartSize.height}
@@ -233,12 +238,15 @@ export function WorkersPanel() {
                     />
                   ))}
                 </LineChart>
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                  history warming up — samples collected every 30s, chart appears once
-                  we have two points
+                  ) : (
+                    <div className="flex h-full items-center justify-center text-center text-sm text-slate-500">
+                      history warming up — the canary samples workers every 60s, chart
+                      appears once we have two points
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+              <ProvisioningHistoryChart colorByRegion={colorByRegion} />
             </div>
           </>
         )}

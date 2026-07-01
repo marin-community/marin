@@ -3,8 +3,6 @@
 
 """Tests for the actor-based execution engine (ZephyrContext)."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os
@@ -38,13 +36,12 @@ from zephyr.execution import (
 from zephyr.plan import PhysicalStage, StageType, compute_plan
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import (
-    ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
-    ZEPHYR_STAGE_ITEM_COUNT_KEY,
     PickleDiskChunk,
     ShardTask,
     TaskResult,
 )
-from zephyr.worker_context import CounterSnapshot, zephyr_worker_ctx
+from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
 
 
 class _UnpicklableError(Exception):
@@ -89,21 +86,15 @@ def test_filter(zephyr_ctx):
 
 
 def test_propagates_user_counters(zephyr_ctx):
-    """User counters incremented inside a shard flow back to the coordinator.
-
-    Each task runs in the worker's own process; ``counters.increment`` writes
-    into the per-task ``_InProcessWorkerContext``. This test verifies the
-    worker forwards the final counter dict to the coordinator via
-    ``report_result``, otherwise the coordinator's ``get_counters`` would
-    silently report 0.
+    """User counters incremented inside a shard are visible in the execution result.
 
     Uses a direct logging handler attachment (rather than ``caplog``) so the
     test works whether or not pytest's logging plugin is enabled.
     """
 
     def increment_per_item(x: int) -> int:
-        counters.increment("docs", 1)
-        counters.increment("doubled_sum", x * 2)
+        counters.pipeline.update_counter("docs", 1)
+        counters.pipeline.update_counter("doubled_sum", x * 2)
         return x
 
     captured: list[str] = []
@@ -459,7 +450,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Once a counter snapshot exists, the throughput segment reappears.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name="map_only"): 7}, generation=1
+        counters={ZEPHYR_STAGE_ITEM_COUNT_KEY: CounterEntry(7, stage="map_only")}, generation=1
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()
@@ -469,7 +460,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
 
     # Same when only the byte counter is present.
     coord._worker_counters["worker-A"] = CounterSnapshot(
-        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name="map_only"): 1024}, generation=2
+        counters={ZEPHYR_STAGE_BYTES_PROCESSED_KEY: CounterEntry(1024, stage="map_only")}, generation=2
     )
     with caplog.at_level(logging.INFO, logger="zephyr.execution"):
         caplog.clear()

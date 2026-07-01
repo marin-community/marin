@@ -6,18 +6,24 @@
 import difflib
 import math
 import re
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
+    AttributeValue,
     Constraint,
     ConstraintIndex,
     DeviceType,
     PlacementRequirements,
+    availability_key,
+    device_variant_constraint,
     extract_placement_requirements,
     get_device_type_enum,
+    is_availability_key,
     routing_constraints,
     soft_constraint_score,
     split_hard_soft,
@@ -30,7 +36,112 @@ from iris.cluster.controller.autoscaler.models import (
     UnmetDemand,
 )
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup, SliceLifecycleState
-from iris.rpc import config_pb2
+from iris.cluster.types import AcceleratorType, CapacityType, gpu_device, tpu_device
+from iris.rpc import job_pb2
+
+# Synthetic task id stem for an availability probe (see availability_probe_entries).
+_AVAILABILITY_PROBE_TASK = "__availability_probe__"
+
+
+def empirical_zone_capabilities(groups: Iterable[ScalingGroup], timestamp: Timestamp) -> dict[str, frozenset[str]]:
+    """Map zone -> accelerator variants the cluster has EMPIRICALLY confirmed available.
+
+    A variant counts for a zone when an accelerator group in that zone's *region*
+    currently has >0 successfully-allocated (``READY``) slices and is not erroring
+    (``QUOTA_EXCEEDED``/``BACKOFF``) — i.e. we actually scaled it up and got capacity,
+    not merely that a group is configured there. This replaces the old optimistic
+    "configured and not quota-blocked" map: a configured-but-never-launched group
+    advertises nothing until a scale-up (e.g. an availability probe) succeeds.
+
+    Rolled up to region so every zone in a region inherits the region's live variants
+    ("schedule me where the accelerator can be found" is a regional question); the
+    returned map stays keyed by zone so the worker/group enrichment consumers are
+    unchanged. Only zones belonging to a region with ≥1 live variant appear.
+    """
+    region_variants: dict[str, set[str]] = defaultdict(set)
+    zones_by_region: dict[str, set[str]] = defaultdict(set)
+    for group in groups:
+        zone = group.zone
+        if zone is None:
+            continue
+        region = group.region or zone
+        zones_by_region[region].add(zone)
+        resources = group.resources
+        variant = resources.device_variant if resources is not None else ""
+        if not variant or group.ready_slice_count() == 0:
+            continue
+        if group.availability(timestamp).status in (GroupAvailability.QUOTA_EXCEEDED, GroupAvailability.BACKOFF):
+            continue
+        region_variants[region].add(variant.lower())
+
+    caps: dict[str, frozenset[str]] = {}
+    for region, zones in zones_by_region.items():
+        variants = frozenset(region_variants.get(region, ()))
+        if not variants:
+            continue
+        for zone in zones:
+            caps[zone] = variants
+    return caps
+
+
+def availability_probe_entries(
+    groups: Sequence[ScalingGroup],
+    demand_entries: Sequence[DemandEntry],
+    available_variants: frozenset[str],
+) -> list[DemandEntry]:
+    """Convert unmet ``availability:<variant>`` demand into accelerator scale-up demand.
+
+    A job carrying ``availability:V`` cannot be placed until some region has live V
+    capacity, but empirical availability can only be discovered by attempting a
+    scale-up. For each V that a pending entry constrains on and that is not yet
+    available, emit **one** synthetic demand entry for a V slice — routed to V's group
+    by device variant (NOT by availability, which would be circular). When the
+    scale-up succeeds V becomes available and the constrained job places, leaving the
+    pending set, so this probe demand naturally subsides on the next tick. Probe
+    slices an orchestrator does not promptly claim are reclaimed by idle-scaledown.
+    """
+    wanted: set[str] = set()
+    for entry in demand_entries:
+        for constraint in entry.constraints:
+            if is_availability_key(constraint.key):
+                wanted.add(constraint.key[len(AVAILABILITY_PREFIX) :])
+    to_probe = wanted - available_variants
+    if not to_probe:
+        return []
+
+    group_by_variant: dict[str, ScalingGroup] = {}
+    for group in groups:
+        resources = group.resources
+        variant = resources.device_variant.lower() if resources is not None and resources.device_variant else ""
+        if variant in to_probe and variant not in group_by_variant:
+            group_by_variant[variant] = group
+
+    probes: list[DemandEntry] = []
+    for variant in sorted(to_probe):
+        group = group_by_variant.get(variant)
+        if group is None:
+            continue  # no configured group provides it — nothing to probe
+        probes.append(_availability_probe_entry(variant, group))
+    return probes
+
+
+def _availability_probe_entry(variant: str, group: ScalingGroup) -> DemandEntry:
+    """One non-coscheduled demand entry shaped to scale a single slice of ``group``."""
+    resources = group.resources
+    if resources is not None and resources.device_type == AcceleratorType.GPU:
+        device = gpu_device(resources.device_variant, resources.device_count or 1)
+    else:
+        # tpu_device infers the per-VM chip count, which matches the group's per-VM
+        # device_count, so check_resource_fit accepts one VM's worth of accelerator.
+        device = tpu_device(variant)
+    constraints = [device_variant_constraint([variant])]
+    return DemandEntry(
+        task_ids=(f"{_AVAILABILITY_PROBE_TASK}:{variant}",),
+        coschedule_group_id=None,
+        normalized=extract_placement_requirements(constraints),
+        constraints=constraints,
+        resources=job_pb2.ResourceSpecProto(device=device),
+    )
 
 
 def additive_req(entry: DemandEntry) -> AdditiveReq:
@@ -207,6 +318,34 @@ def _looks_like_zone(value: str) -> bool:
     return bool(_ZONE_PATTERN.fullmatch(value))
 
 
+def _diagnose_locality(
+    kind: str,
+    other_kind: str,
+    requested: frozenset[str],
+    available_same: set[str],
+    available_other: set[str],
+    confused_with_other: Callable[[str], bool],
+) -> str:
+    """Explain why no group matches a zone or region constraint.
+
+    `confused_with_other(value)` returns True when `value` looks like it
+    belongs to `other_kind` rather than `kind` (e.g. a region string passed as
+    a zone). When the value is also a known `other_kind`, the message suggests
+    switching constraint types; otherwise it offers a fuzzy-match hint against
+    the available values of the same kind.
+    """
+    requested_sorted = sorted(requested)
+    parts = [f"no groups in {kind} {', '.join(requested_sorted)}"]
+    for value in requested_sorted:
+        if confused_with_other(value) and value in available_other:
+            parts.append(f"'{value}' looks like a {other_kind}, not a {kind}; use a {other_kind} constraint instead")
+        else:
+            close = difflib.get_close_matches(value, available_same, n=1, cutoff=0.7)
+            if close:
+                parts.append(f"did you mean {close[0]}?")
+    return "; ".join(parts)
+
+
 def _diagnose(
     placement: PlacementRequirements,
     groups: Sequence[ScalingGroup],
@@ -229,40 +368,36 @@ def _diagnose(
         preempt_matches = [
             g
             for g in device_matches
-            if (g.config.resources.capacity_type == config_pb2.CAPACITY_TYPE_PREEMPTIBLE) == placement.preemptible
+            if (g.config.resources is not None and g.config.resources.capacity_type == CapacityType.PREEMPTIBLE)
+            == placement.preemptible
         ]
         if not preempt_matches:
             want = "preemptible" if placement.preemptible else "non-preemptible"
             return f"no {want} group provides device {device_type.value}:{variants_str}"
         device_matches = preempt_matches
 
+    available_zones = {g.zone for g in device_matches} - {None}
+    available_regions = {g.region for g in device_matches} - {None}
+
     if placement.required_zones:
-        available_zones = {g.zone for g in device_matches} - {None}
-        available_regions = {g.region for g in device_matches} - {None}
-        requested = sorted(placement.required_zones)
-        parts = [f"no groups in zone {', '.join(requested)}"]
-        for z in requested:
-            if not _looks_like_zone(z) and z in available_regions:
-                parts.append(f"'{z}' looks like a region, not a zone; use a region constraint instead")
-            else:
-                close = difflib.get_close_matches(z, available_zones, n=1, cutoff=0.7)
-                if close:
-                    parts.append(f"did you mean {close[0]}?")
-        return "; ".join(parts)
+        return _diagnose_locality(
+            kind="zone",
+            other_kind="region",
+            requested=placement.required_zones,
+            available_same=available_zones,
+            available_other=available_regions,
+            confused_with_other=lambda value: not _looks_like_zone(value),
+        )
 
     if placement.required_regions:
-        available_regions = {g.region for g in device_matches} - {None}
-        available_zones = {g.zone for g in device_matches} - {None}
-        requested = sorted(placement.required_regions)
-        parts = [f"no groups in region {', '.join(requested)}"]
-        for r in requested:
-            if _looks_like_zone(r) and r in available_zones:
-                parts.append(f"'{r}' looks like a zone, not a region; use a zone constraint instead")
-            else:
-                close = difflib.get_close_matches(r, available_regions, n=1, cutoff=0.7)
-                if close:
-                    parts.append(f"did you mean {close[0]}?")
-        return "; ".join(parts)
+        return _diagnose_locality(
+            kind="region",
+            other_kind="zone",
+            requested=placement.required_regions,
+            available_same=available_regions,
+            available_other=available_zones,
+            confused_with_other=_looks_like_zone,
+        )
 
     available = ", ".join(g.name for g in groups)
     return f"no scaling group matches constraints (available: {available})"
@@ -285,10 +420,30 @@ class GroupFeasibility:
     reason: str | None
 
 
+def _feasibility_group_attrs(group: ScalingGroup) -> dict[str, AttributeValue]:
+    """A group's routing attributes plus a CONFIGURED ``availability:<variant>`` marker.
+
+    Lets :func:`job_feasibility` treat a hard ``availability:<variant>`` constraint as
+    satisfiable against any group configured for that variant.
+    """
+    attrs = group.to_attributes()
+    resources = group.resources
+    if resources is not None and resources.device_variant:
+        # CONFIGURED availability — must stay distinct from the EMPIRICAL (live-slice)
+        # marker _enriched_group_attrs injects under the same key for runtime routing.
+        # Feasibility is the static "can this ever schedule" gate, so a cold region with
+        # no live slice (which the autoscaler probe will scale up) must still pass;
+        # gating submission on live capacity would reject every cold-start availability
+        # job. availability_key normalizes the variant to match the constraint.
+        attrs[availability_key(resources.device_variant)] = AttributeValue("true")
+    return attrs
+
+
 def job_feasibility(
     groups: Sequence[ScalingGroup],
     constraints: Sequence[Constraint],
     replicas: int | None = None,
+    resources: job_pb2.ResourceSpecProto | None = None,
 ) -> GroupFeasibility:
     """Answer: can any scaling group ever host this job shape?
 
@@ -296,18 +451,31 @@ def job_feasibility(
     is the autoscaler's job on each tick. This predicate gates LaunchJob at
     submit time so jobs that can never be scheduled fail fast.
 
+    A hard ``availability:<variant>`` constraint is satisfiable against any group
+    *configured* for that variant (see :func:`_feasibility_group_attrs`); the
+    constraint is ANDed with the job's other routing constraints, so an availability
+    job with an incompatible region/zone still fails fast.
+
+    When ``resources`` is given, a matching group must also have enough per-VM
+    capacity for the request's additive dimensions (cpu, memory, disk, device
+    count). This catches over-requests like 300GB disk on a pool that advertises
+    100GB, which would otherwise route to no group and sit pending forever.
+
     Args:
         groups: scaling groups to consider.
         constraints: the job's hard + soft routing constraints.
         replicas: for coscheduled jobs, the required replica count; None for
             non-coscheduled jobs. When set, groups must also have num_vms that
             divides replicas evenly.
+        resources: the job's per-task resource spec. When set, groups whose
+            advertised per-VM capacity can't hold it are dropped from the
+            feasible set.
     """
     groups_list = list(groups)
     if not groups_list:
         return GroupFeasibility(feasible=[], reason=None)
 
-    group_attrs = {g.name: g.to_attributes() for g in groups_list}
+    group_attrs = {g.name: _feasibility_group_attrs(g) for g in groups_list}
     group_index = ConstraintIndex.build(group_attrs)
     hard_cs, _ = split_hard_soft(routing_constraints(constraints))
     matching_names = group_index.matching_entities(hard_cs)
@@ -328,6 +496,17 @@ def job_feasibility(
             )
             return GroupFeasibility(feasible=[], reason=reason)
         matching = compatible
+
+    if resources is not None:
+        fit_reasons = {g.name: g.check_resource_fit(resources) for g in matching}
+        fitting = [g for g in matching if fit_reasons[g.name] is None]
+        if not fitting:
+            details = "; ".join(f"{name} ({reason})" for name, reason in fit_reasons.items() if reason)
+            return GroupFeasibility(
+                feasible=[],
+                reason=f"no matching scaling group has enough per-VM capacity: {details}",
+            )
+        matching = fitting
 
     return GroupFeasibility(feasible=matching, reason=None)
 
@@ -428,16 +607,38 @@ def _is_tier_blocked(group: ScalingGroup, pool_blocked: dict[str, int]) -> bool:
     return tier >= min_blocked
 
 
+def _enriched_group_attrs(
+    group: ScalingGroup, zone_capabilities: Mapping[str, frozenset[str]]
+) -> dict[str, AttributeValue]:
+    """A group's routing attributes plus its zone's ``availability:<variant>`` markers.
+
+    A hard ``availability:<variant>`` constraint on a job's demand restricts routing
+    to groups whose zone has empirically yielded that variant (live, non-erroring
+    slices — see :func:`empirical_zone_capabilities`), so a CPU orchestrator's CPU
+    demand is steered into a zone where its accelerator has actually been found (and
+    is held back from zones that have never provided it).
+    """
+    attrs = group.to_attributes()
+    for variant in zone_capabilities.get(group.zone or "", ()):
+        attrs[availability_key(variant)] = AttributeValue("true")
+    return attrs
+
+
 def route_demand(
     groups: list[ScalingGroup],
     demand_entries: list[DemandEntry],
     timestamp: Timestamp | None = None,
+    zone_capabilities: Mapping[str, frozenset[str]] | None = None,
 ) -> RoutingDecision:
     """Route demand to groups using two-phase routing with committed budgets."""
 
     ts = timestamp or Timestamp.now()
+    zone_caps = zone_capabilities or {}
     sorted_groups = sorted(groups, key=lambda group: group.config.priority or 100)
-    group_attrs = {group.name: group.to_attributes() for group in sorted_groups}
+    # Enrich once and reuse for BOTH hard filtering (the index) and soft ranking,
+    # since the soft-rank sort reads this map directly rather than recomputing
+    # group.to_attributes() (which would omit the injected availability markers).
+    group_attrs = {group.name: _enriched_group_attrs(group, zone_caps) for group in sorted_groups}
     group_index = ConstraintIndex.build(group_attrs)
 
     routed: dict[str, list[DemandEntry]] = {}
@@ -486,7 +687,7 @@ def route_demand(
             matching_groups = sorted(
                 matching_groups,
                 key=lambda group: (
-                    -soft_constraint_score(group.to_attributes(), soft_routing_cs),
+                    -soft_constraint_score(group_attrs[group.name], soft_routing_cs),
                     group.config.priority or 100,
                 ),
             )

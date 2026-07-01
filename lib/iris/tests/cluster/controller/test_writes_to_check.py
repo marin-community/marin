@@ -3,8 +3,6 @@
 
 """Tests for the Stage 12 ``@writes_to`` owned-table startup check."""
 
-from __future__ import annotations
-
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -40,7 +38,7 @@ def fresh_db() -> Iterator[ControllerDB]:
 def projections_built(fresh_db: ControllerDB) -> Iterator[None]:
     """Construct one of each Projection so PROJECTIONS exposes their owned tables."""
     endpoints = EndpointsProjection(fresh_db)
-    worker_attrs = WorkerAttrsProjection(fresh_db)
+    worker_attrs = WorkerAttrsProjection(fresh_db, owns_scale_group=lambda _scale_group: True)
     try:
         yield
     finally:

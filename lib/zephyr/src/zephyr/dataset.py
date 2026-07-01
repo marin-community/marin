@@ -3,8 +3,6 @@
 
 """Core Dataset API with lazy evaluation."""
 
-from __future__ import annotations
-
 import functools
 import logging
 import re
@@ -331,7 +329,7 @@ class JoinOp:
 
     left_key_fn: Callable
     right_key_fn: Callable
-    right_dataset: Dataset
+    right_dataset: "Dataset"
     combiner_fn: Callable
     join_type: JoinType
 
@@ -390,7 +388,7 @@ class Dataset(Generic[T]):
         self.source = source
         self.operations = operations or []
 
-    def _derive(self, *ops: LogicalOp) -> Dataset[Any]:
+    def _derive(self, *ops: LogicalOp) -> "Dataset[Any]":
         """Build a derived dataset with additional logical ops appended.
 
         The constructor infers the element type from ``self.source``, but a
@@ -402,12 +400,12 @@ class Dataset(Generic[T]):
         return Dataset(self.source, [*self.operations, *ops])
 
     @staticmethod
-    def from_list(items: list[T]) -> Dataset[T]:
+    def from_list(items: list[T]) -> "Dataset[T]":
         """Create a dataset from a list."""
         return Dataset(items)
 
     @staticmethod
-    def from_iterable(iterable: Iterable[T]) -> Dataset[T]:
+    def from_iterable(iterable: Iterable[T]) -> "Dataset[T]":
         """Create a dataset from any iterable."""
         return Dataset(iterable)
 
@@ -415,7 +413,7 @@ class Dataset(Generic[T]):
     def from_files(
         pattern: str,
         empty_glob_ok: bool = False,
-    ) -> Dataset[str]:
+    ) -> "Dataset[str]":
         """Create dataset from file glob pattern.
 
         This method finds all files matching the glob pattern and returns a
@@ -441,7 +439,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(GlobSource(pattern, empty_glob_ok))
 
-    def map(self, fn: Callable[[T], R]) -> Dataset[R]:
+    def map(self, fn: Callable[[T], R]) -> "Dataset[R]":
         """Map a function over the dataset.
 
         Args:
@@ -457,7 +455,7 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[R]", self._derive(MapOp(fn)))
 
-    def filter(self, predicate: Callable[[T], bool] | Expr) -> Dataset[T]:
+    def filter(self, predicate: Callable[[T], bool] | Expr) -> "Dataset[T]":
         """Filter dataset elements by a predicate or expression.
 
         Args:
@@ -479,7 +477,7 @@ class Dataset(Generic[T]):
             return Dataset(self.source, [*self.operations, FilterOp(predicate.evaluate, expr=predicate)])
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
 
-    def select(self, *columns: str) -> Dataset[dict]:
+    def select(self, *columns: str) -> "Dataset[dict]":
         """Select specific columns (projection).
 
         Args:
@@ -498,7 +496,7 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[dict]", self._derive(SelectOp(tuple(columns))))
 
-    def take_per_shard(self, n: int) -> Dataset[T]:
+    def take_per_shard(self, n: int) -> "Dataset[T]":
         """Take the first n items from each shard.
 
         Limits each shard to its first n items independently. This is useful
@@ -519,7 +517,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, TakePerShardOp(n)])
 
-    def window(self, size: int) -> Dataset[list[T]]:
+    def window(self, size: int) -> "Dataset[list[T]]":
         """Compute a sliding window of `size` elements across the dataset, returning a list of elements in each window.
 
         Args:
@@ -543,7 +541,7 @@ class Dataset(Generic[T]):
         self,
         folder_fn: Callable[[object, T], tuple[bool, object]],
         initial_state: object = None,
-    ) -> Dataset[list[T]]:
+    ) -> "Dataset[list[T]]":
         """Window elements using a custom fold function.
 
         Args:
@@ -567,7 +565,7 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[list[T]]", self._derive(WindowOp(folder_fn, initial_state)))
 
-    def flat_map(self, fn: Callable[[T], Iterable[R]]) -> Dataset[R]:
+    def flat_map(self, fn: Callable[[T], Iterable[R]]) -> "Dataset[R]":
         """Apply function that returns an iterable, flattening results.
 
         Args:
@@ -594,7 +592,7 @@ class Dataset(Generic[T]):
         approx_shard_bytes: int | None = None,
         include_file_paths: bool = False,
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
-    ) -> Dataset[dict]:
+    ) -> "Dataset[dict]":
         """Load records from file sources, auto-detecting format.
 
         Args:
@@ -632,7 +630,7 @@ class Dataset(Generic[T]):
         file_path_column: str = ...,
         *,
         batch_mode: Literal[False] = ...,
-    ) -> Dataset[dict]: ...
+    ) -> "Dataset[dict]": ...
 
     @overload
     def load_parquet(
@@ -643,7 +641,7 @@ class Dataset(Generic[T]):
         file_path_column: str = ...,
         *,
         batch_mode: Literal[True],
-    ) -> Dataset[RecordBatch]: ...
+    ) -> "Dataset[RecordBatch]": ...
 
     def load_parquet(
         self,
@@ -653,7 +651,7 @@ class Dataset(Generic[T]):
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
         *,
         batch_mode: bool = False,
-    ) -> Dataset[dict] | Dataset[RecordBatch]:
+    ) -> "Dataset[dict] | Dataset[RecordBatch]":
         """Load records from parquet files.
 
         Args:
@@ -680,7 +678,7 @@ class Dataset(Generic[T]):
         self,
         include_file_paths: bool = False,
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
-    ) -> Dataset[dict]:
+    ) -> "Dataset[dict]":
         """Load records from JSONL files.
 
         Args:
@@ -698,7 +696,7 @@ class Dataset(Generic[T]):
         columns: list[str] | None = None,
         include_file_paths: bool = False,
         file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
-    ) -> Dataset[dict]:
+    ) -> "Dataset[dict]":
         """Load records from Vortex files.
 
         Args:
@@ -715,7 +713,7 @@ class Dataset(Generic[T]):
     def map_shard(
         self,
         fn: Callable[[Iterator[T], ShardInfo], Iterator[R]],
-    ) -> Dataset[R]:
+    ) -> "Dataset[R]":
         """Apply function to entire shard iterator.
 
         The function receives an iterator of all items in the shard and a
@@ -751,7 +749,7 @@ class Dataset(Generic[T]):
         """
         return cast("Dataset[R]", self._derive(MapShardOp(fn)))
 
-    def reshard(self, num_shards: int | None) -> Dataset[T]:
+    def reshard(self, num_shards: int | None) -> "Dataset[T]":
         """Redistribute data across target number of shards (best-effort).
 
         Changes parallelism for subsequent operations.
@@ -780,7 +778,9 @@ class Dataset(Generic[T]):
             raise ValueError(f"num_shards must be positive, got {num_shards}")
         return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
 
-    def write_jsonl(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
+    def write_jsonl(
+        self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False
+    ) -> "Dataset[str]":
         """Write records as JSONL files.
 
         Args:
@@ -799,7 +799,9 @@ class Dataset(Generic[T]):
             ),
         )
 
-    def write_binary(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
+    def write_binary(
+        self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False
+    ) -> "Dataset[str]":
         """Write records directly as uninterpreted binary files.
 
         No delimitation or framing is applied - records are written back-to-back.
@@ -826,7 +828,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
         skip_existing: bool = False,
-    ) -> Dataset[str]:
+    ) -> "Dataset[str]":
         """Write records as Parquet files.
 
         Schema can be provided or inferred from the first record or dataclass type.
@@ -854,7 +856,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
         skip_existing: bool = False,
-    ) -> Dataset[str]:
+    ) -> "Dataset[str]":
         """Write records as Vortex files."""
         return cast(
             "Dataset[str]",
@@ -877,7 +879,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
-    ) -> Dataset[R]: ...
+    ) -> "Dataset[R]": ...
 
     @overload
     def group_by(
@@ -888,7 +890,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
-    ) -> Dataset[R]: ...
+    ) -> "Dataset[R]": ...
 
     def group_by(
         self,
@@ -898,7 +900,7 @@ class Dataset(Generic[T]):
         sort_by: Callable[[T], Any] | None = None,
         num_output_shards: int | None = None,
         combiner: Callable[[K, Iterator[T]], Iterator[T]] | None = None,
-    ) -> Dataset[R]:
+    ) -> "Dataset[R]":
         """Group items by key and apply reducer function.
 
         The reducer receives (key, iterator_of_items) and returns a single result or an iterator of
@@ -947,7 +949,7 @@ class Dataset(Generic[T]):
             self._derive(GroupByOp(key, reducer, num_output_shards, sort_fn=sort_by, combiner_fn=combiner)),
         )
 
-    def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
+    def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> "Dataset[T]":
         """Deduplicate items by key.
 
         Example:
@@ -978,7 +980,7 @@ class Dataset(Generic[T]):
         self,
         local_reducer: Callable[[Iterator[T]], R],
         global_reducer: Callable[[Iterator[R]], R] | None = None,
-    ) -> Dataset[R]:
+    ) -> "Dataset[R]":
         """Reduce dataset to a single value via two-phase reduction.
 
         Phase 1: Apply local_reducer to each shard independently
@@ -1001,7 +1003,7 @@ class Dataset(Generic[T]):
 
         return cast("Dataset[R]", self._derive(ReduceOp(local_reducer, global_reducer)))
 
-    def count(self) -> Dataset[int]:
+    def count(self) -> "Dataset[int]":
         """Count the total number of items in the dataset.
 
         Returns:
@@ -1022,12 +1024,12 @@ class Dataset(Generic[T]):
 
     def sorted_merge_join(
         self,
-        right: Dataset[R],
+        right: "Dataset[R]",
         left_key: Callable[[T], object],
         right_key: Callable[[R], object],
         combiner: Callable[[T | None, R | None], object] | None = None,
         how: str = JoinType.INNER,
-    ) -> Dataset:
+    ) -> "Dataset":
         """Streaming merge join for already-sorted, co-partitioned datasets.
 
         Preconditions:

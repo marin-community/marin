@@ -19,117 +19,94 @@ def _get_nnx_key_name(split_key: list[str]) -> str:
     return key_name
 
 
+def _pad_head_dim_to_multiple_of_128(value: jax.Array, axis: int) -> jax.Array:
+    """Pad ``value`` along ``axis`` up to the next multiple of 128.
+
+    vLLM expects attention weights padded to a multiple of 128, since its Pallas
+    kernels require it.
+    """
+    head_size = value.shape[axis]
+    next_multiple_of_128 = ((head_size + 127) // 128) * 128
+    if head_size >= next_multiple_of_128:
+        return value
+    padding = [(0, 0)] * value.ndim
+    padding[axis] = (0, next_multiple_of_128 - head_size)
+    return jnp.pad(value, padding)
+
+
+def _reshape_and_pad_attention_param(value: jax.Array, parts: list[str], is_bias: bool) -> jax.Array:
+    """Prepare a Levanter attention parameter for vLLM.
+
+    Flattens grouped query heads to ``(Total Heads, Head Dim, [Embed])`` and pads the
+    head dimension to a multiple of 128. Non-attention parameters pass through unchanged.
+
+    Args:
+        value: The parameter array.
+        parts: The key components excluding the trailing ``weight``/``bias`` token.
+        is_bias: Whether this parameter is a bias (1D-per-head) rather than a weight.
+    """
+    if "self_attn" not in parts:
+        return value
+
+    if "q_proj" in parts:
+        if value.ndim == 4:
+            # Weight: (KV, Group, HeadSize, Embed) -> (Heads, HeadSize, Embed)
+            kv_heads, q_heads_per_group, head_size, embed = value.shape
+            value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
+        elif value.ndim == 3 and is_bias:
+            # Bias: (KV, Group, HeadSize) -> (Heads, HeadSize)
+            kv_heads, q_heads_per_group, head_size = value.shape
+            value = value.reshape(kv_heads * q_heads_per_group, head_size)
+
+    if "q_proj" in parts or "k_proj" in parts or "v_proj" in parts:
+        # Q/K/V projections carry the head dimension on axis 1.
+        if value.ndim >= 2:
+            value = _pad_head_dim_to_multiple_of_128(value, axis=1)
+    elif "o_proj" in parts and not is_bias and value.ndim == 3:
+        # o_proj weight is (Embed, Heads, HeadSize); pad the head dimension on axis 2.
+        value = _pad_head_dim_to_multiple_of_128(value, axis=2)
+
+    return value
+
+
+def _insert_nested_param(nested_state_dict: dict, split_key: list[str], value: jax.Array) -> None:
+    """Insert ``value`` into ``nested_state_dict`` following the dotted ``split_key``.
+
+    The final dotted component (``weight``/``bias``) is folded into the parameter name by
+    :func:`_get_nnx_key_name` instead of becoming its own nesting level, because the leaf
+    name is what ``transpose_keys`` consults to pick a transpose.
+    """
+    current = nested_state_dict
+    for part in split_key[:-2]:
+        current = current.setdefault(part, {})
+    current[_get_nnx_key_name(split_key)] = nnx.Param(value)
+
+
 def levanter_to_nnx_state(levanter_model: LmHeadModel) -> nnx.State:
-    # The format of this state dict is flat like:
-    # model.layers.0.self_attn.q_proj.weight -> jax array
-    # We are creating a new state dict that is nested because
-    # that's the format that is expected by nnx.State.
-    # This converts the dictionary to something of the form of
-    #  model: {layers: {0: {self_attn: {q_proj: {weight: jax array}}}}}
-    # We do not include the "weight" part of the key to the nested state dict
-    # e.g. we store model: {layers: {0: {self_attn: {q_proj: jax array}}}}
-    # instead of model: {layers: {0: {self_attn: {q_proj: {weight: jax array}}}}}
-    # The reason why is the last part of the key is used to determine the
-    # type of transpose used in transpose_keys. Since normally the weights would all end
-    # in .weight, this would not be informative about how to transpose the weight.
-    state_dict = levanter_model.to_state_dict()
-    nested_state_dict = {}
-    for key, value in state_dict.items():
+    """Convert a Levanter model's flat state dict into the nested ``nnx.State`` vLLM expects.
+
+    Levanter state dicts are flat (``model.layers.0.self_attn.q_proj.weight -> array``); vLLM
+    consumes a nested mapping (``{model: {layers: {0: {self_attn: {q_proj: array}}}}}``).
+    """
+    nested_state_dict: dict = {}
+    for key, value in levanter_model.to_state_dict().items():
         split_key = key.split(".")
-        current = nested_state_dict
-        split_key_without_weight = split_key[:-1]
-        for part in split_key_without_weight[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-
-        # for q, k, v projections, we need to pad the 2nd dimension to next multiple of 128
-        # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
-        # because they want to use Pallas kernels which have this requirement.
-        if "self_attn" in split_key_without_weight:
-            if "q_proj" in split_key_without_weight and len(value.shape) == 4:
-                kv_heads, q_heads_per_group, head_size, embed = value.shape
-                value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
-
-            if (
-                "q_proj" in split_key_without_weight
-                or "k_proj" in split_key_without_weight
-                or "v_proj" in split_key_without_weight
-            ):
-                _heads, head_size, embed = value.shape
-                next_multiple_of_128 = ((head_size + 127) // 128) * 128
-                if head_size < next_multiple_of_128:
-                    # pad 2nd dimension to 128 (e.g., (8, 64, 2048) -> (8, 128, 2048))
-                    value = jnp.pad(value, ((0, 0), (0, next_multiple_of_128 - head_size), (0, 0)))
-            elif "o_proj" in split_key_without_weight:
-                embed, _heads, head_size = value.shape
-                next_multiple_of_128 = ((head_size + 127) // 128) * 128
-                if head_size < next_multiple_of_128:
-                    # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))
-                    value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
-
-        current[_get_nnx_key_name(split_key)] = nnx.Param(value)
+        value = _reshape_and_pad_attention_param(value, split_key[:-1], is_bias=split_key[-1] == "bias")
+        _insert_nested_param(nested_state_dict, split_key, value)
     return nnx.State(nested_state_dict)
 
 
 def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> nnx.State:
+    """Like :func:`levanter_to_nnx_state`, but for an already-extracted state dict, on CPU.
+
+    Used on the inference side where weights arrive (possibly as numpy) over the wire and must
+    be placed on the host before being synced into vLLM.
+    """
     with jax.default_device(jax.devices("cpu")[0]):
-        nested_state_dict = {}
+        nested_state_dict: dict = {}
         for key, value in state_dict.items():
-            # Convert from numpy to jax array here
-            try:
-                value = jax.numpy.asarray(value)
-            except Exception as e:
-                print(f"ConversionError converting {key} to jax array {type(value)}, {value}: {e}")
-
+            value = jnp.asarray(value)
             split_key = key.split(".")
-            current = nested_state_dict
-            split_key_without_weight = split_key[:-1]
-            for part in split_key_without_weight[:-1]:
-                if part not in current:
-                    current[part] = {}
-                current = current[part]
-
-            # vLLM requires weights/biases to be padded to the nearest multiple of 128 for Pallas kernels.
-            if "self_attn" in split_key_without_weight:
-                is_bias = split_key[-1] == "bias"
-
-                # Flatten grouped query heads -> (Total Heads, Head Dim, [Embed]) for vLLM
-                if "q_proj" in split_key_without_weight:
-                    if len(value.shape) == 4:
-                        # Weight: (KV, Group, HeadSize, Embed) -> (Heads, HeadSize, Embed)
-                        kv_heads, q_heads_per_group, head_size, embed = value.shape
-                        value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
-                    elif len(value.shape) == 3 and is_bias:
-                        # Bias: (KV, Group, HeadSize) -> (Heads, HeadSize)
-                        kv_heads, q_heads_per_group, head_size = value.shape
-                        value = value.reshape(kv_heads * q_heads_per_group, head_size)
-
-                # Pad the head dimension (dim 1) for Q/K/V projections
-                if (
-                    "q_proj" in split_key_without_weight
-                    or "k_proj" in split_key_without_weight
-                    or "v_proj" in split_key_without_weight
-                ):
-                    pad_axis = 1
-                    if len(value.shape) >= 2:
-                        head_size = value.shape[pad_axis]
-                        next_multiple_of_128 = ((head_size + 127) // 128) * 128
-
-                        if head_size < next_multiple_of_128:
-                            padding = [(0, 0)] * len(value.shape)
-                            padding[pad_axis] = (0, next_multiple_of_128 - head_size)
-                            value = jnp.pad(value, padding)
-
-                # Pad o_proj weights along the head dimension (dim 2)
-                elif "o_proj" in split_key_without_weight:
-                    # Weight: (Embed, Heads, HeadSize). Skip bias as it is 1D (Embed,) or handled differently.
-                    if not is_bias and len(value.shape) == 3:
-                        embed, _heads, head_size = value.shape
-                        next_multiple_of_128 = ((head_size + 127) // 128) * 128
-                        if head_size < next_multiple_of_128:
-                            value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
-
-            current[_get_nnx_key_name(split_key)] = nnx.Param(value)
-
+            value = _reshape_and_pad_attention_param(value, split_key[:-1], is_bias=split_key[-1] == "bias")
+            _insert_nested_param(nested_state_dict, split_key, value)
         return nnx.State(nested_state_dict)

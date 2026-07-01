@@ -6,10 +6,11 @@
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from iris.cluster.controller.autoscaler.models import DemandEntry, RoutingDecision
 from iris.cluster.controller.autoscaler.routing import format_variants
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, get_gpu_count, get_tpu_count
 from iris.rpc import job_pb2, vm_pb2
 
 
@@ -21,20 +22,47 @@ class PendingHint:
     is_scaling_up: bool
 
 
+class SliceCapacityStatus(StrEnum):
+    """Placement status of a ready slice (slice-granular). A fully-booked healthy
+    slice is ``IN_USE``, not free; non-ready slices carry no capacity status."""
+
+    AVAILABLE = "available"  # all hosts healthy, no tasks: free to place on now
+    IN_USE = "in_use"  # all hosts healthy, at least one task running
+    IDLE = "idle"  # all hosts healthy, no tasks, idle past scale-down threshold
+    DEGRADED = "degraded"  # no hosts, or any host unhealthy: not a placement target
+
+
+def slice_capacity_status(
+    *,
+    is_ready: bool,
+    host_count: int,
+    healthy_hosts: int,
+    running_tasks: int,
+    idle: bool,
+) -> str:
+    """Classify a ready slice by placement readiness; "" for non-ready slices.
+
+    DEGRADED if it has no hosts or any host is not HEALTHY (it cannot take a gang
+    job even if some hosts are fine); otherwise split by occupancy.
+    """
+    if not is_ready:
+        return ""
+    if host_count == 0 or healthy_hosts < host_count:
+        return SliceCapacityStatus.DEGRADED
+    if running_tasks > 0:
+        return SliceCapacityStatus.IN_USE
+    if idle:
+        return SliceCapacityStatus.IDLE
+    return SliceCapacityStatus.AVAILABLE
+
+
 def _resource_spec_proto(resources: job_pb2.ResourceSpecProto) -> vm_pb2.ResourceSpec:
-    gpu_count = 0
-    tpu_count = 0
-    if resources.HasField("device"):
-        if resources.device.HasField("gpu"):
-            gpu_count = resources.device.gpu.count or 1
-        if resources.device.HasField("tpu"):
-            tpu_count = resources.device.tpu.count or 0
     return vm_pb2.ResourceSpec(
         cpu_millicores=resources.cpu_millicores,
         memory_bytes=resources.memory_bytes,
         disk_bytes=resources.disk_bytes,
-        gpu_count=gpu_count,
-        tpu_count=tpu_count,
+        gpu_count=get_gpu_count(resources.device),
+        tpu_count=get_tpu_count(resources.device),
     )
 
 

@@ -27,7 +27,7 @@ from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
-from tests.test_utils import use_test_mesh
+from test_utils import use_test_mesh
 
 TEST_GPT2_MODEL_ID = "sshleifer/tiny-gpt2"
 
@@ -45,13 +45,6 @@ def test_hf_gpt2_roundtrip_fa():
     config = Gpt2Config.from_hf_config(hf_config)
     config = dataclasses.replace(config, use_flash_attention=True, flash_attention_block_size=128)
     _roundtrip_compare_gpt2_checkpoint(TEST_GPT2_MODEL_ID, None, config=config)
-
-
-# TODO: gotta figure out why this regressed
-@pytest.mark.skip
-@skip_if_no_torch
-def test_mistral_gpt2_roundtrip():
-    _roundtrip_compare_gpt2_checkpoint("stanford-crfm/expanse-gpt2-small-x777", "checkpoint-60000")
 
 
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):

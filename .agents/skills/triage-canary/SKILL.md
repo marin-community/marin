@@ -32,7 +32,7 @@ The cluster is still live. Collect signal now — it will be torn down after you
   Get pod status, controller logs, task pod logs, warning events, pod describe.
   **Filter by `iris.job_id=<CANARY_JOB_ID with '/' replaced by '.'>`** so you only see this canary's pods, not co-tenant CI pods. Example: `kubectl -n iris-ci get pods -l iris.job_id=runner.iris-run-job-abc123`.
 - **TPU lane:** use `iris process logs` and `iris job list`.
-- Re-run `scripts/canary/validate_canary_metrics.py` if you need the validation output.
+- Re-run `scripts/ci/validate_canary_metrics.py` if you need the validation output.
 
 ### 2. Identify root cause
 

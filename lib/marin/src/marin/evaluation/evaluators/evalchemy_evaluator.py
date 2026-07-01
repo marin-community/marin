@@ -30,7 +30,8 @@ import shutil
 import subprocess
 import sys
 import traceback
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import ClassVar
 
 import wandb
@@ -79,6 +80,22 @@ def _extract_step_suffix(path: str) -> str:
     """
     match = re.search(r"step-(\d+)", path)
     return f"-step{match.group(1)}" if match else ""
+
+
+@contextmanager
+def _captured_stderr() -> Iterator[io.StringIO]:
+    """Redirect stderr to a buffer for the duration of the block.
+
+    wandb emits noisy ``BrokenPipeError`` tracebacks straight to stderr during teardown;
+    capturing them lets the caller decide whether the output is worth surfacing.
+    """
+    buffer = io.StringIO()
+    saved_stderr = sys.stderr
+    sys.stderr = buffer
+    try:
+        yield buffer
+    finally:
+        sys.stderr = saved_stderr
 
 
 class _TeeWriter(io.TextIOBase):
@@ -235,30 +252,22 @@ class EvalchemyEvaluator(Evaluator):
             if "results" in results:
                 wandb.log({"results_summary": results["results"]})
 
-            # Suppress wandb BrokenPipeError traceback during teardown
-            _saved_stderr = sys.stderr
-            sys.stderr = io.StringIO()
-            try:
+            with _captured_stderr() as stderr_buffer:
                 wandb.finish()
-            finally:
-                _captured = sys.stderr.getvalue()
-                sys.stderr = _saved_stderr
-                if _captured and "BrokenPipeError" not in _captured:
-                    logger.warning(f"wandb.finish() stderr: {_captured.strip()}")
+            captured = stderr_buffer.getvalue()
+            if captured and "BrokenPipeError" not in captured:
+                logger.warning(f"wandb.finish() stderr: {captured.strip()}")
             logger.info(f"Logged results to wandb run: {run_name}")
 
         except Exception as e:
             logger.warning(f"Failed to log results to wandb: {e}")
             # Only try to finish wandb if it was successfully initialized
             if wandb_initialized:
-                _saved_stderr = sys.stderr
-                sys.stderr = io.StringIO()
-                try:
-                    wandb.finish(exit_code=1)
-                except Exception:
-                    pass
-                finally:
-                    sys.stderr = _saved_stderr
+                with _captured_stderr():
+                    try:
+                        wandb.finish(exit_code=1)
+                    except Exception:
+                        logger.debug("wandb.finish(exit_code=1) failed during teardown", exc_info=True)
 
     def _setup_evalchemy(self) -> str:
         """Clone evalchemy and apply necessary patches. Returns path to repo."""

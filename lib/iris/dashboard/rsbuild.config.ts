@@ -30,7 +30,6 @@ export default defineConfig({
   server: {
     proxy: {
       '/iris.cluster.ControllerService': 'http://localhost:8080',
-      '/finelog.logging.LogService': 'http://localhost:8080',
       '/iris.cluster.WorkerService': 'http://localhost:8081',
       '/proxy': 'http://localhost:8080',
       '/bundles': 'http://localhost:8080',

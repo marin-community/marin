@@ -24,7 +24,12 @@ from rigging.timing import log_time
 import levanter
 from levanter.data import AsyncDataset
 from levanter.data.dataset import MappedAsyncDataset
-from levanter.data.mixture import MixtureDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import (
+    ConcatDataset,
+    MixtureDataset,
+    StopStrategy,
+    rescale_mixture_schedule_for_batch_schedule,
+)
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
@@ -53,7 +58,6 @@ from levanter.utils import fsspec_utils
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()  # noqa
 
@@ -330,6 +334,8 @@ class DatasetComponent(DatasetComponentBase):
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
     split: str = "validation"
+    flat_cache: bool = False
+    """Treat ``cache_dir`` as the cache root directly, without appending ``/<split>``."""
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -338,6 +344,15 @@ class DirectDatasetComponent(DatasetComponentBase):
     """A programmatic dataset component that supplies AsyncDataset examples directly."""
 
     datasets: Mapping[str, AsyncDataset[GrugLmExample]]
+    tags: list[str] | None = None
+
+
+@DatasetComponentBase.register_subclass("concat")
+@dataclass(frozen=True)
+class ConcatDatasetComponent(DatasetComponentBase):
+    """A logical component formed by concatenating cache-backed children."""
+
+    children: dict[str, DatasetComponent]
     tags: list[str] | None = None
 
 
@@ -702,6 +717,26 @@ class LmDataConfig:
                 datasets[name] = direct
                 continue
 
+            if isinstance(component, ConcatDatasetComponent):
+                child_datasets: dict[str, AsyncDataset[GrugLmExample]] = {}
+                for child_name, child in component.children.items():
+                    child_key = f"{name}/{child_name}"
+                    cache = caches.get(child_key)
+                    if cache is None:
+                        if split == "train":
+                            raise ValueError(f"No cache available for concat child {child_key} in {split} split")
+                        continue
+                    child_datasets[child_name] = dataset_for_component(
+                        child,
+                        Pos,
+                        cache,
+                        eos_id=self.the_tokenizer.eos_token_id,
+                        block_cross_document_attention=self.block_cross_document_attention,
+                    )
+                if child_datasets:
+                    datasets[name] = ConcatDataset(child_datasets)
+                continue
+
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
 
@@ -865,6 +900,10 @@ class LmDataConfig:
                 continue
             if isinstance(component, DirectDatasetComponent):
                 continue
+            if isinstance(component, ConcatDatasetComponent):
+                for child_name, child in component.children.items():
+                    items.append((f"{name}/{child_name}", child))
+                continue
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
             items.append((name, component))
@@ -883,7 +922,12 @@ class LmDataConfig:
         ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
-            cache_path = os.path.join(cache_root, split)
+            if component.flat_cache:
+                if split != "train":
+                    return name, None, None
+                cache_path = cache_root
+            else:
+                cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:

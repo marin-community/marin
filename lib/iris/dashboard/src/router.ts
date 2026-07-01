@@ -11,12 +11,16 @@ const routes = [
     component: () => import('./components/controller/JobsTab.vue'),
   },
   {
+    path: '/backends',
+    component: () => import('./components/controller/BackendsTab.vue'),
+  },
+  {
     path: '/fleet',
     component: () => import('./components/controller/FleetTab.vue'),
   },
   {
-    path: '/autoscaler',
-    component: () => import('./components/controller/AutoscalerTab.vue'),
+    path: '/capacity',
+    component: () => import('./components/controller/CapacityTab.vue'),
   },
   {
     path: '/cluster',
@@ -27,12 +31,12 @@ const routes = [
     component: () => import('./components/controller/EndpointsTab.vue'),
   },
   {
-    path: '/status',
-    component: () => import('./components/controller/StatusTab.vue'),
+    path: '/logs',
+    component: () => import('./components/controller/LogsTab.vue'),
   },
   {
-    path: '/scheduler',
-    component: () => import('./components/controller/SchedulerTab.vue'),
+    path: '/status',
+    component: () => import('./components/controller/StatusTab.vue'),
   },
   {
     path: '/account',

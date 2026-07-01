@@ -591,6 +591,15 @@ def test_adjust_tpu_replicas_single_host_and_edge_cases():
     assert adjust_tpu_replicas(tpu_device("v99-unknown", count=4), replicas=1) == 1
 
 
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_gpu_device_rejects_non_positive_count(bad_count):
+    # Regression: zero is coerced to 1 by get_gpu_count (`count or 1`) and a
+    # negative count flows through as a negative req_gpu_count that inflates
+    # advertised scheduler capacity. Reject both at the construction boundary.
+    with pytest.raises(ValueError, match="positive integer"):
+        gpu_device("H100", count=bad_count)
+
+
 def test_merge_auto_constraints_with_user_variant_override():
     """User multi-variant IN constraint replaces auto-generated single-variant EQ."""
     auto = constraints_from_resources(

@@ -11,6 +11,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_EXPERT_AXIS=8        expert parallelism inside each NVLink node
     MAY_REPLICA_AXIS=1       FSDP over the whole data axis
     MAY_MODEL_AXIS=1         tensor/model-parallel axis size
+    MAY_PROCESSES_PER_TASK=8 one JAX process per GPU inside each 8-GPU pod
     MAY_BATCH=256            seq=4096 context; raise only after profiling memory
     MAY_NUM_LAYERS=26        override layer count for narrow diagnostics
     MAY_STEPS=50             throughput/profiling length
@@ -43,19 +44,21 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text import BlockShuffleConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import executor_main
-from marin.execution.types import ExecutorStep, this_output_path, versioned
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.step_runner import StepRunner
+from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
+from marin.training.training import LevanterCheckpoint
 
 from experiments.grug.moe.heuristic import MoeAdamHHeuristic
 from experiments.grug.moe.launch import (
-    NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
     GrugMoeLaunchConfig,
     env_int,
     run_grug_moe_trial,
-    slimpajama_6b_data,
-    synthetic_grug_data,
+    slimpajama_6b_dataset,
     validate_local_expert_model_axes,
     validate_ring_expert_model_axes,
 )
@@ -69,7 +72,7 @@ from experiments.grug.moe.model import (
     OutputProjSharding,
     RematMode,
 )
-from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
 GPUS_PER_NODE = 8
@@ -79,6 +82,8 @@ DEFAULT_BATCH = 256
 DEFAULT_STEPS = 50
 DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_WARMUP_FRACTION = 0.01
+OUTPUT_SUBDIR = "experiments/grug-moe-cw"
+_SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
 
 MAY_HEURISTIC = MoeAdamHHeuristic(
     lr_coeff=0.06602,
@@ -146,42 +151,25 @@ def build_may_model() -> GrugModelConfig:
     )
 
 
-def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeMuonHConfig:
+def build_may_optimizer(*, batch_size: int, seq_len: int) -> GrugMoeAdamHConfig:
     total_tokens = env_float("MAY_TOTAL_TOKENS", DEFAULT_TOTAL_TOKENS)
     hidden_dim = env_int("MAY_HIDDEN_DIM", DEFAULT_HIDDEN_DIM)
     base_optimizer = MAY_HEURISTIC.build_optimizer_config(batch_size, total_tokens, hidden_dim, seq_len=seq_len)
-    return GrugMoeMuonHConfig(
-        learning_rate=base_optimizer.learning_rate,
-        adam_lr=base_optimizer.adam_lr,
-        min_lr_ratio=base_optimizer.min_lr_ratio,
+    return dataclasses.replace(
+        base_optimizer,
         warmup=env_float("MAY_WARMUP_FRACTION", DEFAULT_WARMUP_FRACTION),
-        beta1=base_optimizer.beta1,
-        beta2=base_optimizer.beta2,
-        epsilon=base_optimizer.epsilon,
         max_grad_norm=None,
-        lr_schedule=base_optimizer.lr_schedule,
-        decay=base_optimizer.decay,
     )
 
 
-def build_data(model: GrugModelConfig):
+def build_data(ctx: StepContext, slim, model: GrugModelConfig):
     data = os.environ.get("MAY_DATA", "slimpajama").lower()
     if data == "slimpajama":
-        return slimpajama_6b_data()
-    if data == "nemotron":
-        return NEMOTRON_MIX_WITH_DEFAULT_VALIDATION
-    if data == "synthetic":
-        return synthetic_grug_data(
-            seq_len=model.max_seq_len,
-            vocab_size=model.vocab_size,
-            num_examples=env_int("MAY_SYNTHETIC_EXAMPLES", 1 << 20),
-            eos_id=env_int("MAY_SYNTHETIC_EOS_ID", model.vocab_size - 1),
-            eos_interval=env_int("MAY_SYNTHETIC_EOS_INTERVAL", 0),
-        )
-    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama', 'nemotron', or 'synthetic'")
+        return mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE)
+    raise ValueError(f"MAY_DATA={data!r} must be 'slimpajama'")
 
 
-def build_tracker(run_id: str):
+def build_tracker(run_id: str, output_path: str):
     if os.environ.get("MAY_TRACKER", "json_logger").lower() == "wandb":
         return WandbConfig(
             entity=os.environ.get("WANDB_ENTITY") or "marin-community",
@@ -189,7 +177,7 @@ def build_tracker(run_id: str):
             tags=["grug", "moe", "may", "cw", "h100", f"d{env_int('MAY_HIDDEN_DIM', DEFAULT_HIDDEN_DIM)}"],
             group=os.environ.get("MAY_WANDB_GROUP", "grug-moe-cw-may-d2560"),
             name=run_id,
-            replicate_path=this_output_path(),
+            replicate_path=output_path,
         )
     return JsonLoggerConfig(logger_name=os.environ.get("MAY_JSON_LOGGER", "grug_moe_cw_may.metrics"))
 
@@ -225,15 +213,14 @@ def build_eval() -> GrugEvalConfig | None:
     )
 
 
-def build_may_step() -> ExecutorStep:
-    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.timezone.utc).strftime(
-        "cw-may-d2560-%Y%m%d-%H%M%S"
-    )
+def build_may_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckpoint]:
+    run_id = os.environ.get("RUN_ID") or datetime.datetime.now(datetime.UTC).strftime("cw-may-d2560-%Y%m%d-%H%M%S")
 
     replicas = env_int("MAY_GPU_REPLICAS", 32)
     expert_axis = env_int("MAY_EXPERT_AXIS", 8)
     replica_axis = env_int("MAY_REPLICA_AXIS", 1)
     model_axis = env_int("MAY_MODEL_AXIS", 1)
+    processes_per_task = env_int("MAY_PROCESSES_PER_TASK", 8)
     batch_size = env_int("MAY_BATCH", DEFAULT_BATCH)
     steps = env_int("MAY_STEPS", DEFAULT_STEPS)
     worker_cpu = env_int("MAY_CPU_PER_REPLICA", 32)
@@ -305,38 +292,48 @@ def build_may_step() -> ExecutorStep:
     checkpointer, checkpointing_enabled = build_checkpointer(run_id)
 
     name = f"grug-moe-cw-may-d{model.hidden_dim}-L{model.num_layers}-e{model.num_experts}-r{replicas}-cpu{worker_cpu}"
-    return ExecutorStep(
-        name=f"{name}-{run_id}",
-        fn=run_grug_moe_trial,
-        config=GrugMoeLaunchConfig(
-            model=versioned(model),
-            data=build_data(model),
-            output_path=this_output_path(),
+    slim = slimpajama_6b_dataset()
+
+    def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
+        return GrugMoeLaunchConfig(
+            model=model,
+            data=build_data(ctx, slim, model),
+            output_path=ctx.output_path,
             run_id=run_id,
-            resources=versioned(resources),
-            steps=versioned(steps),
-            batch_size=versioned(batch_size),
-            seed=versioned(0),
-            mp=versioned(os.environ.get("MAY_MP", "params=float32,compute=bfloat16,output=bfloat16")),
-            tracker=build_tracker(run_id),
-            optimizer=versioned(build_may_optimizer(batch_size=batch_size, seq_len=model.max_seq_len)),
-            grug_trainer=versioned(grug_trainer),
-            eval=versioned(eval_cfg) if eval_cfg is not None else None,
+            resources=ctx.runtime_arg("train_resources"),
+            steps=steps,
+            batch_size=batch_size,
+            seed=0,
+            mp=os.environ.get("MAY_MP", "params=float32,compute=bfloat16,output=bfloat16"),
+            tracker=build_tracker(run_id, ctx.output_path),
+            optimizer=build_may_optimizer(batch_size=batch_size, seq_len=model.max_seq_len),
+            grug_trainer=grug_trainer,
+            processes_per_task=processes_per_task,
+            eval=eval_cfg,
             profiler=profiler,
             watch=WatchConfig(interval=env_int("MAY_WATCH_INTERVAL", 0)),
             checkpointing_enabled=checkpointing_enabled,
             checkpointer=checkpointer,
             log_jaxprs=env_bool("MAY_LOG_JAXPRS", False),
             log_xla_hlo=env_bool("MAY_LOG_XLA_HLO", False),
-        ),
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(f"{OUTPUT_SUBDIR}/{name}-{run_id}", version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=run_grug_moe_trial,
+        build_config=build_config,
+        deps=(slim,),
+        runtime_args={"train_resources": resources},
     )
 
 
-may_d2560_step = build_may_step()
+may_d2560_step = build_may_checkpoint()
 
 
 def main() -> None:
-    executor_main(steps=[may_d2560_step])
+    StepRunner().run([may_d2560_step.lower()])
 
 
 if __name__ == "__main__":

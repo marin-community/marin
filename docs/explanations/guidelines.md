@@ -112,24 +112,24 @@ for the experiment.  This file should take no arguments (aside from those the
 executor accepts), and running this experiment should launch all the relevant
 jobs for this experiment from start to finish.
 
-Experiments are defined using the [executor framework](../explanations/executor.md),
-which represents a DAG over steps. Each step makes a call to a (possibly remote,
-via Fray) function with a custom `config`.
+Experiments are defined using the [lazy artifact system](../explanations/lazy-artifacts.md),
+which represents a DAG of typed artifact handles. Each handle carries a recipe that
+calls a (possibly remote, via Fray) function with a custom config.
 
 Notes:
 
 - In the top file-level docstring, include a brief summary of the experiment and
   link to corresponding GitHub issue.  The summary should be similar to the
   GitHub issue description, but should reference the code.
-- Name variables of type `ExecutorStep` based on what the `ExecutorStep`
-  produces (e.g., `llama3_8b_model` as opposed to `llama_8b_model_step`).
-- Try to avoid using full paths (e.g., gs://marin-us-central2/...).
-  Instead, import the corresponding utility or experiment file that generated
-  the path and reference the `ExecutorStep`.  This way, the dependency structure
-  is made explicit.
-- After the full experiment runs, add `override_output_path` to any heavy steps
-  that we don't want to accidentally run again (e.g., a large dataset or training
-  a new model).
-- When possible, use the default functions (e.g., `default_train`,
-  `default_eval`) if the configuration details are orthogonal to the aspect
-  being varied in the experiment.
+- Name artifact variables based on what they produce (e.g., `llama3_8b_model`
+  rather than `llama_8b_model_step`).
+- Try to avoid using full GCS paths (e.g., gs://marin-us-central2/...).
+  Instead, import the corresponding utility or experiment file that produced the
+  artifact handle and depend on it directly. This makes the dependency structure
+  explicit.
+- After the full experiment runs, use `ArtifactStep.adopt(name, version, source=...)`
+  to reference heavy completed artifacts as pre-existing data. This keeps them
+  visible in the dependency graph while preventing accidental re-execution.
+- When possible, use the standard helpers (e.g., `train_lm`, `default_eval`) if
+  the configuration details are orthogonal to the aspect being varied in the
+  experiment.

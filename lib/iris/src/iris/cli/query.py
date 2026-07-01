@@ -10,7 +10,7 @@ import json
 import click
 from tabulate import tabulate
 
-from iris.cli.connect import require_controller_url, rpc_client
+from iris.cli.connect import require_controller_url, rpc_client_for_ctx
 from iris.rpc import query_pb2
 
 
@@ -67,9 +67,8 @@ def query_cmd(ctx: click.Context, sql: str, fmt: str) -> None:
       iris query -f json "SELECT job_id, state FROM jobs"
     """
     controller_url = require_controller_url(ctx)
-    token_provider = ctx.obj.get("token_provider") if ctx.obj else None
 
-    with rpc_client(controller_url, token_provider) as client:
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
         request = query_pb2.RawQueryRequest(sql=sql)
         response = client.execute_raw_query(request)
 
