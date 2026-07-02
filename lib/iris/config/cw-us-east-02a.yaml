@@ -69,7 +69,7 @@ controller:
     #   uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \
     #     --acme-email <you@oa.dev> --apply
     # then CNAME public_proxy_host at the printed *.coreweave.app FQDN.
-    public_proxy_host: iris-cw-use02a.oa.dev
+    public_proxy_host: iris-cw-us-east-02a.oa.dev
     tls_secret: iris-controller-proxy-tls
     # Staging first (avoids Let's Encrypt rate limits); flip to
     # letsencrypt-http01-prod once the staging cert validates.
