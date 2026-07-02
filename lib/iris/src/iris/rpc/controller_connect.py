@@ -121,6 +121,9 @@ class ControllerService(Protocol):
     async def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def federation_sync(self, request: controller__pb2.Controller.FederationSyncRequest, ctx: RequestContext) -> controller__pb2.Controller.FederationSyncResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]):
     def __init__(self, service: ControllerService | AsyncGenerator[ControllerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -466,6 +469,16 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_peers,
+                ),
+                "/iris.cluster.ControllerService/FederationSync": Endpoint.unary(
+                    method=MethodInfo(
+                        name="FederationSync",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.FederationSyncRequest,
+                        output=controller__pb2.Controller.FederationSyncResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.federation_sync,
                 ),
             },
             interceptors=interceptors,
@@ -1160,6 +1173,26 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def federation_sync(
+        self,
+        request: controller__pb2.Controller.FederationSyncRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.FederationSyncResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="FederationSync",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.FederationSyncRequest,
+                output=controller__pb2.Controller.FederationSyncResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 
 class EndpointService(Protocol):
@@ -1350,6 +1383,8 @@ class ControllerServiceSync(Protocol):
     def list_backends(self, request: controller__pb2.Controller.ListBackendsRequest, ctx: RequestContext) -> controller__pb2.Controller.ListBackendsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def list_peers(self, request: controller__pb2.Controller.ListPeersRequest, ctx: RequestContext) -> controller__pb2.Controller.ListPeersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def federation_sync(self, request: controller__pb2.Controller.FederationSyncRequest, ctx: RequestContext) -> controller__pb2.Controller.FederationSyncResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -1696,6 +1731,16 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_peers,
+                ),
+                "/iris.cluster.ControllerService/FederationSync": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="FederationSync",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.FederationSyncRequest,
+                        output=controller__pb2.Controller.FederationSyncResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.federation_sync,
                 ),
             },
             interceptors=interceptors,
@@ -2384,6 +2429,26 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=controller__pb2.Controller.ListPeersRequest,
                 output=controller__pb2.Controller.ListPeersResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def federation_sync(
+        self,
+        request: controller__pb2.Controller.FederationSyncRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.FederationSyncResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="FederationSync",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.FederationSyncRequest,
+                output=controller__pb2.Controller.FederationSyncResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

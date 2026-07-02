@@ -31,6 +31,12 @@ from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
+    federated_jobs_table,
+    federated_tasks_table,
+    federation_changelog_floor_table,
+    federation_changelog_table,
+    federation_received_jobs_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     meta_table,
@@ -179,10 +185,13 @@ def insert_job(
     exit_code: int | None,
     num_tasks: int,
     name: str,
+    child_cluster: str = "",
 ) -> None:
     """Insert one row into ``jobs``.
 
     TypeDecorators handle JobName → wire string and bool → 0/1 automatically.
+    A non-empty ``child_cluster`` marks the row as a federated handle handed off
+    to that peer (``backend_id`` stays "").
     """
     tx.execute(
         insert(jobs_table).values(
@@ -201,6 +210,7 @@ def insert_job(
             exit_code=exit_code,
             num_tasks=num_tasks,
             name=name,
+            child_cluster=child_cluster,
         )
     )
 
@@ -280,16 +290,80 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table)
+@writes_to(jobs_table, federation_received_jobs_table)
 def delete_job(tx: Tx, job_id: JobName) -> None:
     """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
+    # Record the tombstone BEFORE the delete so a parent federating with this peer
+    # learns the job was pruned. The changelog has no FK to jobs, so this row
+    # survives the CASCADE (a no-op unless this root was received via handoff).
+    record_federation_change(tx, job_id, tombstone=True)
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
+    # The received-jobs ownership row has no FK to jobs, so drop it explicitly
+    # (a no-op for a job this cluster was not handed).
+    tx.execute(delete(federation_received_jobs_table).where(federation_received_jobs_table.c.job_id == job_id))
 
 
 @writes_to(slices_table)
 def delete_slice(tx: Tx, slice_id: str) -> None:
     """Delete one slice row. Slices have no FK cascades, so this is a bare delete."""
     tx.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
+
+
+# ---------------------------------------------------------------------------
+# Federation (peer side): received-job ownership + the change log
+# ---------------------------------------------------------------------------
+
+
+@writes_to(federation_received_jobs_table)
+def record_received_federated_job(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    requester_id: str,
+    owner_principal: str,
+    received_ms: int,
+) -> None:
+    """Record that ``job_id`` was handed off to this peer by ``requester_id``.
+
+    Idempotent under a re-sent handoff (same ``job_id``): the ownership row is
+    upserted, so a retried handoff never duplicates it. FederationSync joins this
+    table to attribute a changelog event to the requester that owns the job.
+    """
+    tx.execute(
+        sqlite_insert(federation_received_jobs_table)
+        .values(job_id=job_id, requester_id=requester_id, owner_principal=owner_principal, received_ms=received_ms)
+        .on_conflict_do_update(
+            index_elements=["job_id"],
+            set_={"requester_id": requester_id, "owner_principal": owner_principal, "received_ms": received_ms},
+        )
+    )
+
+
+@writes_to(federation_changelog_table)
+def record_federation_change(
+    tx: Tx,
+    job_id: JobName,
+    *,
+    task_index: int | None = None,
+    tombstone: bool = False,
+) -> None:
+    """Append a federation changelog event for a handed-off job's mutation.
+
+    A no-op unless ``job_id``'s root was received via handoff (gated by
+    ``tx.federation_owned_roots``), so a controller that is never a peer writes
+    nothing. Called in the same transaction as the mutation it records; the row
+    carries no FK to ``jobs`` so a tombstone survives the job delete it records.
+    """
+    if job_id.root_job.to_wire() not in tx.federation_owned_roots:
+        return
+    tx.execute(
+        insert(federation_changelog_table).values(
+            job_id=job_id,
+            task_index=task_index,
+            tombstone=1 if tombstone else 0,
+            written_ms=Timestamp.now().epoch_ms(),
+        )
+    )
 
 
 @writes_to(jobs_table)
@@ -390,6 +464,8 @@ def bulk_insert_tasks(tx: Tx, task_rows: list[dict]) -> None:
     if not task_rows:
         return
     tx.execute(insert(tasks_table), task_rows)
+    for row in task_rows:
+        record_federation_change(tx, row["job_id"], task_index=row["task_index"])
 
 
 def task_row(
@@ -463,6 +539,7 @@ def assign_to_worker(
     if priority_band is not None:
         values["priority_band"] = priority_band
     tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+    record_federation_change(tx, task_id.parent, task_index=task_id.task_index)
 
 
 @writes_to(tasks_table, task_attempts_table)
@@ -593,3 +670,197 @@ def set_user_budget(tx: Tx, user_id: str, budget_limit: int, max_band: int, now:
         set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
     )
     tx.execute(stmt)
+
+
+# ---------------------------------------------------------------------------
+# Federation (parent side): the handle + sync mirror; changelog retention
+# ---------------------------------------------------------------------------
+
+
+@writes_to(federated_jobs_table)
+def insert_federated_handle(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    peer_id: str,
+    remote_job_id: str,
+    owner_principal: str,
+    handoff_state: int,
+    spend_snapshot: int,
+    now_ms: int,
+) -> None:
+    """Insert the ``federated_jobs`` handle for a job handed off to ``peer_id``."""
+    tx.execute(
+        insert(federated_jobs_table).values(
+            job_id=job_id,
+            peer_id=peer_id,
+            remote_job_id=remote_job_id,
+            owner_principal=owner_principal,
+            handoff_state=handoff_state,
+            spend_snapshot_micros=spend_snapshot,
+            cancel_intent_version=0,
+            last_sync_ms=now_ms,
+        )
+    )
+
+
+@writes_to(federated_jobs_table)
+def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int, *, now_ms: int, error: str | None = None) -> None:
+    """Flip a handle's ``handoff_state`` (and stamp ``last_sync_ms``/error)."""
+    values: dict = {"handoff_state": handoff_state, "last_sync_ms": now_ms}
+    if error is not None:
+        values["terminal_error"] = error
+    tx.execute(update(federated_jobs_table).where(federated_jobs_table.c.job_id == job_id).values(**values))
+
+
+@writes_to(federated_jobs_table)
+def bump_cancel_intent(tx: Tx, job_id: JobName) -> None:
+    """Increment a handle's ``cancel_intent_version`` (versioned, idempotent cancel)."""
+    tx.execute(
+        update(federated_jobs_table)
+        .where(federated_jobs_table.c.job_id == job_id)
+        .values(cancel_intent_version=federated_jobs_table.c.cancel_intent_version + 1)
+    )
+
+
+@writes_to(jobs_table)
+def mark_federated_job_killed(tx: Tx, job_id: JobName, *, now_ms: int, error: str) -> None:
+    """Terminate a federated handle's local job row (a job the peer never received).
+
+    A federated handle owns no local tasks, so there is no subtree to cancel — the
+    jobs row alone flips to KILLED. Used when a ``PENDING_HANDOFF`` handoff is
+    cancelled before delivery; a delivered job's terminal state arrives via sync.
+    """
+    tx.execute(
+        update(jobs_table)
+        .where(jobs_table.c.job_id == job_id)
+        .values(state=job_pb2.JOB_STATE_KILLED, finished_at_ms=now_ms, error=error)
+    )
+
+
+@writes_to(jobs_table)
+def mirror_federated_job(
+    tx: Tx,
+    *,
+    job_id: JobName,
+    state: int,
+    error: str | None,
+    exit_code: int | None,
+    started_at_ms: int | None,
+    finished_at_ms: int | None,
+    num_tasks: int,
+) -> None:
+    """Mirror a peer's job state onto the local federated ``jobs`` row.
+
+    Never touches ``child_cluster``/``backend_id`` (the discriminator stays), only
+    the state/timing/counts the local reads render.
+    """
+    tx.execute(
+        update(jobs_table)
+        .where(jobs_table.c.job_id == job_id)
+        .values(
+            state=state,
+            error=error,
+            exit_code=exit_code,
+            started_at_ms=started_at_ms,
+            finished_at_ms=finished_at_ms,
+            num_tasks=num_tasks,
+        )
+    )
+
+
+@writes_to(tasks_table, federated_tasks_table)
+def mirror_federated_task(
+    tx: Tx,
+    *,
+    task_id: JobName,
+    job_id: JobName,
+    task_index: int,
+    peer_id: str,
+    state: int,
+    error: str | None,
+    exit_code: int | None,
+    started_at_ms: int | None,
+    finished_at_ms: int | None,
+    failure_count: int,
+    current_attempt_id: int,
+    worker_address: str,
+    peer_worker_label: str,
+) -> None:
+    """Upsert a mirrored federated task row (``child_cluster`` set, no worker FK).
+
+    Priority/retry columns are placeholders — a federated task is fold-excluded
+    and never scheduled locally — so only the display fields the task views read
+    are meaningful.
+    """
+    tx.execute(
+        sqlite_insert(tasks_table)
+        .values(
+            task_id=task_id,
+            job_id=job_id,
+            task_index=task_index,
+            state=state,
+            error=error,
+            exit_code=exit_code,
+            submitted_at_ms=started_at_ms or 0,
+            started_at_ms=started_at_ms,
+            finished_at_ms=finished_at_ms,
+            max_retries_failure=0,
+            max_retries_preemption=0,
+            failure_count=failure_count,
+            preemption_count=0,
+            current_attempt_id=current_attempt_id,
+            current_worker_id=None,
+            current_worker_address=worker_address,
+            backend_id="",
+            child_cluster=peer_id,
+            priority_neg_depth=0,
+            priority_root_submitted_ms=0,
+            priority_insertion=0,
+        )
+        .on_conflict_do_update(
+            index_elements=["task_id"],
+            set_={
+                "state": state,
+                "error": error,
+                "exit_code": exit_code,
+                "started_at_ms": started_at_ms,
+                "finished_at_ms": finished_at_ms,
+                "failure_count": failure_count,
+                "current_attempt_id": current_attempt_id,
+                "current_worker_address": worker_address,
+                "child_cluster": peer_id,
+            },
+        )
+    )
+    tx.execute(
+        sqlite_insert(federated_tasks_table)
+        .values(task_id=task_id, peer_worker_label=peer_worker_label)
+        .on_conflict_do_update(index_elements=["task_id"], set_={"peer_worker_label": peer_worker_label})
+    )
+
+
+@writes_to(federation_sync_state_table)
+def upsert_sync_cursor(tx: Tx, peer_id: str, cursor: str, *, now_ms: int) -> None:
+    """Persist the delta-sync cursor for ``peer_id``."""
+    tx.execute(
+        sqlite_insert(federation_sync_state_table)
+        .values(peer_id=peer_id, cursor=cursor, last_full_resync_ms=now_ms)
+        .on_conflict_do_update(index_elements=["peer_id"], set_={"cursor": cursor})
+    )
+
+
+@writes_to(federation_changelog_table, federation_changelog_floor_table)
+def compact_changelog(tx: Tx, up_to_seq: int) -> None:
+    """Retention: drop changelog rows at or below ``up_to_seq`` and raise the floor.
+
+    A requester whose cursor is at or below the new floor must full-resync (its
+    unconsumed events, including any tombstone, may be gone), which the peer
+    signals via ``cursor_stale``.
+    """
+    tx.execute(delete(federation_changelog_table).where(federation_changelog_table.c.seq <= up_to_seq))
+    tx.execute(
+        sqlite_insert(federation_changelog_floor_table)
+        .values(id=0, floor=up_to_seq)
+        .on_conflict_do_update(index_elements=["id"], set_={"floor": up_to_seq})
+    )

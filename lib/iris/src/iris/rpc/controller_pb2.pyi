@@ -56,7 +56,7 @@ class Controller(_message.Message):
     WORKER_SORT_FIELD_LAST_HEARTBEAT: Controller.WorkerSortField
     WORKER_SORT_FIELD_DEVICE_TYPE: Controller.WorkerSortField
     class LaunchJobRequest(_message.Message):
-        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile")
+        __slots__ = ("name", "entrypoint", "resources", "environment", "bundle_id", "bundle_blob", "scheduling_timeout", "ports", "max_task_failures", "max_retries_failure", "max_retries_preemption", "constraints", "coscheduling", "replicas", "timeout", "fail_if_exists", "preemption_policy", "existing_job_policy", "priority_band", "task_image", "submit_argv", "client_revision_date", "container_profile", "federation")
         NAME_FIELD_NUMBER: _ClassVar[int]
         ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
@@ -80,6 +80,7 @@ class Controller(_message.Message):
         SUBMIT_ARGV_FIELD_NUMBER: _ClassVar[int]
         CLIENT_REVISION_DATE_FIELD_NUMBER: _ClassVar[int]
         CONTAINER_PROFILE_FIELD_NUMBER: _ClassVar[int]
+        FEDERATION_FIELD_NUMBER: _ClassVar[int]
         name: str
         entrypoint: _job_pb2.RuntimeEntrypoint
         resources: _job_pb2.ResourceSpecProto
@@ -103,7 +104,15 @@ class Controller(_message.Message):
         submit_argv: _containers.RepeatedScalarFieldContainer[str]
         client_revision_date: str
         container_profile: _job_pb2.ContainerProfile
-        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ...) -> None: ...
+        federation: Controller.FederationHandoff
+        def __init__(self, name: _Optional[str] = ..., entrypoint: _Optional[_Union[_job_pb2.RuntimeEntrypoint, _Mapping]] = ..., resources: _Optional[_Union[_job_pb2.ResourceSpecProto, _Mapping]] = ..., environment: _Optional[_Union[_job_pb2.EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., bundle_blob: _Optional[bytes] = ..., scheduling_timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., max_task_failures: _Optional[int] = ..., max_retries_failure: _Optional[int] = ..., max_retries_preemption: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[_job_pb2.Constraint, _Mapping]]] = ..., coscheduling: _Optional[_Union[_job_pb2.CoschedulingConfig, _Mapping]] = ..., replicas: _Optional[int] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., fail_if_exists: _Optional[bool] = ..., preemption_policy: _Optional[_Union[_job_pb2.JobPreemptionPolicy, str]] = ..., existing_job_policy: _Optional[_Union[_job_pb2.ExistingJobPolicy, str]] = ..., priority_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ..., task_image: _Optional[str] = ..., submit_argv: _Optional[_Iterable[str]] = ..., client_revision_date: _Optional[str] = ..., container_profile: _Optional[_Union[_job_pb2.ContainerProfile, str]] = ..., federation: _Optional[_Union[Controller.FederationHandoff, _Mapping]] = ...) -> None: ...
+    class FederationHandoff(_message.Message):
+        __slots__ = ("requester_id", "owner_principal")
+        REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
+        OWNER_PRINCIPAL_FIELD_NUMBER: _ClassVar[int]
+        requester_id: str
+        owner_principal: str
+        def __init__(self, requester_id: _Optional[str] = ..., owner_principal: _Optional[str] = ...) -> None: ...
     class LaunchJobResponse(_message.Message):
         __slots__ = ("job_id",)
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -754,6 +763,33 @@ class Controller(_message.Message):
         PEERS_FIELD_NUMBER: _ClassVar[int]
         peers: _containers.RepeatedCompositeFieldContainer[Controller.PeerSummary]
         def __init__(self, peers: _Optional[_Iterable[_Union[Controller.PeerSummary, _Mapping]]] = ...) -> None: ...
+    class FederationSyncRequest(_message.Message):
+        __slots__ = ("requester_id", "cursor")
+        REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
+        CURSOR_FIELD_NUMBER: _ClassVar[int]
+        requester_id: str
+        cursor: str
+        def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
+    class FederationJobDelta(_message.Message):
+        __slots__ = ("remote_job_id", "summary", "changed_tasks", "tombstone")
+        REMOTE_JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        SUMMARY_FIELD_NUMBER: _ClassVar[int]
+        CHANGED_TASKS_FIELD_NUMBER: _ClassVar[int]
+        TOMBSTONE_FIELD_NUMBER: _ClassVar[int]
+        remote_job_id: str
+        summary: _job_pb2.JobStatus
+        changed_tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
+        tombstone: bool
+        def __init__(self, remote_job_id: _Optional[str] = ..., summary: _Optional[_Union[_job_pb2.JobStatus, _Mapping]] = ..., changed_tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ..., tombstone: _Optional[bool] = ...) -> None: ...
+    class FederationSyncResponse(_message.Message):
+        __slots__ = ("deltas", "next_cursor", "cursor_stale")
+        DELTAS_FIELD_NUMBER: _ClassVar[int]
+        NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
+        CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
+        deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
+        next_cursor: str
+        cursor_stale: bool
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

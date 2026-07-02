@@ -168,6 +168,7 @@ def run_controller_serve(
         dry_run=dry_run,
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
+        cluster_id=cluster_config.name,
         peers=cluster_config.peers,
     )
 

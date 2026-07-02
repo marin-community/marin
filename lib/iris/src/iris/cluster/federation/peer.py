@@ -24,15 +24,33 @@ from rigging.timing import Timestamp
 
 from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.config import PeerConfig
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 
 logger = logging.getLogger(__name__)
 
 
 class PeerConnection(Protocol):
-    """The narrow peer-controller surface the federation heartbeat drives."""
+    """The peer-controller surface federation drives: capability heartbeat plus
+    the handoff, delta-sync, and routed-cancel RPCs.
+
+    Handoff reuses the ordinary ``LaunchJob`` (the request carries the remote job
+    name and federation attribution); a routed cancel reuses ``TerminateJob``
+    (targeting the remote job id); ``federation_sync`` is federation's one
+    purpose-built endpoint.
+    """
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
+
+    def launch_job(
+        self, request: controller_pb2.Controller.LaunchJobRequest
+    ) -> controller_pb2.Controller.LaunchJobResponse: ...
+
+    def terminate_job(self, job_id: JobName) -> None: ...
+
+    def federation_sync(
+        self, request: controller_pb2.Controller.FederationSyncRequest
+    ) -> controller_pb2.Controller.FederationSyncResponse: ...
 
     def shutdown(self) -> None: ...
 
@@ -110,6 +128,22 @@ class FederationPeer:
         """The peer's latest heartbeat observation."""
         with self._lock:
             return self._heartbeat
+
+    def launch_job(
+        self, request: controller_pb2.Controller.LaunchJobRequest
+    ) -> controller_pb2.Controller.LaunchJobResponse:
+        """Deliver a handed-off job to the peer (reuses its ``LaunchJob``)."""
+        return self._connection.launch_job(request)
+
+    def terminate_job(self, remote_job_id: JobName) -> None:
+        """Route a cancel to the peer (reuses its ``TerminateJob``)."""
+        self._connection.terminate_job(remote_job_id)
+
+    def federation_sync(
+        self, request: controller_pb2.Controller.FederationSyncRequest
+    ) -> controller_pb2.Controller.FederationSyncResponse:
+        """Run one delta-sync round against the peer."""
+        return self._connection.federation_sync(request)
 
     def close(self) -> None:
         """Release the peer connection."""

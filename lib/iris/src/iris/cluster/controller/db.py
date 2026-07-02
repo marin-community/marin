@@ -147,9 +147,14 @@ class Tx:
     while the write lock is still held (see ``write_transaction``).
     """
 
-    def __init__(self, conn: Connection):
+    def __init__(self, conn: Connection, *, federation_owned_roots: frozenset[str] = frozenset()):
         self.conn = conn
         self._hooks: list[Callable[[], None]] = []
+        # Root job wire-ids this controller received via federation handoff. A
+        # write helper records a federation_changelog event only for a job whose
+        # root is in this set (empty until this controller is a peer), so a
+        # controller that never receives a handoff writes no changelog rows.
+        self.federation_owned_roots = federation_owned_roots
 
     def execute(self, stmt, params=None) -> CursorResult:
         """Execute a SA Core construct. Returns a ``CursorResult``.
@@ -179,7 +184,12 @@ class Tx:
 
 
 @contextmanager
-def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iterator[Tx]:
+def write_transaction(
+    write_engine: Engine,
+    write_lock: threading.RLock,
+    *,
+    federation_owned_roots: frozenset[str] = frozenset(),
+) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
     Acquires ``write_lock``, checks out a connection, emits
@@ -192,7 +202,7 @@ def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iter
     try:
         conn = write_engine.connect()
         conn.execute(text("BEGIN IMMEDIATE"))
-        tx = Tx(conn)
+        tx = Tx(conn, federation_owned_roots=federation_owned_roots)
         try:
             yield tx
         except Exception:
@@ -240,6 +250,10 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
         self._reopen_hooks: list[Callable[[], None]] = []
+        # Root job wire-ids this controller received via federation handoff; gates
+        # federation_changelog writes (see Tx.federation_owned_roots). Seeded from
+        # the DB after migrations and refreshed on checkpoint reopen.
+        self._federation_owned_roots: frozenset[str] = frozenset()
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
@@ -272,6 +286,35 @@ class ControllerDB:
         finally:
             raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
+
+        self._federation_owned_roots = self._read_federation_owned_roots()
+
+    def _read_federation_owned_roots(self) -> frozenset[str]:
+        """Root job wire-ids this controller has received via handoff.
+
+        A received handoff is always a root job, so its stored ``job_id`` is its
+        own root wire-id. Empty on a controller that has never been a peer.
+        """
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            rows = raw_conn.execute("SELECT job_id FROM federation_received_jobs").fetchall()
+        finally:
+            raw_conn.close()
+        return frozenset(row[0] for row in rows)
+
+    @property
+    def federation_owned_roots(self) -> frozenset[str]:
+        """Root job wire-ids gated into the federation changelog (see ``Tx``)."""
+        return self._federation_owned_roots
+
+    def add_federation_owned_root(self, root_wire_id: str) -> None:
+        """Mark a received-handoff root so its mutations enter the changelog.
+
+        Call this before opening the transaction that persists the received job,
+        so that transaction's writes are recorded.
+        """
+        with self._lock:
+            self._federation_owned_roots = self._federation_owned_roots | {root_wire_id}
 
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
@@ -356,7 +399,9 @@ class ControllerDB:
         in sync with the DB without exposing a torn snapshot to concurrent
         readers.
         """
-        with write_transaction(self._sa_write_engine, self._lock) as tx:
+        with write_transaction(
+            self._sa_write_engine, self._lock, federation_owned_roots=self._federation_owned_roots
+        ) as tx:
             yield tx
 
     @contextmanager
@@ -645,6 +690,7 @@ class ControllerDB:
             )
 
         self.apply_migrations()
+        self._federation_owned_roots = self._read_federation_owned_roots()
         for hook in self._reopen_hooks:
             hook()
 

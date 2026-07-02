@@ -51,6 +51,7 @@ from iris.cluster.controller.codec import constraints_from_json, device_counts_f
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.federation_store import ControllerFederationStore
 from iris.cluster.controller.log_stack import LogStack
 from iris.cluster.controller.ops.task import (
     Assignment,
@@ -255,6 +256,13 @@ class ControllerConfig:
     cluster_config.endpoints by the daemon entrypoint. Registered as system
     endpoints on the EndpointService during start()."""
 
+    cluster_id: str = ""
+    """This cluster's federation identity (from the cluster config ``name``).
+
+    Folded into the deterministic ``remote_job_id`` of every handed-off job and
+    sent as the ``requester_id`` on each ``FederationSync``. Required (and must
+    not contain ``~``) once this cluster hands jobs off; unused otherwise."""
+
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
@@ -362,12 +370,21 @@ class Controller:
 
         self._threads = threads if threads is not None else get_thread_container()
 
+        self._run_template_cache: RunTemplateCache = new_run_template_cache()
+
         # Federation: remote clusters this controller may delegate whole jobs to.
-        # Inert with no peers configured (build_peers returns nothing, the
-        # heartbeat never starts), so a single-cluster deployment is unchanged.
+        # Inert with no peers configured (build_peers returns nothing, the loops
+        # never start), so a single-cluster deployment is unchanged. The store
+        # gives the manager durable access to this controller's tables.
         self._federation = FederationManager(
             build_peers(config.peers),
             threads=self._threads,
+            store=ControllerFederationStore(
+                self._db,
+                run_template_cache=self._run_template_cache,
+                user_budget_defaults=config.user_budget_defaults,
+            ),
+            cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,
         )
 
@@ -382,8 +399,6 @@ class Controller:
         self._log_handler.setLevel(logging.DEBUG)
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
-
-        self._run_template_cache: RunTemplateCache = new_run_template_cache()
 
         # Give each worker-daemon backend its own scale-group-scoped view of the DB
         # so it sources its own workers (the controller never partitions a worker

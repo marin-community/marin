@@ -607,6 +607,62 @@ federated_tasks_table = Table(
 )
 
 
+# ---------------------------------------------------------------------------
+# Peer-side federation state (this controller acting AS a peer).
+#
+# When a parent hands a job off, the receiving controller runs it as an ordinary
+# local job and records two things: who handed it off (federation_received_jobs)
+# and a change event per job/task mutation (federation_changelog). FederationSync
+# joins the two to report a requester only its own handoffs. These tables stay
+# empty until this controller receives a handoff, so a controller that is never a
+# peer is unchanged.
+# ---------------------------------------------------------------------------
+
+
+federation_changelog_table = Table(
+    "federation_changelog",
+    metadata,
+    # Monotonic sequence: SQLite aliases an INTEGER PRIMARY KEY to rowid, so it
+    # autoincrements. A parent's sync cursor is the max seq it has consumed.
+    Column("seq", Integer, primary_key=True, autoincrement=True),
+    # No foreign key to jobs on purpose: a tombstone event must outlive the job
+    # row (delete_job CASCADEs its dependents), so the parent can still learn the
+    # job was pruned on a later sync.
+    Column("job_id", JobNameType, nullable=False),
+    Column("task_index", Integer),  # NULL = a job-level change
+    Column("tombstone", Integer, nullable=False, server_default="0"),  # 1 = job pruned on this peer
+    Column("written_ms", TimestampMsType, nullable=False),
+    Index("idx_federation_changelog_job", "job_id"),
+    # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after
+    # retention deletes rows (a plain rowid alias can reuse the max after a delete).
+    sqlite_autoincrement=True,
+)
+
+
+federation_received_jobs_table = Table(
+    "federation_received_jobs",
+    metadata,
+    # This peer's local job id for a handed-off job (equals the parent's
+    # remote_job_id). No FK: it must outlive the job so a tombstone delta can
+    # still be attributed to its requester.
+    Column("job_id", JobNameType, primary_key=True),
+    Column("requester_id", String, nullable=False),  # the parent cluster that handed it off
+    Column("owner_principal", String, nullable=False, server_default=""),
+    Column("received_ms", TimestampMsType, nullable=False),
+    Index("idx_federation_received_requester", "requester_id"),
+)
+
+
+federation_changelog_floor_table = Table(
+    "federation_changelog_floor",
+    metadata,
+    # Single row (id = 0). ``floor`` is the highest changelog seq removed by
+    # retention; a requester whose cursor is at or below it must full-resync.
+    Column("id", Integer, primary_key=True),
+    Column("floor", Integer, nullable=False, server_default="0"),
+)
+
+
 auth_api_keys_table = Table(
     "api_keys",
     auth_metadata,

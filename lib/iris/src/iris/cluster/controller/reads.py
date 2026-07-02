@@ -36,6 +36,11 @@ from iris.cluster.controller.reconcile.policy import NON_TERMINAL_TASK_STATES
 from iris.cluster.controller.reconcile.worker import ReconcileRow
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
+    federated_jobs_table,
+    federation_changelog_floor_table,
+    federation_changelog_table,
+    federation_received_jobs_table,
+    federation_sync_state_table,
     hint_rare_state,
     job_config_table,
     job_workdir_files_table,
@@ -56,7 +61,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
+from iris.cluster.types import TERMINAL_JOB_STATES, AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -1648,3 +1653,259 @@ def load_control_snapshot(
         reconcile_rows=reconcile_rows,
         timeout_rows=timeout_rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# Federation (parent side: handles; peer side: the change-log sync page)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FederatedHandle:
+    """A parent-side federated job handle (``federated_jobs`` joined to ``jobs``)."""
+
+    job_id: JobName  # this cluster's local (root) job id
+    peer_id: str
+    remote_job_id: str
+    owner_principal: str
+    handoff_state: int
+    cancel_intent_version: int
+
+
+def federated_handle(tx: Tx, job_id: JobName) -> FederatedHandle | None:
+    """The federated handle for ``job_id``, or ``None`` if it is not federated."""
+    row = tx.execute(
+        select(
+            federated_jobs_table.c.job_id,
+            federated_jobs_table.c.peer_id,
+            federated_jobs_table.c.remote_job_id,
+            federated_jobs_table.c.owner_principal,
+            federated_jobs_table.c.handoff_state,
+            federated_jobs_table.c.cancel_intent_version,
+        ).where(federated_jobs_table.c.job_id == job_id)
+    ).first()
+    if row is None:
+        return None
+    return FederatedHandle(
+        job_id=row.job_id,
+        peer_id=row.peer_id,
+        remote_job_id=row.remote_job_id,
+        owner_principal=row.owner_principal,
+        handoff_state=int(row.handoff_state),
+        cancel_intent_version=int(row.cancel_intent_version),
+    )
+
+
+def pending_handoff_handles(tx: Tx) -> list[FederatedHandle]:
+    """Handles still awaiting delivery: ``PENDING_HANDOFF`` and not cancelled.
+
+    A cancelled pending handoff (``cancel_intent_version > 0``) is excluded so the
+    retry loop never delivers a job the user already asked to cancel.
+    """
+    rows = tx.execute(
+        select(
+            federated_jobs_table.c.job_id,
+            federated_jobs_table.c.peer_id,
+            federated_jobs_table.c.remote_job_id,
+            federated_jobs_table.c.owner_principal,
+            federated_jobs_table.c.handoff_state,
+            federated_jobs_table.c.cancel_intent_version,
+        ).where(
+            federated_jobs_table.c.handoff_state == bindparam("pending_state"),
+            federated_jobs_table.c.cancel_intent_version == 0,
+        ),
+        {"pending_state": 0},  # HandoffState.PENDING_HANDOFF
+    ).all()
+    return [
+        FederatedHandle(
+            job_id=r.job_id,
+            peer_id=r.peer_id,
+            remote_job_id=r.remote_job_id,
+            owner_principal=r.owner_principal,
+            handoff_state=int(r.handoff_state),
+            cancel_intent_version=int(r.cancel_intent_version),
+        )
+        for r in rows
+    ]
+
+
+def federated_job_for_remote_id(tx: Tx, peer_id: str, remote_job_id: str) -> JobName | None:
+    """The local job id for a peer's ``remote_job_id`` handle, or ``None``."""
+    row = tx.execute(
+        select(federated_jobs_table.c.job_id).where(
+            federated_jobs_table.c.peer_id == peer_id,
+            federated_jobs_table.c.remote_job_id == remote_job_id,
+        )
+    ).first()
+    return row.job_id if row is not None else None
+
+
+def federated_handles_for_peer(tx: Tx, peer_id: str) -> dict[str, JobName]:
+    """``{remote_job_id: local_job_id}`` for every *handed-off* handle to ``peer_id``.
+
+    Used by the full-resync set-replacement to find local handles the peer's
+    active set no longer contains. Restricted to ``HANDED_OFF`` handles: a still-
+    ``PENDING_HANDOFF`` handle is not on the peer yet (the re-drive owns it), so
+    its absence from the peer's active set is expected, not a reason to reap it.
+    """
+    rows = tx.execute(
+        select(federated_jobs_table.c.remote_job_id, federated_jobs_table.c.job_id).where(
+            federated_jobs_table.c.peer_id == peer_id,
+            federated_jobs_table.c.handoff_state == bindparam("handed_off"),
+        ),
+        {"handed_off": 1},  # HandoffState.HANDED_OFF
+    ).all()
+    return {r.remote_job_id: r.job_id for r in rows}
+
+
+def federated_spend_for_user(tx: Tx, user_id: str) -> int:
+    """Sum of spend snapshots over the user's non-terminal federated handles."""
+    total = tx.execute(
+        select(func.coalesce(func.sum(federated_jobs_table.c.spend_snapshot_micros), 0))
+        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
+        .where(
+            jobs_table.c.user_id == bindparam("user_id"),
+            jobs_table.c.state.notin_(bindparam("terminal_states", expanding=True)),
+        ),
+        {"user_id": user_id, "terminal_states": list(TERMINAL_JOB_STATES)},
+    ).scalar()
+    return int(total or 0)
+
+
+def active_federated_job_count(tx: Tx, peer_id: str) -> int:
+    """Count of non-terminal federated handles delegated to ``peer_id``."""
+    count = tx.execute(
+        select(func.count())
+        .select_from(federated_jobs_table.join(jobs_table, jobs_table.c.job_id == federated_jobs_table.c.job_id))
+        .where(
+            federated_jobs_table.c.peer_id == bindparam("peer_id"),
+            jobs_table.c.state.notin_(bindparam("terminal_states", expanding=True)),
+        ),
+        {"peer_id": peer_id, "terminal_states": list(TERMINAL_JOB_STATES)},
+    ).scalar()
+    return int(count or 0)
+
+
+def read_sync_cursor(tx: Tx, peer_id: str) -> str:
+    """The persisted delta-sync cursor for ``peer_id`` ("" on first contact)."""
+    row = tx.execute(
+        select(federation_sync_state_table.c.cursor).where(federation_sync_state_table.c.peer_id == peer_id)
+    ).first()
+    return row.cursor if row is not None else ""
+
+
+# --- peer side: build the change page for a requester ---
+
+
+@dataclass(frozen=True)
+class FederationChange:
+    """One job's change since a requester's cursor (peer side)."""
+
+    job_id: JobName  # the peer's local job id (== the requester's remote_job_id)
+    tombstone: bool
+    changed_task_indexes: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class FederationChangePage:
+    changes: list[FederationChange]
+    next_cursor: str
+    cursor_stale: bool
+
+
+def _changelog_floor(tx: Tx) -> int:
+    row = tx.execute(
+        select(federation_changelog_floor_table.c.floor).where(federation_changelog_floor_table.c.id == 0)
+    ).first()
+    return int(row.floor) if row is not None else 0
+
+
+def _changelog_max_seq(tx: Tx) -> int:
+    return int(tx.execute(select(func.coalesce(func.max(federation_changelog_table.c.seq), 0))).scalar() or 0)
+
+
+def _task_indexes_for_job(tx: Tx, job_id: JobName) -> tuple[int, ...]:
+    rows = tx.execute(select(tasks_table.c.task_index).where(tasks_table.c.job_id == job_id)).all()
+    return tuple(int(r.task_index) for r in rows)
+
+
+def federation_sync_page(tx: Tx, requester_id: str, cursor: str) -> FederationChangePage:
+    """The change page a peer returns to ``requester_id`` for its cursor.
+
+    Empty cursor (first contact) or a cursor at/below the retained changelog floor
+    is stale: the page is the requester's full active set (every still-present
+    handed-off job) and ``cursor_stale`` is set so the parent set-replaces. Else it
+    is the incremental set of jobs whose changelog rows advanced past the cursor.
+    """
+    floor = _changelog_floor(tx)
+    cursor_seq = int(cursor) if cursor else 0
+    stale = (not cursor) or (cursor_seq < floor)
+
+    if stale:
+        rows = tx.execute(
+            select(federation_received_jobs_table.c.job_id)
+            .select_from(
+                federation_received_jobs_table.join(
+                    jobs_table, jobs_table.c.job_id == federation_received_jobs_table.c.job_id
+                )
+            )
+            .where(federation_received_jobs_table.c.requester_id == requester_id)
+        ).all()
+        changes = [
+            FederationChange(job_id=r.job_id, tombstone=False, changed_task_indexes=_task_indexes_for_job(tx, r.job_id))
+            for r in rows
+        ]
+        # A full resync consumes the whole active set, so it subsumes every event
+        # up to now — including the pruned ones below the floor. Advance the cursor
+        # past the floor (max_seq alone can sit below it once the log is compacted)
+        # so the next sync is incremental rather than perpetually stale.
+        next_cursor = str(max(floor, _changelog_max_seq(tx)))
+        return FederationChangePage(changes=changes, next_cursor=next_cursor, cursor_stale=True)
+
+    rows = tx.execute(
+        select(
+            federation_changelog_table.c.job_id,
+            federation_changelog_table.c.task_index,
+            federation_changelog_table.c.tombstone,
+            federation_changelog_table.c.seq,
+        )
+        .select_from(
+            federation_changelog_table.join(
+                federation_received_jobs_table,
+                federation_received_jobs_table.c.job_id == federation_changelog_table.c.job_id,
+            )
+        )
+        .where(
+            federation_received_jobs_table.c.requester_id == requester_id,
+            federation_changelog_table.c.seq > bindparam("cursor_seq"),
+        )
+        .order_by(federation_changelog_table.c.seq),
+        {"cursor_seq": cursor_seq},
+    ).all()
+
+    tombstoned: dict[JobName, bool] = {}
+    task_indexes: dict[JobName, set[int]] = {}
+    order: list[JobName] = []
+    for r in rows:
+        job_id = r.job_id
+        if job_id not in tombstoned:
+            tombstoned[job_id] = False
+            task_indexes[job_id] = set()
+            order.append(job_id)
+        if r.tombstone:
+            tombstoned[job_id] = True
+        elif r.task_index is not None:
+            task_indexes[job_id].add(int(r.task_index))
+
+    changes = [
+        FederationChange(
+            job_id=job_id,
+            tombstone=tombstoned[job_id],
+            changed_task_indexes=tuple(sorted(task_indexes[job_id])),
+        )
+        for job_id in order
+    ]
+    # Advance to the global max: every changelog row up to it that belongs to
+    # this requester is in ``rows`` (the query has no upper bound), so nothing is
+    # skipped, and unconsumed rows for the peer's own subtree don't get re-scanned.
+    return FederationChangePage(changes=changes, next_cursor=str(_changelog_max_seq(tx)), cursor_stale=False)

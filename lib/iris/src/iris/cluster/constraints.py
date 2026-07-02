@@ -999,6 +999,32 @@ def backend_directive(constraints: Sequence[Constraint]) -> str | None:
     return None
 
 
+CLUSTER_CONSTRAINT_KEY = "cluster"
+"""Reserved constraint key carrying a ``--cluster`` federation routing directive.
+
+A ``cluster EQ <peer>`` constraint pins a whole job to a named federation peer:
+the submit-time router hands it off to that peer instead of running it locally.
+Federation strips it before the handed-off request reaches the peer's worker
+matching (no worker advertises a ``cluster`` attribute, so a leftover hard
+``cluster=X`` constraint would match no worker and starve the task), exactly as
+the ``backend`` directive is stripped for local scheduling. A job may not pin
+both a local ``backend`` and a ``cluster`` — the two directives are mutually
+exclusive (one runs the job here, the other hands it off)."""
+
+
+def strip_cluster_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
+    """Drop the reserved ``cluster`` federation routing directive from ``constraints``."""
+    return [c for c in constraints if c.key != CLUSTER_CONSTRAINT_KEY]
+
+
+def cluster_directive(constraints: Sequence[Constraint]) -> str | None:
+    """Return the ``--cluster`` peer target from a ``cluster EQ <peer>`` constraint, if any."""
+    for c in constraints:
+        if c.key == CLUSTER_CONSTRAINT_KEY and c.op == ConstraintOp.EQ:
+            return str(c.values[0].value)
+    return None
+
+
 def routing_constraints(constraints: Sequence[Constraint]) -> list[Constraint]:
     """Filter to routing-only constraints, stripping CPU device-type.
 

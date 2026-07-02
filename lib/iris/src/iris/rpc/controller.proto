@@ -119,6 +119,20 @@ message Controller {
     // profiles (DOCKER_ACCESS, PRIVILEGED) require the admin role at submission
     // when auth is enabled; see service.LaunchJob.
     iris.job.ContainerProfile container_profile = 37;
+
+    // Set only when a federation parent hands a whole job off to this cluster as
+    // a peer. Its presence marks the job as peer-owned: the receiving controller
+    // records the handing-off cluster's ownership (so FederationSync reports the
+    // job back only to that requester) and runs the job in its own DAG on its own
+    // backends. Absent for an ordinary local submission.
+    FederationHandoff federation = 38;
+  }
+
+  // Attribution carried on a federated handoff (LaunchJobRequest.federation).
+  // Ownership is an explicit field, never parsed out of the job name.
+  message FederationHandoff {
+    string requester_id = 1;     // the handing-off (parent) cluster's id
+    string owner_principal = 2;  // the end-user identity the parent asserts
   }
 
   message LaunchJobResponse {
@@ -651,6 +665,36 @@ message Controller {
   message ListPeersResponse {
     repeated PeerSummary peers = 1;
   }
+
+  // --- Federation sync (served by every peer, called by each parent) ---
+
+  message FederationSyncRequest {
+    // The federating (parent) cluster's id: authenticates the caller and selects
+    // which handed-off jobs the peer reports.
+    string requester_id = 1;
+    // Opaque monotonic watermark into the peer's changelog. Empty on first
+    // contact or after the parent lost its cursor — the peer then answers with a
+    // full active-set snapshot (cursor_stale = true).
+    string cursor = 2;
+  }
+
+  // One handed-off job's state as the peer currently holds it. The parent mirrors
+  // this into its own jobs/tasks rows (stamped child_cluster) for that handle.
+  message FederationJobDelta {
+    string remote_job_id = 1;                     // the peer's local job id for the handoff
+    iris.job.JobStatus summary = 2;               // job state + counts (+ spend once reported)
+    repeated iris.job.TaskStatus changed_tasks = 3;  // full row for each task changed since the cursor
+    bool tombstone = 4;                           // peer has pruned the job; parent drops its projection
+  }
+
+  message FederationSyncResponse {
+    repeated FederationJobDelta deltas = 1;
+    string next_cursor = 2;   // persisted to federation_sync_state.cursor; sent back next tick
+    // The requested cursor is below the retained changelog floor (or empty), so
+    // `deltas` is the peer's entire active set for this requester and the parent
+    // must set-replace: drop any local handle for this peer absent from the set.
+    bool cursor_stale = 3;
+  }
 }
 
 // ============================================================================
@@ -729,6 +773,13 @@ service ControllerService {
   // ListBackends: backends are what this controller runs, peers are what it
   // delegates to.
   rpc ListPeers(Controller.ListPeersRequest) returns (Controller.ListPeersResponse);
+
+  // Bulk delta-sync of handed-off jobs, called by a federation parent once per
+  // tick against each of its peers. The peer reports every job this requester
+  // handed off that changed since the cursor (or the full active set when the
+  // cursor is stale). Handoff itself reuses LaunchJob; a routed cancel reuses
+  // TerminateJob.
+  rpc FederationSync(Controller.FederationSyncRequest) returns (Controller.FederationSyncResponse);
 }
 
 // Service-discovery endpoint registry, leased.
