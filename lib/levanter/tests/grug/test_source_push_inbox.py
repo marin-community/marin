@@ -44,8 +44,6 @@ def test_source_push_profile_applies_current_best_candidate_defaults(
     config.validate()
     assert args.routing == config.routing == expected_routing
     assert args.send_pipeline_depth == config.send_pipeline_depth == expected_send_pipeline_depth
-    assert args.implementation == config.implementation == "m_n_slots"
-    assert args.hidden_output_mode == config.hidden_output_mode == "queue"
     assert args.n_groups_per_job == config.n_groups_per_job == 2
     assert args.repeat_runs == settings.repeat_runs == 48
 
@@ -84,7 +82,6 @@ def test_source_push_profile_returns_typed_config_and_run_settings():
 
     config.validate()
     assert config.routing == "roughly_balanced"
-    assert config.hidden_output_mode == "queue"
     assert config.n_groups_per_job == 2
     assert config.send_pipeline_depth == 1
     assert settings.warmup == 2
@@ -106,6 +103,15 @@ def test_disabled_modes_are_not_public_cli_choices():
     with pytest.raises(SystemExit):
         source_push_cli.parse_source_push_inbox_args(["--inbox-storage", "alias"])
 
+    with pytest.raises(SystemExit):
+        source_push_cli.parse_source_push_inbox_args(["--implementation", "send_only"])
+
+    with pytest.raises(SystemExit):
+        source_push_cli.parse_source_push_inbox_args(["--hidden-output-mode", "full"])
+
+    with pytest.raises(SystemExit):
+        source_push_cli.parse_source_push_inbox_args(["--hidden-compute-mode", "store_zero"])
+
 
 def test_removed_experimental_modes_are_not_config_fields():
     for kwargs in (
@@ -114,23 +120,22 @@ def test_removed_experimental_modes_are_not_config_fields():
         {"direct_self_compute": True},
         {"lowering_semantics": "warpgroup"},
         {"output_mode": "debug"},
+        {"implementation": "send_only"},
+        {"hidden_output_mode": "full"},
+        {"hidden_compute_mode": "store_zero"},
     ):
         with pytest.raises(TypeError):
             source_push_inbox.PushInboxConfig(**kwargs)
 
 
 def test_removed_send_pipeline_depths_are_rejected_by_config_validation():
-    for kwargs in (
-        {"implementation": "m_owner"},
-        {"send_pipeline_depth": 3},
-    ):
+    for kwargs in ({"send_pipeline_depth": 3},):
         with pytest.raises(ValueError):
             source_push_inbox.PushInboxConfig(**kwargs).validate()
 
 
 def test_compact_routing_inputs_match_synthetic_queue_metadata():
     config = source_push_inbox.PushInboxConfig(
-        implementation="m_n_slots",
         ep_size=2,
         entries_per_rank=2,
         inbox_slots=2,

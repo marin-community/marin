@@ -159,25 +159,8 @@ def _run_variant(
 def _ablation_variants(config: PushInboxConfig) -> tuple[tuple[str, str, PushInboxConfig], ...]:
     return (
         ("winning", "baseline", config),
-        ("hidden_output_mode=full", "hidden_output_mode", replace(config, hidden_output_mode="full")),
         ("n_groups_per_job=1", "n_groups_per_job", replace(config, n_groups_per_job=1)),
         ("send_pipeline_depth=2", "send_pipeline_depth", replace(config, send_pipeline_depth=2)),
-    )
-
-
-def _decomposition_variants(config: PushInboxConfig) -> tuple[tuple[str, str, PushInboxConfig], ...]:
-    return (
-        (
-            "send_only",
-            "implementation",
-            replace(config, implementation="send_only", hidden_output_mode="full", hidden_compute_mode="wgmma"),
-        ),
-        (
-            "hidden_compute_mode=store_zero",
-            "hidden_compute_mode",
-            replace(config, hidden_compute_mode="store_zero"),
-        ),
-        ("full_wgmma", "baseline", config),
     )
 
 
@@ -196,8 +179,6 @@ def _integration_smoke_config(config: PushInboxConfig) -> PushInboxConfig:
         n_groups_per_job=2,
         num_send_sms=2,
         num_sms=16,
-        hidden_output_mode="full",
-        hidden_compute_mode="wgmma",
     )
 
 
@@ -212,7 +193,7 @@ def _parse_args() -> argparse.Namespace:
         choices=SOURCE_PUSH_PROFILES,
         default=SOURCE_PUSH_PROFILE_STABLE_216,
     )
-    parser.add_argument("--suite", choices=("ablation", "decomposition", "integration", "all"), default="all")
+    parser.add_argument("--suite", choices=("ablation", "integration", "all"), default="all")
     parser.add_argument("--repeat-runs", type=int, default=None)
     parser.add_argument("--warmup", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
@@ -256,18 +237,6 @@ def main() -> None:
                     variant_config,
                     settings,
                     suite="ablation",
-                    variant=variant,
-                    axis=axis,
-                    source_push_profile=args.source_push_profile,
-                    jsonl_file=jsonl_file,
-                )
-
-        if args.suite in ("decomposition", "all"):
-            for variant, axis, variant_config in _decomposition_variants(config):
-                _run_variant(
-                    variant_config,
-                    settings,
-                    suite="decomposition",
                     variant=variant,
                     axis=axis,
                     source_push_profile=args.source_push_profile,

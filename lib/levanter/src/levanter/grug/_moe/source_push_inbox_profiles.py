@@ -20,8 +20,6 @@ SOURCE_PUSH_PROFILES = (
 
 _COMMON_HOPPER_QUEUE_DEFAULTS: Mapping[str, Any] = MappingProxyType(
     {
-        "implementation": "m_n_slots",
-        "hidden_output_mode": "queue",
         "tokens_per_rank": 32768,
         "hidden_dim": 2560,
         "intermediate_dim": 1280,
