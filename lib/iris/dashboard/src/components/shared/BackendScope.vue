@@ -6,6 +6,11 @@ import { useBackends } from '@/composables/useBackends'
 // Above this threshold we switch from a plain <select> to a searchable combo.
 const COMBOBOX_THRESHOLD = 8
 
+// An option value encodes the target kind so a selection writes the matching
+// query param. Kept in one place so the encode and decode sites stay in sync.
+const BACKEND_SCOPE_PREFIX = 'backend:'
+const CLUSTER_SCOPE_PREFIX = 'cluster:'
+
 const route = useRoute()
 const router = useRouter()
 const { backends, peers, ensurePeers } = useBackends()
@@ -23,8 +28,8 @@ interface ScopeOption {
 }
 
 const options = computed<ScopeOption[]>(() => [
-  ...backends.value.map(b => ({ value: `backend:${b.id}`, label: b.name || b.id })),
-  ...peers.value.map(p => ({ value: `cluster:${p.peerId}`, label: `${p.peerId} (peer)` })),
+  ...backends.value.map(b => ({ value: `${BACKEND_SCOPE_PREFIX}${b.id}`, label: b.name || b.id })),
+  ...peers.value.map(p => ({ value: `${CLUSTER_SCOPE_PREFIX}${p.peerId}`, label: `${p.peerId} (peer)` })),
 ])
 
 const targetCount = computed(() => backends.value.length + peers.value.length)
@@ -37,9 +42,9 @@ function queryStr(v: unknown): string {
 
 const selectedValue = computed(() => {
   const backend = queryStr(route.query.backend)
-  if (backend) return `backend:${backend}`
+  if (backend) return `${BACKEND_SCOPE_PREFIX}${backend}`
   const cluster = queryStr(route.query.cluster)
-  if (cluster) return `cluster:${cluster}`
+  if (cluster) return `${CLUSTER_SCOPE_PREFIX}${cluster}`
   return ''
 })
 
@@ -60,8 +65,8 @@ function applyScope(value: string) {
   searchTerm.value = ''
   // A target is either a backend or a peer — never both — so set one and clear
   // the other (undefined drops the param from the URL).
-  const backend = value.startsWith('backend:') ? value.slice('backend:'.length) : undefined
-  const cluster = value.startsWith('cluster:') ? value.slice('cluster:'.length) : undefined
+  const backend = value.startsWith(BACKEND_SCOPE_PREFIX) ? value.slice(BACKEND_SCOPE_PREFIX.length) : undefined
+  const cluster = value.startsWith(CLUSTER_SCOPE_PREFIX) ? value.slice(CLUSTER_SCOPE_PREFIX.length) : undefined
   router.replace({ query: { ...route.query, backend, cluster } })
 }
 

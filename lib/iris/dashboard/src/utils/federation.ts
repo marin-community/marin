@@ -22,9 +22,8 @@ export function peerJobUrl(dashboardUrl?: string, remoteJobId?: string): string 
 }
 
 /**
- * Link to a peer cluster's dashboard home. Used where the exact remote job id
- * isn't available (e.g. the task page, whose TaskStatus carries no remoteJobId),
- * so the user still has a one-click path to the peer's own dashboard.
+ * Link to a peer cluster's dashboard home. Returns undefined when the peer
+ * dashboard URL is missing, so callers can fall back to plain text.
  */
 export function peerHomeUrl(dashboardUrl?: string): string | undefined {
   if (!dashboardUrl) return undefined
