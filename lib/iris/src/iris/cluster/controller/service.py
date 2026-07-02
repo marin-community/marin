@@ -2102,7 +2102,8 @@ class ControllerServiceImpl:
         Merges every backend by default; ``only_backend_id`` restricts the view to
         a single backend. Each backend authors its own status — groups already
         tagged with its backend_id and every VM overlaid with usability/running-task
-        counts — so this only concatenates. Each backend owns a disjoint set of
+        counts — so this only concatenates; a backend with no autoscaler authors an
+        empty status that contributes nothing. Each backend owns a disjoint set of
         scale groups (the single scale-group->backend key space), so group-keyed
         fields (``current_demand``, ``recent_actions``) need no further
         disambiguation. ``recent_actions`` are re-sorted newest-first and capped;
@@ -2113,8 +2114,6 @@ class ControllerServiceImpl:
         last_evaluation = 0
         for backend_id, backend in self._controller.backends.items():
             if only_backend_id and backend_id != only_backend_id:
-                continue
-            if backend.autoscaler is None:
                 continue
             sub = backend.autoscaler_status()
             merged.groups.extend(sub.groups)
@@ -2930,9 +2929,18 @@ class ControllerServiceImpl:
 
             adv: dict[str, set[str]] = backend.advertised_attributes()
 
+            # Each backend authors its own expanded status variant in full: a
+            # worker-daemon backend reads its own liveness tracker and running-task
+            # rows to stamp health counts, per-VM usability, and the backend_id on its
+            # autoscaler groups. The controller renders the result verbatim — the
+            # Backends tab's detail panel shows whichever variant the backend selected,
+            # and the per-group capacity-health tally is read off the same authored view.
+            backend_status = backend.status()
+            variant = backend_status.WhichOneof("detail")
+
             cap_health: dict[str, int] = {}
-            if backend.autoscaler is not None:
-                for group in backend.autoscaler.get_status().groups:
+            if variant == "worker":
+                for group in backend_status.worker.autoscaler.groups:
                     st = group.availability_status or "unknown"
                     cap_health[st] = cap_health.get(st, 0) + 1
 
@@ -2956,13 +2964,6 @@ class ControllerServiceImpl:
             for key, values in adv.items():
                 summary.advertised_attributes[key].values.extend(sorted(values))
 
-            # Each backend authors its own expanded status variant in full: a
-            # worker-daemon backend reads its own liveness tracker and running-task
-            # rows to stamp health counts, per-VM usability, and the backend_id on its
-            # autoscaler groups. The controller renders the result verbatim — the
-            # Backends tab's detail panel shows whichever variant the backend selected.
-            backend_status = backend.status()
-            variant = backend_status.WhichOneof("detail")
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)
             elif variant == "worker":

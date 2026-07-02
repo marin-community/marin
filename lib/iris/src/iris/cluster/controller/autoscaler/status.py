@@ -60,7 +60,7 @@ def slice_capacity_status(
 def overlay_worker_usability(
     status: vm_pb2.AutoscalerStatus,
     usability_by_id: dict[str, WorkerUsability],
-    running: dict[WorkerId, set],
+    running: dict[WorkerId, set[JobName]],
 ) -> None:
     """Overlay per-VM usability and stamp each ready slice's capacity status in place.
 

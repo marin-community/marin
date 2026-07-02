@@ -80,7 +80,7 @@ class BackendWorkerStore(TransitionReader, Protocol):
         ...
 
     def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-        """The running-task ids on each of ``worker_ids`` (dashboard read pool)."""
+        """The running-task ids on each of ``worker_ids``."""
         ...
 
     def worker_address(self, worker_id: WorkerId) -> str | None:
