@@ -96,6 +96,21 @@ Prefer one canonical kernel input shape and make callers normalize to it:
 
 For TPU kernels, also read the input-shape notes in [TPU tips](tpu-tips.md).
 
+## Sharded Kernel Boundaries
+
+Every accelerator kernel boundary should be wrapped in an explicit
+`jax.shard_map`. This applies to `pl.pallas_call`, Mosaic GPU calls, and custom
+FFI calls. Normalize and `reshard` inputs to the local kernel `PartitionSpec`
+before entering the `shard_map`, and make the output spec match the public
+wrapper contract. Only skip `shard_map` for wrappers whose inputs are explicitly
+documented and tested as fully local or replicated.
+
+Do not call a Pallas or FFI kernel directly on globally sharded tensors. Opaque
+kernel boundaries give XLA too little information, and it can insert large
+all-gathers or other global reshards around the call. When a kernel cannot
+support a sharded dimension, assert that dimension is unsharded before the
+`shard_map` rather than silently relying on a global reshard.
+
 ## Bad Patterns
 
 - Exact-shape tuned tables instead of stable shape buckets.
@@ -106,3 +121,5 @@ For TPU kernels, also read the input-shape notes in [TPU tips](tpu-tips.md).
 - Hidden env-var defaults for critical behavior.
 - Compatibility shims for old kernel arguments unless the user explicitly asks
   for them.
+- Direct `pl.pallas_call`, Mosaic, or FFI calls on sharded arrays without a
+  localizing `shard_map`.

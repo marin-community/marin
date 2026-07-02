@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
@@ -23,6 +24,20 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     k = jax.random.normal(k_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     v = jax.random.normal(v_key, (batch, k_len, kv_heads, 8), dtype=jnp.float32)
     return q, k, v
+
+
+def _jaxpr_has_primitive(jaxpr, primitive_name: str) -> bool:
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == primitive_name:
+            return True
+        for value in eqn.params.values():
+            if hasattr(value, "jaxpr") and _jaxpr_has_primitive(value.jaxpr, primitive_name):
+                return True
+            if isinstance(value, (tuple, list)):
+                for item in value:
+                    if hasattr(item, "jaxpr") and _jaxpr_has_primitive(item.jaxpr, primitive_name):
+                        return True
+    return False
 
 
 def test_packed_segment_backward_block_sparse_indices_are_q_direction():
@@ -112,6 +127,36 @@ def test_fa4_frontend_passes_valid_mask_to_backend(monkeypatch):
     np.testing.assert_array_equal(gpu_fa4_cute_attention(q, k, v, mask), q)
     np.testing.assert_array_equal(captured["valid"], jnp.array([[True, True, False, True]]))
     np.testing.assert_array_equal(captured["lower_bounds"], jnp.array([[0, 0, 4, 3]], dtype=jnp.int32))
+
+
+def test_fa4_frontend_enters_shard_map_before_ffi(monkeypatch):
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
+        del k, v, lower_bounds, valid, sm_scale, kernel_config
+        return q
+
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
+
+    q, k, v = _make_qkv(batch=1, q_len=4, k_len=4, q_heads=2, kv_heads=1)
+    q = q.astype(jnp.bfloat16)
+    k = k.astype(jnp.bfloat16)
+    v = v.astype(jnp.bfloat16)
+    mask = AttentionMask.causal()
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape((1, 1, 1, 1)),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+
+    with jax.set_mesh(mesh):
+        traced = jax.make_jaxpr(lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask))(
+            q,
+            k,
+            v,
+        )
+
+    assert _jaxpr_has_primitive(traced.jaxpr, "shard_map")
 
 
 def test_fa4_forward_backend_does_not_pass_valid_to_forward_launcher(monkeypatch):

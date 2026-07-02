@@ -2,19 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import inspect
 from dataclasses import replace
 
 import jax
+from jax import shard_map
 from jax import numpy as jnp
-from jax.sharding import PartitionSpec as P
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask, Fa4CuteMetadata
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
-from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
+from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
+_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
@@ -184,6 +188,95 @@ def _validate_self_attention_shape(q: jax.Array, k: jax.Array, *, backend_name: 
         raise NotImplementedError(f"{backend_name} requires self-attention q_len == k_len.")
 
 
+def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
+    return tuple(axis for axis in _BATCH_AXES if axis in mesh.shape)
+
+
+def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
+    if "model" not in mesh.shape or int(mesh.shape["model"]) != 1:
+        return None
+    return "model"
+
+
+def _assert_sequence_axis_unsharded(name: str, x: jax.Array) -> None:
+    sharding = getattr(x, "sharding", None)
+    if not isinstance(sharding, NamedSharding):
+        return
+
+    spec = tuple(sharding.spec)
+    if len(spec) > 1 and spec[1] is not None:
+        raise ValueError(
+            f"FA4/CuTe shard_map requires unsharded sequence axis for {name}, got sharding {sharding.spec}."
+        )
+
+
+def _fa4_cute_attention_forward_sharded(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    sm_scale: float,
+    kernel_config: Flash4CuteKernelConfig,
+) -> jax.Array:
+    mesh = get_abstract_mesh()
+    if mesh is None or mesh.empty:
+        return fa4_cute_attention_forward(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid,
+            sm_scale=sm_scale,
+            kernel_config=kernel_config,
+        )
+
+    batch_axes = _active_batch_axes(mesh)
+    if not batch_axes:
+        return fa4_cute_attention_forward(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid,
+            sm_scale=sm_scale,
+            kernel_config=kernel_config,
+        )
+
+    qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
+    metadata_spec = P(batch_axes, None)
+    _assert_sequence_axis_unsharded("q", q)
+    _assert_sequence_axis_unsharded("k", k)
+    _assert_sequence_axis_unsharded("v", v)
+    _assert_sequence_axis_unsharded("lower_bounds", lower_bounds)
+    _assert_sequence_axis_unsharded("valid", valid)
+    q = reshard(q, qkv_spec)
+    k = reshard(k, qkv_spec)
+    v = reshard(v, qkv_spec)
+    lower_bounds = reshard(lower_bounds, metadata_spec)
+    valid = reshard(valid, metadata_spec)
+
+    @shard_map(
+        mesh=mesh,
+        in_specs=(qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec),
+        out_specs=qkv_spec,
+        **_SHARD_MAP_CHECK_KWARGS,
+    )
+    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+        return fa4_cute_attention_forward(
+            q_local,
+            k_local,
+            v_local,
+            lower_bounds_local,
+            valid_local,
+            sm_scale=sm_scale,
+            kernel_config=kernel_config,
+        )
+
+    return _local_fa4_attention(q, k, v, lower_bounds, valid)
+
+
 def _fa4_metadata_matches(mask: AttentionMask, *, batch_size: int, seq_len: int) -> bool:
     metadata = mask.fa4_cute_metadata
     return (
@@ -311,7 +404,7 @@ def gpu_fa4_cute_attention(
     kernel_config = _segmented_kernel_config(q.shape[-1])
 
     with jax.named_scope("fa4_cute_kernel"):
-        return fa4_cute_attention_forward(
+        return _fa4_cute_attention_forward_sharded(
             q,
             k,
             v,
