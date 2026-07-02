@@ -35,11 +35,24 @@ stops. With ``--apply`` it installs them, then reads the Traefik LoadBalancer's
 allocated ``*.coreweave.app`` FQDN and prints the DNS record to create and the
 restart/config step.
 
+``--uninstall`` tears the stack back down. Order matters: it deletes the
+ClusterIssuers first (once the CRD is gone they can no longer be addressed),
+``helm uninstall``\\ s both releases, deletes their namespaces, then sweeps the
+cluster-scoped resources a bare namespace delete orphans — the
+``*.cert-manager.io`` / ``*.traefik.io`` CRDs, the cert-manager webhook
+configurations, the releases' ClusterRoles/ClusterRoleBindings, and the Traefik
+IngressClass — and ends with a verification pass listing anything still present.
+Like install, it only prints the plan without ``--apply``.
+
 Usage:
     uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
         --acme-email you@oa.dev                                              # dry run
     uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
         --acme-email you@oa.dev --apply
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
+        --uninstall                                                          # dry run
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
+        --uninstall --apply
 """
 
 import subprocess
@@ -66,6 +79,18 @@ ISSUER_NAMES = {"prod": "letsencrypt-http01-prod", "staging": "letsencrypt-http0
 
 CLUSTERISSUER_CRD = "clusterissuers.cert-manager.io"
 _CRD_WAIT_SECONDS = 120.0
+
+# API groups whose CRDs the charts register; a namespace delete orphans these.
+CRD_GROUPS = ("cert-manager.io", "traefik.io")
+# Cluster-scoped kinds the charts create that `helm uninstall` normally removes
+# but a namespace-only teardown leaves behind.
+SWEEP_KINDS = (
+    "validatingwebhookconfiguration",
+    "mutatingwebhookconfiguration",
+    "clusterrole",
+    "clusterrolebinding",
+)
+INSTANCE_LABEL = "app.kubernetes.io/instance"
 
 # CoreWeave's External Hostname Controller allocates the LB's *.coreweave.app
 # FQDN asynchronously and reports it in the Service's ExternalRecords condition.
@@ -328,6 +353,168 @@ def _print_next_steps(
     )
 
 
+# --------------------------------------------------------------------------
+# Uninstall core (importable; the click command calls it).
+# --------------------------------------------------------------------------
+def _resource_names(kind: str, kflags: list[str], selector: str | None = None) -> list[str]:
+    """List ``kind/name`` strings for ``kind``; [] when the kind itself is unknown (CRD gone)."""
+    cmd = ["kubectl", *kflags, "get", kind, "-o", "name"]
+    if selector:
+        cmd += ["-l", selector]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return result.stdout.split() if result.returncode == 0 else []
+
+
+def _short_name(qualified: str) -> str:
+    """``customresourcedefinition.apiextensions.k8s.io/foo.cert-manager.io`` -> ``foo.cert-manager.io``."""
+    return qualified.rsplit("/", 1)[-1]
+
+
+def _group_crds(kflags: list[str]) -> list[str]:
+    """CRDs belonging to the chart-registered API groups (``CRD_GROUPS``)."""
+    suffixes = tuple(f".{group}" for group in CRD_GROUPS)
+    return [crd for crd in _resource_names("crd", kflags) if _short_name(crd).endswith(suffixes)]
+
+
+def _release_scoped(kind: str, releases: tuple[str, ...], kflags: list[str]) -> list[str]:
+    """Cluster-scoped ``kind`` objects belonging to ``releases``.
+
+    Matches by the ``app.kubernetes.io/instance`` label where the charts set it,
+    plus a name-prefix fallback for objects created without instance labels.
+    """
+    found: set[str] = set()
+    all_names = _resource_names(kind, kflags)
+    for release in releases:
+        found.update(_resource_names(kind, kflags, selector=f"{INSTANCE_LABEL}={release}"))
+        found.update(name for name in all_names if _short_name(name).startswith(release))
+    return sorted(found)
+
+
+def _kubectl_delete(names: list[str], kflags: list[str]) -> None:
+    run(["kubectl", *kflags, "delete", *names, "--ignore-not-found"], check=True)
+
+
+def _helm_release_installed(release: str, namespace: str, hflags: list[str]) -> bool:
+    result = subprocess.run(
+        ["helm", *hflags, "status", release, "-n", namespace],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def uninstall(
+    *,
+    ingress_class: str,
+    traefik_namespace: str,
+    traefik_release: str,
+    cert_manager_namespace: str,
+    cert_manager_release: str,
+    kubeconfig: str | None,
+    context: str | None,
+    apply: bool,
+) -> None:
+    hflags = helm_flags(kubeconfig, context)
+    kflags = kubectl_flags(kubeconfig, context)
+    release_pairs = ((traefik_release, traefik_namespace), (cert_manager_release, cert_manager_namespace))
+    releases = (traefik_release, cert_manager_release)
+    issuers = [ISSUER_NAMES[env] for env in ("staging", "prod")]
+    namespaces = list(dict.fromkeys([traefik_namespace, cert_manager_namespace]))
+
+    # Assemble + print the plan; the only branch is the final apply.
+    click.secho("==> Plan (teardown of the CoreWeave /proxy ingress prerequisites):", fg="blue", bold=True)
+    click.echo(f"  kubectl delete clusterissuer {' '.join(issuers)}   # first, while the CRD still exists")
+    for release, namespace in release_pairs:
+        click.echo(f"  helm uninstall {release} -n {namespace}")
+    click.echo(f"  kubectl delete namespace {' '.join(namespaces)}")
+    groups = " / ".join(f"*.{group}" for group in CRD_GROUPS)
+    click.echo(f"  kubectl delete crd <every {groups} CRD>")
+    click.echo(
+        f"  kubectl delete <{', '.join(SWEEP_KINDS)} with "
+        f"{INSTANCE_LABEL} in ({', '.join(releases)}) or name-prefixed by a release>"
+    )
+    click.echo(f"  kubectl delete ingressclass {ingress_class}")
+    click.echo("  then verify nothing is left")
+
+    if not apply:
+        click.secho("\nwarn: dry run — nothing deleted. Re-run with --apply to uninstall.", fg="yellow", err=True)
+        return
+
+    # 1. ClusterIssuers first: once the CRD is deleted they become unaddressable.
+    click.secho("==> Deleting ClusterIssuers (before the CRD goes)", fg="blue", bold=True)
+    if CLUSTERISSUER_CRD in {_short_name(crd) for crd in _resource_names("crd", kflags)}:
+        present = {_short_name(name) for name in _resource_names("clusterissuer", kflags)}
+        for name in (issuer for issuer in issuers if issuer not in present):
+            click.echo(f"  clusterissuer/{name}: already absent")
+        found = [f"clusterissuer/{issuer}" for issuer in issuers if issuer in present]
+        if found:
+            _kubectl_delete(found, kflags)
+    else:
+        click.echo(f"  CRD {CLUSTERISSUER_CRD} already absent — no ClusterIssuers to delete")
+
+    # 2. helm uninstall both releases (helm removes its own cluster-scoped objects).
+    for release, namespace in release_pairs:
+        click.secho(f"==> Uninstalling helm release {release} (namespace {namespace})", fg="blue", bold=True)
+        if not _helm_release_installed(release, namespace, hflags):
+            click.echo(f"  release {release} not installed in {namespace} — already absent")
+            continue
+        result = run(["helm", *hflags, "uninstall", release, "-n", namespace, "--wait"])
+        if result.returncode != 0:
+            raise click.ClickException(f"helm uninstall of {release} failed")
+
+    # 3. The namespaces the installs created.
+    click.secho("==> Deleting namespaces", fg="blue", bold=True)
+    existing = {_short_name(name) for name in _resource_names("namespace", kflags)}
+    for namespace in (ns for ns in namespaces if ns not in existing):
+        click.echo(f"  namespace/{namespace}: already absent")
+    found = [f"namespace/{ns}" for ns in namespaces if ns in existing]
+    if found:
+        _kubectl_delete(found, kflags)
+
+    # 4. Sweep the cluster-scoped leftovers a namespace delete orphans.
+    click.secho("==> Sweeping cluster-scoped leftovers", fg="blue", bold=True)
+    crds = _group_crds(kflags)
+    if crds:
+        _kubectl_delete(crds, kflags)
+    else:
+        click.echo(f"  CRDs ({groups}): already absent")
+    for kind in SWEEP_KINDS:
+        names = _release_scoped(kind, releases, kflags)
+        if names:
+            _kubectl_delete(names, kflags)
+        else:
+            click.echo(f"  {kind}: already absent")
+    if any(_short_name(name) == ingress_class for name in _resource_names("ingressclass", kflags)):
+        _kubectl_delete([f"ingressclass/{ingress_class}"], kflags)
+    else:
+        click.echo(f"  ingressclass/{ingress_class}: already absent")
+
+    # 5. Verify: list anything still present rather than assuming the sweeps worked.
+    click.secho("==> Verifying teardown", fg="blue", bold=True)
+    leftovers: list[str] = []
+    for release, namespace in release_pairs:
+        if _helm_release_installed(release, namespace, hflags):
+            leftovers.append(f"helm release {release} (namespace {namespace})")
+    existing = {_short_name(name) for name in _resource_names("namespace", kflags)}
+    leftovers += [f"namespace/{ns}" for ns in namespaces if ns in existing]
+    leftovers += _group_crds(kflags)
+    for kind in SWEEP_KINDS:
+        leftovers += _release_scoped(kind, releases, kflags)
+    leftovers += [
+        f"ingressclass/{ingress_class}"
+        for name in _resource_names("ingressclass", kflags)
+        if _short_name(name) == ingress_class
+    ]
+    if leftovers:
+        click.secho("warn: still present after teardown:", fg="yellow", err=True)
+        for item in leftovers:
+            click.echo(f"  {item}", err=True)
+        raise click.ClickException("teardown incomplete — delete the resources above by hand")
+    click.secho(
+        "==> Teardown complete — no releases, namespaces, or cluster-scoped leftovers remain.", fg="green", bold=True
+    )
+
+
 def _derive_from_cluster(name: str) -> dict:
     """Read a named Iris cluster config and return its CoreWeave ingress settings.
 
@@ -381,6 +568,14 @@ def _derive_from_cluster(name: str) -> dict:
 @click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config).")
 @click.option("--context", default=None, help="kube context to target.")
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
+@click.option(
+    "--uninstall",
+    "uninstall_mode",
+    is_flag=True,
+    help="Tear down instead of installing: delete the ClusterIssuers, helm-uninstall both releases, "
+    "delete their namespaces, sweep the cluster-scoped leftovers (CRDs, webhook configurations, "
+    "ClusterRoles/Bindings, IngressClass), and verify nothing remains.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -400,8 +595,9 @@ def main(
     kubeconfig: str | None,
     context: str | None,
     apply: bool,
+    uninstall_mode: bool,
 ) -> None:
-    """Install Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
+    """Install (or with --uninstall tear down) Traefik + cert-manager + issuers for the CoreWeave /proxy ingress."""
     if cluster:
         # Fill host / ingress-class / kubeconfig from the cluster config, but let
         # an explicitly-passed flag win over the derived value.
@@ -414,6 +610,35 @@ def main(
         host = pick("host", host, derived["host"])
         ingress_class = pick("ingress_class", ingress_class, derived["ingress_class"])
         kubeconfig = pick("kubeconfig", kubeconfig, derived["kubeconfig"])
+
+    if uninstall_mode:
+        install_only = (
+            "acme_email",
+            "host",
+            "traefik_version",
+            "cert_manager_version",
+            "skip_traefik",
+            "skip_cert_manager",
+            "skip_issuers",
+        )
+        explicit = [
+            f"--{name.replace('_', '-')}"
+            for name in install_only
+            if ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
+        ]
+        if explicit:
+            raise click.ClickException(f"--uninstall does not take install-only flags: {', '.join(explicit)}")
+        uninstall(
+            ingress_class=ingress_class,
+            traefik_namespace=traefik_namespace,
+            traefik_release=traefik_release,
+            cert_manager_namespace=cert_manager_namespace,
+            cert_manager_release=cert_manager_release,
+            kubeconfig=kubeconfig,
+            context=context,
+            apply=apply,
+        )
+        return
 
     install(
         acme_email=acme_email,
