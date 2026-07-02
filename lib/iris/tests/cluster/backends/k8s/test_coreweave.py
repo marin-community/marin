@@ -34,6 +34,7 @@ from iris.cluster.config import (
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
     _CONTROLLER_MEMORY_REQUEST,
+    _CONTROLLER_PROXY_INGRESS_NAME,
     _CONTROLLER_STATE_PVC_NAME,
     _CONTROLLER_STATE_PVC_SIZE,
     K8sControllerProvider,
@@ -199,6 +200,37 @@ def test_start_controller_creates_all_resources():
     pvc = k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
     assert pvc["spec"]["accessModes"] == ["ReadWriteOnce"]
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
+
+    # No public_proxy_host configured → no Ingress (ClusterIP only).
+    assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is None
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_creates_proxy_ingress_when_host_set():
+    """With public_proxy_host set, setup publishes ONLY /proxy via an Ingress."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cw = cluster_config.controller.coreweave
+    cw.public_proxy_host = "iris-cw.oa.dev"
+    cw.tls_secret = "iris-controller-proxy-tls"
+
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+    provider.start_controller(cluster_config)
+
+    ingress = k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME)
+    assert ingress is not None
+    spec = ingress["spec"]
+    assert spec["ingressClassName"] == "nginx"
+    rule = spec["rules"][0]
+    assert rule["host"] == "iris-cw.oa.dev"
+    path = rule["http"]["paths"][0]
+    # Only /proxy is published; the dashboard + RPC surface stay ClusterIP-internal.
+    assert (path["path"], path["pathType"]) == ("/proxy", "Prefix")
+    assert path["backend"]["service"] == {"name": "iris-controller-svc", "port": {"number": 10000}}
+    assert spec["tls"] == [{"hosts": ["iris-cw.oa.dev"], "secretName": "iris-controller-proxy-tls"}]
 
     t.join(timeout=5)
     provider.shutdown()

@@ -47,11 +47,12 @@ The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 check, but its deny-public rule can cut internal task->controller traffic, so it
 stays an explicit, deliberate step.
 
-The ``public-proxy`` stage is likewise *not* part of ``deploy``: it opens the
-``/proxy/*`` path past IAP (an IAP-free backend on the same controller NEG plus a
-URL-map path rule) so off-cluster callers can reach a registered endpoint through
-the controller proxy, gated by the controller's own per-endpoint auth. It widens
-the public surface, so it is a deliberate, explicit step run after ``deploy``.
+The ``public-proxy`` stage opens the ``/proxy/*`` path past IAP (an IAP-free
+backend on the same controller NEG plus a URL-map path rule) so off-cluster
+callers can reach a registered endpoint through the controller proxy, gated by the
+controller's own per-endpoint auth. It runs by default as part of ``deploy``
+(idempotent); pass ``--no-public-proxy`` to keep the controller fully IAP-gated,
+or run the ``public-proxy`` subcommand standalone.
 
 Usage:
     uv run lib/iris/scripts/iap_gclb.py deploy marin \\
@@ -896,6 +897,7 @@ def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: 
     doc.setdefault("pathMatchers", [])
 
     host_rule = next((h for h in doc["hostRules"] if backend.domain in h.get("hosts", [])), None)
+    matcher: dict
     if host_rule is None:
         # The frontend-owning cluster has no host rule (it uses the map default);
         # add one whose matcher default stays the IAP backend, so only /proxy/* is
@@ -907,14 +909,15 @@ def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: 
         matcher = next(m for m in doc["pathMatchers"] if m["name"] == host_rule["pathMatcher"])
         matcher.setdefault("pathRules", [])
 
-    existing = next((r for r in matcher["pathRules"] if set(r.get("paths", [])) == set(PUBLIC_PROXY_PATHS)), None)
+    rules = matcher["pathRules"]
+    existing = next((r for r in rules if set(r.get("paths", [])) == set(PUBLIC_PROXY_PATHS)), None)
     if existing is not None and existing.get("service") == proxy_link:
         logger.info("✓ /proxy/* already routes to %s for %s", backend.proxy_service, backend.domain)
         return
     if existing is not None:
         existing["service"] = proxy_link
     else:
-        matcher["pathRules"].append({"paths": list(PUBLIC_PROXY_PATHS), "service": proxy_link})
+        rules.append({"paths": list(PUBLIC_PROXY_PATHS), "service": proxy_link})
     logger.info(
         "→ routing %s/proxy/* -> %s (IAP-free); everything else stays IAP-gated", backend.domain, backend.proxy_service
     )
@@ -1052,9 +1055,9 @@ def cli(verbose: bool) -> None:
 @click.option("--member", help="Principal to grant IAP access, e.g. user:you@example.com")
 @click.option("--with-firewall", is_flag=True, help="Also run the allow-LB firewall stage (tag VM + allow rule)")
 @click.option(
-    "--with-public-proxy",
+    "--no-public-proxy",
     is_flag=True,
-    help="Also open /proxy/* off-cluster via an IAP-free backend (gated by the controller's per-endpoint auth)",
+    help="Skip the public-proxy stage (leave the controller fully IAP-gated; no off-cluster /proxy route)",
 )
 def deploy(
     cluster: str,
@@ -1068,7 +1071,7 @@ def deploy(
     controller_ip: str | None,
     member: str | None,
     with_firewall: bool,
-    with_public_proxy: bool,
+    no_public_proxy: bool,
 ) -> None:
     """Stand up a cluster's IAP backend and route it through the shared frontend.
 
@@ -1097,8 +1100,9 @@ def deploy(
     # Shared frontend + this cluster's route.
     reserved_ip = ensure_frontend(frontend, backend, dry_run=dry_run)
 
-    # Optional IAP-free /proxy route (reuses the NEG the backend stage created).
-    if with_public_proxy:
+    # IAP-free /proxy route (default; reuses the NEG the backend stage created).
+    # Opt out with --no-public-proxy to keep the controller fully IAP-gated.
+    if not no_public_proxy:
         ensure_public_proxy_backend(backend, dry_run=dry_run)
         ensure_public_proxy_route(frontend, backend, dry_run=dry_run)
 
@@ -1113,13 +1117,12 @@ def deploy(
         click.echo()
         click.echo("Firewall NOT applied. The backend health check needs the allow-LB rule:")
         click.echo(f"  uv run {sys.argv[0]} firewall {cluster}")
-    if with_public_proxy:
-        click.echo()
-        click.echo(f"Opened https://{domain}/proxy/* (IAP-free) -> {backend.proxy_service}; controller auth gates it.")
-    else:
-        click.echo()
-        click.echo("To open /proxy/* off-cluster (IAP-free, gated by the controller's per-endpoint auth):")
+    click.echo()
+    if no_public_proxy:
+        click.echo("Public proxy NOT opened (--no-public-proxy). To open /proxy/* off-cluster later:")
         click.echo(f"  uv run {sys.argv[0]} public-proxy {cluster} --domain {domain}")
+    else:
+        click.echo(f"Opened https://{domain}/proxy/* (IAP-free) -> {backend.proxy_service}; controller auth gates it.")
     signed_header_audience = discover_signed_header_audience(backend, dry_run=dry_run)
     print_auth_block(backend, desktop_id, desktop_secret, member, signed_header_audience)
 

@@ -229,6 +229,54 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
     }
 
 
+# Name of the Ingress that publishes only the controller's /proxy path.
+_CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
+
+
+def _build_controller_proxy_ingress(
+    *, namespace: str, service_name: str, port: int, host: str, ingress_class: str, tls_secret: str
+) -> dict:
+    """Build the Ingress that publishes ONLY the controller's ``/proxy`` path.
+
+    The dashboard and RPC surface stay ClusterIP-internal — only ``/proxy`` is
+    routed in. CoreWeave has no IAP layer, so the controller's own per-endpoint
+    auth (PRIVATE/PUBLIC/BEARER) is the sole gate for that path.
+    """
+    spec: dict = {
+        "ingressClassName": ingress_class,
+        "rules": [
+            {
+                "host": host,
+                "http": {
+                    "paths": [
+                        {
+                            "path": "/proxy",
+                            "pathType": "Prefix",
+                            "backend": {"service": {"name": service_name, "port": {"number": port}}},
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    if tls_secret:
+        spec["tls"] = [{"hosts": [host], "secretName": tls_secret}]
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "Ingress",
+        "metadata": {
+            "name": _CONTROLLER_PROXY_INGRESS_NAME,
+            "namespace": namespace,
+            # Stream vLLM SSE without buffering; long reads for inference.
+            "annotations": {
+                "nginx.ingress.kubernetes.io/proxy-buffering": "off",
+                "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
+            },
+        },
+        "spec": spec,
+    }
+
+
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -370,6 +418,23 @@ class K8sControllerProvider:
         }
         self._kubectl.apply_json(svc_manifest)
         logger.info("Controller Service %s applied", service_name)
+
+        # Publish only /proxy off-cluster when a host is configured. The rest of
+        # the controller stays ClusterIP-internal; the controller's per-endpoint
+        # auth gates /proxy (CoreWeave has no IAP layer). Idempotent apply.
+        if cw.public_proxy_host:
+            ingress_manifest = _build_controller_proxy_ingress(
+                namespace=self._namespace,
+                service_name=service_name,
+                port=port,
+                host=cw.public_proxy_host,
+                ingress_class=cw.ingress_class,
+                tls_secret=cw.tls_secret,
+            )
+            self._kubectl.apply_json(ingress_manifest)
+            logger.info(
+                "Controller /proxy Ingress %s applied (host=%s)", _CONTROLLER_PROXY_INGRESS_NAME, cw.public_proxy_host
+            )
 
         pdb_manifest = {
             "apiVersion": "policy/v1",

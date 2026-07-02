@@ -43,6 +43,9 @@ class K8sResource(Enum):
     DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
     STATEFULSETS = ("apps", "v1", True, "statefulsets", "StatefulSet")
 
+    # Networking v1
+    INGRESSES = ("networking.k8s.io", "v1", True, "ingresses", "Ingress")
+
     # Policy v1
     PDBS = ("policy", "v1", True, "poddisruptionbudgets", "PodDisruptionBudget")
 

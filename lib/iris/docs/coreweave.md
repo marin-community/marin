@@ -144,14 +144,28 @@ Key architectural properties:
 The controller Service is `ClusterIP:10000` — reachable only in-cluster or via a
 `kubectl port-forward`. To let an off-cluster caller (e.g. a Daytona/Modal sandbox
 running an agent harness) reach a registered endpoint through the controller
-proxy, expose **only** the `/proxy` path with an Ingress. Unlike the GCP arm there
-is no IAP layer, so the **controller's own per-endpoint auth is the sole gate**:
+proxy, `start_controller` publishes **only** the `/proxy` path with an Ingress —
+it is part of controller setup, not a manual step. Unlike the GCP arm there is no
+IAP layer, so the **controller's own per-endpoint auth is the sole gate**:
 register the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or
 `BEARER` (a scoped endpoint token) — the same access modes as the GCP path. Keep
 `auth.provider` set (never null-auth) so `PRIVATE`/`BEARER` are actually enforced.
 
-A path-restricted Ingress keeps the dashboard and RPC surface cluster-internal
-while publishing just `/proxy`:
+Configure it under the controller's `coreweave` block; setup then creates
+(idempotently, on every `start_controller`) a path-restricted Ingress that keeps
+the dashboard and RPC surface cluster-internal and publishes just `/proxy`:
+
+```yaml
+controller:
+  coreweave:
+    scale_group: cpu
+    # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
+    public_proxy_host: iris-cw.oa.dev
+    ingress_class: nginx            # ingressClassName (default: nginx)
+    tls_secret: iris-controller-proxy-tls  # optional; omit for no TLS block
+```
+
+This applies an `iris-controller-proxy` Ingress equivalent to:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -159,33 +173,27 @@ kind: Ingress
 metadata:
   name: iris-controller-proxy
   namespace: iris
-  annotations:
-    # Stream request/response bodies (vLLM SSE) without buffering.
+  annotations:               # stream vLLM SSE without buffering; long reads
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
 spec:
   ingressClassName: nginx
-  tls:
-    - hosts: [iris-cw.oa.dev]
-      secretName: iris-controller-proxy-tls
+  tls: [{hosts: [iris-cw.oa.dev], secretName: iris-controller-proxy-tls}]
   rules:
     - host: iris-cw.oa.dev
       http:
         paths:
           - path: /proxy            # only /proxy* is published; / and the RPC
             pathType: Prefix        # mounts stay ClusterIP-internal.
-            backend:
-              service:
-                name: iris-controller-svc
-                port:
-                  number: 10000
+            backend: {service: {name: iris-controller-svc, port: {number: 10000}}}
 ```
 
-Point the cluster's `dashboard_url` at the published host so `marin-serve`'s
-printed off-cluster URLs and the `BEARER` token are usable as-is. A plain
-`type: LoadBalancer` Service on the controller port is simpler but exposes the
-whole origin (RPC surface included, JWT-gated only) — prefer the path-restricted
-Ingress so only `/proxy` is public.
+It needs an ingress controller (e.g. `ingress-nginx`) and, for `tls_secret`, a
+TLS secret for the host; point the cluster's `dashboard_url` at
+`public_proxy_host` so `marin-serve`'s printed off-cluster URLs and the `BEARER`
+token are usable as-is. A plain `type: LoadBalancer` Service on the controller
+port would be simpler but exposes the whole origin (RPC surface included,
+JWT-gated only) — the path-restricted Ingress keeps only `/proxy` public.
 
 ## 3. Tools
 

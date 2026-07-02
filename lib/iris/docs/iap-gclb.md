@@ -187,22 +187,26 @@ backend. The controller's own per-endpoint auth is then the gate for that path:
 token — see the endpoint access modes). The controller needs **no** firewall or
 IAP-admin authority; this admin-run stage is the only thing that touches the LB.
 
-```bash
-# Open /proxy/* for one cluster (reuses its existing NEG + health check).
-uv run lib/iris/scripts/iap_gclb.py public-proxy marin-dev --domain iris-dev.oa.dev
+`deploy` runs `public-proxy` **by default** (it reuses the cluster's existing NEG
++ health check), so a plain deploy or re-deploy stands up the `/proxy` opening
+idempotently:
 
-# Or fold it into deploy (opt-in, like --with-firewall):
+```bash
 uv run lib/iris/scripts/iap_gclb.py deploy marin-dev --domain iris-dev.oa.dev \
     --web-client-secrets scratch/web.json \
-    --desktop-client-secrets scratch/desktop.json \
-    --with-public-proxy
+    --desktop-client-secrets scratch/desktop.json
+
+# Opt out to keep the controller fully IAP-gated (no off-cluster /proxy):
+#   ... deploy ... --no-public-proxy
+
+# Or run just this stage against an already-deployed cluster:
+uv run lib/iris/scripts/iap_gclb.py public-proxy marin-dev --domain iris-dev.oa.dev
 ```
 
-`public-proxy` is idempotent (a no-op once the backend + path rule exist) and is
-**not** part of a bare `deploy` — like `firewall --deny-public` it widens the
-public surface, so it stays a deliberate step. `teardown` removes the IAP-free
-backend and its `/proxy/*` rule along with the rest of the cluster's stack.
-`status` reports whether the public-proxy backend exists.
+`public-proxy` is idempotent (a no-op once the backend + path rule exist).
+`teardown` removes the IAP-free backend and its `/proxy/*` rule along with the
+rest of the cluster's stack; `status` reports whether the public-proxy backend
+exists.
 
 The firewall allow-rule still admits only the Google LB ranges, so nothing
 bypasses the LB; removing IAP on `/proxy/*` only changes *which* GCLB backend that
