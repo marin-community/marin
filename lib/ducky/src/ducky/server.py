@@ -4,9 +4,9 @@
 """ducky's Starlette dashboard: paste SQL, run it, see a capped result table.
 
 Queries run **asynchronously**: ``POST /query`` returns a ``query_id`` immediately
-and the SQL runs in a background single-worker executor (one DuckDB query at a
-time); the page polls ``GET /result/{query_id}`` until it is done. This decouples a
-long query from the Iris controller proxy's 30 s request timeout
+and the SQL runs in a background thread pool (up to ``max_concurrent_queries``, each on
+its own DuckDB cursor); the page polls ``GET /result/{query_id}`` until it is done. This
+decouples a long query from the Iris controller proxy's 30 s request timeout
 (``endpoint_proxy.PROXY_TIMEOUT_SECONDS``) — each HTTP call returns in well under
 30 s while the query itself may run for minutes.
 
