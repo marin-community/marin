@@ -181,18 +181,32 @@ def test_catalog_views_are_queryable(make_runner, tmp_path):
     assert {'finelog."log"', 'finelog."iris.task"'} <= runner.created_view_names
 
 
-def test_catalog_view_outside_allowlist_is_skipped(make_runner, tmp_path):
-    # the allowlist is the same-region guardrail; a view whose root falls outside it must not be
-    # created, else `SELECT * FROM finelog."log"` would read the disallowed root behind the view.
+def test_configured_root_readable_despite_restrictive_allowlist(make_runner, tmp_path):
+    # configuring finelog_root declares it readable, so its views are created and queryable
+    # even when allowed_buckets doesn't cover it (the root joins effective_allowed_buckets).
     finelog_root = tmp_path / "finelog"
     con = duckdb.connect()
     _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level")
     con.close()
 
     runner = make_runner(finelog_root=str(finelog_root), allowed_buckets=("gs://marin-us-east5",))
-    assert runner.created_view_names == frozenset()  # local root not covered by the gs:// allowlist
-    with pytest.raises(QueryError):
-        runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex)
+    assert 'finelog."log"' in runner.created_view_names
+    assert runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex).total_rows == 1
+
+
+def test_configured_root_extends_literal_read_allowlist():
+    # a literal read_parquet of the configured root prefix is allowed — consistent with the
+    # view — while a different bucket in the same region stays blocked.
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-us-east5",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+    )
+    eff = config.effective_allowed_buckets
+    assert disallowed_uris("read('gs://marin-us-central2/finelog/marin/log/s.parquet')", eff) == []
+    assert disallowed_uris("read('gs://marin-us-central2/other/x.parquet')", eff) == [
+        "gs://marin-us-central2/other/x.parquet"
+    ]
 
 
 def test_datakit_view_globs_hashed_dir(make_runner, tmp_path):

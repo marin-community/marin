@@ -146,6 +146,19 @@ class DuckyConfig:
     """Informational — enforced by the scratch bucket's lifecycle rule, not by ducky (ducky only writes)."""
 
     @property
+    def effective_allowed_buckets(self) -> tuple[str, ...]:
+        """Object-store prefixes a query may read: the configured allowlist plus the catalog
+        roots. Configuring a catalog root (``finelog_root``/``datakit_root``) declares that
+        prefix readable, so a pre-baked view and a literal ``read_parquet`` of the same prefix
+        behave identically — the view can't reach a bucket a literal URI couldn't. An empty
+        allowlist means allow-all and stays empty (adding roots would turn it into a
+        restrictive list)."""
+        if not self.allowed_buckets:
+            return ()
+        roots = tuple(root for root in (self.finelog_root, self.datakit_root) if root)
+        return self.allowed_buckets + roots
+
+    @property
     def gcs_enabled(self) -> bool:
         return bool(self.gcs_hmac_key_id and self.gcs_hmac_secret)
 

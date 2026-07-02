@@ -84,3 +84,21 @@ def test_directly_constructed_config_has_no_catalog_roots():
     config = DuckyConfig(scratch_bucket="/tmp/ducky")
     assert config.finelog_root is None
     assert config.datakit_root is None
+
+
+def test_effective_allowlist_includes_configured_roots():
+    config = DuckyConfig(
+        scratch_bucket="/tmp/ducky",
+        allowed_buckets=("gs://marin-us-east5",),
+        finelog_root="gs://marin-us-central2/finelog/marin",
+        datakit_root="gs://marin-us-east5/normalized",
+    )
+    eff = config.effective_allowed_buckets
+    assert "gs://marin-us-east5" in eff
+    assert "gs://marin-us-central2/finelog/marin" in eff  # cross-region finelog root is readable
+
+
+def test_effective_allowlist_empty_stays_allow_all():
+    # an empty allowlist means allow-all; adding roots must not turn it into a restrictive list
+    config = DuckyConfig(scratch_bucket="/tmp/ducky", allowed_buckets=(), finelog_root="gs://x/finelog")
+    assert config.effective_allowed_buckets == ()

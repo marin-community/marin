@@ -174,18 +174,13 @@ class QueryRunner:
         on rather than fail startup. Views over a root whose backend has no credentials are
         skipped up front (a creds-free smoke deploy would otherwise attempt doomed reads).
 
-        A view whose root falls outside ``allowed_buckets`` is skipped too: the allowlist is
-        the same-region/cost guardrail, and ``run_query`` only scans a query's literal URIs —
-        it can't see a URI hidden behind a view — so an out-of-region root must be refused
-        here rather than let a ``SELECT * FROM finelog."log"`` egress across regions.
+        Configured roots are readable regardless of ``allowed_buckets`` — they're part of
+        ``effective_allowed_buckets`` — so a pre-baked view and a literal ``read_parquet`` of
+        the same prefix behave identically; there's no view/allowlist inconsistency to guard.
         """
-        allowed = self._config.allowed_buckets
         for view in build_catalog(self._config).views:
             root = self._root_for(view)
             if root is None or not self._backend_ready(root):
-                continue
-            if allowed and not _is_allowed(root, allowed):
-                logger.info("skipping catalog view %s: root %s outside allowlist %s", view.qualified_name, root, allowed)
                 continue
             try:
                 self._con.execute(f"CREATE SCHEMA IF NOT EXISTS {view.schema}")
@@ -270,11 +265,11 @@ class QueryRunner:
         if not _QUERY_ID_RE.match(query_id):
             raise ValueError(f"query_id must be a uuid4 hex, got {query_id!r}")
 
-        blocked = disallowed_uris(sql, self._config.allowed_buckets)
+        blocked = disallowed_uris(sql, self._config.effective_allowed_buckets)
         if blocked:
             raise BucketNotAllowedError(
                 f"query references buckets outside the allowlist: {', '.join(blocked)}; "
-                f"allowed prefixes: {', '.join(self._config.allowed_buckets)}"
+                f"allowed prefixes: {', '.join(self._config.effective_allowed_buckets)}"
             )
 
         result_path = f"{self._config.scratch_bucket.rstrip('/')}/ducky/{query_id}.parquet"

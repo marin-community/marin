@@ -86,13 +86,14 @@ disable that source's views. The datakit root defaults to `<MARIN_PREFIX>/normal
 datakit corpus is canonical in eu-west4); finelog defaults to its marin deployment at
 `gs://marin-us-central2/finelog/marin`.
 
-A catalog view whose root falls outside `DUCKY_ALLOWED_BUCKETS` is **not created** — the
-allowlist is ducky's same-region/cost guardrail, and `run_query` can't see a URI hidden
-behind a view, so an out-of-region root is refused at view-creation time rather than left
-to egress on `SELECT * FROM finelog."log"`. So the defaults never silently read
-cross-region: to actually use finelog (us-central2) or an eu-west4 datakit corpus from a
-us-east5 ducky, add that bucket to the allowlist (accepting the egress) or point the root
-at a same-region copy.
+Configuring a catalog root **declares that prefix readable**: the roots join
+`DUCKY_ALLOWED_BUCKETS` to form the effective read-allowlist, so a pre-baked view and a
+literal `read_parquet` of the same prefix behave identically (a view can't reach a bucket a
+literal URI couldn't). This is how finelog stays queryable even though it lives in
+us-central2, cross-region from a us-east5 ducky — the egress is a deliberate choice encoded
+in `finelog_root`, not a silent bypass, and *other* buckets in that region stay gated. To
+avoid the finelog egress entirely, set `DUCKY_FINELOG_ROOT=` (empty) or point it at a
+same-region copy. (An empty `DUCKY_ALLOWED_BUCKETS` still means allow-all.)
 
 Views are bound (and their parquet footers cached) at startup; a view over an
 absent/unreachable dataset is logged and skipped rather than failing the service. The
