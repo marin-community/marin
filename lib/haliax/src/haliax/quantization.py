@@ -271,14 +271,14 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     (e.g. Blackwell hardware block scaling, which carries no delayed-scaling
     state) is a new op class.
 
-    Unlike [Fp8DotGeneralOp][], whose output-gradient dtype defaults to E5M2,
-    ``rev_dtype`` here defaults to E4M3, matching ``fwd_dtype``: stock-jaxlib
-    Mosaic ``wgmma`` requires both operands of a contraction to share one
-    dtype, and re-quantizing *weights* down to E5M2 to match an E5M2 gradient
-    costs too much mantissa.  **The uniform ``e4m3 x e4m3`` backward is therefore
-    an approximation** -- the numerically correct output-gradient dtype is E5M2 --
-    and ``init`` rejects mixed dtype pairs until mixed-dtype ``wgmma`` is
-    available upstream (jax-ml/jax#38859).
+    Like [Fp8DotGeneralOp][], ``rev_dtype`` defaults to E5M2 -- the numerically
+    correct output-gradient dtype -- so both backward GEMMs are genuine mixed
+    ``e5m2 x e4m3`` contractions on the FP8 tensor cores.  **Stock jaxlib's
+    Mosaic ``wgmma`` rejects mixed operand dtypes**: this op requires a jaxlib
+    with mixed-dtype ``wgmma`` (jax-ml/jax#38859; prebuilt as
+    ``mcwitt/jax@mixed-fp8-wgmma-0.10.0``, see ``docs/fp8.md``).  Passing
+    ``rev_dtype=jnp.float8_e4m3fn`` recovers the stock-jaxlib-compatible
+    uniform backward.
     """
 
     input_scale: jnp.ndarray
@@ -297,15 +297,8 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         amax_history_length: int = 1024,
         compute_dtype: DTypeLike | None = None,
         fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
-        rev_dtype: DTypeLike = jnp.float8_e4m3fn,
+        rev_dtype: DTypeLike = jnp.float8_e5m2,
     ):
-        if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
-            raise ValueError(
-                "Fp8RaggedDotOp requires fwd_dtype == rev_dtype: stock-jaxlib Mosaic wgmma only "
-                "contracts same-dtype operands, so the backward runs uniform GEMMs in fwd_dtype. "
-                f"Got fwd_dtype={jnp.dtype(fwd_dtype).name}, rev_dtype={jnp.dtype(rev_dtype).name}. "
-                "The genuine mixed E5M2×E4M3 backward needs mixed-dtype wgmma (jax-ml/jax#38859)."
-            )
         return cls(
             input_scale=jnp.ones(1, dtype=jnp.float32),
             output_grad_scale=jnp.ones(1, dtype=jnp.float32),

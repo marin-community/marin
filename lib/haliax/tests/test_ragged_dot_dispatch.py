@@ -145,8 +145,3 @@ def test_op_with_explicit_implementation_raises():
     op = Fp8RaggedDotOp.init()
     with pytest.raises(ValueError, match="mutually exclusive"):
         ragged_dot(lhs, rhs, gs, implementation="xla", op=op)
-
-
-def test_init_rejects_mixed_fp8_dtypes():
-    with pytest.raises(ValueError, match="fwd_dtype == rev_dtype"):
-        Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)

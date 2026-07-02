@@ -205,16 +205,28 @@ expert weight (rhs), and output gradient.  Each carries a `scale` and
 `partition_for_grad_overwrite` / `apply_updates` and stay out of the
 optimizer/EMA state.  No explicit scale management is required.
 
-### Approximate same-dtype backward (caveat)
+### Mixed backward: requires a mixed-wgmma jaxlib
 
-The numerically correct output-gradient dtype is E5M2, but stock jaxlib's Mosaic
-`wgmma` rejects mixed operand dtypes (E5M2 x E4M3).  Until mixed-dtype `wgmma`
-lands upstream ([jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859)),
-`rev_dtype` defaults to E4M3 so both gradients are uniform `e4m3 x e4m3`
-contractions.  This is an approximation: E4M3 has a lower dynamic range than E5M2
-and can distort large-magnitude output gradients.  The genuine mixed
-`e5m2 x e4m3` backward is a deferred follow-up.  Gradient relative-Frobenius error
-at the operating point is < 6e-2 (within the accepted FP8 tolerance).
+`rev_dtype` defaults to E5M2 -- the numerically correct output-gradient dtype --
+so both backward GEMMs are genuine mixed `e5m2 x e4m3` contractions on the FP8
+tensor cores.  Stock jaxlib's Mosaic `wgmma` rejects mixed operand dtypes; this
+op needs a jaxlib carrying
+[jax-ml/jax#38859](https://github.com/jax-ml/jax/pull/38859).  Until that lands
+upstream, use the prebuilt fork `mcwitt/jax@mixed-fp8-wgmma-0.10.0` (jaxlib C++
+verifier relaxation + jax Python PTX emitter): install with
+`lib/haliax/scripts/mixed_fp8_fork_setup.sh`, optionally passing
+`JAXLIB_WHEEL=` to skip the ~11 min jaxlib build (a cp312 H100 wheel is cached
+at `s3://marin-na/marin/grug-fp8/wheels/jaxlib-mixfp8-0.10.0-cp312-cw.whl`;
+inside an Iris task container the injected `AWS_*` creds can fetch it).  Rename
+the fetched file to
+`jaxlib-0.10.0.dev0+selfbuilt-cp312-cp312-manylinux_2_27_x86_64.whl` before
+installing -- uv requires the filename to match the wheel's dist-info.
+
+Passing `rev_dtype=jnp.float8_e4m3fn` recovers a uniform `e4m3 x e4m3` backward
+that lowers on stock jaxlib (an approximation: E4M3 trades dynamic range for
+mantissa, which can distort large-magnitude output gradients).  Gradient
+relative-Frobenius error at the operating point is < 6e-2 for both recipes
+(within the accepted FP8 tolerance).
 
 ### Performance (H100, d2560 grug-MoE operating point)
 
@@ -222,7 +234,10 @@ Operating point: w13 shape, E_local=64, 1024 tokens/expert (non-uniform groups).
 Measured fwd+bwd speedup vs the bf16 Triton baseline, with a throughput timer
 (enqueue N calls, block once — representative of a pipelined training step):
 **1.41×** at the operating point, **1.27×** at the w2 (down-projection) point
-(larger at the EP4 per-device batch of 1280 tokens/expert).
+(larger at the EP4 per-device batch of 1280 tokens/expert; measured with the
+uniform `e4m3` backward -- the genuine mixed `e5m2 x e4m3` backward has
+repeatedly measured within run-to-run variance of it, so the correct E5M2
+gradient costs nothing).
 Per-call latency timing (sync after every call) reports lower speedups because
 the added sync penalizes FP8's extra kernel launches; training runs see the
 throughput number.  See `lib/haliax/bench/bench_fp8_ragged_dot.py` for the full

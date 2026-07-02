@@ -181,8 +181,8 @@ def main():
     args = ap.parse_args()
 
     print(f"jax {jax.__version__}  device {jax.devices()[0].device_kind}")
-    print("FP8 ragged_dot (E4M3 fwd / E4M3 bwd, delayed per-tensor scaling) vs bf16 Triton baseline")
-    print("Backward: approximate same-dtype (uniform e4m3); genuine mixed e5m2 x e4m3 is a follow-up.")
+    print("FP8 ragged_dot (E4M3 fwd / E5M2 bwd, delayed per-tensor scaling) vs bf16 Triton baseline")
+    print("Backward: genuine mixed e5m2 x e4m3 wgmma (requires the mixed-wgmma jaxlib, jax-ml/jax#38859).")
     # Show that group_sizes are genuinely non-uniform and dynamic.
     e0, tpe0 = OPERATING_POINT
     gs0 = nonuniform_group_sizes(e0, e0 * tpe0, jax.random.split(jax.random.key(0), 3)[2])
