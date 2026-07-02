@@ -15,6 +15,7 @@ Three layers, exercised in order:
 """
 
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, cast
 
@@ -24,6 +25,7 @@ from iris.cluster.backends.rpc.backend import (
     FleetObservation,
     RpcTaskBackend,
 )
+from iris.cluster.config import BackendConfig, ScaleGroupConfig
 from iris.cluster.controller import ops, writes
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
@@ -32,8 +34,10 @@ from iris.cluster.controller.backend import (
     BackendRuntime,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleRequest,
     ScheduleResult,
+    WorkerRegistration,
     plans_from_snapshot,
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
@@ -74,6 +78,7 @@ from tests.cluster.controller.transition_driver import (
 )
 
 from .conftest import (
+    FakeProvider,
     dispatch_task,
     make_controller_state,
     make_job_request,
@@ -1219,14 +1224,23 @@ class _ScriptedProvider:
         self._pending_dead.extend(dead)
         return result
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        assert self._store is not None, "_ScriptedProvider.register_worker called before worker store attached"
+        return self._store.register_worker(registration)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        assert self._store is not None, "_ScriptedProvider.queue_evictions called before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        assert self._store is not None, "_ScriptedProvider.drain_pending_evictions called before worker store attached"
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
+        assert self._store is not None, "_ScriptedProvider.run_teardown called before worker store attached"
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None, "_ScriptedProvider.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
         assert self._store is not None, "_ScriptedProvider.prune_dead_workers called before worker store attached"
@@ -1419,14 +1433,23 @@ class _UnreachableProvider:
         self._pending_dead.extend(dead)
         return result
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        assert self._store is not None, "_UnreachableProvider.register_worker called before worker store attached"
+        return self._store.register_worker(registration)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        assert self._store is not None, "_UnreachableProvider.queue_evictions before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        assert self._store is not None, "_UnreachableProvider.drain_pending_evictions before worker store attached"
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
+        assert self._store is not None, "_UnreachableProvider.run_teardown called before worker store attached"
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None, "_UnreachableProvider.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
         assert self._store is not None, "_UnreachableProvider.prune_dead_workers called before worker store attached"
@@ -1541,14 +1564,16 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
 
 
-def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
-    """A queued eviction fails the worker and reaps its slice on the next tick.
+def test_recycled_address_eviction_tears_down_on_next_tick(make_controller):
+    """A recycled-address eviction fails the prior owner and reaps its slice next tick.
 
-    The Register RPC queues a recycled-IP prior owner off the control-loop thread,
-    where reaping a slice via the autoscaler is unsafe. The tick drains it through
-    the same fail-and-teardown path as a reconcile failure --
-    ``backend.autoscale(dead_workers=...)`` -- even though the worker answers every
-    reconcile: eviction is driven by the queue, not by liveness.
+    When a new worker registers at an address a stale row still holds (a recycled
+    internal IP), the backend reports the prior owner and the controller routes it to
+    its owning backend's eviction queue, off the control-loop thread where reaping a
+    slice via the autoscaler is unsafe. The tick drains it through the same
+    fail-and-teardown path as a reconcile failure -- ``backend.autoscale(dead_workers=...)``
+    -- even though the prior owner answers every reconcile: eviction is driven by the
+    queue, not by liveness.
     """
     provider = _UnreachableProvider()  # the worker stays reachable every tick
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
@@ -1562,12 +1587,75 @@ def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
 
-    ctrl.request_worker_eviction([wid])
+    # A fresh worker claims w1's address; registration reports the stale prior owner,
+    # which the controller routes to its owning backend's queue.
+    store = ctrl.provider._store
+    assert store is not None
+    outcome = store.register_worker(
+        WorkerRegistration(
+            worker_id=WorkerId("recycled-ip-owner"),
+            address=_W1_ADDR,
+            scale_group="",
+            slice_id="",
+            metadata=make_worker_metadata(),
+        )
+    )
+    assert outcome.recycled_address_workers == [wid]
+    ctrl.queue_recycled_evictions(outcome.recycled_address_workers)
     reconcile_once(ctrl)
 
     assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
     assert query_worker(state, wid) is None, "evicted worker row should be removed"
     assert wid not in ctrl.provider.health.all(), "evicted worker should be forgotten from the tracker"
+
+
+def test_recycled_address_eviction_routes_to_owning_backend(make_controller):
+    """A recycled address whose stale owner lives in another backend is reaped there.
+
+    Address reuse can cross backends -- two worker-daemon backends can share an IP
+    space. The new worker registers into backend B, but the stale prior owner belongs
+    to backend A; the controller routes the eviction to A, where the worker's liveness
+    lives, so A reaps it. Routing it to B would silently no-op -- B's health tracker
+    never held the worker -- and the recycled-IP zombie would survive.
+    """
+    backend_a, backend_b = FakeProvider(), FakeProvider()
+    ctrl = make_controller(
+        backends={"a": backend_a, "b": backend_b},
+        backend_configs={
+            "a": BackendConfig(kind="worker_daemon", scale_groups={"sg-a": ScaleGroupConfig()}),
+            "b": BackendConfig(kind="worker_daemon", scale_groups={"sg-b": ScaleGroupConfig()}),
+        },
+    )
+    addr = "10.0.0.9:10001"
+    a_worker, b_worker = WorkerId("a-worker"), WorkerId("b-worker")
+
+    # a_worker registers into backend A; A's tracker holds it.
+    backend_a.register_worker(WorkerRegistration(a_worker, addr, "sg-a", "", make_worker_metadata()))
+    assert backend_a.health.liveness(a_worker).active
+
+    # b_worker recycles A's address into backend B; B detects the stale row but,
+    # owning no liveness for it, queues nothing itself.
+    outcome = backend_b.register_worker(WorkerRegistration(b_worker, addr, "sg-b", "", make_worker_metadata()))
+    assert outcome.recycled_address_workers == [a_worker]
+    assert not backend_b._store._pending_evictions
+
+    # The controller routes the eviction to A (the owner), not B (the registrant).
+    ctrl.queue_recycled_evictions(outcome.recycled_address_workers)
+    assert sorted(backend_a._store._pending_evictions) == [a_worker]
+    assert not backend_b._store._pending_evictions
+
+    # A's drain reaps the stale worker through its own tracker; B's drain is a no-op.
+    assert backend_b.drain_pending_evictions() == []
+    assert backend_a.drain_pending_evictions() == [a_worker]
+    state_a = ControllerTestState(
+        ctrl._db,
+        health=backend_a.health,
+        endpoints=ctrl._endpoints,
+        worker_attrs=backend_a.worker_attrs,
+        run_template_cache=ctrl._run_template_cache,
+    )
+    assert query_worker(state_a, a_worker) is None, "stale worker row removed"
+    assert a_worker not in backend_a.health.all(), "stale worker forgotten from A's tracker"
 
 
 def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:

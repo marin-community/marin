@@ -252,14 +252,19 @@ class _FakeProvider:
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
 
+    def register_worker(self, registration):
+        assert self._store is not None
+        return self._store.register_worker(registration)
+
+    def drain_pending_evictions(self):
+        assert self._store is not None
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
+        assert self._store is not None
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()

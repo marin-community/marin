@@ -11,7 +11,7 @@ schedules and reconciles from, resolve a worker's address, and reap dead workers
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from rigging.timing import Timestamp
@@ -19,9 +19,16 @@ from rigging.timing import Timestamp
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
-from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
+from iris.cluster.controller.backend import (
+    AutoscaleRequest,
+    AutoscaleResult,
+    BackendSchedulingInputs,
+    RegisterOutcome,
+    WorkerRegistration,
+)
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.worker import fail as fail_workers
+from iris.cluster.controller.ops.worker import register as register_worker_row
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import ControlSnapshot, ReconcileRow
@@ -45,6 +52,10 @@ from iris.rpc import job_pb2
 
 # Failure reason stamped on a healthy slice sibling reaped alongside a dead worker.
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
+
+# Failure reason stamped on a stale worker evicted because a new worker registered
+# at its address (a recycled internal IP).
+_RECYCLED_IP_EVICTION_REASON = "address reused by newly-registered worker (recycled IP)"
 
 
 def _find_prunable_worker(health: WorkerHealthTracker, before_ms: int) -> WorkerId | None:
@@ -83,6 +94,27 @@ class BackendWorkerStore(TransitionReader, Protocol):
         """The worker's address, or ``None`` if it has none."""
         ...
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        """Persist a registering worker and report any recycled-address collision.
+
+        Safe to call off the control thread. Returns the stale prior owners of the
+        worker's address (a recycled IP) so the controller can route each to its
+        owning backend; this store does not reap them itself."""
+        ...
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Queue workers this backend owns for reaping on the next control tick.
+
+        Safe to call off the control thread; the controller routes a recycled-address
+        collision here after resolving each stale worker's owning backend."""
+        ...
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """Reap the workers queued by :meth:`queue_evictions`.
+
+        Runs on the control thread once per tick. Returns every worker removed."""
+        ...
+
     def reap_workers(self, worker_ids: list[WorkerId], *, reason: str) -> list[WorkerId]:
         """Fail ``worker_ids``, terminate their slices and healthy siblings, and forget
         them. Returns every worker removed (the failed workers plus reaped siblings)."""
@@ -114,6 +146,41 @@ class DbBackendWorkerStore:
     run_template_cache: RunTemplateCache
     defaults: UserBudgetDefaults
     autoscale: Callable[[AutoscaleRequest], AutoscaleResult]
+    # Workers queued by queue_evictions (RPC thread, controller-routed) for
+    # drain_pending_evictions (control thread); guarded by its lock.
+    _pending_evictions: set[WorkerId] = field(default_factory=set)
+    _pending_evictions_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        now = Timestamp.now()
+        with self.db.transaction() as cur:
+            register_worker_row(
+                cur,
+                worker_id=registration.worker_id,
+                address=registration.address,
+                metadata=registration.metadata,
+                ts=now,
+                health=self.health,
+                worker_attrs=self.worker_attrs,
+                slice_id=registration.slice_id,
+                scale_group=registration.scale_group,
+            )
+        with self.db.read_snapshot() as snap:
+            stale = reads.worker_ids_at_address(snap, registration.address, exclude=registration.worker_id)
+        return RegisterOutcome(recycled_address_workers=stale)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        with self._pending_evictions_lock:
+            self._pending_evictions.update(worker_ids)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """Reap the workers queued by :meth:`queue_evictions`."""
+        with self._pending_evictions_lock:
+            if not self._pending_evictions:
+                return []
+            drained = sorted(self._pending_evictions)
+            self._pending_evictions.clear()
+        return self.reap_workers(drained, reason=_RECYCLED_IP_EVICTION_REASON)
 
     def transition_snapshot(
         self,

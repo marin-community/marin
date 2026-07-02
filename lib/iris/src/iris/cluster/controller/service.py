@@ -44,7 +44,13 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.autoscaler.scaling_group import SliceLifecycleState
 from iris.cluster.controller.autoscaler.status import PendingHint, slice_capacity_status
-from iris.cluster.controller.backend import BackendCapability, ProviderError, TaskBackend, TaskTarget
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    ProviderError,
+    TaskBackend,
+    TaskTarget,
+    WorkerRegistration,
+)
 from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
@@ -930,8 +936,6 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def request_worker_eviction(self, worker_ids: Sequence[WorkerId]) -> None: ...
-
     def request_task_kicks(self, kicks: Sequence[PendingKick]) -> None: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
@@ -957,6 +961,8 @@ class ControllerProtocol(Protocol):
     def run_template_cache(self) -> RunTemplateCache: ...
 
     def backend_id_for_scale_group(self, scale_group: str) -> str: ...
+
+    def queue_recycled_evictions(self, stale_worker_ids: list[WorkerId]) -> None: ...
 
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]: ...
 
@@ -1858,51 +1864,36 @@ class ControllerServiceImpl:
             )
         worker_id = WorkerId(request.worker_id)
 
-        # Route the worker into the liveness tracker and attributes projection owned
-        # by the backend that owns its scale group; a worker never registers into a
-        # k8s scale group.
+        # Route the worker into the backend that owns its scale group; the backend
+        # persists it (seeding liveness and attributes in its own trackers) and
+        # reports any stale prior owner of the address — a recycled internal IP.
+        # Address reuse can cross backends, so the controller routes each stale
+        # worker to its owning backend to reap, rather than the backend that just
+        # registered.
         backend = self._backend_for_id(self._controller.backend_id_for_scale_group(request.scale_group))
-        health = backend.health
-        worker_attrs = backend.worker_attrs
-        assert health is not None, f"worker {worker_id} registered into a scale group with no liveness tracker"
-        assert worker_attrs is not None, f"worker {worker_id} registered into a scale group with no attrs projection"
-        with self._db.transaction() as cur:
-            ops.worker.register(
-                cur,
+        outcome = backend.register_worker(
+            WorkerRegistration(
                 worker_id=worker_id,
                 address=request.address,
-                metadata=request.metadata,
-                ts=Timestamp.now(),
-                health=health,
-                worker_attrs=worker_attrs,
-                slice_id=request.slice_id,
                 scale_group=request.scale_group,
+                slice_id=request.slice_id,
+                metadata=request.metadata,
             )
-        self._request_recycled_address_eviction(worker_id, request.address)
+        )
+        if outcome.recycled_address_workers:
+            logger.warning(
+                "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
+                worker_id,
+                request.address,
+                len(outcome.recycled_address_workers),
+                [str(wid) for wid in outcome.recycled_address_workers],
+            )
+            self._controller.queue_recycled_evictions(outcome.recycled_address_workers)
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
             accepted=True,
         )
-
-    def _request_recycled_address_eviction(self, worker_id: WorkerId, address: str) -> None:
-        """Hand any stale prior owner of ``address`` to the controller for teardown.
-
-        Detects a recycled internal IP (see :func:`reads.worker_ids_at_address`)
-        and defers the reap to :meth:`Controller.request_worker_eviction`.
-        """
-        with self._db.read_snapshot() as snap:
-            stale = reads.worker_ids_at_address(snap, address, exclude=worker_id)
-        if not stale:
-            return
-        logger.warning(
-            "Worker %s registered at %s held by %d stale row(s) (recycled IP); evicting: %s",
-            worker_id,
-            address,
-            len(stale),
-            [str(wid) for wid in stale],
-        )
-        self._controller.request_worker_eviction(stale)
 
     def list_workers(
         self,

@@ -1399,7 +1399,7 @@ def test_live_user_stats_sql_aggregation(state, service):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, state):
+def test_list_workers_returns_all(service, state, register_backend):
     """Verify list_workers returns all registered workers."""
     db = state._db
     with db.transaction() as _tx:
@@ -1455,7 +1455,7 @@ def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: in
         _verified_identity.reset(token)
 
 
-def test_list_workers_pagination(service, state):
+def test_list_workers_pagination(service, state, register_backend):
     """list_workers respects offset/limit and reports total_count + has_more."""
     _register_workers_for_query(service, state, count_cpu=7, count_gpu=0)
 
@@ -1488,7 +1488,7 @@ def test_list_workers_pagination(service, state):
     assert page3.has_more is False
 
 
-def test_list_workers_filter_by_contains(service, state):
+def test_list_workers_filter_by_contains(service, state, register_backend):
     """contains matches worker_id substring (case-insensitive) and address."""
     _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
 
@@ -1633,7 +1633,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path, log_cli
         _verified_identity.reset(token)
 
 
-def test_register_allows_worker_role(state, mock_controller, tmp_path, log_client):
+def test_register_allows_worker_role(state, mock_controller, register_backend, tmp_path, log_client):
     """Worker-role user can call register()."""
     db = state._db
     now = Timestamp.now()
@@ -1666,14 +1666,14 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path, log_clien
         _verified_identity.reset(token)
 
 
-def test_register_requests_eviction_of_recycled_address_owner(service, state, mock_controller):
+def test_register_requests_eviction_of_recycled_address_owner(service, state, mock_controller, register_backend):
     """Registering at an address still held by another row evicts the stale owner.
 
     GCP recycles a deleted worker's internal IP onto a new VM. Left in place, the
     dead row makes the controller misroute its address-keyed reconcile to the live
     worker, which then zombie-kills its own tasks (the recycled-IP cross-talk). The
-    new registrant owns the address, so the prior holder is handed to the
-    controller for fail-and-teardown (deferred to the control-loop thread).
+    new registrant owns the address, so the backend queues the prior holder for
+    fail-and-teardown on the next control tick (and the service wakes the tick).
     """
     addr = "10.0.0.7:10001"
     dead, live = WorkerId("dead-worker-0"), WorkerId("live-worker-0")
@@ -1685,7 +1685,8 @@ def test_register_requests_eviction_of_recycled_address_owner(service, state, mo
     )
     with state._db.read_snapshot() as tx:
         assert reads.worker_ids_at_address(tx, addr, exclude=sentinel) == [dead]
-    mock_controller.request_worker_eviction.assert_not_called()
+    assert not register_backend._store._pending_evictions
+    mock_controller.wake.assert_not_called()
 
     service.register(
         controller_pb2.Controller.RegisterRequest(worker_id=str(live), address=addr, metadata=make_worker_metadata()),
@@ -1693,11 +1694,13 @@ def test_register_requests_eviction_of_recycled_address_owner(service, state, mo
     )
 
     # The live registrant now shares the address with the stale `dead` row, which
-    # is queued for eviction; the actual teardown rides the control tick.
-    mock_controller.request_worker_eviction.assert_called_once_with([dead])
+    # the backend queues for eviction; the actual teardown rides the control tick,
+    # which the service wakes.
+    assert sorted(register_backend._store._pending_evictions) == [dead]
+    mock_controller.wake.assert_called_once()
 
 
-def test_register_distinct_addresses_requests_no_eviction(service, state, mock_controller):
+def test_register_distinct_addresses_requests_no_eviction(service, state, mock_controller, register_backend):
     """Registering at a fresh address leaves workers at other addresses untouched."""
     meta = make_worker_metadata()
     a, b = WorkerId("worker-a"), WorkerId("worker-b")
@@ -1709,7 +1712,7 @@ def test_register_distinct_addresses_requests_no_eviction(service, state, mock_c
     )
     assert state._health.liveness(a).active
     assert state._health.liveness(b).active
-    mock_controller.request_worker_eviction.assert_not_called()
+    assert not register_backend._store._pending_evictions
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):

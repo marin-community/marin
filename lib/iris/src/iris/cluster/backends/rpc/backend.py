@@ -17,7 +17,7 @@ effects, so no worker identity crosses the reconcile result boundary.
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, TypeVar
 
@@ -33,10 +33,12 @@ from iris.cluster.controller.backend import (
     ProviderError,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleInput,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerRegistration,
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
@@ -371,6 +373,21 @@ class RpcTaskBackend:
         self._pending_dead.extend(self.health.apply(events, now_ms=now.epoch_ms()))
         return ReconcileResult(effects=effects)
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        """Persist a registering worker and report any recycled-address collision."""
+        assert self._store is not None, "RpcTaskBackend.register_worker called before worker store attached"
+        return self._store.register_worker(registration)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        """Queue controller-routed recycled-address workers for the next tick's drain."""
+        assert self._store is not None, "RpcTaskBackend.queue_evictions called before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        """Reap the workers queued by :meth:`queue_evictions` this tick."""
+        assert self._store is not None, "RpcTaskBackend.drain_pending_evictions called before worker store attached"
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
         """Tear down the workers this tick's reconcile fold reaped.
 
@@ -379,14 +396,10 @@ class RpcTaskBackend:
         commits the reconcile effects, so a just-finalized attempt is already
         terminal and skipped. Empty between reaps, so most ticks are a no-op.
         """
+        assert self._store is not None, "RpcTaskBackend.run_teardown called before worker store attached"
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        """Fail ``dead_workers``, reap their slices and siblings, and forget them."""
-        assert self._store is not None, "RpcTaskBackend.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
         """Garbage-collect this backend's stale DEAD workers through its worker store."""

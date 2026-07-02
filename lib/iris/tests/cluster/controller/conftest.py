@@ -6,7 +6,7 @@
 import shutil
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import replace as _replace
@@ -54,10 +54,12 @@ from iris.cluster.controller.backend import (
     ProviderUnsupportedError,
     ReconcileRequest,
     ReconcileResult,
+    RegisterOutcome,
     ScheduleInput,
     ScheduleRequest,
     ScheduleResult,
     TaskTarget,
+    WorkerRegistration,
     assemble_scheduling_context,
     plans_from_snapshot,
     run_scheduling_decision,
@@ -248,14 +250,23 @@ class FakeProvider:
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
         return AutoscaleResult()
 
+    def register_worker(self, registration: WorkerRegistration) -> RegisterOutcome:
+        assert self._store is not None, "FakeProvider.register_worker called before worker store attached"
+        return self._store.register_worker(registration)
+
+    def queue_evictions(self, worker_ids: Iterable[WorkerId]) -> None:
+        assert self._store is not None, "FakeProvider.queue_evictions called before worker store attached"
+        self._store.queue_evictions(worker_ids)
+
+    def drain_pending_evictions(self) -> list[WorkerId]:
+        assert self._store is not None, "FakeProvider.drain_pending_evictions called before worker store attached"
+        return self._store.drain_pending_evictions()
+
     def run_teardown(self) -> None:
+        assert self._store is not None, "FakeProvider.run_teardown called before worker store attached"
         dead = self._pending_dead
         self._pending_dead = []
-        self.teardown(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
-
-    def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:
-        assert self._store is not None, "FakeProvider.teardown called before worker store attached"
-        self._store.reap_workers(dead_workers, reason=reason)
+        self._store.reap_workers(dead, reason=WORKER_RECONCILE_TEARDOWN_REASON)
 
     def prune_dead_workers(self, *, cutoff_ms: int, stop_event: threading.Event | None, pause: float) -> int:
         assert self._store is not None, "FakeProvider.prune_dead_workers called before worker store attached"
@@ -321,7 +332,6 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
-        self.request_worker_eviction = Mock()
         self.request_task_kicks = Mock()
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.last_scheduling_context = None
@@ -344,6 +354,13 @@ class MockController:
     def backend_id_for_scale_group(self, scale_group: str) -> str:
         return self.scale_group_to_backend.get(scale_group, DEFAULT_BACKEND_ID)
 
+    def queue_recycled_evictions(self, stale_worker_ids: list[WorkerId]) -> None:
+        # Single-backend mock: route every stale worker to the default backend's
+        # eviction queue, mirroring the controller's scale-group routing + wake.
+        if stale_worker_ids:
+            self.backends[DEFAULT_BACKEND_ID].queue_evictions(stale_worker_ids)
+            self.wake()
+
     def all_liveness(self) -> dict[WorkerId, WorkerLiveness]:
         merged: dict[WorkerId, WorkerLiveness] = {}
         for backend in self.backends.values():
@@ -358,6 +375,32 @@ class MockController:
 @pytest.fixture
 def mock_controller() -> MockController:
     return MockController()
+
+
+@pytest.fixture
+def register_backend(state, mock_controller) -> FakeProvider:
+    """A real store-backed worker-daemon backend wired to the test's DB and health,
+    installed as the controller's default backend.
+
+    The service no longer writes worker rows itself — ``register`` routes to the
+    backend's ``register_worker``. Tests that exercise registration install this so
+    the write lands in ``state._db``, liveness seeds into ``state._health``, and a
+    recycled-address eviction queues on the backend's own store.
+    """
+    backend = FakeProvider()
+    backend.health = state._health
+    backend.bind_runtime(
+        BackendRuntime(
+            db=state._db,
+            endpoints=state._endpoints,
+            run_template_cache=state._run_template_cache,
+            owns_scale_group=lambda _scale_group: True,
+            budget_defaults=UserBudgetDefaults(),
+        )
+    )
+    mock_controller.provider = backend
+    mock_controller.backends = {DEFAULT_BACKEND_ID: backend}
+    return backend
 
 
 @pytest.fixture
