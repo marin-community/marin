@@ -49,6 +49,9 @@ pre{white-space:pre-wrap;word-wrap:break-word;margin:0;font:12px/1.45 ui-monospa
 <main id="main"></main>
 
 <script>
+const DEFAULT_SEED=7;
+const rndSeed=()=>Math.floor(Math.random()*1e6);
+const seedVal=id=>{const el=document.getElementById(id);return el?el.value:DEFAULT_SEED;};
 const fmt=n=>(n==null?'—':Number(n).toLocaleString());
 function cnum(n){if(n==null)return '—';n=+n;const a=Math.abs(n);
   if(a>=1e9)return (n/1e9).toFixed(a>=1e10?0:1)+'B';
@@ -163,9 +166,12 @@ function renderStageSource(m,stage){
   m.innerHTML=`<div class="card"><div class="controls">
     <label>source ${sourceInput('src',OV.sources)}</label>
     ${stage==='normalized'?'<input type="search" id="q" placeholder="search text…">':''}
-    <button class="primary" id="go">load</button></div>
+    <label>seed <input type="number" id="seed" value="${DEFAULT_SEED}" style="width:74px"></label>
+    <button class="primary" id="go">load</button>
+    <button id="dice" title="new random seed & reload">🎲</button></div>
     <div id="out"><p class="muted">type a source name and load</p></div></div>`;
   const out=document.getElementById('out');
+  document.getElementById('dice').onclick=()=>{document.getElementById('seed').value=rndSeed();document.getElementById('go').click();};
   document.getElementById('go').onclick=async()=>{
     const src=document.getElementById('src').value.trim();
     if(!src){out.innerHTML='<p class="muted">type a source name</p>';return;}
@@ -192,7 +198,7 @@ function loadNormalized(out,src){
     const total=hist.reduce((a,r)=>a+(r.docs||0),0);
     return `<p class="muted">sampled over ${fmt(total)} documents (first rows of the source; id is a content hash, so unbiased)</p>`
       +bars(hist,r=>`${fmt(r.lo)}–${fmt(r.hi)}`,r=>r.docs);});
-  fillSection('nsa',runQuery('normalized_samples',{source:src,n:20,search}),samp=>sampleTable(samp,['id','chars','text']));
+  fillSection('nsa',runQuery('normalized_samples',{source:src,n:20,search,seed:+seedVal('seed')}),samp=>sampleTable(samp,['id','chars','text']));
 }
 function loadDecontam(out,src){
   out.innerHTML=`<div id="dst" class="spin">stats…</div><h4>most-contaminated samples</h4><div id="dsa" class="spin">loading…</div>`;
@@ -201,7 +207,7 @@ function loadDecontam(out,src){
      <div class="stat"><b>${st.contaminated_pct}%</b><span>contaminated (sampled)</span></div>
      <div class="stat"><b>${st.avg_overlap}</b><span>avg overlap (sampled)</span></div>
      <div class="stat"><b>${st.max_overlap}</b><span>max overlap (sampled)</span></div></div>`);
-  fillSection('dsa',runQuery('decontam_samples',{source:src,n:20}),samp=>sampleTable(samp,['id','max_overlap','text']));
+  fillSection('dsa',runQuery('decontam_samples',{source:src,n:20,seed:+seedVal('seed')}),samp=>sampleTable(samp,['id','max_overlap','text']));
 }
 async function loadQuality(out,src){
   const hist=await runQuery('quality_hist',{source:src});
@@ -215,7 +221,7 @@ async function loadQuality(out,src){
   out.querySelectorAll('.qb').forEach(el=>el.onclick=async()=>{
     out.querySelectorAll('.qb').forEach(x=>x.style.fontWeight='');el.style.fontWeight='700';
     const lo=+el.dataset.lo, hi=+el.dataset.hi, qs=document.getElementById('qs');loading(qs);
-    try{const s=await runQuery('quality_samples',{source:src,lo:lo,hi:hi+0.0001,n:20});
+    try{const s=await runQuery('quality_samples',{source:src,lo:lo,hi:hi+0.0001,n:20,seed:+seedVal('seed')});
       qs.innerHTML=`<h4>samples with score in ${lo}–${hi}</h4>${sampleTable(s,['score','text'])}`;
     }catch(e){fail(qs,e);}
   });
@@ -232,17 +238,21 @@ function renderDedup(m){
    </div>
    <p class="muted">fuzzy-dup dataset: <code>${OV.dedup?esc(OV.dedup):'unresolved'}</code></p></div>
    <div class="card"><div class="controls"><label>source ${sourceInput('ds',ds)}</label>
-     <button class="primary" id="dgo">load duplicate clusters</button></div>
+     <label>seed <input type="number" id="dseed" value="${DEFAULT_SEED}" style="width:74px"></label>
+     <button class="primary" id="dgo">load duplicate clusters</button>
+     <button id="ddice" title="new random seed & reload">🎲</button></div>
      <div id="dout"><p class="muted">type a source to inspect its duplicate clusters (canonical kept vs dropped)</p></div></div>`;
   const out=document.getElementById('dout');
-  document.getElementById('dgo').onclick=()=>{const s=document.getElementById('ds').value.trim();if(s)loadDedup(out,s);};
+  const dgo=()=>{const s=document.getElementById('ds').value.trim();if(s)loadDedup(out,s);};
+  document.getElementById('dgo').onclick=dgo;
+  document.getElementById('ddice').onclick=()=>{document.getElementById('dseed').value=rndSeed();dgo();};
 }
 async function loadDedup(out,src){
   const s=(OV.source_summary||[]).find(r=>r.source===src)||{};
   const pct=v=>v==null?'—':(100*v).toFixed(1)+'%';
   loading(out);
   try{
-    const cl=await runQuery('dedup_examples',{source:src,n_clusters:6});
+    const cl=await runQuery('dedup_examples',{source:src,n_clusters:6,seed:+seedVal('dseed')});
     let html=`<div class="stats">
       <div class="stat"><b>${pct(s.drop_rate)}</b><span>docs dropped as dup</span></div>
       <div class="stat"><b>${pct(s.dup_prevalence)}</b><span>in a dup cluster</span></div>
@@ -294,11 +304,15 @@ function renderStore(m){
    <div class="card"><div class="controls">
      <label>cluster <select id="sc">${rows.map(r=>`<option value="${r.cluster}">c${r.cluster} · ${cnum(r.docs)} docs</option>`).join('')}</select></label>
      <label>quality <select id="sq"><option value="">any</option>${[...Array(nq).keys()].map(q=>`<option value="${q}">q${q} ${esc(qr(q))}</option>`).join('')}</select></label>
-     <input type="number" id="sn" value="12" min="1" max="50" style="width:64px"><button class="primary" id="sgo">sample</button></div>
+     <input type="number" id="sn" value="12" min="1" max="50" style="width:64px" title="sample size">
+     <label>seed <input type="number" id="sseed" value="${DEFAULT_SEED}" style="width:74px"></label>
+     <button class="primary" id="sgo">sample</button>
+     <button id="sdice" title="new random seed & resample">🎲</button></div>
      <div id="ss"><p class="muted">pick a cluster + quality (or click a cell in the table above) to sample its documents</p></div></div>`;
   m.querySelectorAll('th[data-k]').forEach(t=>t.onclick=()=>{const kk=t.dataset.k;STORESORT=(STORESORT.key===kk)?{key:kk,dir:-STORESORT.dir}:{key:kk,dir:(kk==='cluster'?1:-1)};render();});
   const go=()=>sampleBucket(+document.getElementById('sc').value,document.getElementById('sq').value,+document.getElementById('sn').value);
   document.getElementById('sgo').onclick=go;
+  document.getElementById('sdice').onclick=()=>{document.getElementById('sseed').value=rndSeed();go();};
   m.querySelectorAll('.qcell').forEach(c=>c.onclick=()=>{document.getElementById('sc').value=c.dataset.c;document.getElementById('sq').value=c.dataset.q;
     sampleBucket(+c.dataset.c,c.dataset.q,+document.getElementById('sn').value);});
 }
@@ -306,8 +320,9 @@ async function sampleBucket(cluster,q,n){
   const ss=document.getElementById('ss');loading(ss);
   try{
     let rows,cols,label;
-    if(q===''||q==null){rows=await runQuery('store_samples',{cluster,n:n||12});cols=['source','text'];label=`cluster ${cluster} · any quality`;}
-    else{rows=await runQuery('store_bucket_samples',{cluster,quality_bucket:+q,n:n||12});cols=['source','score','text'];label=`cluster ${cluster} · q${q}`;}
+    const seed=+seedVal('sseed');
+    if(q===''||q==null){rows=await runQuery('store_samples',{cluster,n:n||12,seed});cols=['source','text'];label=`cluster ${cluster} · any quality`;}
+    else{rows=await runQuery('store_bucket_samples',{cluster,quality_bucket:+q,n:n||12,seed});cols=['source','score','text'];label=`cluster ${cluster} · q${q}`;}
     ss.innerHTML=`<h4>${label} — ${rows.length} sample documents (exact text)</h4>${rows.length?sampleTable(rows,cols):'<p class="muted">no documents matched in the sampled sources</p>'}`;
   }catch(e){fail(ss,e);}
 }

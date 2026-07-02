@@ -25,6 +25,15 @@ from experiments.datakit.dataviz.lineage import StoreLineage
 
 logger = logging.getLogger(__name__)
 
+# Samplers read a bounded candidate pool (LIMIT, cheap — no full scan of a
+# multi-TB source), then seed-shuffle it (`ORDER BY hash(id || seed)`) and take
+# n. Reproducible for a given seed, re-samplable by changing it. Since parquet
+# is content-hash (id) ordered, the pool is already a representative slice.
+DEFAULT_SEED = 7
+_POOL_BROAD = 4000  # unfiltered / broad-search sampling
+_POOL_FILTER = 500  # selective filters (a cluster, a quality-score range)
+_POOL_RARE = 200  # rare filters (contamination)
+
 
 def _sql_str(value: str) -> str:
     """Escape a string for embedding in single-quoted SQL."""
@@ -96,17 +105,14 @@ class Dataviz:
             f"min(n) AS lo, max(n) AS hi, count(*) AS docs FROM d GROUP BY bucket ORDER BY bucket"
         )
 
-    def normalized_samples(self, source: str, n: int = 20, search: str = "") -> QueryResult:
+    def normalized_samples(self, source: str, n: int = 20, search: str = "", seed: int = DEFAULT_SEED) -> QueryResult:
         # Only id + text are guaranteed across sources; other normalize columns
         # (source_id / uuid / source-specific fields) vary, so don't select them.
-        # LIMIT (not USING SAMPLE): reservoir sampling would scan the whole source
-        # (5TB+ for the big ones); LIMIT reads first row-groups and stops early
-        # (id is a content hash, so first-N is unbiased w.r.t. content), and with
-        # a search it stops as soon as N matches are found.
         where = f"WHERE text ILIKE '%{_sql_str(search)}%'" if search.strip() else ""
         return self.ducky.run(
-            f"SELECT id, length(text) AS chars, substr(text, 1, 2000) AS text "
-            f"FROM read_parquet('{self._normalize_glob(source)}') {where} LIMIT {int(n)}"
+            f"SELECT id, length(text) AS chars, substr(text, 1, 2000) AS text FROM "
+            f"(SELECT id, text FROM read_parquet('{self._normalize_glob(source)}') {where} LIMIT {_POOL_BROAD}) "
+            f"ORDER BY hash(id || '{int(seed)}') LIMIT {int(n)}"
         )
 
     # -- decontamination ----------------------------------------------------
@@ -126,15 +132,17 @@ class Dataviz:
         stats["sampled_rows"] = self._SAMPLE
         return stats
 
-    def decontam_samples(self, source: str, n: int = 20) -> QueryResult:
-        """Sample contaminated docs, joined back to their normalized text."""
+    def decontam_samples(self, source: str, n: int = 20, seed: int = DEFAULT_SEED) -> QueryResult:
+        """Seed-sample contaminated docs (from a bounded pool), joined to their text."""
         decon = self._flat_glob(self.lineage.decontam, source)
         norm = self._normalize_glob(source)
         return self.ducky.run(
-            f"SELECT d.id, round(d.attributes.max_overlap, 3) AS max_overlap, "
-            f"substr(n.text, 1, 2000) AS text "
-            f"FROM read_parquet('{decon}') d JOIN read_parquet('{norm}') n USING (id) "
-            f"WHERE d.attributes.contaminated ORDER BY d.attributes.max_overlap DESC LIMIT {int(n)}"
+            f"SELECT id, max_overlap, text FROM ("
+            f"SELECT d.id AS id, round(d.attributes.max_overlap, 3) AS max_overlap, substr(n.text, 1, 2000) AS text "
+            f"FROM (SELECT id, attributes FROM read_parquet('{decon}') "
+            f"WHERE attributes.contaminated LIMIT {_POOL_RARE}) d "
+            f"JOIN read_parquet('{norm}') n USING (id)) "
+            f"ORDER BY hash(id || '{int(seed)}') LIMIT {int(n)}"
         )
 
     # -- quality classifier -------------------------------------------------
@@ -147,21 +155,25 @@ class Dataviz:
             f"FROM (SELECT score FROM read_parquet('{glob}') LIMIT {self._SAMPLE}) GROUP BY bucket ORDER BY bucket"
         )
 
-    def quality_samples(self, source: str, lo: float, hi: float, n: int = 20) -> QueryResult:
+    def quality_samples(self, source: str, lo: float, hi: float, n: int = 20, seed: int = DEFAULT_SEED) -> QueryResult:
         qual = self._flat_glob(self.lineage.quality, source)
         norm = self._normalize_glob(source)
         return self.ducky.run(
-            f"SELECT round(q.score,4) AS score, substr(n.text,1,2000) AS text "
-            f"FROM read_parquet('{qual}') q JOIN read_parquet('{norm}') n USING (id) "
-            f"WHERE q.score >= {float(lo)} AND q.score < {float(hi)} "
-            f"ORDER BY q.score DESC LIMIT {int(n)}"
+            f"SELECT score, text FROM ("
+            f"SELECT q.id AS id, round(q.score,4) AS score, substr(n.text,1,2000) AS text "
+            f"FROM (SELECT id, score FROM read_parquet('{qual}') "
+            f"WHERE score >= {float(lo)} AND score < {float(hi)} LIMIT {_POOL_FILTER}) q "
+            f"JOIN read_parquet('{norm}') n USING (id)) "
+            f"ORDER BY hash(id || '{int(seed)}') LIMIT {int(n)}"
         )
 
     # -- deduplication ------------------------------------------------------
     def _dedup_glob(self, source: str) -> str:
         return f"{self.dedup_attr[source]}/*.parquet"
 
-    def dedup_examples(self, source: str, n_clusters: int = 6, per_cluster: int = 3) -> list[dict]:
+    def dedup_examples(
+        self, source: str, n_clusters: int = 6, per_cluster: int = 3, seed: int = DEFAULT_SEED
+    ) -> list[dict]:
         """Example duplicate clusters for ``source`` with each member's text.
 
         The per-source fuzzy-dup attr is sparse (non-singletons only). We bound
@@ -178,7 +190,8 @@ class Dataviz:
             f"FROM read_parquet('{attr}') LIMIT 500000), "
             f"r AS (SELECT *, row_number() OVER (PARTITION BY d ORDER BY c DESC) rn, "
             f"count(*) OVER (PARTITION BY d) n FROM win), "
-            f"big AS (SELECT DISTINCT d, n FROM r WHERE n >= 3 ORDER BY n DESC LIMIT {int(n_clusters)}) "
+            f"big AS (SELECT DISTINCT d, n FROM r WHERE n >= 3 "
+            f"ORDER BY hash(d || '{int(seed)}') LIMIT {int(n_clusters)}) "
             f"SELECT r.d AS cluster_id, r.n AS sampled_size, r.id AS doc_id, r.c AS canonical "
             f"FROM r JOIN big USING (d) WHERE r.rn <= {int(per_cluster)} ORDER BY r.n DESC, r.d, r.c DESC"
         ).dicts()
@@ -208,13 +221,15 @@ class Dataviz:
         # Provided by the server from the loaded ClusteredStoreData payload.
         raise NotImplementedError("store_heatmap is served from the store payload, not ducky")
 
-    def store_cluster_samples(self, cluster: int, n: int = 12, max_sources: int = 8) -> list[dict]:
-        """Sample docs assigned to ``cluster`` (cluster_view), joined to their text.
+    def store_cluster_samples(
+        self, cluster: int, n: int = 12, max_sources: int = 8, seed: int = DEFAULT_SEED
+    ) -> list[dict]:
+        """Seed-sample docs assigned to ``cluster`` (cluster_view), joined to their text.
 
         A cluster spans all sources; joining every source's parquet at once is
         too heavy, so we probe resolved sources one at a time (cheap per-source
-        join with predicate pushdown on the cluster column) and accumulate up to
-        ``n`` rows across at most ``max_sources`` sources.
+        join with predicate pushdown on the cluster column), seed-shuffle a
+        bounded pool per source, and accumulate up to ``n`` across ``max_sources``.
         """
         view = self.lineage.cluster_view
         both = [s for s in self.lineage.source_names if s in self.lineage.cluster_assign and s in self.lineage.normalize]
@@ -229,15 +244,19 @@ class Dataviz:
             assign = self._flat_glob(self.lineage.cluster_assign, source)
             norm = self._normalize_glob(source)
             res = self.ducky.run(
-                f"SELECT a.cluster_{view} AS cluster, substr(n.text,1,2000) AS text "
+                f"SELECT cluster, text FROM ("
+                f"SELECT a.cluster_{view} AS cluster, a.id AS id, substr(n.text,1,2000) AS text "
                 f"FROM read_parquet('{assign}') a JOIN read_parquet('{norm}') n USING (id) "
-                f"WHERE a.cluster_{view} = {int(cluster)} LIMIT {int(remaining)}"
+                f"WHERE a.cluster_{view} = {int(cluster)} LIMIT {_POOL_FILTER}) "
+                f"ORDER BY hash(id || '{int(seed)}') LIMIT {int(remaining)}"
             )
             for row in res.dicts():
                 out.append({**row, "source": source})
         return out
 
-    def store_bucket_samples(self, cluster: int, quality_bucket: int, n: int = 12, max_sources: int = 8) -> list[dict]:
+    def store_bucket_samples(
+        self, cluster: int, quality_bucket: int, n: int = 12, max_sources: int = 8, seed: int = DEFAULT_SEED
+    ) -> list[dict]:
         """Sample docs in a specific (cluster, quality) bucket, with score + text.
 
         The bucket is ``cluster_<view> == cluster`` AND the quality score in that
@@ -266,10 +285,12 @@ class Dataviz:
             qual = self._flat_glob(self.lineage.quality, source)
             norm = self._normalize_glob(source)
             res = self.ducky.run(
-                f"SELECT round(q.score, 4) AS score, substr(n.text, 1, 2000) AS text "
+                f"SELECT score, text FROM ("
+                f"SELECT a.id AS id, round(q.score, 4) AS score, substr(n.text, 1, 2000) AS text "
                 f"FROM read_parquet('{assign}') a JOIN read_parquet('{qual}') q USING (id) "
                 f"JOIN read_parquet('{norm}') n USING (id) "
-                f"WHERE a.cluster_{view} = {int(cluster)} AND q.score >= {lo} AND q.score < {hi} LIMIT {remaining}"
+                f"WHERE a.cluster_{view} = {int(cluster)} AND q.score >= {lo} AND q.score < {hi} LIMIT {_POOL_FILTER}) "
+                f"ORDER BY hash(id || '{int(seed)}') LIMIT {int(remaining)}"
             )
             for row in res.dicts():
                 out.append({**row, "source": source})

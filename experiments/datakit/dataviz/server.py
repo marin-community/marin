@@ -51,7 +51,7 @@ from starlette.routing import Route
 
 from experiments.datakit.dataviz.ducky import DEFAULT_BASE_URL, DuckyClient, DuckyError, iap_token_provider
 from experiments.datakit.dataviz.lineage import StoreLineage, load_lineage, resolve_lineage, save_lineage
-from experiments.datakit.dataviz.queries import Dataviz
+from experiments.datakit.dataviz.queries import DEFAULT_SEED, Dataviz
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 
 logger = logging.getLogger(__name__)
@@ -121,23 +121,28 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
 
 def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
+    def _seed(p: dict) -> int:
+        return int(p.get("seed", DEFAULT_SEED))
+
     return {
         "normalized_stats": lambda p: dv.normalized_stats(p["source"]),
         "normalized_hist": lambda p: dv.normalized_length_hist(p["source"]).dicts(),
         "normalized_samples": (
-            lambda p: dv.normalized_samples(p["source"], int(p.get("n", 20)), p.get("search", "")).dicts()
+            lambda p: dv.normalized_samples(p["source"], int(p.get("n", 20)), p.get("search", ""), _seed(p)).dicts()
         ),
         "decontam_stats": lambda p: dv.decontam_stats(p["source"]),
-        "decontam_samples": lambda p: dv.decontam_samples(p["source"], int(p.get("n", 20))).dicts(),
+        "decontam_samples": lambda p: dv.decontam_samples(p["source"], int(p.get("n", 20)), _seed(p)).dicts(),
         "quality_hist": lambda p: dv.quality_hist(p["source"]).dicts(),
         "quality_samples": (
-            lambda p: dv.quality_samples(p["source"], float(p["lo"]), float(p["hi"]), int(p.get("n", 20))).dicts()
+            lambda p: dv.quality_samples(
+                p["source"], float(p["lo"]), float(p["hi"]), int(p.get("n", 20)), _seed(p)
+            ).dicts()
         ),
-        "store_samples": lambda p: dv.store_cluster_samples(int(p["cluster"]), int(p.get("n", 12))),
+        "store_samples": lambda p: dv.store_cluster_samples(int(p["cluster"]), int(p.get("n", 12)), seed=_seed(p)),
         "store_bucket_samples": lambda p: dv.store_bucket_samples(
-            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12))
+            int(p["cluster"]), int(p["quality_bucket"]), int(p.get("n", 12)), seed=_seed(p)
         ),
-        "dedup_examples": lambda p: dv.dedup_examples(p["source"], int(p.get("n_clusters", 6))),
+        "dedup_examples": lambda p: dv.dedup_examples(p["source"], int(p.get("n_clusters", 6)), seed=_seed(p)),
     }
 
 
