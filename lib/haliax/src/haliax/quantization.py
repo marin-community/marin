@@ -26,6 +26,7 @@ from haliax.state_dict import StateDict
 from haliax.types import PrecisionLike
 
 from ._src.fp8 import fp8_scaled_dot_general
+from ._src.fp8_ragged import WgradMode
 from .axis import Axis
 from .core import NamedArray
 from .hof import vmap
@@ -284,6 +285,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
     compute_dtype: DTypeLike | None = eqx.field(static=True)
     fwd_dtype: DTypeLike = eqx.field(static=True)
     rev_dtype: DTypeLike = eqx.field(static=True)
+    wgrad_mode: WgradMode = eqx.field(static=True, default=WgradMode.FP8)
 
     @classmethod
     def init(
@@ -292,6 +294,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         compute_dtype: DTypeLike | None = None,
         fwd_dtype: DTypeLike = jnp.float8_e4m3fn,
         rev_dtype: DTypeLike = jnp.float8_e4m3fn,
+        wgrad_mode: WgradMode = WgradMode.FP8,
     ):
         if jnp.dtype(fwd_dtype) != jnp.dtype(rev_dtype):
             raise ValueError(
@@ -310,6 +313,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             compute_dtype=compute_dtype,
             fwd_dtype=fwd_dtype,
             rev_dtype=rev_dtype,
+            wgrad_mode=wgrad_mode,
         )
 
     def __call__(self, lhs, rhs, group_sizes):
@@ -333,6 +337,7 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
             quantize_compute_type=comp_dtype,
             fwd_dtype=self.fwd_dtype,
             rev_dtype=self.rev_dtype,
+            wgrad_mode=self.wgrad_mode,
         )
 
 

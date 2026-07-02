@@ -414,6 +414,357 @@ def _grouped_gemm_launcher(*, tile_shape_mn, group_count):
     return GroupedGemmFp8()
 
 
+def _wgrad_tensor_specs():
+    """TensorSpecs for the wgrad ``cutlass_call`` operands and output.
+
+    A ``a_t[K,M]`` and B ``b_t[N,M]`` are token-major FP8 (the contraction M is
+    the contiguous minor axis, padded to a multiple of the tile so the FAST
+    globally-aligned 128-bit load is legal). The M axis carries the 16-element
+    (128-bit) vectorized copy, so it is declared with FP8 divisibility. The int32
+    metadata/offsets and the ``[1]`` float32 scale are plain static tensors; the
+    ``[E,K,N]`` output is declared like the forward's.
+    """
+    vec = _UNIVERSAL_COPY_BITS // 8  # fp8 elems per 128-bit copy
+    tensor_spec = cjax.TensorSpec
+    a_spec = tensor_spec(mode=(0, 1), divisibility=(1, vec), static=True)
+    b_spec = tensor_spec(mode=(0, 1), divisibility=(1, vec), static=True)
+    meta_spec = tensor_spec(mode=(0, 1), static=True)
+    offsets_spec = tensor_spec(mode=(0,), static=True)
+    scale_spec = tensor_spec(mode=(0,), static=True)
+    c_spec = tensor_spec(mode=(0, 1, 2), divisibility=(1, 1, 1), static=True)
+    return a_spec, b_spec, meta_spec, offsets_spec, scale_spec, c_spec
+
+
+def _wgrad_gemm_launcher(*, tile_shape_mn, group_count):
+    """Build the ``@cute.jit`` WGMMA launcher for the token-M-contracting wgrad.
+
+    Computes ``mC[g,k,n] = sum_{m in group g} mA[k,m]*mB[n,m]`` where the token
+    axis M is the (variable, non-tile-aligned) contraction. Reuses the forward
+    kernel's smem layouts / WGMMA config / StMatrix epilogue verbatim; only the
+    tensor indexing and the mainloop load differ:
+
+    * The output tiles per group are UNIFORM (K,N are static and tile-aligned),
+      so the group maps to ``blockIdx.z`` directly (no cross-group tile
+      scheduler needed) and the epilogue stores the full tile (no row predicate).
+    * The contraction length ``M_g`` is dynamic and NOT tile-aligned. The kernel
+      iterates GLOBALLY tile-aligned token tiles (never ``domain_offset``-ing the
+      contiguous contraction, which would break the 128-bit load alignment). A
+      tile fully inside a group's ``[m_offset, m_offset+M_g)`` range takes the
+      FAST 128-bit vectorized load; the (at most two) boundary tiles take a
+      vector-1 element-predicated load (two-sided ``m_offset <= m < m_offset+M_g``)
+      so no token of an adjacent group is dropped or contaminated.
+
+    ``tile_shape_mn`` tiles the output (M=K rows, N cols); ``group_count`` is the
+    grid Z extent.
+    """
+    sm90_utils = importlib.import_module("cutlass.utils.hopper_helpers")
+    cuda = importlib.import_module("cuda.bindings.driver")
+
+    tile_m, tile_n = tile_shape_mn
+    acc_dtype = cutlass.Float32
+    atom_layout_mnk = (2, 1, 1)
+    num_mma_warp_groups = 2
+    num_threads = num_mma_warp_groups * 128
+
+    class WgradGemmFp8:
+        @cute.jit
+        def __call__(
+            self,
+            stream: cuda.CUstream,
+            mA: cute.Tensor,
+            mB: cute.Tensor,
+            mPS: cute.Tensor,
+            mOff: cute.Tensor,
+            mScale: cute.Tensor,
+            mC: cute.Tensor,
+        ):
+            a_dtype = mA.element_type
+            b_dtype = mB.element_type
+            c_dtype = mC.element_type
+
+            a_layout = cutlass.utils.LayoutEnum.from_tensor(mA)
+            b_layout = cutlass.utils.LayoutEnum.from_tensor(mB)
+            tiled_mma = sm90_utils.make_trivial_tiled_mma(
+                a_dtype,
+                b_dtype,
+                a_layout.sm90_mma_major_mode(),
+                b_layout.sm90_mma_major_mode(),
+                acc_dtype,
+                atom_layout_mnk,
+                tiler_mn=(64, tile_n),
+            )
+            mma_inst_k = cute.size(tiled_mma.shape_mnk, mode=[2])
+            tile_k = mma_inst_k * 4
+
+            a_atom = cute.nvgpu.warpgroup.make_smem_layout_atom(
+                sm90_utils.get_smem_layout_atom(a_layout, a_dtype, tile_k), a_dtype
+            )
+            b_atom = cute.nvgpu.warpgroup.make_smem_layout_atom(
+                sm90_utils.get_smem_layout_atom(b_layout, b_dtype, tile_k), b_dtype
+            )
+            sA_layout = cute.tile_to_shape(a_atom, (tile_m, tile_k), order=(0, 1))
+            sB_layout = cute.tile_to_shape(b_atom, (tile_n, tile_k), order=(0, 1))
+
+            c_layout_enum = cutlass.utils.LayoutEnum.from_tensor(mC[0, None, None])
+            epi_tile = sm90_utils.compute_tile_shape_or_override(
+                (tile_m, tile_n, tile_k), c_dtype, is_cooperative=True
+            )
+            sC_layout = sm90_utils.make_smem_layout_epi(c_dtype, c_layout_enum, epi_tile, 1)
+
+            @cute.struct
+            class SharedStorage:
+                sA: cute.struct.Align[cute.struct.MemRange[a_dtype, cute.cosize(sA_layout)], 1024]
+                sB: cute.struct.Align[cute.struct.MemRange[b_dtype, cute.cosize(sB_layout)], 1024]
+                sC: cute.struct.Align[cute.struct.MemRange[c_dtype, cute.cosize(sC_layout)], 1024]
+
+            # Two gmem->smem load paths along the contraction M:
+            #  * FAST: 128-bit vectorized copy (as in the forward kernel) for tiles
+            #    fully within M_g. Real MoE token counts are typically multiples of
+            #    tile_k, so this covers essentially all the contraction.
+            #  * TAIL: element-granular (vector = 1) predicated copy for the single
+            #    boundary tile where M_g is not tile-aligned -- a vectorized copy
+            #    there would drop or contaminate boundary tokens of adjacent groups.
+            a_vec = _UNIVERSAL_COPY_BITS // a_dtype.width
+            b_vec = _UNIVERSAL_COPY_BITS // b_dtype.width
+            a_k_vecs = tile_k // a_vec
+            b_k_vecs = tile_k // b_vec
+            tiled_copy_a_fast = cute.make_tiled_copy_tv(
+                cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), a_dtype, num_bits_per_copy=_UNIVERSAL_COPY_BITS),
+                cute.make_layout((num_threads // a_k_vecs, a_k_vecs), stride=(a_k_vecs, 1)),
+                cute.make_layout((1, a_vec)),
+            )
+            tiled_copy_b_fast = cute.make_tiled_copy_tv(
+                cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), b_dtype, num_bits_per_copy=_UNIVERSAL_COPY_BITS),
+                cute.make_layout((num_threads // b_k_vecs, b_k_vecs), stride=(b_k_vecs, 1)),
+                cute.make_layout((1, b_vec)),
+            )
+            # Tail copies put the (contiguous) contraction on the fast thread axis so
+            # the vector-1 loads still coalesce across threads.
+            tiled_copy_a_tail = cute.make_tiled_copy_tv(
+                cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), a_dtype, num_bits_per_copy=a_dtype.width),
+                cute.make_layout((num_threads // tile_k, tile_k), stride=(tile_k, 1)),
+                cute.make_layout((1, 1)),
+            )
+            tiled_copy_b_tail = cute.make_tiled_copy_tv(
+                cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), b_dtype, num_bits_per_copy=b_dtype.width),
+                cute.make_layout((num_threads // tile_k, tile_k), stride=(tile_k, 1)),
+                cute.make_layout((1, 1)),
+            )
+
+            copy_atom_r2s = sm90_utils.get_smem_store_op(c_layout_enum, c_dtype, acc_dtype)
+            tiled_copy_r2s = cute.make_tiled_copy_S(
+                copy_atom_r2s, cute.make_tiled_copy_C_atom(copy_atom_r2s, tiled_mma)
+            )
+            c_vec = _UNIVERSAL_COPY_BITS // c_dtype.width
+            c_n_vecs = epi_tile[1] // c_vec
+            tiled_copy_s2g = cute.make_tiled_copy_tv(
+                cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), c_dtype, num_bits_per_copy=_UNIVERSAL_COPY_BITS),
+                cute.make_layout((num_threads // c_n_vecs, c_n_vecs), stride=(c_n_vecs, 1)),
+                cute.make_layout((1, c_vec)),
+            )
+
+            k = mA.shape[0]  # output rows (hidden), == mC.shape[1]
+            n = mB.shape[0]  # output cols, == mC.shape[2]
+            grid = (
+                cute.ceil_div(k, tile_m),
+                cute.ceil_div(n, tile_n),
+                group_count,
+            )
+            self.kernel(
+                mA,
+                mB,
+                mPS,
+                mOff,
+                mScale,
+                mC,
+                sA_layout,
+                sB_layout,
+                sC_layout,
+                tiled_copy_a_fast,
+                tiled_copy_b_fast,
+                tiled_copy_a_tail,
+                tiled_copy_b_tail,
+                tiled_copy_r2s,
+                tiled_copy_s2g,
+                tiled_mma,
+                tile_m,
+                tile_n,
+                tile_k,
+                epi_tile,
+                a_dtype,
+                b_dtype,
+                c_dtype,
+                SharedStorage,
+            ).launch(grid=grid, block=[num_threads, 1, 1], stream=stream)
+
+        @cute.kernel
+        def kernel(
+            self,
+            mA: cute.Tensor,
+            mB: cute.Tensor,
+            mPS: cute.Tensor,
+            mOff: cute.Tensor,
+            mScale: cute.Tensor,
+            mC: cute.Tensor,
+            sA_layout: cute.ComposedLayout,
+            sB_layout: cute.ComposedLayout,
+            sC_layout: cute.ComposedLayout,
+            tiled_copy_a_fast: cute.TiledCopy,
+            tiled_copy_b_fast: cute.TiledCopy,
+            tiled_copy_a_tail: cute.TiledCopy,
+            tiled_copy_b_tail: cute.TiledCopy,
+            tiled_copy_r2s: cute.TiledCopy,
+            tiled_copy_s2g: cute.TiledCopy,
+            tiled_mma: cute.TiledMma,
+            tile_m: cutlass.Constexpr,
+            tile_n: cutlass.Constexpr,
+            tile_k: cutlass.Constexpr,
+            epi_tile: cutlass.Constexpr,
+            a_dtype: cutlass.Constexpr,
+            b_dtype: cutlass.Constexpr,
+            c_dtype: cutlass.Constexpr,
+            SharedStorage: cutlass.Constexpr,
+        ):
+            tidx, _, _ = cute.arch.thread_idx()
+            k_block, n_block, g = cute.arch.block_idx()
+
+            # Group g owns the full [K,N] output slab mC[g]; its tokens are the
+            # packed contraction slice [m_offset, m_offset+M_g) of A[K,M]/B[N,M].
+            m_g = mPS[g, 0]
+            m_offset = mOff[g]
+
+            mC_g = mC[g, None, None]
+
+            # Tile A/B over the WHOLE (padded) token axis at global 128-aligned
+            # boundaries -- never domain_offset the contiguous contraction, which
+            # would break the FAST 128-bit load's 16-byte alignment.
+            gA = cute.local_tile(mA, (tile_m, tile_k), (k_block, None))
+            gB = cute.local_tile(mB, (tile_n, tile_k), (n_block, None))
+            gC = cute.local_tile(mC_g, (tile_m, tile_n), (k_block, n_block))
+
+            smem = cutlass.utils.SmemAllocator()
+            storage = smem.allocate(SharedStorage)
+            sA = storage.sA.get_tensor(sA_layout.outer, swizzle=sA_layout.inner)
+            sB = storage.sB.get_tensor(sB_layout.outer, swizzle=sB_layout.inner)
+
+            # Fast (vectorized) and tail (vector-1, predicated) load partitions.
+            thr_a_fast = tiled_copy_a_fast.get_slice(tidx)
+            thr_b_fast = tiled_copy_b_fast.get_slice(tidx)
+            tAgA_f = thr_a_fast.partition_S(gA)
+            tAsA_f = thr_a_fast.partition_D(sA)
+            tBgB_f = thr_b_fast.partition_S(gB)
+            tBsB_f = thr_b_fast.partition_D(sB)
+
+            thr_a_tail = tiled_copy_a_tail.get_slice(tidx)
+            thr_b_tail = tiled_copy_b_tail.get_slice(tidx)
+            tAgA_t = thr_a_tail.partition_S(gA)
+            tAsA_t = thr_a_tail.partition_D(sA)
+            tBgB_t = thr_b_tail.partition_S(gB)
+            tBsB_t = thr_b_tail.partition_D(sB)
+            # Token (tile_k) coordinate for the tail predicate.
+            cA = cute.make_identity_tensor((tile_m, tile_k))
+            tAcA = thr_a_tail.partition_S(cA)
+            cB = cute.make_identity_tensor((tile_n, tile_k))
+            tBcB = thr_b_tail.partition_S(cB)
+            a_rest_m = cute.size(tAgA_t, mode=[1])
+            a_rest_k = cute.size(tAgA_t, mode=[2])
+            b_rest_n = cute.size(tBgB_t, mode=[1])
+            b_rest_k = cute.size(tBgB_t, mode=[2])
+
+            warp_group_idx = cute.arch.make_warp_uniform(tidx // 128)
+            wg_thread_layout = cute.make_layout(2, stride=128)
+            thr_mma = tiled_mma.get_slice(wg_thread_layout(warp_group_idx))
+            tCsA = thr_mma.partition_A(sA)
+            tCsB = thr_mma.partition_B(sB)
+            tCrA = tiled_mma.make_fragment_A(tCsA)
+            tCrB = tiled_mma.make_fragment_B(tCsB)
+
+            gC_mma = thr_mma.partition_C(gC)
+            acc = cute.make_rmem_tensor(gC_mma.shape, cutlass.Float32)
+            # Accumulate onto a zeroed acc (ACCUMULATE always True): an empty group
+            # (M_g==0) runs no tile and correctly stores zeros.
+            acc.fill(0.0)
+            tiled_mma.set(cute.nvgpu.warpgroup.Field.ACCUMULATE, True)
+
+            num_k_blocks = cute.size(tCrA, mode=[2])
+            m_end = m_offset + m_g
+            first_tile = m_offset // tile_k
+            last_tile = (m_end - 1) // tile_k  # inclusive; empty groups yield <= first_tile-1
+            n_tiles = last_tile - first_tile + 1
+
+            for i in cutlass.range(n_tiles, unroll=1):
+                t = first_tile + i
+                lo = t * tile_k
+                if lo >= m_offset and lo + tile_k <= m_end:
+                    # Tile fully inside the group: fast 128-bit vectorized load.
+                    cute.copy(tiled_copy_a_fast, tAgA_f[None, None, None, t], tAsA_f)
+                    cute.copy(tiled_copy_b_fast, tBgB_f[None, None, None, t], tBsB_f)
+                else:
+                    # Boundary tile: vector-1 load, two-sided per-token predicate.
+                    for rk in cutlass.range_constexpr(a_rest_k):
+                        for rm in cutlass.range_constexpr(a_rest_m):
+                            gm = lo + tAcA[0, rm, rk][1]
+                            if m_offset <= gm and gm < m_end:
+                                cute.copy(tiled_copy_a_tail, tAgA_t[None, rm, rk, t], tAsA_t[None, rm, rk])
+                            else:
+                                tAsA_t[None, rm, rk].fill(0)
+                    for rk in cutlass.range_constexpr(b_rest_k):
+                        for rn in cutlass.range_constexpr(b_rest_n):
+                            gm = lo + tBcB[0, rn, rk][1]
+                            if m_offset <= gm and gm < m_end:
+                                cute.copy(tiled_copy_b_tail, tBgB_t[None, rn, rk, t], tBsB_t[None, rn, rk])
+                            else:
+                                tBsB_t[None, rn, rk].fill(0)
+                cute.arch.sync_threads()
+                # Generic-proxy (SIMT st.shared) writes are not visible to the
+                # async-proxy WGMMA smem read without this fence (see the forward
+                # kernel); omitting it yields nondeterministic garbage at scale.
+                cute.arch.fence_proxy("async.shared", space="cta")
+                cute.nvgpu.warpgroup.fence()
+                for kb in cutlass.range_constexpr(num_k_blocks):
+                    cute.gemm(tiled_mma, acc, tCrA[None, None, kb], tCrB[None, None, kb], acc)
+                cute.nvgpu.warpgroup.commit_group()
+                cute.nvgpu.warpgroup.wait_group(0)
+                cute.arch.sync_threads()
+
+            # Epilogue: identical to the forward (scale, r2s StMatrix, s2g), but
+            # the output [K,N] is fully tile-aligned so every row is stored.
+            out_scale = mScale[0]
+            acc.store(acc.load() / out_scale)
+
+            sC = storage.sC.get_tensor(sC_layout.outer, swizzle=sC_layout.inner)
+            thr_r2s = tiled_copy_r2s.get_slice(tidx)
+            tRS_sC = thr_r2s.partition_D(sC)
+            tRS_rAcc = tiled_copy_r2s.retile(acc)
+            rD_layout = cute.make_layout(cute.shape(thr_r2s.partition_S(sC))[:3])
+            chunk = cute.size(rD_layout)
+
+            epi_num = tile_n // epi_tile[1]
+            thr_s2g = tiled_copy_s2g.get_slice(tidx)
+
+            for epi_idx in cutlass.range_constexpr(epi_num):
+                rAcc = cute.make_rmem_tensor(rD_layout, cutlass.Float32)
+                for v in cutlass.range_constexpr(chunk):
+                    rAcc[v] = tRS_rAcc[epi_idx * chunk + v]
+                rC = cute.make_rmem_tensor(rD_layout, c_dtype)
+                rC.store(rAcc.load().to(c_dtype))
+                cute.copy(tiled_copy_r2s, rC, tRS_sC[None, None, None, 0])
+                cute.arch.fence_proxy("async.shared", space="cta")
+                cute.arch.sync_threads()
+
+                gC_chunk = cute.local_tile(gC, (tile_m, epi_tile[1]), (0, epi_idx))
+                sC_chunk = sC[None, None, 0]
+                tSG_sC = thr_s2g.partition_S(sC_chunk)
+                tSG_gC = thr_s2g.partition_D(gC_chunk)
+                tSG_rC = cute.make_fragment_like(tSG_sC)
+                cute.autovec_copy(tSG_sC, tSG_rC)
+                for rm in cutlass.range_constexpr(cute.size(tSG_gC, mode=[1])):
+                    cute.copy(tiled_copy_s2g, tSG_rC[None, rm, None], tSG_gC[None, rm, None])
+                cute.arch.sync_threads()
+
+    return WgradGemmFp8()
+
+
 def cute_ragged_dot(a, b, group_sizes, *, out_dtype, out_scale):
     """Grouped GEMM ``a[M,K] . b[E,N,K] -> [M,N]`` contracting the last axis K
     (contiguous for both). Epilogue divides the f32 accumulator by ``out_scale``."""
@@ -444,3 +795,49 @@ def cute_ragged_dot(a, b, group_sizes, *, out_dtype, out_scale):
         use_static_tensors=True,
     )
     return call(a, b, meta, offsets, out_scale)
+
+
+def cute_wgrad(a_t, b_t, group_sizes, *, out_dtype, out_scale):
+    """Grouped wgrad ``a_t[K,M] . b_t[N,M] -> [E,K,N]`` contracting the token axis M.
+
+    ``a_t``/``b_t`` are token-major FP8 (cast-transposed activations E4M3 and
+    output-grad E5M2); M is the packed, non-tile-aligned per-group contraction.
+    Produces one ``[K,N]`` weight-gradient slab per expert. The epilogue divides
+    the f32 accumulator by ``out_scale`` (the reciprocal of the operand scale
+    product, matching the dequantize convention)."""
+    if not cute_available():
+        raise RuntimeError("cute_wgrad requires the CuTe DSL on a GPU backend")
+    tile_shape_mn = (128, 256)
+    tile_k = _FP8_WGMMA_K_GRANULARITY
+    k, m = a_t.shape
+    n = b_t.shape[0]
+    e = group_sizes.shape[0]
+    if k % tile_shape_mn[0] != 0:
+        raise ValueError(
+            f"cute_wgrad: K={k} is not divisible by tile_m={tile_shape_mn[0]}; pad or reshape before calling"
+        )
+    if n % tile_shape_mn[1] != 0:
+        raise ValueError(
+            f"cute_wgrad: N={n} is not divisible by tile_n={tile_shape_mn[1]}; pad or reshape before calling"
+        )
+    # Pad the contraction M up to a tile_k multiple with zeros (beyond the last
+    # group, so no group's contraction changes) so the base M extent is 16-aligned
+    # and the globally-tile-aligned FAST 128-bit load is legal.
+    m_pad = ((m + tile_k - 1) // tile_k) * tile_k
+    if m_pad != m:
+        a_t = jnp.pad(a_t, ((0, 0), (0, m_pad - m)))
+        b_t = jnp.pad(b_t, ((0, 0), (0, m_pad - m)))
+    # meta carries per-group token counts (contraction M) in mode 0; offsets are
+    # the packed exclusive prefix sum of token counts along M.
+    meta = _problem_shape_mnkl(group_sizes, n, k)
+    offsets = (jnp.cumsum(group_sizes.astype(jnp.int32)) - group_sizes.astype(jnp.int32)).astype(jnp.int32)
+    launcher = _wgrad_gemm_launcher(tile_shape_mn=tile_shape_mn, group_count=e)
+    a_spec, b_spec, meta_spec, offsets_spec, scale_spec, c_spec = _wgrad_tensor_specs()
+    call = cjax.cutlass_call(
+        launcher,
+        output_shape_dtype=jax.ShapeDtypeStruct((e, k, n), out_dtype),
+        input_spec=(a_spec, b_spec, meta_spec, offsets_spec, scale_spec),
+        output_spec=(c_spec,),
+        use_static_tensors=True,
+    )
+    return call(a_t, b_t, meta, offsets, out_scale)

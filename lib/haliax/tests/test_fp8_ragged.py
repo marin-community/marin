@@ -108,11 +108,13 @@ def test_fp8_forward_rel_fro():
 @gpu_only
 def test_fp8_dgrad_and_bf16_wgrad():
     """dlhs from FP8 dgrad (E5M2 x E4M3) within 8% of bf16; drhs (bf16 wgrad) < 0.1%."""
+    from haliax._src.fp8_ragged import WgradMode  # noqa: PLC0415
     from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
     from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
 
     lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
-    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+    # Pin the bf16 wgrad so the drhs assertion stays bit-exact (default is FP8 wgrad).
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2, wgrad_mode=WgradMode.BF16)
 
     def loss(l, r, o):
         return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
@@ -164,6 +166,97 @@ def test_fp8_nonunit_scale_regression():
     g_lhs_fp8 = jax.grad(lambda l: loss(l, rhs, op))(lhs)
     g_lhs_ref = jax.grad(lambda l: loss(l, rhs, None))(lhs)
     assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 8e-2  # dgrad: reciprocal dgrad_scale
+
+
+def test_cute_wgrad_guard_non_conforming_shapes():
+    """cute_wgrad raises ValueError for K/N output dims that miss tile alignment."""
+    import importlib  # noqa: PLC0415
+
+    ragged_dot_cute = importlib.import_module("haliax._src.ragged_dot_cute")
+    original = ragged_dot_cute.cute_available
+    ragged_dot_cute.cute_available = lambda: True
+    try:
+        gs = jnp.array([4], jnp.int32)
+        scale = jnp.ones((1,), jnp.float32)
+        # Bad K (rows, not divisible by tile_m=128).
+        with pytest.raises(ValueError, match="K=64"):
+            a_t = jnp.zeros((64, 4), jnp.float8_e4m3fn)
+            b_t = jnp.zeros((256, 4), jnp.float8_e5m2)
+            ragged_dot_cute.cute_wgrad(a_t, b_t, gs, out_dtype=jnp.bfloat16, out_scale=scale)
+        # Bad N (cols, not divisible by tile_n=256).
+        with pytest.raises(ValueError, match="N=100"):
+            a_t = jnp.zeros((128, 4), jnp.float8_e4m3fn)
+            b_t = jnp.zeros((100, 4), jnp.float8_e5m2)
+            ragged_dot_cute.cute_wgrad(a_t, b_t, gs, out_dtype=jnp.bfloat16, out_scale=scale)
+    finally:
+        ragged_dot_cute.cute_available = original
+
+
+def test_cast_transpose_reference_contract():
+    """cast_transpose_reference: row-major == quantize, token-major == its transpose."""
+    from haliax._src.fp8 import quantize  # noqa: PLC0415
+    from haliax._src.fp8_cast_transpose import cast_transpose_reference  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    x = jnp.asarray(rng.standard_normal((256, 128)) * 0.1, jnp.bfloat16)
+    scale = jnp.asarray(float(jnp.max(jnp.abs(x))) / 448.0, jnp.float32)
+    row, col = cast_transpose_reference(x, scale, out_dtype=jnp.float8_e4m3fn)
+    ref_row = quantize(x, jnp.float8_e4m3fn, scale, jnp.float32)
+    assert row.shape == (256, 128) and col.shape == (128, 256)
+    assert np.array_equal(np.asarray(row, np.float32), np.asarray(ref_row, np.float32))
+    assert np.array_equal(np.asarray(col, np.float32), np.asarray(row, np.float32).T)
+
+
+@gpu_only
+def test_cute_wgrad_matches_reference():
+    """Standalone genuine E4M3xE5M2 wgrad (contract token axis) within 5% of the f32 ref."""
+    from haliax._src.fp8_cast_transpose import cast_transpose  # noqa: PLC0415
+    from haliax._src.ragged_dot_cute import cute_wgrad  # noqa: PLC0415
+
+    lhs, _, gs = _nonuniform_fp8(512, 128, 8, 256)  # lhs[T,K]
+    g = jnp.asarray(np.random.default_rng(1).standard_normal((512, 256)) * 0.1, jnp.bfloat16)  # g[T,N]
+    # This repo's quantize DIVIDES by scale, so the range-filling scale is amax/fp8_max.
+    s_l = jnp.asarray(float(jnp.max(jnp.abs(lhs))) / 448.0, jnp.float32)
+    s_g = jnp.asarray(float(jnp.max(jnp.abs(g))) / 57344.0, jnp.float32)
+    _, lhs_t = cast_transpose(lhs, s_l, out_dtype=jnp.float8_e4m3fn)  # [K,T]
+    _, g_t = cast_transpose(g, s_g, out_dtype=jnp.float8_e5m2)  # [N,T]
+    # Reciprocal: raw fp8 product is (lhs/s_l)(g/s_g); the epilogue DIVIDES by out_scale,
+    # so pass 1/(s_l*s_g) to recover lhs*g.
+    out_scale = jnp.reshape((1.0 / (s_l * s_g)).astype(jnp.float32), (1,))
+    drhs = cute_wgrad(lhs_t, g_t, gs, out_dtype=jnp.bfloat16, out_scale=out_scale)  # [E,K,N]
+    ref = jax.lax.ragged_dot_general(
+        lhs.astype(jnp.float32),
+        g.astype(jnp.float32),
+        gs,
+        ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
+            dot_dimension_numbers=(((0,), (0,)), ((), ())),  # contract the token axis
+            lhs_ragged_dimensions=(0,),
+            rhs_group_dimensions=(),
+        ),
+    )
+    assert drhs.shape == ref.shape
+    # Genuine mixed E4M3(lhs)xE5M2(grad) contraction vs the full-precision f32 ref:
+    # E5M2 carries only 2 mantissa bits, so the wgrad error floor is ~6-8% (higher
+    # than the E4M3xE4M3 forward's 5%). This is the true fp8 error, not a kernel bug.
+    assert _rel_fro(drhs, ref) < 8e-2
+
+
+@gpu_only
+def test_fp8_wgrad_matches_bf16_within_tol():
+    """Default FP8 wgrad (genuine E5M2 contraction) drhs within 8% of the bf16 grad."""
+    from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
+    from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)  # wgrad_mode defaults to FP8
+
+    def loss(l, r, o):
+        return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
+
+    g_lhs_fp8, g_rhs_fp8 = jax.grad(lambda l, r: loss(l, r, op), argnums=(0, 1))(lhs, rhs)
+    g_lhs_ref, g_rhs_ref = jax.grad(lambda l, r: loss(l, r, None), argnums=(0, 1))(lhs, rhs)
+    assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 8e-2  # fp8 dgrad
+    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 8e-2  # fp8 wgrad (genuine E4M3xE5M2 contraction)
 
 
 @gpu_only
