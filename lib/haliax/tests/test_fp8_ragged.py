@@ -36,3 +36,49 @@ def test_cute_ragged_dot_matches_reference():
     # Reference: dequantize operands (no scaling here) and contract in f32, same layout.
     ref = jax.lax.ragged_dot(a.astype(jnp.float32), jnp.swapaxes(b, 1, 2).astype(jnp.float32), gs)
     assert _rel_fro(out, ref) < 5e-2
+
+
+@gpu_only
+def test_cute_ragged_dot_scale_divide():
+    """Verify the epilogue DIVIDES (not multiplies) the accumulator by out_scale."""
+    from haliax._src.ragged_dot_cute import cute_ragged_dot  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 8, 256, seed=1)
+    E4M3 = jnp.float8_e4m3fn
+    a = (lhs / jnp.max(jnp.abs(lhs)) * 448.0).astype(E4M3)
+    b = (jnp.swapaxes(rhs, 1, 2) / jnp.max(jnp.abs(rhs)) * 448.0).astype(E4M3)
+    scale_value = 2.0
+    out_scale = jnp.full((1,), scale_value, jnp.float32)
+    out_scaled = cute_ragged_dot(a, b, gs, out_dtype=jnp.bfloat16, out_scale=out_scale)
+    # Reference: unscaled contract, then divide by scale_value.
+    ref_unscaled = jax.lax.ragged_dot(a.astype(jnp.float32), jnp.swapaxes(b, 1, 2).astype(jnp.float32), gs)
+    ref_scaled = ref_unscaled / scale_value
+    # The divide path must match; a multiply would produce ref * scale^2 and fail.
+    assert _rel_fro(out_scaled, ref_scaled) < 5e-2
+
+
+def test_cute_ragged_dot_guard_non_conforming_shapes():
+    """Guard raises ValueError for N/K shapes that don't meet tile alignment."""
+    import importlib  # noqa: PLC0415
+
+    # Patch cute_available to return True so we reach the guard without a GPU.
+    ragged_dot_cute = importlib.import_module("haliax._src.ragged_dot_cute")
+    original = ragged_dot_cute.cute_available
+
+    def _fake_available():
+        return True
+
+    ragged_dot_cute.cute_available = _fake_available
+    try:
+        a = jnp.zeros((4, 128), jnp.float8_e4m3fn)
+        gs = jnp.array([4], jnp.int32)
+        # Bad N (not divisible by 256).
+        b_bad_n = jnp.zeros((1, 100, 128), jnp.float8_e4m3fn)
+        with pytest.raises(ValueError, match="N=100"):
+            ragged_dot_cute.cute_ragged_dot(a, b_bad_n, gs, out_dtype=jnp.bfloat16, out_scale=jnp.ones((1,)))
+        # Bad K (not divisible by 128).
+        b_bad_k = jnp.zeros((1, 256, 64), jnp.float8_e4m3fn)
+        with pytest.raises(ValueError, match="K=64"):
+            ragged_dot_cute.cute_ragged_dot(a[:, :64], b_bad_k, gs, out_dtype=jnp.bfloat16, out_scale=jnp.ones((1,)))
+    finally:
+        ragged_dot_cute.cute_available = original

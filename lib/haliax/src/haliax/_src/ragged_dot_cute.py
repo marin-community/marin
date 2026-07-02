@@ -41,6 +41,9 @@ except Exception:  # optional GPU-only dep
 
 # 128-bit vectorized gmem<->smem copies (the FFI CopyUniversalOp path).
 _UNIVERSAL_COPY_BITS = 128
+# Hopper FP8 WGMMA tile-K granularity: the MMA instruction consumes 32 K elements
+# and tile_k = mma_inst_k * 4 = 128; K must be a multiple of this.
+_FP8_WGMMA_K_GRANULARITY = 128
 
 
 def cute_available() -> bool:
@@ -62,7 +65,7 @@ def _problem_shape_mnkl(group_sizes: jax.Array, n: int, k: int) -> jax.Array:
     )
 
 
-def _tensor_specs(a, b, meta, offsets, scale, out_shape, out_dtype):
+def _tensor_specs():
     """TensorSpecs for the cutlass_call operands and output.
 
     A ``[M, K]`` and B ``[E, N, K]`` are K-contiguous FP8; the K axis carries the
@@ -416,15 +419,23 @@ def cute_ragged_dot(a, b, group_sizes, *, out_dtype, out_scale):
     (contiguous for both). Epilogue divides the f32 accumulator by ``out_scale``."""
     if not cute_available():
         raise RuntimeError("cute_ragged_dot requires the CuTe DSL on a GPU backend")
+    tile_shape_mn = (128, 256)
     e, n, k = b.shape
+    if n % tile_shape_mn[1] != 0:
+        raise ValueError(
+            f"cute_ragged_dot: N={n} is not divisible by tile_n={tile_shape_mn[1]}; " "pad or reshape b before calling"
+        )
+    if k % _FP8_WGMMA_K_GRANULARITY != 0:
+        raise ValueError(
+            f"cute_ragged_dot: K={k} is not divisible by {_FP8_WGMMA_K_GRANULARITY} "
+            "(FP8 WGMMA K granularity); pad or reshape before calling"
+        )
     m = a.shape[0]
     meta = _problem_shape_mnkl(group_sizes, n, k)
     # Packed per-group row offsets (exclusive prefix sum of token counts).
     offsets = (jnp.cumsum(group_sizes.astype(jnp.int32)) - group_sizes.astype(jnp.int32)).astype(jnp.int32)
-    launcher = _grouped_gemm_launcher(tile_shape_mn=(128, 256), group_count=e)
-    a_spec, b_spec, meta_spec, offsets_spec, scale_spec, c_spec = _tensor_specs(
-        a, b, meta, offsets, out_scale, (m, n), out_dtype
-    )
+    launcher = _grouped_gemm_launcher(tile_shape_mn=tile_shape_mn, group_count=e)
+    a_spec, b_spec, meta_spec, offsets_spec, scale_spec, c_spec = _tensor_specs()
     call = cjax.cutlass_call(
         launcher,
         output_shape_dtype=jax.ShapeDtypeStruct((m, n), out_dtype),
