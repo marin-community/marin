@@ -59,7 +59,7 @@ uv run ... \
 ```
 
 Keep the profiler window short when enabling HLO protobuf collection — it
-enlarges artifacts and can increase profile upload/finalization time.
+enlarges profile files and can increase trace finalization and mirror time.
 
 Profile location and durability rules:
 - The profiler writes to the configured trainer log directory first. With
@@ -69,9 +69,9 @@ Profile location and durability rules:
 - Relative Iris task-container paths disappear after task teardown. Retrieve
   them live with `iris task exec`/tar while the task is still alive, or configure
   code to copy/mirror the profiler directory to a durable run output path.
-- Durable retrieval requires one of: a W&B artifact logged with type
-  `jax_profile`, an explicit copy/mirror of the profiler directory to the Marin
-  run output path or S3, or live retrieval before the Iris task exits.
+- Durable retrieval requires one of: an explicit copy/mirror of the profiler
+  directory to the Marin run output path or S3, or live retrieval before the
+  Iris task exits.
 - A Marin `ctx.output_path` can be S3 without being the trainer log directory.
   `WandbConfig(replicate_path=output_path)` mirrors tracker metrics such as
   `tracker_metrics.jsonl`; it does not by itself mirror profiler files.
@@ -141,7 +141,16 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output scratch/profile_summary.json
 ```
 
-### Option A: From a W&B artifact reference
+### Option A: From a local or mirrored profile directory
+
+```bash
+uv run python lib/marin/tools/profile_summary.py summarize \
+  --profile-dir s3://bucket/run-output/profiler \
+  --download-root /tmp/marin-profiles \
+  --output /tmp/profile_summary.json
+```
+
+### Option B: From a historical W&B artifact reference
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
@@ -150,7 +159,7 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-### Option B: From a W&B run target
+### Option C: From a W&B run target
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
@@ -162,13 +171,14 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 `--run-target` accepts: a bare run id (requires `--entity` and `--project`),
 `entity/project/run_id`, or a full W&B run URL. It mirrors the profiler
 directory computed from the run config's `trainer.log_dir` and run id. This is
-not a W&B `jax_profile` artifact lookup: it works only when `trainer.log_dir`
-points at remote/durable storage, or when that local path is still available in
-the environment running the command. For nested Grug configs, inspect
+not a W&B `jax_profile` artifact lookup: it works only when the run config points
+at remote/durable storage or an explicit mirrored profile path, or when that
+local path is still available in the environment running the command. For nested
+Grug configs, inspect
 `trainer.trainer.log_dir` as well as top-level `trainer.log_dir` before assuming
 where the profile was written.
 
-### Option C: From a local artifact directory
+### Option D: From a local artifact directory
 
 ```bash
 uv run python lib/marin/tools/profile_summary.py summarize \
