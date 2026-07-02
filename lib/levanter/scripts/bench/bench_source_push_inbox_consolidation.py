@@ -159,7 +159,6 @@ def _run_variant(
 def _ablation_variants(config: PushInboxConfig) -> tuple[tuple[str, str, PushInboxConfig], ...]:
     return (
         ("winning", "baseline", config),
-        ("output_mode=debug", "output_mode", replace(config, output_mode="debug")),
         ("hidden_output_mode=full", "hidden_output_mode", replace(config, hidden_output_mode="full")),
         ("n_groups_per_job=1", "n_groups_per_job", replace(config, n_groups_per_job=1)),
         ("send_pipeline_depth=2", "send_pipeline_depth", replace(config, send_pipeline_depth=2)),
@@ -197,7 +196,6 @@ def _integration_smoke_config(config: PushInboxConfig) -> PushInboxConfig:
         n_groups_per_job=2,
         num_send_sms=2,
         num_sms=16,
-        output_mode="debug",
         hidden_output_mode="full",
         hidden_compute_mode="wgmma",
     )

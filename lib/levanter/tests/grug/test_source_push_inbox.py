@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import importlib.util
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,6 +16,14 @@ from levanter.grug._moe.source_push_inbox_profiles import (
 )
 
 
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox.py"
+SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
+assert SCRIPT_SPEC is not None
+source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
+assert SCRIPT_SPEC.loader is not None
+SCRIPT_SPEC.loader.exec_module(source_push_cli)
+
+
 @pytest.mark.parametrize(
     ("profile", "expected_routing", "expected_send_pipeline_depth"),
     [
@@ -23,7 +33,7 @@ from levanter.grug._moe.source_push_inbox_profiles import (
 def test_source_push_profile_applies_current_best_candidate_defaults(
     profile, expected_routing, expected_send_pipeline_depth
 ):
-    args = source_push_inbox.parse_source_push_inbox_args(
+    args = source_push_cli.parse_source_push_inbox_args(
         [
             "--source-push-profile",
             profile,
@@ -41,7 +51,7 @@ def test_source_push_profile_applies_current_best_candidate_defaults(
 
 
 def test_source_push_profile_allows_explicit_overrides():
-    args = source_push_inbox.parse_source_push_inbox_args(
+    args = source_push_cli.parse_source_push_inbox_args(
         [
             "--source-push-profile",
             SOURCE_PUSH_PROFILE_STABLE_216,
@@ -58,7 +68,6 @@ def test_source_push_profile_allows_explicit_overrides():
     assert args.send_pipeline_depth == 2
     assert args.repeat_runs == 3
     assert args.n_groups_per_job == 2
-    assert args.output_mode == "perf"
 
 
 def test_source_push_profile_defaults_are_copied():
@@ -92,10 +101,10 @@ def test_source_push_profile_exposes_single_stable_candidate():
 
 def test_disabled_modes_are_not_public_cli_choices():
     with pytest.raises(SystemExit):
-        source_push_inbox.parse_source_push_inbox_args(["--receiver-schedule", "ready_scan"])
+        source_push_cli.parse_source_push_inbox_args(["--receiver-schedule", "ready_scan"])
 
     with pytest.raises(SystemExit):
-        source_push_inbox.parse_source_push_inbox_args(["--inbox-storage", "alias"])
+        source_push_cli.parse_source_push_inbox_args(["--inbox-storage", "alias"])
 
 
 def test_removed_experimental_modes_are_not_config_fields():
@@ -103,6 +112,8 @@ def test_removed_experimental_modes_are_not_config_fields():
         {"metadata_mode": "remote_slot"},
         {"receiver_schedule": "slot_group"},
         {"direct_self_compute": True},
+        {"lowering_semantics": "warpgroup"},
+        {"output_mode": "debug"},
     ):
         with pytest.raises(TypeError):
             source_push_inbox.PushInboxConfig(**kwargs)
@@ -173,9 +184,9 @@ def test_source_push_cli_runs_every_send_pipeline_depth_sweep_value(monkeypatch,
         calls.append((config.send_pipeline_depth, kwargs["repeat_runs"]))
         return [{"send_pipeline_depth": config.send_pipeline_depth, "repeat_runs": kwargs["repeat_runs"]}]
 
-    monkeypatch.setattr(source_push_inbox, "run_source_push_inbox", fake_run_source_push_inbox)
+    monkeypatch.setattr(source_push_cli, "run_source_push_inbox", fake_run_source_push_inbox)
 
-    source_push_inbox.main(
+    source_push_cli.main(
         [
             "--sweep-send-pipeline-depth",
             "1,2",

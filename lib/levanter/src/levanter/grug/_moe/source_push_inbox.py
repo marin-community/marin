@@ -20,14 +20,10 @@ new kernel-facing code should depend on this module or on
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import time
 import traceback
-from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
-from types import MappingProxyType
 from typing import Any, Callable
 
 import jax
@@ -39,21 +35,14 @@ from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from levanter.grug._moe.common import _prepare_moe_dispatch_indices_with_assignment_ids
-from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
+from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_defaults
 
 
 AXIS = "expert"
 KERNEL_NAME = "source_push_inbox"
-LOWERING_SEMANTICS: Mapping[str, mgpu.LoweringSemantics] = MappingProxyType(
-    {
-        "warpgroup": mgpu.LoweringSemantics.Warpgroup,
-        "lane": mgpu.LoweringSemantics.Lane,
-    }
-)
 META_FIELDS = 4
 BYTES_PER_BF16 = 2
 IMPLEMENTATIONS = ("m_n_slots", "send_only")
-OUTPUT_MODES = ("debug", "perf")
 HIDDEN_OUTPUT_MODES = ("full", "queue")
 HIDDEN_COMPUTE_MODES = ("wgmma", "store_zero")
 ROUTING_MODES = (
@@ -73,9 +62,7 @@ def _silu(x: jax.Array) -> jax.Array:
     return x * jax.nn.sigmoid(x)
 
 
-def _wgmma_transforms(shape: tuple[int, int], dtype: Any, *, lowering_semantics: str):
-    if lowering_semantics != "lane":
-        return ()
+def _wgmma_transforms(shape: tuple[int, int], dtype: Any):
     swizzle_elems = WGMMA_SWIZZLE_BYTES // jnp.dtype(dtype).itemsize
     if shape[-2] % WGMMA_TILE_M or shape[-1] % swizzle_elems:
         raise ValueError(
@@ -88,11 +75,11 @@ def _wgmma_transforms(shape: tuple[int, int], dtype: Any, *, lowering_semantics:
     )
 
 
-def _wgmma_smem(shape: tuple[int, int], dtype: Any, *, lowering_semantics: str):
+def _wgmma_smem(shape: tuple[int, int], dtype: Any):
     return mgpu.SMEM(
         shape,
         dtype=dtype,
-        transforms=_wgmma_transforms(shape, dtype, lowering_semantics=lowering_semantics),
+        transforms=_wgmma_transforms(shape, dtype),
     )
 
 
@@ -112,8 +99,6 @@ class PushInboxConfig:
     num_send_sms: int = 4
     num_sms: int = 16
     send_pipeline_depth: int = 1
-    lowering_semantics: str = "lane"
-    output_mode: str = "debug"
     hidden_output_mode: str = "full"
     hidden_compute_mode: str = "wgmma"
     n_groups_per_job: int = 1
@@ -161,13 +146,6 @@ class PushInboxConfig:
             )
         if self.send_pipeline_depth not in (1, 2):
             raise ValueError(f"send_pipeline_depth must be in (1, 2), got {self.send_pipeline_depth}")
-        if self.lowering_semantics not in LOWERING_SEMANTICS:
-            raise ValueError(
-                f"unknown lowering_semantics={self.lowering_semantics!r}; "
-                f"expected one of {sorted(LOWERING_SEMANTICS)}"
-            )
-        if self.output_mode not in OUTPUT_MODES:
-            raise ValueError(f"unknown output_mode={self.output_mode!r}; expected one of {OUTPUT_MODES}")
         if self.hidden_output_mode not in HIDDEN_OUTPUT_MODES:
             raise ValueError(
                 f"unknown hidden_output_mode={self.hidden_output_mode!r}; expected one of {HIDDEN_OUTPUT_MODES}"
@@ -181,11 +159,6 @@ class PushInboxConfig:
         if self.hidden_compute_mode == "store_zero":
             if self.implementation != "m_n_slots":
                 raise ValueError("hidden_compute_mode=store_zero is currently implemented only for m_n_slots")
-            if self.output_mode != "perf":
-                raise ValueError("hidden_compute_mode=store_zero requires output_mode=perf")
-        if self.output_mode == "perf":
-            if self.implementation not in ("send_only", "m_n_slots"):
-                raise ValueError("output_mode=perf is currently implemented only for send_only and m_n_slots")
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -319,12 +292,8 @@ def _make_kernel(config: PushInboxConfig):
             def _send_to_dst(dst_ordinal: int, dst_offset: int) -> None:
                 dst = (rank + dst_offset) % config.ep_size
                 remote_inbox_ref = None
-                remote_meta_ref = None
-                write_slot_metadata = config.implementation == "send_only" and config.output_mode != "perf"
                 if dst_offset != 0:
                     remote_inbox_ref = mgpu.remote_ref(inbox_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
-                    if write_slot_metadata:
-                        remote_meta_ref = mgpu.remote_ref(meta_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
 
                 @pl.loop(0, rounds_per_slot)
                 def _round_loop(round_i) -> None:
@@ -344,8 +313,6 @@ def _make_kernel(config: PushInboxConfig):
 
                                 @pl.when(valid_rows > 0)
                                 def _send_entry() -> None:
-                                    expert = send_meta_ref[dst_ordinal, entry, 1]
-                                    dst_row_start = send_meta_ref[dst_ordinal, entry, 2]
                                     pl.semaphore_wait(empty_sem_ref.at[dst, slot])
 
                                     def _copy_buffer(buffer_smem, k_start) -> None:
@@ -419,19 +386,8 @@ def _make_kernel(config: PushInboxConfig):
                                             ),
                                         )
                                     if dst_offset == 0:
-                                        if write_slot_metadata:
-                                            meta_ref[rank, slot, 0] = rank
-                                            meta_ref[rank, slot, 1] = expert
-                                            meta_ref[rank, slot, 2] = dst_row_start
-                                            meta_ref[rank, slot, 3] = valid_rows
                                         pl.semaphore_signal(full_sem_ref.at[rank, slot])
                                     else:
-                                        if write_slot_metadata:
-                                            assert remote_meta_ref is not None
-                                            remote_meta_ref[rank, slot, 0] = rank
-                                            remote_meta_ref[rank, slot, 1] = expert
-                                            remote_meta_ref[rank, slot, 2] = dst_row_start
-                                            remote_meta_ref[rank, slot, 3] = valid_rows
                                         pl.semaphore_signal(
                                             full_sem_ref.at[rank, slot],
                                             device_id=dst,
@@ -548,21 +504,9 @@ def _make_kernel(config: PushInboxConfig):
 
                 pl.run_scoped(
                     smem_scope,
-                    lhs_smem=_wgmma_smem(
-                        (config.block_m, config.block_k),
-                        inbox_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
-                    gate_smem=_wgmma_smem(
-                        (config.block_k, config.block_n),
-                        w_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
-                    up_smem=_wgmma_smem(
-                        (config.block_k, config.block_n),
-                        w_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
+                    lhs_smem=_wgmma_smem((config.block_m, config.block_k), inbox_ref.dtype),
+                    gate_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
+                    up_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
                     ready_barrier=mgpu.Barrier(num_arrivals=3),
                 )
                 return _silu(gate_acc_ref[...]) * up_acc_ref[...]
@@ -652,31 +596,11 @@ def _make_kernel(config: PushInboxConfig):
 
                     pl.run_scoped(
                         smem_scope,
-                        lhs_smem=_wgmma_smem(
-                            (config.block_m, config.block_k),
-                            inbox_ref.dtype,
-                            lowering_semantics=config.lowering_semantics,
-                        ),
-                        gate_n0_smem=_wgmma_smem(
-                            (config.block_k, config.block_n),
-                            w_ref.dtype,
-                            lowering_semantics=config.lowering_semantics,
-                        ),
-                        up_n0_smem=_wgmma_smem(
-                            (config.block_k, config.block_n),
-                            w_ref.dtype,
-                            lowering_semantics=config.lowering_semantics,
-                        ),
-                        gate_n1_smem=_wgmma_smem(
-                            (config.block_k, config.block_n),
-                            w_ref.dtype,
-                            lowering_semantics=config.lowering_semantics,
-                        ),
-                        up_n1_smem=_wgmma_smem(
-                            (config.block_k, config.block_n),
-                            w_ref.dtype,
-                            lowering_semantics=config.lowering_semantics,
-                        ),
+                        lhs_smem=_wgmma_smem((config.block_m, config.block_k), inbox_ref.dtype),
+                        gate_n0_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
+                        up_n0_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
+                        gate_n1_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
+                        up_n1_smem=_wgmma_smem((config.block_k, config.block_n), w_ref.dtype),
                         ready_barrier=mgpu.Barrier(num_arrivals=5),
                     )
                     hidden_n0 = _silu(gate_n0_acc[...]) * up_n0_acc[...]
@@ -694,12 +618,6 @@ def _make_kernel(config: PushInboxConfig):
 
         def _consume_entry(src, src_offset: int, entry, slot) -> None:
             pl.semaphore_wait(full_sem_ref.at[src, slot])
-            if config.output_mode != "perf":
-                seen_payload_ref[src, entry] = inbox_ref[src, slot, 0, 0]
-                seen_meta_ref[src, entry, 0] = meta_ref[src, slot, 0]
-                seen_meta_ref[src, entry, 1] = meta_ref[src, slot, 1]
-                seen_meta_ref[src, entry, 2] = meta_ref[src, slot, 2]
-                seen_meta_ref[src, entry, 3] = meta_ref[src, slot, 3]
             _signal_empty_to_src(src, src_offset, slot)
 
         if config.implementation == "m_n_slots":
@@ -826,18 +744,12 @@ def _make_kernel(config: PushInboxConfig):
                 _switch_recv_src(peer_ordinal)
 
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
-    if config.output_mode == "perf":
-        returned_inbox_shape = inbox_shape
-        meta_shape = (1, 1, META_FIELDS)
-        seen_payload_shape = (1, 1)
-        seen_meta_shape = (1, 1, META_FIELDS)
-    else:
-        returned_inbox_shape = inbox_shape
-        meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
-        seen_payload_shape = (config.ep_size, config.entries_per_rank)
-        seen_meta_shape = (config.ep_size, config.entries_per_rank, META_FIELDS)
+    returned_inbox_shape = inbox_shape
+    meta_shape = (1, 1, META_FIELDS)
+    seen_payload_shape = (1, 1)
+    seen_meta_shape = (1, 1, META_FIELDS)
     grid = (len(send_dst_offsets), config.num_sms)
-    compiler_params = mgpu.CompilerParams(lowering_semantics=LOWERING_SEMANTICS[config.lowering_semantics])
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     out_shape = [
         jax.ShapeDtypeStruct(returned_inbox_shape, jnp.bfloat16),
         jax.ShapeDtypeStruct(meta_shape, jnp.int32),
@@ -966,7 +878,6 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         per_expert_pair_max = 0
     return {
         "routing": config.routing,
-        "output_mode": config.output_mode,
         "hidden_output_mode": config.hidden_output_mode,
         "hidden_compute_mode": config.hidden_compute_mode,
         "send_pipeline_depth": config.send_pipeline_depth,
@@ -1457,14 +1368,9 @@ def _validate(
     send_meta_host,
     w_host,
     inbox,
-    meta,
-    seen_payload,
-    seen_meta,
     hidden,
 ) -> ValidationMetrics:
     inbox_host = np.asarray(inbox, dtype=np.float32)
-    seen_payload_host = np.asarray(seen_payload, dtype=np.float32)
-    seen_meta_host = np.asarray(seen_meta, dtype=np.int32)
     x_expected = np.asarray(x_host, dtype=np.float32)
     send_meta_expected = np.asarray(send_meta_host, dtype=np.int32)
     max_abs_diff = 0.0
@@ -1473,17 +1379,6 @@ def _validate(
         for dst in _destination_ranks(config, src):
             dst_ordinal = _dst_ordinal(config, src, dst)
             live_entries = int(np.sum(send_meta_expected[src, dst_ordinal, :, 3] > 0))
-            if config.implementation == "send_only":
-                for entry in range(config.entries_per_rank):
-                    expected_meta = send_meta_expected[src, dst_ordinal, entry, :]
-                    if expected_meta[3] <= 0:
-                        continue
-                    expected_payload = x_expected[src, dst_ordinal, entry, 0, 0]
-                    max_abs_diff = max(
-                        max_abs_diff,
-                        float(np.max(np.abs(seen_payload_host[dst, src, entry] - expected_payload))),
-                    )
-                    metadata_mismatches += int(np.sum(seen_meta_host[dst, src, entry, :] != expected_meta))
             for slot in range(min(config.inbox_slots, live_entries)):
                 entry = slot + ((live_entries - 1 - slot) // config.inbox_slots) * config.inbox_slots
                 observed = inbox_host[dst, src, slot, :, :]
@@ -1530,8 +1425,6 @@ def _run_one(
         if settings.repeat_runs <= 0:
             raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
         config.validate()
-        if settings.check and config.output_mode == "perf":
-            raise ValueError("output_mode=perf uses tiny debug outputs and requires --no-check")
         _emit_progress(config, settings.progress_events, "mesh_start")
         mesh = _make_mesh(config.ep_size)
         _emit_progress(config, settings.progress_events, "make_inputs_start")
@@ -1571,9 +1464,6 @@ def _run_one(
                 inputs.send_meta,
                 inputs.w,
                 inbox,
-                meta,
-                seen_payload,
-                seen_meta,
                 hidden,
             )
             max_abs_diff = validation.max_abs_diff
@@ -1700,188 +1590,3 @@ def run_source_push_inbox_compact_routing(
         progress_events=progress_events,
     )
     return _run_one(config, settings, input_builder=_make_compact_routing_inputs)
-
-
-def _parse_int_csv(value: str) -> tuple[int, ...]:
-    values = tuple(int(part) for part in value.split(",") if part)
-    if not values:
-        raise argparse.ArgumentTypeError("expected a comma-separated list of integers")
-    return values
-
-
-def _parse_choice_csv(value: str, choices: tuple[str, ...], name: str) -> tuple[str, ...]:
-    values = tuple(part for part in value.split(",") if part)
-    if not values:
-        raise argparse.ArgumentTypeError(f"expected a comma-separated list of {name} values")
-    unknown = tuple(part for part in values if part not in choices)
-    if unknown:
-        raise argparse.ArgumentTypeError(f"unknown {name} values {unknown}; expected one of {choices}")
-    return values
-
-
-def _parse_hidden_output_mode_csv(value: str) -> tuple[str, ...]:
-    return _parse_choice_csv(value, HIDDEN_OUTPUT_MODES, "hidden_output_mode")
-
-
-def _parse_hidden_compute_mode_csv(value: str) -> tuple[str, ...]:
-    return _parse_choice_csv(value, HIDDEN_COMPUTE_MODES, "hidden_compute_mode")
-
-
-def _source_push_profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--source-push-profile", choices=SOURCE_PUSH_PROFILES, default="none")
-    args, _ = pre_parser.parse_known_args(argv)
-    return source_push_profile_defaults(args.source_push_profile)
-
-
-def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse source-push inbox benchmark arguments with profile defaults applied."""
-    profile_defaults = _source_push_profile_defaults(argv)
-
-    def default(name: str, fallback: Any) -> Any:
-        return profile_defaults.get(name, fallback)
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-push-profile", choices=SOURCE_PUSH_PROFILES, default="none")
-    parser.add_argument("--implementation", choices=IMPLEMENTATIONS, default=default("implementation", "m_n_slots"))
-    parser.add_argument("--ep-size", type=int, default=default("ep_size", 8))
-    parser.add_argument("--entries-per-rank", type=int, default=default("entries_per_rank", 2))
-    parser.add_argument("--sweep-entries-per-rank", type=_parse_int_csv, default=None)
-    parser.add_argument("--inbox-slots", type=int, default=default("inbox_slots", 2))
-    parser.add_argument("--sweep-inbox-slots", type=_parse_int_csv, default=None)
-    parser.add_argument("--hidden-dim", type=int, default=default("hidden_dim", 2560))
-    parser.add_argument("--intermediate-dim", type=int, default=default("intermediate_dim", 1280))
-    parser.add_argument("--block-m", type=int, default=default("block_m", 64))
-    parser.add_argument("--sweep-block-m", type=_parse_int_csv, default=None)
-    parser.add_argument("--block-n", type=int, default=default("block_n", 128))
-    parser.add_argument("--sweep-block-n", type=_parse_int_csv, default=None)
-    parser.add_argument("--block-k", type=int, default=default("block_k", 128))
-    parser.add_argument("--sweep-block-k", type=_parse_int_csv, default=None)
-    parser.add_argument("--n-group", type=int, default=default("n_group", 1))
-    parser.add_argument("--sweep-n-groups", type=_parse_int_csv, default=None)
-    parser.add_argument("--experts-per-rank", type=int, default=default("experts_per_rank", 32))
-    parser.add_argument("--num-send-sms", type=int, default=default("num_send_sms", 4))
-    parser.add_argument("--sweep-num-send-sms", type=_parse_int_csv, default=None)
-    parser.add_argument("--num-sms", type=int, default=default("num_sms", 16))
-    parser.add_argument("--sweep-num-sms", type=_parse_int_csv, default=None)
-    parser.add_argument("--send-pipeline-depth", type=int, default=default("send_pipeline_depth", 1))
-    parser.add_argument("--sweep-send-pipeline-depth", type=_parse_int_csv, default=None)
-    parser.add_argument(
-        "--lowering-semantics", choices=tuple(LOWERING_SEMANTICS), default=default("lowering_semantics", "lane")
-    )
-    parser.add_argument("--output-mode", choices=OUTPUT_MODES, default=default("output_mode", "debug"))
-    parser.add_argument(
-        "--hidden-output-mode", choices=HIDDEN_OUTPUT_MODES, default=default("hidden_output_mode", "full")
-    )
-    parser.add_argument("--sweep-hidden-output-mode", type=_parse_hidden_output_mode_csv, default=None)
-    parser.add_argument(
-        "--hidden-compute-mode", choices=HIDDEN_COMPUTE_MODES, default=default("hidden_compute_mode", "wgmma")
-    )
-    parser.add_argument("--sweep-hidden-compute-mode", type=_parse_hidden_compute_mode_csv, default=None)
-    parser.add_argument("--n-groups-per-job", type=int, default=default("n_groups_per_job", 1))
-    parser.add_argument("--sweep-n-groups-per-job", type=_parse_int_csv, default=None)
-    parser.add_argument("--routing", choices=ROUTING_MODES, default=default("routing", "balanced"))
-    parser.add_argument("--tokens-per-rank", type=int, default=default("tokens_per_rank", 32768))
-    parser.add_argument("--topk", type=int, default=default("topk", 4))
-    parser.add_argument("--routing-seed", type=int, default=default("routing_seed", 0))
-    parser.add_argument("--warmup", type=int, default=default("warmup", 1))
-    parser.add_argument("--steps", type=int, default=default("steps", 5))
-    parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 1))
-    parser.add_argument("--check", action=argparse.BooleanOptionalAction, default=default("check", True))
-    parser.add_argument(
-        "--debug-exceptions", action=argparse.BooleanOptionalAction, default=default("debug_exceptions", False)
-    )
-    parser.add_argument(
-        "--separate-compile", action=argparse.BooleanOptionalAction, default=default("separate_compile", False)
-    )
-    parser.add_argument(
-        "--progress-events", action=argparse.BooleanOptionalAction, default=default("progress_events", False)
-    )
-    parser.add_argument("--jsonl", type=str, default=None)
-    return parser.parse_args(argv)
-
-
-def _parse_args() -> argparse.Namespace:
-    return parse_source_push_inbox_args()
-
-
-def main(argv: Sequence[str] | None = None) -> None:
-    args = parse_source_push_inbox_args(argv)
-    entries_per_rank_values = args.sweep_entries_per_rank or (args.entries_per_rank,)
-    inbox_slots_values = args.sweep_inbox_slots or (args.inbox_slots,)
-    block_m_values = args.sweep_block_m or (args.block_m,)
-    block_n_values = args.sweep_block_n or (args.block_n,)
-    block_k_values = args.sweep_block_k or (args.block_k,)
-    num_send_sms_values = args.sweep_num_send_sms or (args.num_send_sms,)
-    num_sms_values = args.sweep_num_sms or (args.num_sms,)
-    send_pipeline_depth_values = args.sweep_send_pipeline_depth or (args.send_pipeline_depth,)
-    n_group_values = args.sweep_n_groups or (args.n_group,)
-    n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
-    hidden_output_mode_values = args.sweep_hidden_output_mode or (args.hidden_output_mode,)
-    hidden_compute_mode_values = args.sweep_hidden_compute_mode or (args.hidden_compute_mode,)
-    if args.jsonl:
-        jsonl_dir = os.path.dirname(args.jsonl)
-        if jsonl_dir:
-            os.makedirs(jsonl_dir, exist_ok=True)
-
-    for entries_per_rank in entries_per_rank_values:
-        for inbox_slots in inbox_slots_values:
-            for block_m in block_m_values:
-                for block_n in block_n_values:
-                    for block_k in block_k_values:
-                        for num_send_sms in num_send_sms_values:
-                            for num_sms in num_sms_values:
-                                for send_pipeline_depth in send_pipeline_depth_values:
-                                    for n_group in n_group_values:
-                                        for n_groups_per_job in n_groups_per_job_values:
-                                            for hidden_output_mode in hidden_output_mode_values:
-                                                for hidden_compute_mode in hidden_compute_mode_values:
-                                                    config = PushInboxConfig(
-                                                        implementation=args.implementation,
-                                                        ep_size=args.ep_size,
-                                                        entries_per_rank=entries_per_rank,
-                                                        inbox_slots=inbox_slots,
-                                                        hidden_dim=args.hidden_dim,
-                                                        intermediate_dim=args.intermediate_dim,
-                                                        block_m=block_m,
-                                                        block_n=block_n,
-                                                        block_k=block_k,
-                                                        n_group=n_group,
-                                                        n_groups_per_job=n_groups_per_job,
-                                                        experts_per_rank=args.experts_per_rank,
-                                                        num_send_sms=num_send_sms,
-                                                        num_sms=num_sms,
-                                                        send_pipeline_depth=send_pipeline_depth,
-                                                        lowering_semantics=args.lowering_semantics,
-                                                        output_mode=args.output_mode,
-                                                        hidden_output_mode=hidden_output_mode,
-                                                        hidden_compute_mode=hidden_compute_mode,
-                                                        routing=args.routing,
-                                                        tokens_per_rank=args.tokens_per_rank,
-                                                        topk=args.topk,
-                                                        routing_seed=args.routing_seed,
-                                                    )
-                                                    rows = run_source_push_inbox(
-                                                        config,
-                                                        warmup=args.warmup,
-                                                        steps=args.steps,
-                                                        repeat_runs=args.repeat_runs,
-                                                        check=args.check,
-                                                        debug_exceptions=args.debug_exceptions,
-                                                        separate_compile=args.separate_compile,
-                                                        progress_events=args.progress_events,
-                                                    )
-                                                    for row in rows:
-                                                        line = json.dumps(row, sort_keys=True)
-                                                        print(line, flush=True)
-                                                        if args.jsonl:
-                                                            with open(
-                                                                args.jsonl,
-                                                                "a",
-                                                                encoding="utf-8",
-                                                            ) as f:
-                                                                print(line, file=f, flush=True)
-
-
-if __name__ == "__main__":
-    main()
