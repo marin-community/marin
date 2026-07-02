@@ -73,24 +73,15 @@ const MIN_SECRET_BYTES: usize = 16;
 
 /// One rule's verdict over a request, mirroring rigging's
 /// AUTHENTICATED / ABSENT / REJECTED.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verdict {
-    /// This rule admits the request; stop and admit. Carries the verified origin
-    /// cluster when the admitting layer resolves one (a JWT's `k.cluster`);
-    /// `None` for a CIDR/local admit that carries no cluster identity.
-    Allow(Option<String>),
+    /// This rule admits the request; stop and admit.
+    Allow,
     /// This rule does not claim the request; try the next.
     Fallthrough,
     /// A credential was presented but is invalid; stop and deny.
     Reject,
 }
-
-/// The verified origin cluster for an admitted request, carried as a
-/// [`RequestContext`] extension from [`AuthInterceptor`] to the `push_logs`
-/// handler, which stamps it onto the log row's `cluster` column. Empty for a
-/// CIDR/local-admitted push that carries no delegation identity.
-#[derive(Debug, Clone)]
-pub struct VerifiedCluster(pub String);
 
 /// An IPv4/IPv6 network in CIDR form (`10.0.0.0/8`, `2001:db8::/32`).
 #[derive(Debug, Clone)]
@@ -303,9 +294,7 @@ impl AuthLayer {
     fn check(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Verdict {
         match self {
             AuthLayer::Cidr(nets) => match peer_ip {
-                // A CIDR/local admit carries no delegation identity — the origin
-                // cluster is unknown, so the stamped column is empty.
-                Some(ip) if nets.iter().any(|n| n.contains(ip)) => Verdict::Allow(None),
+                Some(ip) if nets.iter().any(|n| n.contains(ip)) => Verdict::Allow,
                 _ => Verdict::Fallthrough,
             },
             // rigging JwtAuthenticator parity: no bearer → fall through (a later
@@ -316,7 +305,7 @@ impl AuthLayer {
                 Some(tok) => match verifier.verify(tok, now_unix()) {
                     Some(cluster) => {
                         tracing::trace!(cluster, "finelog: admitted jwt-authenticated request");
-                        Verdict::Allow(Some(cluster.to_string()))
+                        Verdict::Allow
                     }
                     None => Verdict::Reject,
                 },
@@ -454,31 +443,29 @@ impl AuthPolicy {
     }
 
     /// The core decision over already-extracted request facts: the bearer token
-    /// (no `Bearer ` prefix) and the transport peer IP. Walks the stack: first
-    /// `Allow` admits, first `Reject` denies, an unclaimed request is denied
-    /// (default-deny). Returns the admitting layer's verified origin cluster
-    /// ([`VerifiedCluster`], empty for a CIDR/local admit) to stamp, or `None`
-    /// when denied. Shared by the Connect interceptor and the axum [`auth_gate`]
-    /// middleware so both surfaces enforce the identical policy.
-    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> Option<VerifiedCluster> {
+    /// (no `Bearer ` prefix) and the transport peer IP. `true` = admit. Walks the
+    /// stack: first `Allow` admits, first `Reject` denies, an unclaimed request is
+    /// denied (default-deny). Shared by the Connect interceptor and the axum
+    /// [`auth_gate`] middleware so both surfaces enforce the identical policy.
+    fn admits(&self, bearer: Option<&str>, peer_ip: Option<IpAddr>) -> bool {
         for layer in &self.layers {
             match layer.check(bearer, peer_ip) {
-                Verdict::Allow(cluster) => {
-                    return Some(VerifiedCluster(cluster.unwrap_or_default()))
-                }
-                Verdict::Reject => return None,
+                Verdict::Allow => return true,
+                Verdict::Reject => return false,
                 Verdict::Fallthrough => {}
             }
         }
-        None
+        false
     }
 
     /// Connect-interceptor entry point: extract the bearer + peer IP from the RPC
-    /// context, apply the policy, and return the verified origin cluster to stamp
-    /// (empty for a CIDR/local admit that carries no delegation identity).
-    fn authorize(&self, ctx: &RequestContext) -> Result<VerifiedCluster, ConnectError> {
-        self.admits(bearer_token(ctx), peer_ip(ctx))
-            .ok_or_else(unauthenticated)
+    /// context and apply the policy.
+    fn authorize(&self, ctx: &RequestContext) -> Result<(), ConnectError> {
+        if self.admits(bearer_token(ctx), peer_ip(ctx)) {
+            Ok(())
+        } else {
+            Err(unauthenticated())
+        }
     }
 }
 
@@ -528,15 +515,10 @@ impl AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     async fn intercept_unary(
         &self,
-        mut req: UnaryRequest,
+        req: UnaryRequest,
         next: Next<'_>,
     ) -> Result<UnaryResponse, ConnectError> {
-        // Stamp the verified origin cluster onto the request context so the
-        // `push_logs` handler can tag the ingested log rows from the authenticated
-        // identity (never a client-supplied field). Mutating `ctx.extensions`
-        // before `next.run` propagates to the handler.
-        let cluster = self.policy.authorize(&req.ctx)?;
-        req.ctx.extensions_mut().insert(cluster);
+        self.policy.authorize(&req.ctx)?;
         next.run(req).await
     }
 }
@@ -563,7 +545,7 @@ pub async fn auth_gate(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if policy.admits(bearer, peer_ip).is_some() {
+    if policy.admits(bearer, peer_ip) {
         next.run(request).await
     } else {
         (StatusCode::UNAUTHORIZED, "finelog: unauthorized").into_response()
@@ -836,25 +818,6 @@ mod tests {
                 Some(untrusted)
             ))
             .is_err());
-    }
-
-    #[test]
-    fn authorize_returns_verified_cluster_from_jwt_and_empty_for_cidr() {
-        // The stamped cluster comes from the admitting layer: a JWT admit carries
-        // the verified `k.cluster`; a CIDR/local admit carries no identity → empty.
-        let p = stacked_policy(); // cidr 10.0.0.0/8, then jwt alpha=KEY_A
-        let untrusted: SocketAddr = "192.0.2.1:5555".parse().unwrap();
-        let vc = p
-            .authorize(&ctx(Some(&bearer(&mint(KEY_A, FUTURE))), Some(untrusted)))
-            .expect("valid jwt admits");
-        assert_eq!(vc.0, "alpha");
-
-        // A trusted-network peer is admitted by CIDR before jwt → empty cluster.
-        let trusted: SocketAddr = "10.1.2.3:5555".parse().unwrap();
-        let vc = p
-            .authorize(&ctx(None, Some(trusted)))
-            .expect("trusted peer admits");
-        assert_eq!(vc.0, "");
     }
 
     fn ok_response() -> UnaryResponse {

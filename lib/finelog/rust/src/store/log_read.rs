@@ -200,11 +200,11 @@ pub fn add_common_filters(
 
 /// Append the origin-cluster filter to `where_parts`.
 ///
-/// The `cluster` column is stamped server-side on ingress from the pushing
-/// identity, so filtering on it namespaces a global finelog's logs by their
-/// origin cluster. A non-empty `cluster` restricts to rows whose column equals it
-/// exactly; empty adds no predicate (all origins — the local single-cluster read
-/// behavior). Segments written before the column existed store NULL, which
+/// The `cluster` column carries the writer-supplied origin of each push, so
+/// filtering on it namespaces a global finelog's logs by origin cluster. A
+/// non-empty `cluster` restricts to rows whose column equals it exactly; empty
+/// adds no predicate (all origins — the local single-cluster read behavior).
+/// Segments written before the column existed store NULL, which
 /// `cluster = <literal>` excludes — correct, since those rows predate federation.
 pub fn add_cluster_filter(where_parts: &mut Vec<String>, cluster: &str) {
     if !cluster.is_empty() {

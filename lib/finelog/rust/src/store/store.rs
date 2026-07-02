@@ -45,12 +45,12 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Registered schema for the privileged `log` namespace; `key_column = "key"`.
 ///
 /// The original five columns (key/source/data/epoch_ms/level) are non-nullable.
-/// `cluster` is a later **additive, nullable** column: the server-stamped origin
-/// cluster of each push (from the authenticated delegation identity), which
-/// namespaces logs a global finelog collects from many federated clusters. It is
-/// nullable so it evolves an already-registered `log` namespace additively —
-/// `merge_schemas` requires new columns to be nullable, and segments written
-/// before the column existed null-fill it on read.
+/// `cluster` is a later **additive, nullable** column: the writer-supplied origin
+/// cluster of each push (trusted — writers are authenticated), which namespaces
+/// logs a global finelog collects from many federated clusters. It is nullable so
+/// it evolves an already-registered `log` namespace additively — `merge_schemas`
+/// requires new columns to be nullable, and segments written before the column
+/// existed null-fill it on read.
 pub(crate) fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
