@@ -87,6 +87,12 @@ message FetchLogsRequest {
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
   MatchScope match_scope = 8;  // How `source` is interpreted
+  // Restrict to rows whose server-stamped origin `cluster` equals this value.
+  // The `cluster` column is stamped on ingress from the pushing identity (the
+  // delegation-JWT's verified cluster; empty for a local/CIDR-admitted push), so
+  // it namespaces logs a global finelog collects from many federated clusters.
+  // Empty = unfiltered (all origins) — the local single-cluster read behavior.
+  string cluster = 9;
 }
 
 message FetchLogsResponse {

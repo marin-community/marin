@@ -14,8 +14,10 @@ use crate::proto::finelog::logging::{
 use crate::query::fetch_log_rows;
 use crate::query::make_ctx;
 use crate::query::provider::NamespaceProvider;
+use crate::server::auth::VerifiedCluster;
 use crate::store::log_read::{
-    add_common_filters, build_log_predicates, shape_log_read_result, str_to_log_level, ShapedEntry,
+    add_cluster_filter, add_common_filters, build_log_predicates, shape_log_read_result,
+    str_to_log_level, ShapedEntry,
 };
 use crate::store::namespace::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::store::LOG_NAMESPACE_NAME;
@@ -50,9 +52,10 @@ impl LogServiceImpl {
     }
 }
 
-/// The five non-seq log columns built from PushLogs entries, plus their byte
+/// The six non-seq log columns built from PushLogs entries, plus their byte
 /// size. Built outside the namespace insertion lock (the prepared-outside-lock
-/// pattern from `append_log_batch`).
+/// pattern from `append_log_batch`). The `cluster` column is stamped server-side
+/// from the authenticated identity, not from any client-supplied field.
 struct LogColumns {
     columns: Vec<ArrayRef>,
     num_rows: usize,
@@ -77,6 +80,18 @@ impl LogService for LogServiceImpl {
             return connectrpc::Response::ok(PushLogsResponse::default());
         }
 
+        // The origin cluster is server-stamped from the authenticated identity
+        // (the delegation-JWT's verified cluster; empty for a CIDR/local admit),
+        // which the `AuthInterceptor` inserts into the request context before this
+        // handler runs. Every ingested row is tagged with it, so a global finelog
+        // that collects pushes from many federated clusters can namespace them by
+        // origin without the writer choosing (and thus being able to spoof) it.
+        let cluster = ctx
+            .extensions()
+            .get::<VerifiedCluster>()
+            .map(|c| c.0.as_str())
+            .unwrap_or("");
+
         let key = request.key.unwrap_or("");
         let n = request.entries.len();
         let mut keys: Vec<&str> = Vec::with_capacity(n);
@@ -97,12 +112,16 @@ impl LogService for LogServiceImpl {
             );
             levels.push(entry.level.map(|ev| ev.to_i32()).unwrap_or(0));
         }
+        // One `cluster` value for the whole push (it is per-connection identity,
+        // not per-entry), repeated to match the batch length.
+        let clusters: Vec<&str> = vec![cluster; n];
         let columns: Vec<ArrayRef> = vec![
             Arc::new(StringArray::from(keys)),
             Arc::new(StringArray::from(sources)),
             Arc::new(StringArray::from(datas)),
             Arc::new(Int64Array::from(epoch_ms)),
             Arc::new(Int32Array::from(levels)),
+            Arc::new(StringArray::from(clusters)),
         ];
         let byte_size: i64 = columns.iter().map(array_buffer_size).sum();
         let log_columns = LogColumns {
@@ -159,6 +178,10 @@ impl LogService for LogServiceImpl {
         let mut predicates =
             build_log_predicates(source, cursor, scope).map_err(ConnectError::invalid_argument)?;
         add_common_filters(&mut predicates.where_parts, since_ms, substring, min_level);
+        // Restrict to one origin cluster when the caller asks (the federated read
+        // path filters `cluster = <peer>`); empty = unfiltered, so a local
+        // single-cluster read behaves exactly as before.
+        add_cluster_filter(&mut predicates.where_parts, request.cluster.unwrap_or(""));
 
         // Hold the query-visibility READ guard across the whole scan: like
         // Query, DataFusion opens the snapshotted `log` parquet files lazily
