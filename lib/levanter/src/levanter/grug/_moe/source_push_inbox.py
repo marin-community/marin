@@ -25,8 +25,9 @@ import json
 import os
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
+from types import MappingProxyType
 from typing import Any, Callable
 
 import jax
@@ -41,10 +42,13 @@ from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, 
 
 
 AXIS = "expert"
-LOWERING_SEMANTICS = {
-    "warpgroup": mgpu.LoweringSemantics.Warpgroup,
-    "lane": mgpu.LoweringSemantics.Lane,
-}
+KERNEL_NAME = "source_push_inbox"
+LOWERING_SEMANTICS: Mapping[str, mgpu.LoweringSemantics] = MappingProxyType(
+    {
+        "warpgroup": mgpu.LoweringSemantics.Warpgroup,
+        "lane": mgpu.LoweringSemantics.Lane,
+    }
+)
 META_FIELDS = 4
 BYTES_PER_BF16 = 2
 IMPLEMENTATIONS = ("send_only", "m_owner", "m_owner_slots", "m_n_slots")
@@ -244,10 +248,6 @@ class PushInboxConfig:
                 "whole-inbox SMEM blowup, but global semaphore lowering then fails with an out-of-bounds "
                 "reserve_semaphores slice. This path needs an mgpu.kernel-level alias mechanism."
             )
-            if self.implementation != "m_n_slots":
-                raise ValueError("inbox_storage=alias is currently implemented only for implementation=m_n_slots")
-            if self.output_mode != "perf":
-                raise ValueError("inbox_storage=alias requires output_mode=perf")
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -351,6 +351,42 @@ class SourcePushInboxRunSettings:
     progress_events: bool = False
 
 
+@dataclass(frozen=True)
+class HostInputs:
+    x: np.ndarray
+    send_meta: np.ndarray
+    recv_meta: np.ndarray
+    queue_stats: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class DeviceInputs:
+    x: jax.Array
+    send_meta: jax.Array
+    recv_meta: jax.Array
+    w: jax.Array
+    queue_stats: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TimingResult:
+    compile_time: float
+    steady_state_times: list[float]
+    output: Any
+    lower_compile_time: float | None
+    first_run_time: float | None
+
+
+@dataclass(frozen=True)
+class ValidationMetrics:
+    max_abs_diff: float
+    metadata_mismatches: int
+    hidden_max_abs_diff: float | None
+    hidden_mean_abs_diff: float | None
+    hidden_all_max_abs_diff: float | None
+    hidden_unwritten_max_abs: float | None
+
+
 def source_push_inbox_profile(profile: str) -> tuple[PushInboxConfig, SourcePushInboxRunSettings]:
     """Return the package-private config and run settings for a named profile."""
     defaults = source_push_profile_defaults(profile)
@@ -394,11 +430,8 @@ def _make_kernel(config: PushInboxConfig):
         seen_payload_ref: Float[Ref, "SRC Q"],
         seen_meta_ref: Int[Ref, "SRC Q F"],
         hidden_ref: Float[Ref, "rows I"],
-        inbox_scratch_ref: Float[Ref, "SRC SLOTS M D"] | None = None,
     ) -> None:
-        inbox_ref = inbox_scratch_ref if config.inbox_storage == "scratch" else inbox_out_ref
-        if inbox_ref is None:
-            raise AssertionError("inbox_ref must be available for enabled inbox storage modes")
+        inbox_ref = inbox_out_ref
         empty_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         full_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         done_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
@@ -1856,7 +1889,7 @@ def _make_kernel(config: PushInboxConfig):
 
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
     if config.output_mode == "perf":
-        returned_inbox_shape = (1, 1, 1, 1) if config.inbox_storage == "scratch" else inbox_shape
+        returned_inbox_shape = inbox_shape
         meta_shape = (1, 1, META_FIELDS)
         seen_payload_shape = (1, 1)
         seen_meta_shape = (1, 1, META_FIELDS)
@@ -1865,9 +1898,6 @@ def _make_kernel(config: PushInboxConfig):
         meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
         seen_payload_shape = (config.ep_size, config.entries_per_rank)
         seen_meta_shape = (config.ep_size, config.entries_per_rank, META_FIELDS)
-    scratch_shapes = ()
-    if config.inbox_storage == "scratch":
-        scratch_shapes = (mgpu.GMEM(inbox_shape, jnp.bfloat16),)
     grid = (
         (len(send_dst_offsets), config.num_sms) if config.peer_loop in ("grid", "grid_switch") else (config.num_sms,)
     )
@@ -1880,67 +1910,9 @@ def _make_kernel(config: PushInboxConfig):
         jax.ShapeDtypeStruct(config.hidden_output_shape, jnp.bfloat16),
     ]
 
-    if config.inbox_storage == "alias":
-        x_shape = (config.traffic_fanout, config.entries_per_rank, config.block_m, config.hidden_dim)
-        send_meta_shape = (config.traffic_fanout, config.entries_per_rank, META_FIELDS)
-        recv_meta_shape = (config.traffic_fanout, config.entries_per_rank, META_FIELDS)
-        w_shape = (config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim)
-
-        def gmem_spec(shape):
-            return pl.BlockSpec(
-                shape,
-                lambda *indices: (0,) * len(shape),
-                memory_space=mgpu.GMEM,
-            )
-
-        in_specs = (
-            gmem_spec(x_shape),
-            gmem_spec(send_meta_shape),
-            gmem_spec(recv_meta_shape),
-            gmem_spec(w_shape),
-            gmem_spec(inbox_shape),
-        )
-        out_specs = tuple(gmem_spec(shape_dtype.shape) for shape_dtype in out_shape)
-
-        def alias_body(
-            x_ref,
-            send_meta_ref,
-            recv_meta_ref,
-            w_ref,
-            inbox_seed_ref,
-            inbox_ref,
-            meta_ref,
-            seen_payload_ref,
-            seen_meta_ref,
-            hidden_ref,
-        ) -> None:
-            del inbox_seed_ref
-            body(
-                x_ref,
-                send_meta_ref,
-                recv_meta_ref,
-                w_ref,
-                inbox_ref,
-                meta_ref,
-                seen_payload_ref,
-                seen_meta_ref,
-                hidden_ref,
-            )
-
-        return pl.pallas_call(
-            alias_body,
-            out_shape=out_shape,
-            grid=grid,
-            in_specs=in_specs,
-            out_specs=out_specs,
-            input_output_aliases={4: 0},
-            compiler_params=compiler_params,
-        )
-
     return mgpu.kernel(
         body,
         out_shape=out_shape,
-        scratch_shapes=scratch_shapes,
         grid=grid,
         grid_names=("peer_phase", "sm") if config.peer_loop in ("grid", "grid_switch") else ("sm",),
         compiler_params=compiler_params,
@@ -2181,7 +2153,7 @@ def _fill_block(x_host: np.ndarray, src: int, dst_ordinal: int, entry: int, vali
     x_host[src, dst_ordinal, entry, :valid_rows, :] = value
 
 
-def _make_rectangular_inputs(config: PushInboxConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+def _make_rectangular_inputs(config: PushInboxConfig) -> HostInputs:
     x_host = np.zeros(
         (config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, config.hidden_dim),
         dtype=np.float32,
@@ -2200,7 +2172,7 @@ def _make_rectangular_inputs(config: PushInboxConfig) -> tuple[np.ndarray, np.nd
     stats = _queue_stats(config, send_meta)
     stats["dropped_entries_total"] = 0
     stats["dropped_rows_total"] = 0
-    return x_host, send_meta, recv_meta, stats
+    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
 
 
 def _routing_counts(config: PushInboxConfig) -> np.ndarray:
@@ -2275,7 +2247,7 @@ def _routing_counts(config: PushInboxConfig) -> np.ndarray:
     return counts
 
 
-def _make_routing_inputs(config: PushInboxConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     counts = _routing_counts(config)
     rounded_counts = ((counts + config.block_m - 1) // config.block_m) * config.block_m
     expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
@@ -2320,69 +2292,26 @@ def _make_routing_inputs(config: PushInboxConfig) -> tuple[np.ndarray, np.ndarra
     stats["dropped_entries_total"] = dropped_entries
     stats["dropped_rows_total"] = dropped_rows
     stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
-    return x_host, send_meta, recv_meta, stats
+    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
 
 
-def _make_inputs(config: PushInboxConfig):
+def _make_inputs(config: PushInboxConfig) -> DeviceInputs:
     if config.queue_mode == "routing":
-        x_host, send_meta, recv_meta, stats = _make_routing_inputs(config)
+        host_inputs = _make_routing_inputs(config)
     else:
-        x_host, send_meta, recv_meta, stats = _make_rectangular_inputs(config)
+        host_inputs = _make_rectangular_inputs(config)
     w_host = _make_weights(config)
-    return (
-        jnp.asarray(x_host, dtype=jnp.bfloat16),
-        jnp.asarray(send_meta, dtype=jnp.int32),
-        jnp.asarray(recv_meta, dtype=jnp.int32),
-        w_host,
-        stats,
+    return DeviceInputs(
+        x=jnp.asarray(host_inputs.x, dtype=jnp.bfloat16),
+        send_meta=jnp.asarray(host_inputs.send_meta, dtype=jnp.int32),
+        recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        w=w_host,
+        queue_stats=host_inputs.queue_stats,
     )
 
 
 def _sharded_kernel(mesh: Mesh, config: PushInboxConfig):
     kernel = _make_kernel(config)
-
-    if config.inbox_storage == "alias":
-
-        def local_alias_fn(
-            x_local: Float[Array, "1 DST Q M D"],
-            send_meta_local: Int[Array, "1 DST Q F"],
-            recv_meta_local: Int[Array, "1 SRC Q F"],
-            w_local: Float[Array, "1 E D twoI"],
-            inbox_seed_local: Float[Array, "1 SRC SLOTS M D"],
-        ):
-            x_local = x_local[0]
-            send_meta_local = send_meta_local[0]
-            recv_meta_local = recv_meta_local[0]
-            w_local = w_local[0]
-            inbox_seed_local = inbox_seed_local[0]
-            inbox, meta, seen_payload, seen_meta, hidden = kernel(
-                x_local,
-                send_meta_local,
-                recv_meta_local,
-                w_local,
-                inbox_seed_local,
-            )
-            return inbox[None, ...], meta[None, ...], seen_payload[None, ...], seen_meta[None, ...], hidden[None, ...]
-
-        return shard_map(
-            local_alias_fn,
-            mesh=mesh,
-            in_specs=(
-                P(AXIS, None, None, None, None),
-                P(AXIS, None, None, None),
-                P(AXIS, None, None, None),
-                P(AXIS, None, None, None),
-                P(AXIS, None, None, None, None),
-            ),
-            out_specs=(
-                P(AXIS, None, None, None, None),
-                P(AXIS, None, None, None),
-                P(AXIS, None, None),
-                P(AXIS, None, None, None),
-                P(AXIS, None, None),
-            ),
-            check_vma=False,
-        )
 
     def local_fn(
         x_local: Float[Array, "1 DST Q M D"],
@@ -2444,18 +2373,9 @@ def _time_jitted(
     steps: int,
     repeat_runs: int,
     separate_compile: bool,
-    threaded_alias: tuple[int, int] | None = None,
     progress: Callable[[str], None] | None = None,
-):
+) -> TimingResult:
     call_args = tuple(args)
-
-    def _thread_alias(current_args, out):
-        if threaded_alias is None:
-            return current_args
-        next_args = list(current_args)
-        input_index, output_index = threaded_alias
-        next_args[input_index] = out[output_index]
-        return tuple(next_args)
 
     lower_compile_time = None
     first_run_time = None
@@ -2476,7 +2396,6 @@ def _time_jitted(
         start = time.perf_counter()
         out = compiled(*call_args)
         _block_until_ready(out)
-        call_args = _thread_alias(call_args, out)
         first_run_time = time.perf_counter() - start
         compile_time = lower_compile_time + first_run_time
         if progress is not None:
@@ -2487,7 +2406,6 @@ def _time_jitted(
         start = time.perf_counter()
         out = fn(*call_args)
         _block_until_ready(out)
-        call_args = _thread_alias(call_args, out)
         compile_time = time.perf_counter() - start
         if progress is not None:
             progress("first_call_done")
@@ -2497,7 +2415,6 @@ def _time_jitted(
     for _ in range(warmup):
         out = fn(*call_args)
         _block_until_ready(out)
-        call_args = _thread_alias(call_args, out)
 
     steady_state_times = []
     for _ in range(repeat_runs):
@@ -2507,11 +2424,16 @@ def _time_jitted(
         for _ in range(steps):
             out = fn(*call_args)
             _block_until_ready(out)
-            call_args = _thread_alias(call_args, out)
         steady_state_times.append((time.perf_counter() - start) / steps)
         if progress is not None:
             progress("steady_state_done")
-    return compile_time, steady_state_times, out, lower_compile_time, first_run_time
+    return TimingResult(
+        compile_time=compile_time,
+        steady_state_times=steady_state_times,
+        output=out,
+        lower_compile_time=lower_compile_time,
+        first_run_time=first_run_time,
+    )
 
 
 def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -> np.ndarray:
@@ -2572,7 +2494,7 @@ def _validate(
     seen_payload,
     seen_meta,
     hidden,
-) -> dict[str, Any]:
+) -> ValidationMetrics:
     inbox_host = np.asarray(inbox, dtype=np.float32)
     meta_host = np.asarray(meta, dtype=np.int32)
     seen_payload_host = np.asarray(seen_payload, dtype=np.float32)
@@ -2627,96 +2549,77 @@ def _validate(
         else:
             hidden_unwritten_max_abs = 0.0
         max_abs_diff = max(max_abs_diff, hidden_max_abs_diff)
-    return {
-        "max_abs_diff": max_abs_diff,
-        "metadata_mismatches": metadata_mismatches,
-        "hidden_max_abs_diff": hidden_max_abs_diff,
-        "hidden_mean_abs_diff": hidden_mean_abs_diff,
-        "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
-        "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
-    }
+    return ValidationMetrics(
+        max_abs_diff=max_abs_diff,
+        metadata_mismatches=metadata_mismatches,
+        hidden_max_abs_diff=hidden_max_abs_diff,
+        hidden_mean_abs_diff=hidden_mean_abs_diff,
+        hidden_all_max_abs_diff=hidden_all_max_abs_diff,
+        hidden_unwritten_max_abs=hidden_unwritten_max_abs,
+    )
 
 
 def _run_one(
     config: PushInboxConfig,
-    *,
-    warmup: int,
-    steps: int,
-    repeat_runs: int,
-    check: bool,
-    debug_exceptions: bool,
-    separate_compile: bool,
-    progress_events: bool,
+    settings: SourcePushInboxRunSettings,
 ) -> list[dict[str, Any]]:
     try:
-        _emit_progress(config, progress_events, "validate_start")
-        if repeat_runs <= 0:
-            raise ValueError(f"repeat_runs must be positive, got {repeat_runs}")
+        _emit_progress(config, settings.progress_events, "validate_start")
+        if settings.repeat_runs <= 0:
+            raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
         config.validate()
-        if check and config.output_mode == "perf":
+        if settings.check and config.output_mode == "perf":
             raise ValueError("output_mode=perf uses tiny debug outputs and requires --no-check")
-        _emit_progress(config, progress_events, "mesh_start")
+        _emit_progress(config, settings.progress_events, "mesh_start")
         mesh = _make_mesh(config.ep_size)
-        _emit_progress(config, progress_events, "make_inputs_start")
-        x_host, send_meta_host, recv_meta_host, w_host, queue_stats = _make_inputs(config)
-        _emit_progress(config, progress_events, "device_put_start")
-        x = jax.device_put(x_host, NamedSharding(mesh, P(AXIS, None, None, None, None)))
-        send_meta = jax.device_put(send_meta_host, NamedSharding(mesh, P(AXIS, None, None, None)))
-        recv_meta = jax.device_put(recv_meta_host, NamedSharding(mesh, P(AXIS, None, None, None)))
-        w = jax.device_put(w_host, NamedSharding(mesh, P(AXIS, None, None, None)))
-        kernel_args = (x, send_meta, recv_meta, w)
-        threaded_alias = None
-        if config.inbox_storage == "alias":
-            inbox_seed_host = jnp.zeros(
-                (config.ep_size, config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim),
-                dtype=jnp.bfloat16,
-            )
-            inbox_seed = jax.device_put(inbox_seed_host, NamedSharding(mesh, P(AXIS, None, None, None, None)))
-            kernel_args = (x, send_meta, recv_meta, w, inbox_seed)
-            threaded_alias = (4, 0)
-        _emit_progress(config, progress_events, "jit_start")
+        _emit_progress(config, settings.progress_events, "make_inputs_start")
+        inputs = _make_inputs(config)
+        _emit_progress(config, settings.progress_events, "device_put_start")
+        x = jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None)))
+        send_meta = jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
+        recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
+        w = jax.device_put(inputs.w, NamedSharding(mesh, P(AXIS, None, None, None)))
+        _emit_progress(config, settings.progress_events, "jit_start")
         fn = jax.jit(_sharded_kernel(mesh, config))
 
-        (
-            compile_time,
-            steady_state_times,
-            (inbox, meta, seen_payload, seen_meta, hidden),
-            lower_compile_time,
-            first_run_time,
-        ) = _time_jitted(
+        timing = _time_jitted(
             fn,
-            *kernel_args,
-            warmup=warmup,
-            steps=steps,
-            repeat_runs=repeat_runs,
-            separate_compile=separate_compile,
-            threaded_alias=threaded_alias,
-            progress=lambda event: _emit_progress(config, progress_events, event),
+            x,
+            send_meta,
+            recv_meta,
+            w,
+            warmup=settings.warmup,
+            steps=settings.steps,
+            repeat_runs=settings.repeat_runs,
+            separate_compile=settings.separate_compile,
+            progress=lambda event: _emit_progress(config, settings.progress_events, event),
         )
+        inbox, meta, seen_payload, seen_meta, hidden = timing.output
         max_abs_diff = None
         metadata_mismatches = None
         hidden_max_abs_diff = None
         hidden_mean_abs_diff = None
         hidden_all_max_abs_diff = None
         hidden_unwritten_max_abs = None
-        if check:
+        if settings.check:
             validation = _validate(
                 config,
-                x_host,
-                send_meta_host,
-                w_host,
+                inputs.x,
+                inputs.send_meta,
+                inputs.w,
                 inbox,
                 meta,
                 seen_payload,
                 seen_meta,
                 hidden,
             )
-            max_abs_diff = validation["max_abs_diff"]
-            metadata_mismatches = validation["metadata_mismatches"]
-            hidden_max_abs_diff = validation["hidden_max_abs_diff"]
-            hidden_mean_abs_diff = validation["hidden_mean_abs_diff"]
-            hidden_all_max_abs_diff = validation["hidden_all_max_abs_diff"]
-            hidden_unwritten_max_abs = validation["hidden_unwritten_max_abs"]
+            max_abs_diff = validation.max_abs_diff
+            metadata_mismatches = validation.metadata_mismatches
+            hidden_max_abs_diff = validation.hidden_max_abs_diff
+            hidden_mean_abs_diff = validation.hidden_mean_abs_diff
+            hidden_all_max_abs_diff = validation.hidden_all_max_abs_diff
+            hidden_unwritten_max_abs = validation.hidden_unwritten_max_abs
+        queue_stats = inputs.queue_stats
         bytes_per_rank = queue_stats["send_rounded_rows_per_rank_mean"] * config.hidden_dim * BYTES_PER_BF16
         flops_per_rank = None
         if config.implementation != "send_only":
@@ -2724,19 +2627,19 @@ def _run_one(
                 queue_stats["rounded_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
             )
         rows = []
-        for repeat_run, steady_state_time in enumerate(steady_state_times):
+        for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
             rows.append(
                 {
-                    "kernel": "source_push_inbox",
+                    "kernel": KERNEL_NAME,
                     "implementation": config.implementation,
                     "config": asdict(config),
                     "queue_stats": queue_stats,
                     **queue_stats,
-                    "compile_time": compile_time,
-                    "lower_compile_time": lower_compile_time,
-                    "first_run_time": first_run_time,
+                    "compile_time": timing.compile_time,
+                    "lower_compile_time": timing.lower_compile_time,
+                    "first_run_time": timing.first_run_time,
                     "repeat_run": repeat_run,
-                    "repeat_runs": repeat_runs,
+                    "repeat_runs": settings.repeat_runs,
                     "steady_state_time": steady_state_time,
                     "bytes_per_rank": bytes_per_rank,
                     "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
@@ -2750,22 +2653,24 @@ def _run_one(
                     "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
                     "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
                     "error": None,
+                    "error_type": None,
+                    "error_message": None,
                 }
             )
         return rows
     except Exception as exc:  # noqa: BLE001 - repro rows should capture unsupported candidates.
-        if debug_exceptions:
+        if settings.debug_exceptions:
             raise
         return [
             {
-                "kernel": "source_push_inbox",
+                "kernel": KERNEL_NAME,
                 "implementation": config.implementation,
                 "config": asdict(config),
                 "compile_time": None,
                 "lower_compile_time": None,
                 "first_run_time": None,
                 "repeat_run": None,
-                "repeat_runs": repeat_runs,
+                "repeat_runs": settings.repeat_runs,
                 "steady_state_time": None,
                 "bytes_per_rank": None,
                 "send_gbps_per_rank": None,
@@ -2777,6 +2682,8 @@ def _run_one(
                 "hidden_all_max_abs_diff": None,
                 "hidden_unwritten_max_abs": None,
                 "error": f"{type(exc).__name__}: {exc}",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
                 "traceback": traceback.format_exc(),
             }
         ]
@@ -2796,8 +2703,7 @@ def run_source_push_inbox(
     progress_events: bool = False,
 ) -> list[dict[str, Any]]:
     """Run one package-private source-push inbox benchmark configuration."""
-    return _run_one(
-        config,
+    settings = SourcePushInboxRunSettings(
         warmup=warmup,
         steps=steps,
         repeat_runs=repeat_runs,
@@ -2806,6 +2712,7 @@ def run_source_push_inbox(
         separate_compile=separate_compile,
         progress_events=progress_events,
     )
+    return _run_one(config, settings)
 
 
 def _parse_int_csv(value: str) -> tuple[int, ...]:

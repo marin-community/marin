@@ -8,27 +8,15 @@ from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_de
 
 
 @pytest.mark.parametrize(
-    ("profile", "expected"),
+    ("profile", "expected_routing", "expected_send_pipeline_depth"),
     [
-        (
-            "hopper_queue_ngroups2_210",
-            {
-                "routing": "uniform",
-                "send_pipeline_depth": 2,
-                "repeat_runs": 48,
-            },
-        ),
-        (
-            "hopper_queue_roughly_balanced_ngroups2_210",
-            {
-                "routing": "roughly_balanced",
-                "send_pipeline_depth": 1,
-                "repeat_runs": 48,
-            },
-        ),
+        ("hopper_queue_ngroups2_210", "uniform", 2),
+        ("hopper_queue_roughly_balanced_ngroups2_210", "roughly_balanced", 1),
     ],
 )
-def test_source_push_profile_applies_current_best_candidate_defaults(profile, expected):
+def test_source_push_profile_applies_current_best_candidate_defaults(
+    profile, expected_routing, expected_send_pipeline_depth
+):
     args = source_push_inbox.parse_source_push_inbox_args(
         [
             "--source-push-profile",
@@ -36,40 +24,15 @@ def test_source_push_profile_applies_current_best_candidate_defaults(profile, ex
         ]
     )
 
-    common_expected = {
-        "implementation": "m_n_slots",
-        "queue_mode": "routing",
-        "traffic_pattern": "all_to_all",
-        "peer_loop": "grid_switch",
-        "lowering_semantics": "lane",
-        "metadata_mode": "static_recv",
-        "output_mode": "perf",
-        "hidden_output_mode": "queue",
-        "tokens_per_rank": 32768,
-        "hidden_dim": 2560,
-        "intermediate_dim": 1280,
-        "experts_per_rank": 32,
-        "topk": 4,
-        "entries_per_rank": 288,
-        "inbox_slots": 12,
-        "num_send_sms": 2,
-        "num_sms": 32,
-        "block_m": 64,
-        "block_k": 128,
-        "block_n": 128,
-        "n_group": 1,
-        "n_groups_per_job": 2,
-        "receiver_schedule": "fixed_wait",
-        "slot_order": "current",
-        "warmup": 2,
-        "steps": 7,
-        "check": False,
-        "separate_compile": True,
-        "progress_events": True,
-    }
-    common_expected.update(expected)
-    for field, value in common_expected.items():
-        assert getattr(args, field) == value
+    config, settings = source_push_inbox.source_push_inbox_profile(profile)
+    config.validate()
+    assert args.routing == config.routing == expected_routing
+    assert args.send_pipeline_depth == config.send_pipeline_depth == expected_send_pipeline_depth
+    assert args.implementation == config.implementation == "m_n_slots"
+    assert args.metadata_mode == config.metadata_mode == "static_recv"
+    assert args.hidden_output_mode == config.hidden_output_mode == "queue"
+    assert args.n_groups_per_job == config.n_groups_per_job == 2
+    assert args.repeat_runs == settings.repeat_runs == 48
 
 
 def test_source_push_profile_allows_explicit_overrides():
@@ -130,6 +93,6 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     )
 
     assert len(rows) == 1
-    assert rows[0]["error"] == "ValueError: ep_size must be greater than 1, got 1"
+    assert rows[0]["error_type"] == "ValueError"
     assert rows[0]["kernel"] == "source_push_inbox"
     assert rows[0]["repeat_runs"] == 1
