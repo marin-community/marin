@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -71,6 +72,7 @@ class ProfilerConfig:
     start_step: int = 5
     num_steps: int = 25
     perfetto_link: bool = False
+    stop_barrier_timeout: float = 200
     profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
 
     @property
@@ -92,15 +94,21 @@ class ProfilerConfig:
         return max(0, total_prof_steps)
 
 
+def _process_profile_path(path: str) -> str:
+    return os.path.join(path, f"process_{jax.process_index():05d}")
+
+
 def profile(
     path: str,
     start_step: int,
     num_steps: int,
     create_perfetto_link: bool,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    stop_barrier_timeout: float = 200,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
-    mkdirs(path)
+    process_path = _process_profile_path(path)
+    mkdirs(process_path)
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal trace_started
@@ -113,11 +121,11 @@ def profile(
             if force or trace_started:
                 return
             _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
-            logger.info(f"Starting profiler until step {start_step + num_steps}.")
+            logger.info("Starting profiler until step %s. Trace path: %s", start_step + num_steps, process_path)
             jax.profiler.start_trace(
-                path,
+                process_path,
                 create_perfetto_link=_create_perfetto_link,
-                create_perfetto_trace=True,
+                create_perfetto_trace=_create_perfetto_link,
                 profiler_options=profiler_options,
             )
             trace_started = True
@@ -144,7 +152,7 @@ def profile(
 
         if create_perfetto_link and jax.process_index() == 0:
             event.set()
-        barrier_sync()
+        barrier_sync(timeout=stop_barrier_timeout)
 
     return profiler_callback_fn
 

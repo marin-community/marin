@@ -494,6 +494,7 @@ def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     monkeypatch.setenv("MAY_PKO_ON_LAST_LAYER", "false")
     monkeypatch.setenv("MAY_INPUT_EMBED_SHARDING", "replicated")
     monkeypatch.setenv("MAY_OUTPUT_PROJ_SHARDING", "replicated")
+    monkeypatch.setenv("MAY_NON_EXPERT_PARAM_SHARDING", "batch")
 
     launch_module = importlib.import_module("experiments.grug.moe.launch_cw_may_d2560")
     model = launch_module.build_may_model()
@@ -503,6 +504,7 @@ def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     assert model.pko_on_last_layer is False
     assert model.input_embed_sharding == "replicated"
     assert model.output_proj_sharding == "replicated"
+    assert model.non_expert_param_sharding == "batch"
 
 
 def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):

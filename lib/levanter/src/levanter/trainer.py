@@ -599,6 +599,7 @@ class Trainer:
                     total_prof_steps,
                     profiler.perfetto_link,
                     profiler_options=profiler.build_jax_profile_options(),
+                    stop_barrier_timeout=profiler.stop_barrier_timeout,
                 ),
                 every=1,
             )

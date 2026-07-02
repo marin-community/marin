@@ -28,6 +28,7 @@ CoreWeave/R2 launch path. Defaults are for a fast profiling run, not a full
     MAY_PKO_ON_LAST_LAYER=true
     MAY_INPUT_EMBED_SHARDING=hidden_batch  hidden_batch | replicated diagnostic
     MAY_OUTPUT_PROJ_SHARDING=lm_head  lm_head | replicated diagnostic
+    MAY_NON_EXPERT_PARAM_SHARDING=batch  data | batch
 
 The default parameter policy keeps one sharded fp32 parameter tree plus sharded
 optimizer state. Set ``MAY_LIVE_PARAM_MODE=compute_with_master`` to keep a
@@ -68,16 +69,18 @@ from experiments.grug.moe.launch import (
 )
 from experiments.grug.moe.model import (
     VALID_INPUT_EMBED_SHARDINGS,
+    VALID_NON_EXPERT_PARAM_SHARDINGS,
     VALID_OUTPUT_PROJ_SHARDINGS,
     VALID_REMAT_MODES,
     CrossEntropyImplementation,
     GrugModelConfig,
     InputEmbedSharding,
+    NonExpertParamSharding,
     OutputProjSharding,
     RematMode,
 )
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
-from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig, LiveParamMode
+from experiments.grug.moe.train import CompileDiagnosticMode, GrugEvalConfig, GrugTrainerConfig, LiveParamMode
 
 GPUS_PER_NODE = 8
 DEFAULT_HIDDEN_DIM = 2560
@@ -160,6 +163,10 @@ def build_may_model() -> GrugModelConfig:
     if input_embed_sharding not in VALID_INPUT_EMBED_SHARDINGS:
         valid = ", ".join(VALID_INPUT_EMBED_SHARDINGS)
         raise ValueError(f"MAY_INPUT_EMBED_SHARDING={input_embed_sharding!r} must be one of {valid}")
+    non_expert_param_sharding = os.environ.get("MAY_NON_EXPERT_PARAM_SHARDING", "batch")
+    if non_expert_param_sharding not in VALID_NON_EXPERT_PARAM_SHARDINGS:
+        valid = ", ".join(VALID_NON_EXPERT_PARAM_SHARDINGS)
+        raise ValueError(f"MAY_NON_EXPERT_PARAM_SHARDING={non_expert_param_sharding!r} must be one of {valid}")
     attention_implementation = os.environ.get("MAY_ATTENTION_IMPLEMENTATION", "gpu_fa4_cute")
     cross_entropy_implementation = os.environ.get("MAY_CE_IMPLEMENTATION") or None
 
@@ -179,6 +186,7 @@ def build_may_model() -> GrugModelConfig:
         cross_entropy_implementation=cast(CrossEntropyImplementation | None, cross_entropy_implementation),
         input_embed_sharding=cast(InputEmbedSharding, input_embed_sharding),
         output_proj_sharding=cast(OutputProjSharding, output_proj_sharding),
+        non_expert_param_sharding=cast(NonExpertParamSharding, non_expert_param_sharding),
         remat_mode=cast(RematMode, remat_mode),
     )
 
@@ -318,6 +326,17 @@ def build_may_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckp
         replica_axis_size=replica_axis,
         model_axis_size=model_axis,
         live_param_mode=cast(LiveParamMode, os.environ.get("MAY_LIVE_PARAM_MODE", "param")),
+        compile_diagnostic=cast(
+            CompileDiagnosticMode,
+            os.environ.get("MAY_COMPILE_DIAGNOSTIC", "off"),
+        ),
+        compile_diagnostic_log_hlo=env_bool("MAY_COMPILE_DIAGNOSTIC_LOG_HLO", False),
+        compile_diagnostic_progress_interval=env_float("MAY_COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL", 60.0),
+        compile_diagnostic_barrier_timeout=env_float("MAY_COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT", 1800.0),
+        sharding_audit=env_bool("MAY_SHARDING_AUDIT", True),
+        sharding_audit_only=env_bool("MAY_SHARDING_AUDIT_ONLY", False),
+        sharding_audit_min_bytes=env_int("MAY_SHARDING_AUDIT_MIN_BYTES", 1 << 20),
+        sharding_audit_max_entries=env_int("MAY_SHARDING_AUDIT_MAX_ENTRIES", 40),
         z_loss_weight=0.0,
         ema_beta=None,
         log_every=env_int("MAY_LOG_EVERY", 1),
@@ -327,6 +346,7 @@ def build_may_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCheckp
         start_step=env_int("MAY_PROFILER_START", 8),
         num_steps=profiler_steps,
         perfetto_link=env_bool("MAY_PROFILER_PERFETTO_LINK", False),
+        stop_barrier_timeout=env_float("MAY_PROFILER_STOP_BARRIER_TIMEOUT", 1800.0),
         profile_options=ProfileOptionsConfig(
             host_tracer_level=env_optional_int("MAY_PROFILER_HOST_TRACER_LEVEL"),
             python_tracer_level=env_optional_int("MAY_PROFILER_PYTHON_TRACER_LEVEL"),

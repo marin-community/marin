@@ -566,13 +566,22 @@ class LevanterHarnessLM(TemplateLM):
         if self._current_step == start_step and not self._profiler_started:
             _create_perfetto_link = self.profiler_config.perfetto_link and jax.process_index() == 0
 
-            os.makedirs(self.profiler_config.profile_path, exist_ok=True)
-
-            logger.info(f"Starting profiler at step {self._current_step} (will profile until step {end_step})")
-            jax.profiler.start_trace(
+            process_profile_path = os.path.join(
                 self.profiler_config.profile_path,
+                f"process_{jax.process_index():05d}",
+            )
+            os.makedirs(process_profile_path, exist_ok=True)
+
+            logger.info(
+                "Starting profiler at step %s (will profile until step %s). Trace path: %s",
+                self._current_step,
+                end_step,
+                process_profile_path,
+            )
+            jax.profiler.start_trace(
+                process_profile_path,
                 create_perfetto_link=_create_perfetto_link,
-                create_perfetto_trace=True,
+                create_perfetto_trace=_create_perfetto_link,
             )
             self._profiler_started = True
 

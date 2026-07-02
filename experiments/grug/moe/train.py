@@ -4,6 +4,9 @@
 import dataclasses
 import functools
 import logging
+import math
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -35,7 +38,7 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
-from levanter.utils.jax_utils import parameter_count
+from levanter.utils.jax_utils import barrier_sync, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
@@ -50,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 LiveParamMode = Literal["param", "compute_with_master"]
+CompileDiagnosticMode = Literal["off", "compile", "compile_only"]
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,14 @@ class GrugTrainerConfig:
     forward/backward and a separate param-dtype master tree for optimizer state
     and updates.
     """
+    compile_diagnostic: CompileDiagnosticMode = "off"
+    compile_diagnostic_log_hlo: bool = False
+    compile_diagnostic_progress_interval: float = 60.0
+    compile_diagnostic_barrier_timeout: float = 1800.0
+    sharding_audit: bool = False
+    sharding_audit_only: bool = False
+    sharding_audit_min_bytes: int = 1 << 20
+    sharding_audit_max_entries: int = 40
 
 
 @dataclass(frozen=True)
@@ -415,6 +427,170 @@ def _make_train_step(
     return train_step
 
 
+def _dtype_size(dtype) -> int:
+    try:
+        return jnp.dtype(dtype).itemsize
+    except TypeError:
+        return 0
+
+
+def _format_tree_path(path) -> str:
+    return jax.tree_util.keystr(path).lstrip(".") or "<root>"
+
+
+def _sharding_spec_and_shard_count(leaf) -> tuple[str, int]:
+    sharding = getattr(leaf, "sharding", None)
+    if sharding is None:
+        sharding = getattr(jax.typeof(leaf), "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    mesh = getattr(sharding, "mesh", None)
+    if spec is None:
+        return type(sharding).__name__ if sharding is not None else "<none>", 1
+
+    axes: set[str] = set()
+    for part in tuple(spec):
+        if part is None:
+            continue
+        if isinstance(part, tuple):
+            axes.update(str(axis) for axis in part)
+        else:
+            axes.add(str(part))
+
+    shard_count = 1
+    mesh_shape = getattr(mesh, "shape", {}) if mesh is not None else {}
+    for axis in axes:
+        shard_count *= int(mesh_shape.get(axis, 1))
+    return str(spec), shard_count
+
+
+def _log_sharding_audit(name: str, tree, *, min_bytes: int, max_entries: int) -> None:
+    if jax.process_index() != 0:
+        return
+
+    leaves_with_paths, _ = jax.tree_util.tree_flatten_with_path(tree, is_leaf=lambda x: x is None)
+    entries: list[tuple[int, int, str, tuple[int, ...], str, str]] = []
+    total_bytes = 0
+    replicated_large_bytes = 0
+    replicated_large_count = 0
+    lightly_sharded_large_bytes = 0
+    lightly_sharded_large_count = 0
+
+    for path, leaf in leaves_with_paths:
+        if leaf is None or not hasattr(leaf, "shape"):
+            continue
+        shape = tuple(int(dim) for dim in leaf.shape)
+        size = int(math.prod(shape)) if shape else 1
+        nbytes = size * _dtype_size(getattr(leaf, "dtype", None))
+        total_bytes += nbytes
+        spec, shard_count = _sharding_spec_and_shard_count(leaf)
+        if nbytes >= min_bytes and shard_count <= 1:
+            replicated_large_count += 1
+            replicated_large_bytes += nbytes
+        if nbytes >= min_bytes and shard_count < jax.device_count():
+            lightly_sharded_large_count += 1
+            lightly_sharded_large_bytes += nbytes
+        entries.append((nbytes, shard_count, _format_tree_path(path), shape, str(getattr(leaf, "dtype", "")), spec))
+
+    entries.sort(reverse=True, key=lambda entry: entry[0])
+    logger.info(
+        "Grug sharding audit %s: leaves=%s total_global_bytes=%.3fGiB large_replicated=%s %.3fGiB "
+        "large_less_than_global_device_count=%s %.3fGiB min_bytes=%s global_device_count=%s",
+        name,
+        len(entries),
+        total_bytes / (1024**3),
+        replicated_large_count,
+        replicated_large_bytes / (1024**3),
+        lightly_sharded_large_count,
+        lightly_sharded_large_bytes / (1024**3),
+        min_bytes,
+        jax.device_count(),
+    )
+    for nbytes, shard_count, path, shape, dtype, spec in entries[:max_entries]:
+        logger.info(
+            "Grug sharding audit %s leaf path=%s shape=%s dtype=%s global_bytes=%.3fMiB "
+            "shard_count=%s per_shard_bytes=%.3fMiB spec=%s",
+            name,
+            path,
+            shape,
+            dtype,
+            nbytes / (1024**2),
+            shard_count,
+            nbytes / max(1, shard_count) / (1024**2),
+            spec,
+        )
+
+
+def _run_with_progress_logging(label: str, interval: float, fn):
+    start = time.perf_counter()
+    reporter: subprocess.Popen | None = None
+    logger.info("Grug compile diagnostic starting: %s", label)
+    if interval > 0:
+        reporter_code = (
+            "import sys, time\n"
+            f"interval = {interval!r}\n"
+            f"label = {label!r}\n"
+            "start = time.perf_counter()\n"
+            "while True:\n"
+            "    time.sleep(interval)\n"
+            "    elapsed = time.perf_counter() - start\n"
+            '    print(f"Grug compile diagnostic still running: {label} elapsed={elapsed:.1f}s", '
+            "file=sys.stderr, flush=True)\n"
+        )
+        reporter = subprocess.Popen(
+            [sys.executable, "-c", reporter_code],
+            stdout=subprocess.DEVNULL,
+            stderr=sys.stderr,
+        )
+
+    try:
+        return fn()
+    finally:
+        if reporter is not None:
+            reporter.terminate()
+            try:
+                reporter.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                reporter.kill()
+                reporter.wait(timeout=1)
+        logger.info("Grug compile diagnostic finished: %s elapsed=%.1fs", label, time.perf_counter() - start)
+
+
+def _run_compile_diagnostic(
+    *,
+    train_step,
+    state: GrugTrainState,
+    iterator,
+    mode: CompileDiagnosticMode,
+    log_hlo: bool,
+    progress_interval: float,
+    barrier_timeout: float,
+):
+    if mode == "off":
+        return None, False
+    if mode not in ("compile", "compile_only"):
+        raise ValueError("compile_diagnostic must be one of: off, compile, compile_only")
+
+    logger.info("Grug compile diagnostic enabled: mode=%s", mode)
+    batch_start = time.perf_counter()
+    batch = next(iterator)
+    logger.info("Grug compile diagnostic fetched batch in %.1fs", time.perf_counter() - batch_start)
+
+    lowered = _run_with_progress_logging(
+        "train_step.lower",
+        progress_interval,
+        lambda: train_step.lower(state, batch, compute_watch=False),
+    )
+    if log_hlo:
+        logger.info("Grug compile diagnostic lowered StableHLO:\n%s", lowered.as_text())
+
+    compiled = _run_with_progress_logging("train_step.compile", progress_interval, lowered.compile)
+    del compiled
+    logger.info("Grug compile diagnostic waiting at post-compile barrier: timeout=%.1fs", barrier_timeout)
+    barrier_sync(timeout=barrier_timeout)
+    logger.info("Grug compile diagnostic post-compile barrier complete")
+    return batch, mode == "compile_only"
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     trainer = config.trainer.trainer
@@ -502,6 +678,31 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
+        if config.trainer.sharding_audit:
+            _log_sharding_audit(
+                "params",
+                state.params,
+                min_bytes=config.trainer.sharding_audit_min_bytes,
+                max_entries=config.trainer.sharding_audit_max_entries,
+            )
+            if state.master_params is not None:
+                _log_sharding_audit(
+                    "master_params",
+                    state.master_params,
+                    min_bytes=config.trainer.sharding_audit_min_bytes,
+                    max_entries=config.trainer.sharding_audit_max_entries,
+                )
+            _log_sharding_audit(
+                "opt_state",
+                state.opt_state,
+                min_bytes=config.trainer.sharding_audit_min_bytes,
+                max_entries=config.trainer.sharding_audit_max_entries,
+            )
+            if config.trainer.sharding_audit_only:
+                logger.info("Grug sharding audit only complete; skipping training.")
+                levanter.tracker.current_tracker().finish()
+                return
+
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
 
@@ -542,6 +743,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
                     profiler_options=profiler_cfg.build_jax_profile_options(),
+                    stop_barrier_timeout=profiler_cfg.stop_barrier_timeout,
                 ),
                 every=1,
             )
@@ -562,13 +764,28 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
+        prefetched_batch, compile_only = _run_compile_diagnostic(
+            train_step=train_step,
+            state=state,
+            iterator=iterator,
+            mode=config.trainer.compile_diagnostic,
+            log_hlo=config.trainer.compile_diagnostic_log_hlo,
+            progress_interval=config.trainer.compile_diagnostic_progress_interval,
+            barrier_timeout=config.trainer.compile_diagnostic_barrier_timeout,
+        )
 
         # Main optimization loop.
         try:
             current_step = int(state.step)
-            while current_step < trainer.num_train_steps:
+            if compile_only:
+                logger.info("Grug compile diagnostic compile_only complete; skipping train loop.")
+            while not compile_only and current_step < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
-                    batch = next(iterator)
+                    if prefetched_batch is None:
+                        batch = next(iterator)
+                    else:
+                        batch = prefetched_batch
+                        prefetched_batch = None
                 step_start = time.perf_counter()
                 # grad_watch runs only on its configured interval.
                 compute_watch = (
@@ -642,6 +859,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "CompileDiagnosticMode",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",

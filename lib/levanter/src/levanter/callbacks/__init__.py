@@ -171,13 +171,14 @@ def profile_ctx(
     logger.info("Starting profiler.")
 
     # Ensure destination exists (handles both local and remote filesystems)
-    mkdirs(path)
+    process_path = os.path.join(path, f"process_{jax.process_index():05d}")
+    mkdirs(process_path)
 
     if device_profile:
         jax.profiler.start_trace(
-            path,
+            process_path,
             create_perfetto_link=_create_perfetto_link,
-            create_perfetto_trace=True,
+            create_perfetto_trace=_create_perfetto_link,
             profiler_options=profiler_options,
         )
 
@@ -190,8 +191,8 @@ def profile_ctx(
             pr = cProfile.Profile()
             pr.enable()
             # Primary .pstats file and a human-readable txt summary
-            stats_path = os.path.join(path, f"{host_profile_basename}.pstats")
-            txt_summary_path = os.path.join(path, f"{host_profile_basename}.txt")
+            stats_path = os.path.join(process_path, f"{host_profile_basename}.pstats")
+            txt_summary_path = os.path.join(process_path, f"{host_profile_basename}.txt")
         except Exception as e:  # pragma: no cover - optional/diagnostic path
             logger.warning(f"Failed to start cProfile host profiler: {e}")
 

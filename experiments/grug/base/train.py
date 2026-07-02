@@ -521,6 +521,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
+                    stop_barrier_timeout=profiler_cfg.stop_barrier_timeout,
                 ),
                 every=1,
             )

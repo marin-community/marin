@@ -34,6 +34,7 @@ USE_PKO="${MAY_USE_PKO:-true}"
 PKO_ON_LAST_LAYER="${MAY_PKO_ON_LAST_LAYER:-true}"
 INPUT_EMBED_SHARDING="${MAY_INPUT_EMBED_SHARDING:-hidden_batch}"
 OUTPUT_PROJ_SHARDING="${MAY_OUTPUT_PROJ_SHARDING:-lm_head}"
+NON_EXPERT_PARAM_SHARDING="${MAY_NON_EXPERT_PARAM_SHARDING:-batch}"
 MP="params=float32,compute=bfloat16,output=bfloat16"
 LIVE_PARAM_MODE="param"
 ATTENTION_IMPLEMENTATION="gpu_fa4_cute"
@@ -42,6 +43,7 @@ MOE_IMPLEMENTATION="${MAY_MOE_IMPLEMENTATION:-ring}"
 TRACKER="wandb"
 PROFILER_START=12
 PROFILER_STEPS=8
+PROFILER_STOP_BARRIER_TIMEOUT="${MAY_PROFILER_STOP_BARRIER_TIMEOUT:-1800}"
 ENABLE_HLO_PROTO="${MAY_PROFILER_ENABLE_HLO_PROTO:-false}"
 HOST_TRACER_LEVEL="${MAY_PROFILER_HOST_TRACER_LEVEL:-1}"
 PYTHON_TRACER_LEVEL="${MAY_PROFILER_PYTHON_TRACER_LEVEL:-0}"
@@ -51,6 +53,14 @@ WATCH_INTERVAL=0
 LOG_EVERY=1
 LOG_JAXPRS="${MAY_LOG_JAXPRS:-false}"
 LOG_XLA_HLO="${MAY_LOG_XLA_HLO:-false}"
+COMPILE_DIAGNOSTIC="${MAY_COMPILE_DIAGNOSTIC:-off}"
+COMPILE_DIAGNOSTIC_LOG_HLO="${MAY_COMPILE_DIAGNOSTIC_LOG_HLO:-false}"
+COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL="${MAY_COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL:-60}"
+COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT="${MAY_COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT:-1800}"
+SHARDING_AUDIT="${MAY_SHARDING_AUDIT:-true}"
+SHARDING_AUDIT_ONLY="${MAY_SHARDING_AUDIT_ONLY:-false}"
+SHARDING_AUDIT_MIN_BYTES="${MAY_SHARDING_AUDIT_MIN_BYTES:-1048576}"
+SHARDING_AUDIT_MAX_ENTRIES="${MAY_SHARDING_AUDIT_MAX_ENTRIES:-40}"
 
 usage() {
     cat <<'EOF'
@@ -76,6 +86,7 @@ Options:
   --steps N                 MAY_STEPS (default: 30).
   --profiler-start N        MAY_PROFILER_START (default: 12).
   --profiler-steps N        MAY_PROFILER_STEPS (default: 8; set 0 to disable).
+  --profiler-stop-barrier-timeout N MAY_PROFILER_STOP_BARRIER_TIMEOUT in seconds (default: 1800).
   --xla-memory-fraction F   XLA_PYTHON_CLIENT_MEM_FRACTION (default: 0.95).
   --tracker NAME            MAY_TRACKER: wandb or json_logger (default: wandb).
   --data NAME               MAY_DATA: slimpajama, nemotron, or synthetic (default: slimpajama).
@@ -85,6 +96,7 @@ Options:
   --pko-on-last-layer BOOL  MAY_PKO_ON_LAST_LAYER diagnostic toggle (default: true).
   --input-embed-sharding MODE MAY_INPUT_EMBED_SHARDING: hidden_batch or replicated (default: hidden_batch).
   --output-proj-sharding MODE MAY_OUTPUT_PROJ_SHARDING: lm_head or replicated (default: lm_head).
+  --non-expert-param-sharding MODE MAY_NON_EXPERT_PARAM_SHARDING: data or batch (default: batch).
   --mp POLICY               MAY_MP policy string.
   --live-param-mode MODE    MAY_LIVE_PARAM_MODE: param or compute_with_master (default: param).
   --attention NAME          MAY_ATTENTION_IMPLEMENTATION (default: gpu_fa4_cute).
@@ -94,11 +106,34 @@ Options:
   --log-every N             MAY_LOG_EVERY train progress/scalar logging cadence (default: 1).
   --log-jaxprs BOOL         MAY_LOG_JAXPRS; true dumps JAXPRs (default: false).
   --log-xla-hlo BOOL        MAY_LOG_XLA_HLO; true dumps XLA HLO (default: false).
+  --compile-diagnostic MODE MAY_COMPILE_DIAGNOSTIC: off, compile, or compile_only (default: off).
+  --compile-diagnostic-log-hlo BOOL MAY_COMPILE_DIAGNOSTIC_LOG_HLO (default: false).
+  --compile-diagnostic-progress-interval N MAY_COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL seconds (default: 60).
+  --compile-diagnostic-barrier-timeout N MAY_COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT after compile (default: 1800).
+  --sharding-audit BOOL     MAY_SHARDING_AUDIT; logs params/opt_state sharding before train step (default: true).
+  --sharding-audit-only BOOL MAY_SHARDING_AUDIT_ONLY; exit after sharding audit (default: false).
+  --sharding-audit-min-bytes N MAY_SHARDING_AUDIT_MIN_BYTES for large-leaf summaries (default: 1048576).
+  --sharding-audit-max-entries N MAY_SHARDING_AUDIT_MAX_ENTRIES per tree (default: 40).
   -h, --help                Show this help.
 
 This wrapper forwards explicit MAY_* environment variables to Iris; local shell
 MAY_* values are not implicitly visible inside the remote job.
+Runtime tuning variables XLA_FLAGS, LIBTPU_INIT_ARGS, NCCL_*, and JAX_* are
+forwarded when set locally, except JAX_PLATFORMS.
 EOF
+}
+
+append_runtime_env_args() {
+    local key
+    while IFS='=' read -r key _; do
+        case "$key" in
+            JAX_PLATFORMS)
+                ;;
+            XLA_FLAGS|LIBTPU_INIT_ARGS|NCCL_*|JAX_*)
+                ENV_ARGS+=(-e "$key" "${!key}")
+                ;;
+        esac
+    done < <(env)
 }
 
 while [ "$#" -gt 0 ]; do
@@ -176,6 +211,10 @@ while [ "$#" -gt 0 ]; do
             PROFILER_STEPS="$2"
             shift 2
             ;;
+        --profiler-stop-barrier-timeout)
+            PROFILER_STOP_BARRIER_TIMEOUT="$2"
+            shift 2
+            ;;
         --xla-memory-fraction)
             XLA_MEMORY_FRACTION="$2"
             shift 2
@@ -212,6 +251,10 @@ while [ "$#" -gt 0 ]; do
             OUTPUT_PROJ_SHARDING="$2"
             shift 2
             ;;
+        --non-expert-param-sharding)
+            NON_EXPERT_PARAM_SHARDING="$2"
+            shift 2
+            ;;
         --mp)
             MP="$2"
             shift 2
@@ -246,6 +289,38 @@ while [ "$#" -gt 0 ]; do
             ;;
         --log-xla-hlo)
             LOG_XLA_HLO="$2"
+            shift 2
+            ;;
+        --compile-diagnostic)
+            COMPILE_DIAGNOSTIC="$2"
+            shift 2
+            ;;
+        --compile-diagnostic-log-hlo)
+            COMPILE_DIAGNOSTIC_LOG_HLO="$2"
+            shift 2
+            ;;
+        --compile-diagnostic-progress-interval)
+            COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL="$2"
+            shift 2
+            ;;
+        --compile-diagnostic-barrier-timeout)
+            COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT="$2"
+            shift 2
+            ;;
+        --sharding-audit)
+            SHARDING_AUDIT="$2"
+            shift 2
+            ;;
+        --sharding-audit-only)
+            SHARDING_AUDIT_ONLY="$2"
+            shift 2
+            ;;
+        --sharding-audit-min-bytes)
+            SHARDING_AUDIT_MIN_BYTES="$2"
+            shift 2
+            ;;
+        --sharding-audit-max-entries)
+            SHARDING_AUDIT_MAX_ENTRIES="$2"
             shift 2
             ;;
         -h|--help)
@@ -287,6 +362,24 @@ case "$OUTPUT_PROJ_SHARDING" in
         ;;
 esac
 
+case "$NON_EXPERT_PARAM_SHARDING" in
+    data|batch)
+        ;;
+    *)
+        echo "ERROR: --non-expert-param-sharding must be data or batch, got: $NON_EXPERT_PARAM_SHARDING" >&2
+        exit 1
+        ;;
+esac
+
+case "$COMPILE_DIAGNOSTIC" in
+    off|compile|compile_only)
+        ;;
+    *)
+        echo "ERROR: --compile-diagnostic must be off, compile, or compile_only, got: $COMPILE_DIAGNOSTIC" >&2
+        exit 1
+        ;;
+esac
+
 if [ -f "$ENV_FILE" ] || [ "$ENV_FILE_EXPLICIT" = true ]; then
     R2_EXPORTS="$("${REPO_ROOT}/scripts/iris/cloudflare_r2_env.sh" "$ENV_FILE")"
 else
@@ -323,6 +416,7 @@ ENV_ARGS=(
     -e MAY_PKO_ON_LAST_LAYER "$PKO_ON_LAST_LAYER"
     -e MAY_INPUT_EMBED_SHARDING "$INPUT_EMBED_SHARDING"
     -e MAY_OUTPUT_PROJ_SHARDING "$OUTPUT_PROJ_SHARDING"
+    -e MAY_NON_EXPERT_PARAM_SHARDING "$NON_EXPERT_PARAM_SHARDING"
     -e MAY_MP "$MP"
     -e MAY_LIVE_PARAM_MODE "$LIVE_PARAM_MODE"
     -e MAY_ATTENTION_IMPLEMENTATION "$ATTENTION_IMPLEMENTATION"
@@ -331,6 +425,7 @@ ENV_ARGS=(
     -e MAY_TRACKER "$TRACKER"
     -e MAY_PROFILER_START "$PROFILER_START"
     -e MAY_PROFILER_STEPS "$PROFILER_STEPS"
+    -e MAY_PROFILER_STOP_BARRIER_TIMEOUT "$PROFILER_STOP_BARRIER_TIMEOUT"
     -e MAY_PROFILER_ENABLE_HLO_PROTO "$ENABLE_HLO_PROTO"
     -e MAY_PROFILER_HOST_TRACER_LEVEL "$HOST_TRACER_LEVEL"
     -e MAY_PROFILER_PYTHON_TRACER_LEVEL "$PYTHON_TRACER_LEVEL"
@@ -338,6 +433,14 @@ ENV_ARGS=(
     -e MAY_LOG_EVERY "$LOG_EVERY"
     -e MAY_LOG_JAXPRS "$LOG_JAXPRS"
     -e MAY_LOG_XLA_HLO "$LOG_XLA_HLO"
+    -e MAY_COMPILE_DIAGNOSTIC "$COMPILE_DIAGNOSTIC"
+    -e MAY_COMPILE_DIAGNOSTIC_LOG_HLO "$COMPILE_DIAGNOSTIC_LOG_HLO"
+    -e MAY_COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL "$COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL"
+    -e MAY_COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT "$COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT"
+    -e MAY_SHARDING_AUDIT "$SHARDING_AUDIT"
+    -e MAY_SHARDING_AUDIT_ONLY "$SHARDING_AUDIT_ONLY"
+    -e MAY_SHARDING_AUDIT_MIN_BYTES "$SHARDING_AUDIT_MIN_BYTES"
+    -e MAY_SHARDING_AUDIT_MAX_ENTRIES "$SHARDING_AUDIT_MAX_ENTRIES"
     -e XLA_PYTHON_CLIENT_MEM_FRACTION "$XLA_MEMORY_FRACTION"
 )
 
@@ -346,6 +449,7 @@ for maybe_env in WANDB_API_KEY WANDB_ENTITY WANDB_PROJECT MAY_WANDB_GROUP; do
         ENV_ARGS+=(-e "$maybe_env" "${!maybe_env}")
     fi
 done
+append_runtime_env_args
 
 CMD=(
     uv run --package marin-iris --extra controller iris --cluster="$CLUSTER"
@@ -372,7 +476,7 @@ seq_len: $SEQ_LEN
 layers: ${NUM_LAYERS:-default}
 steps: $STEPS
 tracker: $TRACKER
-profiler: start=$PROFILER_START steps=$PROFILER_STEPS hlo_proto=$ENABLE_HLO_PROTO
+profiler: start=$PROFILER_START steps=$PROFILER_STEPS stop_barrier_timeout=$PROFILER_STOP_BARRIER_TIMEOUT hlo_proto=$ENABLE_HLO_PROTO
 checkpoints: $CHECKPOINTS
 xla_memory_fraction: $XLA_MEMORY_FRACTION
 mp: $MP
@@ -381,10 +485,19 @@ watch_interval: $WATCH_INTERVAL
 log_every: $LOG_EVERY
 log_jaxprs: $LOG_JAXPRS
 log_xla_hlo: $LOG_XLA_HLO
+compile_diagnostic: $COMPILE_DIAGNOSTIC
+compile_diagnostic_log_hlo: $COMPILE_DIAGNOSTIC_LOG_HLO
+compile_diagnostic_progress_interval: $COMPILE_DIAGNOSTIC_PROGRESS_INTERVAL
+compile_diagnostic_barrier_timeout: $COMPILE_DIAGNOSTIC_BARRIER_TIMEOUT
+sharding_audit: $SHARDING_AUDIT
+sharding_audit_only: $SHARDING_AUDIT_ONLY
+sharding_audit_min_bytes: $SHARDING_AUDIT_MIN_BYTES
+sharding_audit_max_entries: $SHARDING_AUDIT_MAX_ENTRIES
 use_pko: $USE_PKO
 pko_on_last_layer: $PKO_ON_LAST_LAYER
 input_embed_sharding: $INPUT_EMBED_SHARDING
 output_proj_sharding: $OUTPUT_PROJ_SHARDING
+non_expert_param_sharding: $NON_EXPERT_PARAM_SHARDING
 attention: $ATTENTION_IMPLEMENTATION
 ce_implementation: ${CE_IMPLEMENTATION:-default}
 moe_implementation: $MOE_IMPLEMENTATION

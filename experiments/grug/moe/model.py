@@ -43,7 +43,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -72,6 +72,8 @@ OutputProjSharding = Literal["lm_head", "replicated"]
 VALID_OUTPUT_PROJ_SHARDINGS: tuple[OutputProjSharding, ...] = ("lm_head", "replicated")
 InputEmbedSharding = Literal["hidden_batch", "replicated"]
 VALID_INPUT_EMBED_SHARDINGS: tuple[InputEmbedSharding, ...] = ("hidden_batch", "replicated")
+NonExpertParamSharding = Literal["data", "batch"]
+VALID_NON_EXPERT_PARAM_SHARDINGS: tuple[NonExpertParamSharding, ...] = ("data", "batch")
 
 
 def _batch_spec() -> P:
@@ -97,9 +99,25 @@ def _token_reshard_if_mesh(x: jax.Array) -> jax.Array:
     return _token_reshard(x)
 
 
+def _non_expert_hidden_axes(cfg: "GrugModelConfig") -> tuple[str, ...]:
+    if cfg.non_expert_param_sharding == "data":
+        return ("replica_dcn", "data")
+    if cfg.non_expert_param_sharding == "batch":
+        return _BATCH_AXES
+    raise ValueError(f"Unknown non_expert_param_sharding={cfg.non_expert_param_sharding!r}")
+
+
+def _hidden_model_pspec(cfg: "GrugModelConfig") -> P:
+    return P(_non_expert_hidden_axes(cfg), "model")
+
+
+def _model_hidden_pspec(cfg: "GrugModelConfig") -> P:
+    return P("model", _non_expert_hidden_axes(cfg))
+
+
 def _output_proj_pspec(cfg: "GrugModelConfig") -> P:
     if cfg.output_proj_sharding == "lm_head":
-        return Plm_head
+        return _hidden_model_pspec(cfg)
     if cfg.output_proj_sharding == "replicated":
         return P(None, None)
     raise ValueError(f"Unknown output_proj_sharding={cfg.output_proj_sharding!r}")
@@ -107,7 +125,7 @@ def _output_proj_pspec(cfg: "GrugModelConfig") -> P:
 
 def _input_embed_pspec(cfg: "GrugModelConfig") -> P:
     if cfg.input_embed_sharding == "hidden_batch":
-        return Pembed_vocab
+        return _model_hidden_pspec(cfg)
     if cfg.input_embed_sharding == "replicated":
         return P(None, None)
     raise ValueError(f"Unknown input_embed_sharding={cfg.input_embed_sharding!r}")
@@ -156,6 +174,8 @@ class GrugModelConfig:
     """Input embedding parameter sharding. Use "replicated" only for layout diagnostics."""
     output_proj_sharding: OutputProjSharding = "lm_head"
     """Output projection parameter sharding. Use "replicated" only for layout diagnostics."""
+    non_expert_param_sharding: NonExpertParamSharding = "data"
+    """Mesh axes for hidden dimensions on dense, embedding, and output-head parameters."""
     moe_implementation: MoeImplementation | None = None
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing.
@@ -194,6 +214,11 @@ class GrugModelConfig:
             raise ValueError(
                 f"input_embed_sharding must be one of {VALID_INPUT_EMBED_SHARDINGS}, "
                 f"got {self.input_embed_sharding!r}"
+            )
+        if self.non_expert_param_sharding not in VALID_NON_EXPERT_PARAM_SHARDINGS:
+            raise ValueError(
+                f"non_expert_param_sharding must be one of {VALID_NON_EXPERT_PARAM_SHARDINGS}, "
+                f"got {self.non_expert_param_sharding!r}"
             )
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
@@ -259,11 +284,11 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _hidden_model_pspec(cfg)),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _hidden_model_pspec(cfg)),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), _hidden_model_pspec(cfg)),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _model_hidden_pspec(cfg)),
+            attn_gate=reshard(jnp.zeros((d, n)), P(_non_expert_hidden_axes(cfg), None)),
             cfg=cfg,
         )
 
@@ -383,12 +408,23 @@ class DenseMLP(eqx.Module):
     w_down: jax.Array
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
+        hidden_dim = cfg.hidden_dim
+        intermediate_dim = cfg.shared_expert_intermediate_dim
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            w_gate=reshard(
+                _init_weight(k_gate, (hidden_dim, intermediate_dim), cfg.initializer_std),
+                _hidden_model_pspec(cfg),
+            ),
+            w_up=reshard(
+                _init_weight(k_up, (hidden_dim, intermediate_dim), cfg.initializer_std),
+                _hidden_model_pspec(cfg),
+            ),
+            w_down=reshard(
+                _init_weight(k_down, (intermediate_dim, hidden_dim), cfg.initializer_std),
+                _model_hidden_pspec(cfg),
+            ),
         )
 
     @named_call
@@ -519,7 +555,7 @@ class MoEMLP(eqx.Module):
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
 
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(_non_expert_hidden_axes(cfg), None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=e,
@@ -610,9 +646,7 @@ class Block(eqx.Module):
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
-            )
+            shared = DenseMLP.init(cfg, key=shared_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
