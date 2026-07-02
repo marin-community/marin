@@ -35,6 +35,10 @@ from ducky.tunnel import cluster_tunnel
 logger = logging.getLogger(__name__)
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
+# The built SPA is gitignored; this glob (relative to the workspace root) tells the Iris
+# bundle to ship it to the worker anyway. Owning it here keeps ducky-specific paths out of
+# Iris's bundler.
+DASHBOARD_DIST_INCLUDE = "lib/ducky/dashboard/dist/**/*"
 
 # Prod default: a single ct6e-standard-4t v6e host — 180 vCPU / 720 GB advertised,
 # ~700 GB allocatable after system reservation. DuckDB runs on CPU/RAM only (the v6e
@@ -172,7 +176,7 @@ def cli(
     policy = job_pb2.EXISTING_JOB_POLICY_KEEP if keep else job_pb2.EXISTING_JOB_POLICY_RECREATE
 
     def _submit(url: str) -> None:
-        client = IrisClient.remote(url, workspace=Path.cwd())
+        client = IrisClient.remote(url, workspace=Path.cwd(), extra_bundle_includes=[DASHBOARD_DIST_INCLUDE])
         job = submit_ducky(
             client,
             name=name,

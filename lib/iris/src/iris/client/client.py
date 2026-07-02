@@ -18,7 +18,7 @@ Example:
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -530,6 +530,7 @@ class IrisClient:
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
         credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         """Create an IrisClient for an external client (CLI, laptop, notebook).
 
@@ -548,6 +549,9 @@ class IrisClient:
             credentials: Auth material for outgoing RPCs — the Iris JWT and, for
                 an IAP-fronted cluster, the IAP OIDC ID token. None sends neither
                 (a loopback-trusted tunnel).
+            extra_bundle_includes: Glob patterns (relative to ``workspace``) for
+                gitignored files the caller needs in the task bundle — e.g. a package's
+                built frontend ``dist``. Bundled in addition to the git-tracked files.
 
         Returns:
             IrisClient wrapping RemoteClusterClient
@@ -559,6 +563,7 @@ class IrisClient:
             timeout_ms=timeout_ms,
             credentials=credentials,
             use_controller_proxy=True,
+            extra_bundle_includes=extra_bundle_includes,
         )
 
     @classmethod
@@ -598,6 +603,7 @@ class IrisClient:
         timeout_ms: int,
         use_controller_proxy: bool,
         credentials: ClientCredentials | None = None,
+        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         interceptors = credentials.interceptors() if credentials is not None else []
 
@@ -608,6 +614,7 @@ class IrisClient:
             timeout_ms=timeout_ms,
             interceptors=interceptors,
             use_controller_proxy=use_controller_proxy,
+            extra_bundle_includes=extra_bundle_includes,
         )
         return cls(cluster)
 
