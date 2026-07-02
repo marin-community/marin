@@ -2383,6 +2383,31 @@ description: Hopper Pallas Mosaic MGPU expert-parallel MoE forward/permute_up wo
   - The failure is now on the full candidate-space design requested by the revised objective, not the earlier slot-local approximation.
   - Current status satisfies the "ready_scan correctness/deadlock issue" branch of the stop-condition tree for this design. Continue fixed-schedule tuning or move to a different producer/consumer design; do not run target ready-scan sweeps with the current implementation.
 
+### 2026-07-02 01:38 PDT - FWD-SWQ-064 Fixed-wait tile sweep around current pocket
+- Question:
+  - With ready-scan unsafe, check whether the fixed schedule has an untuned local W13 tile around the current best pocket.
+  - Sweep `block_k={64,128,256}` x `block_n={64,128,256}` with `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `n_group=1`, `entries_per_rank=288`, `output_mode=perf`.
+- H100 job:
+  - `/dlwh/repro-source-push-fixed-tile-sweep-20260702-013448`, cluster `cw-us-east-02a`, succeeded.
+
+  | block_k | block_n | compute jobs/entry | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---:|---:|---:|---:|---:|---:|---|
+  | 64 | 64 | 20 | `0.013798211s` | `132.01` | `51.57` | slower |
+  | 128 | 64 | 20 | `0.010916507s` | `166.86` | `65.18` | slower |
+  | 256 | 64 | 20 | `0.015641414s` | `116.45` | `45.49` | slower |
+  | 64 | 128 | 10 | `0.011568177s` | `157.46` | `61.51` | slower |
+  | 128 | 128 | 10 | `0.015814460s` | `115.18` | `44.99` | noisy/regressed in this run |
+  | 256 | 128 | 10 | `0.021322850s` | `85.42` | `33.37` | slower |
+  | 64 | 256 | 5 | `0.029516344s` | `61.71` | `24.11` | slower |
+  | 128 | 256 | 5 | `0.030248649s` | `60.22` | `23.52` | slower |
+  | 256 | 256 | 5 | n/a | n/a | n/a | invalid: `smem_bytes=294920 > max_smem_bytes=232448` |
+
+- Interpretation:
+  - No tile candidate beats the current local pocket. `block_n=64` and `block_n=256` are slower; `block_k=256` is consistently bad; `256x256` is invalid on SMEM.
+  - The `128x128` row was much slower than the same structural config in FWD-SWQ-060/062 (`191-192 TFLOP/s/rank`), so this job should not reset the baseline. Treat it as a noisy negative sweep for alternate tiles.
+  - Best stable-looking structural config remains `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `fixed_wait`, `static_recv`, `output_mode=perf`.
+  - No source-push H100 jobs are left running.
+
 Addendum:
 - Live-row validation now separates correctness from unwritten hidden arena contents. In `/dlwh/repro-source-push-live-mask-smoke-20260702-010245`, both fixed and ordered rows had live `hidden_max_abs_diff=0.028977394104003906`, while `hidden_all_max_abs_diff=0.671875` and `hidden_unwritten_max_abs=0.671875`. The former is the useful correctness signal; the latter is the expected no-zeroing diagnostic for rows never written by live routing metadata.
 - `/dlwh/repro-source-push-ordered-missing-target-20260702-011330` was launched only for missing `ordered_wait` rotated/hash target rows. It reached `ordered_wait/rotated` `first_call_start`, emitted no completed rows after several minutes, and was stopped. `ordered_wait/rotated` is therefore a runtime stall at target shape in the current implementation.
@@ -2406,3 +2431,19 @@ Addendum:
   - A later ready-scan variant that scans across all source/slot/job candidates compiled on the tiny checked target (`compile_done` after about `1.91s`) but stalled after `first_run_start`.
   - It emitted no row and was stopped.
   - Conclusion unchanged: current ready-scan structure still deadlocks/stalls before it can be a performance path.
+
+- Fixed-wait tile sweep `/dlwh/repro-source-push-fixed-tile-sweep-20260702-013448` succeeded with 9 rows at the target uniform shape (`inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, perf mode):
+
+  | block_k | block_n | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---:|---:|---:|---:|---:|---|
+  | 128 | 64 | `0.0109165066388s` | `166.855701176` | `65.1780082718` | valid |
+  | 64 | 128 | `0.0115681770258s` | `157.456215058` | `61.5063340071` | valid |
+  | 64 | 64 | `0.0137982110027s` | `132.008516846` | `51.565826893` | valid |
+  | 256 | 64 | `0.0156414137688s` | `116.452476517` | `45.4892486395` | valid |
+  | 128 | 128 | `0.0158144599758s` | `115.178221222` | `44.9914926648` | valid but noisy/slow |
+  | 256 | 128 | `0.0213228495792s` | `85.4239187327` | `33.368718255` | valid |
+  | 64 | 256 | `0.0295163440052s` | `61.7109412086` | `24.1058364096` | valid |
+  | 128 | 256 | `0.0302486493718s` | `60.2169487706` | `23.5222456135` | valid |
+  | 256 | 256 | n/a | n/a | n/a | invalid shared-memory footprint (`294920 > 232448`) |
+
+  The best tile-sweep row is still below the current `block_k=128,block_n=128,inbox_slots=4,num_send_sms=2,num_sms=32` neighborhood, so tile-size changes did not unlock the 210 target.
