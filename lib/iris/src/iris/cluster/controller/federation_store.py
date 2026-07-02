@@ -4,10 +4,10 @@
 """The controller-side :class:`FederationStore` implementation.
 
 Backs the federation manager's durable operations against the controller's own
-tables: it admits and persists handoff handles (with the federated budget check),
-re-drives pending handoffs, mirrors a peer's synced state into the local
-``jobs``/``tasks`` rows, and routes cancel intent. Keeping this on the controller
-side lets the federation module depend only on the ``FederationStore`` protocol.
+tables: it admits and persists handoff handles, re-drives pending handoffs, mirrors
+a peer's synced state into the local ``jobs``/``tasks`` rows, and routes cancel
+intent. Keeping this on the controller side lets the federation module depend only
+on the ``FederationStore`` protocol.
 """
 
 import logging
@@ -15,23 +15,16 @@ import logging
 from rigging.timing import Timestamp
 
 from iris.cluster.controller import ops, reads, writes
-from iris.cluster.controller.budget import compute_user_spend, resource_value
-from iris.cluster.controller.codec import (
-    device_counts_from_json,
-    proto_to_json,
-    reconstruct_launch_job_request,
-)
+from iris.cluster.controller.codec import reconstruct_launch_job_request
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.run_template import RunTemplateCache
 from iris.cluster.federation.store import (
     CancelTarget,
     HandoffAdmission,
-    HandoffOutcome,
     HandoffSpec,
     HandoffState,
 )
-from iris.cluster.types import JobName, UserBudgetDefaults
-from iris.rpc import controller_pb2
+from iris.cluster.types import JobName
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
@@ -42,21 +35,6 @@ def _proto_ms(has: bool, ts) -> int | None:
     return timestamp_from_proto(ts).epoch_ms() if has else None
 
 
-def _reservation(request: controller_pb2.Controller.LaunchJobRequest) -> int:
-    """The budget charge for a federated job: its shape's value times replicas.
-
-    Uses the same ``resource_value`` scalar as local spend so the admission check
-    compares like with like.
-    """
-    res = request.resources if request.HasField("resources") else None
-    if res is None:
-        return 0
-    device_json = proto_to_json(res.device) if res.HasField("device") else None
-    counts = device_counts_from_json(device_json)
-    replicas = max(int(request.replicas), 1)
-    return resource_value(int(res.cpu_millicores), int(res.memory_bytes), counts.gpu + counts.tpu) * replicas
-
-
 class ControllerFederationStore:
     """A :class:`~iris.cluster.federation.store.FederationStore` over ``ControllerDB``."""
 
@@ -65,25 +43,18 @@ class ControllerFederationStore:
         db: ControllerDB,
         *,
         run_template_cache: RunTemplateCache,
-        user_budget_defaults: UserBudgetDefaults,
     ):
         self._db = db
         self._run_template_cache = run_template_cache
-        self._user_budget_defaults = user_budget_defaults
 
     # -- handoff -------------------------------------------------------------
 
-    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffOutcome:
+    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
         now = Timestamp.now()
         with self._db.transaction() as cur:
             if reads.get_job_state(cur, spec.parent_job_id) is not None:
                 # A handle already exists — a retried/idempotent resubmit.
-                return HandoffOutcome(admission=HandoffAdmission.ALREADY_EXISTS)
-
-            reservation = _reservation(spec.request)
-            reject = self._admission_rejection(cur, spec.parent_job_id.user, reservation)
-            if reject is not None:
-                return HandoffOutcome(admission=HandoffAdmission.REJECTED, reject_reason=reject)
+                return HandoffAdmission.ALREADY_EXISTS
 
             ops.job.insert_job_and_config(
                 cur,
@@ -100,29 +71,9 @@ class ControllerFederationStore:
                 remote_job_id=spec.remote_job_id,
                 owner_principal=spec.owner_principal,
                 handoff_state=int(HandoffState.PENDING_HANDOFF),
-                spend_snapshot=reservation,
                 now_ms=now.epoch_ms(),
             )
-        return HandoffOutcome(admission=HandoffAdmission.ADMITTED)
-
-    def _admission_rejection(self, cur, user_id: str, reservation: int) -> str | None:
-        """The federated budget check: local + cached-federated spend + this
-        job's reservation against the user cap. Returns a rejection message when
-        over cap, else ``None``. A cap of 0 means unlimited."""
-        budget = reads.get_user_budget(cur, user_id)
-        limit = budget.budget_limit if budget is not None else self._user_budget_defaults.budget_limit
-        if limit <= 0:
-            return None
-        local_spend = compute_user_spend(cur).get(user_id, 0)
-        federated_spend = reads.federated_spend_for_user(cur, user_id)
-        projected = local_spend + federated_spend + reservation
-        if projected > limit:
-            return (
-                f"User {user_id} would exceed their budget with this federated job "
-                f"(local {local_spend} + federated {federated_spend} + reservation {reservation} "
-                f"= {projected} > limit {limit})"
-            )
-        return None
+        return HandoffAdmission.ADMITTED
 
     def mark_handed_off(self, parent_job_id: JobName, *, now_ms: int) -> None:
         with self._db.transaction() as cur:
@@ -150,20 +101,37 @@ class ControllerFederationStore:
     # -- cancel --------------------------------------------------------------
 
     def bump_cancel_intent(self, parent_job_id: JobName) -> CancelTarget | None:
+        """Bump a SENT handle's cancel intent and return the peer/remote-id to cancel.
+
+        Returns ``None`` when ``parent_job_id`` is not a SENT handle. A handle the
+        peer never received (still ``PENDING_HANDOFF``) is terminated locally here —
+        the re-drive now skips it, so no sync will ever mirror it terminal. A
+        delivered handle keeps its synced state: the routed cancel drives it terminal
+        on the peer and the next sync reflects it.
+        """
         with self._db.transaction() as cur:
             handle = reads.federated_handle(cur, parent_job_id)
             if handle is None:
                 return None
             writes.bump_cancel_intent(cur, parent_job_id)
-            # A handle the peer never received (the re-drive now skips it) will
-            # never be mirrored terminal by a sync, so terminate its local job now.
-            # A delivered job keeps its synced state — the routed cancel drives it
-            # terminal on the peer and the next sync reflects it.
             if handle.handoff_state == int(HandoffState.PENDING_HANDOFF):
                 writes.mark_federated_job_killed(
                     cur, parent_job_id, now_ms=Timestamp.now().epoch_ms(), error="Cancelled before handoff"
                 )
-            return CancelTarget(peer_id=handle.peer_id, remote_job_id=handle.remote_job_id)
+            return CancelTarget(parent_job_id=parent_job_id, peer_id=handle.peer_id, remote_job_id=handle.remote_job_id)
+
+    def pending_cancels(self) -> list[CancelTarget]:
+        with self._db.read_snapshot() as tx:
+            return [
+                CancelTarget(parent_job_id=h.job_id, peer_id=h.peer_id, remote_job_id=h.remote_job_id)
+                for h in reads.pending_cancel_handles(tx)
+            ]
+
+    def mark_cancel_satisfied(self, parent_job_id: JobName, *, now_ms: int) -> None:
+        with self._db.transaction() as cur:
+            writes.mark_federated_job_killed(
+                cur, parent_job_id, now_ms=now_ms, error="Cancelled (peer reported the job gone)"
+            )
 
     # -- sync ----------------------------------------------------------------
 

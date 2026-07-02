@@ -1544,7 +1544,8 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         sample_job = sample_row.job_id  # already decoded to JobName by JobNameType
 
         def _list_tasks():
-            tasks = _tasks_for_listing(db, job_id=sample_job)
+            with db.read_snapshot() as snap:
+                tasks = _tasks_for_listing(snap, job_id=sample_job)
             _worker_addresses_for_tasks(db, tasks)
 
         bench("RPC: ListTasks (one job)", _list_tasks)

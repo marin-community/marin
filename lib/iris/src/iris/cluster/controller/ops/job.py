@@ -276,7 +276,20 @@ def insert_job_and_config(
             [{"job_id": job_id, "filename": name, "data": data} for name, data in workdir_files.items()],
         )
 
-    # Record the job-level creation for any parent federating with this peer (a
+    # A received handoff runs as an ordinary local job, but is recorded as a
+    # RECEIVED federated_jobs row (after the jobs row, per the FK) naming the
+    # requester, so FederationSync reports it back only to that requester and the
+    # changelog events below (and its tasks') resolve their requester from it.
+    if request.HasField("federation"):
+        writes.insert_received_handle(
+            cur,
+            job_id=job_id,
+            requester_id=request.federation.requester_id,
+            owner_principal=request.federation.owner_principal,
+            now_ms=ts.epoch_ms(),
+        )
+
+    # Record the job-level creation for any requester federating with this peer (a
     # no-op unless this job's root was received via handoff).
     writes.record_federation_change(cur, job_id)
 

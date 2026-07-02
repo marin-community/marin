@@ -8,8 +8,8 @@ Wires two in-process controllers — a parent and a peer — through a delegatin
 job is handed off (no local tasks, a ``federated_jobs`` handle in ``HANDED_OFF``),
 the peer materializes and owns it, one sync mirrors the peer's state back onto the
 parent's handle, a routed cancel tombstones it, and the next sync drops the handle.
-Also covers the federated budget-admission check and the full-resync
-set-replacement path.
+Also covers handoff admission/idempotency, the incremental-tombstone path, and the
+full-resync set-replacement path.
 """
 
 from contextlib import ExitStack
@@ -27,7 +27,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.federation.manager import FederationManager, encode_remote_job_id
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
-from iris.cluster.types import JobName, UserBudgetDefaults
+from iris.cluster.types import JobName
 from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from rigging.server_auth import VerifiedIdentity, identity_scope
@@ -121,8 +121,6 @@ def _make_service(
 def _attach_federation(
     parent_service: ControllerServiceImpl,
     connection: _InProcessPeerConnection,
-    *,
-    budget_defaults: UserBudgetDefaults | None = None,
 ) -> FederationManager:
     """Give ``parent_service`` a one-peer federation manager delegating to ``connection``."""
     peer = FederationPeer(
@@ -132,7 +130,6 @@ def _attach_federation(
     store = ControllerFederationStore(
         parent_service._db,
         run_template_cache=RunTemplateCache(256),
-        user_budget_defaults=budget_defaults or UserBudgetDefaults(),
     )
     manager = FederationManager([peer], threads=get_thread_container(), store=store, cluster_id="parent")
     parent_service._controller.federation = manager
@@ -183,8 +180,8 @@ def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
         assert handle.remote_job_id == remote_job_id.to_wire()
         assert query_tasks_for_job(parent_state, parent_job_id) == []
 
-        # Peer side: it materialized and OWNS the job (received-jobs row, not a
-        # handle) and expanded it into a task.
+        # Peer side: it materialized and OWNS the job (a RECEIVED federated_jobs
+        # row, not a SENT handle) and expanded it into a task.
         assert _handle(peer_state, remote_job_id) is None
         assert len(query_tasks_for_job(peer_state, remote_job_id)) == 1
         assert query_job(peer_state, remote_job_id) is not None
@@ -237,14 +234,14 @@ def test_full_resync_drops_a_handle_absent_from_the_peers_active_set(tmp_path, l
         manager.sync_once()  # parent's cursor advances past the peer's current max seq
         assert query_job(parent_state, parent_job_id) is not None
 
-        # The peer prunes the job, then compacts the changelog past the parent's
-        # cursor so the tombstone event is gone. The parent's stale cursor forces a
-        # full resync, whose active set no longer contains the job — so it is
-        # dropped by set-replacement, not by a tombstone the parent never saw.
+        # The peer prunes the job, and the parent loses its cursor (reset to "", as
+        # after a state reset / first contact). The next sync is therefore a full
+        # resync, whose active set no longer contains the job — so the parent drops
+        # it by set-replacement, not by a tombstone delta.
         with peer_state._db.transaction() as cur:
             writes.delete_job(cur, remote_job_id)
-        with peer_state._db.transaction() as cur:
-            writes.compact_changelog(cur, reads._changelog_max_seq(cur))
+        with parent_state._db.transaction() as cur:
+            writes.upsert_sync_cursor(cur, "cw", "", now_ms=0)
         manager.sync_once()
 
         assert _handle(parent_state, parent_job_id) is None
@@ -300,50 +297,53 @@ def test_redrive_of_a_handle_the_peer_already_has_is_idempotent(tmp_path, log_cl
 
 
 # ---------------------------------------------------------------------------
-# federated budget admission
+# admission + incremental tombstone
 # ---------------------------------------------------------------------------
 
 
-def test_federated_budget_admission_rejects_over_cap(tmp_path, log_client):
+def test_admit_persists_a_pending_handle_and_is_idempotent(tmp_path, log_client):
     with ExitStack() as stack:
         _parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        # A cpu=1 / 1 GiB job values at 6; a cap of 5 rejects it.
-        store = ControllerFederationStore(
-            parent_state._db,
-            run_template_cache=RunTemplateCache(256),
-            user_budget_defaults=UserBudgetDefaults(budget_limit=5),
-        )
-        parent_job_id = JobName.root(_USER, "over-cap")
+        store = ControllerFederationStore(parent_state._db, run_template_cache=RunTemplateCache(256))
+        parent_job_id = JobName.root(_USER, "fed-job")
         spec = HandoffSpec(
             parent_job_id=parent_job_id,
             remote_job_id=encode_remote_job_id("parent", parent_job_id),
             peer_id="cw",
             owner_principal=_USER,
-            request=make_direct_job_request("over-cap", replicas=1),
+            request=make_direct_job_request("fed-job", replicas=1),
         )
-        outcome = store.admit_and_persist_handoff(spec)
-        assert outcome.admission is HandoffAdmission.REJECTED
-        assert _handle(parent_state, parent_job_id) is None
 
-
-def test_federated_budget_admission_admits_within_cap(tmp_path, log_client):
-    with ExitStack() as stack:
-        _parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        store = ControllerFederationStore(
-            parent_state._db,
-            run_template_cache=RunTemplateCache(256),
-            user_budget_defaults=UserBudgetDefaults(budget_limit=100),
-        )
-        parent_job_id = JobName.root(_USER, "within-cap")
-        spec = HandoffSpec(
-            parent_job_id=parent_job_id,
-            remote_job_id=encode_remote_job_id("parent", parent_job_id),
-            peer_id="cw",
-            owner_principal=_USER,
-            request=make_direct_job_request("within-cap", replicas=1),
-        )
-        outcome = store.admit_and_persist_handoff(spec)
-        assert outcome.admission is HandoffAdmission.ADMITTED
+        assert store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED
         handle = _handle(parent_state, parent_job_id)
         assert handle is not None
         assert handle.handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+        # A re-submit of the same job is idempotent — no second handle, no error.
+        assert store.admit_and_persist_handoff(spec) is HandoffAdmission.ALREADY_EXISTS
+
+
+def test_incremental_sync_delivers_a_tombstone_and_drops_the_handle(tmp_path, log_client):
+    """A prune's tombstone reaches the parent on the INCREMENTAL path (cursor already
+    advanced), not only via a full resync: each changelog row carries its requester,
+    so the tombstone is attributable after the received job (and its row) is gone.
+    """
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        parent_job_id = JobName.from_wire(response.job_id)
+        remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
+        manager.sync_once()  # advance the parent's cursor past the peer's current max seq
+        assert query_job(parent_state, parent_job_id) is not None
+
+        # Prune on the peer AFTER the parent is caught up, so only the incremental
+        # tombstone (not a first-contact full resync) can reclaim the handle.
+        with peer_state._db.transaction() as cur:
+            writes.delete_job(cur, remote_job_id)
+        manager.sync_once()
+
+        assert _handle(parent_state, parent_job_id) is None
+        assert query_job(parent_state, parent_job_id) is None

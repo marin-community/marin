@@ -382,7 +382,6 @@ class Controller:
             store=ControllerFederationStore(
                 self._db,
                 run_template_cache=self._run_template_cache,
-                user_budget_defaults=config.user_budget_defaults,
             ),
             cluster_id=config.cluster_id,
             heartbeat_interval=config.federation_heartbeat_interval,

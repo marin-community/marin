@@ -78,7 +78,6 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitRouting
-from iris.cluster.federation.store import HandoffAdmission
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -513,7 +512,7 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
 _LISTING_FAILURE_STATES = (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED)
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
+def _tasks_for_listing(tx: Tx, *, job_id: JobName) -> list[TaskWithAttempts]:
     """Load tasks for the list view with their current and latest-failed attempts.
 
     Each task carries its current attempt plus the most recent attempt in each
@@ -521,47 +520,46 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
     visible after the task is retried back into a running/pending state. Only the
     latest per state is attached, keeping the payload bounded for tasks with long
     retry histories. Attempts are ascending by ``attempt_id`` so the current
-    attempt (the highest id) stays last.
+    attempt (the highest id) stays last. Reads within the caller's snapshot.
     """
     job_task_ids = select(tasks_table.c.task_id).where(tasks_table.c.job_id == job_id)
-    with db.read_snapshot() as tx:
-        task_rows = tx.execute(
-            select(*reads.TASK_DETAIL_COLS)
-            .where(tasks_table.c.job_id == job_id)
-            .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
-        ).all()
-        # Current attempt per task (composite-PK lookup, at most one row each).
-        current_attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS).where(
-                tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
-                    select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
-                        tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
-                    )
+    task_rows = tx.execute(
+        select(*reads.TASK_DETAIL_COLS)
+        .where(tasks_table.c.job_id == job_id)
+        .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
+    ).all()
+    # Current attempt per task (composite-PK lookup, at most one row each).
+    current_attempt_rows = tx.execute(
+        select(*reads.ATTEMPT_COLS).where(
+            tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
+                select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
+                    tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
                 )
             )
-        ).all()
-        # Highest failed attempt_id per (task, failure-state). One aggregate scan
-        # of this job's failed attempts, then a PK join back to the full rows —
-        # bounded to <= 2 rows per task no matter how deep the retry history runs.
-        latest_failed = (
-            select(
-                task_attempts_table.c.task_id.label("task_id"),
-                func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
-            )
-            .where(
-                task_attempts_table.c.task_id.in_(job_task_ids),
-                task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
-            )
-            .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
-            .subquery()
         )
-        failed_attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS).join(
-                latest_failed,
-                (task_attempts_table.c.task_id == latest_failed.c.task_id)
-                & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
-            )
-        ).all()
+    ).all()
+    # Highest failed attempt_id per (task, failure-state). One aggregate scan
+    # of this job's failed attempts, then a PK join back to the full rows —
+    # bounded to <= 2 rows per task no matter how deep the retry history runs.
+    latest_failed = (
+        select(
+            task_attempts_table.c.task_id.label("task_id"),
+            func.max(task_attempts_table.c.attempt_id).label("attempt_id"),
+        )
+        .where(
+            task_attempts_table.c.task_id.in_(job_task_ids),
+            task_attempts_table.c.state.in_(_LISTING_FAILURE_STATES),
+        )
+        .group_by(task_attempts_table.c.task_id, task_attempts_table.c.state)
+        .subquery()
+    )
+    failed_attempt_rows = tx.execute(
+        select(*reads.ATTEMPT_COLS).join(
+            latest_failed,
+            (task_attempts_table.c.task_id == latest_failed.c.task_id)
+            & (task_attempts_table.c.attempt_id == latest_failed.c.attempt_id),
+        )
+    ).all()
     # Merge, deduping the current attempt when it is itself a failure.
     attempts_by_task: dict[JobName, dict[int, Any]] = {}
     for a in (*current_attempt_rows, *failed_attempt_rows):
@@ -1113,20 +1111,24 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.LaunchJobResponse:
         """Hand a job off to a federation peer and return the parent's job id.
 
-        The manager persists the federated handle (admitting it against the
-        user's budget) in one local transaction, then synchronously delivers it
-        to the peer. A failed delivery is not fatal — the sync loop re-drives the
-        handle — so an admitted or already-present handle still returns its id;
-        only a budget rejection surfaces as an error.
+        Only a root job is ever handed off — the remote job id folds this cluster
+        into the root name, so a non-root job would collide with its siblings on the
+        peer. The manager persists the federated handle in one local transaction,
+        then synchronously delivers it to the peer. A failed delivery is not fatal —
+        the sync loop re-drives the handle — so an admitted or already-present handle
+        still returns its id.
         """
-        outcome = self._controller.federation.submit_federated_handle(
+        if not job_id.is_root:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Job {job_id} is not a root job; only whole root jobs may be federated to a peer.",
+            )
+        self._controller.federation.submit_federated_handle(
             parent_job_id=job_id,
             request=request,
             peer_id=peer_id,
             owner_principal=job_id.user,
         )
-        if outcome.admission is HandoffAdmission.REJECTED:
-            raise ConnectError(Code.RESOURCE_EXHAUSTED, outcome.reject_reason)
         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
 
     def launch_job(
@@ -1175,19 +1177,28 @@ class ControllerServiceImpl:
         # has (the name is authoritative), while token users stay pinned.
         # Only root submissions carry an owner segment; child jobs inherit it.
         #
-        # A received federation handoff is exempt: the caller is a trusted peer
-        # authenticated with its own credentials, and the acting owner it asserts
-        # rides in ``federation.owner_principal`` (already encoded in the handoff
-        # name's user segment). Re-pinning to the peer's principal would corrupt
-        # both the attribution and the deterministic remote job id.
+        # A received federation handoff is exempt from re-pinning: the acting owner
+        # it asserts rides in ``federation.owner_principal`` (already encoded in the
+        # handoff name's user segment), so re-pinning to the peer's own principal
+        # would corrupt both the attribution and the deterministic remote job id.
         identity = get_verified_identity()
-        if (
-            self._auth.provider
-            and identity is not None
-            and job_id.is_root
-            and identity.role != "admin"
-            and not request.HasField("federation")
-        ):
+
+        # ``federation`` is a field on the public LaunchJobRequest, so guard who may
+        # set it. With auth on it marks a trusted peer-to-peer handoff — honor it
+        # only from an admin principal (a peer authenticates with admin credentials).
+        # A non-admin, or an unauthenticated caller under configured auth, that sets
+        # it is forging a handoff to run a job as another user, so reject it. In
+        # no-auth mode the cluster already trusts the name, so there is nothing to
+        # forge. A received handoff is always a root job.
+        if request.HasField("federation") and self._auth.provider:
+            if identity is None or identity.role != "admin":
+                raise ConnectError(
+                    Code.PERMISSION_DENIED, "The federation handoff field may only be set by a trusted peer."
+                )
+            if not job_id.is_root:
+                raise ConnectError(Code.INVALID_ARGUMENT, "A federation handoff must be a root job.")
+
+        if self._auth.provider and identity is not None and job_id.is_root and identity.role != "admin":
             job_id = JobName.root(identity.user_id, job_id.name)
 
         # For non-root jobs, verify the caller owns the parent hierarchy
@@ -1485,22 +1496,10 @@ class ControllerServiceImpl:
                 f"Job {job_id} is unschedulable: {feasibility_errors[0]} (constraints: {constraints})",
             )
 
-        # A received handoff runs as an ordinary local job, but is first recorded
-        # as peer-owned so FederationSync reports it back only to the requester,
-        # and this controller begins writing its changelog. Marking the owned root
-        # before the transaction opens ensures the submit's own writes are logged.
-        if is_received_handoff:
-            self._db.add_federation_owned_root(job_id.root_job.to_wire())
-
+        # A received handoff runs as an ordinary local job; ``ops.job.submit``
+        # records it as a RECEIVED federated_jobs row so FederationSync reports it
+        # back to the requester and this controller writes its changelog.
         with self._db.transaction() as cur:
-            if is_received_handoff:
-                writes.record_received_federated_job(
-                    cur,
-                    job_id=job_id,
-                    requester_id=request.federation.requester_id,
-                    owner_principal=request.federation.owner_principal,
-                    received_ms=Timestamp.now().epoch_ms(),
-                )
             # Re-check inside the same tx as the INSERT. Two LaunchJob
             # handlers can race past the earlier existence check (separate
             # transaction above) — almost always the same logical request
@@ -1811,7 +1810,8 @@ class ControllerServiceImpl:
         if not request.job_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
         job_id = JobName.from_wire(request.job_id)
-        tasks = _tasks_for_listing(self._db, job_id=job_id)
+        with self._db.read_snapshot() as tx:
+            tasks = _tasks_for_listing(tx, job_id=job_id)
 
         task_statuses = []
         for task in tasks:
@@ -3114,6 +3114,26 @@ class ControllerServiceImpl:
             status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
         return status
 
+    def _federated_job_delta(
+        self, q, job_id: JobName, *, all_tasks: bool, task_indexes: set[int]
+    ) -> controller_pb2.Controller.FederationJobDelta | None:
+        """One non-tombstone delta: the job's current summary plus its changed tasks.
+
+        ``all_tasks`` includes every current task (a job-level change or full
+        resync); otherwise only ``task_indexes``. ``None`` if the job raced with its
+        own prune — the tombstone event follows on a later sync.
+        """
+        job = reads.get_job_detail(q, job_id)
+        if job is None:
+            return None
+        tasks = _tasks_for_listing(q, job_id=job_id)
+        changed_tasks = [task_to_proto(task) for task in tasks if all_tasks or task.task_id.task_index in task_indexes]
+        return controller_pb2.Controller.FederationJobDelta(
+            remote_job_id=job_id.to_wire(),
+            summary=self._federated_job_summary(q, job),
+            changed_tasks=changed_tasks,
+        )
+
     def federation_sync(
         self,
         request: controller_pb2.Controller.FederationSyncRequest,
@@ -3121,46 +3141,61 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.FederationSyncResponse:
         """Peer side: report jobs ``requester_id`` handed off, changed since its cursor.
 
-        Pages the changelog since the requester's cursor (or the full active set
-        when the cursor is stale), building one delta per changed job: a tombstone
-        for a pruned job, else the job's current summary plus the full rows of the
-        tasks that changed. The parent applies the batch and advances its cursor.
+        On first contact (empty cursor) or a cursor below the retained changelog
+        window, returns the requester's full active set with ``cursor_stale`` so the
+        parent set-replaces. Otherwise returns the incremental set: one delta per job
+        whose changelog rows advanced past the cursor — a tombstone for a pruned job,
+        else the job's summary plus its changed tasks. Assembled in one snapshot.
         """
         require_identity()
-        with self._db.read_snapshot() as q:
-            page = reads.federation_sync_page(q, request.requester_id, request.cursor)
-            summaries: dict[JobName, job_pb2.JobStatus] = {}
-            for change in page.changes:
-                if change.tombstone:
-                    continue
-                job = reads.get_job_detail(q, change.job_id)
-                if job is not None:
-                    summaries[change.job_id] = self._federated_job_summary(q, job)
-
+        requester_id = request.requester_id
+        cursor = request.cursor
+        cursor_seq = int(cursor) if cursor else 0
         deltas: list[controller_pb2.Controller.FederationJobDelta] = []
-        for change in page.changes:
-            if change.tombstone:
-                deltas.append(
-                    controller_pb2.Controller.FederationJobDelta(remote_job_id=change.job_id.to_wire(), tombstone=True)
+        with self._db.read_snapshot() as q:
+            min_seq = reads.changelog_min_seq(q)
+            next_cursor = str(reads.changelog_max_seq(q))
+            # Stale when the requester has no cursor, or its cursor sits below the
+            # oldest retained event (an unconsumed event, including a tombstone, may
+            # be gone). A full resync subsumes everything, so it advances to the max.
+            stale = (not cursor) or (min_seq > 0 and cursor_seq < min_seq - 1)
+
+            if stale:
+                for job_id in reads.active_received_jobs(q, requester_id):
+                    delta = self._federated_job_delta(q, job_id, all_tasks=True, task_indexes=set())
+                    if delta is not None:
+                        deltas.append(delta)
+                return controller_pb2.Controller.FederationSyncResponse(
+                    deltas=deltas, next_cursor=next_cursor, cursor_stale=True
                 )
-                continue
-            summary = summaries.get(change.job_id)
-            if summary is None:
-                continue
-            wanted = set(change.changed_task_indexes)
-            changed_tasks = [
-                task_to_proto(task)
-                for task in _tasks_for_listing(self._db, job_id=change.job_id)
-                if task.task_id.task_index in wanted
-            ]
-            deltas.append(
-                controller_pb2.Controller.FederationJobDelta(
-                    remote_job_id=change.job_id.to_wire(),
-                    summary=summary,
-                    changed_tasks=changed_tasks,
-                )
-            )
+
+            tombstoned: dict[JobName, bool] = {}
+            all_tasks: dict[JobName, bool] = {}
+            indexes: dict[JobName, set[int]] = {}
+            order: list[JobName] = []
+            for row in reads.changelog_rows_since(q, requester_id, cursor_seq):
+                if row.job_id not in tombstoned:
+                    tombstoned[row.job_id] = False
+                    all_tasks[row.job_id] = False
+                    indexes[row.job_id] = set()
+                    order.append(row.job_id)
+                if row.tombstone:
+                    tombstoned[row.job_id] = True
+                elif row.task_index is None:
+                    all_tasks[row.job_id] = True
+                else:
+                    indexes[row.job_id].add(row.task_index)
+
+            for job_id in order:
+                if tombstoned[job_id]:
+                    deltas.append(
+                        controller_pb2.Controller.FederationJobDelta(remote_job_id=job_id.to_wire(), tombstone=True)
+                    )
+                    continue
+                delta = self._federated_job_delta(q, job_id, all_tasks=all_tasks[job_id], task_indexes=indexes[job_id])
+                if delta is not None:
+                    deltas.append(delta)
 
         return controller_pb2.Controller.FederationSyncResponse(
-            deltas=deltas, next_cursor=page.next_cursor, cursor_stale=page.cursor_stale
+            deltas=deltas, next_cursor=next_cursor, cursor_stale=False
         )

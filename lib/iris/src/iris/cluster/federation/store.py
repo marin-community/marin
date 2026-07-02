@@ -19,8 +19,18 @@ from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 
 
+class FederationDirection(IntEnum):
+    """Which end of a handoff a ``federated_jobs`` row represents.
+
+    Persisted as the ``direction`` column, so the values are explicit and stable.
+    """
+
+    SENT = 0  # this cluster is the parent; peer_id is the destination
+    RECEIVED = 1  # this cluster is the peer; peer_id is the requester
+
+
 class HandoffState(IntEnum):
-    """The ``federated_jobs.handoff_state`` lifecycle for one handle.
+    """The ``federated_jobs.handoff_state`` lifecycle for one SENT handle.
 
     Persisted as the ``handoff_state`` column, so the values are explicit and
     stable across code changes.
@@ -35,17 +45,14 @@ class HandoffAdmission(Enum):
 
     ADMITTED = auto()  # new handle persisted in PENDING_HANDOFF
     ALREADY_EXISTS = auto()  # a live handle for this job id already existed (idempotent resubmit)
-    REJECTED = auto()  # budget admission denied the handoff
 
 
 @dataclass(frozen=True)
 class HandoffSpec:
     """One handoff handle to admit, persist, and deliver.
 
-    The store derives the budget subject (``parent_job_id.user``) and the
-    reservation (``resource_value`` of the request's shape) itself, so those units
-    stay in the controller alongside the local budget accounting. The same spec is
-    replayed by the re-drive loop, so it carries everything needed to deliver.
+    The same spec is replayed by the re-drive loop, so it carries everything
+    needed to deliver.
     """
 
     parent_job_id: JobName  # this cluster's local (root) job id
@@ -56,15 +63,10 @@ class HandoffSpec:
 
 
 @dataclass(frozen=True)
-class HandoffOutcome:
-    admission: HandoffAdmission
-    reject_reason: str = ""
-
-
-@dataclass(frozen=True)
 class CancelTarget:
-    """What a routed cancel must address on the peer."""
+    """What a routed cancel must address on the peer, plus the local handle it backs."""
 
+    parent_job_id: JobName  # this cluster's local job id, to terminalize on NOT_FOUND
     peer_id: str
     remote_job_id: str
 
@@ -72,11 +74,12 @@ class CancelTarget:
 class FederationStore(Protocol):
     """Durable operations the federation manager performs against the parent DB."""
 
-    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffOutcome:
-        """In one transaction: re-check existence (idempotent resubmit), run the
-        federated budget admission, and persist the ``jobs`` row (``child_cluster``
-        set, no tasks) + ``job_config`` + the ``federated_jobs`` handle in
-        ``PENDING_HANDOFF``."""
+    def admit_and_persist_handoff(self, spec: HandoffSpec) -> HandoffAdmission:
+        """In one transaction: re-check existence (idempotent resubmit) and persist
+        the ``jobs`` row (``child_cluster`` set, no tasks) + ``job_config`` + the
+        SENT ``federated_jobs`` handle in ``PENDING_HANDOFF``. Returns ``ADMITTED``
+        for a freshly-persisted handle, ``ALREADY_EXISTS`` for an idempotent
+        resubmit."""
         ...
 
     def mark_handed_off(self, parent_job_id: JobName, *, now_ms: int) -> None:
@@ -85,6 +88,17 @@ class FederationStore(Protocol):
 
     def pending_handoffs(self) -> list[HandoffSpec]:
         """Every handle still in ``PENDING_HANDOFF`` (boot re-drive + retry)."""
+        ...
+
+    def pending_cancels(self) -> list[CancelTarget]:
+        """Every SENT handle whose cancel intent is set but whose local mirrored job
+        is not yet terminal — the routed ``TerminateJob`` to re-drive each sync tick
+        until the peer acks or sync observes it terminal/pruned."""
+        ...
+
+    def mark_cancel_satisfied(self, parent_job_id: JobName, *, now_ms: int) -> None:
+        """Terminalize the local mirrored job after a peer ``NOT_FOUND`` (the peer
+        already pruned it), so it drops out of :meth:`pending_cancels`."""
         ...
 
     def read_cursor(self, peer_id: str) -> str:

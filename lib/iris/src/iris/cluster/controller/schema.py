@@ -572,19 +572,27 @@ user_budgets_table = Table(
 # ---------------------------------------------------------------------------
 
 
+# One row per job this controller has federated, in either direction:
+#   SENT     — this cluster is the parent; it handed the job to peer_id and tracks
+#              the handoff lifecycle (remote_job_id, handoff_state, cancel intent).
+#   RECEIVED — this cluster is the peer; peer_id is the requester that handed it off.
+# Joining jobs ⋈ federated_jobs tells you where a job was federated to/from. The
+# SENT-only columns are null on RECEIVED rows.
 federated_jobs_table = Table(
     "federated_jobs",
     metadata,
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
-    Column("peer_id", String, nullable=False),  # == jobs.child_cluster
-    # Deterministic, globally unique remote id: "<parent_cluster>/<job_id>".
-    Column("remote_job_id", String, nullable=False),
-    Column("owner_principal", String, nullable=False),  # auth identity asserted to the peer
-    Column("handoff_state", Integer, nullable=False),  # PENDING_HANDOFF | HANDED_OFF
-    Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
+    Column("direction", Integer, nullable=False),  # FederationDirection: SENT | RECEIVED
+    # The counterparty cluster: the destination when SENT, the requester when RECEIVED.
+    Column("peer_id", String, nullable=False),
+    Column("owner_principal", String, nullable=False, server_default=""),  # end-user identity
+    # Deterministic, globally unique id the peer runs the job under (SENT only).
+    Column("remote_job_id", String),
+    Column("handoff_state", Integer),  # SENT only: PENDING_HANDOFF | HANDED_OFF
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
     Column("last_sync_ms", TimestampMsType),
     Column("terminal_error", String),
+    Index("idx_federated_jobs_direction_peer", "direction", "peer_id"),
 )
 
 
@@ -608,14 +616,14 @@ federated_tasks_table = Table(
 
 
 # ---------------------------------------------------------------------------
-# Peer-side federation state (this controller acting AS a peer).
+# Peer-side federation changelog (this controller acting AS a peer).
 #
 # When a parent hands a job off, the receiving controller runs it as an ordinary
-# local job and records two things: who handed it off (federation_received_jobs)
-# and a change event per job/task mutation (federation_changelog). FederationSync
-# joins the two to report a requester only its own handoffs. These tables stay
-# empty until this controller receives a handoff, so a controller that is never a
-# peer is unchanged.
+# local job (recorded as a RECEIVED row in federated_jobs) and appends a change
+# event per job/task mutation here. Each row carries the requester it belongs to,
+# so FederationSync reports a requester only its own handoffs without a join. The
+# table stays empty until this controller receives a handoff, so a controller that
+# is never a peer is unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -629,37 +637,14 @@ federation_changelog_table = Table(
     # row (delete_job CASCADEs its dependents), so the parent can still learn the
     # job was pruned on a later sync.
     Column("job_id", JobNameType, nullable=False),
+    Column("requester_id", String, nullable=False),  # parent cluster this event is reported to
     Column("task_index", Integer),  # NULL = a job-level change
     Column("tombstone", Integer, nullable=False, server_default="0"),  # 1 = job pruned on this peer
     Column("written_ms", TimestampMsType, nullable=False),
-    Index("idx_federation_changelog_job", "job_id"),
-    # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after
-    # retention deletes rows (a plain rowid alias can reuse the max after a delete).
+    Index("idx_federation_changelog_requester", "requester_id", "seq"),
+    # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after a
+    # delete (a plain rowid alias can reuse the max after a delete).
     sqlite_autoincrement=True,
-)
-
-
-federation_received_jobs_table = Table(
-    "federation_received_jobs",
-    metadata,
-    # This peer's local job id for a handed-off job (equals the parent's
-    # remote_job_id). No FK: it must outlive the job so a tombstone delta can
-    # still be attributed to its requester.
-    Column("job_id", JobNameType, primary_key=True),
-    Column("requester_id", String, nullable=False),  # the parent cluster that handed it off
-    Column("owner_principal", String, nullable=False, server_default=""),
-    Column("received_ms", TimestampMsType, nullable=False),
-    Index("idx_federation_received_requester", "requester_id"),
-)
-
-
-federation_changelog_floor_table = Table(
-    "federation_changelog_floor",
-    metadata,
-    # Single row (id = 0). ``floor`` is the highest changelog seq removed by
-    # retention; a requester whose cursor is at or below it must full-resync.
-    Column("id", Integer, primary_key=True),
-    Column("floor", Integer, nullable=False, server_default="0"),
 )
 
 

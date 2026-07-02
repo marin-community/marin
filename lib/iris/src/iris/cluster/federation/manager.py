@@ -18,7 +18,7 @@ to hand a job off or run the sync loop; the observability slice (heartbeat,
 
 import logging
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -28,9 +28,9 @@ from iris.cluster.constraints import BACKEND_CONSTRAINT_KEY, CLUSTER_CONSTRAINT_
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import PeerRouter, RoutingRequest, SubmitRouting
 from iris.cluster.federation.store import (
+    CancelTarget,
     FederationStore,
     HandoffAdmission,
-    HandoffOutcome,
     HandoffSpec,
 )
 from iris.cluster.types import JobName
@@ -135,16 +135,15 @@ class FederationManager:
         request: controller_pb2.Controller.LaunchJobRequest,
         peer_id: str,
         owner_principal: str,
-    ) -> HandoffOutcome:
+    ) -> None:
         """Persist a federated handle and synchronously hand the job to its peer.
 
-        In one local transaction the store admits the job against the user's
-        budget and persists the ``jobs``/``job_config``/``federated_jobs`` handle
-        (no task rows) with a deterministic ``remote_job_id`` in
-        ``PENDING_HANDOFF``. On admission it then calls the peer's ``LaunchJob``
-        and flips the handle to ``HANDED_OFF``. A failed delivery is not fatal —
-        the handle persists and the sync loop re-drives it — so the caller always
-        gets the parent job id back for an admitted or already-present handle.
+        In one local transaction the store persists the
+        ``jobs``/``job_config``/``federated_jobs`` handle (no task rows) with a
+        deterministic ``remote_job_id`` in ``PENDING_HANDOFF``. When freshly
+        admitted it then calls the peer's ``LaunchJob`` and flips the handle to
+        ``HANDED_OFF``; an idempotent resubmit skips delivery. A failed delivery is
+        not fatal — the handle persists and the sync loop re-drives it.
         """
         if self._store is None:
             raise RuntimeError("federation handoff requires a store")
@@ -160,10 +159,8 @@ class FederationManager:
             owner_principal=owner_principal,
             request=request,
         )
-        outcome = self._store.admit_and_persist_handoff(spec)
-        if outcome.admission is HandoffAdmission.ADMITTED:
+        if self._store.admit_and_persist_handoff(spec) is HandoffAdmission.ADMITTED:
             self._deliver_handoff(spec)
-        return outcome
 
     # -- cancel (parent side) ------------------------------------------------
 
@@ -171,60 +168,93 @@ class FederationManager:
         """Route a versioned cancel for a federated job to its peer.
 
         Bumps ``cancel_intent_version`` (so a cancelled pending handoff is never
-        delivered and a retried cancel is a no-op) and routes an idempotent
-        ``TerminateJob(remote_job_id)``. A peer ``NOT_FOUND`` means the job is
-        already gone (terminal-and-pruned), which satisfies the cancel; any other
-        RPC error is left for the next sync to reconcile.
+        delivered and a retried cancel is a no-op) and routes the idempotent
+        ``TerminateJob(remote_job_id)``. A transient failure is not fatal — the sync
+        loop re-drives the cancel until the peer acks or sync observes the job
+        terminal/pruned.
         """
         if self._store is None:
             raise RuntimeError("federation cancel requires a store")
         target = self._store.bump_cancel_intent(parent_job_id)
-        if target is None:
-            return
+        if target is not None:
+            self._deliver_cancel(target)
+
+    def _deliver_cancel(self, target: CancelTarget) -> None:
+        """Route one ``TerminateJob`` to the peer.
+
+        A peer ``NOT_FOUND`` means the job is already gone (terminal-and-pruned),
+        which satisfies the cancel — terminalize the local mirror so the re-drive
+        stops. Any other RPC error is left for the next sync to retry.
+        """
+        assert self._store is not None
         peer = self._peers.get(target.peer_id)
         if peer is None:
-            logger.warning("Cannot cancel federated job %s: peer %s is not configured", parent_job_id, target.peer_id)
+            logger.warning(
+                "Cannot cancel federated job %s: peer %s is not configured", target.parent_job_id, target.peer_id
+            )
             return
         try:
             peer.terminate_job(JobName.from_wire(target.remote_job_id))
         except ConnectError as exc:
             if exc.code == Code.NOT_FOUND:
+                self._store.mark_cancel_satisfied(target.parent_job_id, now_ms=Timestamp.now().epoch_ms())
                 return
-            logger.warning("Routed cancel of %s to peer %s failed: %s", parent_job_id, target.peer_id, exc)
+            logger.warning(
+                "Routed cancel of %s to peer %s failed (will retry): %s",
+                target.parent_job_id,
+                target.peer_id,
+                exc,
+            )
         except (ConnectionError, OSError) as exc:
-            logger.warning("Routed cancel of %s to peer %s failed: %s", parent_job_id, target.peer_id, exc)
+            logger.warning(
+                "Routed cancel of %s to peer %s failed (will retry): %s",
+                target.parent_job_id,
+                target.peer_id,
+                exc,
+            )
 
     # -- background loops ----------------------------------------------------
 
-    def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
-        interval = self._heartbeat_interval.to_seconds()
+    def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
+        """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""
         while not stop_event.is_set():
-            for peer in self._peers.values():
-                peer.probe()
+            step()
             stop_event.wait(timeout=interval)
 
+    def _run_heartbeat_loop(self, stop_event: threading.Event) -> None:
+        self._run_loop(stop_event, self._probe_all_peers, self._heartbeat_interval.to_seconds())
+
+    def _run_sync_loop(self, stop_event: threading.Event) -> None:
+        self._run_loop(stop_event, self.sync_once, self._sync_interval.to_seconds())
+
+    def _probe_all_peers(self) -> None:
+        for peer in self._peers.values():
+            peer.probe()
+
     def sync_once(self) -> None:
-        """One sync pass: re-drive pending handoffs, then pull each peer once.
+        """One sync pass: re-drive pending handoffs and cancels, then pull each peer.
 
         The unit the sync loop repeats; a no-op without a store.
         """
         if self._store is None:
             return
         self._redrive_pending_handoffs()
+        self._redrive_pending_cancels()
         for peer in self._peers.values():
             self._sync_peer(peer)
-
-    def _run_sync_loop(self, stop_event: threading.Event) -> None:
-        interval = self._sync_interval.to_seconds()
-        while not stop_event.is_set():
-            self.sync_once()
-            stop_event.wait(timeout=interval)
 
     def _redrive_pending_handoffs(self) -> None:
         """Re-deliver every handle still awaiting its peer (boot recovery + retry)."""
         assert self._store is not None
         for spec in self._store.pending_handoffs():
             self._deliver_handoff(spec)
+
+    def _redrive_pending_cancels(self) -> None:
+        """Re-route ``TerminateJob`` for every cancel intent the peer has not yet
+        acknowledged (a transient failure left it undelivered)."""
+        assert self._store is not None
+        for target in self._store.pending_cancels():
+            self._deliver_cancel(target)
 
     def _deliver_handoff(self, spec: HandoffSpec) -> None:
         assert self._store is not None

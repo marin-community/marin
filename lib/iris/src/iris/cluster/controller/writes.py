@@ -33,9 +33,7 @@ from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
     federated_jobs_table,
     federated_tasks_table,
-    federation_changelog_floor_table,
     federation_changelog_table,
-    federation_received_jobs_table,
     federation_sync_state_table,
     job_config_table,
     jobs_table,
@@ -48,6 +46,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.federation.store import FederationDirection
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -290,17 +289,16 @@ def insert_job_config(
     )
 
 
-@writes_to(jobs_table, federation_received_jobs_table)
+@writes_to(jobs_table)
 def delete_job(tx: Tx, job_id: JobName) -> None:
     """Delete a job row. ``ON DELETE CASCADE`` handles tasks, attempts, endpoints."""
     # Record the tombstone BEFORE the delete so a parent federating with this peer
-    # learns the job was pruned. The changelog has no FK to jobs, so this row
-    # survives the CASCADE (a no-op unless this root was received via handoff).
+    # learns the job was pruned. The event resolves and stamps its requester from
+    # the RECEIVED federated_jobs row (still present here) and carries no FK to
+    # jobs, so it survives the CASCADE that removes that row (a no-op unless this
+    # root was received via handoff).
     record_federation_change(tx, job_id, tombstone=True)
     tx.execute(delete(jobs_table).where(jobs_table.c.job_id == job_id))
-    # The received-jobs ownership row has no FK to jobs, so drop it explicitly
-    # (a no-op for a job this cluster was not handed).
-    tx.execute(delete(federation_received_jobs_table).where(federation_received_jobs_table.c.job_id == job_id))
 
 
 @writes_to(slices_table)
@@ -314,29 +312,86 @@ def delete_slice(tx: Tx, slice_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@writes_to(federation_received_jobs_table)
-def record_received_federated_job(
+@writes_to(federated_jobs_table)
+def insert_received_handle(
     tx: Tx,
     *,
     job_id: JobName,
     requester_id: str,
     owner_principal: str,
-    received_ms: int,
+    now_ms: int,
 ) -> None:
-    """Record that ``job_id`` was handed off to this peer by ``requester_id``.
+    """Record that ``job_id`` was handed to this peer by ``requester_id`` as a
+    RECEIVED ``federated_jobs`` row (``peer_id`` is the requester; the SENT-only
+    columns stay null).
 
-    Idempotent under a re-sent handoff (same ``job_id``): the ownership row is
-    upserted, so a retried handoff never duplicates it. FederationSync joins this
-    table to attribute a changelog event to the requester that owns the job.
+    Must run after the ``jobs`` row exists (the FK). Idempotent under a re-sent
+    handoff (same ``job_id``): the row is upserted, so a retried handoff never
+    duplicates it.
     """
     tx.execute(
-        sqlite_insert(federation_received_jobs_table)
-        .values(job_id=job_id, requester_id=requester_id, owner_principal=owner_principal, received_ms=received_ms)
+        sqlite_insert(federated_jobs_table)
+        .values(
+            job_id=job_id,
+            direction=int(FederationDirection.RECEIVED),
+            peer_id=requester_id,
+            owner_principal=owner_principal,
+            last_sync_ms=now_ms,
+        )
         .on_conflict_do_update(
             index_elements=["job_id"],
-            set_={"requester_id": requester_id, "owner_principal": owner_principal, "received_ms": received_ms},
+            set_={"peer_id": requester_id, "owner_principal": owner_principal},
         )
     )
+    # Keep the per-transaction requester resolution consistent with this insert so a
+    # changelog event recorded later in the same transaction sees the row.
+    tx.memo["federation_has_received"] = True
+    tx.memo.setdefault("federation_requester", {})[job_id.to_wire()] = requester_id
+
+
+def _federation_has_received(tx: Tx) -> bool:
+    """Whether this controller holds any RECEIVED handoff, memoized per transaction.
+
+    Lets the changelog gate short-circuit with a single probe on a controller that
+    is never a peer (its ``federated_jobs`` has no RECEIVED rows), so such a
+    controller writes no changelog rows and issues no per-mutation lookup.
+    """
+    flag = tx.memo.get("federation_has_received")
+    if flag is None:
+        flag = (
+            tx.execute(
+                select(federated_jobs_table.c.job_id)
+                .where(federated_jobs_table.c.direction == int(FederationDirection.RECEIVED))
+                .limit(1)
+            ).first()
+            is not None
+        )
+        tx.memo["federation_has_received"] = flag
+    return flag
+
+
+def _received_requester(tx: Tx, root: JobName) -> str:
+    """The requester of a received-handoff ``root``, or '' if not a received job.
+
+    Resolved from the RECEIVED ``federated_jobs`` row (the source of truth) and
+    memoized per transaction so a reconcile flush does one lookup per distinct root.
+    """
+    cache: dict[str, str] = tx.memo.setdefault("federation_requester", {})
+    key = root.to_wire()
+    if key in cache:
+        return cache[key]
+    if not _federation_has_received(tx):
+        cache[key] = ""
+        return ""
+    row = tx.execute(
+        select(federated_jobs_table.c.peer_id).where(
+            federated_jobs_table.c.job_id == root,
+            federated_jobs_table.c.direction == int(FederationDirection.RECEIVED),
+        )
+    ).first()
+    requester = row[0] if row is not None else ""
+    cache[key] = requester
+    return requester
 
 
 @writes_to(federation_changelog_table)
@@ -347,18 +402,21 @@ def record_federation_change(
     task_index: int | None = None,
     tombstone: bool = False,
 ) -> None:
-    """Append a federation changelog event for a handed-off job's mutation.
+    """Append a federation changelog event for a received-handoff job's mutation.
 
-    A no-op unless ``job_id``'s root was received via handoff (gated by
-    ``tx.federation_owned_roots``), so a controller that is never a peer writes
-    nothing. Called in the same transaction as the mutation it records; the row
-    carries no FK to ``jobs`` so a tombstone survives the job delete it records.
+    A no-op unless ``job_id``'s root was received via handoff, so a controller that
+    is never a peer writes nothing. Each row carries the ``requester_id`` it is
+    reported to (resolved from the RECEIVED ``federated_jobs`` row), so
+    FederationSync attributes it without a join and a tombstone survives the job
+    delete it records (the changelog has no FK to ``jobs``).
     """
-    if job_id.root_job.to_wire() not in tx.federation_owned_roots:
+    requester = _received_requester(tx, job_id.root_job)
+    if not requester:
         return
     tx.execute(
         insert(federation_changelog_table).values(
             job_id=job_id,
+            requester_id=requester,
             task_index=task_index,
             tombstone=1 if tombstone else 0,
             written_ms=Timestamp.now().epoch_ms(),
@@ -686,18 +744,17 @@ def insert_federated_handle(
     remote_job_id: str,
     owner_principal: str,
     handoff_state: int,
-    spend_snapshot: int,
     now_ms: int,
 ) -> None:
-    """Insert the ``federated_jobs`` handle for a job handed off to ``peer_id``."""
+    """Insert the SENT ``federated_jobs`` handle for a job handed off to ``peer_id``."""
     tx.execute(
         insert(federated_jobs_table).values(
             job_id=job_id,
+            direction=int(FederationDirection.SENT),
             peer_id=peer_id,
             remote_job_id=remote_job_id,
             owner_principal=owner_principal,
             handoff_state=handoff_state,
-            spend_snapshot_micros=spend_snapshot,
             cancel_intent_version=0,
             last_sync_ms=now_ms,
         )
@@ -848,20 +905,4 @@ def upsert_sync_cursor(tx: Tx, peer_id: str, cursor: str, *, now_ms: int) -> Non
         sqlite_insert(federation_sync_state_table)
         .values(peer_id=peer_id, cursor=cursor, last_full_resync_ms=now_ms)
         .on_conflict_do_update(index_elements=["peer_id"], set_={"cursor": cursor})
-    )
-
-
-@writes_to(federation_changelog_table, federation_changelog_floor_table)
-def compact_changelog(tx: Tx, up_to_seq: int) -> None:
-    """Retention: drop changelog rows at or below ``up_to_seq`` and raise the floor.
-
-    A requester whose cursor is at or below the new floor must full-resync (its
-    unconsumed events, including any tombstone, may be gone), which the peer
-    signals via ``cursor_stale``.
-    """
-    tx.execute(delete(federation_changelog_table).where(federation_changelog_table.c.seq <= up_to_seq))
-    tx.execute(
-        sqlite_insert(federation_changelog_floor_table)
-        .values(id=0, floor=up_to_seq)
-        .on_conflict_do_update(index_elements=["id"], set_={"floor": up_to_seq})
     )

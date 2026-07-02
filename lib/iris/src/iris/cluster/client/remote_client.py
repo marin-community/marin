@@ -386,25 +386,6 @@ class RemoteClusterClient:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
         self._client.terminate_job(request)
 
-    def launch_job(
-        self, request: controller_pb2.Controller.LaunchJobRequest
-    ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Send a pre-built ``LaunchJobRequest`` (used for a federation handoff).
-
-        Unlike :meth:`submit_job`, this takes a fully-formed request — the
-        federation parent has already normalized it and set the remote job name
-        and federation attribution — and just delivers it, with the submit
-        timeout floor so a slow peer boot doesn't spuriously fail the handoff.
-        """
-        launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
-        return self._client.launch_job(request, timeout_ms=launch_timeout_ms)
-
-    def federation_sync(
-        self, request: controller_pb2.Controller.FederationSyncRequest
-    ) -> controller_pb2.Controller.FederationSyncResponse:
-        """Run one bulk delta-sync round against a peer this cluster federates to."""
-        return self._client.federation_sync(request)
-
     def register_endpoint(
         self,
         name: str,

@@ -3,29 +3,36 @@
 
 """One connection per federation peer, plus its capability-heartbeat state.
 
-``RemoteClusterClient`` already encapsulates "one connection to one controller";
-:class:`FederationPeer` holds one per peer (keyed by peer id) and caches the
-backends that peer last advertised — its static topology and current state. The
-connection is authenticated with the credentials this controller presents to the
-peer, resolved from the peer's cluster manifest via the shared ``credentials_for``
-path — no second credential system.
+:class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
+the backends that peer last advertised — its static topology and current state. The
+connection speaks the generated controller stub directly (not the end-user
+``RemoteClusterClient``): federation only ever drives a peer with the raw RPCs —
+``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel), ``FederationSync``, and
+``ListBackends`` (heartbeat). It is authenticated with the credentials this
+controller presents to the peer, resolved from the peer's cluster manifest via the
+shared ``credentials_for`` path — no second credential system.
 """
 
 import logging
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Protocol
 
 from connectrpc.errors import ConnectError
+from connectrpc.interceptor import InterceptorSync
 from rigging.cluster_manifest import load_manifest
 from rigging.credentials import ClientCredentials, credentials_for
 from rigging.timing import Timestamp
 
-from iris.cluster.client.remote_client import RemoteClusterClient
 from iris.cluster.config import PeerConfig
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+
+# A handoff carries a full request and a peer's cold boot can outrun the default
+# RPC deadline, so deliver LaunchJob with this floor to avoid spurious failures.
+_LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +87,36 @@ def _peer_credentials(peer: PeerConfig) -> ClientCredentials:
     return credentials_for(peer.cluster, manifest.auth, static_token=peer.static_token or None)
 
 
+class _PeerRpcConnection:
+    """A :class:`PeerConnection` over the generated controller stub."""
+
+    def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
+        self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
+
+    def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
+        response = self._client.list_backends(controller_pb2.Controller.ListBackendsRequest())
+        return list(response.backends)
+
+    def launch_job(
+        self, request: controller_pb2.Controller.LaunchJobRequest
+    ) -> controller_pb2.Controller.LaunchJobResponse:
+        return self._client.launch_job(request, timeout_ms=_LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+
+    def terminate_job(self, job_id: JobName) -> None:
+        self._client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()))
+
+    def federation_sync(
+        self, request: controller_pb2.Controller.FederationSyncRequest
+    ) -> controller_pb2.Controller.FederationSyncResponse:
+        return self._client.federation_sync(request)
+
+    def shutdown(self) -> None:
+        self._client.close()
+
+
 def connect_to_peer(peer: PeerConfig) -> PeerConnection:
     """Open one authenticated connection to a peer controller."""
-    return RemoteClusterClient(
-        controller_address=peer.controller_address,
-        interceptors=_peer_credentials(peer).interceptors(),
-    )
+    return _PeerRpcConnection(peer.controller_address, _peer_credentials(peer).interceptors())
 
 
 class FederationPeer:
