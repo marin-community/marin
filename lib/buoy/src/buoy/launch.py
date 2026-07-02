@@ -35,6 +35,9 @@ from buoy.serve import serve_in_job
 logger = logging.getLogger("buoy.launch")
 
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
+# The built SPA is gitignored; this glob (relative to the workspace root) tells the
+# Iris bundle to ship it to the worker (mirrors ducky's deploy).
+DASHBOARD_DIST_INCLUDE = "lib/buoy/dashboard/dist/**/*"
 
 
 def _build_dashboard() -> None:
@@ -108,7 +111,9 @@ def cli(
 
     with (
         bundle.controller.tunnel(address=controller_address) as controller_url,
-        IrisClient.remote(controller_url, workspace=Path.cwd()) as client,
+        IrisClient.remote(
+            controller_url, workspace=Path.cwd(), extra_bundle_includes=[DASHBOARD_DIST_INCLUDE]
+        ) as client,
     ):
         job = client.submit(
             entrypoint=Entrypoint.from_callable(serve_in_job, endpoint_name),
