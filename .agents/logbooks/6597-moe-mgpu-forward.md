@@ -1258,3 +1258,983 @@ description: Hopper Pallas Mosaic MGPU expert-parallel MoE forward/permute_up wo
   - Queue sparsity is not the main target-size issue at the winning settings: all queue entries are live for `EG>=16, block_tokens>=128`; a sparse host queue would mainly help small-EG configs that are already slow.
   - The remaining waste is intra-entry masked work and the blocking remote-GMEM -> local-GMEM -> SMEM staging path. The measured target copy-only tax is about `11-12 ms`, compute-only about `16 ms`, queue-only about `3.3 ms`, and full ring about `25 ms`.
   - This supports the expected conclusion: the ring implementation is a correctness/perf-isolation proof. It is not a production performance path unless we get true async refill or split the kernel into a producer/consumer design that can overlap remote staging with WGMMA.
+
+### 2026-07-01 15:15 PDT - FWD-SWQ-035 direct remote-SMEM double-buffer test
+- Hypothesis:
+  - If Mosaic can issue remote peer GMEM -> local SMEM copies asynchronously, a direct destination-pull K-loop can overlap the LHS fetch for `kk+1` with WGMMA for `kk` without staging through local GMEM.
+  - Start with the constrained case: `block_m=64`, `expert_group_size=1`, `n_group in {1,2}`, `block_k in {64,128}`, no ring semaphores, no local GMEM scratch.
+- Commit Hash: uncommitted worktree.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`.
+  - Added benchmark implementations:
+    - `direct_remote_smem_blocking`: constrained direct destination-pull variant using the existing blocking `mgpu.load(remote_ref, ..., layout=WGMMA)` LHS path.
+    - `direct_remote_smem_double_buffer`: attempts explicit async `mgpu.copy_gmem_to_smem(remote_sorted_x_ref.at[...], lhs_smem, barrier)` into two LHS SMEM buffers plus two gate/up SMEM buffer sets.
+  - Added `--block-k-values` so the compact harness can sweep `block_k=64,128` without separate commands.
+  - Added validation that the direct remote-SMEM prototype runs only with `block_m=64`, `block_k in {64,128}`, and `expert_group_size=1`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+- H100 results:
+  - Smoke `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-215740`, EP=8/T=1024/D=256/I=256/E_local=8/K=4, `block_k=64`, `n_group=1`, `EG=1`, `--check`:
+    - `direct_remote_smem_blocking`: `0.0035452221s`, compile `5.2569512750s`, `max_abs_diff=3.814697265625e-06`, `metadata_mismatches=0`.
+    - `direct_remote_smem_double_buffer`: compile/lowering failure: `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+  - Target direct remote-SMEM sweep `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-220012`, EP=8/T=32768/D=2560/I=1280/E_local=32/K=4, `EG=1`, uniform routing:
+    - `direct_remote_smem_blocking`, `block_k=64,n_group=1`: `0.068488s`, `25.08 TFLOP/s/rank`.
+    - `direct_remote_smem_blocking`, `block_k=64,n_group=2`: `0.071185s`, `24.13 TFLOP/s/rank`.
+    - `direct_remote_smem_blocking`, `block_k=128,n_group=1`: `0.059341s`, `28.95 TFLOP/s/rank`.
+    - `direct_remote_smem_blocking`, `block_k=128,n_group=2`: `0.056502s`, `30.41 TFLOP/s/rank`.
+    - `direct_remote_smem_double_buffer`, `block_k=64,n_group=1`: failed with `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+    - `direct_remote_smem_double_buffer`, `block_k=64,n_group=2`: same peer-id GMEM lowering failure.
+    - `direct_remote_smem_double_buffer`, `block_k=128,n_group=1`: same peer-id GMEM lowering failure.
+    - `direct_remote_smem_double_buffer`, `block_k=128,n_group=2`: failed earlier on SMEM pressure, `smem_bytes=294928 > max_smem_bytes=232448`.
+  - Target baseline comparison `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-220407`, same target shape, `EG=32`, `ring_block_tokens=256`, `ring_num_prefetch=4`, `ring_queue_order=eg_block_src`:
+    - `pull`, `block_k=64,n_group=1`: `0.041067s`, `41.83 TFLOP/s/rank`.
+    - `pull`, `block_k=64,n_group=2`: `0.030538s`, `56.26 TFLOP/s/rank`.
+    - `pull`, `block_k=128,n_group=1`: `0.040129s`, `42.81 TFLOP/s/rank`.
+    - `pull`, `block_k=128,n_group=2`: `0.034237s`, `50.18 TFLOP/s/rank`.
+    - `ring`, `block_k=64,n_group=1`: `0.026284s`, `65.36 TFLOP/s/rank`.
+    - `ring`, `block_k=64,n_group=2`: `0.028880s`, `59.49 TFLOP/s/rank`.
+    - `ring`, `block_k=128,n_group=1`: `0.022377s`, `76.77 TFLOP/s/rank`.
+    - `ring`, `block_k=128,n_group=2`: `0.032636s`, `52.64 TFLOP/s/rank`.
+- Interpretation:
+  - The intended async remote GMEM -> SMEM K-tile prefetch cannot be tested as a runtime overlap path in current warpgroup lowering: `mgpu.copy_gmem_to_smem` from an `mgpu.remote_ref(..., peer_id)` is rejected.
+  - Therefore `double_buffer=true` cannot improve over blocking; it does not produce an executable kernel for the relevant cases.
+  - On the executable constrained blocking path, `n_group=2` only helped at `block_k=128` (`0.059341s -> 0.056502s`) and hurt at `block_k=64` (`0.068488s -> 0.071185s`).
+  - `block_k=128` beats `block_k=64` for the constrained blocking path, but the path is much slower than the EG=32 baselines because `EG=1` explodes schedule/phase overhead.
+  - This reinforces the previous direction: without supported async peer GMEM -> SMEM copy, the next real overlap experiment needs producer/consumer warp specialization or a different supported data movement mechanism, not more direct double-buffer tuning.
+
+### 2026-07-01 15:27 PDT - FWD-SWQ-036 peer GMEM -> SMEM Lane lowering repro
+- Hypothesis:
+  - The `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.` failure may be specific to warpgroup lowering. Lane lowering may permit a manual `mgpu.copy_gmem_to_smem(remote_ref.at[...], smem, barrier)` path.
+- Code change:
+  - Added minimal repro `lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py`.
+  - The repro runs the same two-rank remote GMEM -> SMEM copy with both `mgpu.LoweringSemantics.Warpgroup` and `mgpu.LoweringSemantics.Lane`.
+- Local check:
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py`
+- H100 result:
+  - Job `/dlwh/iris-run-repro_remote_gmem_to_smem_peer_lane-20260701-222612`, cluster `cw-us-east-02a`, H100x8, succeeded in `16.27s`.
+  - `Warpgroup`: reproduces `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+  - `Lane`: succeeds; output `out[:, 0, 0] = [2 1]`, confirming rank 0 pulled rank 1's value and rank 1 pulled rank 0's value.
+- Interpretation:
+  - The peer-id GMEM restriction is not a blanket prohibition on remote GMEM -> SMEM copies. It is specific to warpgroup lowering for this repro.
+  - `compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)` is a concrete next experiment for the direct remote-SMEM/double-buffer path.
+  - The main open question is whether Lane lowering still supports the WGMMA-heavy compute path with acceptable performance, or whether this only proves the copy primitive.
+
+### 2026-07-01 15:45 PDT - FWD-SWQ-037 Lane lowering with WGMMA matmul
+- Hypothesis:
+  - Lane lowering may permit peer GMEM -> SMEM async copies, but WGMMA requires Lane-specific SMEM layout transforms. If operands are allocated as logical SMEM backed by `(TilingTransform((8, swizzle_elems)), SwizzleTransform(128))`, WGMMA should lower under `LoweringSemantics.Lane`.
+- Code change:
+  - Extended `lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py` with a two-rank WGMMA case:
+    - rank 0 pulls rank 1's all-2 LHS tile, rank 1 pulls rank 0's all-1 LHS tile;
+    - both multiply by an all-1 RHS tile; expected `out[:, 0, 0] = [128, 64]`.
+  - Updated `lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`:
+    - added `--lowering-semantics {warpgroup,lane}`;
+    - added WGMMA SMEM layout helper for Lane lowering;
+    - added `--debug-exceptions`;
+    - for `direct_remote_smem_double_buffer` under Lane only, statically unrolled the phase loop so async-copy peer ids are derived from `axis_index + static_phase` instead of a `pl.loop` block argument.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+- H100 results:
+  - Minimal repro, current script: `/dlwh/iris-run-repro_remote_gmem_to_smem_peer_lane-20260701-224410`, `cw-us-east-02a`, H100x8, succeeded in `23.55s`.
+    - `copy Warpgroup`: `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+    - `copy Lane`: success, `out[:, 0, 0] = [2 1]`.
+    - `wgmma Warpgroup`: same peer-id NotImplementedError.
+    - `wgmma Lane`: success, `out[:, 0, 0] = [128 64]`.
+  - Earlier WGMMA repro without Lane SMEM transforms: `/dlwh/iris-run-repro_remote_gmem_to_smem_peer_lane-20260701-223055`.
+    - `wgmma Lane` failed with `ValueError: When WGMMA lhs is passed in as a ref, it must be transformed by swizzling and tiling appropriately.`
+  - Compact direct double-buffer Lane smoke before static phase unroll: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-223621`.
+    - Failed row: `ValueError: Failed to recompute the async_copy peer id on the host`.
+  - Compact debug rerun: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-223808`.
+    - Full stack shows `ReplicationError: Can't recompute a value that's a block argument` inside `launch_context.py:init_tma_desc`, confirming the dynamic `pl.loop` phase variable was the peer-id blocker.
+  - Compact direct double-buffer Lane smoke after static phase unroll: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-223933`, `cw-us-east-02a`, H100x8, succeeded in `2m10.92s`.
+    - Shape: `EP=8,T=1024,D=256,I=256,E_local=8,K=4,routing=uniform`.
+    - Config: `direct_remote_smem_double_buffer`, `lowering_semantics=lane`, `block_m=64`, `block_n=128`, `block_k=64`, `expert_group_size=1`, `n_group=1`.
+    - `compile_time=82.66401271894574s`.
+    - `steady_state_time=0.011414404027163982s`.
+    - `effective_tflops_per_rank=0.09406902203958356`.
+    - `max_abs_diff=3.814697265625e-06`, `mean_abs_diff=4.2589071824750135e-08`, `metadata_mismatches=0`.
+- Interpretation:
+  - Lane lowering does work with WGMMA matmul operations, provided WGMMA operands use the expected swizzle/tile SMEM transforms.
+  - The compact async-copy path also compiles and is correct on a small shape after removing dynamic `pl.loop` peer ids.
+  - Static phase unroll is compile-heavy and not a performance path as-is: even the small smoke spends `82.7s` compiling and runs at only `0.094 TFLOP/s/rank`.
+  - For target-size work, Lane lowering looks usable for correctness experiments and for proving remote-GMEM -> WGMMA plumbing. The next performance question is how to express rotating peer phases without dynamic peer ids and without exploding compile size.
+
+### 2026-07-01 16:04 PDT - FWD-SWQ-038 static-peer conditional instead of full phase unroll
+- Hypothesis:
+  - We do not need to unroll all `expert_groups * ep_size` phases. The peer id only needs to be static/host-recomputable at the `mgpu.remote_ref` site. Keep the dynamic `pl.loop(0, total_phases)`, compute `(expert_group, peer_phase)` dynamically, then use an 8-way `pl.when(peer_phase == static_peer_phase)` branch so each remote-copy branch closes over a Python static peer phase.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`.
+  - Replaced the Lane-only full phase unroll:
+    - old: `for phase in range(total_phases): _compute_phase(phase)`
+    - new: `@pl.loop(0, total_phases)` plus static-peer `pl.when` branches inside `_compute_phase`.
+  - This leaves Warpgroup/default behavior unchanged.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+- H100 results:
+  - Small correctness smoke: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-224927`, `cw-us-east-02a`, H100x8, succeeded.
+    - Shape: `EP=8,T=1024,D=256,I=256,E_local=8,K=4,routing=uniform`.
+    - Config: `direct_remote_smem_double_buffer`, `lowering_semantics=lane`, `block_k=64`, `n_group=1`, `expert_group_size=1`.
+    - `compile_time=10.79410322709009s` vs `82.66401271894574s` for the full phase unroll.
+    - `steady_state_time=0.0032046420965343714s` vs `0.011414404027163982s` for the full phase unroll.
+    - `effective_tflops_per_rank=0.33505826599519106`.
+    - `max_abs_diff=3.814697265625e-06`, `mean_abs_diff=4.2589071824750135e-08`, `metadata_mismatches=0`.
+  - Target single row: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-225120`, same target shape as below.
+    - `block_k=64,n_group=1`: `compile_time=91.53700038208626s`, `steady_state_time=0.048244417645037174s`, `35.61006645453263 TFLOP/s/rank`.
+  - Target sweep: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-225508`, `EP=8,T=32768,D=2560,I=1280,E_local=32,K=4,routing=uniform`, H100x8, succeeded.
+    - `block_k=64,n_group=1`: `compile_time=91.53104437398724s`, `steady_state_time=0.045079481011877455s`, `38.1101751803076 TFLOP/s/rank`.
+    - `block_k=64,n_group=2`: `compile_time=142.53197380900383s`, `steady_state_time=0.048396044333154954s`, `35.49849873211743 TFLOP/s/rank`.
+    - `block_k=128,n_group=1`: `compile_time=107.96291107893921s`, `steady_state_time=0.03846787537137667s`, `44.66030166247046 TFLOP/s/rank`.
+    - `block_k=128,n_group=2`: failed at compile with `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=294928 > max_smem_bytes=232448`.
+- Interpretation:
+  - Yes, a conditional works, as long as the peer-id expression inside each branch is static with respect to `pl.loop` block arguments.
+  - A fully dynamic `remote_ref(..., peer_phase_from_loop)` still fails because async-copy TMA descriptor host init cannot recompute peer ids from block arguments.
+  - Static-peer branching avoids the full-unroll compile blowup and is much faster on the small smoke.
+  - Target compact best is now `0.038468s` at `block_k=128,n_group=1`. This is a real improvement over the previous constrained direct remote-SMEM blocking rows (`0.056502-0.071185s`) and gets close to the earlier production target forward repeat (`0.038529s`), but it is still a compact harness result, not production integration.
+
+### 2026-07-01 16:10 PDT - FWD-SWQ-039 lax.switch static-peer attempt
+- Hypothesis:
+  - Since `pl.when` lowers through `jax.lax.cond`, an 8-way `jax.lax.switch` over static-peer branches might express the same static-peer selection more cleanly and perhaps avoid eight separate conditionals.
+- Code tried:
+  - Replaced the working `pl.when(peer_phase == static_peer_phase)` chain with `lax.switch(peer_phase, branches, expert_group)`, where each branch called `_compute_expert_group_peer(expert_group, static_peer_phase)`.
+  - After that failed, tried a zero-operand switch: branches closed over dynamic `expert_group` and called `_compute_expert_group_peer(expert_group, static_peer_phase)`.
+  - Reverted back to the working `pl.when` chain after both switch attempts failed.
+- H100 results:
+  - Explicit-operand switch smoke: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-230700`, same small config as FWD-SWQ-038.
+    - Failed row: `ValueError: Failed to recompute the async_copy peer id on the host`.
+  - Zero-operand switch smoke: `/dlwh/iris-run-compact_moe_permute_up_mgpu-20260701-230854`, same small config.
+    - Failed row: `ValueError: Failed to recompute the async_copy peer id on the host`.
+- Local checks after revert:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py`
+- Interpretation:
+  - `lax.switch` is not equivalent enough for this Mosaic async-copy peer-id use case. Even when each branch closes over a Python static peer phase, the lowered switch/case still leaves the async-copy descriptor host init unable to recompute the peer id.
+  - The working form remains the explicit `pl.when` static-peer chain from FWD-SWQ-038.
+
+### 2026-07-01 18:25 PDT - FWD-SWQ-040 Phase 0 source-push primitive repro
+- Spec reference:
+  - Source-push inbox pipeline spec from `/Users/dlwh/.codex/attachments/47df6d89-bafb-4095-a361-89ad773a8abc/pasted-text-1.txt`.
+  - Required Phase 0 control: confirm `copy_smem_to_gmem(local_smem, remote_gmem)` works, and stop optimizing destination-pull async paths.
+- Code change:
+  - Added `lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py`.
+  - Two-rank repro: each rank loads a local `[64, 128]` bf16 tile into SMEM, then calls `mgpu.copy_smem_to_gmem(tile_smem, remote_y_ref.at[...])` into the peer rank's output GMEM and waits with `mgpu.wait_smem_to_gmem(0, wait_read_only=False)`.
+  - Expected output after cross-write is `out[:, 0, 0] = [2, 1]`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py`
+- H100 result:
+  - Job `/dlwh/iris-run-repro_smem_to_remote_gmem_peer-20260702-012447`, cluster `cw-us-east-02a`, H100x8, succeeded in `21.51s`.
+  - `Warpgroup`: fails with `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.` from `copy_smem_to_gmem`.
+  - `Lane`: succeeds, `out[:, 0, 0] = [2 1]`.
+- Interpretation:
+  - The source-push primitive works only under Lane lowering for this direct remote-peer GMEM write path.
+  - This corrects the spec assumption: `local SMEM -> remote GMEM` is not usable in Warpgroup lowering in the current environment.
+  - Phase 1/2 source-push inbox prototypes should use `mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)` unless a different supported remote write mechanism is found.
+
+### 2026-07-01 18:29 PDT - FWD-SWQ-041 Phase 1 minimal source-push inbox semaphore repro
+- Hypothesis:
+  - A minimal source-push inbox slot can be synchronized with a remote full semaphore under Lane lowering:
+    - source writes payload with `copy_smem_to_gmem` into peer inbox GMEM;
+    - source writes peer metadata;
+    - source signals peer full semaphore;
+    - destination waits its local full semaphore before returning/validating the inbox.
+- Code change:
+  - Added `lib/levanter/scripts/bench/repro_source_push_inbox_sem.py`.
+  - Two-rank repro with one inbox slot per rank:
+    - payload: bf16 `[64, 128]`;
+    - metadata: int32 `[src_rank, valid_rows]`;
+    - expected payload after exchange: `inbox[:, 0, 0] = [2, 1]`;
+    - expected metadata: `[[1, 64], [0, 64]]`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_sem.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_sem.py`
+- H100 result:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_sem-20260702-012758`, cluster `cw-us-east-02a`, H100x8, succeeded in `21.61s`.
+  - `Warpgroup`: fails with `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+  - `Lane`: succeeds:
+    - `inbox[:, 0, 0] = [2 1]`
+    - `meta = [[1 64], [0 64]]`
+- Interpretation:
+  - The basic source-push inbox invariant works under Lane for a single slot: remote payload write, remote metadata write, remote full semaphore, local full wait.
+  - Warpgroup remains unusable for direct peer GMEM refs in the async copy path.
+  - Next Phase 1 step should lift this from a one-slot repro into the compact routing harness: deterministic send entries, `inbox[src, slot, :, :]`, metadata per `(src, slot)`, and a send-only validator/release path before adding W13 compute.
+
+### 2026-07-01 18:49 PDT - FWD-SWQ-042 Queue-shaped source-push inbox send-only repro
+- Hypothesis:
+  - The one-slot Phase 1 repro should be lifted to a queue-shaped send-only prototype before adding W13 compute:
+    - each source rank owns deterministic send entries;
+    - source workers load `[BLOCK_M, block_k]` local GMEM tiles into SMEM;
+    - source workers push those SMEM tiles into remote destination inbox GMEM;
+    - source writes metadata and signals the destination full semaphore;
+    - destination waits the full count before host validation.
+  - This still does not test compute overlap, but it tests the payload/metadata layout, multi-entry queue shape, and sensitivity to source-send worker count.
+- Code change:
+  - Added `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Self-contained JAX/Pallas MGPU script with no Marin/Levanter imports.
+  - Output inbox layout: `inbox[dst_rank, src, slot, block_m, hidden_dim]`.
+  - Metadata per destination/source/slot: `[src, expert, dst_row_start, valid_rows]`.
+  - Current limitation: this send-only repro does not reuse slots yet, so it requires `inbox_slots >= entries_per_rank` and has no destination release path. It is a queue/inbox primitive check, not the full pipeline.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 smoke:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-014516`, cluster `cw-us-east-02a`, H100x8, succeeded in `27.04s`.
+  - Config: `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=2560`, `block_m=64`, `block_k=128`, `num_send_sms=4`, `num_sms=16`, Lane lowering.
+  - Result:
+    - `bytes_per_rank=655360`
+    - `compile_time=2.100447454955429s`
+    - `steady_state_time=0.0014150138013064861s`
+    - `send_gbps_per_rank=0.4631474261204409`
+    - `max_abs_diff=0.0`, `metadata_mismatches=0`
+- H100 send-SM sweep:
+  - Job `/dlwh/iris-run-job-20260702-014627`, cluster `cw-us-east-02a`, H100x8, succeeded in `1m19.86s`.
+  - Config common fields: `EP=8`, `entries_per_rank=64`, `inbox_slots=64`, `D=2560`, `block_m=64`, `block_k=128`, `num_sms=16`, Lane lowering, validation enabled.
+  - Rows:
+    - `num_send_sms=1`: `steady_state_time=0.010348283220082521s`, `send_gbps_per_rank=2.026569968562647`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `num_send_sms=2`: `steady_state_time=0.002098269620910287s`, `send_gbps_per_rank=9.994673606770315`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `num_send_sms=4`: `steady_state_time=0.0017919364385306836s`, `send_gbps_per_rank=11.70327225289074`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `num_send_sms=8`: `steady_state_time=0.0015863002277910709s`, `send_gbps_per_rank=13.220397773757444`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- H100 block-K sweep:
+  - Job `/dlwh/iris-run-job-20260702-014826`, cluster `cw-us-east-02a`, H100x8, succeeded in `58.75s`.
+  - Config common fields: `EP=8`, `entries_per_rank=64`, `inbox_slots=64`, `D=2560`, `block_m=64`, `num_send_sms=8`, `num_sms=16`, Lane lowering, validation enabled.
+  - Rows:
+    - `block_k=64`: `steady_state_time=0.0016892635729163885s`, `send_gbps_per_rank=12.414593161323088`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `block_k=128`: `steady_state_time=0.0017605913802981378s`, `send_gbps_per_rank=11.911633917262899`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `block_k=256`: `steady_state_time=0.0015535728074610234s`, `send_gbps_per_rank=13.498897444190842`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- Interpretation:
+  - The queue-shaped source-push inbox primitive is correct under Lane lowering for EP=8 and multi-entry sends.
+  - Send-only performance scales strongly from one to two source workers, then tapers. The best row so far is `num_send_sms=8, block_k=256`: `0.0015536s` for `20.97 MB/rank`, or `13.50 GB/s/rank`.
+  - This is not yet a real pipeline result. It still blocks on `wait_smem_to_gmem` for every K slice and does not include destination local GMEM -> SMEM or W13 compute.
+  - The next meaningful step is to add slot reuse/release and a destination consumer path. Without that, high `inbox_slots` is only a correctness/throughput probe, not the intended bounded-inbox protocol.
+
+### 2026-07-01 19:03 PDT - FWD-SWQ-043 Bounded source-push inbox slot reuse/release
+- Hypothesis:
+  - Pallas/Mosaic shaped semaphores should be enough for a bounded source-push inbox protocol:
+    - source waits local `empty_sem[slot]`;
+    - source writes remote destination `inbox[src, slot, :, :]` and metadata;
+    - source signals remote destination `full_sem[src, slot]`;
+    - destination waits `full_sem[src, slot]`, records the consumed entry, and signals remote source `empty_sem[slot]`.
+  - This should allow `inbox_slots < entries_per_rank`, so the repro tests slot reuse instead of relying on one slot per queue entry.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Replaced the previous scalar full-count wait with shaped semaphores:
+    - `empty_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((inbox_slots,)))`
+    - `full_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((ep_size, inbox_slots)))`
+  - Added destination receiver program at `sm == num_send_sms`, requiring `num_sms > num_send_sms`.
+  - Added `seen_payload[src, entry]` and `seen_meta[src, entry, :]` outputs so host validation checks every consumed generation, not only the final slot contents.
+  - Final correct sender schedule is round-major, slot-minor:
+    - for each generation/round;
+    - for each slot owned by this send worker;
+    - send `entry = slot + round * inbox_slots`.
+- Bugs found while testing:
+  - First bounded version let multiple send workers wait on the same slot. A later generation could wake before an earlier generation, producing incorrect rows:
+    - Killed job `/dlwh/iris-run-job-20260702-015335`.
+    - Bad first row before kill: `entries_per_rank=64`, `inbox_slots=2`, `num_send_sms=4`, `steady_state_time=0.002219265792518854s`, but `max_abs_diff=22.0`, `metadata_mismatches=918`.
+  - FIFO-per-slot sender then sent all generations for one owned slot before moving to the next owned slot. That can deadlock: sender blocks on a later generation of slot 0 while receiver waits for the first generation of slot 4.
+    - Killed job `/dlwh/iris-run-job-20260702-015654` after rows through `slots=4`; the next `slots=8` row hung.
+  - The round-major slot-owner schedule fixed both issues.
+- H100 smoke after slot reuse:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-015242`, cluster `cw-us-east-02a`, H100x8, succeeded in `26.59s`.
+  - Config: `entries_per_rank=4`, `inbox_slots=2`, `block_k=128`, `num_send_sms=2`, `num_sms=16`, Lane lowering.
+  - Result: `steady_state_time=0.00783512918278575s`, `send_gbps_per_rank=0.1672876055291763`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- H100 smoke after round-major fix:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-015941`, cluster `cw-us-east-02a`, H100x8, succeeded in `26.27s`.
+  - Config: `entries_per_rank=64`, `inbox_slots=8`, `block_k=128`, `num_send_sms=4`, `num_sms=16`, Lane lowering.
+  - Result: `steady_state_time=0.00194842298515141s`, `send_gbps_per_rank=10.76333022132272`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- Final H100 bounded sweep:
+  - Job `/dlwh/iris-run-job-20260702-020050`, cluster `cw-us-east-02a`, H100x8, succeeded in `1m51.4s`.
+  - Config common fields: `EP=8`, `entries_per_rank=64`, `D=2560`, `block_m=64`, `block_k=128`, `num_sms=16`, Lane lowering, validation enabled.
+  - Rows:
+    - `inbox_slots=2`, `num_send_sms=4`: `steady_state_time=0.0054614458233118056s`, `send_gbps_per_rank=3.8399209071130045`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `inbox_slots=2`, `num_send_sms=8`: `steady_state_time=0.0021684879902750254s`, `send_gbps_per_rank=9.671033500785136`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `inbox_slots=4`, `num_send_sms=4`: `steady_state_time=0.0018162766005843877s`, `send_gbps_per_rank=11.546435159299199`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `inbox_slots=4`, `num_send_sms=8`: `steady_state_time=0.0018009061925113202s`, `send_gbps_per_rank=11.644981891453059`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `inbox_slots=8`, `num_send_sms=4`: `steady_state_time=0.0018964590039104224s`, `send_gbps_per_rank=11.058251170606676`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+    - `inbox_slots=8`, `num_send_sms=8`: `steady_state_time=0.001735408790409565s`, `send_gbps_per_rank=12.084484137625358`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- Interpretation:
+  - Bounded source-push slot reuse/release is now correct in the compact repro.
+  - Correctness requires a real per-slot FIFO discipline. Per-slot semaphores alone prevent overwrites, but they do not impose generation order if multiple workers contend for the same slot.
+  - Best bounded row so far is `inbox_slots=8`, `num_send_sms=8`: `0.0017354s`, `12.08 GB/s/rank`.
+  - No-reuse send-only best from FWD-SWQ-042 was `0.0015536s`, `13.50 GB/s/rank` with `block_k=256`; bounded reuse at `block_k=128` is close but not faster. This is expected because bounded reuse adds destination receiver semaphore waits and release signals.
+  - This still does not prove communication/compute overlap. The next step is to replace the destination receiver's `seen_*` recording with local inbox GMEM -> SMEM -> W13 for one M-owner compute path.
+
+### 2026-07-01 19:25 PDT - FWD-SWQ-044 Source-push inbox W13 M-owner bring-up
+- Hypothesis:
+  - The source-push inbox protocol can feed W13 directly from the destination's local inbox GMEM:
+    - source SMs wait local `empty_sem[slot]`;
+    - source SMs push local X tiles through SMEM into destination `inbox[src, slot, :, :]`;
+    - destination compute SMs wait `full_sem[src, slot]`;
+    - destination loads local inbox GMEM plus local expert weights into WGMMA SMEM and computes `hidden = silu(gate) * up`;
+    - destination releases the slot back to the source.
+  - A single M-owner receiver should be correct but compute-serialized; slot-owned receivers should expose whether multiple destination SMs can consume independent inbox slots safely.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Added `implementation=m_owner` and `implementation=m_owner_slots`.
+  - Added local expert weights, WGMMA SMEM transforms for Lane lowering, W13 gate/up accumulation, SiLU activation, hidden output, and host reference validation.
+  - `m_owner` uses one destination receiver at `sm == num_send_sms`.
+  - `m_owner_slots` initializes empty slots with one worker, then lets all `sm >= num_send_sms` consume slots by `slot % (num_sms - num_send_sms)` while preserving per-slot FIFO.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 correctness smokes:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-020906`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=m_owner`, `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=256`, `I=256`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, Lane lowering.
+    - `steady_state_time=0.0018399891s`.
+    - `w13_tflops_per_rank=0.0182362`.
+    - `hidden_max_abs_diff=0.0069537`, `hidden_mean_abs_diff=0.0011011`, `metadata_mismatches=0`.
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-021001`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=m_owner`, `entries_per_rank=8`, `inbox_slots=4`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, Lane lowering.
+    - `steady_state_time=0.0043452730s`.
+    - `w13_tflops_per_rank=1.5444`.
+    - `hidden_max_abs_diff=0.0143805`, `hidden_mean_abs_diff=0.0019476`, `metadata_mismatches=0`.
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-021700`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=m_owner_slots`, `entries_per_rank=4`, `inbox_slots=4`, `D=256`, `I=256`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, Lane lowering.
+    - `steady_state_time=0.0018883741s`.
+    - `w13_tflops_per_rank=0.0355379`.
+    - `hidden_max_abs_diff=0.0126772`, `hidden_mean_abs_diff=0.00218024`, `metadata_mismatches=0`.
+- H100 timing sweeps:
+  - Single M-owner slot-depth sweep: `/dlwh/iris-run-job-20260702-021130`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Common config: `implementation=m_owner`, `entries_per_rank=16`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation disabled.
+    - `inbox_slots=1`: `steady_state_time=0.0075915533s`, `1.76799 TFLOP/s/rank`.
+    - `inbox_slots=2`: `steady_state_time=0.0072322971s`, `1.85581 TFLOP/s/rank`.
+    - `inbox_slots=4`: `steady_state_time=0.0072396067s`, `1.85394 TFLOP/s/rank`.
+    - `inbox_slots=8`: `steady_state_time=0.0072902044s`, `1.84107 TFLOP/s/rank`.
+  - Slot-parallel M-owner sweep: `/dlwh/iris-run-job-20260702-021757`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Common config: `implementation=m_owner_slots`, `entries_per_rank=16`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation disabled.
+    - `inbox_slots=1`: `steady_state_time=0.0076613196s`, `1.75189 TFLOP/s/rank`.
+    - `inbox_slots=2`: `steady_state_time=0.0053904176s`, `2.48993 TFLOP/s/rank`.
+    - `inbox_slots=4`: `steady_state_time=0.0060648710s`, `2.21304 TFLOP/s/rank`.
+    - `inbox_slots=8`: `steady_state_time=0.0022848203s`, `5.87432 TFLOP/s/rank`.
+- Interpretation:
+  - The source-push inbox plus destination W13 path is correct under Lane lowering.
+  - The single M-owner receiver is compute-serialized: increasing slots from 1 to 8 is flat around `0.0072s`.
+  - Slot-owned destination compute improves substantially when enough slots are available (`0.00228s` at 8 slots), so the semaphore protocol can safely feed several independent consumers.
+  - This is still a correctness/protocol primitive, not a production performance path. It only sends to the next rank and does not yet implement all-peer routing or M x N sharded W13. The current bottleneck is software-structure and tensor-core occupancy from the M-owner compute assignment, not raw remote-copy bandwidth.
+  - Next source-push experiment should split compute across N tiles, or otherwise give multiple compute SMs work for the same M block, before spending more time on send-SM or slot-depth tuning.
+
+### 2026-07-01 19:33 PDT - FWD-SWQ-045 Source-push inbox M x N slot-sharded W13
+- Hypothesis:
+  - The M-owner variants underuse tensor cores because one destination worker computes all N tiles for each M block.
+  - Sharding each full inbox slot across N-tile workers should improve occupancy while preserving the bounded source-push protocol:
+    - source pushes one M block into a destination slot;
+    - source signals the full slot once;
+    - each N-tile worker observes the full generation, computes one W13 N tile, and signals done;
+    - one release worker waits for all N tiles before returning the slot to the source.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Added `implementation=m_n_slots`.
+  - Refactored W13 tile compute into `_compute_hidden_n_tile`.
+  - Initial M x N semaphore design used `full_sem` with `inc=n_tiles` and one decrementing wait per N tile. It was correct for a small `n_tiles=2` smoke but hung when reusing multiple target-size slots.
+  - Replaced that with monotonic per-slot counters:
+    - source signals `full_sem[src, slot]` once per generation;
+    - N-tile workers wait with `decrement=False` on `value=round_i + 1`;
+    - each N-tile worker signals `done_sem[slot]`;
+    - release worker waits with `decrement=False` on `value=(round_i + 1) * n_tiles` before signaling source `empty_sem[slot]`.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 correctness/timing:
+  - Small checked smoke before monotonic-counter fix: `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-022353`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=m_n_slots`, `entries_per_rank=4`, `inbox_slots=4`, `D=256`, `I=256`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `steady_state_time=0.0015948184s`.
+    - `w13_tflops_per_rank=0.0420793`.
+    - `hidden_max_abs_diff=0.0126772`, `hidden_mean_abs_diff=0.00218024`, `metadata_mismatches=0`.
+  - First target sweep before monotonic-counter fix: `/dlwh/iris-run-job-20260702-022444`, cluster `cw-us-east-02a`, H100x8, killed after slots=2 hung.
+    - `inbox_slots=1`: `steady_state_time=0.0025575220s`, `5.24796 TFLOP/s/rank`.
+    - `inbox_slots=2`: no row after about 1m24s total job runtime, killed to avoid burning the reservation.
+  - Checked target-dim slots=2 smoke after monotonic-counter fix: `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-022744`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=m_n_slots`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `steady_state_time=0.0016075835s`.
+    - `w13_tflops_per_rank=2.08726`.
+    - `hidden_max_abs_diff=0.0143805`, `hidden_mean_abs_diff=0.00180969`, `metadata_mismatches=0`.
+  - Fixed target-size slot sweep: `/dlwh/iris-run-job-20260702-022847`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Common config: `implementation=m_n_slots`, `entries_per_rank=16`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation disabled.
+    - `inbox_slots=1`: `steady_state_time=0.0025331167s`, `5.29852 TFLOP/s/rank`.
+    - `inbox_slots=2`: `steady_state_time=0.0021586060s`, `6.21780 TFLOP/s/rank`.
+    - `inbox_slots=4`: `steady_state_time=0.0020214153s`, `6.63979 TFLOP/s/rank`.
+    - `inbox_slots=8`: `steady_state_time=0.0020124843s`, `6.66926 TFLOP/s/rank`.
+- Interpretation:
+  - M x N slot-sharding is correct with monotonic full/done counters and avoids the earlier multi-slot hang.
+  - It improves the best compact source-push primitive row from `m_owner_slots` `0.0022848203s` / `5.87432 TFLOP/s/rank` to `m_n_slots` `0.0020124843s` / `6.66926 TFLOP/s/rank`, about `11.9%` faster in this primitive.
+  - The improvement is real but still not enough to call this a production direction. Absolute W13 occupancy remains very low because this compact path only models next-rank traffic, has heavy semaphore/control overhead, and still reloads the same M tile from local inbox for every N tile.
+  - The next useful experiments are:
+    - tune `num_send_sms` vs compute workers for `m_n_slots`;
+    - group multiple N tiles per worker (`n_group`) once shared memory permits, to reduce repeated inbox loads and semaphore fanout;
+    - extend from next-rank-only to all-peer routing only if the primitive closes more of the occupancy gap.
+
+### 2026-07-01 19:36 PDT - FWD-SWQ-046 Source-push M x N send/compute SM split sweep
+- Hypothesis:
+  - `m_n_slots` is compute/control-heavy after N-tile sharding. Reducing send workers may help by leaving more compute workers, but too few send workers may underfeed the inbox.
+  - Sweep `num_send_sms` at the two best slot depths from FWD-SWQ-045.
+- H100 result:
+  - Job `/dlwh/iris-run-job-20260702-023131`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `entries_per_rank=16`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_sms=16`, validation disabled.
+  - `inbox_slots=4`:
+    - `num_send_sms=1`: `steady_state_time=0.0022352966s`, `6.00447 TFLOP/s/rank`.
+    - `num_send_sms=2`: `steady_state_time=0.0021871936s`, `6.13653 TFLOP/s/rank`.
+    - `num_send_sms=4`: `steady_state_time=0.0021312877s`, `6.29749 TFLOP/s/rank`.
+    - `num_send_sms=8`: `steady_state_time=0.0022724379s`, `5.90633 TFLOP/s/rank`.
+  - `inbox_slots=8`:
+    - `num_send_sms=1`: `steady_state_time=0.0019796023s`, `6.78003 TFLOP/s/rank`.
+    - `num_send_sms=2`: `steady_state_time=0.0021450970s`, `6.25695 TFLOP/s/rank`.
+    - `num_send_sms=4`: `steady_state_time=0.0020981620s`, `6.39692 TFLOP/s/rank`.
+    - `num_send_sms=8`: `steady_state_time=0.0024364567s`, `5.50873 TFLOP/s/rank`.
+- Interpretation:
+  - Best compact source-push primitive row is now `inbox_slots=8,num_send_sms=1`: `0.0019796023s`, `6.78003 TFLOP/s/rank`.
+  - That is only `1.6%` faster than the previous best `inbox_slots=8,num_send_sms=4` row from FWD-SWQ-045 (`0.0020124843s`) and about `13.4%` faster than `m_owner_slots` best (`0.0022848203s`).
+  - The optimal send/compute split depends on buffering: with `inbox_slots=4`, one send worker underfeeds and four send workers win; with `inbox_slots=8`, one send worker wins because the extra compute workers matter more.
+  - This remains software-structure-bound. The compact primitive is still far below a healthy W13 roofline, and this sweep does not justify integrating the source-push path yet.
+  - Next highest-signal patch is N grouping (`n_group > 1`) so each worker reuses one inbox M tile for multiple adjacent N tiles, reducing semaphore fanout and repeated local inbox loads. The current script still rejects `n_group != 1`.
+
+### 2026-07-01 19:41 PDT - FWD-SWQ-047 Source-push M x N `n_group=2` negative result
+- Hypothesis:
+  - In `m_n_slots`, each N tile currently reloads the same inbox M block from local GMEM. Grouping two adjacent N tiles per worker should reuse that LHS SMEM tile inside the K loop and halve the full/done semaphore fanout.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Added `n_group=2` support for `implementation=m_n_slots`.
+  - The grouped path computes two adjacent N tiles with clear accumulator names:
+    - `gate_n0_acc`, `up_n0_acc`;
+    - `gate_n1_acc`, `up_n1_acc`.
+  - The grouped path uses one LHS inbox SMEM load and four RHS SMEM loads per K tile, then issues four WGMMA operations before storing the two hidden N tiles.
+  - Validation still rejects `n_group > 1` for the other inbox implementations.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 correctness:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-023651`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Config: `implementation=m_n_slots`, `n_group=2`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_send_sms=1`, `num_sms=16`, validation enabled.
+  - `steady_state_time=0.0017425114s`.
+  - `w13_tflops_per_rank=1.92564`.
+  - `hidden_max_abs_diff=0.0143805`, `hidden_mean_abs_diff=0.00180969`, `metadata_mismatches=0`.
+- H100 timing:
+  - Job `/dlwh/iris-run-job-20260702-023749`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `n_group=2`, `entries_per_rank=16`, `D=2560`, `I=1280`, `block_k=128`, `block_n=128`, `num_sms=16`, validation disabled.
+  - `inbox_slots=4,num_send_sms=1`: `steady_state_time=0.0023088150s`, `5.81327 TFLOP/s/rank`.
+  - `inbox_slots=4,num_send_sms=4`: `steady_state_time=0.0072954780s`, `1.83974 TFLOP/s/rank`.
+  - `inbox_slots=8,num_send_sms=1`: `steady_state_time=0.0023554047s`, `5.69829 TFLOP/s/rank`.
+  - `inbox_slots=8,num_send_sms=4`: `steady_state_time=0.0055771460s`, `2.40657 TFLOP/s/rank`.
+- Interpretation:
+  - `n_group=2` is correct, but it is slower than `n_group=1` for every tested comparable row.
+  - Best `n_group=2` row is `0.0023088150s`, worse than the current `n_group=1` best `0.0019796023s`.
+  - The likely cause is extra accumulator/register/SMEM pressure and longer per-worker critical sections. The saved LHS load and reduced semaphore fanout do not compensate.
+  - Do not pursue larger `n_group` in this source-push primitive without a different compute layout. At `n_group=4`, RHS SMEM would also exceed the comfortable shared-memory budget for this shape.
+  - Current best remains `m_n_slots`, `n_group=1`, `inbox_slots=8`, `num_send_sms=1`: `0.0019796023s`, `6.78003 TFLOP/s/rank`.
+
+### 2026-07-01 20:03 PDT - FWD-SWQ-048 Source-push `lax.switch` peer-loop smoke
+- Hypothesis:
+  - `pl.when` lowers through `jax.lax.cond`, so the source-push peer loop might avoid a fully duplicated Python peer loop by using `jax.lax.switch` over a dynamic peer ordinal, with each branch closing over a static peer offset.
+  - This is different from the earlier destination-pull `lax.switch` failure in FWD-SWQ-039 because the remote operation here is `copy_smem_to_gmem(local_smem, remote_gmem)` under lane lowering.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py`.
+    - Added `--selection={direct,pl_when,switch,all}`.
+    - The `pl_when` and `switch` modes run a two-phase loop: local write, then remote write.
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `PushInboxConfig.peer_loop`.
+    - Added CLI `--peer-loop={static,switch}`.
+    - `peer_loop=switch` uses a dynamic `pl.loop` over peer ordinals and `lax.switch` branches that close over static peer offsets for send, initial empty-slot signaling, and receive/release loops.
+- Local checks:
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py`
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 primitive result:
+  - Job `/dlwh/iris-run-repro_smem_to_remote_gmem_peer-20260702-025104`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - `direct Warpgroup`: expected `NotImplementedError: GMEM refs with peer ids are not supported in warpgroup lowering.`
+  - `direct Lane`: success, `out[:, 0, 0] = [2 1]`.
+  - `pl_when Warpgroup`: expected same peer-id warpgroup failure.
+  - `pl_when Lane`: success, `out[:, 0, 0] = [2 1]`.
+  - `switch Warpgroup`: expected same peer-id warpgroup failure.
+  - `switch Lane`: success, `out[:, 0, 0] = [2 1]`.
+- H100 inbox small all-to-all result:
+  - Job `/dlwh/iris-run-job-20260702-025332`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=256`, `I=256`, `block_m=64`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+  - `peer_loop=static`: `compile_time=6.95185s`, `steady_state_time=0.00164852s`, `0.162834 TFLOP/s/rank`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.00695372`.
+  - `peer_loop=switch`: `compile_time=7.31261s`, `steady_state_time=0.00163688s`, `0.163992 TFLOP/s/rank`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.00695372`.
+- H100 target-dim follow-up:
+  - Job `/dlwh/iris-run-job-20260702-025454`, cluster `cw-us-east-02a`, H100x8, failed by command timeout.
+  - Config: same source-push `m_n_slots` all-to-all comparison, `entries_per_rank=4`, `D=2560`, `I=1280`, `block_k=128`, validation enabled.
+  - Result: no JSON rows emitted before timeout.
+  - Iris summary: task exit code `124`, duration `1208443 ms`, state `failed`.
+- Interpretation:
+  - `lax.switch` is viable for the source-push lane-lowering path.
+  - It does not bypass the warpgroup peer-id limitation; all warpgroup variants still fail at the expected remote-GMEM ref lowering point.
+  - On the small inbox all-to-all smoke, `switch` is correctness-neutral and runtime-neutral; compile time was slightly worse (`7.31s` vs `6.95s`).
+  - Current bottleneck judgment is still software-structure-bound, not compute-bound.
+  - The target-dim all-to-all `m_n_slots` graph is now too large/slow to compile with the current structure, even at `entries_per_rank=4`. The switch form is useful as a control-flow option for source-push lane lowering, but it does not solve the large-graph problem by itself.
+
+### 2026-07-01 20:55 PDT - FWD-SWQ-049 Grid peer phase plus `lax.switch`
+- Question:
+  - Can we avoid fully unrolling the all-peer source-push loop while still giving Mosaic static peer-id branches?
+  - `pl.when` lowers through `jax.lax.cond`; test `jax.lax.switch` with the peer ordinal supplied by a grid dimension instead of a `pl.loop` carried value.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `peer_loop=dynamic`, `peer_loop=grid`, and `peer_loop=grid_switch`.
+    - `grid` maps `peer_ordinal = pl.program_id(0)` and `sm = pl.program_id(1)`, but still uses dynamic peer arithmetic.
+    - `grid_switch` maps peer ordinal the same way, then calls `lax.switch(peer_ordinal, static_peer_branches)` for send, empty-slot init, and recv/release.
+    - `send_only` now uses a dummy `(ep_size, 1, 1, 1)` W input and hidden output shape `(1, 1)`, so send-only timing no longer allocates unused multi-GB W13 weights.
+  - Added/updated peer-id repros:
+    - `lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py` now has `--ep-size` and dynamic nested-loop selections.
+    - `lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer_grid.py` tests source-push peer phase as a grid dimension.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer_grid.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer_grid.py`
+- Negative H100 results:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-033657`: small all-to-all `send_only`, `peer_loop=dynamic`, failed with `ValueError: Failed to recompute the async_copy peer id on the host`; root was a loop-carried block argument.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-034619`: first `peer_loop=grid` layout failed with peer-id recompute on `gpu.block_id x`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-034954`: after swapping grid order so peer phase is `program_id(0)`, `peer_loop=grid` still failed with peer-id recompute on `gpu.block_id y`.
+  - Target-D `send_only` `static`/`switch` attempts before the dummy-W/grid-switch fixes produced no row before being killed or timed out:
+    - `/dlwh/iris-run-job-20260702-031957`, killed after `227052 ms`.
+    - `/dlwh/iris-run-job-20260702-032452`, killed after `212320 ms`.
+    - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-032844`, killed after `339106 ms`.
+- Positive H100 repro results:
+  - `/dlwh/iris-run-repro_smem_to_remote_gmem_peer-20260702-033437`: minimal dynamic-loop EP=2 source-push lane repro succeeded; warpgroup failed with expected peer-id lowering limitation.
+  - `/dlwh/iris-run-job-20260702-034124`: minimal dynamic/nested EP=8 source-push lane repros succeeded, all producing `out[:, 0, 0] = [8 1 2 3 4 5 6 7]`; warpgroup failed as expected.
+  - `/dlwh/iris-run-repro_smem_to_remote_gmem_peer_grid-20260702-034405`: minimal grid peer-phase lane repro succeeded for EP=8; warpgroup failed as expected.
+- Positive H100 inbox results:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-035138`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: `implementation=send_only`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=256`, `I=256`, `block_m=64`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `compile_time=2.6732348402s`, `steady_state_time=0.0015680999s`, `bytes_per_rank=524288`, `send_gbps_per_rank=0.334346`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-035238`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: target-D `send_only`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `compile_time=3.0009198510s`, `steady_state_time=0.0015431187s`, `bytes_per_rank=10485760`, `send_gbps_per_rank=6.79517`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-035336`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: small WGMMA `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=256`, `I=256`, `block_m=64`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `compile_time=7.0569546900s`, `steady_state_time=0.0015161049s`, `w13_tflops_per_rank=0.177056`, `hidden_max_abs_diff=0.00695372`, `hidden_mean_abs_diff=0.00106579`, `metadata_mismatches=0`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-035549`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: target-D WGMMA `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+    - `compile_time=5.6102150199s`, `steady_state_time=0.0015892386s`, `w13_tflops_per_rank=16.8908`, `send_gbps_per_rank=6.59798`, `hidden_max_abs_diff=0.0143805`, `hidden_mean_abs_diff=0.00192177`, `metadata_mismatches=0`.
+- Tuning follow-up:
+  - `/dlwh/iris-run-job-20260702-035727`, cluster `cw-us-east-02a`, H100x8, killed after one useful row because the next config produced no row.
+    - Sweep intent: `inbox_slots={1,2,4,8}` x `num_send_sms={1,2,4,8}`, target-D all-to-all `m_n_slots grid_switch`, validation disabled.
+    - Completed row: `inbox_slots=1,num_send_sms=1`: `compile_time=5.4421144261s`, `steady_state_time=0.0017394261s`, `w13_tflops_per_rank=15.4324`.
+    - The next row, `inbox_slots=1,num_send_sms=2`, emitted no row before manual kill at about `92s` job duration.
+  - `/dlwh/iris-run-job-20260702-035921`, cluster `cw-us-east-02a`, H100x8, killed after the first focused config emitted no row.
+    - Focused intent: `(inbox_slots,num_send_sms)=(2,1),(2,4),(4,1),(4,4),(8,1)`, target-D all-to-all `m_n_slots grid_switch`, validation disabled.
+    - The first row, `inbox_slots=2,num_send_sms=1`, emitted no row before manual kill at about `50s` job duration.
+  - `/dlwh/iris-run-job-20260702-040031`, cluster `cw-us-east-02a`, was submitted for a narrower `num_send_sms=4` slot sweep but remained pending, so it was killed before starting.
+- Interpretation:
+  - `lax.switch` is useful here when the peer ordinal comes from a grid dimension and each branch closes over a static peer offset. This avoids both the loop-carried peer-id recompute failure and the target-D no-row behavior seen with the previous static/switch structures.
+  - Plain dynamic peer arithmetic is not enough, even with peer phase as `program_id(0)`: the combined send/recv kernel still makes async-copy host peer-id recompute see an unsupported block id.
+  - Lane lowering is compatible with the source-push WGMMA path in `grid_switch`; the small `m_n_slots` checked run validates matmul correctness.
+  - This is still a source-push protocol/harness result, not yet a production permute_up speedup. The current bottleneck remains software-structure-bound: the protocol can compile and run, but the WGMMA primitive is far below useful tensor-core occupancy, and send-only bandwidth at this small message count is not competitive with the production tiled path.
+
+### 2026-07-01 21:15 PDT - FWD-SWQ-050 Native grid-switch sweep and compile/runtime split
+- Question:
+  - The first grid-switch tuning attempts suggested low `num_send_sms` might hang. Determine whether that was a real semaphore/progress issue or an artifact of the shell-loop harness.
+  - Make sweeps native to the Python repro so row generation and progress events are reliable.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--separate-compile` and `--progress-events`.
+    - Rows now include `lower_compile_time` and `first_run_time` when `--separate-compile` is used.
+    - Progress events now cover `validate_start`, `mesh_start`, `make_inputs_start`, `device_put_start`, `jit_start`, and timing phases.
+    - Added native sweep flags `--sweep-inbox-slots` and `--sweep-num-send-sms`, avoiding fragile shell loops.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 compile/runtime diagnostics:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-040634`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: target-D all-to-all `m_n_slots grid_switch`, `inbox_slots=2`, `num_send_sms=4`, validation disabled, `--separate-compile`, `warmup=0`, `steps=1`.
+    - `lower_compile_time=3.8032942459s`, `first_run_time=1.6628572522s`, `compile_time=5.4661514980s`, `steady_state_time=0.0025271629s`.
+    - Setup events showed about `16s` before `lower_start`, dominated by mesh/device discovery, synthetic target-D W construction, and `device_put`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-040733`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: same, `inbox_slots=2`, `num_send_sms=1`.
+    - `lower_compile_time=3.9671898130s`, `first_run_time=1.5979714841s`, `compile_time=5.5651612971s`, `steady_state_time=0.0023255940s`.
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-040833`, cluster `cw-us-east-02a`, H100x8, succeeded.
+    - Config: same, `inbox_slots=1`, `num_send_sms=2`.
+    - `lower_compile_time=3.8154163749s`, `first_run_time=1.6651320548s`, `compile_time=5.4805484298s`, `steady_state_time=0.0023940830s`.
+- H100 native target-D sweep:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-041149`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=4`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 1 | 1 | `0.0019036843s` | `14.1008` | `5.5081` |
+  | 1 | 2 | `0.0017392787s` | `15.4337` | `6.0288` |
+  | 1 | 4 | `0.0017727807s` | `15.1421` | `5.9149` |
+  | 1 | 8 | `0.0018025277s` | `14.8922` | `5.8173` |
+  | 2 | 1 | `0.0017870436s` | `15.0212` | `5.8677` |
+  | 2 | 2 | `0.0016089707s` | `16.6837` | `6.5171` |
+  | 2 | 4 | `0.0016030597s` | `16.7452` | `6.5411` |
+  | 2 | 8 | `0.0017332930s` | `15.4870` | `6.0496` |
+  | 4 | 1 | `0.0016862490s` | `15.9191` | `6.2184` |
+  | 4 | 2 | `0.0017943053s` | `14.9604` | `5.8439` |
+  | 4 | 4 | `0.0016837710s` | `15.9425` | `6.2275` |
+  | 4 | 8 | `0.0018952853s` | `14.1633` | `5.5325` |
+- Interpretation:
+  - Low `num_send_sms` is not a deadlock in the grid-switch path. The earlier no-row observations came from weak shell-loop orchestration and premature kills, not a proved protocol progress failure.
+  - There is a real overlap/buffering signal: `inbox_slots=2` improves over `inbox_slots=1` at comparable send-worker counts; best row is `inbox_slots=2,num_send_sms=4` at `0.0016030597s`, close to the prior checked `0.0015892386s` row.
+  - More buffering is not monotonically better: `inbox_slots=4` is comparable but does not beat the best `inbox_slots=2` row.
+  - Too many send workers hurts: `num_send_sms=8` regresses at every tested slot count.
+  - Current bottleneck remains software-structure-bound / low tensor-core occupancy. The source-push grid-switch prototype answers the spec's overlap question positively in a narrow sense, but at only about `16.7 TFLOP/s/rank` it is still far from a production performance path.
+
+### 2026-07-01 21:18 PDT - FWD-SWQ-051 Grid-switch `block_k=64` targeted sweep
+- Question:
+  - The source-push spec calls out `block_k=64` and `block_k=128` as initial candidates.
+  - Test whether smaller send/compute K tiles improve the best `grid_switch` target-D region.
+- H100 result:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-041553`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=4`, `D=2560`, `I=1280`, `block_m=64`, `block_k=64`, `block_n=128`, `n_group=1`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 2 | 2 | `0.0017569417s` | `15.2786` | `5.9682` |
+  | 2 | 4 | `0.0018279493s` | `14.6851` | `5.7364` |
+  | 4 | 2 | `0.0017310370s` | `15.5072` | `6.0575` |
+  | 4 | 4 | `0.0017507356s` | `15.3327` | `5.9893` |
+- Interpretation:
+  - `block_k=64` is slower than `block_k=128` in the best target-D grid-switch region.
+  - Best tested `block_k=64` row is `inbox_slots=4,num_send_sms=2`: `0.0017310370s`, worse than `block_k=128` best `inbox_slots=2,num_send_sms=4`: `0.0016030597s`.
+  - Keep `block_k=128` for this prototype unless a later local K-pipeline rewrite changes the balance.
+
+### 2026-07-01 21:30 PDT - FWD-SWQ-052 `lax.switch` peer dispatch plus local K `emit_pipeline` test
+- Question:
+  - User suggested replacing a hand-written `pl.when`/`cond` peer selection ladder with `jax.lax.switch`.
+  - Test whether the source-push `grid_switch` peer dispatch can remain the static-peer mechanism while swapping the compute-side manual K loop for `mgpu.emit_pipeline`.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `COMPUTE_PIPELINE_MODES = ("manual", "emit")`.
+    - Added `PushInboxConfig.compute_pipeline` and `PushInboxConfig.max_concurrent_steps`.
+    - Added CLI flags `--compute-pipeline`, `--max-concurrent-steps`, and `--sweep-max-concurrent-steps`.
+    - Factored lane WGMMA shared-memory transforms through `_wgmma_transforms(...)`, reused by both manual SMEM refs and `mgpu.BlockSpec(..., transforms=...)`.
+    - `compute_pipeline=emit` uses `mgpu.emit_pipeline` across K tiles for the `n_group=1` W13 tile path, while preserving `grid_switch` static peer dispatch.
+    - `compute_pipeline=emit` currently rejects `n_group != 1`; the grouped two-N-tile path still uses the manual loop.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 correctness smoke:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-042319`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=emit`, `max_concurrent_steps=4`, `EP=8`, `entries_per_rank=2`, `inbox_slots=2`, `D=256`, `I=256`, `block_m=64`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+  - `lower_compile_time=5.8907892320s`, `first_run_time=1.8379488070s`, `compile_time=7.7287380390s`.
+  - `steady_state_time=0.0017448770s`, `w13_tflops_per_rank=0.153842`, `send_gbps_per_rank=0.300473`.
+  - `hidden_max_abs_diff=0.0069537163`, `hidden_mean_abs_diff=0.0010657860`, `metadata_mismatches=0`.
+- H100 target-D `block_k=128` emit sweep:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-042459`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=emit`, `EP=8`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `num_send_sms=4`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | max_concurrent_steps | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | outcome |
+  |---:|---:|---:|---:|---|
+  | 1 | n/a | n/a | n/a | invalid: `max_concurrent_steps` must exceed `delay_release=1` |
+  | 2 | `0.0019022586s` | `14.1114` | `5.5123` | runs, slower than manual |
+  | 4 | n/a | n/a | n/a | SMEM overflow: `327712 > 232448` bytes |
+  | 6 | n/a | n/a | n/a | SMEM overflow: `491568 > 232448` bytes |
+
+- H100 target-D `block_k=64` emit sweep:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-042714`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: same as above except `block_k=64`.
+
+  | max_concurrent_steps | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|
+  | 2 | `0.0017692650s` | `15.1721` | `5.9266` |
+  | 3 | `0.0017556247s` | `15.2900` | `5.9727` |
+  | 4 | `0.0018021560s` | `14.8952` | `5.8185` |
+  | 5 | `0.0020414394s` | `13.1493` | `5.1365` |
+
+- Interpretation:
+  - `lax.switch` remains the right way to express static peer branches when the peer ordinal comes from the grid. It traces all branches, but each branch closes over static `src_offset`/`dst_offset`, so it avoids the dynamic peer-id recompute failure.
+  - `mgpu.emit_pipeline` is correctness-compatible with lane-lowered source-push WGMMA in this harness.
+  - The local K `emit_pipeline` variant is not a speedup at target shape. With `block_k=128`, only `max_concurrent_steps=2` fits and it is slower than the manual best (`0.0019022586s` vs `0.0016030597s`). Deeper staging would need more SMEM than Mosaic allows in this combined send/recv/compute kernel.
+  - With `block_k=64`, deeper staging fits but remains slower than manual `block_k=128`; best emit row is `0.0017556247s`.
+  - Bottleneck judgment remains software-structure-bound / occupancy-bound. The source-push protocol works and has a narrow buffering signal, but this simple local-K pipeline does not fix the low TFLOP/s path.
+
+### 2026-07-01 21:36 PDT - FWD-SWQ-053 Source-push target-D `num_sms` sweep
+- Question:
+  - The target-D `grid_switch` source-push path had only been swept at `num_sms=16`.
+  - Test whether increasing the total programs per peer phase improves compute occupancy for the manual K-loop path.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added CLI flag `--sweep-num-sms`.
+    - Native sweep loop now nests `inbox_slots`, `num_send_sms`, `num_sms`, and `max_concurrent_steps`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 target-D `num_sms` sweep:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-043121`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `entries_per_rank=4`, `inbox_slots=2`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `num_send_sms=4`, validation disabled, `warmup=1`, `steps=3`.
+
+  | num_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|
+  | 16 | `0.0015406663s` | `17.4233` | `6.8060` |
+  | 32 | `0.0016165933s` | `16.6050` | `6.4863` |
+  | 64 | `0.0015991673s` | `16.7860` | `6.5570` |
+  | 128 | `0.0016346443s` | `16.4216` | `6.4147` |
+
+- H100 target-D best-row repeat:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-043440`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Config: same as above with `num_sms=16`, validation disabled, `warmup=3`, `steps=10`.
+  - `lower_compile_time=3.4722816400s`, `first_run_time=1.5514973670s`, `compile_time=5.0237790070s`.
+  - `steady_state_time=0.0015381217s`, `w13_tflops_per_rank=17.4522`, `send_gbps_per_rank=6.8172`.
+- Interpretation:
+  - Increasing `num_sms` does not improve the target-D source-push path. Best remains `num_sms=16`; larger grids add overhead or dilute useful work.
+  - The previous best target-D source-push row was `0.0016030597s`; a longer repeat of the same best-shape config now measures `0.0015381217s`, about 4.0% faster. This is a benchmark measurement update, not a production integrated speedup.
+  - Bottleneck remains software-structure/occupancy-bound. More independent programs do not unlock higher tensor-core utilization for this combined source-push kernel.
+
+### 2026-07-01 21:52 PDT - FWD-SWQ-054 Full-scale source-push scaling and `lax.switch` peer dispatch
+- Question:
+  - User noted that `pl.when` lowers to `jax.lax.cond`, so peer selection can use `jax.lax.switch` instead of manually writing an unrolled conditional ladder.
+  - Test the `grid_switch` source-push path at a realistic balanced proxy: `entries_per_rank=256`, corresponding to `32` local experts times `512` rows/expert divided by `block_m=64`.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--sweep-entries-per-rank`.
+    - Vectorized `_make_inputs` host construction for target-scale `entries_per_rank=256`, avoiding Python loops over rank/entry/expert.
+    - Continued using `peer_loop=grid_switch`: one grid axis carries `peer_phase`, and `jax.lax.switch` selects a branch whose body closes over static peer offsets.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 correctness smoke:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-044100`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Config: small checked all-to-all `m_n_slots grid_switch`, `D=256`, `I=256`, `entries_per_rank=4`, `block_k=64`, `inbox_slots=2`, `num_send_sms=4`, `num_sms=16`.
+  - `steady_state_time=0.0014935450s`, `hidden_max_abs_diff=0.0289773941`, `hidden_mean_abs_diff=0.0022519461`, `metadata_mismatches=0`.
+- H100 entries scaling:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-043917`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `inbox_slots=2`, `num_send_sms=4`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | entries_per_rank | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | bytes/rank |
+  |---:|---:|---:|---:|---:|
+  | 4 | `0.0016284170s` | `16.4844` | `6.4392` | `10485760` |
+  | 64 | `0.0038493923s` | `111.5752` | `43.5841` | `167772160` |
+  | 256 | `0.0108622830s` | `158.1608` | `61.7815` | `671088640` |
+
+- H100 send-only full-scale tax:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-044220`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Config: `implementation=send_only`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `entries_per_rank=256`, `D=2560`, `block_m=64`, `block_k=128`, `inbox_slots=2`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+  - `steady_state_time=0.0048350357s`, `send_gbps_per_rank=138.7970`, `bytes_per_rank=671088640`, `max_abs_diff=0.0`, `metadata_mismatches=0`.
+- H100 full-scale overlap sweep:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-044327`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `entries_per_rank=256`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 1 | 1 | `0.0175822653s` | `97.7114` | `38.1685` |
+  | 1 | 2 | `0.0174991904s` | `98.1752` | `38.3497` |
+  | 1 | 4 | `0.0176462460s` | `97.3571` | `38.0301` |
+  | 1 | 8 | `0.0264773947s` | `64.8850` | `25.3457` |
+  | 2 | 1 | `0.0109726423s` | `156.5700` | `61.1602` |
+  | 2 | 2 | `0.0110186857s` | `155.9158` | `60.9046` |
+  | 2 | 4 | `0.0110242110s` | `155.8376` | `60.8741` |
+  | 2 | 8 | `0.0152888033s` | `112.3690` | `43.8941` |
+  | 4 | 1 | `0.0103051037s` | `166.7122` | `65.1220` |
+  | 4 | 2 | `0.0133965090s` | `128.2414` | `50.0943` |
+  | 4 | 4 | `0.0118276817s` | `145.2514` | `56.7388` |
+  | 4 | 8 | `0.0164114740s` | `104.6821` | `40.8914` |
+
+- Interpretation:
+  - `jax.lax.switch` works with lane lowering and the WGMMA matmul path here. It removes source-level hand-unrolling, but all branches are still traced into the compiled switch; runtime selects one branch. This is a good static-peer expression, not a compile-size miracle.
+  - Full-scale performance is much better than the tiny `entries_per_rank=4` proxy: best full-scale row is `0.0103051037s` and `166.7 TFLOP/s/rank` for W13/up-half source-push harness work.
+  - There is a real slot-depth/overlap signal. `inbox_slots=1` is about `17.5ms`; `inbox_slots=2` drops to about `11.0ms`; best `inbox_slots=4,num_send_sms=1` is `10.3ms`.
+  - More send workers are not better. `num_send_sms=8` regresses for every tested slot count.
+  - Send-only remote write/semaphore cost at the same full-scale traffic is `4.835ms`; the full W13 path is not just copy-bound, but the exchange is still a large part of the budget.
+  - Bottleneck judgment: communication plus software structure, with meaningful but incomplete overlap. This source-push path is more credible at realistic queue depth than the earlier tiny proxy, but it remains a W13-only harness result and not an integrated production forward speedup.
+
+### 2026-07-01 21:59 PDT - FWD-SWQ-055 Full-scale `n_group=2` source-push test
+- Question:
+  - The source-push spec suggests trying `n_group=2` so each compute job reuses the same inbox LHS tile for two adjacent N tiles.
+  - Test whether this improves the full-scale W13/up-half source-push harness.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--sweep-n-groups` so `n_group=1,2` rows can be produced by one reproducible Python sweep.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 job:
+  - Job `/dlwh/iris-run-job-20260702-045326`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Command structure: one checked small `n_group=2` smoke, then a full-scale `n_group=1,2` sweep.
+- H100 correctness smoke:
+  - Config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `entries_per_rank=4`, `inbox_slots=2`, `D=256`, `I=256`, `block_m=64`, `block_k=64`, `block_n=128`, `n_group=2`, `num_send_sms=4`, `num_sms=16`, validation enabled.
+  - `steady_state_time=0.0015734613s`, `hidden_max_abs_diff=0.0289773941`, `hidden_mean_abs_diff=0.0022519461`, `metadata_mismatches=0`.
+- H100 full-scale sweep:
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `entries_per_rank=256`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `block_n=128`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | inbox_slots | num_send_sms | n_group | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 1 | 1 | 1 | `0.0175520747s` | `97.8794` | `38.2341` |
+  | 1 | 1 | 2 | `0.0349167467s` | `49.2024` | `19.2197` |
+  | 1 | 4 | 1 | `0.0177069133s` | `97.0235` | `37.8998` |
+  | 1 | 4 | 2 | `0.0351557560s` | `48.8679` | `19.0890` |
+  | 2 | 1 | 1 | `0.0109774067s` | `156.5021` | `61.1336` |
+  | 2 | 1 | 2 | `0.0214171403s` | `80.2155` | `31.3342` |
+  | 2 | 4 | 1 | `0.0109635550s` | `156.6998` | `61.2109` |
+  | 2 | 4 | 2 | `0.0194689583s` | `88.2424` | `34.4697` |
+  | 4 | 1 | 1 | `0.0103007983s` | `166.7819` | `65.1492` |
+  | 4 | 1 | 2 | `0.0236580810s` | `72.6173` | `28.3661` |
+  | 4 | 4 | 1 | `0.0118166576s` | `145.3869` | `56.7917` |
+  | 4 | 4 | 2 | `0.0157361350s` | `109.1746` | `42.6463` |
+
+- Interpretation:
+  - `n_group=2` is correct in the checked small case but is consistently slower at the full target shape with `block_n=128`.
+  - Best row remains `n_group=1,inbox_slots=4,num_send_sms=1`: `0.0103007983s`, matching the prior best within noise.
+  - `n_group=2` likely pays too much SMEM/register/scheduling pressure: at `block_n=128`, it needs one LHS tile plus four RHS tiles and four accumulators per compute job. It also halves the number of N work groups per ready slot, which may reduce scheduling flexibility.
+  - Next useful test: `block_n=64,n_group=2`, which keeps the four RHS tiles closer to the SMEM footprint of the current `block_n=128,n_group=1` path while still testing LHS reuse.
+
+### 2026-07-01 22:06 PDT - FWD-SWQ-056 `block_n=64` follow-up for grouped N tiles
+- Question:
+  - FWD-SWQ-055 showed `n_group=2` is much slower at `block_n=128`.
+  - Test whether the slowdown is specifically from the large grouped RHS/accumulator footprint by trying `block_n=64,n_group=2`, which keeps the four RHS tiles closer to the SMEM footprint of `block_n=128,n_group=1`.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--sweep-block-n`.
+    - Added `--sweep-block-k`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 job:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-045936`, cluster `cw-us-east-02a`, H100x8, succeeded.
+  - Common config: `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `compute_pipeline=manual`, `EP=8`, `entries_per_rank=256`, `D=2560`, `I=1280`, `block_m=64`, `block_k=128`, `num_sms=16`, validation disabled, `warmup=1`, `steps=3`.
+
+  | inbox_slots | num_send_sms | block_n | n_group | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 2 | 1 | 64 | 1 | `0.0120518717s` | `142.5494` | `55.6834` |
+  | 2 | 1 | 64 | 2 | `0.0116488006s` | `147.4819` | `57.6101` |
+  | 2 | 4 | 64 | 1 | `0.0154716453s` | `111.0410` | `43.3754` |
+  | 2 | 4 | 64 | 2 | `0.0116478840s` | `147.4935` | `57.6146` |
+  | 2 | 1 | 128 | 1 | `0.0109705330s` | `156.6001` | `61.1719` |
+  | 2 | 1 | 128 | 2 | `0.0207069037s` | `82.9669` | `32.4089` |
+  | 2 | 4 | 128 | 1 | `0.0109399877s` | `157.0374` | `61.3427` |
+  | 2 | 4 | 128 | 2 | `0.0192205400s` | `89.3829` | `34.9152` |
+  | 4 | 1 | 64 | 1 | `0.0163424597s` | `105.1241` | `41.0641` |
+  | 4 | 1 | 64 | 2 | `0.0111712187s` | `153.7869` | `60.0730` |
+  | 4 | 4 | 64 | 1 | `0.0141456363s` | `121.4500` | `47.4414` |
+  | 4 | 4 | 64 | 2 | `0.0124490807s` | `138.0011` | `53.9067` |
+  | 4 | 1 | 128 | 1 | `0.0105058403s` | `163.5268` | `63.8777` |
+  | 4 | 1 | 128 | 2 | `0.0233965400s` | `73.4291` | `28.6832` |
+  | 4 | 4 | 128 | 1 | `0.0117593630s` | `146.0952` | `57.0685` |
+  | 4 | 4 | 128 | 2 | `0.0157999107s` | `108.7340` | `42.4742` |
+
+- Interpretation:
+  - `block_n=64,n_group=2` partially rescues grouped N tiles: it beats `block_n=64,n_group=1` in 3 of 4 matched rows, and the best grouped-64 row is `0.0111712187s`.
+  - It still does not beat the current best `block_n=128,n_group=1` row: `0.0105058403s` in this job and `0.0103007983s` in FWD-SWQ-055.
+  - The `block_n=128,n_group=2` regression is therefore at least partly SMEM/register-pressure related, not just a semantic bug in grouped-N scheduling.
+  - Decision: keep `block_n=128,n_group=1` as the best source-push W13 harness configuration for now. Stop spending blind tuning on `n_group=2` unless a later structural change reduces grouped-job pressure.
+
+### 2026-07-01 22:32 PDT - FWD-SWQ-057 Routing-derived source-push queues and counters
+- Question:
+  - Replace the synthetic rectangular source-push queue with routing-derived live send/recv entries before doing more tuning.
+  - Validate zeros, tails, ragged source/expert counts, multiple sources to one expert, and many-source/many-expert traffic.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--queue-mode {rectangular,routing}` and `--routing {balanced,uniform,tail_debug,one_source_one_expert,many_sources_one_expert,many_sources_many_experts}`.
+    - Added routing metadata inputs for send and recv queues, with live-entry skipping before semaphore waits.
+    - Added queue counters: send/recv/live entries, skipped zero entries, tail entries/fraction, source/destination/expert imbalance, slot wait counts, and max slot reuse depth.
+    - Kept the source-push protocol: source local GMEM -> SMEM -> destination inbox GMEM, then signal full; destination waits full, computes, and releases empty.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 validation jobs:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-051328`, cluster `cw-us-east-02a`, succeeded. Checked small `tail_debug` routing smoke: `steady_state_time=0.0018682873s`, `hidden_max_abs_diff=0.0308904648`, `metadata_mismatches=0`, `send_entries_total=511`, `tail_entries_total=511`, `dropped_entries_total=0`.
+  - `/dlwh/iris-run-job-20260702-052247`, cluster `cw-us-east-02a`, succeeded. Checked routing matrix:
+    - `tail_debug`: `send_entries=511`, `tails=511`, `zero_entries_skipped=1025`, `hidden_max_abs_diff=0.0289773941`, `metadata_mismatches=0`.
+    - `one_source_one_expert`: `send_entries=2`, `tails=1`, `zero_entries_skipped=1534`, `hidden_max_abs_diff=0.015625`, `metadata_mismatches=0`.
+    - `many_sources_one_expert`: `send_entries=16`, `tails=8`, `zero_entries_skipped=1520`, `hidden_max_abs_diff=0.015625`, `metadata_mismatches=0`.
+    - `many_sources_many_experts`: `send_entries=410`, `tails=240`, `zero_entries_skipped=1126`, `hidden_max_abs_diff=0.0289840698`, `metadata_mismatches=0`.
+    - `uniform`: `send_entries=751`, `tails=477`, `zero_entries_skipped=785`, `hidden_max_abs_diff=0.0304203033`, `metadata_mismatches=0`.
+- H100 benchmark jobs:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-051838`, cluster `cw-us-east-02a`, succeeded. Routing uniform target, `entries_per_rank=288`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `num_sms=16`:
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 2 | 1 | `0.0198999327s` | `91.5320` | `35.7547` |
+  | 2 | 4 | `0.0130559287s` | `139.5137` | `54.4976` |
+  | 4 | 1 | `0.0107049743s` | `170.1528` | `66.4659` |
+  | 4 | 4 | `0.0123006187s` | `148.0805` | `57.8439` |
+
+  - `/dlwh/iris-run-job-20260702-052615`, cluster `cw-us-east-02a`, succeeded. A/B/C benchmark with current best synthetic config (`block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `inbox_slots=4`, `num_send_sms=1`, `num_sms=16`):
+
+  | case | queue | entries_per_rank | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | tail_fraction |
+  |---|---|---:|---:|---:|---:|---:|
+  | A | rectangular balanced | 256 | `0.0112180463s` | `153.1449` | `59.8222` | `0.0` |
+  | B | routing balanced | 256 | `0.0097151733s` | `176.8354` | `69.0763` | `0.0` |
+  | C | routing uniform target | 288 | `0.0106858497s` | `170.4573` | `66.5849` | `0.1160554948` |
+
+- Interpretation:
+  - Routing-derived queues are correct across zero-count, tail, one-source/one-expert, many-source/one-expert, many-source/many-expert, and random ragged cases.
+  - The routing queue preserves the overlap signal: `inbox_slots=4` is materially faster than `inbox_slots=2`; `num_send_sms=1` remains best at `inbox_slots=4`.
+  - Matched balanced routing is faster than the rectangular baseline in this harness, so the rectangular queue was not an optimistic bound.
+  - Full uniform routing target is close to the best synthetic source-push W13 harness row: `0.0106858497s`, `170.46 TFLOP/s/rank`, no dropped entries.
+  - Bottleneck judgment remains communication plus software structure, but the routing-derived source-push path is now a credible forward-permute-up experiment path instead of only a synthetic correctness proof.
+
+### 2026-07-02 00:00 PDT - FWD-SWQ-058 Static recv metadata and direct-self compute
+- Question:
+  - Test whether moving slot metadata out of the source-push kernel, and bypassing inbox traffic for self-rank entries, removes enough software/metadata tax to move the source-push inbox harness toward the 200 TFLOP/s/rank target.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--metadata-mode {remote_slot,static_recv}`.
+    - Added `--direct-self-compute`.
+    - For `metadata_mode=static_recv`, `m_n_slots` sources no longer write per-slot metadata; the receiver reads static routing metadata after waiting for the full semaphore.
+    - For `direct_self_compute`, self-rank entries skip inbox sends and slot semaphore traffic, and the destination computes directly from the rank-local input for those entries.
+    - Added counters for `direct_self_entries_total`, `payload_send_entries_total`, `remote_send_entries_total`, and send-side rounded-row counts.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 jobs:
+  - `/dlwh/repro-source-push-self-bypass-20260702-0538`, cluster `cw-us-east-02a`, stopped after the first over-aggressive direct-self attempt wedged. The implementation was then corrected to keep the slot protocol balanced for remote entries.
+  - `/dlwh/repro-source-push-self-bypass-smoke2-20260702-0547`, cluster `cw-us-east-02a`, succeeded for an intermediate self-payload-bypass smoke: `steady_state_time=0.0015181369s`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289773941`.
+  - `/dlwh/repro-source-push-static-self-smoke-20260702-0552`, cluster `cw-us-east-02a`, succeeded for the final true direct-self/static metadata small smoke.
+  - `/dlwh/repro-source-push-static-self-target-20260702-0555`, cluster `cw-us-east-02a`, succeeded for the target A/B/C comparison.
+- Checked small final direct-self smoke:
+  - Config: `routing=tail_debug`, `metadata_mode=static_recv`, `direct_self_compute=True`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `EP=8`, `entries_per_rank=24`, `D=256`, `I=256`, `inbox_slots=2`, `num_send_sms=4`, `num_sms=16`.
+  - `steady_state_time=0.0014902499970048666s`, `w13_tflops_per_rank=0.7191039584994546`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.028977394104003906`, `hidden_mean_abs_diff=0.0012497357092797756`.
+  - Counters: `direct_self_entries_total=63`, `remote_send_entries_total=448`, `live_entries_total=511`, `send_wait_empty_count=448`, `slot_full_waits=896`.
+- Target A/B/C comparison:
+
+  | metadata_mode | direct_self | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | live entries | remote send entries |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `remote_slot` | false | `0.009905381322217485s` | `183.88806148375832` | `71.8312740170931` | `17371` | `17371` |
+  | `static_recv` | false | `0.009813299674230317s` | `185.6135479468952` | `72.50529216675594` | `17371` | `17371` |
+  | `static_recv` | true | `0.010159598003762463s` | `179.28675612218515` | `61.277133186711424` | `17371` | `15199` |
+
+- Interpretation:
+  - `static_recv` metadata is correct and gives a small target win, about 0.9% over per-slot remote metadata in this run.
+  - True direct-self bypass is correct in the checked small smoke but regresses at target shape despite reducing remote send entries from `17371` to `15199`.
+  - The direct-self branch likely hurts scheduling/branch uniformity and removes some useful uniformity from the steady source-push loop. It is not a performance path as currently written.
+
+### 2026-07-02 00:03 PDT - FWD-SWQ-059 Perf output mode, grouped compute jobs, and target tuning sweep
+- Question:
+  - Test whether debug-output stores, done-semaphore fan-in, larger/smaller tiles, extra inbox buffering, or additional send/compute SMs are the remaining tax in the source-push inbox harness.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--output-mode {debug,perf}`. `perf` keeps the real `inbox` and hidden output shape but shrinks debug/validation side outputs, and is disabled when `--check` is used.
+    - Added `--n-groups-per-job` and `--sweep-n-groups-per-job`. Compute jobs can now cover multiple adjacent N workgroups per queue entry, wait full once, and signal done once.
+    - Added stats for `n_groups_per_job`, `n_work_groups_per_entry`, `num_compute_jobs_per_entry`, and `done_signals_per_entry`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 jobs:
+  - `/dlwh/repro-source-push-ngroups-smoke-20260702-0559`, cluster `cw-us-east-02a`, succeeded.
+  - `/dlwh/repro-source-push-full-sweep-20260702-0603`, cluster `cw-us-east-02a`, completed the Cartesian target sweep rows and was stopped when the trailing static peer-loop spot blocked.
+  - `/dlwh/repro-source-push-best-check-20260702-0647`, cluster `cw-us-east-02a`, produced repeat/check rows and was stopped when a trailing switch peer-loop spot blocked.
+  - `/dlwh/repro-source-push-direct-self-best-20260702-0656`, cluster `cw-us-east-02a`, succeeded.
+- Checked small `n_groups_per_job=2` smoke:
+  - `steady_state_time=0.0014919049572199583s`, `w13_tflops_per_rank=0.7183062612761347`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.028977394104003906`.
+  - Counters: `n_groups_per_job=2`, `n_work_groups_per_entry=2`, `num_compute_jobs_per_entry=1`, `done_signals_per_entry=1`.
+- Full target sweep summary:
+  - Completed rows: `120` successful Cartesian rows plus `24` expected error rows.
+  - All error rows were `block_k=256,block_n=256` shared-memory overflows: `smem_bytes=294920 > max_smem_bytes=232448`.
+  - Best single no-check Cartesian row:
+    - `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `n_groups_per_job=1`, `output_mode=perf`, `peer_loop=grid_switch`, `direct_self_compute=False`, `metadata_mode=static_recv`.
+    - `steady_state_time=0.00912814901676029s`, `w13_tflops_per_rank=199.54553395826022`, `live_entries_total=17371`, `remote_send_entries_total=17371`, `slot_full_waits=173710`.
+  - Other top rows:
+
+  | block_k | block_n | inbox_slots | num_send_sms | num_sms | n_groups_per_job | steady_state_time | W13 TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 256 | 128 | 4 | 1 | 16 | 1 | `0.009502197344166538s` | `191.6905431056133` |
+  | 128 | 128 | 4 | 2 | 32 | 2 | `0.009681603677260378s` | `188.13839424951837` |
+  | 128 | 128 | 4 | 1 | 16 | 1 | `0.009755055652931333s` | `186.72178144392814` |
+  | 64 | 128 | 8 | 2 | 32 | 1 | `0.009787799674086273s` | `186.09712399636356` |
+
+- Repeat/check follow-up for the best-looking row:
+  - Repeat no-check row, same best structural config with `warmup=2`, `steps=7`, `output_mode=perf`:
+    - `steady_state_time=0.010859257408550807s`, `w13_tflops_per_rank=167.73535252656663`.
+  - Checked target row, same structural config with `output_mode=debug`, `warmup=1`, `steps=1`:
+    - `steady_state_time=0.009240464074537158s`, `w13_tflops_per_rank=197.12011809225453`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.2509002685546875`, `hidden_mean_abs_diff=0.020084695890545845`.
+  - Direct-self at the best SMS shape:
+    - `steady_state_time=0.017455345989825826s`, `w13_tflops_per_rank=104.35091751614`, `send_gbps_per_rank=35.665350910996864`, `direct_self_entries_total=2172`, `remote_send_entries_total=15199`, `send_rounded_rows_per_rank_mean=121592.0`, `rounded_rows_per_rank_mean=138968.0`.
+- Interpretation:
+  - `block_k=128,block_n=128,inbox_slots=4,n_groups_per_job=1,peer_loop=grid_switch` remains the best stable shape.
+  - The single `199.55 TFLOP/s/rank` row is not stable enough to claim a 200 TFLOP/s/rank path; the immediate longer repeat fell to `167.74 TFLOP/s/rank`.
+  - The checked target row reached `197.12 TFLOP/s/rank` with `metadata_mismatches=0`, but max diff was larger than the small-shape smoke, so this is a useful harness result rather than an integration-quality production proof.
+  - `output_mode=perf` removes debug-output tax in principle, but did not produce a stable win.
+  - `n_groups_per_job>1` reduces done semaphore fan-in but generally regresses, consistent with reduced scheduling flexibility or higher per-job pressure.
+  - `inbox_slots=8` did not beat `4`.
+  - `block_n=256` is not competitive, and `block_k=256,block_n=256` is invalid on shared-memory footprint.
+  - Static/switch peer loops blocked in this harness; treat `grid_switch` as the viable peer scheduling path for now.
+  - Current bottleneck judgment: communication plus software structure. The source-push inbox protocol can approach 200 TFLOP/s/rank, but the current implementation does not have a stable checked target win beyond the existing best row.
