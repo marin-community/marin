@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "marin-ducky"
 version = "0.1.0"
-description = "ducky — ad-hoc DuckDB SQL service: paste SQL, run it on a v6e host over object-store parquet."
+description = "ducky — ad-hoc DuckDB SQL service: paste SQL, run it over object-store parquet."
 requires-python = ">=3.11"
 dependencies = [
     "marin-iris",
