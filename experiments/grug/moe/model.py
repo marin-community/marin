@@ -100,6 +100,18 @@ class GrugModelConfig:
     ``shared_expert_intermediate_dim=0`` in this mode (the dense layers play that role)."""
     dense_intermediate_dim: int | None = None
     """Intermediate dim of the dense FFN layers when ``alternating_dense_moe`` is set."""
+    moe_latent_dim: int | None = None
+    """LatentMoE: when set, the routed experts operate in this compressed dim ``l``.
+    Tokens are down-projected ``D -> l`` before dispatch and up-projected ``l -> D``
+    after combine (both projections shared across all experts), so the expert-parallel
+    all-to-all dispatch/combine traffic carries ``l``-dim vectors instead of ``D``. The
+    router (on full ``D``) and the shared expert are unchanged; only the routed-expert
+    path is compressed. Each routed expert is then ``l -> intermediate_dim -> l``. With
+    ``alternating_dense_moe`` this only affects the MoE layers (dense layers have no MoE)."""
+    moe_latent_norm: bool = False
+    """When True (and ``moe_latent_dim`` is set), apply a learnable per-channel RMSNorm
+    to the down-projected MoE latent ``c`` before expert dispatch (DeepSeek a_layernorm
+    style). Adds ``(moe_latent_dim,)`` params per layer."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -144,6 +156,8 @@ class GrugModelConfig:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.alternating_dense_moe and not self.dense_intermediate_dim:
             raise ValueError("alternating_dense_moe requires dense_intermediate_dim to be set")
+        if self.moe_latent_dim is not None and self.moe_latent_dim <= 0:
+            raise ValueError(f"moe_latent_dim must be positive when set; got {self.moe_latent_dim}")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -431,11 +445,19 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    moe_down: jax.Array | None  # (D, l) shared down-proj; None unless moe_latent_dim set
+    moe_up: jax.Array | None  # (l, D) shared up-proj; None unless moe_latent_dim set
+    moe_latent_rms: RMSNorm | None  # learnable RMSNorm on the latent c; None unless moe_latent_norm
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        # Keep the no-latent RNG stream identical to before so existing configs are unchanged.
+        if cfg.moe_latent_dim is None:
+            k_router, k_expert = random.split(key, 2)
+            k_down = k_up = None
+        else:
+            k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -443,12 +465,29 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # LatentMoE: routed experts (and their all-to-all) run in the compressed dim l.
+        expert_hidden = cfg.moe_latent_dim if cfg.moe_latent_dim is not None else d
+        moe_down = (
+            reshard(_init_weight(k_down, (d, cfg.moe_latent_dim), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
+        moe_up = (
+            reshard(_init_weight(k_up, (cfg.moe_latent_dim, d), cfg.initializer_std), P(None, None))
+            if cfg.moe_latent_dim is not None
+            else None
+        )
+        moe_latent_rms = (
+            RMSNorm.init(cfg.moe_latent_dim, cfg.layer_norm_eps)
+            if (cfg.moe_latent_dim is not None and cfg.moe_latent_norm)
+            else None
+        )
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_hidden,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -456,6 +495,9 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
             ),
+            moe_down=moe_down,
+            moe_up=moe_up,
+            moe_latent_rms=moe_latent_rms,
             cfg=cfg,
         )
 
@@ -509,14 +551,26 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        # LatentMoE: compress tokens D -> l before dispatch so the expert-parallel
+        # all-to-all carries l-dim vectors. Router (above) still ran on full D.
+        expert_in = x_flat
+        if self.moe_down is not None:
+            expert_in = reshard(jnp.einsum("td,dl->tl", x_flat, self.moe_down), P(_BATCH_AXES, None))
+            if self.moe_latent_rms is not None:
+                expert_in = self.moe_latent_rms(expert_in)
+
         routed_flat, dropped_assignments = self.expert_mlp(
-            x_flat,
+            expert_in,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+
+        # Up-project the combined expert output l -> D back into the residual stream.
+        if self.moe_up is not None:
+            routed_flat = reshard(jnp.einsum("tl,ld->td", routed_flat, self.moe_up), P(_BATCH_AXES, None))
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
