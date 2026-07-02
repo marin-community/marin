@@ -3,17 +3,21 @@
 
 import json
 
+import numpy as np
 import pytest
 
 import levanter.grug._moe.source_push_inbox as source_push_inbox
-from levanter.grug._moe.source_push_inbox_profiles import source_push_profile_defaults
+from levanter.grug._moe.source_push_inbox_profiles import (
+    SOURCE_PUSH_PROFILE_STABLE_216,
+    SOURCE_PUSH_PROFILES,
+    source_push_profile_defaults,
+)
 
 
 @pytest.mark.parametrize(
     ("profile", "expected_routing", "expected_send_pipeline_depth"),
     [
-        ("hopper_queue_ngroups2_210", "uniform", 2),
-        ("hopper_queue_roughly_balanced_ngroups2_210", "roughly_balanced", 1),
+        (SOURCE_PUSH_PROFILE_STABLE_216, "roughly_balanced", 1),
     ],
 )
 def test_source_push_profile_applies_current_best_candidate_defaults(
@@ -41,7 +45,7 @@ def test_source_push_profile_allows_explicit_overrides():
     args = source_push_inbox.parse_source_push_inbox_args(
         [
             "--source-push-profile",
-            "hopper_queue_roughly_balanced_ngroups2_210",
+            SOURCE_PUSH_PROFILE_STABLE_216,
             "--routing",
             "uniform",
             "--send-pipeline-depth",
@@ -59,16 +63,16 @@ def test_source_push_profile_allows_explicit_overrides():
 
 
 def test_source_push_profile_defaults_are_copied():
-    defaults = source_push_profile_defaults("hopper_queue_ngroups2_210")
-    defaults["routing"] = "roughly_balanced"
+    defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
+    defaults["routing"] = "uniform"
 
-    fresh_defaults = source_push_profile_defaults("hopper_queue_ngroups2_210")
+    fresh_defaults = source_push_profile_defaults(SOURCE_PUSH_PROFILE_STABLE_216)
 
-    assert fresh_defaults["routing"] == "uniform"
+    assert fresh_defaults["routing"] == "roughly_balanced"
 
 
 def test_source_push_profile_returns_typed_config_and_run_settings():
-    config, settings = source_push_inbox.source_push_inbox_profile("hopper_queue_roughly_balanced_ngroups2_210")
+    config, settings = source_push_inbox.source_push_inbox_profile(SOURCE_PUSH_PROFILE_STABLE_216)
 
     config.validate()
     assert config.routing == "roughly_balanced"
@@ -81,6 +85,53 @@ def test_source_push_profile_returns_typed_config_and_run_settings():
     assert not settings.check
     assert settings.separate_compile
     assert settings.progress_events
+
+
+def test_source_push_profile_exposes_single_stable_candidate():
+    assert SOURCE_PUSH_PROFILES == ("none", SOURCE_PUSH_PROFILE_STABLE_216)
+
+
+def test_disabled_modes_are_not_public_cli_choices():
+    with pytest.raises(SystemExit):
+        source_push_inbox.parse_source_push_inbox_args(["--receiver-schedule", "ready_scan"])
+
+    with pytest.raises(SystemExit):
+        source_push_inbox.parse_source_push_inbox_args(["--inbox-storage", "alias"])
+
+
+def test_compact_routing_inputs_match_synthetic_queue_metadata():
+    config = source_push_inbox.PushInboxConfig(
+        implementation="m_n_slots",
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=2,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=4,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=2,
+        num_send_sms=1,
+        num_sms=4,
+        traffic_pattern="all_to_all",
+        peer_loop="grid_switch",
+        queue_mode="routing",
+        routing="balanced",
+        tokens_per_rank=8,
+        topk=2,
+    )
+
+    synthetic_inputs = source_push_inbox._make_routing_inputs(config)
+    compact_inputs = source_push_inbox._make_compact_routing_inputs(config)
+
+    assert np.array_equal(compact_inputs.send_meta, synthetic_inputs.send_meta)
+    assert np.array_equal(compact_inputs.recv_meta, synthetic_inputs.recv_meta)
+    assert compact_inputs.queue_stats["input_mode"] == "compact_routing"
+    assert compact_inputs.queue_stats["dropped_entries_total"] == 0
+    assert (
+        compact_inputs.queue_stats["compact_pack_rows_total"] == config.ep_size * config.tokens_per_rank * config.topk
+    )
+    assert not np.all(compact_inputs.x[0, 0, 0, 0, :] == compact_inputs.x[0, 0, 0, 0, 0])
 
 
 def test_source_push_package_private_runner_returns_structured_validation_errors():

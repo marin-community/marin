@@ -38,6 +38,7 @@ from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as mgpu
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
+from levanter.grug._moe.common import _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, source_push_profile_defaults
 
 
@@ -60,11 +61,16 @@ METADATA_MODES = ("remote_slot", "static_recv")
 OUTPUT_MODES = ("debug", "perf")
 HIDDEN_OUTPUT_MODES = ("full", "queue", "sink")
 HIDDEN_COMPUTE_MODES = ("wgmma", "store_zero")
-RECEIVER_SCHEDULES = ("fixed_wait", "owned_jobs", "owned_slots", "ordered_wait", "ready_scan", "slot_group")
+RECEIVER_SCHEDULES = ("fixed_wait",)
+_EXPERIMENTAL_RECEIVER_SCHEDULES = ("owned_jobs", "owned_slots", "ordered_wait", "slot_group")
+_DISABLED_RECEIVER_SCHEDULES = ("ready_scan",)
+_ALL_RECEIVER_SCHEDULES = RECEIVER_SCHEDULES + _EXPERIMENTAL_RECEIVER_SCHEDULES + _DISABLED_RECEIVER_SCHEDULES
 SCAN_ORDERS = ("current", "rotated", "hash")
 SLOT_ORDERS = ("current", "rotated", "hash")
 SOURCE_PUSH_MODES = ("packed",)
-INBOX_STORAGE_MODES = ("output", "alias", "scratch")
+INBOX_STORAGE_MODES = ("output",)
+_DISABLED_INBOX_STORAGE_MODES = ("alias", "scratch")
+_ALL_INBOX_STORAGE_MODES = INBOX_STORAGE_MODES + _DISABLED_INBOX_STORAGE_MODES
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -233,10 +239,10 @@ class PushInboxConfig:
         if self.output_mode == "perf":
             if self.implementation not in ("send_only", "m_n_slots"):
                 raise ValueError("output_mode=perf is currently implemented only for send_only and m_n_slots")
-            if self.metadata_mode != "static_recv":
-                raise ValueError("output_mode=perf requires metadata_mode=static_recv")
-        if self.inbox_storage not in INBOX_STORAGE_MODES:
-            raise ValueError(f"unknown inbox_storage={self.inbox_storage!r}; expected one of {INBOX_STORAGE_MODES}")
+        if self.inbox_storage not in _ALL_INBOX_STORAGE_MODES:
+            raise ValueError(
+                f"unknown inbox_storage={self.inbox_storage!r}; expected one of {_ALL_INBOX_STORAGE_MODES}"
+            )
         if self.inbox_storage == "scratch":
             raise ValueError(
                 "inbox_storage=scratch is disabled: Mosaic GPU scratch_shapes with mgpu.GMEM fail with "
@@ -256,9 +262,9 @@ class PushInboxConfig:
                 f"got {self.n_groups_per_job=} with "
                 f"{self.intermediate_dim=} {self.block_n=} {self.n_group=}"
             )
-        if self.receiver_schedule not in RECEIVER_SCHEDULES:
+        if self.receiver_schedule not in _ALL_RECEIVER_SCHEDULES:
             raise ValueError(
-                f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {RECEIVER_SCHEDULES}"
+                f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {_ALL_RECEIVER_SCHEDULES}"
             )
         if self.receiver_schedule == "ready_scan":
             raise ValueError(
@@ -535,7 +541,7 @@ def _make_kernel(config: PushInboxConfig):
 
                                     @pl.when(dst_offset == 0)
                                     def _write_local_meta() -> None:
-                                        if config.output_mode != "perf":
+                                        if config.metadata_mode == "remote_slot" or config.output_mode != "perf":
                                             meta_ref[rank, slot, 0] = rank
                                             meta_ref[rank, slot, 1] = expert
                                             meta_ref[rank, slot, 2] = dst_row_start
@@ -544,7 +550,7 @@ def _make_kernel(config: PushInboxConfig):
 
                                     @pl.when(dst_offset != 0)
                                     def _write_remote_meta() -> None:
-                                        if config.output_mode != "perf":
+                                        if config.metadata_mode == "remote_slot" or config.output_mode != "perf":
                                             remote_meta_ref = mgpu.remote_ref(
                                                 meta_ref,
                                                 dst,
@@ -1563,6 +1569,8 @@ def _make_kernel(config: PushInboxConfig):
                                             )
                                             _signal_empty_to_src(src, src_offset, slot)
 
+                    # Historical receiver schedules are retained for debugging but are no longer exposed as
+                    # ordinary CLI sweep choices. The stable profile uses fixed_wait.
                     elif config.receiver_schedule == "owned_jobs":
 
                         @pl.loop(0, rounds_per_slot)
@@ -1890,7 +1898,10 @@ def _make_kernel(config: PushInboxConfig):
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
     if config.output_mode == "perf":
         returned_inbox_shape = inbox_shape
-        meta_shape = (1, 1, META_FIELDS)
+        if config.metadata_mode == "remote_slot":
+            meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
+        else:
+            meta_shape = (1, 1, META_FIELDS)
         seen_payload_shape = (1, 1)
         seen_meta_shape = (1, 1, META_FIELDS)
     else:
@@ -2247,8 +2258,7 @@ def _routing_counts(config: PushInboxConfig) -> np.ndarray:
     return counts
 
 
-def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
-    counts = _routing_counts(config)
+def _routing_row_bases(config: PushInboxConfig, counts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     rounded_counts = ((counts + config.block_m - 1) // config.block_m) * config.block_m
     expert_base = np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
     src_base = np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
@@ -2261,6 +2271,12 @@ def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
                 src_base[src, dst, expert] = src_running
                 src_running += int(rounded_counts[src, dst, expert])
             row += src_running
+    return rounded_counts, expert_base, src_base
+
+
+def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
+    counts = _routing_counts(config)
+    _, expert_base, src_base = _routing_row_bases(config, counts)
 
     x_host = np.zeros(
         (config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, config.hidden_dim),
@@ -2295,11 +2311,100 @@ def _make_routing_inputs(config: PushInboxConfig) -> HostInputs:
     return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
 
 
-def _make_inputs(config: PushInboxConfig) -> DeviceInputs:
+def _selected_experts_from_counts(config: PushInboxConfig, source_counts: np.ndarray, src: int) -> np.ndarray:
+    assignments = config.tokens_per_rank * config.topk
+    global_experts = config.ep_size * config.experts_per_rank
+    flat_experts = np.repeat(np.arange(global_experts, dtype=np.int32), source_counts.reshape(-1))
+    if flat_experts.size != assignments:
+        raise ValueError(
+            "compact routing source counts must match tokens_per_rank * topk; "
+            f"got {flat_experts.size=} {assignments=} for {src=}"
+        )
+    rng = np.random.default_rng(config.routing_seed + 1009 * src)
+    rng.shuffle(flat_experts)
+    return flat_experts.reshape(config.tokens_per_rank, config.topk)
+
+
+def _make_source_tokens(config: PushInboxConfig, src: int) -> np.ndarray:
+    token_component = np.arange(config.tokens_per_rank, dtype=np.float32)[:, None] * 0.001
+    hidden_component = np.arange(config.hidden_dim, dtype=np.float32)[None, :] * 0.00001
+    return (0.125 + 0.03125 * src + token_component + hidden_component).astype(np.float32)
+
+
+def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
+    """Build source-push queue inputs from the compact expert-sorted routing layout."""
+    if config.queue_mode != "routing":
+        raise ValueError("compact routing smoke requires queue_mode=routing")
+    if config.traffic_pattern != "all_to_all":
+        raise ValueError("compact routing smoke currently requires traffic_pattern=all_to_all")
+
+    counts = _routing_counts(config)
+    _, expert_base, src_base = _routing_row_bases(config, counts)
+    global_experts = config.ep_size * config.experts_per_rank
+    x_host = np.zeros(
+        (config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, config.hidden_dim),
+        dtype=np.float32,
+    )
+    send_meta = np.zeros((config.ep_size, config.traffic_fanout, config.entries_per_rank, META_FIELDS), dtype=np.int32)
+    dropped_entries = 0
+    dropped_rows = 0
+    compact_pack_rows = 0
+    for src in range(config.ep_size):
+        selected_experts = _selected_experts_from_counts(config, counts[src], src)
+        token_ids_sort, _, group_sizes, _ = _prepare_moe_dispatch_indices_with_assignment_ids(
+            jnp.asarray(selected_experts, dtype=jnp.int32),
+            num_experts=global_experts,
+        )
+        token_ids_sort_host = np.asarray(jax.device_get(token_ids_sort), dtype=np.int32)
+        group_sizes_host = np.asarray(jax.device_get(group_sizes), dtype=np.int32)
+        expected_group_sizes = counts[src].reshape(-1)
+        if not np.array_equal(group_sizes_host, expected_group_sizes):
+            raise ValueError("compact routing group sizes diverged from requested source counts")
+
+        source_tokens = _make_source_tokens(config, src)
+        packed_x = source_tokens[token_ids_sort_host]
+        compact_pack_rows += int(packed_x.shape[0])
+        group_offsets = np.cumsum(np.concatenate((np.array([0], dtype=np.int64), group_sizes_host[:-1])))
+        for dst in range(config.ep_size):
+            dst_ordinal = _dst_ordinal(config, src, dst)
+            entry = 0
+            for expert in range(config.experts_per_rank):
+                global_expert = dst * config.experts_per_rank + expert
+                count = int(group_sizes_host[global_expert])
+                block_count = (count + config.block_m - 1) // config.block_m
+                group_start = int(group_offsets[global_expert])
+                for block in range(block_count):
+                    valid_rows = min(config.block_m, count - block * config.block_m)
+                    if entry >= config.entries_per_rank:
+                        dropped_entries += 1
+                        dropped_rows += valid_rows
+                        continue
+                    dst_row_start = int(expert_base[dst, expert] + src_base[src, dst, expert] + block * config.block_m)
+                    send_meta[src, dst_ordinal, entry, :] = (src, expert, dst_row_start, valid_rows)
+                    row_start = group_start + block * config.block_m
+                    x_host[src, dst_ordinal, entry, :valid_rows, :] = packed_x[row_start : row_start + valid_rows]
+                    entry += 1
+
+    recv_meta = _recv_meta_from_send_meta(config, send_meta)
+    stats = _queue_stats(config, send_meta)
+    stats["input_mode"] = "compact_routing"
+    stats["compact_pack_rows_total"] = compact_pack_rows
+    stats["dropped_entries_total"] = dropped_entries
+    stats["dropped_rows_total"] = dropped_rows
+    stats["routing_assignments_per_source"] = config.tokens_per_rank * config.topk
+    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
+
+
+def _make_host_inputs(config: PushInboxConfig) -> HostInputs:
     if config.queue_mode == "routing":
         host_inputs = _make_routing_inputs(config)
     else:
         host_inputs = _make_rectangular_inputs(config)
+    host_inputs.queue_stats["input_mode"] = "synthetic_blocks"
+    return host_inputs
+
+
+def _device_inputs_from_host(config: PushInboxConfig, host_inputs: HostInputs) -> DeviceInputs:
     w_host = _make_weights(config)
     return DeviceInputs(
         x=jnp.asarray(host_inputs.x, dtype=jnp.bfloat16),
@@ -2308,6 +2413,10 @@ def _make_inputs(config: PushInboxConfig) -> DeviceInputs:
         w=w_host,
         queue_stats=host_inputs.queue_stats,
     )
+
+
+def _make_inputs(config: PushInboxConfig) -> DeviceInputs:
+    return _device_inputs_from_host(config, _make_host_inputs(config))
 
 
 def _sharded_kernel(mesh: Mesh, config: PushInboxConfig):
@@ -2562,6 +2671,7 @@ def _validate(
 def _run_one(
     config: PushInboxConfig,
     settings: SourcePushInboxRunSettings,
+    input_builder: Callable[[PushInboxConfig], HostInputs] = _make_host_inputs,
 ) -> list[dict[str, Any]]:
     try:
         _emit_progress(config, settings.progress_events, "validate_start")
@@ -2573,7 +2683,8 @@ def _run_one(
         _emit_progress(config, settings.progress_events, "mesh_start")
         mesh = _make_mesh(config.ep_size)
         _emit_progress(config, settings.progress_events, "make_inputs_start")
-        inputs = _make_inputs(config)
+        host_inputs = input_builder(config)
+        inputs = _device_inputs_from_host(config, host_inputs)
         _emit_progress(config, settings.progress_events, "device_put_start")
         x = jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None)))
         send_meta = jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
@@ -2713,6 +2824,30 @@ def run_source_push_inbox(
         progress_events=progress_events,
     )
     return _run_one(config, settings)
+
+
+def run_source_push_inbox_compact_routing(
+    config: PushInboxConfig,
+    *,
+    warmup: int,
+    steps: int,
+    repeat_runs: int,
+    check: bool,
+    debug_exceptions: bool = False,
+    separate_compile: bool = False,
+    progress_events: bool = False,
+) -> list[dict[str, Any]]:
+    """Run the source-push inbox kernel fed by compact expert-sorted routing inputs."""
+    settings = SourcePushInboxRunSettings(
+        warmup=warmup,
+        steps=steps,
+        repeat_runs=repeat_runs,
+        check=check,
+        debug_exceptions=debug_exceptions,
+        separate_compile=separate_compile,
+        progress_events=progress_events,
+    )
+    return _run_one(config, settings, input_builder=_make_compact_routing_inputs)
 
 
 def _parse_int_csv(value: str) -> tuple[int, ...]:

@@ -11,13 +11,11 @@ from typing import Any
 
 
 SOURCE_PUSH_PROFILE_NONE = "none"
-SOURCE_PUSH_PROFILE_UNIFORM_210 = "hopper_queue_ngroups2_210"
-SOURCE_PUSH_PROFILE_ROUGHLY_BALANCED_210 = "hopper_queue_roughly_balanced_ngroups2_210"
+SOURCE_PUSH_PROFILE_STABLE_216 = "hopper_source_push_inbox_rough_balanced_216"
 
 SOURCE_PUSH_PROFILES = (
     SOURCE_PUSH_PROFILE_NONE,
-    SOURCE_PUSH_PROFILE_UNIFORM_210,
-    SOURCE_PUSH_PROFILE_ROUGHLY_BALANCED_210,
+    SOURCE_PUSH_PROFILE_STABLE_216,
 )
 
 _COMMON_HOPPER_QUEUE_DEFAULTS: Mapping[str, Any] = MappingProxyType(
@@ -63,11 +61,7 @@ def _profile_defaults(**overrides: Any) -> Mapping[str, Any]:
 _SOURCE_PUSH_PROFILE_DEFAULTS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
     {
         SOURCE_PUSH_PROFILE_NONE: MappingProxyType({}),
-        SOURCE_PUSH_PROFILE_UNIFORM_210: _profile_defaults(
-            routing="uniform",
-            send_pipeline_depth=2,
-        ),
-        SOURCE_PUSH_PROFILE_ROUGHLY_BALANCED_210: _profile_defaults(
+        SOURCE_PUSH_PROFILE_STABLE_216: _profile_defaults(
             routing="roughly_balanced",
             send_pipeline_depth=1,
         ),
