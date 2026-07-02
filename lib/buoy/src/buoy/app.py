@@ -33,6 +33,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from buoy import cache
 from buoy.config import BuoyConfig
@@ -312,6 +313,29 @@ async def xprof_proxy(request: Request) -> Response:
 # The dashboard is a bundled Vue SPA built into dashboard/dist by `npm run build`
 # (gitignored; shipped in the Iris bundle via GENERATED_ARTIFACT_GLOBS). Resolve its
 # dist dir: env override → the in-repo build output next to this package.
+STATIC_MAX_AGE = 31_536_000  # 1 year; rsbuild asset filenames are content-hashed (immutable)
+
+
+class _CacheControlStatic:
+    """Wrap StaticFiles to add a long immutable Cache-Control on the hashed assets."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+        self._header = f"public, max-age={STATIC_MAX_AGE}, immutable".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def send_cached(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"cache-control", self._header)]
+            await send(message)
+
+        await self._app(scope, receive, send_cached)
+
+
 def _dashboard_dist() -> Path:
     override = os.environ.get("BUOY_DASHBOARD_DIST")
     if override:
@@ -388,7 +412,9 @@ def build_app(cfg: BuoyConfig) -> Starlette:
             Route("/api/profile_status", profile_status),
             Route("/wrap/{entity}/{project}/{run_id}", xprof_wrap),
             Route("/xprof/{entity}/{project}/{run_id}/{sub:path}", xprof_proxy, methods=["GET", "HEAD"]),
-            Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"),
+            Mount(
+                "/static", _CacheControlStatic(StaticFiles(directory=dist / "static", check_dir=False)), name="static"
+            ),
         ],
         lifespan=lifespan,
     )
