@@ -188,12 +188,8 @@ class DbBackendWorkerStore:
         return result
 
     def running_tasks(self, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-        """The running-task ids on each of ``worker_ids``.
-
-        Serves the backend's dashboard status authoring, so it reads from the
-        general pool — never the control-only pool the schedule/reconcile/autoscale
-        tick reserves for itself.
-        """
+        """The running-task ids on each of ``worker_ids``, read from the general
+        pool (never the control-only pool the control-loop tick reserves)."""
         if not worker_ids:
             return {}
         with self.db.read_snapshot() as snap:

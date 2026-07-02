@@ -536,13 +536,12 @@ class TaskBackend(Protocol):
         ...
 
     def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """Author this backend's autoscaler status, fully populated.
+        """This backend's autoscaler status, fully populated and self-contained.
 
-        The backend stamps each group with its own :attr:`backend_id` and overlays
-        every VM with the usability / running-task-count / capacity verdict it
-        derives from its own liveness tracker and running-task rows. Empty for a
-        backend with no autoscaler. The controller merges these across backends for
-        ``GetAutoscalerStatus`` without reaching into any backend's state.
+        Every group is tagged with this backend's id and every VM carries its
+        usability / running-task-count / capacity verdict, so the controller can
+        merge statuses across backends without reaching into any backend's state.
+        Empty for a backend with no autoscaler.
         """
         ...
 
