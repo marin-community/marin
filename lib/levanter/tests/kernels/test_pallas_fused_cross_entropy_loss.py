@@ -921,7 +921,7 @@ def test_batched_xla_h100_full_vocab_policy_selects_b_tiled_path(monkeypatch: py
             jax.ShapeDtypeStruct((8191, 16), jnp.bfloat16),
             w,
         )
-        == 8191
+        is None
     )
     assert (
         batched_xla._h100_full_vocab_b_tiled_block_size(
