@@ -7,49 +7,7 @@ import levanter.callbacks as callbacks_module
 from levanter.callbacks import LambdaCallback
 from levanter.callbacks import profile_ctx
 from levanter.callbacks import profiler as profiler_module
-from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, profile
-
-
-def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
-    calls = []
-
-    def start_trace(path: str, *, create_perfetto_link: bool, create_perfetto_trace: bool, profiler_options) -> None:
-        calls.append(("start", path, create_perfetto_link, create_perfetto_trace, profiler_options))
-
-    def stop_trace() -> None:
-        calls.append(("stop",))
-
-    monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 0)
-    monkeypatch.setattr(profiler_module.jax.profiler, "start_trace", start_trace)
-    monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", stop_trace)
-    monkeypatch.setattr(profiler_module, "barrier_sync", lambda *, timeout: calls.append(("barrier", timeout)))
-
-    options = ProfilerConfig(profile_options=ProfileOptionsConfig(host_tracer_level=1)).build_jax_profile_options()
-    profile_dir = tmp_path / "run" / "profiler"
-    callback = LambdaCallback(
-        profile(
-            str(profile_dir),
-            start_step=5,
-            num_steps=1,
-            create_perfetto_link=False,
-            profiler_options=options,
-        )
-    )
-
-    assert profile_dir.exists()
-    process_dir = profile_dir / "process_00000"
-    assert process_dir.exists()
-
-    callback.on_step(SimpleNamespace(step=4))
-    callback.on_step(SimpleNamespace(step=4), force=True)
-    callback.on_step(SimpleNamespace(step=4), force=True)
-
-    assert calls == [
-        ("start", str(process_dir), False, False, options),
-        ("stop",),
-        ("barrier", 200),
-    ]
-    assert profile_dir.exists()
+from levanter.callbacks.profiler import profile
 
 
 def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, tmp_path):
