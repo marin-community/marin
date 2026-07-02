@@ -5,16 +5,18 @@
 > PR #6857). Follow-up to #6545 (public-endpoint discussion) and #6556
 > (marin-serve).
 >
-> **Landed (controller core + client plumbing, all tests green):** stages 1–7's
-> controller side — proto (`EndpointAccess`, `RegisterEndpointRequest.access`,
-> `MintEndpointToken`), migration `0036`, `VerifiedIdentity.audience`,
-> `JwtTokenManager.create_endpoint_token` + `verify_aud=False`,
-> `resolve_endpoint_row`, `_authorize_proxy` + the RPC/HTTP scoped-token denies,
-> the `MintEndpointToken` handler, the URL-token fallback route, and the
-> `access=` parameter threaded through the registration client APIs.
-> **Remaining:** the `quick_serve` serve-flow integration (register `BEARER` +
-> CLI-side mint/print — open question 2) and the infra stages 8 (operator-run
-> `iap_gclb.py public-proxy` and the CoreWeave ingress) + docs.
+> **Landed (stages 1–7, all tests green):** proto (`EndpointAccess`,
+> `RegisterEndpointRequest.access`, `MintEndpointToken`), migration `0036`,
+> `VerifiedIdentity.audience`, `JwtTokenManager.create_endpoint_token` +
+> `verify_aud=False`, `resolve_endpoint_row`, `_authorize_proxy` + the RPC/HTTP
+> scoped-token denies, the `MintEndpointToken` handler, the URL-token fallback
+> route, the `access=` parameter threaded through the registration client APIs,
+> and the **`marin-serve` flow**: `--access {private|public|bearer}` registers
+> the endpoint with the mode and, for `bearer`, mints a scoped token CLI-side
+> (`RemoteClusterClient.mint_endpoint_token`) once vLLM registers and prints the
+> off-cluster OpenAI `base_url` + `api_key`.
+> **Remaining:** infra stage 8 (operator-run `iap_gclb.py public-proxy` and the
+> CoreWeave ingress) + docs.
 
 ## Problem
 
