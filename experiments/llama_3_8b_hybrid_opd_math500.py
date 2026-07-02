@@ -3,20 +3,21 @@
 
 # nodryrun because vLLM is not installed by default
 
-"""Executor-backed hybrid reward+OPD Math500 smoke launcher for Llama 3.1 8B."""
+"""Lazy-artifact hybrid reward+OPD Math500 smoke launcher for Llama 3.1 8B."""
 
 import argparse
 import logging
 import os
 
 from levanter.checkpoint import CheckpointDebugConfig
-from marin.execution.executor import executor_main
+from marin.execution.lazy import lower
+from marin.execution.step_runner import StepRunner
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.opd_losses import HybridRLOOOPDSampledTokenReverseKLLoss
-from marin.rl.rl_experiment_utils import RLExperimentConfig, executor_main_config_for_rl_experiment, make_rl_step
+from marin.rl.rl_experiment_utils import RLExperimentConfig, make_rl_step
 from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig
 
-from experiments.llama_3_8b_rl_math500 import (
+from experiments.llama_3_8b_opd_math500_common import (
     DEFAULT_CHECKPOINTER_SAVE_INTERVAL,
     DEFAULT_EVAL_FREQUENCY,
     DEFAULT_EVAL_N_EXAMPLES,
@@ -26,6 +27,7 @@ from experiments.llama_3_8b_rl_math500 import (
     DEFAULT_TPU_WORKER_RAM,
     LLAMA_3_1_8B_INSTRUCT,
     PROJECT_NAME,
+    RL_STEP_VERSION,
     build_math500_curriculum,
     build_run_name,
 )
@@ -227,7 +229,6 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         max_rollout_step_delay=0,
         weight_transfer_sync_interval_steps=1,
         max_weight_transfer_wait_time=600,
-        inference_n=args.n_generations_per_prompt,
     )
 
 
@@ -246,15 +247,15 @@ def main() -> None:
         name=run_name,
         config=experiment_config,
         curriculum=curriculum,
+        version=RL_STEP_VERSION,
     )
-    executor_config = executor_main_config_for_rl_experiment(experiment_config)
     rl_loss = experiment_config.rl_loss
     if not isinstance(rl_loss, HybridRLOOOPDSampledTokenReverseKLLoss):
         raise TypeError(f"Expected HybridRLOOOPDSampledTokenReverseKLLoss, got {type(rl_loss)}")
 
     logger.info(
-        "Launching executor hybrid OPD Math500 run %s (teacher=%s, opd_coef=%.4f, train_tpu=%s, "
-        "inference_tpu=%s, train_ram=%s, inference_ram=%s, zone=%s, executor_prefix=%s, eval_examples=%d)",
+        "Launching hybrid OPD Math500 run %s (teacher=%s, opd_coef=%.4f, train_tpu=%s, "
+        "inference_tpu=%s, train_ram=%s, inference_ram=%s, zone=%s, output_path=%s, eval_examples=%d)",
         run_name,
         experiment_config.teacher.checkpoint if experiment_config.teacher is not None else None,
         rl_loss.opd_coef,
@@ -263,15 +264,11 @@ def main() -> None:
         experiment_config.train_ram,
         experiment_config.inference_ram,
         experiment_config.zone,
-        executor_config.prefix,
+        step.path(),
         DEFAULT_EVAL_N_EXAMPLES,
     )
 
-    executor_main(
-        executor_config,
-        steps=[step],
-        description="Executor-backed hybrid reward+sampled-token OPD Math500 smoke run for Llama 3.1 8B",
-    )
+    StepRunner().run([lower(step)])
 
 
 if __name__ == "__main__":
