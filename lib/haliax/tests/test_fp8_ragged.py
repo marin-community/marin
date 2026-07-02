@@ -208,6 +208,40 @@ def test_cast_transpose_reference_contract():
 
 
 @gpu_only
+@pytest.mark.parametrize("out_dtype", [jnp.float8_e4m3fn, jnp.float8_e5m2])
+@pytest.mark.parametrize("M", [256, 130])  # tile-aligned and a non-tile-aligned M
+def test_cute_cast_transpose_bit_exact(out_dtype, M):
+    """The fused CuTe cast-transpose is bit-identical to the pure-JAX reference."""
+    from haliax._src.fp8_cast_transpose import cast_transpose_reference  # noqa: PLC0415
+    from haliax._src.ragged_dot_cute import cute_cast_transpose  # noqa: PLC0415
+
+    N = 128
+    fp8_max = float(jnp.finfo(out_dtype).max)
+    x = jnp.asarray(np.random.default_rng(0).standard_normal((M, N)) * 0.1, jnp.bfloat16)
+    scale = jnp.asarray(float(jnp.max(jnp.abs(x))) / fp8_max, jnp.float32)
+    row, col = cute_cast_transpose(x, scale, out_dtype=out_dtype)
+    ref_row, ref_col = cast_transpose_reference(x, scale, out_dtype=out_dtype)
+    assert row.shape == (M, N) and col.shape == (N, M)
+    # Bit-exact: identical FP8 bit patterns (compare the raw float values).
+    assert np.array_equal(np.asarray(row, np.float32), np.asarray(ref_row, np.float32))
+    assert np.array_equal(np.asarray(col, np.float32), np.asarray(ref_col, np.float32))
+
+
+@gpu_only
+def test_cute_cast_transpose_deterministic():
+    """Repeated fused cast-transpose runs are bit-identical (async-proxy-free elementwise)."""
+    from haliax._src.ragged_dot_cute import cute_cast_transpose  # noqa: PLC0415
+
+    x = jnp.asarray(np.random.default_rng(2).standard_normal((512, 256)) * 0.1, jnp.bfloat16)
+    scale = jnp.asarray(float(jnp.max(jnp.abs(x))) / 448.0, jnp.float32)
+    fn = jax.jit(lambda a: cute_cast_transpose(a, scale, out_dtype=jnp.float8_e4m3fn))
+    row0, col0 = (np.asarray(t, np.float32) for t in jax.block_until_ready(fn(x)))
+    for _ in range(7):
+        row, col = (np.asarray(t, np.float32) for t in jax.block_until_ready(fn(x)))
+        assert np.array_equal(row, row0) and np.array_equal(col, col0)
+
+
+@gpu_only
 def test_cute_wgrad_matches_reference():
     """Standalone genuine E4M3xE5M2 wgrad (contract token axis) within 5% of the f32 ref."""
     from haliax._src.fp8_cast_transpose import cast_transpose  # noqa: PLC0415

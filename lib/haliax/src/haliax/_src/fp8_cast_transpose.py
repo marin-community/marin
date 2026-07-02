@@ -20,6 +20,10 @@ row-major output is bit-consistent with the forward operand ``in_q`` builds.
 import jax.numpy as jnp
 
 from .fp8 import quantize
+from .ragged_dot_cute import cute_available, cute_cast_transpose
+
+# Fused GPU kernel handles bf16 inputs with an f32 accumulator and an N tile of 64.
+_CUTE_CAST_TRANSPOSE_TILE_N = 64
 
 
 def cast_transpose_reference(x, scale, *, out_dtype, compute_dtype=jnp.float32):
@@ -32,12 +36,26 @@ def cast_transpose_reference(x, scale, *, out_dtype, compute_dtype=jnp.float32):
     return xq, jnp.swapaxes(xq, -2, -1)
 
 
+def _fused_conforming(x, compute_dtype) -> bool:
+    """The fused CuTe kernel handles bf16 inputs, an f32 accumulator, and N%tile_n==0."""
+    return (
+        cute_available()
+        and x.dtype == jnp.bfloat16
+        and compute_dtype == jnp.float32
+        and x.ndim == 2
+        and x.shape[1] % _CUTE_CAST_TRANSPOSE_TILE_N == 0
+    )
+
+
 def cast_transpose(x, scale, *, out_dtype, compute_dtype=jnp.float32):
     """Cast-transpose ``x[M,F]`` to FP8, returning both row-major and token-major layouts.
 
-    Currently the pure-JAX reference on every backend (quantize + XLA transpose).
-    A fused single-pass CuTe kernel (one HBM read -> both layouts + amax) is the
-    intended GPU optimization; until it lands this reference is exact and the
-    XLA transpose is the unfused-traffic cost the e2e bench measures.
+    On a GPU with the CuTe DSL (and a conforming bf16 ``x``), a single fused kernel
+    reads ``x`` once and emits both the row-major FP8 (bit-identical to
+    ``quantize(x, out_dtype, scale)``) and the token-major FP8 transpose, replacing
+    the reference's ``quantize + swapaxes`` two-pass. Otherwise the pure-JAX
+    reference runs (exact on any backend).
     """
+    if _fused_conforming(x, compute_dtype):
+        return cute_cast_transpose(x, scale, out_dtype=out_dtype)
     return cast_transpose_reference(x, scale, out_dtype=out_dtype, compute_dtype=compute_dtype)
