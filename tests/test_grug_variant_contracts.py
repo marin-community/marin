@@ -42,6 +42,7 @@ from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import url_to_fs
 
 from experiments.ferries import canary_ferry
 from experiments.llama import llama3_tokenizer
@@ -505,6 +506,23 @@ def test_grug_moe_may_launcher_diagnostic_overrides(monkeypatch):
     assert model.input_embed_sharding == "replicated"
     assert model.output_proj_sharding == "replicated"
     assert model.non_expert_param_sharding == "batch"
+
+
+def test_grug_moe_profiler_mirror_copies_contents_to_output_path(tmp_path):
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    profile_dir = tmp_path / "logs" / "run-123" / "profiler"
+    trace_dir = profile_dir / "process_00000" / "plugins" / "profile" / "2026_07_02"
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "host.xplane.pb").write_bytes(b"profile")
+
+    output_path = f"memory://grug-profile-mirror/{uuid.uuid4()}"
+
+    mirrored = train_module._mirror_profiler_dir_to_output(profile_dir, output_path)
+
+    assert mirrored == f"{output_path}/profiler"
+    fs, fs_path = url_to_fs(f"{output_path}/profiler/process_00000/plugins/profile/2026_07_02/host.xplane.pb")
+    assert fs.exists(fs_path)
+    assert not fs.exists(f"{fs_path.rsplit('/process_00000/', 1)[0]}/profiler/process_00000")
 
 
 def test_grug_moe_pko_attention_accepts_precomputed_segment_starts(monkeypatch):

@@ -273,6 +273,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         model=config.model,
         data=config.data,
         resources=config.resources,
+        output_path=config.output_path,
         optimizer=config.optimizer,
         trainer=grug_trainer,
         eval=config.eval,

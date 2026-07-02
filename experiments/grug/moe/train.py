@@ -5,10 +5,12 @@ import dataclasses
 import functools
 import logging
 import math
+import posixpath
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import equinox as eqx
@@ -38,8 +40,10 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.utils.fsspec_utils import join_path
 from levanter.utils.jax_utils import barrier_sync, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from rigging.filesystem import url_to_fs
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -114,6 +118,7 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
+    output_path: str | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -268,6 +273,32 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
 def _should_log_loop_metrics(*, step: int, log_every: int) -> bool:
     return step % log_every == 0
+
+
+def _mirror_profiler_dir_to_output(profile_dir: Path, output_path: str | None) -> str | None:
+    if output_path is None:
+        return None
+    if not profile_dir.exists():
+        logger.warning("Grug profiler directory does not exist; skipping mirror: %s", profile_dir)
+        return None
+
+    target_url = join_path(output_path, "profiler")
+    fs, target_path = url_to_fs(target_url)
+    if fs.exists(target_path):
+        fs.rm(target_path, recursive=True)
+    fs.makedirs(target_path, exist_ok=True)
+
+    for source_path in profile_dir.rglob("*"):
+        relative_path = source_path.relative_to(profile_dir).as_posix()
+        destination_path = posixpath.join(target_path.rstrip("/"), relative_path)
+        if source_path.is_dir():
+            fs.makedirs(destination_path, exist_ok=True)
+            continue
+        fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
+        fs.put_file(str(source_path), destination_path)
+
+    logger.info("Mirrored Grug profiler directory to %s", target_url)
+    return target_url
 
 
 @register_dataclass
@@ -839,6 +870,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if checkpointer is not None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
+
+            if profiler_enabled and jax.process_index() == 0:
+                profiler_dir = trainer.log_dir / run_id / "profiler"
+                _mirror_profiler_dir_to_output(profiler_dir, config.output_path)
+                logger.info("Logging Grug profiler artifact: %s", profiler_dir)
+                levanter.tracker.current_tracker().log_artifact(
+                    profiler_dir,
+                    name=f"{run_id}-profiler",
+                    type="jax_profile",
+                )
 
     levanter.tracker.current_tracker().finish()
 

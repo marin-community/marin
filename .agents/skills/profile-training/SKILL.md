@@ -33,8 +33,8 @@ tables. Use `--trace-file` only for a specific Perfetto JSON trace or an older
 profile with no XPlane protobuf.
 
 ## Capture Profiles
-Use Levanter profiler flags so profiles land under
-`<trainer.log_dir>/<run_id>/profiler`:
+Use Levanter profiler flags so profiles first land under
+`<trainer.log_dir>/<run_id>/profiler/process_<rank>/`:
 
 ```bash
 uv run ... \
@@ -60,6 +60,26 @@ uv run ... \
 
 Keep the profiler window short when enabling HLO protobuf collection — it
 enlarges artifacts and can increase profile upload/finalization time.
+
+Profile location and durability rules:
+- The profiler writes to the configured trainer log directory first. With
+  Levanter's default relative `trainer.log_dir=logs`, an Iris task writes inside
+  that task container, for example
+  `logs/cw-may-d2560-profile-20260702-183313/profiler/process_00000/...`.
+- Relative Iris task-container paths disappear after task teardown. Retrieve
+  them live with `iris task exec`/tar while the task is still alive, or configure
+  code to copy/mirror the profiler directory to a durable run output path.
+- Durable retrieval requires one of: a W&B artifact logged with type
+  `jax_profile`, an explicit copy/mirror of the profiler directory to the Marin
+  run output path or S3, or live retrieval before the Iris task exits.
+- A Marin `ctx.output_path` can be S3 without being the trainer log directory.
+  `WandbConfig(replicate_path=output_path)` mirrors tracker metrics such as
+  `tracker_metrics.jsonl`; it does not by itself mirror profiler files.
+- Current Grug MoE launchers mirror completed profiler captures to
+  `<ctx.output_path>/profiler/`, which is the durable default location for new
+  Grug profile runs.
+- Nested Grug configs may record the effective value as
+  `trainer.trainer.log_dir`, not top-level `trainer.log_dir`.
 
 Known-good TensorBoard scope recipe from CoreWeave Grug MoE profiling:
 `trainer.profiler.enabled=true`, `trainer.profiler.start_step=3`,
@@ -140,8 +160,13 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 ```
 
 `--run-target` accepts: a bare run id (requires `--entity` and `--project`),
-`entity/project/run_id`, or a full W&B run URL. The profiler directory is
-resolved from `trainer.log_dir` in the run config.
+`entity/project/run_id`, or a full W&B run URL. It mirrors the profiler
+directory computed from the run config's `trainer.log_dir` and run id. This is
+not a W&B `jax_profile` artifact lookup: it works only when `trainer.log_dir`
+points at remote/durable storage, or when that local path is still available in
+the environment running the command. For nested Grug configs, inspect
+`trainer.trainer.log_dir` as well as top-level `trainer.log_dir` before assuming
+where the profile was written.
 
 ### Option C: From a local artifact directory
 
