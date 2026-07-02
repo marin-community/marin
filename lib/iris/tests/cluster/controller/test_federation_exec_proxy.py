@@ -140,6 +140,7 @@ def _handoff_and_mirror_running_task(
     parent_service: ControllerServiceImpl,
     peer_state: ControllerTestState,
     manager: FederationManager,
+    name: str = "fed-job",
 ) -> tuple[JobName, JobName]:
     """Hand off a job, drive its peer task to RUNNING, and mirror it back.
 
@@ -147,7 +148,7 @@ def _handoff_and_mirror_running_task(
     then holds a live federated task (``child_cluster`` set, no local worker), the
     exact row an on-demand RPC must proxy rather than resolve locally.
     """
-    response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+    response = parent_service.launch_job(_cluster_pinned_request(name), None)
     parent_job_id = JobName.from_wire(response.job_id)
     remote_job_id = JobName.from_wire(encode_remote_job_id("parent", parent_job_id))
 
@@ -238,6 +239,30 @@ def test_exec_against_a_federated_task_runs_on_the_peer(tmp_path, log_client):
         (call,) = peer_service._controller.provider.exec_in_container.call_args_list
         assert call.args[0].task_id == remote_job_id.task(0).to_wire()
         assert call.args[1].task_id == remote_job_id.task(0).to_wire()
+
+
+def test_exec_rebases_a_task_id_whose_job_name_contains_a_colon(tmp_path, log_client):
+    """A ':' in a job-name component is a legal name char, not an attempt separator
+    for an exec task id — the rebase must parse it as a JobName, not a TaskAttempt."""
+    with ExitStack() as stack:
+        parent_service, _parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _ProxyPeerConnection(peer_service))
+        parent_job_id, remote_job_id = _handoff_and_mirror_running_task(
+            parent_service, peer_state, manager, name="train:debug"
+        )
+
+        peer_service._controller.provider.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(
+            exit_code=0
+        )
+        resp = parent_service.exec_in_container(
+            controller_pb2.Controller.ExecInContainerRequest(task_id=parent_job_id.task(0).to_wire(), command=["true"]),
+            None,
+        )
+
+        assert resp.exit_code == 0
+        (call,) = peer_service._controller.provider.exec_in_container.call_args_list
+        assert call.args[0].task_id == remote_job_id.task(0).to_wire()
 
 
 def test_exec_surfaces_the_peers_not_found_for_a_stale_mirror(tmp_path, log_client):

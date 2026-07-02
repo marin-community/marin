@@ -64,14 +64,25 @@ def encode_remote_job_id(cluster_id: str, parent_job_id: JobName) -> str:
     return JobName.root(root.user, f"{cluster_id}~{root.name}").to_wire()
 
 
-def _rebase_target(target: str, remote_job_id: str) -> str:
-    """Rewrite a task/attempt wire id onto the peer's ``remote_job_id`` root job.
+def _rebase_task_id(task_id: str, remote_job_id: str) -> str:
+    """Rewrite a full task wire id onto the peer's ``remote_job_id`` root job.
 
-    ``target`` is a :class:`~iris.cluster.types.TaskAttempt` wire string — a full
-    task id (``/user/job/0``) or one with an attempt qualifier (``/user/job/0:3``).
-    Its root job is replaced by ``remote_job_id`` while the child path, task index,
-    and any attempt qualifier are preserved, so the peer resolves the same task in
-    its own tree.
+    ``task_id`` is a plain task :class:`~iris.cluster.types.JobName`
+    (``/user/job/0``), whose components may legally contain ``:`` — so it is parsed
+    as a ``JobName``, never a ``TaskAttempt`` (which would mis-split a ``:`` in a
+    job name as an attempt qualifier). Its root job is replaced by ``remote_job_id``
+    while the child path and task index are preserved.
+    """
+    remote_root = JobName.from_wire(remote_job_id)
+    return JobName.from_wire(task_id).with_root_job(remote_root).to_wire()
+
+
+def _rebase_profile_target(target: str, remote_job_id: str) -> str:
+    """Rewrite a profile ``target`` onto the peer's ``remote_job_id`` root job.
+
+    ``target`` is a :class:`~iris.cluster.types.TaskAttempt` wire string — a task id
+    with an optional ``:attempt`` qualifier — so the root job is replaced while the
+    child path, task index, and any attempt qualifier are preserved.
     """
     parsed = TaskAttempt.from_wire(target)
     remote_root = JobName.from_wire(remote_job_id)
@@ -246,7 +257,7 @@ class FederationManager:
         peer = self._require_peer(peer_id)
         forwarded = job_pb2.ProfileTaskRequest()
         forwarded.CopyFrom(request)
-        forwarded.target = _rebase_target(request.target, remote_job_id)
+        forwarded.target = _rebase_profile_target(request.target, remote_job_id)
         return peer.profile_task(forwarded)
 
     def proxy_exec(
@@ -266,7 +277,7 @@ class FederationManager:
         peer = self._require_peer(peer_id)
         forwarded = controller_pb2.Controller.ExecInContainerRequest()
         forwarded.CopyFrom(request)
-        forwarded.task_id = _rebase_target(request.task_id, remote_job_id)
+        forwarded.task_id = _rebase_task_id(request.task_id, remote_job_id)
         return peer.exec_in_container(forwarded)
 
     # -- background loops ----------------------------------------------------
