@@ -100,8 +100,65 @@ class ProfilerConfig:
         return max(0, total_prof_steps)
 
 
+@dataclass
+class _HostProfileState:
+    profiler: cProfile.Profile
+    stats_path: str
+    txt_summary_path: str
+
+
 def _process_profile_path(path: str) -> str:
     return os.path.join(path, f"process_{jax.process_index():05d}")
+
+
+def _start_host_profile(process_path: str, host_profile_basename: str) -> _HostProfileState | None:
+    try:
+        profiler = cProfile.Profile()
+        profiler.enable()
+        return _HostProfileState(
+            profiler=profiler,
+            stats_path=os.path.join(process_path, f"{host_profile_basename}.pstats"),
+            txt_summary_path=os.path.join(process_path, f"{host_profile_basename}.txt"),
+        )
+    except Exception as e:  # pragma: no cover - optional/diagnostic path
+        logger.warning("Failed to start cProfile host profiler: %s", e)
+        return None
+
+
+def _write_host_profile(state: _HostProfileState | None, host_profile_topn: int) -> None:
+    if state is None:
+        return
+    try:
+        state.profiler.disable()
+        state.profiler.dump_stats(state.stats_path)
+        if host_profile_topn:
+            stats = pstats.Stats(state.stats_path)
+            stats.strip_dirs().sort_stats("cumtime")
+            with open(state.txt_summary_path, "w") as f:
+                stats.stream = f  # type: ignore[assignment]
+                stats.print_stats(host_profile_topn)
+    except Exception:  # pragma: no cover - optional/diagnostic path
+        logger.warning("Failed to log host profile stats", exc_info=True)
+
+
+def _stop_device_profile(*, create_perfetto_link: bool, device_profile: bool, stop_barrier_timeout: float) -> None:
+    event = None
+    if create_perfetto_link and jax.process_index() == 0:
+        event = threading.Event()
+        _flush_while_waiting(event)
+
+    if create_perfetto_link:
+        logger.info("Stopping profiler. Process 0 will open a perfetto link. I am process %s", jax.process_index())
+    else:
+        logger.info("Stopping profiler.")
+
+    if device_profile:
+        jax.profiler.stop_trace()
+
+    if event is not None:
+        event.set()
+
+    barrier_sync(timeout=stop_barrier_timeout)
 
 
 def mirror_process_profile_dir(
@@ -170,51 +227,17 @@ def profile_ctx(
             profiler_options=profiler_options,
         )
 
-    pr = None
-    stats_path = None
-    txt_summary_path = None
-    if host_profile:
-        try:
-            pr = cProfile.Profile()
-            pr.enable()
-            stats_path = os.path.join(process_path, f"{host_profile_basename}.pstats")
-            txt_summary_path = os.path.join(process_path, f"{host_profile_basename}.txt")
-        except Exception as e:  # pragma: no cover - optional/diagnostic path
-            logger.warning("Failed to start cProfile host profiler: %s", e)
+    host_profile_state = _start_host_profile(process_path, host_profile_basename) if host_profile else None
 
     try:
         yield
     finally:
-        if pr is not None and stats_path is not None:
-            try:
-                pr.disable()
-                pr.dump_stats(stats_path)
-                if host_profile_topn and txt_summary_path is not None:
-                    stats = pstats.Stats(stats_path)
-                    stats.strip_dirs().sort_stats("cumtime")
-                    with open(txt_summary_path, "w") as f:
-                        stats.stream = f  # type: ignore[assignment]
-                        stats.print_stats(host_profile_topn)
-            except Exception:  # pragma: no cover - optional/diagnostic path
-                logger.warning("Failed to log host profile stats", exc_info=True)
-
-        event = None
-        if create_perfetto_link and jax.process_index() == 0:
-            event = threading.Event()
-            _flush_while_waiting(event)
-
-        if create_perfetto_link:
-            logger.info("Stopping profiler. Process 0 will open a perfetto link. I am process %s", jax.process_index())
-        else:
-            logger.info("Stopping profiler.")
-
-        if device_profile:
-            jax.profiler.stop_trace()
-
-        if event is not None:
-            event.set()
-
-        barrier_sync(timeout=stop_barrier_timeout)
+        _write_host_profile(host_profile_state, host_profile_topn)
+        _stop_device_profile(
+            create_perfetto_link=create_perfetto_link,
+            device_profile=device_profile,
+            stop_barrier_timeout=stop_barrier_timeout,
+        )
         mirror_process_profile_dir(path, remote_profile_dir)
 
 
