@@ -205,6 +205,10 @@ class DbBackendWorkerStore:
         derived from this backend's own liveness tracker (which holds exactly its
         persisted workers) plus the running-task rows for those VMs.
         ``autoscaler_status`` is mutated in place and returned.
+
+        Authored on RPC/dashboard threads, so the running-task lookup uses the
+        general read pool — never the control-only pool the schedule/reconcile
+        tick reserves.
         """
         usability_by_id = {str(wid): live.usability for wid, live in self.health.all().items()}
         for group in autoscaler_status.groups:
@@ -217,7 +221,7 @@ class DbBackendWorkerStore:
             if vm.vm_id
         }
         if vm_ids:
-            with self.db.control_read_snapshot() as snap:
+            with self.db.read_snapshot() as snap:
                 running = reads.running_tasks_by_worker(snap, vm_ids)
         else:
             running = {}
