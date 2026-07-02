@@ -19,7 +19,7 @@ from pathlib import Path
 import click
 
 from finelog.deploy.bootstrap import render_template
-from finelog.deploy.config import FinelogConfig
+from finelog.deploy.config import FinelogConfig, assert_inlineable_auth, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
 _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
@@ -34,6 +34,22 @@ _S3_SECRET_SUFFIX = "-env"
 _K8S_MANIFEST_DIR = Path(__file__).resolve().parents[3] / "deploy" / "k8s"
 
 _MANIFESTS = ("01-pvc.yaml.tmpl", "02-deployment.yaml.tmpl", "03-service.yaml.tmpl")
+
+
+def _auth_env_block(cfg: FinelogConfig) -> str:
+    """Render the `FINELOG_AUTH_POLICY` container-env entry, or "" for no policy.
+
+    A cidr-only policy carries no secrets and is injected inline. A policy with a
+    jwt layer carries key material, so it is rejected here — it must be supplied
+    through the `{name}-env` Secret rather than baked into a plaintext manifest.
+    """
+    if not cfg.auth:
+        return ""
+    assert_inlineable_auth(cfg)
+    policy = auth_policy_json(cfg.auth)
+    if "'" in policy:
+        raise ValueError("auth policy must not contain a single quote")
+    return f"            - name: FINELOG_AUTH_POLICY\n              value: '{policy}'"
 
 
 def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
@@ -58,6 +74,7 @@ def _render_manifest(template_path: Path, cfg: FinelogConfig) -> str:
         "remote_log_dir": cfg.remote_log_dir,
         "storage_class_block": storage_class_block,
         "storage_gb": k8s.storage_gb,
+        "auth_env_block": _auth_env_block(cfg),
     }
     referenced = set(_TEMPLATE_VAR_RE.findall(template))
     return render_template(template, **{k: v for k, v in all_vars.items() if k in referenced})

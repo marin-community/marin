@@ -27,3 +27,10 @@ deployment:
     storage_gb: 250
     # R2 endpoint for the s3:// archive; folded into the minted creds Secret.
     object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+# Authenticated-ingress policy. This LOCAL finelog is default-deny;
+# it admits its own cluster's private network (CoreWeave pods are 10.x) and
+# loopback (port-forward), never the public internet. No jwt layer — that is the
+# GLOBAL finelog's job, for cross-cluster relay pushes.
+auth:
+  - type: cidr
+    cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]

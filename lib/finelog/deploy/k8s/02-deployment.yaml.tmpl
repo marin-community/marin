@@ -57,11 +57,16 @@ spec:
             - secretRef:
                 name: {{ name }}-env
                 optional: true
+          # FINELOG_AUTH_POLICY is injected inline below for a
+          # cidr-only policy (no secrets). A policy carrying jwt keys must instead
+          # be supplied through the `{{ name }}-env` Secret so key material never
+          # lands in a plaintext manifest (the deploy path rejects inline jwt).
           env:
             - name: FINELOG_PORT
               value: "{{ port }}"
             - name: FINELOG_REMOTE_DIR
               value: "{{ remote_log_dir }}"
+{{ auth_env_block }}
           volumeMounts:
             - name: cache
               mountPath: /var/cache/finelog

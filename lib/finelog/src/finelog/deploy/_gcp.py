@@ -18,7 +18,7 @@ import time
 import click
 
 from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
-from finelog.deploy.config import FinelogConfig
+from finelog.deploy.config import FinelogConfig, assert_inlineable_auth, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
 LABEL_KEY = "finelog-name"
@@ -97,6 +97,27 @@ def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) 
     return False
 
 
+def _render_bootstrap(cfg: FinelogConfig) -> str:
+    """Pin the image and render the VM bootstrap script for ``cfg``.
+
+    The script becomes startup-script metadata (readable to anyone with instance-
+    metadata access), so an auth stack carrying jwt secrets is rejected — those must
+    come through an operator-managed metadata secret, never inline.
+    """
+    pinned = resolve_image_digest(cfg.image)
+    if pinned != cfg.image:
+        click.echo(f"Pinned image: {cfg.image} -> {pinned}")
+    else:
+        click.echo(f"Using image: {pinned}")
+    assert_inlineable_auth(cfg)
+    return render_bootstrap(
+        image=pinned,
+        port=cfg.port,
+        remote_log_dir=cfg.remote_log_dir,
+        auth_policy=auth_policy_json(cfg.auth) if cfg.auth else "",
+    )
+
+
 def gcp_up(cfg: FinelogConfig) -> None:
     """Create a finelog GCE VM. Idempotent: errors out cleanly if the VM exists."""
     assert cfg.deployment.gcp is not None
@@ -108,13 +129,7 @@ def gcp_up(cfg: FinelogConfig) -> None:
         click.echo("Run `finelog deploy restart <name>` to refresh the container in place.")
         return
 
-    pinned = resolve_image_digest(cfg.image)
-    if pinned != cfg.image:
-        click.echo(f"Pinned image: {cfg.image} -> {pinned}")
-    else:
-        click.echo(f"Using image: {pinned}")
-
-    bootstrap = render_bootstrap(image=pinned, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
+    bootstrap = _render_bootstrap(cfg)
 
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
         f.write(bootstrap)
@@ -176,13 +191,7 @@ def gcp_restart(cfg: FinelogConfig) -> None:
     assert cfg.deployment.gcp is not None
     gcp = cfg.deployment.gcp
 
-    pinned = resolve_image_digest(cfg.image)
-    if pinned != cfg.image:
-        click.echo(f"Pinned image: {cfg.image} -> {pinned}")
-    else:
-        click.echo(f"Using image: {pinned}")
-
-    bootstrap = render_bootstrap(image=pinned, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
+    bootstrap = _render_bootstrap(cfg)
 
     # Update the instance's startup-script metadata so that a future VM reboot
     # (host maintenance, manual reset) brings up the same image we're about to

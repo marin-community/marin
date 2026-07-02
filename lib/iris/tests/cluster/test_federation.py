@@ -87,6 +87,42 @@ def test_peers_config_rejects_static_token_without_cluster():
 
 
 # ---------------------------------------------------------------------------
+# global_finelog: config parse + validation
+# ---------------------------------------------------------------------------
+
+
+def test_global_finelog_config_round_trips():
+    config = parse_config(
+        _config(
+            global_finelog={
+                "address": "dns:///global-finelog:10001",
+                "cluster": "cw-east",
+                "delegation_key": "0123456789abcdef0123456789abcdef",
+            }
+        )
+    )
+    reparsed = parse_config(config_to_dict(config))
+    assert reparsed.global_finelog.address == "dns:///global-finelog:10001"
+    assert reparsed.global_finelog.cluster == "cw-east"
+    assert reparsed.global_finelog.delegation_key == "0123456789abcdef0123456789abcdef"
+
+
+def test_global_finelog_rejects_delegation_key_without_cluster():
+    with pytest.raises(ValueError, match="delegation_key requires cluster"):
+        parse_config(_config(global_finelog={"address": "dns:///g:1", "delegation_key": "k" * 32}))
+
+
+def test_global_finelog_rejects_short_delegation_key():
+    with pytest.raises(ValueError, match="delegation_key must be at least 16 bytes"):
+        parse_config(_config(global_finelog={"address": "dns:///g:1", "cluster": "cw", "delegation_key": "short"}))
+
+
+def test_global_finelog_rejects_empty_address():
+    with pytest.raises(ValueError, match="address is required"):
+        parse_config(_config(global_finelog={"address": "  "}))
+
+
+# ---------------------------------------------------------------------------
 # peer heartbeat + ListPeers view (the parent side)
 # ---------------------------------------------------------------------------
 

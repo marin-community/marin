@@ -3,15 +3,20 @@
 
 """Tests for `finelog.deploy.config`."""
 
+import json
 import textwrap
 from pathlib import Path
 
 import pytest
 from finelog.deploy.config import (
+    CidrAuthLayer,
     Deployment,
     FinelogConfig,
     GcpDeployment,
+    JwtAuthLayer,
+    JwtKeyEntry,
     K8sDeployment,
+    auth_policy_json,
     derive_endpoint_uri,
     load_finelog_config,
 )
@@ -129,3 +134,58 @@ def test_derive_endpoint_uri_k8s() -> None:
     uri, metadata = derive_endpoint_uri(cfg)
     assert uri == "k8s://finelog-x.iris"
     assert metadata == {"port": "10001"}
+
+
+def test_auth_layers_parse_and_serialize(tmp_path: Path) -> None:
+    """An ordered cidr+jwt `auth:` list parses to typed layers and serializes to the
+    `FINELOG_AUTH_POLICY` JSON the finelog server reads, order preserved."""
+    cfg_path = tmp_path / "authed.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-authed
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: gs://bucket/x
+        deployment:
+          gcp:
+            project: p
+            zone: us-central1-a
+        auth:
+          - type: cidr
+            cidrs: [10.0.0.0/8, "::1/128"]
+          - type: jwt
+            keys:
+              - {cluster: marin, secret: 0123456789abcdef0123456789abcdef}
+        """,
+    )
+    cfg = load_finelog_config(str(cfg_path))
+    assert cfg.auth == (
+        CidrAuthLayer(cidrs=("10.0.0.0/8", "::1/128")),
+        JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", secret="0123456789abcdef0123456789abcdef"),)),
+    )
+    assert json.loads(auth_policy_json(cfg.auth)) == [
+        {"type": "cidr", "cidrs": ["10.0.0.0/8", "::1/128"]},
+        {"type": "jwt", "keys": [{"cluster": "marin", "secret": "0123456789abcdef0123456789abcdef"}]},
+    ]
+
+
+def test_auth_unknown_layer_type_rejected(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "bad.yaml"
+    _write_config(
+        cfg_path,
+        """
+        name: finelog-bad
+        port: 10001
+        image: ghcr.io/test/finelog:latest
+        remote_log_dir: gs://bucket/x
+        deployment:
+          gcp:
+            project: p
+            zone: us-central1-a
+        auth:
+          - type: mtls
+        """,
+    )
+    with pytest.raises(ValueError, match="unknown type 'mtls'"):
+        load_finelog_config(str(cfg_path))

@@ -624,6 +624,42 @@ class PeerConfig(_Config):
     static_token: str = ""  # client token for a peer whose manifest uses static auth
 
 
+class GlobalFinelogConfig(_Config):
+    """The shared global finelog this cluster relays its logs to and reads from.
+
+    Federation lands every cluster's logs in one store. When this is set, the
+    controller runs a durable relay that forwards its local finelog out to
+    ``address`` (cluster-namespacing every key) and serves log reads from that
+    store instead of the local one. Absent leaves the log plane single-cluster:
+    no relay, local reads, byte-identical behavior.
+
+    ``address`` is the global finelog's RPC endpoint. The controller authenticates
+    its pushes with a per-cluster delegation credential the global finelog verifies
+    on ingress:
+
+    - ``delegation_key`` — a shared HS256 secret. When set, the relay mints a
+      short-lived JWT signed with it (via the same ``JwtTokenManager`` the control
+      plane uses), and the global finelog carries a matching ``jwt`` layer keyed on
+      ``{cluster: <cluster>, secret: <delegation_key>}``. Dedicated (not the
+      control-plane signing key) so the shared store can *verify* this cluster's
+      tokens without gaining the power to *mint* control-plane tokens. This is the
+      cross-region path; the finelog verifier is HS256-only, so an IAP/GCP token
+      would not verify.
+    - ``static_token`` — a pre-minted bearer used verbatim, for a simple/local
+      deployment. Lower-preference than ``delegation_key``.
+    - Neither set — no bearer; the global finelog must admit this controller by a
+      ``cidr`` layer (e.g. a same-VPC/loopback dev store).
+
+    ``cluster`` names this cluster's identity: the JWT ``sub`` the relay mints and
+    the ``cluster`` the global finelog's ``jwt`` key entry is labelled with.
+    """
+
+    address: str  # global finelog RPC endpoint (relay target + read source)
+    cluster: str = ""  # this cluster's delegation identity (JWT sub / jwt-key label)
+    delegation_key: str = ""  # shared HS256 secret; relay mints short-lived JWTs with it
+    static_token: str = ""  # pre-minted static bearer (alternative to delegation_key)
+
+
 # ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
@@ -654,6 +690,9 @@ class IrisClusterConfig(_OneofConfig):
     # cluster may delegate whole jobs to. Absent/empty leaves federation inert —
     # a single-cluster deployment is unchanged.
     peers: dict[str, PeerConfig] = Field(default_factory=dict)
+    # Shared global finelog for federated log relay + cross-cluster reads. Absent
+    # leaves the log plane single-cluster (local relay off, local reads).
+    global_finelog: GlobalFinelogConfig | None = None
     # When set, iris auto-derives /system/log-server from this finelog config name.
     log_server_config: str = ""
     # Public dashboard origin (e.g. "https://iris.oa.dev"); enables clickable job URLs.
@@ -923,10 +962,29 @@ def _validate_peers(config: IrisClusterConfig) -> None:
             )
 
 
+def _validate_global_finelog(config: IrisClusterConfig) -> None:
+    """Validate the ``global_finelog:`` relay target."""
+    gf = config.global_finelog
+    if gf is None:
+        return
+    if not gf.address.strip():
+        raise ValueError("global_finelog: address is required.")
+    if gf.delegation_key and not gf.cluster:
+        raise ValueError(
+            "global_finelog: delegation_key requires cluster to be set (the identity the "
+            "minted JWT carries and the global finelog's jwt key entry is labelled with)."
+        )
+    # The finelog HS256 verifier rejects a delegation secret shorter than 16 bytes
+    # (MIN_SECRET_BYTES); fail fast here rather than at the store on first push.
+    if gf.delegation_key and len(gf.delegation_key.encode()) < 16:
+        raise ValueError("global_finelog: delegation_key must be at least 16 bytes.")
+
+
 def validate_config(config: IrisClusterConfig) -> None:
     """Validate cluster config; raises ValueError on the first violation."""
     _validate_backends(config)
     _validate_peers(config)
+    _validate_global_finelog(config)
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
