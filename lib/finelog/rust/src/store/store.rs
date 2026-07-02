@@ -269,7 +269,7 @@ impl Store {
     /// nullable ones, e.g. `cluster`). Catalog-only — no engine is built here;
     /// `rehydrate_from_catalog` (which runs immediately after) opens the engine
     /// from the resulting catalog schema. An empty policy preserves the existing
-    /// one. The additive merge mirrors `register_table`'s.
+    /// one.
     fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
