@@ -450,7 +450,7 @@ class TrainWorker:
         try:
             config = self.config
             optimizer = config.optimizer.build(config.trainer.num_train_steps)
-            loss_fn = self.loss_module.create_loss_fn(self.reference_model, None)
+            loss_fn = self.loss_module.create_loss_fn(self.reference_model)
 
             @jax.jit
             def _loss_function(model, batch, key):
