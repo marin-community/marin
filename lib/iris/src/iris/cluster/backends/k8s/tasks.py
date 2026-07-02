@@ -75,7 +75,7 @@ from iris.cluster.runtime.profile import (
 )
 from iris.cluster.types import JobName, WorkerId, get_gpu_count
 from iris.cluster.worker.stats import IrisTaskStat, build_task_stat
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.proto_display import resolve_container_profile
 from iris.time_proto import timestamp_to_proto
 
@@ -1698,6 +1698,10 @@ class K8sTaskProvider:
     def status(self) -> controller_pb2.Controller.BackendStatus:
         """Author the ``kubernetes`` status variant from the cluster-state snapshot."""
         return controller_pb2.Controller.BackendStatus(kubernetes=self.get_cluster_status())
+
+    def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
+        """Empty: K8s provisions its own capacity and runs no Iris autoscaler."""
+        return vm_pb2.AutoscalerStatus()
 
     # -------------------------------------------------------------------------
     # Internal helpers

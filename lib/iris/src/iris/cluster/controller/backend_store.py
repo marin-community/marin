@@ -19,6 +19,7 @@ from rigging.timing import Timestamp
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.autoscaler.persistence import persist_autoscaler_state
+from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.backend import AutoscaleRequest, AutoscaleResult, BackendSchedulingInputs
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.ops.worker import fail as fail_workers
@@ -41,7 +42,7 @@ from iris.cluster.types import (
     WorkerStatusMap,
     WorkerUsability,
 )
-from iris.rpc import job_pb2
+from iris.rpc import controller_pb2, job_pb2, vm_pb2
 
 # Failure reason stamped on a healthy slice sibling reaped alongside a dead worker.
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
@@ -79,6 +80,18 @@ class BackendWorkerStore(TransitionReader, Protocol):
         """Each owned worker's idle/running status."""
         ...
 
+    def overlaid_autoscaler_status(self, autoscaler_status: vm_pb2.AutoscalerStatus) -> vm_pb2.AutoscalerStatus:
+        """Tag ``autoscaler_status``'s groups with the backend id and overlay each VM
+        with the usability/running-task verdict from this backend's own state."""
+        ...
+
+    def worker_fleet_detail(
+        self, autoscaler_status: vm_pb2.AutoscalerStatus
+    ) -> controller_pb2.Controller.WorkerFleetDetail:
+        """Author the backend's ``worker`` status variant: health counts plus the
+        overlaid ``autoscaler_status``."""
+        ...
+
     def worker_address(self, worker_id: WorkerId) -> str | None:
         """The worker's address, or ``None`` if it has none."""
         ...
@@ -106,6 +119,7 @@ class DbBackendWorkerStore:
     terminate their slices.
     """
 
+    backend_id: str
     db: ControllerDB
     owns_scale_group: Callable[[str], bool]
     health: WorkerHealthTracker
@@ -182,6 +196,48 @@ class DbBackendWorkerStore:
                 usability=usability[wid],
             )
         return result
+
+    def overlaid_autoscaler_status(self, autoscaler_status: vm_pb2.AutoscalerStatus) -> vm_pb2.AutoscalerStatus:
+        """Author this backend's autoscaler status from the state it owns.
+
+        Stamps each group with this backend's id, then overlays every VM named in
+        the status with the usability / running-task-count / capacity verdict
+        derived from this backend's own liveness tracker (which holds exactly its
+        persisted workers) plus the running-task rows for those VMs.
+        ``autoscaler_status`` is mutated in place and returned.
+        """
+        usability_by_id = {str(wid): live.usability for wid, live in self.health.all().items()}
+        for group in autoscaler_status.groups:
+            group.backend_id = self.backend_id
+        vm_ids = {
+            WorkerId(vm.vm_id)
+            for group in autoscaler_status.groups
+            for slice_info in group.slices
+            for vm in slice_info.vms
+            if vm.vm_id
+        }
+        if vm_ids:
+            with self.db.control_read_snapshot() as snap:
+                running = reads.running_tasks_by_worker(snap, vm_ids)
+        else:
+            running = {}
+        overlay_worker_usability(autoscaler_status, usability_by_id, running)
+        return autoscaler_status
+
+    def worker_fleet_detail(
+        self, autoscaler_status: vm_pb2.AutoscalerStatus
+    ) -> controller_pb2.Controller.WorkerFleetDetail:
+        """Author this backend's ``worker`` status variant from the state it owns.
+
+        Health counts come from this backend's own liveness tracker; the embedded
+        autoscaler status is authored by :meth:`overlaid_autoscaler_status`.
+        """
+        liveness = self.health.all()
+        return controller_pb2.Controller.WorkerFleetDetail(
+            autoscaler=self.overlaid_autoscaler_status(autoscaler_status),
+            total_worker_count=len(liveness),
+            healthy_worker_count=sum(1 for live in liveness.values() if live.healthy),
+        )
 
     def worker_address(self, worker_id: WorkerId) -> str | None:
         with self.db.control_read_snapshot() as snap:

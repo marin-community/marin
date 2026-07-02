@@ -955,6 +955,7 @@ class Controller:
             return self.backend_id_for_scale_group(scale_group) == backend_id
 
         return BackendRuntime(
+            backend_id=backend_id,
             db=self._db,
             endpoints=self._endpoints,
             run_template_cache=self._run_template_cache,
