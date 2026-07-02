@@ -705,12 +705,13 @@ def insert_federated_handle(
 
 
 @writes_to(federated_jobs_table)
-def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int, *, now_ms: int, error: str | None = None) -> None:
-    """Flip a handle's ``handoff_state`` (and stamp ``last_sync_ms``/error)."""
-    values: dict = {"handoff_state": handoff_state, "last_sync_ms": now_ms}
-    if error is not None:
-        values["terminal_error"] = error
-    tx.execute(update(federated_jobs_table).where(federated_jobs_table.c.job_id == job_id).values(**values))
+def set_handoff_state(tx: Tx, job_id: JobName, handoff_state: int, *, now_ms: int) -> None:
+    """Flip a handle's ``handoff_state`` and stamp ``last_sync_ms``."""
+    tx.execute(
+        update(federated_jobs_table)
+        .where(federated_jobs_table.c.job_id == job_id)
+        .values(handoff_state=handoff_state, last_sync_ms=now_ms)
+    )
 
 
 @writes_to(federated_jobs_table)

@@ -32,7 +32,6 @@ from iris.cluster.federation.store import (
     HandoffAdmission,
     HandoffOutcome,
     HandoffSpec,
-    PendingHandoff,
 )
 from iris.cluster.types import JobName
 from iris.managed_thread import ManagedThread, ThreadContainer
@@ -163,15 +162,7 @@ class FederationManager:
         )
         outcome = self._store.admit_and_persist_handoff(spec)
         if outcome.admission is HandoffAdmission.ADMITTED:
-            self._deliver_handoff(
-                PendingHandoff(
-                    parent_job_id=parent_job_id,
-                    remote_job_id=remote_job_id,
-                    peer_id=peer_id,
-                    owner_principal=owner_principal,
-                    request=request,
-                )
-            )
+            self._deliver_handoff(spec)
         return outcome
 
     # -- cancel (parent side) ------------------------------------------------
@@ -232,24 +223,22 @@ class FederationManager:
     def _redrive_pending_handoffs(self) -> None:
         """Re-deliver every handle still awaiting its peer (boot recovery + retry)."""
         assert self._store is not None
-        for pending in self._store.pending_handoffs():
-            self._deliver_handoff(pending)
+        for spec in self._store.pending_handoffs():
+            self._deliver_handoff(spec)
 
-    def _deliver_handoff(self, pending: PendingHandoff) -> None:
+    def _deliver_handoff(self, spec: HandoffSpec) -> None:
         assert self._store is not None
-        peer = self._peers.get(pending.peer_id)
+        peer = self._peers.get(spec.peer_id)
         if peer is None:
-            logger.warning("Cannot hand off %s: peer %s is not configured", pending.parent_job_id, pending.peer_id)
+            logger.warning("Cannot hand off %s: peer %s is not configured", spec.parent_job_id, spec.peer_id)
             return
-        handoff = self._build_handoff_request(pending.request, pending.remote_job_id, pending.owner_principal)
+        handoff = self._build_handoff_request(spec.request, spec.remote_job_id, spec.owner_principal)
         try:
             peer.launch_job(handoff)
         except _PEER_RPC_ERRORS as exc:
-            logger.warning(
-                "Handoff of %s to peer %s failed (will retry): %s", pending.parent_job_id, pending.peer_id, exc
-            )
+            logger.warning("Handoff of %s to peer %s failed (will retry): %s", spec.parent_job_id, spec.peer_id, exc)
             return
-        self._store.mark_handed_off(pending.parent_job_id, now_ms=Timestamp.now().epoch_ms())
+        self._store.mark_handed_off(spec.parent_job_id, now_ms=Timestamp.now().epoch_ms())
 
     def _sync_peer(self, peer: FederationPeer) -> None:
         assert self._store is not None

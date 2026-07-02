@@ -12,7 +12,7 @@ and can be exercised with a fake store.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum, IntEnum, auto
 from typing import Protocol
 
 from iris.cluster.types import JobName
@@ -20,28 +20,32 @@ from iris.rpc import controller_pb2
 
 
 class HandoffState(IntEnum):
-    """The ``federated_jobs.handoff_state`` lifecycle for one handle."""
+    """The ``federated_jobs.handoff_state`` lifecycle for one handle.
+
+    Persisted as the ``handoff_state`` column, so the values are explicit and
+    stable across code changes.
+    """
 
     PENDING_HANDOFF = 0  # persisted locally, peer has not yet acked LaunchJob
     HANDED_OFF = 1  # peer acked; the sync loop now mirrors its state
-    HANDOFF_FAILED = 2  # peer rejected the handoff terminally
 
 
-class HandoffAdmission(IntEnum):
-    """The outcome of admitting and persisting a handoff handle."""
+class HandoffAdmission(Enum):
+    """The outcome of admitting and persisting a handoff handle (in-memory only)."""
 
-    ADMITTED = 0  # new handle persisted in PENDING_HANDOFF
-    ALREADY_EXISTS = 1  # a live handle for this job id already existed (idempotent resubmit)
-    REJECTED = 2  # budget admission denied the handoff
+    ADMITTED = auto()  # new handle persisted in PENDING_HANDOFF
+    ALREADY_EXISTS = auto()  # a live handle for this job id already existed (idempotent resubmit)
+    REJECTED = auto()  # budget admission denied the handoff
 
 
 @dataclass(frozen=True)
 class HandoffSpec:
-    """Everything the store needs to admit and persist one handoff handle.
+    """One handoff handle to admit, persist, and deliver.
 
     The store derives the budget subject (``parent_job_id.user``) and the
     reservation (``resource_value`` of the request's shape) itself, so those units
-    stay in the controller alongside the local budget accounting.
+    stay in the controller alongside the local budget accounting. The same spec is
+    replayed by the re-drive loop, so it carries everything needed to deliver.
     """
 
     parent_job_id: JobName  # this cluster's local (root) job id
@@ -55,17 +59,6 @@ class HandoffSpec:
 class HandoffOutcome:
     admission: HandoffAdmission
     reject_reason: str = ""
-
-
-@dataclass(frozen=True)
-class PendingHandoff:
-    """A persisted handle awaiting first delivery (or re-delivery) to its peer."""
-
-    parent_job_id: JobName
-    remote_job_id: str
-    peer_id: str
-    owner_principal: str
-    request: controller_pb2.Controller.LaunchJobRequest
 
 
 @dataclass(frozen=True)
@@ -90,11 +83,7 @@ class FederationStore(Protocol):
         """Flip a handle to ``HANDED_OFF`` after the peer acks its ``LaunchJob``."""
         ...
 
-    def mark_handoff_failed(self, parent_job_id: JobName, error: str) -> None:
-        """Record a terminal handoff failure on the handle."""
-        ...
-
-    def pending_handoffs(self) -> list[PendingHandoff]:
+    def pending_handoffs(self) -> list[HandoffSpec]:
         """Every handle still in ``PENDING_HANDOFF`` (boot re-drive + retry)."""
         ...
 

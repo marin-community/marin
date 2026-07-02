@@ -61,6 +61,7 @@ from iris.cluster.controller.task_state import (
     task_row_can_be_scheduled,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.federation.store import HandoffState
 from iris.cluster.types import TERMINAL_JOB_STATES, AttemptUid, JobName, PendingTask, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2
 
@@ -1714,7 +1715,7 @@ def pending_handoff_handles(tx: Tx) -> list[FederatedHandle]:
             federated_jobs_table.c.handoff_state == bindparam("pending_state"),
             federated_jobs_table.c.cancel_intent_version == 0,
         ),
-        {"pending_state": 0},  # HandoffState.PENDING_HANDOFF
+        {"pending_state": int(HandoffState.PENDING_HANDOFF)},
     ).all()
     return [
         FederatedHandle(
@@ -1743,17 +1744,16 @@ def federated_job_for_remote_id(tx: Tx, peer_id: str, remote_job_id: str) -> Job
 def federated_handles_for_peer(tx: Tx, peer_id: str) -> dict[str, JobName]:
     """``{remote_job_id: local_job_id}`` for every *handed-off* handle to ``peer_id``.
 
-    Used by the full-resync set-replacement to find local handles the peer's
-    active set no longer contains. Restricted to ``HANDED_OFF`` handles: a still-
-    ``PENDING_HANDOFF`` handle is not on the peer yet (the re-drive owns it), so
-    its absence from the peer's active set is expected, not a reason to reap it.
+    Restricted to ``HANDED_OFF`` handles: a still-``PENDING_HANDOFF`` handle is not
+    on the peer yet (the re-drive owns it), so its absence from the peer's active
+    set is expected — a full resync must not reap it.
     """
     rows = tx.execute(
         select(federated_jobs_table.c.remote_job_id, federated_jobs_table.c.job_id).where(
             federated_jobs_table.c.peer_id == peer_id,
             federated_jobs_table.c.handoff_state == bindparam("handed_off"),
         ),
-        {"handed_off": 1},  # HandoffState.HANDED_OFF
+        {"handed_off": int(HandoffState.HANDED_OFF)},
     ).all()
     return {r.remote_job_id: r.job_id for r in rows}
 

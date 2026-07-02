@@ -29,7 +29,6 @@ from iris.cluster.federation.store import (
     HandoffOutcome,
     HandoffSpec,
     HandoffState,
-    PendingHandoff,
 )
 from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import controller_pb2
@@ -129,13 +128,7 @@ class ControllerFederationStore:
         with self._db.transaction() as cur:
             writes.set_handoff_state(cur, parent_job_id, int(HandoffState.HANDED_OFF), now_ms=now_ms)
 
-    def mark_handoff_failed(self, parent_job_id: JobName, error: str) -> None:
-        with self._db.transaction() as cur:
-            writes.set_handoff_state(
-                cur, parent_job_id, int(HandoffState.HANDOFF_FAILED), now_ms=Timestamp.now().epoch_ms(), error=error
-            )
-
-    def pending_handoffs(self) -> list[PendingHandoff]:
+    def pending_handoffs(self) -> list[HandoffSpec]:
         with self._db.read_snapshot() as tx:
             handles = reads.pending_handoff_handles(tx)
             pending = []
@@ -144,7 +137,7 @@ class ControllerFederationStore:
                 if job is None:
                     continue
                 pending.append(
-                    PendingHandoff(
+                    HandoffSpec(
                         parent_job_id=handle.job_id,
                         remote_job_id=handle.remote_job_id,
                         peer_id=handle.peer_id,

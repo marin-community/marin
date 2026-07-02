@@ -580,7 +580,7 @@ federated_jobs_table = Table(
     # Deterministic, globally unique remote id: "<parent_cluster>/<job_id>".
     Column("remote_job_id", String, nullable=False),
     Column("owner_principal", String, nullable=False),  # auth identity asserted to the peer
-    Column("handoff_state", Integer, nullable=False),  # PENDING_HANDOFF | HANDED_OFF | HANDOFF_FAILED
+    Column("handoff_state", Integer, nullable=False),  # PENDING_HANDOFF | HANDED_OFF
     Column("spend_snapshot_micros", Integer, nullable=False, server_default="0"),
     Column("cancel_intent_version", Integer, nullable=False, server_default="0"),
     Column("last_sync_ms", TimestampMsType),
