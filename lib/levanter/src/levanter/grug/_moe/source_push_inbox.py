@@ -244,10 +244,6 @@ class PushInboxConfig:
                 "whole-inbox SMEM blowup, but global semaphore lowering then fails with an out-of-bounds "
                 "reserve_semaphores slice. This path needs an mgpu.kernel-level alias mechanism."
             )
-            if self.implementation != "m_n_slots":
-                raise ValueError("inbox_storage=alias is currently implemented only for implementation=m_n_slots")
-            if self.output_mode != "perf":
-                raise ValueError("inbox_storage=alias requires output_mode=perf")
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -2747,6 +2743,8 @@ def _run_one(
                     "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
                     "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
                     "error": None,
+                    "error_type": None,
+                    "error_message": None,
                 }
             )
         return rows
@@ -2772,6 +2770,8 @@ def _run_one(
                 "hidden_all_max_abs_diff": None,
                 "hidden_unwritten_max_abs": None,
                 "error": f"{type(exc).__name__}: {exc}",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
                 "traceback": traceback.format_exc(),
             }
         ]
@@ -2781,25 +2781,18 @@ def _run_one(
 
 def run_source_push_inbox(
     config: PushInboxConfig,
-    *,
-    warmup: int,
-    steps: int,
-    repeat_runs: int,
-    check: bool,
-    debug_exceptions: bool = False,
-    separate_compile: bool = False,
-    progress_events: bool = False,
+    settings: SourcePushInboxRunSettings,
 ) -> list[dict[str, Any]]:
     """Run one package-private source-push inbox benchmark configuration."""
     return _run_one(
         config,
-        warmup=warmup,
-        steps=steps,
-        repeat_runs=repeat_runs,
-        check=check,
-        debug_exceptions=debug_exceptions,
-        separate_compile=separate_compile,
-        progress_events=progress_events,
+        warmup=settings.warmup,
+        steps=settings.steps,
+        repeat_runs=settings.repeat_runs,
+        check=settings.check,
+        debug_exceptions=settings.debug_exceptions,
+        separate_compile=settings.separate_compile,
+        progress_events=settings.progress_events,
     )
 
 
@@ -3048,13 +3041,15 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                                             )
                                                                         rows = run_source_push_inbox(
                                                                             config,
-                                                                            warmup=args.warmup,
-                                                                            steps=args.steps,
-                                                                            repeat_runs=args.repeat_runs,
-                                                                            check=args.check,
-                                                                            debug_exceptions=args.debug_exceptions,
-                                                                            separate_compile=args.separate_compile,
-                                                                            progress_events=args.progress_events,
+                                                                            SourcePushInboxRunSettings(
+                                                                                warmup=args.warmup,
+                                                                                steps=args.steps,
+                                                                                repeat_runs=args.repeat_runs,
+                                                                                check=args.check,
+                                                                                debug_exceptions=args.debug_exceptions,
+                                                                                separate_compile=args.separate_compile,
+                                                                                progress_events=args.progress_events,
+                                                                            ),
                                                                         )
                                                                         for row in rows:
                                                                             line = json.dumps(row, sort_keys=True)

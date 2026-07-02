@@ -22,9 +22,7 @@ SOURCE_PUSH_PROFILES = (
 
 _SOURCE_PUSH_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
     "none": {},
-    # Best repeated target candidate from FWD-SWQ-117:
-    # /dlwh/iris-run-repro_source_push_inbox_queue-20260702-123853
-    # median 0.008288984719s, 219.747234 TFLOP/s/rank over 48 repeats.
+    # Uniform-routing Hopper profile used as a deterministic all-to-all control.
     "hopper_queue_ngroups2_210": {
         "implementation": "m_n_slots",
         "queue_mode": "routing",
@@ -59,9 +57,7 @@ _SOURCE_PUSH_PROFILE_DEFAULTS: dict[str, dict[str, Any]] = {
         "separate_compile": True,
         "progress_events": True,
     },
-    # Target-like deterministic routing diagnostic from FWD-SWQ-128:
-    # /dlwh/repro-source-push-rough-extracted-96-20260702-0645
-    # median 0.008262450441s, 220.592534 TFLOP/s/rank over 96 repeats.
+    # Target-like deterministic Hopper profile with realistic route imbalance.
     "hopper_queue_roughly_balanced_ngroups2_210": {
         "implementation": "m_n_slots",
         "queue_mode": "routing",

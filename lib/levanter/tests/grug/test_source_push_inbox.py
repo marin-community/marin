@@ -35,11 +35,14 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
 
     rows = source_push_inbox.run_source_push_inbox(
         config,
-        warmup=0,
-        steps=1,
-        repeat_runs=1,
-        check=False,
+        source_push_inbox.SourcePushInboxRunSettings(
+            warmup=0,
+            steps=1,
+            repeat_runs=1,
+            check=False,
+        ),
     )
 
     assert len(rows) == 1
-    assert rows[0]["error"] == "ValueError: ep_size must be greater than 1, got 1"
+    assert rows[0]["error_type"] == "ValueError"
+    assert rows[0]["steady_state_time"] is None
