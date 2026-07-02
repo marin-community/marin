@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import cloudpickle
 import pytest
+from conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE
 from fray import ResourceConfig
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
@@ -42,8 +43,6 @@ from zephyr.stage_io import (
 )
 from zephyr.stats import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 from zephyr.worker_context import CounterEntry, CounterSnapshot, zephyr_worker_ctx
-
-from tests.conftest import _TEST_TASK_COST, _TEST_WORKER_AVAILABLE
 
 
 class _UnpicklableError(Exception):
