@@ -193,10 +193,23 @@ def _grouped_gemm_launcher(*, tile_shape_mn, group_count):
 
             m_total = mA.shape[0]
             n = mB.shape[1]
+            # Grouped-GEMM tile scheduler grid: the x dimension enumerates the linear
+            # row-tile id across ALL groups, i.e. sum_e ceil_div(m_e, tile_m). The old
+            # grid put the group in blockIdx.z and used ceil_div(m_total, tile_m) row
+            # tiles PER group, so every group rescanned all m-tiles and ~(1 - 1/E) of
+            # blocks ran the full WGMMA mainloop on zero-filled A tiles. Here each block
+            # maps to exactly one real (group, row-tile) pair (see kernel), so no group
+            # scans another group's rows.
+            #
+            # sum_e ceil_div(m_e, tile_m) <= ceil_div(m_total, tile_m) + (group_count-1)
+            # (ceil(a)+ceil(b) <= ceil(a+b)+1), so this static bound covers every real
+            # tile; the <= group_count-1 surplus blocks map to the last group with an
+            # out-of-range row-tile and are zero-filled/predicated away like empty tiles.
+            num_row_tiles = cute.ceil_div(m_total, tile_m) + (group_count - 1)
             grid = (
-                cute.ceil_div(m_total, tile_m),
+                num_row_tiles,
                 cute.ceil_div(n, tile_n),
-                group_count,
+                1,
             )
             self.kernel(
                 mA,
@@ -250,15 +263,29 @@ def _grouped_gemm_launcher(*, tile_shape_mn, group_count):
             SharedStorage: cutlass.Constexpr,
         ):
             tidx, _, _ = cute.arch.thread_idx()
-            m_block, n_block, g = cute.arch.block_idx()
+            lin_tile, n_block, _ = cute.arch.block_idx()
+
+            # Tile scheduler: map the linear row-tile id (blockIdx.x) to the group it
+            # belongs to and the row-tile index within that group. Group gi owns the
+            # linear range [running, running + ceil_div(m_gi, tile_m)); pick the last
+            # group whose range starts at or before lin_tile (running is monotonic, so
+            # this is the containing group for any in-range id). Surplus padding blocks
+            # (lin_tile >= sum of all row-tiles) resolve to the last group with an
+            # out-of-range m_block -> the A-load predicate zero-fills every row and the
+            # store predicate suppresses the write, exactly like the reference kernel's
+            # empty tiles (block-uniform integer arithmetic, no data-dependent WGMMA).
+            g = cutlass.Int32(0)
+            tile_base = cutlass.Int32(0)
+            running = cutlass.Int32(0)
+            for gi in cutlass.range_constexpr(group_count):
+                if running <= lin_tile:
+                    g = cutlass.Int32(gi)
+                    tile_base = running
+                running = running + cute.ceil_div(mPS[gi, 0], tile_m)
+            m_block = lin_tile - tile_base
 
             m_g = mPS[g, 0]
             k = mPS[g, 2]
-
-            # No early return (disallowed in @cute.kernel): tiles beyond this
-            # group's token count are handled by predication -- the A load
-            # zero-fills out-of-range rows and the epilogue store predicate
-            # (m_bound <= 0) suppresses all writes for padded tiles.
 
             # Packed row offset of group g in the [M, K]/[M, N] tensors.
             m_offset = mOff[g]
@@ -319,6 +346,15 @@ def _grouped_gemm_launcher(*, tile_shape_mn, group_count):
                         tAsA[None, rm, None].fill(0)
                 cute.copy(tiled_copy_b, tBgB[None, None, None, k_tile], tBsB)
                 cute.arch.sync_threads()
+                # A/B are filled with SIMT st.shared (CopyUniversalOp) in the generic
+                # proxy, but wgmma reads its smem operands through the async proxy. A
+                # generic-proxy write is NOT visible to an async-proxy read without a
+                # fence.proxy.async (sync_threads only orders generic-proxy accesses and
+                # warpgroup.fence only orders accumulator registers). Without it wgmma
+                # occasionally reads uninitialized smem -> nondeterministic garbage, only
+                # exposed at scale (many k-tiles/blocks). cp.async/TMA-filled kernels do
+                # not need this because they write through the async proxy already.
+                cute.arch.fence_proxy("async.shared", space="cta")
                 cute.nvgpu.warpgroup.fence()
                 for kb in cutlass.range_constexpr(num_k_blocks):
                     cute.gemm(tiled_mma, acc, tCrA[None, None, kb], tCrB[None, None, kb], acc)
