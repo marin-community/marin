@@ -193,6 +193,51 @@ pods via `envFrom`.
 > is incompatible with JAX's GCS/S3 backend. Use Cloudflare R2 or another
 > path-style-compatible endpoint for JAX workloads.
 
+### CoreWeave AI Object Storage access
+
+Use `s3://marin-us-east-02a` for CoreWeave-local object storage. The bucket is
+browsable in the
+[CoreWeave console](https://console.coreweave.com/object-storage/buckets/marin-us-east-02a).
+Follow CoreWeave's
+[endpoint](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/configure-endpoints)
+and
+[object-management](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/manage-objects)
+docs; Marin-specific settings are:
+
+- Credentials: create an Object Storage access key in the
+  [CoreWeave console](https://console.coreweave.com/object-storage/access-keys);
+  use the Key ID as `CW_ACCESS_KEY_ID` and the Key secret as
+  `CW_SECRET_ACCESS_KEY`.
+- Endpoint: `https://cwobject.com` outside CoreWeave, `http://cwlota.com`
+  inside CoreWeave.
+- Region: `US-EAST-02A`.
+- Addressing: `s3.addressing_style = virtual`; path-style requests are not
+  supported.
+
+One-off AWS CLI check, without persistent AWS config:
+
+```bash
+export CW_ACCESS_KEY_ID=<your-coreweave-object-storage-key-id>
+export CW_SECRET_ACCESS_KEY=<your-coreweave-object-storage-key-secret>
+
+tmp_config="$(mktemp)"
+trap 'rm -f "$tmp_config"' EXIT
+
+cat >"$tmp_config" <<'EOF'
+[default]
+s3 =
+    addressing_style = virtual
+EOF
+
+AWS_CONFIG_FILE="$tmp_config" \
+AWS_ACCESS_KEY_ID="$CW_ACCESS_KEY_ID" \
+AWS_SECRET_ACCESS_KEY="$CW_SECRET_ACCESS_KEY" \
+AWS_REGION=US-EAST-02A \
+AWS_ENDPOINT_URL_S3=https://cwobject.com \
+AWS_PAGER="" \
+aws s3 ls s3://marin-us-east-02a/
+```
+
 ### Lifecycle
 
 ```bash
@@ -609,6 +654,8 @@ The platform detects fatal errors before the full timeout expires:
 | `KUBECONFIG` | Path to kubeconfig (alternative to `kubeconfig_path` in config) |
 | `R2_ACCESS_KEY_ID` | S3/R2 access key (required if storage uses `s3://`) |
 | `R2_SECRET_ACCESS_KEY` | S3/R2 secret key |
+| `CW_ACCESS_KEY_ID` | CoreWeave Object Storage key ID |
+| `CW_SECRET_ACCESS_KEY` | CoreWeave Object Storage secret key |
 
 ### Auto-injected into worker and task Pods
 
@@ -783,6 +830,7 @@ by polling.
 |----------|---------|---------------|
 | CoreWeave API token | kubeconfig auth | Console > Tokens > Create Token |
 | Kubeconfig file | Operator's kubectl access | Console > Tokens > Download Kubeconfig |
+| CoreWeave Object Storage access key | S3-compatible access to CoreWeave buckets | Console > Object Storage > Access Keys |
 
 The `kubeconfig_path` config field is only needed when running the CLI
 **outside** the cluster (e.g., `iris cluster start` from a laptop). Inside the
@@ -850,6 +898,8 @@ instantly. Fix in config and redeploy.
 - [CoreWeave Autoscaling](https://docs.coreweave.com/docs/products/cks/nodes/autoscaling)
 - [CoreWeave GPU Instances](https://docs.coreweave.com/docs/platform/instances/gpu-instances)
 - [CoreWeave Observe (Managed Grafana)](https://docs.coreweave.com/docs/observability/managed-grafana)
+- [CoreWeave AI Object Storage: Set endpoints](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/configure-endpoints)
+- [CoreWeave AI Object Storage: Manage objects](https://docs.coreweave.com/products/storage/object-storage/using-object-storage/manage-objects)
 - [CoreWeave Terraform Provider](https://docs.coreweave.com/docs/products/cks/terraform/about)
 
 ### Source files
