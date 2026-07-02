@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from types import SimpleNamespace
+import uuid
 
-import levanter.callbacks as callbacks_module
 from levanter.callbacks import LambdaCallback
 from levanter.callbacks import profile_ctx
 from levanter.callbacks import profiler as profiler_module
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, profile
+from rigging.filesystem import url_to_fs
 
 
 def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monkeypatch, tmp_path):
@@ -76,9 +77,25 @@ def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, t
     assert profile_dir.exists()
 
 
+def test_profile_context_mirrors_process_dir_to_remote_profile_dir(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda **_kwargs: calls.append(("barrier",)))
+
+    profile_dir = tmp_path / "ctx" / "profiler"
+    remote_profile_dir = f"memory://levanter-profile/{uuid.uuid4()}/profiler"
+    with profile_ctx(str(profile_dir), device_profile=False, remote_profile_dir=remote_profile_dir):
+        trace_path = profile_dir / "process_00000" / "plugins" / "profile" / "2026_07_02" / "host.xplane.pb"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_bytes(b"profile")
+
+    fs, fs_path = url_to_fs(f"{remote_profile_dir}/process_00000/plugins/profile/2026_07_02/host.xplane.pb")
+    assert fs.exists(fs_path)
+    assert calls == [("barrier",)]
+
+
 def test_profile_ctx_writes_host_profile_files_without_tracker_upload(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(callbacks_module, "barrier_sync", lambda: calls.append(("barrier",)))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda **_kwargs: calls.append(("barrier",)))
 
     profile_dir = tmp_path / "ctx" / "profiler"
     with profile_ctx(str(profile_dir), device_profile=False, host_profile=True, host_profile_topn=10):

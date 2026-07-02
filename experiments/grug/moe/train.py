@@ -5,12 +5,10 @@ import dataclasses
 import functools
 import logging
 import math
-import posixpath
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 
 import equinox as eqx
@@ -43,7 +41,6 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.jax_utils import barrier_sync, parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from rigging.filesystem import url_to_fs
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -273,35 +270,6 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 
 def _should_log_loop_metrics(*, step: int, log_every: int) -> bool:
     return step % log_every == 0
-
-
-def _mirror_profiler_dir_to_output(profile_dir: Path, output_path: str | None, *, process_index: int) -> str | None:
-    if output_path is None:
-        return None
-    if not profile_dir.exists():
-        logger.warning("Grug profiler directory does not exist; skipping mirror: %s", profile_dir)
-        return None
-
-    process_dir = profile_dir / f"process_{process_index:05d}"
-    if not process_dir.exists():
-        logger.warning("Grug profiler process directory does not exist; skipping mirror: %s", process_dir)
-        return None
-
-    target_url = join_path(output_path, "profiler")
-    fs, target_path = url_to_fs(target_url)
-    fs.makedirs(target_path, exist_ok=True)
-
-    for source_path in process_dir.rglob("*"):
-        relative_path = source_path.relative_to(profile_dir).as_posix()
-        destination_path = posixpath.join(target_path.rstrip("/"), relative_path)
-        if source_path.is_dir():
-            fs.makedirs(destination_path, exist_ok=True)
-            continue
-        fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
-        fs.put_file(str(source_path), destination_path)
-
-    logger.info("Mirrored Grug profiler process directory to %s", join_path(target_url, process_dir.name))
-    return target_url
 
 
 @register_dataclass
@@ -770,14 +738,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
+            profile_dir = trainer.log_dir / run_id / "profiler"
+            remote_profile_dir = join_path(config.output_path, "profiler") if config.output_path is not None else None
             state_callbacks.add_hook(
                 callbacks.profile(
-                    str(trainer.log_dir / run_id / "profiler"),
+                    str(profile_dir),
                     profiler_cfg.start_step,
                     profiler_num_steps,
                     profiler_cfg.perfetto_link,
                     profiler_options=profiler_cfg.build_jax_profile_options(),
                     stop_barrier_timeout=profiler_cfg.stop_barrier_timeout,
+                    remote_profile_dir=remote_profile_dir,
                 ),
                 every=1,
             )
@@ -873,18 +844,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             if checkpointer is not None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
-
-            if profiler_enabled:
-                profiler_dir = trainer.log_dir / run_id / "profiler"
-                _mirror_profiler_dir_to_output(profiler_dir, config.output_path, process_index=jax.process_index())
-            if profiler_enabled and jax.process_index() == 0:
-                profiler_dir = trainer.log_dir / run_id / "profiler"
-                logger.info("Logging Grug profiler artifact: %s", profiler_dir)
-                levanter.tracker.current_tracker().log_artifact(
-                    profiler_dir,
-                    name=f"{run_id}-profiler",
-                    type="jax_profile",
-                )
 
     levanter.tracker.current_tracker().finish()
 
