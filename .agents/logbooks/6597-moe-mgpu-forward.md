@@ -2447,3 +2447,15 @@ Addendum:
   | 256 | 256 | n/a | n/a | n/a | invalid shared-memory footprint (`294920 > 232448`) |
 
   The best tile-sweep row is still below the current `block_k=128,block_n=128,inbox_slots=4,num_send_sms=2,num_sms=32` neighborhood, so tile-size changes did not unlock the 210 target.
+
+- Pipeline comparison `/dlwh/repro-source-push-pipeline-compare-20260702-013920` was killed after emitting 5 rows:
+
+  | compute_pipeline | max_concurrent_steps | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---|---:|---:|---:|---:|---|
+  | manual | 4 | `0.015715236403s` | `115.905438702` | `45.2755619929` | valid but slow/noisy |
+  | emit | 2 | `0.020857731998s` | `87.3288318106` | `34.112824926` | valid regression |
+  | emit | 3 | n/a | n/a | n/a | invalid shared-memory footprint (`245784 > 232448`) |
+  | emit | 4 | n/a | n/a | n/a | invalid shared-memory footprint (`327712 > 232448`) |
+  | emit | 5 | n/a | n/a | n/a | invalid shared-memory footprint (`409640 > 232448`) |
+
+  `mgpu.emit_pipeline` does not improve the source-push target path here; higher in-flight depth exceeds SMEM.
