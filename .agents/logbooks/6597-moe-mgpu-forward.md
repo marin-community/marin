@@ -2594,6 +2594,65 @@ Addendum:
   - The scratch-inbox approach cannot be used as a small patch unless we move away from `mgpu.kernel` scratch allocation or find a different aliasing mechanism.
   - `inbox_storage=scratch` is now disabled in validation to avoid accidental target sweeps.
 
+### 2026-07-02 02:28 PDT - FWD-SWQ-071 Re-enabled simple ready-scan branch
+- Question:
+  - The current code still contained a simpler per-source `ready_scan` branch, while validation rejected all `ready_scan` runs based on the older global candidate-space deadlock. Does the simpler branch work, and can it stabilize the target?
+- Code change:
+  - Removed the unconditional `receiver_schedule=ready_scan` validation rejection in `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 smokes:
+  - `/dlwh/repro-source-push-ready-scan-local-smoke-20260702-091236`, cluster `cw-us-east-02a`, stopped.
+    - `fixed_wait` tiny rows completed: `0.001838723974s` / `0.001584498057s`.
+    - `ready_scan` with `scan_order=rotated` compiled, then stalled after `first_run_start`.
+  - `/dlwh/repro-source-push-ready-scan-current-smoke-20260702-091636`, cluster `cw-us-east-02a`, succeeded.
+    - `ready_scan`, `scan_order=current`, tiny rows: `0.001771671697s`, `0.001612790627s`.
+- H100 target comparison:
+  - `/dlwh/repro-source-push-ready-current-target-20260702-091827`, cluster `cw-us-east-02a`, stopped after target `ready_scan/current` stalled after `first_run_start`.
+
+  | schedule | repeat_run | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---|---:|---:|---:|---:|---|
+  | fixed_wait | 0 | `0.009551624002s` | `190.698605` | `74.491642` | completed |
+  | fixed_wait | 1 | `0.009404732413s` | `193.677107` | `75.655120` | completed |
+  | fixed_wait | 2 | `0.009309633269s` | `195.655545` | `76.427947` | completed |
+  | fixed_wait | 3 | `0.009444840552s` | `192.854645` | `75.333846` | completed |
+  | fixed_wait | 4 | `0.009636285848s` | `189.023177` | `73.837179` | completed |
+  | fixed_wait | 5 | `0.014543765990s` | `125.241383` | `48.922415` | slow tail |
+  | fixed_wait | 6 | `0.009429359875s` | `193.171264` | `75.457525` | completed |
+  | fixed_wait | 7 | `0.009362845715s` | `194.543563` | `75.993579` | completed |
+  | ready_scan/current | n/a | n/a | n/a | n/a | target first-run stall |
+
+- Summary:
+  - Fixed target median in this job: `0.009437100213s`, `193.012955 TFLOP/s/rank`, `75.395685 GB/s/rank`.
+  - `ready_scan/rotated` is not safe even at the tiny smoke shape.
+  - `ready_scan/current` works on the tiny shape but stalls at the target shape before emitting a row.
+- Interpretation:
+  - Lightweight ready scanning did not produce a target performance path.
+  - The target stall is a correctness/liveness issue, not a performance regression.
+  - Current best remains fixed-wait; the best repeated median seen in this pass is about `193 TFLOP/s/rank`, still below the 210 Stage 1 target.
+
+### 2026-07-02 02:28 PDT - FWD-SWQ-072 Inbox input/output alias smoke
+- Question:
+  - Can the full inbox be passed as an input/output aliased buffer so repeated calls avoid allocating a fresh returned inbox output?
+- Code change:
+  - Added experimental `inbox_storage=alias` path using `pl.pallas_call(..., input_output_aliases={4: 0})`.
+  - `_time_jitted` can now thread an aliased output buffer into the next call.
+- H100 smoke:
+  - `/dlwh/repro-source-push-inbox-alias-smoke-20260702-092534`, cluster `cw-us-east-02a`, succeeded as a job but alias row failed.
+
+  | inbox_storage | repeat_run | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---|---:|---:|---:|---:|---|
+  | output | 0 | `0.001737541364s` | `0.307776` | `0.601125` | tiny-shape smoke baseline |
+  | output | 1 | `0.001736621683s` | `0.307939` | `0.601444` | tiny-shape smoke baseline |
+  | alias | n/a | n/a | n/a | n/a | `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=14730256 > max_smem_bytes=232448` |
+
+- Interpretation:
+  - The quick `pl.pallas_call` alias wrapper maps the full inbox into the kernel memory footprint and blows SMEM, so this is not a viable small patch.
+  - `inbox_storage=alias` is now disabled in validation alongside `inbox_storage=scratch`.
+  - Avoiding returned-inbox allocation likely requires a deeper wrapper/lowering change or a different kernel boundary.
+
 ### 2026-07-02 02:08 PDT - FWD-SWQ-071 Send-only perf-output repeat
 - Question:
   - How much of the send-only source-push tax in FWD-SWQ-068 came from debug `seen_payload`/`seen_meta` writes and their output allocation, rather than the inbox copy/semaphore protocol itself?
@@ -2622,3 +2681,164 @@ Addendum:
   - Debug side-output writes/allocations are a real tax for send-only: removing them improved median by about `23.4%` in time (`0.0078876s -> 0.0060409s`).
   - The slow tail did not disappear: repeats `0` and `5` are still about `0.0126-0.0129s`.
   - Current bottleneck judgment remains source-push copy/semaphore/output-scratch scheduling instability, not just WGMMA or debug-output overhead.
+
+### 2026-07-02 02:22 PDT - FWD-SWQ-072 Observed concurrent ready-current target job
+- Coordination:
+  - Observed active H100 job `/dlwh/repro-source-push-ready-current-target-20260702-091827` on cluster `cw-us-east-02a`.
+  - I did not launch this job and did not stop it.
+  - Posted coordination update in `6597-forward`.
+- Fixed-wait half completed before the job entered `ready_scan`:
+
+  | repeat_run | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|
+  | 0 | `0.009551624002s` | `190.698605` | `74.491642` |
+  | 1 | `0.009404732413s` | `193.677107` | `75.655120` |
+  | 2 | `0.009309633269s` | `195.655545` | `76.427947` |
+  | 3 | `0.009444840552s` | `192.854645` | `75.333846` |
+  | 4 | `0.009636285848s` | `189.023177` | `73.837179` |
+  | 5 | `0.014543765990s` | `125.241383` | `48.922415` |
+  | 6 | `0.009429359875s` | `193.171264` | `75.457525` |
+  | 7 | `0.009362845715s` | `194.543563` | `75.993579` |
+
+- Summary:
+  - Median: `0.009437100213s`, about `193.012955 TFLOP/s/rank`.
+  - One slow-tail repeat remains: repeat `5` at `0.014543765990s`, `125.241383 TFLOP/s/rank`.
+- Ready-scan status:
+  - The job then compiled `receiver_schedule=ready_scan`.
+  - Logs reached `first_run_start` at `2026-07-02 09:19:31 UTC` and had not emitted `first_run_done` or result rows by `02:22 PDT`.
+- Interpretation:
+  - This reproduces the fixed-wait fast pocket and the same slow-tail behavior.
+  - The subsequent `ready_scan` start-only behavior matches earlier ready-scan deadlock/stall observations.
+  - I am holding off on launching the fixed-wait `num_send_sms=2,3,4` repeat sweep until this H100 reservation clears or is handed off.
+
+### 2026-07-02 02:26 PDT - FWD-SWQ-073 Fixed-wait producer-SM repeat sweep
+- Question:
+  - Does changing producer ownership stabilize the fixed-wait source-push path?
+  - Sweep `num_send_sms=1,2,3,4` at the current fixed pocket while keeping `num_sms=32`.
+- H100 job:
+  - `/dlwh/repro-source-push-send-sms-repeat-20260702-0924`, cluster `cw-us-east-02a`, succeeded.
+  - Config: `implementation=m_n_slots`, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_sms=32`, `repeat_runs=8`, `warmup=2`, `steps=7`, `--no-check`.
+
+  | num_send_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 1 | `0.011332655858s` | `160.730592` | `101.649665` | `163.746946` |
+  | 2 | `0.010458210932s` | `174.196073` | `116.080274` | `196.091615` |
+  | 3 | `0.011350601496s` | `160.484537` | `106.459776` | `162.648930` |
+  | 4 | `0.011415319484s` | `159.564951` | `115.026196` | `160.275030` |
+
+- Interpretation:
+  - `num_send_sms=2` remains the least-bad full-path setting in this repeat, but the median was only `174.20 TFLOP/s/rank`.
+  - Increasing producers to 3 or 4 does not stabilize the full WGMMA path.
+  - The slow tail is still present, so producer count alone is not the missing overlap/scheduling fix.
+
+### 2026-07-02 02:34 PDT - FWD-SWQ-074 Hidden-output sink diagnostic
+- Question:
+  - Is full hidden output materialization or giant output-buffer initialization a major part of the source-push tax?
+- Code change:
+  - Added experimental `--hidden-output-mode {full,sink}` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - First sink attempt tried to write one scalar from the tiled accumulator and failed in lowering because Mosaic requires accumulator slices to be multiples of tile shape `(64, 8)`.
+  - Corrected sink mode stores each computed `64 x 128` tile into a much smaller cyclic `(src, slot)` hidden sink. This keeps WGMMA/SILU live and reduces output shape, but still performs a tile-shaped store.
+- H100 jobs:
+  - `/dlwh/repro-source-push-hidden-sink-20260702-0927`, cluster `cw-us-east-02a`, failed during scalar-sink lowering after completing the full-output half.
+  - `/dlwh/repro-source-push-hidden-sink2-20260702-0932`, cluster `cw-us-east-02a`, succeeded with corrected tile-sink mode.
+
+  | mode | job | median steady_state_time | median W13 TFLOP/s/rank | result |
+  |---|---|---:|---:|---|
+  | full | `/dlwh/repro-source-push-hidden-sink-20260702-0927` | `0.009547218564s` | `190.787500` | baseline half completed |
+  | scalar sink | `/dlwh/repro-source-push-hidden-sink-20260702-0927` | n/a | n/a | failed: `slice shape [1, 1]` not multiple of accumulator tile `(64, 8)` |
+  | tile sink | `/dlwh/repro-source-push-hidden-sink2-20260702-0932` | `0.012997329850s` | `141.267949` | valid but slower |
+
+- Interpretation:
+  - Full hidden output shape is not an obvious easy win in this harness.
+  - The corrected sink mode is slower, likely because a small cyclic sink creates repeated writes to the same GMEM rows and a less favorable output layout.
+  - This does not rule out a production W2-fused path, but it argues against spending more time on hidden-output shrinking inside the current source-push harness.
+
+### 2026-07-02 02:36 PDT - FWD-SWQ-075 Send-only producer-SM sweep
+- Question:
+  - Without WGMMA/hidden stores, does the producer/copy side prefer more send workers?
+- H100 job:
+  - `/dlwh/repro-source-push-send-only-sms-sweep-20260702-0935`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same routing and slot geometry as FWD-SWQ-073, but `implementation=send_only`, `output_mode=perf`, `repeat_runs=8`.
+
+  | num_send_sms | median steady_state_time | median send GB/s/rank | min GB/s/rank | max GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 1 | `0.012627916361s` | `56.458212` | `49.821655` | `71.999437` |
+  | 2 | `0.005767165783s` | `123.374177` | `68.960984` | `125.401970` |
+  | 3 | `0.005901318775s` | `121.558835` | `65.988476` | `135.224364` |
+  | 4 | `0.004562460784s` | `158.764683` | `57.438985` | `183.208139` |
+
+- Interpretation:
+  - Send-only strongly prefers more producer workers; `num_send_sms=4` is the best median and reaches `183.21 GB/s/rank`.
+  - This conflicts with the full WGMMA path, where `num_send_sms=4` is slower. The issue is not raw producer copy bandwidth; it is interference with the compute-side schedule/protocol.
+
+### 2026-07-02 02:38 PDT - FWD-SWQ-076 Send4 compute-worker balance sweep
+- Question:
+  - Can the full WGMMA path use the faster `num_send_sms=4` producer setting if we increase `num_sms` to keep enough compute workers?
+- H100 job:
+  - `/dlwh/repro-source-push-send4-compute-balance-20260702-0937`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same fixed pocket as FWD-SWQ-073, but `num_send_sms=4`, `sweep_num_sms=32,34,36,40,48`, `repeat_runs=6`.
+
+  | num_sms | compute workers | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 32 | 28 | `0.012146341997s` | `150.503083` | `98.901626` | `161.420185` |
+  | 34 | 30 | `0.012657967080s` | `143.900029` | `105.574300` | `145.861262` |
+  | 36 | 32 | `0.016199639067s` | `112.449405` | `109.145886` | `140.905683` |
+  | 40 | 36 | `0.015663144910s` | `116.462717` | `104.584664` | `135.690994` |
+  | 48 | 44 | `0.015521660497s` | `117.461902` | `102.247753` | `149.282296` |
+
+- Interpretation:
+  - More total CTAs do not make the fast send-only producer setting viable for the full path.
+  - The extra producer/compute programs appear to interfere with WGMMA scheduling more than they help overlap copy.
+  - Current bottleneck judgment: software/protocol scheduling interference between source-push copy/semaphore CTAs and WGMMA CTAs, not raw copy bandwidth, hidden-output buffer size, or WGMMA tile math alone.
+
+### 2026-07-02 02:43 PDT - FWD-SWQ-077 Fixed-wait compute-worker count sweeps
+- Question:
+  - Does increasing receiver/compute worker count reduce fixed-wait slow tails for the current source-push pocket?
+  - Does the current best `num_send_sms=2` setting improve with nearby `num_sms` values around 32?
+- H100 jobs:
+  - `/dlwh/repro-source-push-fixed-sms64-sweep-20260702-093509`, cluster `cw-us-east-02a`, succeeded.
+  - `/dlwh/repro-source-push-send2-compute-nearby-20260702-0940`, cluster `cw-us-east-02a`, succeeded.
+- Shared config:
+  - `implementation=m_n_slots`, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `warmup=2`, `steps=7`, `--no-check`.
+- `num_sms=64` sweep:
+
+  | num_send_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 1 | `0.020542044857s` | `88.672623` | `78.232393` | `102.507006` |
+  | 2 | `0.015388849375s` | `118.363878` | `102.048281` | `142.585191` |
+  | 4 | `0.014866538928s` | `122.530442` | `93.650632` | `142.729282` |
+
+- `num_send_sms=2` nearby `num_sms` sweep:
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 30 | `0.015023226284s` | `122.480188` | `47.843823` | `102.291225` | `148.943942` |
+  | 32 | `0.009580117983s` | `190.132532` | `74.270520` | `133.410604` | `193.270701` |
+  | 34 | `0.013888717064s` | `131.158661` | `51.233852` | `91.799253` | `133.612599` |
+  | 36 | `0.016027360439s` | `113.729346` | `44.425526` | `107.347938` | `136.950840` |
+  | 40 | `0.014844690067s` | `123.061323` | `48.070829` | `100.283028` | `130.602520` |
+
+- Interpretation:
+  - `num_sms=64` is strongly negative; adding more receiver workers increases overhead/contension instead of reducing slow tails.
+  - The nearby `num_send_sms=2` sweep shows a sharp pocket at `num_sms=32`; even there two of six repeats are slow (`150.25` and `133.41 TFLOP/s/rank`).
+  - Current bottleneck judgment remains software/protocol-structure-bound in the fixed-wait source-push semaphore/slot loop. It is not fixed by more receiver workers, more producer workers, hidden-output shrinking, or WGMMA tile retuning.
+
+### 2026-07-02 02:42 PDT - FWD-SWQ-078 Send2 nearby compute-worker sweep
+- Question:
+  - Is the current `num_send_sms=2,num_sms=32` full-path pocket slightly under- or over-provisioned on compute workers?
+- H100 job:
+  - `/dlwh/repro-source-push-send2-compute-nearby-20260702-0940`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same fixed pocket as FWD-SWQ-073, but `num_send_sms=2`, `sweep_num_sms=30,32,34,36,40`, `repeat_runs=6`.
+
+  | num_sms | compute workers | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 30 | 28 | `0.015023226284s` | `122.480188` | `102.291225` | `148.943942` |
+  | 32 | 30 | `0.009580117983s` | `190.132532` | `133.410604` | `193.270701` |
+  | 34 | 32 | `0.013888717064s` | `131.158661` | `91.799253` | `133.612599` |
+  | 36 | 34 | `0.016027360439s` | `113.729346` | `107.347938` | `136.950840` |
+  | 40 | 38 | `0.014844690067s` | `123.061323` | `100.283028` | `130.602520` |
+
+- Interpretation:
+  - This confirms the current local pocket: `num_send_sms=2,num_sms=32`.
+  - Nearby lower/higher total worker counts regress. The fixed-wait path is sensitive to CTA count/scheduling, and simply adding compute workers does not stabilize the slow tail.
+  - No speedup over the existing fixed-wait baseline was found in this pass.
