@@ -7,8 +7,9 @@ The CLI command itself opens a real connection (gcsfs in production); these
 tests cover the testable seams against a local parquet directory.
 """
 
-import os
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import duckdb
 import fsspec
@@ -27,6 +28,22 @@ def _write_segment(path: Path, level: int, seq: int, rows: list[dict[str, object
     out = path / f"seg_L{level}_{seq:019d}.parquet"
     pq.write_table(pa.Table.from_pylist(rows), out)
     return out
+
+
+@contextmanager
+def _stub_file_timestamps(timestamps: dict[str, int]):
+    """Stub _info_time_created_ms to return fixed epoch_ms values keyed by filename.
+
+    os.utime controls mtime but not ctime on Linux (the kernel always resets ctime
+    to now on any metadata change), so tests that rely on time-window filtering must
+    inject timestamps at the abstraction boundary instead of via the filesystem.
+    """
+
+    def _stubbed(info: dict) -> int | None:
+        return timestamps.get(Path(str(info.get("name", ""))).name)
+
+    with patch("finelog.deploy.cli._info_time_created_ms", side_effect=_stubbed):
+        yield
 
 
 def test_list_namespace_dirs_keeps_only_dirs_with_segments(tmp_path: Path) -> None:
@@ -58,13 +75,12 @@ def test_list_namespace_segments_filters_by_time_created(tmp_path: Path) -> None
     ns_dir = tmp_path / "log"
     old = _write_segment(ns_dir, level=1, seq=1, rows=[{"x": 1}])
     new = _write_segment(ns_dir, level=1, seq=2, rows=[{"x": 2}])
-    os.utime(old, (1_700_000_000.0, 1_700_000_000.0))
-    os.utime(new, (1_800_000_000.0, 1_800_000_000.0))
 
     fs, _ = fsspec.url_to_fs(str(tmp_path))
-    after = _list_namespace_segments(
-        str(tmp_path), "log", fs, created_since_ms=1_750_000_000 * 1000, created_until_ms=None
-    )
+    with _stub_file_timestamps({old.name: 1_700_000_000_000, new.name: 1_800_000_000_000}):
+        after = _list_namespace_segments(
+            str(tmp_path), "log", fs, created_since_ms=1_750_000_000 * 1000, created_until_ms=None
+        )
     assert [p.split("/")[-1] for p in after] == [new.name]
 
 
@@ -74,19 +90,18 @@ def test_register_namespace_views_with_time_window_only_reads_matching_files(tmp
     ns_dir = tmp_path / "log"
     old = _write_segment(ns_dir, level=1, seq=1, rows=[{"key": "/old", "data": "old"}])
     new = _write_segment(ns_dir, level=1, seq=2, rows=[{"key": "/new", "data": "new"}])
-    os.utime(old, (1_700_000_000.0, 1_700_000_000.0))
-    os.utime(new, (1_800_000_000.0, 1_800_000_000.0))
 
     fs, _ = fsspec.url_to_fs(str(tmp_path))
     conn = duckdb.connect()
-    _register_namespace_views(
-        conn,
-        str(tmp_path),
-        ["log"],
-        fs=fs,
-        created_since_ms=1_750_000_000 * 1000,
-        created_until_ms=None,
-    )
+    with _stub_file_timestamps({old.name: 1_700_000_000_000, new.name: 1_800_000_000_000}):
+        _register_namespace_views(
+            conn,
+            str(tmp_path),
+            ["log"],
+            fs=fs,
+            created_since_ms=1_750_000_000 * 1000,
+            created_until_ms=None,
+        )
     assert conn.execute("SELECT key FROM log").fetchall() == [("/new",)]
 
 
@@ -94,17 +109,17 @@ def test_register_namespace_views_empty_filter_skips_view(tmp_path: Path) -> Non
     """When the filter drops every file, no view is created and a SELECT
     fails — better than silently scanning all files."""
     f = _write_segment(tmp_path / "log", level=1, seq=1, rows=[{"key": "/k", "data": "v"}])
-    os.utime(f, (1_700_000_000.0, 1_700_000_000.0))
 
     fs, _ = fsspec.url_to_fs(str(tmp_path))
     conn = duckdb.connect()
-    _register_namespace_views(
-        conn,
-        str(tmp_path),
-        ["log"],
-        fs=fs,
-        created_since_ms=1_800_000_000 * 1000,
-        created_until_ms=None,
-    )
+    with _stub_file_timestamps({f.name: 1_700_000_000_000}):
+        _register_namespace_views(
+            conn,
+            str(tmp_path),
+            ["log"],
+            fs=fs,
+            created_since_ms=1_800_000_000 * 1000,
+            created_until_ms=None,
+        )
     with pytest.raises(duckdb.CatalogException):
         conn.execute("SELECT * FROM log").fetchall()
