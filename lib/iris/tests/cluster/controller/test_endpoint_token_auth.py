@@ -150,6 +150,20 @@ def test_null_auth_with_worker_verifier_still_allows(jwt):
     assert _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=False) is None
 
 
+def test_private_honors_cidr_network_trust(jwt):
+    """On a CIDR-auth cluster the proxy gate trusts direct in-network peers.
+
+    A PRIVATE endpoint is reachable from inside the trusted CIDR without a
+    token; an external peer still gets 401.
+    """
+    policy = RequestAuthPolicy.from_verifiers(verifier=jwt, trusted_cidrs=("10.0.0.0/8",))
+    assert (
+        _authorize_proxy(_request(host="10.1.2.3"), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True) is None
+    )
+    deny = _authorize_proxy(_request(host="203.0.113.9"), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True)
+    assert deny is not None and deny.status_code == 401
+
+
 def test_token_in_url_override(jwt, policy):
     """The URL-token fallback reuses the same check via the token override."""
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)

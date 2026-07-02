@@ -19,6 +19,7 @@ from rigging.server_auth import (
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
     IapIdTokenVerifier,
+    RequestAuthPolicy,
     StaticTokenVerifier,
     TokenVerifier,
     VerifiedIdentity,
@@ -37,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
 DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
+
+# Provider name reported when auth is enabled by trusted_cidrs alone (no
+# gcp/static/iap login arm). There is no `iris login` flow for it: in-network
+# callers get ambient identity by network location, everything else needs a
+# bearer token (worker JWT, API key, or a scoped endpoint token at the proxy).
+CIDR_PROVIDER = "cidr"
 
 # Role carried by an endpoint-scoped proxy token. It has zero RPC authority
 # (authorize_method denies any audience-bearing identity); it exists only so the
@@ -329,6 +336,25 @@ class ControllerAuth:
     # Verifies IAP's signed-header assertion to authenticate tokenless callers
     # behind IAP (only when an IAP signed_header_audience is set).
     iap_assertion_verifier: IapAssertionVerifier | None = None
+    # Direct transport peers inside these CIDRs authenticate as anonymous
+    # admin (network-location trust; forwarded requests never match).
+    trusted_cidrs: tuple[str, ...] = ()
+
+
+def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
+    """Build the request-auth policy the dashboard/RPC surfaces enforce.
+
+    The single place a resolved ``ControllerAuth`` becomes an authenticator
+    stack, so HTTP, RPC, and proxy gates cannot wire it differently.
+    """
+    if auth is None:
+        return RequestAuthPolicy()
+    return RequestAuthPolicy.from_verifiers(
+        verifier=auth.verifier,
+        optional=auth.optional,
+        iap_assertion_verifier=auth.iap_assertion_verifier,
+        trusted_cidrs=auth.trusted_cidrs,
+    )
 
 
 # How long a resolved IAP email->role mapping is cached before re-reading the
@@ -370,9 +396,11 @@ def create_controller_auth(
     Signs JWTs with a persistent key in ``controller_secrets``; ``api_keys``
     rows exist for audit and revocation, but verification never hits the DB.
 
-    A ``None`` config (or one with no provider selected) runs in null-auth mode.
+    A ``None`` config (or one with no provider selected and no trusted CIDRs)
+    runs in null-auth mode. ``trusted_cidrs`` alone enables auth: identity by
+    network location for direct in-network peers, tokens for everything else.
     """
-    if auth_config is None or auth_config.provider_kind() is None:
+    if auth_config is None or (auth_config.provider_kind() is None and not auth_config.trusted_cidrs):
         if db:
             now = Timestamp.now()
             with db.transaction() as _tx:
@@ -389,7 +417,7 @@ def create_controller_auth(
         logger.info("Authentication disabled — null-auth mode, no DB")
         return ControllerAuth()
 
-    provider = auth_config.provider_kind()
+    provider = auth_config.provider_kind() or CIDR_PROVIDER
     now = Timestamp.now()
 
     jwt_mgr: JwtTokenManager | None = None
@@ -436,9 +464,13 @@ def create_controller_auth(
     iap_assertion_verifier: IapAssertionVerifier | None = None
     if provider == "iap":
         audiences = list(auth_config.iap.audiences)
-        if not audiences:
-            raise ValueError("IAP auth config requires at least one audience")
-        login_verifier = IapIdTokenVerifier(audiences)
+        if not audiences and not auth_config.iap.signed_header_audience:
+            raise ValueError("IAP auth config requires audiences (login) and/or signed_header_audience (assertion)")
+        # Assertion-only IAP (no desktop OAuth client registered) is valid:
+        # browser users authenticate via the signed header; `iris login` then
+        # reports UNIMPLEMENTED (no login verifier).
+        if audiences:
+            login_verifier = IapIdTokenVerifier(audiences)
 
         # When the signed-header audience is configured, a tokenless request that
         # carries a valid IAP assertion is authenticated as the asserted email,
@@ -451,11 +483,12 @@ def create_controller_auth(
 
     optional = auth_config.optional
     logger.info(
-        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s (loopback always trusted as admin)",
+        "Auth enabled: provider=%s, db=%s, jwt=%s, optional=%s, trusted_cidrs=%s (loopback always trusted as admin)",
         provider,
         "yes" if db else "no",
         "yes" if jwt_mgr else "no",
         optional,
+        list(auth_config.trusted_cidrs) or "-",
     )
     return ControllerAuth(
         verifier=verifier,
@@ -466,6 +499,7 @@ def create_controller_auth(
         jwt_manager=jwt_mgr,
         optional=optional,
         iap_assertion_verifier=iap_assertion_verifier,
+        trusted_cidrs=tuple(auth_config.trusted_cidrs),
     )
 
 

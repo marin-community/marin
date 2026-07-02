@@ -10,14 +10,19 @@ import sqlalchemy.exc
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import AuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
+    CIDR_PROVIDER,
+    WORKER_USER,
     JwtTokenManager,
     _get_or_create_signing_key,
     _make_iap_role_resolver,
     create_api_key,
+    create_controller_auth,
     list_api_keys,
     lookup_api_key_by_id,
+    request_auth_policy,
     revoke_api_key,
     revoke_login_keys_for_user,
 )
@@ -348,6 +353,39 @@ def test_revoke_login_keys(db: ControllerDB):
 
     revoked_ids = revoke_login_keys_for_user(db, "carol", now)
     assert set(revoked_ids) == {"k-login-1", "k-login-2"}
+
+
+# -- CIDR network-location auth -------------------------------------------------
+
+
+def test_cidr_only_auth_config_enables_request_auth(db: ControllerDB):
+    """An auth block with only trusted_cidrs turns auth on.
+
+    Direct in-network peers resolve to an admin identity; external and
+    forwarded peers are rejected; the cluster's worker JWT still verifies
+    through the same policy.
+    """
+    auth = create_controller_auth(AuthConfig(trusted_cidrs=["10.0.0.0/8"]), db=db)
+    assert auth.provider == CIDR_PROVIDER
+
+    policy = request_auth_policy(auth)
+    assert policy.request_auth_enabled
+
+    inside = policy.resolve(None, client_address="10.1.2.3:5555", headers={})
+    assert inside is not None
+    assert inside.role == "admin"
+
+    with pytest.raises(ValueError, match="Missing authentication"):
+        policy.resolve(None, client_address="203.0.113.9:5555", headers={})
+
+    # A forwarded request whose socket peer is an in-CIDR ingress hop must not
+    # inherit the hop's network location.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        policy.resolve(None, client_address="10.1.2.3:5555", headers={"x-forwarded-for": "203.0.113.9"})
+
+    worker = policy.resolve(auth.worker_token, client_address="203.0.113.9:5555", headers={})
+    assert worker is not None
+    assert worker.user_id == WORKER_USER
 
 
 # -- Optional auth (gradual adoption) -----------------------------------------

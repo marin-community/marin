@@ -8,7 +8,7 @@ module *verifies* one on the server and binds the resulting identity for the
 request: the Google-credential verifiers (GCP access token, IAP OIDC ID token,
 IAP signed-header assertion), a static-token verifier, the authenticator stack
 that resolves a request to an identity (presented token > IAP assertion >
-trusted loopback), and the Connect interceptors that enforce it.
+trusted CIDR > trusted loopback), and the Connect interceptors that enforce it.
 
 It carries no service-specific policy — no token *minting*, no role semantics, no
 RBAC. A service supplies those: it injects its own ``TokenVerifier`` (e.g. one
@@ -57,6 +57,12 @@ class VerifiedIdentity:
 # on-host) already implies host-level trust, so the caller is the admin user.
 # Jobs are still attributed per-user via the job name's owner segment.
 LOOPBACK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
+
+# Identity granted to a tokenless caller whose direct transport peer is inside
+# a configured trusted CIDR (see CidrAuthenticator). Same conventions as
+# LOOPBACK_IDENTITY: network location implies operator-level trust, and jobs
+# are still attributed per-user via the job name's owner segment.
+TRUSTED_NETWORK_IDENTITY = VerifiedIdentity(user_id="anonymous", role="admin")
 
 
 def _extract_cookie(cookie_header: str, name: str) -> str | None:
@@ -301,12 +307,14 @@ class IapAssertionVerifier:
         return VerifiedIdentity(user_id=email, role=self._role_resolver(email))
 
 
-def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
-    """Return True if the request arrived over a genuine loopback connection.
+def _direct_peer_ip(client_address: str | None, headers: dict) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return the transport-peer IP of a genuine direct connection, else None.
 
-    A connection is trusted-loopback iff its transport peer is a loopback
-    address (127.0.0.0/8 or ::1) on a nonzero port *and* it carries no
-    ``X-Forwarded-For`` header.
+    A connection counts as direct iff its transport peer parses as ``ip:port``
+    with a nonzero port *and* the request carries no ``X-Forwarded-For``
+    header. This is the shared trust gate for every network-location
+    authenticator (loopback, trusted CIDR): identity may only ever be granted
+    to the *socket peer*, never to a client-supplied header.
 
     The two conditions are individually sufficient and kept together as
     defence in depth. A uvicorn-fronted service configured with
@@ -315,22 +323,35 @@ def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
     when the client is derived from a forwarded header (it cannot recover the
     forwarded client's port). A public request spoofing
     ``X-Forwarded-For: 127.0.0.1`` therefore presents as ``("127.0.0.1", 0)``
-    with the header present — rejected on both counts. Only a direct transport
-    peer on the loopback interface (SSH tunnel / on-host) passes.
+    with the header present — rejected on both counts. And any legitimate
+    proxy hop (Traefik, GCLB) appends ``X-Forwarded-For``, so traffic it
+    forwards can never borrow the hop's own network location.
     """
     if not client_address:
-        return False
+        return None
     if headers.get("x-forwarded-for"):
-        return False
+        return None
     host, _, port = client_address.rpartition(":")
     if not host or not port:
-        return False
+        return None
     try:
         if int(port) == 0:
-            return False
-        return ipaddress.ip_address(host).is_loopback
+            return None
+        return ipaddress.ip_address(host)
     except ValueError:
-        return False
+        return None
+
+
+def is_trusted_loopback(client_address: str | None, headers: dict) -> bool:
+    """Return True if the request arrived over a genuine loopback connection.
+
+    A connection is trusted-loopback iff it is a direct connection (see
+    :func:`_direct_peer_ip` for the forwarded-header trust model) whose peer
+    is a loopback address (127.0.0.0/8 or ::1). Only a direct transport peer
+    on the loopback interface (SSH tunnel / on-host) passes.
+    """
+    peer = _direct_peer_ip(client_address, headers)
+    return peer is not None and peer.is_loopback
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,20 +454,65 @@ class LoopbackAuthenticator:
         return _ABSENT
 
 
+class CidrAuthenticator:
+    """Trusts a direct transport peer inside a configured CIDR as admin.
+
+    Network-location trust for a service reachable only over a private network
+    (a VPC, a k8s pod network): a tokenless caller whose socket peer falls
+    inside one of ``cidrs`` authenticates as :data:`TRUSTED_NETWORK_IDENTITY`
+    — the same anonymous/admin convention as :class:`LoopbackAuthenticator`.
+
+    Trust model: the CIDR check runs against the *transport peer address*
+    (``AuthRequest.client_address``) and never against ``X-Forwarded-For`` or
+    any other client-supplied header. Any request that carries
+    ``X-Forwarded-For`` is refused CIDR trust outright (see
+    :func:`_direct_peer_ip`): a forwarded request's peer is the proxy hop, so
+    an in-network ingress (Traefik, a load balancer) would otherwise lend its
+    own address to every anonymous internet request it forwards — and under
+    uvicorn's ``forwarded_allow_ips="*"`` the scope client is itself rewritten
+    from the spoofable header. Configure only ranges where holding an address
+    implies operator-level trust; never an ingress hop's source ranges.
+    """
+
+    def __init__(self, cidrs: Sequence[str]):
+        if not cidrs:
+            raise ValueError("CidrAuthenticator requires at least one CIDR")
+        # ip_network raises ValueError on a malformed CIDR (or one with host
+        # bits set) — fail at construction, never silently at request time.
+        self._networks = tuple(ipaddress.ip_network(cidr) for cidr in cidrs)
+
+    def authenticate(self, request: AuthRequest) -> AuthOutcome:
+        peer = _direct_peer_ip(request.client_address, request.headers)
+        if peer is None:
+            return _ABSENT
+        # __contains__ is False (not an error) on an IPv4 peer vs IPv6 network
+        # and vice versa, so mixed-family CIDR lists are fine.
+        if any(peer in network for network in self._networks):
+            return _authenticated(TRUSTED_NETWORK_IDENTITY)
+        return _ABSENT
+
+
 def build_request_authenticators(
-    verifier: TokenVerifier,
+    verifier: "TokenVerifier | None",
     iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+    *,
+    trusted_cidrs: Sequence[str] = (),
 ) -> tuple[RequestAuthenticator, ...]:
     """Return the standard request-auth stack, highest-trust first.
 
-    ``[Jwt, (IapAssertion?), Loopback]``: a presented service JWT wins; otherwise
-    an IAP signed-header assertion (when IAP fronts the service); otherwise a
-    trusted loopback peer. ``iap_assertion_verifier`` is omitted from the stack
-    when IAP is not configured.
+    ``[Jwt?, IapAssertion?, Cidr?, Loopback]``: a presented service JWT wins;
+    otherwise an IAP signed-header assertion (when IAP fronts the service);
+    otherwise network-location trust — a direct peer inside a trusted CIDR,
+    and finally the loopback interface. Unconfigured sources are omitted from
+    the stack; loopback is always present.
     """
-    authenticators: list[RequestAuthenticator] = [JwtAuthenticator(verifier)]
+    authenticators: list[RequestAuthenticator] = []
+    if verifier is not None:
+        authenticators.append(JwtAuthenticator(verifier))
     if iap_assertion_verifier is not None:
         authenticators.append(IapAssertionAuthenticator(iap_assertion_verifier))
+    if trusted_cidrs:
+        authenticators.append(CidrAuthenticator(trusted_cidrs))
     authenticators.append(LoopbackAuthenticator())
     return tuple(authenticators)
 
@@ -500,13 +566,18 @@ class RequestAuthPolicy:
         verifier: "TokenVerifier | None" = None,
         optional: bool = False,
         iap_assertion_verifier: "IapAssertionVerifier | None" = None,
+        trusted_cidrs: Sequence[str] = (),
     ) -> "RequestAuthPolicy":
         """Build the standard request-auth policy from its verifiers.
 
-        With a ``verifier`` set, the stack is ``[Jwt, (IapAssertion?), Loopback]``.
-        Without one (null-auth, no DB) the stack is empty and request auth is off.
+        With a ``verifier`` or ``trusted_cidrs`` set, the stack is
+        ``[Jwt?, IapAssertion?, Cidr?, Loopback]``. With neither (null-auth,
+        no DB) the stack is empty and request auth is off.
         """
-        authenticators = build_request_authenticators(verifier, iap_assertion_verifier) if verifier is not None else ()
+        if verifier is not None or trusted_cidrs:
+            authenticators = build_request_authenticators(verifier, iap_assertion_verifier, trusted_cidrs=trusted_cidrs)
+        else:
+            authenticators = ()
         return cls(authenticators=authenticators, optional=optional, verifier=verifier)
 
     @property

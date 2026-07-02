@@ -114,10 +114,19 @@ def test_iap_provider_uses_id_token_login_verifier(db):
     assert auth.verifier.verify(auth.worker_token).user_id == WORKER_USER
 
 
-def test_iap_provider_requires_audiences(db):
+def test_iap_provider_requires_audiences_or_assertion(db):
     config = AuthConfig(iap={"url": "https://iris-marin.example.com"})
-    with pytest.raises(ValueError, match="at least one audience"):
+    with pytest.raises(ValueError, match=r"audiences .* signed_header_audience"):
         create_controller_auth(config, db=db)
+
+
+def test_iap_assertion_only_has_no_login_verifier(db):
+    """Assertion-only IAP (no desktop OAuth client): browser users authenticate
+    via the signed header; `iris login` has no verifier and is unavailable."""
+    config = AuthConfig(iap={"signed_header_audience": "/projects/1/global/backendServices/2"})
+    auth = create_controller_auth(config, db=db)
+    assert auth.login_verifier is None
+    assert auth.iap_assertion_verifier is not None
 
 
 def test_worker_token_differs_after_restart(db):

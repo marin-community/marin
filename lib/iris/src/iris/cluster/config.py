@@ -18,6 +18,7 @@ these are normalized at the parse boundary.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import logging
 import os
 from collections.abc import Mapping
@@ -26,7 +27,7 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import fsspec
 import yaml
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 from rigging.timing import Duration
 
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
@@ -519,10 +520,24 @@ class AuthConfig(_OneofConfig):
     gcp: GcpAuthConfig | None = None
     static: StaticAuthConfig | None = None
     iap: IapAuthConfig | None = None
+    # Network-location trust, orthogonal to the login-provider arm: a tokenless
+    # request whose *direct transport peer* is inside one of these CIDRs
+    # authenticates as the anonymous admin identity (like loopback). Requests
+    # forwarded through a proxy hop (X-Forwarded-For present) never match, so
+    # an in-network ingress cannot lend its address to external traffic. With
+    # no arm selected, a non-empty list alone enables auth (provider "cidr").
+    trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
+
+    @field_validator("trusted_cidrs")
+    @classmethod
+    def _parse_cidrs(cls, cidrs: list[str]) -> list[str]:
+        for cidr in cidrs:
+            ipaddress.ip_network(cidr)  # ValueError on a malformed CIDR — fail at load
+        return cidrs
 
     def provider_kind(self) -> str | None:
         return self._selected_arm()

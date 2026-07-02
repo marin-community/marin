@@ -43,6 +43,14 @@ platform:
 storage:
   remote_state_dir: s3://marin-na/iris/cw-us-east-02a/state
 
+# Request auth. No login arm — identity is by network location: direct
+# in-cluster peers (CKS pods/nodes are RFC1918; loopback covers kubectl
+# port-forward) are trusted as admin. External traffic reaches only /proxy via
+# Traefik, which appends X-Forwarded-For — a forwarded request never matches a
+# CIDR, so it must present a bearer token (per-endpoint access mode).
+auth:
+  trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
+
 kubernetes_provider:
   namespace: iris
   default_image: ghcr.io/marin-community/iris-task:latest

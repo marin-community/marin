@@ -10,12 +10,15 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.server_auth import (
     LOOPBACK_IDENTITY,
+    TRUSTED_NETWORK_IDENTITY,
     AuthInterceptor,
     AuthRequest,
+    CidrAuthenticator,
     GcpAccessTokenVerifier,
     IapAssertionVerifier,
     IapIdTokenVerifier,
     NullAuthInterceptor,
+    RequestAuthPolicy,
     StaticTokenVerifier,
     VerifiedIdentity,
     _extract_cookie,
@@ -328,6 +331,96 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
         optional=False,
     )
     assert identity == LOOPBACK_IDENTITY
+
+
+# --- CIDR network-location trust ---------------------------------------------
+
+
+def _cidr_stack(trusted_cidrs, tokens=None):
+    return build_request_authenticators(StaticTokenVerifier(tokens or {}), trusted_cidrs=trusted_cidrs)
+
+
+def test_cidr_admits_direct_peer_inside_cidr():
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="10.4.5.6:41234"),
+        _cidr_stack(["10.0.0.0/8"]),
+        optional=False,
+    )
+    assert identity == TRUSTED_NETWORK_IDENTITY
+
+
+def test_cidr_rejects_peer_outside_cidr():
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={}, client_address="192.0.2.7:41234"),
+            _cidr_stack(["10.0.0.0/8"]),
+            optional=False,
+        )
+
+
+def test_cidr_matches_ipv6_peer():
+    identity = resolve_auth(
+        AuthRequest(token=None, headers={}, client_address="fd12:3456::1:41234"),
+        _cidr_stack(["fd00::/8"]),
+        optional=False,
+    )
+    assert identity == TRUSTED_NETWORK_IDENTITY
+
+
+def test_cidr_refuses_forwarded_request():
+    # The socket peer IS inside the CIDR, but it is a proxy hop: the request
+    # carries X-Forwarded-For, so an in-network ingress must not lend its
+    # address to the (anonymous, external) client it forwards for.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(
+                token=None,
+                headers={"x-forwarded-for": "10.9.9.9"},
+                client_address="10.4.5.6:41234",
+            ),
+            _cidr_stack(["10.0.0.0/8"]),
+            optional=False,
+        )
+
+
+def test_cidr_refuses_port_zero_peer():
+    # Port 0 marks a scope["client"] uvicorn rewrote from a forwarded header —
+    # not a genuine socket peer, so no network-location trust.
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={}, client_address="10.4.5.6:0"),
+            _cidr_stack(["10.0.0.0/8"]),
+            optional=False,
+        )
+
+
+@pytest.mark.parametrize("bad", ["10.0.0.0/33", "not-a-cidr", "10.0.0.1/8", ""])
+def test_cidr_authenticator_rejects_malformed_cidr_at_construction(bad):
+    # Fail-fast contract: a bad CIDR is a config error surfaced at startup,
+    # never a silently-never-matching rule at request time.
+    with pytest.raises(ValueError):
+        CidrAuthenticator([bad])
+
+
+def test_cidr_trust_never_masks_a_presented_bad_token():
+    # A present-but-invalid credential is rejected, not downgraded to ambient
+    # network trust, even when the peer is inside a trusted CIDR.
+    with pytest.raises(ValueError):
+        resolve_auth(
+            AuthRequest(token="wrong", headers={}, client_address="10.4.5.6:41234"),
+            _cidr_stack(["10.0.0.0/8"], tokens={"tok": "alice"}),
+            optional=False,
+        )
+
+
+def test_request_auth_policy_enabled_by_cidrs_alone():
+    # Trusted CIDRs alone (no verifier) must turn request auth on: in-network
+    # peers resolve to the trusted identity, everything else is rejected.
+    policy = RequestAuthPolicy.from_verifiers(trusted_cidrs=["10.0.0.0/8"])
+    assert policy.request_auth_enabled
+    assert policy.resolve(None, client_address="10.1.2.3:5000", headers={}) == TRUSTED_NETWORK_IDENTITY
+    with pytest.raises(ValueError, match="Missing authentication"):
+        policy.resolve(None, client_address="192.0.2.7:5000", headers={})
 
 
 def test_different_users_get_different_identities(interceptor):
