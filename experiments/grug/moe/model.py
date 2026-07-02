@@ -119,6 +119,16 @@ class GrugModelConfig:
     moe_latent_scale: bool = False
     """When True (and ``moe_latent_dim`` is set), multiply the MoE latent ``c`` by a
     single learnable scalar (init 1.0). A minimal alternative to normalizing the latent."""
+    moe_latent_fixed_scale: float | None = None
+    """Fixed (non-learnable) multiplier applied to the MoE latent ``c`` after ``moe_down``
+    (before dispatch). Compensates the init-time RMS shrink of the down-projection."""
+    moe_up_fixed_scale: float | None = None
+    """Fixed (non-learnable) multiplier applied to the routed output after ``moe_up``.
+    Compensates the init-time RMS shrink of the up-projection."""
+    moe_down_init_std: float | None = None
+    """Override the init std of ``moe_down``. None uses ``initializer_std`` (0.5/sqrt(D))."""
+    moe_up_init_std: float | None = None
+    """Override the init std of ``moe_up``. None uses ``initializer_std`` (0.5/sqrt(D))."""
     num_layers: int = 6
     num_heads: int = 4
     head_dim: int | None = None
@@ -730,13 +740,15 @@ class MoEMLP(eqx.Module):
         d, e = cfg.hidden_dim, cfg.num_experts
         # LatentMoE: routed experts (and their all-to-all) run in the compressed dim l.
         expert_hidden = cfg.moe_latent_dim if cfg.moe_latent_dim is not None else d
+        down_std = cfg.moe_down_init_std if cfg.moe_down_init_std is not None else cfg.initializer_std
+        up_std = cfg.moe_up_init_std if cfg.moe_up_init_std is not None else cfg.initializer_std
         moe_down = (
-            reshard(_init_weight(k_down, (d, cfg.moe_latent_dim), cfg.initializer_std), P(None, None))
+            reshard(_init_weight(k_down, (d, cfg.moe_latent_dim), down_std), P(None, None))
             if cfg.moe_latent_dim is not None
             else None
         )
         moe_up = (
-            reshard(_init_weight(k_up, (cfg.moe_latent_dim, d), cfg.initializer_std), P(None, None))
+            reshard(_init_weight(k_up, (cfg.moe_latent_dim, d), up_std), P(None, None))
             if cfg.moe_latent_dim is not None
             else None
         )
@@ -837,6 +849,8 @@ class MoEMLP(eqx.Module):
                 expert_in = self.moe_latent_gate(expert_in)
             if self.moe_latent_scale is not None:
                 expert_in = expert_in * self.moe_latent_scale.astype(expert_in.dtype)
+            if self.cfg.moe_latent_fixed_scale is not None:
+                expert_in = expert_in * self.cfg.moe_latent_fixed_scale
 
         routed_flat, dropped_assignments = self.expert_mlp(
             expert_in,
@@ -850,6 +864,8 @@ class MoEMLP(eqx.Module):
         # Up-project the combined expert output l -> D back into the residual stream.
         if self.moe_up is not None:
             routed_flat = reshard(jnp.einsum("tl,ld->td", routed_flat, self.moe_up), P(_BATCH_AXES, None))
+            if self.cfg.moe_up_fixed_scale is not None:
+                routed_flat = routed_flat * self.cfg.moe_up_fixed_scale
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
