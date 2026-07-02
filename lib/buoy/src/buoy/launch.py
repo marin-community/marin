@@ -24,6 +24,7 @@ from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.rpc import job_pb2
 from rigging.config_discovery import resolve_cluster_config
 from rigging.connect import proxy_path
 from rigging.filesystem import marin_temp_bucket, region_from_prefix
@@ -38,6 +39,10 @@ DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
 # The built SPA is gitignored; this glob (relative to the workspace root) tells the
 # Iris bundle to ship it to the worker (mirrors ducky's deploy).
 DASHBOARD_DIST_INCLUDE = "lib/buoy/dashboard/dist/**/*"
+# Keep the viewer up as a best-effort service: never let a preemption or a container
+# death end the job (the job-level max_task_failures budget defaults to 0, so it's the
+# critical one), and recreate on redeploy. Mirrors ducky's always-on job.
+_UNLIMITED_RETRIES = 1_000_000
 
 
 def _build_dashboard() -> None:
@@ -70,7 +75,6 @@ def _build_dashboard() -> None:
 @click.option("--memory", default="12g")
 @click.option("--disk", default="50g")
 @click.option("--timeout", type=int, default=0, help="Job timeout seconds (0 = no timeout).")
-@click.option("--max-retries-preemption", type=int, default=10)
 @click.option("--wait-timeout", type=float, default=600.0)
 @click.option("--skip-build", is_flag=True, help="Skip the dashboard `npm run build` (use an already-built dist).")
 def cli(
@@ -82,7 +86,6 @@ def cli(
     memory: str,
     disk: str,
     timeout: int,
-    max_retries_preemption: int,
     wait_timeout: float,
     skip_build: bool,
 ) -> None:
@@ -123,8 +126,10 @@ def cli(
             ports=["http"],
             constraints=constraints,
             timeout=Duration.from_seconds(timeout) if timeout else None,
-            max_retries_failure=0,
-            max_retries_preemption=max_retries_preemption,
+            max_retries_preemption=_UNLIMITED_RETRIES,  # never let a preemption end the service
+            max_retries_failure=_UNLIMITED_RETRIES,  # per-task budget for whole-container deaths
+            max_task_failures=_UNLIMITED_RETRIES,  # job-level cumulative budget (defaults to 0!)
+            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_RECREATE,  # redeploy recreates in place
         )
         proxy = proxy_path(endpoint_name)
         share = f"{dashboard_url.rstrip('/')}{proxy}/" if dashboard_url else f"{proxy}/"
