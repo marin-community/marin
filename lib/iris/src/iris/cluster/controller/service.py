@@ -2618,7 +2618,7 @@ class ControllerServiceImpl:
             authorize_resource_owner(row.task_id.user)
 
         if request.HasField("ttl"):
-            ttl = int(duration_from_proto(request.ttl).total_seconds())
+            ttl = int(duration_from_proto(request.ttl).to_seconds())
             ttl = max(1, min(ttl, MAX_ENDPOINT_TOKEN_TTL_SECONDS))
         else:
             ttl = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS
