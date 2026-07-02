@@ -19,6 +19,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
 from iris.cluster.client.endpoint_client import EndpointClient
+from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
@@ -392,8 +393,9 @@ class RemoteClusterClient:
         address: str,
         task_attempt: TaskAttempt,
         metadata: dict[str, str] | None = None,
+        access: EndpointAccess = EndpointAccess.PRIVATE,
     ) -> str:
-        return self._endpoint_client.register(name, address, task_attempt, metadata)
+        return self._endpoint_client.register(name, address, task_attempt, metadata, access)
 
     def unregister_endpoint(self, endpoint_id: str) -> None:
         """Unregister an endpoint via RPC."""
