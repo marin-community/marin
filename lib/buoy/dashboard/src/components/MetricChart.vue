@@ -1,17 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Plotly, { CHART_CONFIG, LINE_COLOR } from '../utils/plot'
 import { ema } from '../utils/smoothing'
 import type { Series } from '../composables/useMetrics'
 
-const props = withDefaults(defineProps<{ metricKey: string; series: Series; height?: number }>(), { height: 400 })
+// `series` is undefined until /api/metrics returns — the chart shows a spinner
+// until then (a big run's history can take a few seconds to read).
+const props = withDefaults(defineProps<{ metricKey: string; series?: Series; height?: number }>(), { height: 400 })
 defineEmits<{ close: []; fullscreen: [] }>()
 
 const el = ref<HTMLElement | null>(null)
 const st = reactive({ logY: false, logX: false, smoothing: 0 })
 
-function traces() {
-  const { x, y } = props.series
+function traces(s: Series) {
+  const { x, y } = s
   if (st.smoothing > 0 && y.length > 1) {
     // raw faint underneath, smoothed bold on top (wandb style)
     return [
@@ -40,16 +42,31 @@ function layout() {
   }
 }
 
-const redraw = () => el.value && Plotly.react(el.value, traces(), layout(), CHART_CONFIG)
+let drawn = false
 
-onMounted(() => el.value && Plotly.newPlot(el.value, traces(), layout(), CHART_CONFIG))
+// Draw once the series is present and the plot div is mounted; newPlot first, then
+// react on later updates (preserving zoom via uirevision). nextTick lets the v-if
+// plot div mount when series flips from undefined → loaded.
+async function render() {
+  const s = props.series
+  if (!s) return
+  await nextTick()
+  if (!el.value) return
+  if (drawn) Plotly.react(el.value, traces(s), layout(), CHART_CONFIG)
+  else {
+    Plotly.newPlot(el.value, traces(s), layout(), CHART_CONFIG)
+    drawn = true
+  }
+}
+
+onMounted(render)
 onBeforeUnmount(() => el.value && Plotly.purge(el.value))
-watch(() => props.series, redraw)
-watch(() => st.smoothing, redraw)
+watch(() => props.series, render)
+watch(() => st.smoothing, render)
 
 function toggleLog(which: 'logY' | 'logX') {
   st[which] = !st[which]
-  if (el.value) {
+  if (drawn && el.value) {
     Plotly.relayout(el.value, { [which === 'logY' ? 'yaxis.type' : 'xaxis.type']: st[which] ? 'log' : 'linear' })
   }
 }
@@ -57,14 +74,22 @@ function toggleLog(which: 'logY' | 'logX') {
 
 <template>
   <div class="chart-card overflow-hidden rounded-lg border border-surface-border bg-surface-raised shadow-sm">
-    <div class="chart-bar flex items-center justify-end gap-2 border-b border-surface-border/70 px-2 py-1">
-      <button class="cbtn" :class="{ active: st.logY }" @click="toggleLog('logY')">log y</button>
-      <button class="cbtn" :class="{ active: st.logX }" @click="toggleLog('logX')">log x</button>
-      <input v-model.number="st.smoothing" type="range" min="0" max="0.97" step="0.01" class="w-16" title="smoothing" />
-      <button class="cbtn" title="full screen" @click="$emit('fullscreen')">⛶</button>
-      <button class="cbtn close" title="remove this chart" @click="$emit('close')">×</button>
+    <template v-if="series">
+      <div class="chart-bar flex items-center justify-end gap-2 border-b border-surface-border/70 px-2 py-1">
+        <button class="cbtn" :class="{ active: st.logY }" @click="toggleLog('logY')">log y</button>
+        <button class="cbtn" :class="{ active: st.logX }" @click="toggleLog('logX')">log x</button>
+        <input v-model.number="st.smoothing" type="range" min="0" max="0.97" step="0.01" class="w-16" title="smoothing" />
+        <button class="cbtn" title="full screen" @click="$emit('fullscreen')">⛶</button>
+        <button class="cbtn close" title="remove this chart" @click="$emit('close')">×</button>
+      </div>
+      <div ref="el"></div>
+    </template>
+    <div v-else class="flex items-center justify-center text-text-muted" :style="{ height: `${height}px` }">
+      <div class="text-center">
+        <div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-surface-border border-t-accent"></div>
+        <div class="truncate px-4 font-mono text-xs">loading {{ metricKey }}…</div>
+      </div>
     </div>
-    <div ref="el"></div>
   </div>
 </template>
 

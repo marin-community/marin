@@ -98,7 +98,7 @@ function openFullscreen(key: string) {
         v-for="k in selected"
         :key="k"
         :metric-key="k"
-        :series="data[k] || { x: [], y: [] }"
+        :series="data[k]"
         @close="remove(k)"
         @fullscreen="openFullscreen(k)"
       />
@@ -114,7 +114,7 @@ function openFullscreen(key: string) {
       </button>
       <MetricChart
         :metric-key="fullscreenKey"
-        :series="data[fullscreenKey] || { x: [], y: [] }"
+        :series="data[fullscreenKey]"
         :height="fullscreenHeight"
         @close="fullscreenKey = null"
         @fullscreen="fullscreenKey = null"
