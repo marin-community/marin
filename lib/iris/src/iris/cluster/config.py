@@ -973,6 +973,13 @@ def _validate_finelog_relay(config: IrisClusterConfig) -> None:
     relay = config.finelog.relay
     if relay is None:
         return
+    # The relay stamps `/c/<cluster-name>` on every forwarded key, so the cluster needs a
+    # slash-free name. Check here so a missing name fails at config load, not as a
+    # controller-startup crash on the remote host.
+    if not config.name.strip():
+        raise ValueError("finelog.relay: the cluster must set a top-level name (used as the /c/<name> log namespace).")
+    if "/" in config.name:
+        raise ValueError(f"finelog.relay: cluster name must not contain '/' (got {config.name!r}).")
     if not relay.address.strip():
         raise ValueError("finelog.relay: address is required.")
     # The finelog HS256 verifier rejects a delegation secret shorter than 16 bytes

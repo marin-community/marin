@@ -93,6 +93,8 @@ class LogForwarder:
         # In-memory observability counters (the state file only needs the cursor).
         self._forwarded = 0
         self._failed = 0
+        # Rows fetched in the last `forward_once`; a full batch drives the drain loop.
+        self._last_fetched = 0
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="finelog-forwarder", daemon=False)
@@ -108,12 +110,27 @@ class LogForwarder:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self.forward_once()
+                self._drain()
             except Exception:
                 # A failed forward is already recorded and retried; an unexpected error
                 # (e.g. a source read) must not kill the loop and silently stop shipping.
                 logger.exception("finelog forwarder: unexpected error in tick")
             self._stop.wait(timeout=self._poll_interval)
+
+    def _drain(self) -> int:
+        """Forward batches until caught up, then return the total forwarded this pass.
+
+        Shipping only one ``batch_lines`` batch per poll interval caps the forward rate; a
+        cluster producing faster than that would fall behind until source retention evicts
+        un-forwarded rows (silent loss). So we keep forwarding while each batch comes back
+        full (more pending), and stop on a short batch (caught up), a failure, or stop.
+        """
+        total = 0
+        while not self._stop.is_set():
+            total += self.forward_once()
+            if self._last_fetched < self._batch_lines:
+                return total
+        return total
 
     def forward_once(self) -> int:
         """Forward one batch of newly-ingested source logs to the target.
@@ -121,6 +138,7 @@ class LogForwarder:
         Returns the number of entries forwarded this tick (0 = nothing new, or the
         initial seed). Exposed so a test can drive one tick deterministically.
         """
+        self._last_fetched = 0
         cursor = self._read_watermark()
         if cursor is None:
             seed = self._source_max_cursor()
@@ -149,10 +167,11 @@ class LogForwarder:
                 # A keyless entry can't be namespaced; drop it rather than stall the
                 # watermark (the source always keys its writes).
                 continue
-            if self._key_prefix and entry.key.startswith(self._key_prefix):
+            if self._key_prefix and entry.key.startswith(self._key_prefix + "/"):
                 # Already under our prefix — a row this forwarder produced (source and
                 # target are the same store, or otherwise share one). Skipping it stops
                 # an unbounded /c/x/c/x/... re-forward loop; the watermark still advances.
+                # The trailing "/" keeps a sibling prefix (/c/x-dev) from matching /c/x.
                 continue
             groups[entry.key].append(entry)
 
@@ -168,6 +187,11 @@ class LogForwarder:
                 exc,
             )
             return 0
+
+        # A full fetch means the source has more pending past this batch — the drain loop
+        # in `_run` reads this to keep forwarding within the tick instead of one batch per
+        # poll interval. Reset to 0 on every non-forwarding path (seed, empty, failure).
+        self._last_fetched = len(response.entries)
 
         # Count what was actually pushed, not what was fetched: keyless and
         # already-namespaced entries are skipped above but still advance the watermark.

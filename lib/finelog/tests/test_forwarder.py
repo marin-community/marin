@@ -228,8 +228,48 @@ def test_forwarder_skips_already_namespaced_keys_no_amplification(tmp_path):
         )
         assert list(doubled.entries) == [], "already-namespaced rows must not be re-forwarded"
 
+        # A sibling cluster's namespace (/c/marin-dev) shares the /c/marin text but is a
+        # different prefix: the trailing-separator guard must forward it, not false-skip it.
+        sibling = LogClient.connect(store.address)
+        sibling.push_batch("/c/marin-dev/user/job-1/task-0:0", _entries(2))
+        sibling.close()
+        assert forwarder.forward_once() == 2
+
         reader.close()
         source.close()
         target.close()
     finally:
         store.stop()
+
+
+def test_forwarder_drains_backlog_beyond_one_batch(tmp_path, servers):
+    # A backlog larger than batch_lines must fully drain in one pass, not ship only
+    # batch_lines per poll interval — that cap would let a busy cluster outrun the
+    # forwarder until source retention drops the un-forwarded rows (silent loss).
+    source_server, target_server = servers
+    state = tmp_path / "watermark.json"
+    source = LogClient.connect(source_server.address)
+    target = _authed_client(target_server.address)
+    forwarder = LogForwarder(
+        source=source,
+        target=target,
+        target_label=target_server.address,
+        key_prefix=_PREFIX,
+        state_path=state,
+        batch_lines=2,
+    )
+    assert forwarder.forward_once() == 0  # seed
+
+    key = "/user/job-7/task-0:0"
+    writer = LogClient.connect(source_server.address)
+    writer.push_batch(key, _entries(5))
+    writer.close()
+
+    # batch_lines=2 over a 5-row backlog → 3 fetch cycles (2+2+1); one drain ships all 5.
+    assert forwarder._drain() == 5
+    reader = _authed_client(target_server.address)
+    assert len(_read_namespaced(reader, key)) == 5
+
+    reader.close()
+    source.close()
+    target.close()
