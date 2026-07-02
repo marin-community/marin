@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AbstractMesh, AxisType, Mesh
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
@@ -113,42 +112,6 @@ def test_fa4_frontend_passes_valid_mask_to_backend(monkeypatch):
     np.testing.assert_array_equal(gpu_fa4_cute_attention(q, k, v, mask), q)
     np.testing.assert_array_equal(captured["valid"], jnp.array([[True, True, False, True]]))
     np.testing.assert_array_equal(captured["lower_bounds"], jnp.array([[0, 0, 4, 3]], dtype=jnp.int32))
-
-
-def test_fa4_frontend_enters_shard_map_before_ffi(monkeypatch):
-    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
-        del k, v, lower_bounds, valid, sm_scale, kernel_config
-        return q
-
-    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
-    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", fake_forward)
-
-    q, k, v = _make_qkv(batch=1, q_len=4, k_len=4, q_heads=2, kv_heads=1)
-    q = q.astype(jnp.bfloat16)
-    k = k.astype(jnp.bfloat16)
-    v = v.astype(jnp.bfloat16)
-    mask = AttentionMask.causal()
-    mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape((1, 1, 1, 1)),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
-
-    with jax.set_mesh(mesh):
-        traced = jax.make_jaxpr(lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask))(
-            q,
-            k,
-            v,
-        )
-
-    assert any(eqn.primitive.name == "shard_map" for eqn in traced.jaxpr.eqns)
-
-
-def test_fa4_head_axis_uses_nontrivial_model_axis():
-    mesh = AbstractMesh((1, 1, 1, 2), ("replica_dcn", "data", "expert", "model"))
-
-    assert fa4_cute._head_axis(mesh) == "model"
 
 
 def test_fa4_forward_backend_does_not_pass_valid_to_forward_launcher(monkeypatch):

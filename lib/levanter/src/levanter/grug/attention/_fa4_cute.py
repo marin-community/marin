@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import inspect
 from dataclasses import replace
 
 import jax
@@ -17,8 +16,6 @@ from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
-_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
-_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
@@ -259,9 +256,8 @@ def _fa4_cute_attention_forward_sharded(
 
     @shard_map(
         mesh=mesh,
-        in_specs=(qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec),
         out_specs=qkv_spec,
-        **_SHARD_MAP_CHECK_KWARGS,
+        check_vma=False,
     )
     def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
         return fa4_cute_attention_forward(
