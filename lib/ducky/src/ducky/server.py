@@ -1,0 +1,366 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""ducky's Starlette dashboard: paste SQL, run it, see a capped result table.
+
+Queries run **asynchronously**: ``POST /query`` returns a ``query_id`` immediately
+and the SQL runs in a background thread pool (up to ``max_concurrent_queries``, each on
+its own DuckDB cursor); the page polls ``GET /result/{query_id}`` until it is done. This
+decouples a long query from the Iris controller proxy's 30 s request timeout
+(``endpoint_proxy.PROXY_TIMEOUT_SECONDS``) — each HTTP call returns in well under
+30 s while the query itself may run for minutes.
+
+The page talks plain JSON over relative URLs (so it works behind the controller's
+``/proxy/ducky/`` prefix). ``main()`` wires the app to an Iris named port and
+registers it with the endpoint registry so the controller can route to it.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import enum
+import logging
+import multiprocessing
+import os
+import threading
+import time
+import uuid
+from collections import OrderedDict
+from concurrent.futures import Executor, ThreadPoolExecutor
+from pathlib import Path
+
+import uvicorn
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.cluster.dashboard_common import on_shutdown, public, requires_auth
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+
+from ducky.config import ENDPOINT_NAME, PORT_NAME, DuckyConfig
+from ducky.runner import DuckyError, QueryResult, QueryRunner
+
+logger = logging.getLogger(__name__)
+
+
+def _log_sql(sql: str, limit: int = 300) -> str:
+    """Collapse SQL to a single truncated line for logging."""
+    one_line = " ".join(sql.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
+def _human_bytes(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{n} B"
+
+
+class QueryStatus(enum.StrEnum):
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
+@dataclasses.dataclass(frozen=True)
+class QueryState:
+    status: QueryStatus
+    result: QueryResult | None = None
+    error: str | None = None
+    cached: bool = False
+
+
+class QueryManager:
+    """Runs queries in a background thread pool and tracks their state.
+
+    Up to ``max_workers`` queries run concurrently; ``submit`` returns immediately so
+    the HTTP request never blocks on the query. Identical SQL is served from an
+    in-memory result cache keyed on the exact query text — a cache hit reuses the
+    prior spilled parquet and returns instantly with ``cached=True``. State and cache
+    are process-local; ducky is stateless and restartable, so a restart drops both.
+    """
+
+    def __init__(
+        self,
+        runner: QueryRunner,
+        executor: Executor | None = None,
+        max_workers: int = 8,
+        cache_ttl: float = 0.0,
+        max_retained_states: int = 1024,
+        max_cache_entries: int = 256,
+    ) -> None:
+        self._runner = runner
+        self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ducky-query")
+        # Bounded LRU maps: an always-on service would otherwise grow the heap unbounded,
+        # since each result retains up to preview_row_cap rows. Oldest entries are evicted;
+        # an evicted query_id just 404s on /result (results also live on GCS).
+        self._states: OrderedDict[str, QueryState] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[QueryResult, float]] = OrderedDict()  # sql -> (result, monotonic ts)
+        self._cache_ttl = cache_ttl  # seconds; entries older than this are re-run (their parquet may be gone)
+        self._max_retained_states = max_retained_states
+        self._max_cache_entries = max_cache_entries
+        self._lock = threading.Lock()
+
+    def _set_state(self, query_id: str, state: QueryState) -> None:
+        """Record a query's state (most-recent-last), evicting the oldest past the cap. Under the lock."""
+        self._states[query_id] = state
+        self._states.move_to_end(query_id)
+        while len(self._states) > self._max_retained_states:
+            self._states.popitem(last=False)
+
+    def _store_cache(self, sql: str, result: QueryResult) -> None:
+        """Cache a result (most-recent-last), evicting the oldest past the cap. Under the lock."""
+        self._cache[sql] = (result, time.monotonic())
+        self._cache.move_to_end(sql)
+        while len(self._cache) > self._max_cache_entries:
+            self._cache.popitem(last=False)
+
+    def submit(self, sql: str, use_cache: bool = True) -> str:
+        """Submit ``sql`` and return a query_id. With ``use_cache`` (default), identical SQL
+        served earlier returns instantly from the cache; pass ``use_cache=False`` to force a
+        fresh run (e.g. when the underlying data changed) — it still refreshes the cache."""
+        query_id = uuid.uuid4().hex
+        with self._lock:
+            cached = self._cached_result(sql) if use_cache else None
+            if cached is not None:
+                self._set_state(query_id, QueryState(QueryStatus.DONE, result=cached, cached=True))
+                logger.info(
+                    "query %s cache hit (%d rows, %s): %s",
+                    query_id,
+                    cached.total_rows,
+                    _human_bytes(cached.result_bytes),
+                    _log_sql(sql),
+                )
+                return query_id
+            self._set_state(query_id, QueryState(QueryStatus.RUNNING))
+        logger.info("query %s submitted: %s", query_id, _log_sql(sql))
+        self._executor.submit(self._run, sql, query_id)
+        return query_id
+
+    def get(self, query_id: str) -> QueryState | None:
+        with self._lock:
+            return self._states.get(query_id)
+
+    def _cached_result(self, sql: str) -> QueryResult | None:
+        """Return a still-valid cached result, or None. Call under the lock.
+
+        Entries older than the cache TTL are dropped — their spilled parquet may have
+        been deleted by the scratch bucket's lifecycle rule, so the cached result_path
+        would dangle.
+        """
+        entry = self._cache.get(sql)
+        if entry is None:
+            return None
+        result, created = entry
+        if self._cache_ttl and (time.monotonic() - created) > self._cache_ttl:
+            del self._cache[sql]
+            return None
+        self._cache.move_to_end(sql)  # LRU: a hit keeps the entry fresh against eviction
+        return result
+
+    def _run(self, sql: str, query_id: str) -> None:
+        try:
+            result = self._runner.run_query(sql, query_id)
+        except DuckyError as e:
+            logger.warning("query %s failed: %s", query_id, str(e).splitlines()[0])
+            with self._lock:
+                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=str(e)))
+            return
+        except Exception as e:  # background task: record instead of hanging in RUNNING forever
+            logger.exception("query %s crashed", query_id)
+            with self._lock:
+                self._set_state(query_id, QueryState(QueryStatus.ERROR, error=f"internal error: {e}"))
+            return
+        logger.info(
+            "query %s done: %d rows, %s, %d ms",
+            query_id,
+            result.total_rows,
+            _human_bytes(result.result_bytes),
+            result.elapsed_ms,
+        )
+        with self._lock:
+            self._store_cache(sql, result)
+            self._set_state(query_id, QueryState(QueryStatus.DONE, result=result, cached=False))
+
+    def shutdown(self) -> None:
+        self._executor.shutdown(wait=False)
+
+
+def _result_payload(state: QueryState) -> dict:
+    if state.status is QueryStatus.RUNNING:
+        return {"status": QueryStatus.RUNNING.value}
+    if state.status is QueryStatus.ERROR:
+        return {"status": QueryStatus.ERROR.value, "error": state.error}
+    result = state.result
+    assert result is not None  # DONE always carries a result
+    return {
+        "status": QueryStatus.DONE.value,
+        "columns": result.columns,
+        "rows": result.preview_rows,
+        "total_rows": result.total_rows,
+        "truncated": result.truncated,
+        "result_path": result.result_path,
+        "cached": state.cached,
+        "elapsed_ms": result.elapsed_ms,
+        "result_bytes": result.result_bytes,
+    }
+
+
+# The dashboard is a bundled Vue SPA built into dashboard/dist by `npm run build`
+# (gitignored; shipped in the Iris bundle via GENERATED_ARTIFACT_GLOBS). Resolve its
+# dist dir: env override → the in-repo build output next to this package.
+def _dashboard_dist() -> Path:
+    override = os.environ.get("DUCKY_DASHBOARD_DIST")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[2] / "dashboard" / "dist"
+
+
+_NOT_BUILT_HTML = (
+    "<!doctype html><meta charset=utf-8><title>ducky</title>"
+    "<body style='font-family:system-ui;margin:3rem'><h1>🦆 ducky</h1>"
+    "<p>Dashboard not built — run "
+    "<code>npm --prefix lib/ducky/dashboard install &amp;&amp; npm --prefix lib/ducky/dashboard run build</code>.</p>"
+)
+
+
+def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
+    """Serve dist/index.html, rewriting ``<base href="/">`` to the proxy sub-path.
+
+    The controller proxy sets ``X-Forwarded-Prefix`` (e.g. ``/proxy/ducky``) in
+    path-style mode; rewriting the base makes the SPA's relative asset and API URLs
+    resolve under it. Empty prefix (subdomain/direct) leaves the base at ``/``.
+    """
+    index_path = dist / "index.html"
+    if not index_path.is_file():
+        return HTMLResponse(_NOT_BUILT_HTML, status_code=503)
+    html = index_path.read_text(encoding="utf-8")
+    prefix = forwarded_prefix.rstrip("/")
+    if prefix:
+        html = html.replace('<base href="/"', f'<base href="{prefix}/"', 1)
+    return HTMLResponse(html)
+
+
+def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | None = None) -> Starlette:
+    """Build the ducky Starlette app over a query runner. No Iris context required.
+
+    ``executor`` overrides the query executor (tests inject a synchronous one).
+    """
+    dist = _dashboard_dist()
+    manager = QueryManager(
+        runner,
+        executor=executor,
+        max_workers=config.max_concurrent_queries,
+        cache_ttl=config.result_ttl_days * 86400,
+    )
+
+    @requires_auth
+    async def index(request: Request) -> HTMLResponse:
+        return _index_html(dist, request.headers.get("x-forwarded-prefix", ""))
+
+    @requires_auth
+    async def query(request: Request) -> JSONResponse:
+        body = await request.json()
+        sql = body.get("sql")
+        if not isinstance(sql, str) or not sql.strip():
+            return JSONResponse({"error": "missing 'sql'"}, status_code=400)
+        use_cache = body.get("use_cache", True)
+        return JSONResponse({"query_id": manager.submit(sql, use_cache=bool(use_cache))}, status_code=202)
+
+    @requires_auth
+    async def result(request: Request) -> JSONResponse:
+        state = manager.get(request.path_params["query_id"])
+        if state is None:
+            return JSONResponse({"error": "unknown query_id"}, status_code=404)
+        return JSONResponse(_result_payload(state))
+
+    @requires_auth
+    async def api_config(_request: Request) -> JSONResponse:
+        return JSONResponse({"result_ttl_days": config.result_ttl_days})
+
+    @public
+    async def health(_request: Request) -> JSONResponse:
+        return JSONResponse({"status": "healthy"})
+
+    routes = [
+        Route("/", index),
+        Route("/query", query, methods=["POST"]),
+        Route("/result/{query_id:str}", result),
+        Route("/api/config", api_config),
+        Route("/health", health),
+    ]
+    # check_dir=False: the app still boots (index shows a "not built" page) when the
+    # SPA hasn't been built yet, instead of raising at startup.
+    routes.append(Mount("/static", StaticFiles(directory=dist / "static", check_dir=False), name="static"))
+    app = Starlette(routes=routes)
+    app.state.query_manager = manager
+    return app
+
+
+class _QuietPolls(logging.Filter):
+    """Drop the high-frequency dashboard-poll access lines so query lifecycle logs stand out."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return '"GET /result/' not in message and '"GET /health ' not in message
+
+
+_RESTART_DELAY = 3  # base seconds between supervised server restarts
+_RESTART_DELAY_MAX = 300  # cap on the backoff for a crash-looping server
+_HEALTHY_RUNTIME = 60  # a child that ran at least this long is "healthy" → reset the backoff
+
+
+def _serve() -> None:
+    """Serve ducky in this process. Runs in a supervised child (see `main`)."""
+    logging.getLogger("uvicorn.access").addFilter(_QuietPolls())
+    config = DuckyConfig.from_environment()
+    runner = QueryRunner(config)
+    app = create_app(runner, config)
+
+    ctx = iris_ctx()
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("No Iris job info available — ducky must run inside an Iris job")
+    port = ctx.get_port(PORT_NAME)
+    address = f"http://{job_info.advertise_host}:{port}"
+
+    endpoint_id = ctx.registry.register(ENDPOINT_NAME, address, {"job_id": ctx.job_id.to_wire()})
+    logger.info("ducky registered as %s at %s", ENDPOINT_NAME, address)
+
+    async def _on_shutdown() -> None:
+        ctx.registry.unregister(endpoint_id)
+        app.state.query_manager.shutdown()
+        logger.info("ducky endpoint unregistered")
+
+    app.router.lifespan_context = on_shutdown(_on_shutdown)
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+def main() -> None:
+    """Supervise the server: run it in a child process and restart it if it exits.
+
+    A cgroup OOM-kill reaps the largest process — the server child — while this tiny
+    supervisor survives, so ducky restarts in-process without consuming an Iris job
+    retry. If the whole cgroup is killed the Iris task retry is the backstop.
+
+    Restarts back off exponentially (capped) so a server that crash-loops on a permanent
+    fault (e.g. bad config) doesn't hot-loop; the backoff resets once a child stays up.
+    """
+    logging.basicConfig(level=logging.INFO)
+    delay = _RESTART_DELAY
+    while True:
+        started = time.monotonic()
+        server = multiprocessing.Process(target=_serve, name="ducky-server")
+        server.start()
+        server.join()
+        delay = _RESTART_DELAY if time.monotonic() - started >= _HEALTHY_RUNTIME else min(delay * 2, _RESTART_DELAY_MAX)
+        logger.error("ducky server exited (exitcode=%s) — restarting in %ds", server.exitcode, delay)
+        time.sleep(delay)
+
+
+if __name__ == "__main__":
+    main()

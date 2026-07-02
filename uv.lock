@@ -196,6 +196,7 @@ fork-strategy = "fewest"
 [manifest]
 members = [
     "marin-core",
+    "marin-ducky",
     "marin-finelog",
     "marin-fray",
     "marin-haliax",
@@ -4746,6 +4747,43 @@ test = [
 ]
 
 [[package]]
+name = "marin-ducky"
+version = "0.1.0"
+source = { editable = "lib/ducky" }
+dependencies = [
+    { name = "click" },
+    { name = "duckdb" },
+    { name = "httpx" },
+    { name = "marin-iris" },
+    { name = "pyarrow" },
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "duckdb", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "marin-iris", editable = "lib/iris" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "starlette", specifier = ">=0.37" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "marin-dupekit"
 version = "0.1.2.dev202606081019"
 source = { registry = "https://pypi.org/simple" }
@@ -5372,6 +5410,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "marin-core" },
+    { name = "marin-ducky" },
     { name = "marin-dupekit" },
     { name = "marin-finelog" },
     { name = "marin-fray" },
@@ -5386,6 +5425,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "marin-core", editable = "lib/marin" },
+    { name = "marin-ducky", editable = "lib/ducky" },
     { name = "marin-dupekit", specifier = ">=0.1.2.dev202606060824" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
