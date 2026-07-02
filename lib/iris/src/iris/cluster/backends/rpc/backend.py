@@ -25,6 +25,7 @@ from rigging.timing import Duration, Timestamp
 
 from iris.chaos import chaos
 from iris.cluster.controller.autoscaler import Autoscaler
+from iris.cluster.controller.autoscaler.status import overlay_worker_usability
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -176,6 +177,10 @@ class RpcTaskBackend:
     stub_factory: WorkerStubFactory
     parallelism: int = RECONCILE_FANOUT_PARALLELISM
     name: str = "worker"
+    # The id the controller assigned this backend, learned in ``bind_runtime``. The
+    # backend stamps it onto the autoscaler groups it authors in ``status`` /
+    # ``autoscaler_status``, so the controller reads those verbatim.
+    backend_id: str = field(default="", init=False)
     # The Iris autoscaler that provisions capacity for this backend, passed by the
     # composer at construction after it builds the autoscaler from the provider
     # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
@@ -220,9 +225,9 @@ class RpcTaskBackend:
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         """Build this backend's worker-attributes projection and worker store from
         ``runtime`` and the backend's own liveness tracker and ``autoscale`` callback."""
+        self.backend_id = runtime.backend_id
         self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
-            backend_id=runtime.backend_id,
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,
@@ -255,27 +260,34 @@ class RpcTaskBackend:
         self.advertised = advertised
         self.allowed_users = allowed_users
 
-    def _raw_autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """This backend's autoscaler status before the store's id/usability overlay."""
-        return self.autoscaler.get_status() if self.autoscaler is not None else vm_pb2.AutoscalerStatus()
-
     def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:
-        """Author this backend's autoscaler status: groups tagged with this backend's
-        id and every VM overlaid with its usability/running-task verdict, all from
-        this backend's own liveness tracker and running-task rows."""
+        """Author this backend's autoscaler status from the state it owns.
+
+        Tags each group with this backend's id, then overlays every VM with the
+        usability/running-task/capacity verdict from this backend's own liveness
+        tracker plus the running-task rows the store reads for those VMs.
+        """
         assert self._store is not None, "RpcTaskBackend.autoscaler_status called before worker store attached"
-        return self._store.overlaid_autoscaler_status(self._raw_autoscaler_status())
+        status = self.autoscaler.get_status() if self.autoscaler is not None else vm_pb2.AutoscalerStatus()
+        for group in status.groups:
+            group.backend_id = self.backend_id
+        usability_by_id = {str(worker_id): live.usability for worker_id, live in self.health.all().items()}
+        vm_ids = {WorkerId(vm.vm_id) for group in status.groups for s in group.slices for vm in s.vms if vm.vm_id}
+        overlay_worker_usability(status, usability_by_id, self._store.running_tasks(vm_ids))
+        return status
 
     def status(self) -> controller_pb2.Controller.BackendStatus:
-        """Author the full ``worker`` status variant from this backend's own state.
-
-        The store reads this backend's liveness tracker and running-task rows to
-        author the health counts and per-VM usability overlay directly, so the
-        controller reads the result verbatim and overlays nothing.
+        """Author the full ``worker`` status variant from this backend's own state:
+        the health counts from its liveness tracker around its :meth:`autoscaler_status`.
+        The controller reads the result verbatim and overlays nothing.
         """
-        assert self._store is not None, "RpcTaskBackend.status called before worker store attached"
+        liveness = self.health.all()
         return controller_pb2.Controller.BackendStatus(
-            worker=self._store.worker_fleet_detail(self._raw_autoscaler_status())
+            worker=controller_pb2.Controller.WorkerFleetDetail(
+                autoscaler=self.autoscaler_status(),
+                total_worker_count=len(liveness),
+                healthy_worker_count=sum(1 for live in liveness.values() if live.healthy),
+            )
         )
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:

@@ -216,7 +216,6 @@ class _FakeProvider:
     def bind_runtime(self, runtime: BackendRuntime) -> None:
         self.worker_attrs = WorkerAttrsProjection(runtime.db, owns_scale_group=runtime.owns_scale_group)
         self._store = DbBackendWorkerStore(
-            backend_id=runtime.backend_id,
             db=runtime.db,
             owns_scale_group=runtime.owns_scale_group,
             health=self.health,

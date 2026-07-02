@@ -181,7 +181,6 @@ def store_from_runtime(
     attrs projection, and ``autoscale`` — the worker-daemon fakes' shared mirror of
     ``RpcTaskBackend.bind_runtime``."""
     return DbBackendWorkerStore(
-        backend_id=runtime.backend_id,
         db=runtime.db,
         owns_scale_group=runtime.owns_scale_group,
         health=health,
