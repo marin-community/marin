@@ -2335,7 +2335,45 @@ description: Hopper Pallas Mosaic MGPU expert-parallel MoE forward/permute_up wo
   - The 64-row row in this sweep was slower than the earlier best 64-row rows, so absolute timing is noisy; the relative `block_m=128` regression is still consistent across two runs.
   - No source-push H100 jobs are left running.
 
+### 2026-07-02 01:25 PDT - FWD-SWQ-062 Nearby inbox slot-depth sweep
+- Question:
+  - Test non-power-of-two inbox depths around the current best source-push pocket.
+  - Keep fixed receiver scheduling and the current best target geometry: `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `entries_per_rank=288`, `num_sms=32`, `output_mode=perf`, `metadata_mode=static_recv`.
+- H100 job:
+  - `/dlwh/repro-source-push-slot-depth-nearby-20260702-012247`, cluster `cw-us-east-02a`, succeeded.
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | max slot reuse depth | masked row fraction |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 3 | 1 | `0.012471006s` | `146.06` | `57.05` | `93` | `5.6819%` |
+  | 3 | 2 | `0.017623122s` | `103.36` | `40.37` | `93` | `5.6819%` |
+  | 4 | 1 | `0.012033473s` | `151.37` | `59.13` | `70` | `5.6819%` |
+  | 4 | 2 | `0.009473210s` | `192.28` | `75.11` | `70` | `5.6819%` |
+  | 5 | 1 | `0.011551082s` | `157.69` | `61.60` | `56` | `5.6819%` |
+  | 5 | 2 | `0.013462776s` | `135.30` | `52.85` | `56` | `5.6819%` |
+  | 6 | 1 | `0.015101117s` | `120.62` | `47.12` | `47` | `5.6819%` |
+  | 6 | 2 | `0.012726683s` | `143.12` | `55.91` | `47` | `5.6819%` |
+
+- Interpretation:
+  - `inbox_slots=4,num_send_sms=2,num_sms=32` is again the best local pocket (`192.28 TFLOP/s/rank` here, `191.47` in FWD-SWQ-060).
+  - Reducing slot reuse depth below 70 with 5 or 6 slots does not help. More buffering is not the missing overlap.
+  - `inbox_slots=3` is worse, and `send_sms=2` is especially bad at 3 slots, likely from poorer modulo assignment/slot-owner balance.
+  - No source-push H100 jobs are left running.
+
 Addendum:
 - Live-row validation now separates correctness from unwritten hidden arena contents. In `/dlwh/repro-source-push-live-mask-smoke-20260702-010245`, both fixed and ordered rows had live `hidden_max_abs_diff=0.028977394104003906`, while `hidden_all_max_abs_diff=0.671875` and `hidden_unwritten_max_abs=0.671875`. The former is the useful correctness signal; the latter is the expected no-zeroing diagnostic for rows never written by live routing metadata.
 - `/dlwh/repro-source-push-ordered-missing-target-20260702-011330` was launched only for missing `ordered_wait` rotated/hash target rows. It reached `ordered_wait/rotated` `first_call_start`, emitted no completed rows after several minutes, and was stopped. `ordered_wait/rotated` is therefore a runtime stall at target shape in the current implementation.
 - `block_m=128` source-push target probe `/dlwh/repro-source-push-blockm128-target-20260702-011900` succeeded but regressed: `steady_state_time=0.0127822074241s`, `w13_tflops_per_rank=150.565260486`, `send_gbps_per_rank=58.8145548775`, `live_entries_total=9177`, `slot_full_waits=91770`, `rounded_rows_per_rank_mean=146832`, dropped entries `0`. Halving queue entries and semaphore waits did not offset larger CTA/accumulator pressure and extra rounded-row work.
+- Slot-depth nearby sweep `/dlwh/repro-source-push-slot-depth-nearby-20260702-012247` succeeded with 8 rows around the current best shape (`block_m=64`, `block_k=128`, `block_n=128`, `num_sms=32`, uniform target, perf mode):
+
+  | inbox_slots | num_send_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 4 | 2 | `0.0094732100144s` | `192.277102147` | `75.1082430262` |
+  | 5 | 1 | `0.0115510824136s` | `157.689236764` | `61.5973581108` |
+  | 4 | 1 | `0.0120334734209s` | `151.367880735` | `59.1280784121` |
+  | 3 | 1 | `0.0124710059725s` | `146.057292701` | `57.0536299614` |
+  | 6 | 2 | `0.0127266826108s` | `143.12302941` | `55.9074333633` |
+  | 5 | 2 | `0.0134627759922s` | `135.297606575` | `52.8506275682` |
+  | 6 | 1 | `0.0151011172216s` | `120.618980892` | `47.1167894108` |
+  | 3 | 2 | `0.0176231221762s` | `103.357472722` | `40.3740127821` |
+
+  This reinforces `inbox_slots=4,num_send_sms=2,num_sms=32` as the best current fixed-wait neighborhood, but still below the 210 TFLOP/s/rank goal.
