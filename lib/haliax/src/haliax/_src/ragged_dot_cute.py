@@ -4,18 +4,22 @@
 
 """CuTe (CUTLASS Python DSL) FP8 grouped (ragged) matmul for Hopper H100.
 
-The non-Mosaic backend for the FP8 ``ragged_dot``: a Hopper WGMMA grouped GEMM
-authored in ``cutlass.cute`` and wrapped as a JAX custom call via
-``cutlass.jax.cutlass_call``. Needs no forked jaxlib -- NVIDIA's WGMMA path
-supports mixed E4M3/E5M2 out of the box. Dynamic per-expert token counts arrive
-as a device ``problem_shape_mnkl`` tensor; copy atoms are ``CopyUniversalOp``
-(never TMA) because ``cutlass_call`` operands are generic memrefs on the FFI
-path (FA4 backend, _fa4_cute_kernels.py:319-336).
+The non-Mosaic backend for the FP8 ``ragged_dot``, wrapped as a JAX custom call
+via ``cutlass.jax.cutlass_call`` (no forked jaxlib -- NVIDIA's WGMMA path
+supports mixed E4M3/E5M2 out of the box).
 
-Kernel shape: this is a simple (non-persistent, non-warp-specialized) tiled
-WGMMA GEMM. Two cooperative MMA warpgroups (256 threads) load each K tile
-gmem->smem with a 128-bit ``CopyUniversalOp`` and issue ``wgmma`` from smem with
-an FP32 accumulator. Groups map to ``blockIdx.z``; the un-tile-aligned per-group row
+* ``cute_ragged_dot`` (forward + dgrad) dispatches to NVIDIA's stock Hopper TMA
+  warp-specialized persistent grouped-GEMM kernel in ``_tma_grouped_gemm.py``
+  (WGMMA + TMA + per-group device tensormap updates, ~1130-1230 TFLOP/s).
+* ``cute_wgrad`` (token-M-contracting weight gradient) and ``cute_cast_transpose``
+  still use the simpler ``CopyUniversalOp`` (non-TMA) mainloop below. TMA operands
+  on the FFI path DO work (see ``_tma_grouped_gemm``); porting the wgrad is a
+  follow-up.
+
+CopyUniversalOp kernel shape (wgrad / cast-transpose): a simple (non-persistent,
+non-warp-specialized) tiled WGMMA GEMM. Two cooperative MMA warpgroups (256
+threads) load each K tile gmem->smem with a 128-bit ``CopyUniversalOp`` and issue
+``wgmma`` from smem with an FP32 accumulator. The un-tile-aligned per-group row
 offset is handled by shifting the operand/output origin with ``domain_offset``
 and predicating on the device-read token count ``M_g = problem_shape[g, 0]``.
 """
@@ -963,36 +967,35 @@ def cute_cast_transpose(x, scale, *, out_dtype):
     return call(x, scale_1)
 
 
+# CTA tile of the TMA grouped-GEMM kernel: N must be a multiple of tile_n and K a
+# multiple of the FP8 WGMMA/TMA granularity (the per-group byte offsets are then
+# always 16B-aligned for TMA).
+_TMA_TILE_N = 256
+
+
 def cute_ragged_dot(a, b, group_sizes, *, out_dtype, out_scale):
     """Grouped GEMM ``a[M,K] . b[E,N,K] -> [M,N]`` contracting the last axis K
-    (contiguous for both). Epilogue divides the f32 accumulator by ``out_scale``."""
+    (contiguous for both). Epilogue divides the f32 accumulator by ``out_scale``.
+
+    Backed by NVIDIA's stock Hopper TMA warp-specialized persistent grouped-GEMM
+    kernel (``_tma_grouped_gemm``). Serves both the forward (E4M3xE4M3) and the
+    dgrad (E5M2xE4M3) -- both arrive as ``a[M,K] . b[E,N,K]``."""
     if not cute_available():
         raise RuntimeError("cute_ragged_dot requires the CuTe DSL on a GPU backend")
-    tile_shape_mn = (128, 256)
     e, n, k = b.shape
-    if n % tile_shape_mn[1] != 0:
+    if n % _TMA_TILE_N != 0:
         raise ValueError(
-            f"cute_ragged_dot: N={n} is not divisible by tile_n={tile_shape_mn[1]}; " "pad or reshape b before calling"
+            f"cute_ragged_dot: N={n} is not divisible by tile_n={_TMA_TILE_N}; pad or reshape b before calling"
         )
     if k % _FP8_WGMMA_K_GRANULARITY != 0:
         raise ValueError(
             f"cute_ragged_dot: K={k} is not divisible by {_FP8_WGMMA_K_GRANULARITY} "
             "(FP8 WGMMA K granularity); pad or reshape before calling"
         )
-    m = a.shape[0]
-    meta = _problem_shape_mnkl(group_sizes, n, k)
-    # Packed per-group row offsets (exclusive prefix sum of token counts).
-    offsets = (jnp.cumsum(group_sizes.astype(jnp.int32)) - group_sizes.astype(jnp.int32)).astype(jnp.int32)
-    launcher = _grouped_gemm_launcher(tile_shape_mn=tile_shape_mn, group_count=e)
-    a_spec, b_spec, meta_spec, offsets_spec, scale_spec, c_spec = _tensor_specs()
-    call = cjax.cutlass_call(
-        launcher,
-        output_shape_dtype=jax.ShapeDtypeStruct((m, n), out_dtype),
-        input_spec=(a_spec, b_spec, meta_spec, offsets_spec, scale_spec),
-        output_spec=(c_spec,),
-        use_static_tensors=True,
-    )
-    return call(a, b, meta, offsets, out_scale)
+    # Guarded optional-dep import: the vendored TMA kernel hard-imports cutlass.
+    from haliax._src._tma_grouped_gemm import tma_grouped_gemm  # noqa: PLC0415
+
+    return tma_grouped_gemm(a, b, group_sizes, out_dtype=out_dtype, out_scale=out_scale)
 
 
 def cute_wgrad(a_t, b_t, group_sizes, *, out_dtype, out_scale):

@@ -375,6 +375,7 @@ project-excludes = [
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/iris/src/iris/rpc/*_pb2*",  # Generated protobuf files
     "lib/iris/src/iris/rpc/*_connect.py",  # Generated Connect RPC files
+    "lib/haliax/src/haliax/_src/_tma_grouped_gemm.py",  # Vendored NVIDIA CUTLASS 4.5.2 CuTe kernel
     # Keep key excludes that pyrefly normally adds heuristically.
     "**/node_modules",
     "**/__pycache__",
