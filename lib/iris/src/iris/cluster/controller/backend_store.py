@@ -227,10 +227,9 @@ class DbBackendWorkerStore:
     def worker_fleet_detail(
         self, autoscaler_status: vm_pb2.AutoscalerStatus
     ) -> controller_pb2.Controller.WorkerFleetDetail:
-        """Author this backend's ``worker`` status variant from the state it owns.
-
-        Health counts come from this backend's own liveness tracker; the embedded
-        autoscaler status is authored by :meth:`overlaid_autoscaler_status`.
+        """Author this backend's ``worker`` status variant from the state it owns:
+        the health counts from its own liveness tracker, wrapping the overlaid
+        ``autoscaler_status``.
         """
         liveness = self.health.all()
         return controller_pb2.Controller.WorkerFleetDetail(
