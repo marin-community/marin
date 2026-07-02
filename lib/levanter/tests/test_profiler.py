@@ -22,10 +22,11 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
     monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 0)
     monkeypatch.setattr(profiler_module.jax.profiler, "start_trace", start_trace)
     monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", stop_trace)
-    monkeypatch.setattr(profiler_module, "barrier_sync", lambda: calls.append(("barrier",)))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda **_kwargs: calls.append(("barrier",)))
 
     options = ProfilerConfig(profile_options=ProfileOptionsConfig(host_tracer_level=1)).build_jax_profile_options()
     profile_dir = tmp_path / "run" / "profiler"
+    process_dir = profile_dir / "process_00000"
     callback = LambdaCallback(
         profile(
             str(profile_dir),
@@ -43,7 +44,7 @@ def test_profile_writes_trace_to_run_dir_and_ignores_duplicate_forced_stop(monke
     callback.on_step(SimpleNamespace(step=4), force=True)
 
     assert calls == [
-        ("start", str(profile_dir), False, True, options),
+        ("start", str(process_dir), False, False, options),
         ("stop",),
         ("barrier",),
     ]
@@ -59,16 +60,17 @@ def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, t
         lambda path, *_args, **_kwargs: calls.append(("start", path)),
     )
     monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", lambda: calls.append(("stop",)))
-    monkeypatch.setattr(profiler_module, "barrier_sync", lambda: calls.append(("barrier",)))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda **_kwargs: calls.append(("barrier",)))
 
     profile_dir = tmp_path / "stress" / "profiler"
+    process_dir = profile_dir / "process_00000"
     callback = LambdaCallback(profile(str(profile_dir), start_step=10, num_steps=2, create_perfetto_link=False))
     for _ in range(50):
         callback.on_step(SimpleNamespace(step=9))
         callback.on_step(SimpleNamespace(step=10))
         callback.on_step(SimpleNamespace(step=10), force=True)
 
-    assert calls.count(("start", str(profile_dir))) == 50
+    assert calls.count(("start", str(process_dir))) == 50
     assert calls.count(("stop",)) == 50
     assert calls.count(("barrier",)) == 50
     assert profile_dir.exists()
@@ -82,6 +84,6 @@ def test_profile_ctx_writes_host_profile_files_without_tracker_upload(monkeypatc
     with profile_ctx(str(profile_dir), device_profile=False, host_profile=True, host_profile_topn=10):
         sum(range(1000))
 
-    assert (profile_dir / "host_profile.pstats").exists()
-    assert (profile_dir / "host_profile.txt").exists()
+    assert (profile_dir / "process_00000" / "host_profile.pstats").exists()
+    assert (profile_dir / "process_00000" / "host_profile.txt").exists()
     assert calls == [("barrier",)]
