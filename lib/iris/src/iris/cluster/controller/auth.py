@@ -38,6 +38,15 @@ logger = logging.getLogger(__name__)
 WORKER_USER = "system:worker"
 DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
 
+# Role carried by an endpoint-scoped proxy token. It has zero RPC authority
+# (authorize_method denies any audience-bearing identity); it exists only so the
+# token has a role claim and so audit rows read sensibly.
+ENDPOINT_TOKEN_ROLE = "endpoint"
+# Default lifetime of a minted endpoint token when the caller requests none.
+DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
+# Hard ceiling on a requested endpoint-token TTL.
+MAX_ENDPOINT_TOKEN_TTL_SECONDS = 86400  # 24 hours
+
 
 # ---------------------------------------------------------------------------
 # API key CRUD — top-level functions operating on ControllerDB
@@ -209,6 +218,30 @@ class JwtTokenManager:
         }
         return jwt.encode(payload, self._signing_key, algorithm="HS256")
 
+    def create_endpoint_token(
+        self,
+        endpoint_name: str,
+        key_id: str,
+        ttl_seconds: int = DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS,
+    ) -> str:
+        """Mint a scoped bearer token authorizing only ``endpoint_name``'s /proxy path.
+
+        Carries ``scope=proxy`` and ``aud=<wire name>``; ``verify`` surfaces the
+        audience on the identity, and both the proxy and the RPC/HTTP auth arms
+        treat an audience-bearing identity as endpoint-scoped (no RPC authority).
+        """
+        now = time.time()
+        payload = {
+            "sub": f"endpoint:{endpoint_name}",
+            "role": ENDPOINT_TOKEN_ROLE,
+            "aud": endpoint_name,
+            "scope": "proxy",
+            "jti": key_id,
+            "iat": int(now),
+            "exp": int(now + ttl_seconds),
+        }
+        return jwt.encode(payload, self._signing_key, algorithm="HS256")
+
     def verify(self, token: str) -> VerifiedIdentity:
         """Verify JWT signature and claims, check revocation.
 
@@ -216,7 +249,12 @@ class JwtTokenManager:
         per ``_TOUCH_INTERVAL_SECONDS`` to avoid hot-path DB writes.
         """
         try:
-            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"])
+            # verify_aud=False: this one verify() accepts both full-identity
+            # tokens (no aud) and endpoint-scoped tokens (aud set). PyJWT 2.x
+            # otherwise rejects any aud-bearing token when decode() gets no
+            # audience= (InvalidAudienceError). Audience enforcement is ours,
+            # at the proxy, against the endpoint the request names.
+            payload = jwt.decode(token, self._signing_key, algorithms=["HS256"], options={"verify_aud": False})
         except jwt.ExpiredSignatureError as exc:
             raise ValueError("Token has expired") from exc
         except jwt.InvalidTokenError as exc:
@@ -228,9 +266,13 @@ class JwtTokenManager:
 
         self._maybe_touch(jti)
 
+        # A scoped proxy token carries its endpoint wire name in aud; any other
+        # token is a full identity (audience=None).
+        audience = payload.get("aud") if payload.get("scope") == "proxy" else None
         return VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
+            audience=audience,
         )
 
     def _maybe_touch(self, jti: str) -> None:

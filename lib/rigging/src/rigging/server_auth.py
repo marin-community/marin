@@ -45,6 +45,11 @@ class VerifiedIdentity:
 
     user_id: str
     role: str
+    # Set only for a token scoped to a single proxy audience (e.g. one
+    # endpoint's /proxy path). A scoped identity MUST NOT authorize any RPC —
+    # the consuming service enforces that. None ⇒ a full identity (the default
+    # for every non-scoped token and every non-JWT authenticator).
+    audience: str | None = None
 
 
 # Identity granted to any tokenless caller on a genuine loopback connection.

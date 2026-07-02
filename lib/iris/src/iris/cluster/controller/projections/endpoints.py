@@ -16,7 +16,7 @@ disk.
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from threading import RLock
 from typing import ClassVar
 
@@ -39,6 +39,24 @@ class EndpointQuery:
     limit: int | None = None
 
 
+class EndpointAccess(IntEnum):
+    """Who may reach an endpoint through the controller's /proxy route.
+
+    Values mirror the ``Controller.EndpointAccess`` proto enum (the wire-only
+    ``UNSPECIFIED = 0`` sentinel is normalized to ``PRIVATE`` at the boundary
+    and never stored). A NULL ``access`` column also reads as ``PRIVATE``.
+    """
+
+    PRIVATE = 1  # a full cluster identity is required (today's behavior)
+    PUBLIC = 2  # no auth on /proxy/<name>/*
+    BEARER = 3  # a scoped endpoint token (or a full cluster identity)
+
+
+def access_from_db(value: int | None) -> EndpointAccess:
+    """Decode a stored ``access`` column (NULL ⇒ PRIVATE) to an EndpointAccess."""
+    return EndpointAccess.PRIVATE if value is None else EndpointAccess(value)
+
+
 @dataclass(frozen=True, slots=True)
 class EndpointRow:
     """Registered service endpoint (in-memory write-through cache row)."""
@@ -52,6 +70,7 @@ class EndpointRow:
     # Lease expiry; ``None`` never expires (only fixtures that skip leasing).
     # A passed deadline is hidden from reads and swept by ``sweep_expired``.
     lease_deadline: Timestamp | None = None
+    access: EndpointAccess = EndpointAccess.PRIVATE
 
     def is_expired(self, now: Timestamp) -> bool:
         return self.lease_deadline is not None and self.lease_deadline <= now
@@ -135,6 +154,7 @@ class EndpointsProjection:
                         metadata=row.metadata_json,
                         registered_at=row.registered_at_ms,
                         lease_deadline=row.lease_deadline_ms,
+                        access=access_from_db(row.access),
                     )
                     self._index(endpoint)
         logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
@@ -269,6 +289,7 @@ class EndpointsProjection:
                 "metadata_json": endpoint.metadata,
                 "registered_at_ms": endpoint.registered_at,
                 "lease_deadline_ms": endpoint.lease_deadline,
+                "access": int(endpoint.access),
             },
         )
 

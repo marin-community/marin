@@ -12,6 +12,7 @@ endpoints are served from an in-memory map and never expire.
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from connectrpc.code import Code
@@ -21,6 +22,7 @@ from rigging.timing import Duration, Timestamp
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
+    EndpointAccess,
     EndpointQuery,
     EndpointRow,
     EndpointsProjection,
@@ -40,6 +42,32 @@ ENDPOINT_LEASE = Duration.from_hours(120)
 # Floor on a granted lease: bounds how often a client may force the controller to
 # re-register by capping the renewal rate a short requested lease can ask for.
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
+
+
+def _access_from_proto(access: int) -> EndpointAccess:
+    """Normalize a proto EndpointAccess to a stored EndpointAccess.
+
+    The wire-only ``UNSPECIFIED = 0`` sentinel registers as ``PRIVATE`` (today's
+    cluster-identity-required default), so an old client that never sets the
+    field keeps the safe behavior.
+    """
+    if access == controller_pb2.Controller.ENDPOINT_ACCESS_UNSPECIFIED:
+        return EndpointAccess.PRIVATE
+    return EndpointAccess(access)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedEndpoint:
+    """A proxy request's resolved target: canonical wire name, address, access.
+
+    Produced by :meth:`EndpointServiceImpl.resolve_endpoint_row` in one lookup
+    so the proxy's authorization (access mode + ``aud`` compare against ``name``)
+    and its forwarding (``address``) can never disagree.
+    """
+
+    name: str
+    address: str
+    access: EndpointAccess
 
 
 class EndpointServiceImpl:
@@ -106,6 +134,7 @@ class EndpointServiceImpl:
             metadata=dict(request.metadata),
             registered_at=Timestamp.now(),
             lease_deadline=Timestamp.now().add(granted),
+            access=_access_from_proto(request.access),
         )
 
         # Validation runs inside the writer transaction in
@@ -170,6 +199,7 @@ class EndpointServiceImpl:
                     address=e.address,
                     task_id=e.task_id.to_wire(),
                     metadata=e.metadata,
+                    access=int(e.access),
                 )
                 for e in endpoints
             ]
@@ -186,6 +216,40 @@ class EndpointServiceImpl:
         if row is not None:
             return row.address
         return self._system_endpoints.get(name)
+
+    def resolve_task_endpoint(self, name: str) -> EndpointRow | None:
+        """Resolve a task-registered endpoint row by wire name, or None.
+
+        Used for owner authorization on token minting; ``/system/`` endpoints
+        (no owning task) are intentionally not returned. Accepts either the
+        ``/``-prefixed wire name or the bare form.
+        """
+        slashed = name.replace(".", "/")
+        for candidate in (f"/{slashed}", slashed):
+            row = self._endpoints.resolve(candidate)
+            if row is not None:
+                return row
+        return None
+
+    def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
+        """Resolve a proxy request's ``encoded_name`` to its target, or None.
+
+        Owns the ``.`` -> ``/`` decode and the slash-prefixed-then-bare lookup
+        that the proxy's forwarding path also performs, returning the endpoint's
+        access mode, address, and canonical wire name in a single lookup so
+        authorization and forwarding cannot drift. ``/system/`` endpoints come
+        from the in-memory map, which has no access column, and always resolve
+        as ``PRIVATE``.
+        """
+        slashed = encoded_name.replace(".", "/")
+        for name in (f"/{slashed}", slashed):
+            row = self._endpoints.resolve(name)
+            if row is not None:
+                return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)
+            address = self._system_endpoints.get(name)
+            if address is not None:
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.PRIVATE)
+        return None
 
     def _list_system_endpoints(self, prefix: str, *, exact: bool) -> controller_pb2.Controller.ListEndpointsResponse:
         """Resolve system endpoints from the in-memory map."""

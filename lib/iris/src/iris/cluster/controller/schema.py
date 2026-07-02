@@ -519,6 +519,10 @@ endpoints_table = Table(
     # backfill; a NULL deadline is treated as never-expiring until the registrant
     # next re-registers with a real lease.
     Column("lease_deadline_ms", TimestampMsType, nullable=True),
+    # Proxy access mode (EndpointAccess int). Nullable so it can be added to an
+    # existing DB without a backfill; a NULL is read as PRIVATE (today's
+    # cluster-identity-required behavior), so pre-migration rows are unchanged.
+    Column("access", Integer, nullable=True),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
     Index("idx_endpoints_job_id", "job_id"),

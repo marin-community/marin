@@ -25,6 +25,8 @@ from iris.cluster.controller.endpoint_proxy import (
     EndpointProxy,
     _rewrite_location,
 )
+from iris.cluster.controller.endpoint_service import ResolvedEndpoint
+from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
 from rigging.timing import Duration, ExponentialBackoff
@@ -677,7 +679,29 @@ def test_extract_proxy_subdomain(host: str, expected: str | None) -> None:
     assert _extract_proxy_subdomain(host) == expected
 
 
-def _build_subdomain_app(proxy: EndpointProxy):
+class _DictEndpointService:
+    """Minimal endpoint_service for the subdomain middleware in tests.
+
+    Backs ``resolve_endpoint_row`` with the same ``name -> address`` dict the
+    proxy resolves against, mirroring production's ``.`` -> ``/`` decode and
+    slash-prefixed-then-bare lookup. All endpoints resolve as PRIVATE; the
+    subdomain tests run with the default (auth-disabled) policy, so the access
+    mode does not gate — they exercise dispatch, not authorization.
+    """
+
+    def __init__(self, endpoints: dict[str, str]):
+        self._endpoints = endpoints
+
+    def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
+        slashed = encoded_name.replace(".", "/")
+        for name in (f"/{slashed}", slashed):
+            address = self._endpoints.get(name)
+            if address is not None:
+                return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.PRIVATE)
+        return None
+
+
+def _build_subdomain_app(proxy: EndpointProxy, endpoints: dict[str, str]):
     """Wrap an EndpointProxy with subdomain dispatch + a fall-through inner app.
 
     The inner app responds 418 to any request that the middleware does not
@@ -690,7 +714,7 @@ def _build_subdomain_app(proxy: EndpointProxy):
 
     inner = Starlette(routes=[Route("/{path:path}", _inner, methods=list(ALLOWED_METHODS))])
     inner.router.redirect_slashes = False
-    return _SubdomainProxyMiddleware(inner, endpoint_proxy=proxy)
+    return _SubdomainProxyMiddleware(inner, endpoint_proxy=proxy, endpoint_service=_DictEndpointService(endpoints))
 
 
 def _start_subdomain_proxy(
@@ -699,7 +723,7 @@ def _start_subdomain_proxy(
     endpoints: dict[str, str],
 ) -> str:
     ep_proxy = EndpointProxy(endpoints.get)
-    app = _build_subdomain_app(ep_proxy)
+    app = _build_subdomain_app(ep_proxy, endpoints)
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", log_config=None)
     server = uvicorn.Server(config)

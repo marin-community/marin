@@ -46,7 +46,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from iris.cluster.controller import endpoint_proxy
 from iris.cluster.controller.backend import backend_descriptor
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
-from iris.cluster.controller.endpoint_service import EndpointServiceImpl
+from iris.cluster.controller.endpoint_service import EndpointServiceImpl, ResolvedEndpoint
+from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
     _AUTH_POLICY_ATTR,
@@ -97,9 +98,14 @@ async def _enforce_http_auth(
     """Resolve auth for an ASGI scope; on failure send a 401 and return False.
 
     On success, sets ``scope["auth_identity"]`` if a verified identity is
-    present and returns True. Shared by ``_RouteAuthMiddleware`` (which
-    runs against route-annotated requests) and ``_SubdomainProxyMiddleware``
-    (which intercepts before any route can match).
+    present and returns True. Used by ``_RouteAuthMiddleware`` (which runs
+    against route-annotated ``@requires_auth`` routes).
+
+    An endpoint-scoped token (``identity.audience`` set) is rejected here with
+    403: such a token is only ever valid at the per-endpoint proxy (see
+    ``_authorize_proxy``), never on a whole-dashboard ``@requires_auth`` route
+    such as ``_legacy_log_service``. This keeps ``_authorize_proxy`` the single
+    acceptor of scoped tokens and future-proofs any new ``@requires_auth`` route.
     """
     headers = _scope_headers(scope)
     token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
@@ -113,9 +119,67 @@ async def _enforce_http_auth(
         response = JSONResponse({"error": "authentication required"}, status_code=401)
         await response(scope, receive, send)
         return False
+    if identity is not None and identity.audience is not None:
+        response = JSONResponse({"error": "endpoint-scoped token cannot access this route"}, status_code=403)
+        await response(scope, receive, send)
+        return False
     if identity is not None:
         scope["auth_identity"] = identity
     return True
+
+
+def _authorize_proxy(
+    request: Request,
+    resolved: ResolvedEndpoint | None,
+    policy: RequestAuthPolicy,
+    *,
+    token: str | None = None,
+) -> Response | None:
+    """Authorize a ``/proxy`` request against its endpoint's access mode.
+
+    Returns a deny ``Response`` (401/403) to send, or ``None`` when the request
+    is allowed. ``resolved`` is the endpoint the request names (``None`` for an
+    unknown name, which is treated as ``PRIVATE`` — the forwarding layer then
+    404s). This is the *only* place an endpoint-scoped token is accepted.
+
+    - ``PUBLIC``: allowed with no auth.
+    - ``BEARER``: a scoped token must match this endpoint's wire name; a full
+      cluster identity also passes.
+    - ``PRIVATE`` (and unknown): a full cluster identity is required; a scoped
+      token is rejected.
+
+    ``token`` overrides where the credential comes from: the URL-token fallback
+    passes the token lifted from the path; otherwise it is read from the
+    ``Authorization`` header or session cookie. In null-auth mode (no verifier
+    configured) every request is allowed, matching the rest of the dashboard.
+    """
+    access = resolved.access if resolved is not None else EndpointAccess.PRIVATE
+    if access is EndpointAccess.PUBLIC:
+        return None
+    if not policy.request_auth_enabled:
+        return None
+    headers = dict(request.headers)
+    if token is None:
+        token = extract_bearer_token(headers, cookie_name=SESSION_COOKIE)
+    client = request.client
+    try:
+        identity = policy.resolve(
+            token,
+            client_address=f"{client.host}:{client.port}" if client else None,
+            headers=headers,
+        )
+    except ValueError:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+
+    scoped = identity is not None and identity.audience is not None
+    if access is EndpointAccess.BEARER:
+        if scoped and identity.audience != resolved.name:
+            return JSONResponse({"error": "token not valid for this endpoint"}, status_code=403)
+        return None
+    # PRIVATE (and unknown): full cluster identity only, never a scoped token.
+    if scoped:
+        return JSONResponse({"error": "endpoint-scoped token cannot access this endpoint"}, status_code=403)
+    return None
 
 
 class _RouteAuthMiddleware:
@@ -341,10 +405,12 @@ class _SubdomainProxyMiddleware:
         app: ASGIApp,
         *,
         endpoint_proxy: EndpointProxy,
+        endpoint_service: EndpointServiceImpl,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
+        self._endpoint_service = endpoint_service
         self._auth_policy = auth_policy
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -357,16 +423,21 @@ class _SubdomainProxyMiddleware:
             await self._app(scope, receive, send)
             return
 
-        if self._auth_policy.request_auth_enabled:
-            if not await _enforce_http_auth(scope, receive, send, self._auth_policy):
-                return
-
+        # Resolve once (access + address + wire name), then apply the per-endpoint
+        # access mode — the same policy the path-style proxy route uses.
+        resolved = self._endpoint_service.resolve_endpoint_row(encoded_name)
         request = Request(scope, receive=receive)
+        deny = _authorize_proxy(request, resolved, self._auth_policy)
+        if deny is not None:
+            await deny(scope, receive, send)
+            return
+
         response = await self._endpoint_proxy.dispatch(
             request,
             encoded_name=encoded_name,
             sub_path=request.url.path.lstrip("/"),
             proxy_prefix="",
+            address=resolved.address if resolved is not None else None,
         )
         await response(scope, receive, send)
 
@@ -464,17 +535,45 @@ class ControllerDashboard:
 
         self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
-        @requires_auth
+        # The proxy routes are @public so the route-annotation middleware does
+        # not apply the whole-dashboard @requires_auth (which would over-grant a
+        # served-model token the RPC surface). They enforce their own
+        # per-endpoint access mode via _authorize_proxy instead.
+        @public
         async def _proxy_endpoint(request: Request) -> Response:
             name = request.path_params["endpoint_name"]
+            resolved = self._endpoint_service.resolve_endpoint_row(name)
+            deny = _authorize_proxy(request, resolved, self._auth_policy)
+            if deny is not None:
+                return deny
             return await self._endpoint_proxy.dispatch(
                 request,
                 encoded_name=name,
                 sub_path=request.path_params["sub_path"],
                 proxy_prefix=f"/proxy/{name}",
+                address=resolved.address if resolved is not None else None,
             )
 
-        @requires_auth
+        @public
+        async def _proxy_endpoint_token(request: Request) -> Response:
+            # URL-token fallback for transports that can't set an Authorization
+            # header: /proxy/t/<token>/<name>/<sub_path>. Same JWT as the header
+            # form, lifted from the path and validated the same way.
+            token = request.path_params["token"]
+            name = request.path_params["endpoint_name"]
+            resolved = self._endpoint_service.resolve_endpoint_row(name)
+            deny = _authorize_proxy(request, resolved, self._auth_policy, token=token)
+            if deny is not None:
+                return deny
+            return await self._endpoint_proxy.dispatch(
+                request,
+                encoded_name=name,
+                sub_path=request.path_params["sub_path"],
+                proxy_prefix=f"/proxy/t/{token}/{name}",
+                address=resolved.address if resolved is not None else None,
+            )
+
+        @public
         async def _proxy_endpoint_redirect(request: Request) -> Response:
             # ``/proxy/<name>`` (no trailing slash, no sub_path) needs a
             # redirect to ``/proxy/<name>/`` so upstream apps resolve their
@@ -484,6 +583,10 @@ class ControllerDashboard:
             # internal bind IP. A path-only Location resolves against the
             # browser's current origin, so no internal address leaks.
             name = request.path_params["endpoint_name"]
+            resolved = self._endpoint_service.resolve_endpoint_row(name)
+            deny = _authorize_proxy(request, resolved, self._auth_policy)
+            if deny is not None:
+                return deny
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"/proxy/{name}/{query}", status_code=307)
 
@@ -514,6 +617,14 @@ class ControllerDashboard:
             Route(
                 "/proxy/{endpoint_name:str}",
                 _proxy_endpoint_redirect,
+                methods=list(endpoint_proxy.ALLOWED_METHODS),
+            ),
+            # URL-token fallback — must precede PROXY_ROUTE, which would otherwise
+            # swallow ``/proxy/t/...`` as endpoint ``t``. The ``t`` label is
+            # reserved (endpoint names are never a bare ``t``).
+            Route(
+                "/proxy/t/{token:str}/{endpoint_name:str}/{sub_path:path}",
+                _proxy_endpoint_token,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
             Route(
@@ -555,6 +666,7 @@ class ControllerDashboard:
         wrapped = _SubdomainProxyMiddleware(
             wrapped,
             endpoint_proxy=self._endpoint_proxy,
+            endpoint_service=self._endpoint_service,
             auth_policy=self._auth_policy,
         )
         return wrapped
