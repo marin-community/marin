@@ -2448,7 +2448,11 @@ Addendum:
 
   The best tile-sweep row is still below the current `block_k=128,block_n=128,inbox_slots=4,num_send_sms=2,num_sms=32` neighborhood, so tile-size changes did not unlock the 210 target.
 
-- Pipeline comparison `/dlwh/repro-source-push-pipeline-compare-20260702-013920` was killed after emitting 5 rows:
+### 2026-07-02 01:45 PDT - FWD-SWQ-065 Manual vs emit pipeline comparison
+- Question:
+  - Check whether replacing the current manual WGMMA staging loop with `mgpu.emit_pipeline` improves the best fixed source-push target pocket.
+- H100 job:
+  - `/dlwh/repro-source-push-pipeline-compare-20260702-013920`, cluster `cw-us-east-02a`, killed after emitting 5 rows.
 
   | compute_pipeline | max_concurrent_steps | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
   |---|---:|---:|---:|---:|---|
@@ -2458,4 +2462,7 @@ Addendum:
   | emit | 4 | n/a | n/a | n/a | invalid shared-memory footprint (`327712 > 232448`) |
   | emit | 5 | n/a | n/a | n/a | invalid shared-memory footprint (`409640 > 232448`) |
 
-  `mgpu.emit_pipeline` does not improve the source-push target path here; higher in-flight depth exceeds SMEM.
+- Interpretation:
+  - `mgpu.emit_pipeline` does not improve the source-push target path here.
+  - `max_concurrent_steps=2` is a regression versus the already-noisy manual row, and higher in-flight depth exceeds SMEM.
+  - No source-push H100 jobs are left running.
