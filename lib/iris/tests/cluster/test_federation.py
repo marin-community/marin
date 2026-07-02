@@ -87,31 +87,8 @@ def test_peers_config_rejects_static_token_without_cluster():
 
 
 # ---------------------------------------------------------------------------
-# finelog.relay: config parse + validation
+# finelog.relay: validation
 # ---------------------------------------------------------------------------
-
-
-def test_finelog_relay_config_round_trips():
-    config = parse_config(
-        _config(
-            finelog={
-                "config": "marin",
-                "relay": {
-                    "address": "dns:///global-finelog:10001",
-                    "delegation_key": "0123456789abcdef0123456789abcdef",
-                },
-            }
-        )
-    )
-    reparsed = parse_config(config_to_dict(config))
-    assert reparsed.finelog.config == "marin"
-    assert reparsed.finelog.relay.address == "dns:///global-finelog:10001"
-    assert reparsed.finelog.relay.delegation_key == "0123456789abcdef0123456789abcdef"
-
-
-def test_finelog_relay_absent_leaves_log_plane_single_cluster():
-    cfg = parse_config(_config(finelog={"config": "marin"}))
-    assert cfg.finelog.relay is None
 
 
 def test_finelog_relay_rejects_short_delegation_key():

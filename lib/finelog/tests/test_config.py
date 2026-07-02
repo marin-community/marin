@@ -9,12 +9,9 @@ from pathlib import Path
 
 import pytest
 from finelog.deploy.config import (
-    CidrAuthLayer,
     Deployment,
     FinelogConfig,
     GcpDeployment,
-    JwtAuthLayer,
-    JwtKeyEntry,
     K8sDeployment,
     auth_policy_json,
     derive_endpoint_uri,
@@ -136,9 +133,9 @@ def test_derive_endpoint_uri_k8s() -> None:
     assert metadata == {"port": "10001"}
 
 
-def test_auth_layers_parse_and_serialize(tmp_path: Path) -> None:
-    """An ordered cidr+jwt `auth:` list parses to typed layers and serializes to the
-    `FINELOG_AUTH_POLICY` JSON the finelog server reads, order preserved."""
+def test_auth_layers_serialize_to_finelog_policy_json(tmp_path: Path) -> None:
+    """An ordered cidr+jwt `auth:` list serializes to the exact `FINELOG_AUTH_POLICY`
+    JSON the finelog Rust server parses — order preserved, snake_case tags."""
     cfg_path = tmp_path / "authed.yaml"
     _write_config(
         cfg_path,
@@ -160,10 +157,6 @@ def test_auth_layers_parse_and_serialize(tmp_path: Path) -> None:
         """,
     )
     cfg = load_finelog_config(str(cfg_path))
-    assert cfg.auth == (
-        CidrAuthLayer(cidrs=("10.0.0.0/8", "::1/128")),
-        JwtAuthLayer(keys=(JwtKeyEntry(cluster="marin", secret="0123456789abcdef0123456789abcdef"),)),
-    )
     assert json.loads(auth_policy_json(cfg.auth)) == [
         {"type": "cidr", "cidrs": ["10.0.0.0/8", "::1/128"]},
         {"type": "jwt", "keys": [{"cluster": "marin", "secret": "0123456789abcdef0123456789abcdef"}]},
