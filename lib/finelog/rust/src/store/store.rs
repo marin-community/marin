@@ -268,19 +268,23 @@ impl Store {
     /// [`log_registered_schema`] (the union: existing columns plus any new
     /// nullable ones, e.g. `cluster`). Catalog-only — no engine is built here;
     /// `rehydrate_from_catalog` (which runs immediately after) opens the engine
-    /// from the resulting catalog schema. An empty policy preserves the existing
-    /// one.
+    /// from the resulting catalog schema.
+    ///
+    /// This runs before rehydrate, so the catalog's live map is still empty and
+    /// `register_or_evolve` takes its fresh-registration path. We therefore pass
+    /// the *persisted* policy (not [`StoragePolicy::default`]) so a store that
+    /// already has a custom `log` retention/offload policy keeps it across boots
+    /// rather than having the row reset.
     fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
         let stored = with_implicit_seq(schema);
+        let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
         let stored_for_merge = stored.clone();
-        self.catalog.register_or_evolve(
-            LOG_NAMESPACE_NAME,
-            stored,
-            StoragePolicy::default(),
-            move |existing| merge_schemas(existing, &stored_for_merge),
-        )?;
+        self.catalog
+            .register_or_evolve(LOG_NAMESPACE_NAME, stored, policy, move |existing| {
+                merge_schemas(existing, &stored_for_merge)
+            })?;
         Ok(())
     }
 
@@ -891,11 +895,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn boot_evolves_preexisting_log_schema_with_cluster() {
+    async fn boot_evolves_preexisting_log_schema_and_preserves_policy() {
         // A store booting over a deployment whose persisted `log` schema predates
-        // the `cluster` column must additively evolve it: `ensure_log_namespace_schema`
+        // the `cluster` column must additively evolve it (`ensure_log_namespace_schema`
         // merges the column into the catalog BEFORE rehydrate opens the engine, so
-        // no live-engine rebuild happens at boot.
+        // no live-engine rebuild happens at boot) WITHOUT resetting the namespace's
+        // persisted storage policy.
         let dir = std::env::temp_dir().join(format!(
             "finelog_evolve_log_{}",
             std::time::SystemTime::now()
@@ -905,9 +910,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Seed the catalog with the frozen pre-cluster (five-column) `log` schema,
-        // spelled out because it is the historical layout — deliberately different
-        // from today's `log_registered_schema`.
+        // Seed the catalog with the frozen pre-cluster (five-column) `log` schema
+        // and a non-default policy. The schema is spelled out because it is the
+        // historical layout — deliberately different from today's
+        // `log_registered_schema`.
+        let seeded_policy = StoragePolicy {
+            max_segments: Some(7),
+            ..Default::default()
+        };
         {
             let catalog = Catalog::open(Some(dir.as_path())).unwrap();
             let old = with_implicit_seq(Schema::new(
@@ -921,17 +931,14 @@ mod tests {
                 "key",
             ));
             catalog
-                .register_or_evolve(
-                    LOG_NAMESPACE_NAME,
-                    old,
-                    StoragePolicy::default(),
-                    |existing| Ok(existing.clone()),
-                )
+                .register_or_evolve(LOG_NAMESPACE_NAME, old, seeded_policy.clone(), |existing| {
+                    Ok(existing.clone())
+                })
                 .unwrap();
         }
 
         // Boot over that catalog: the schema gains the nullable `cluster` column,
-        // appended after the original five, with everything else preserved.
+        // appended after the original five, and the policy is preserved.
         let store = Store::new(Some(dir.clone()), String::new()).unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
         assert_eq!(
@@ -941,6 +948,11 @@ mod tests {
         assert!(
             schema.column("cluster").unwrap().nullable,
             "the evolved cluster column is nullable"
+        );
+        assert_eq!(
+            store.get_policy(LOG_NAMESPACE_NAME).unwrap(),
+            seeded_policy,
+            "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
