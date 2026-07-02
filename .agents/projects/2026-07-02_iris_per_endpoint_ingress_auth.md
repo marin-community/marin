@@ -1,9 +1,20 @@
 # Per-endpoint auth-gated public ingress on the Iris controller
 
-> Status: **design — revised after review** (GitHub issue
+> Status: **implementing** (GitHub issue
 > [#6847](https://github.com/marin-community/marin/issues/6847); weaver #4;
 > PR #6857). Follow-up to #6545 (public-endpoint discussion) and #6556
 > (marin-serve).
+>
+> **Landed (controller core + client plumbing, all tests green):** stages 1–7's
+> controller side — proto (`EndpointAccess`, `RegisterEndpointRequest.access`,
+> `MintEndpointToken`), migration `0036`, `VerifiedIdentity.audience`,
+> `JwtTokenManager.create_endpoint_token` + `verify_aud=False`,
+> `resolve_endpoint_row`, `_authorize_proxy` + the RPC/HTTP scoped-token denies,
+> the `MintEndpointToken` handler, the URL-token fallback route, and the
+> `access=` parameter threaded through the registration client APIs.
+> **Remaining:** the `quick_serve` serve-flow integration (register `BEARER` +
+> CLI-side mint/print — open question 2) and the infra stages 8 (operator-run
+> `iap_gclb.py public-proxy` and the CoreWeave ingress) + docs.
 
 ## Problem
 
