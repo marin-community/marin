@@ -2466,3 +2466,159 @@ Addendum:
   - `mgpu.emit_pipeline` does not improve the source-push target path here.
   - `max_concurrent_steps=2` is a regression versus the already-noisy manual row, and higher in-flight depth exceeds SMEM.
   - No source-push H100 jobs are left running.
+
+### 2026-07-02 01:52 PDT - FWD-SWQ-066 Best fixed pocket process-level repeat
+- Question:
+  - Re-run the current best fixed source-push pocket enough times to separate a real 190-ish ceiling from single-row noise.
+- H100 job:
+  - `/dlwh/repro-source-push-fixed-best-repeat-20260702-084602`, cluster `cw-us-east-02a`, succeeded.
+  - Config: `fixed_wait`, `static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `entries_per_rank=288`, `warmup=2`, `steps=7`, `--separate-compile`, `--no-check`.
+
+  | repeat | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|
+  | 0 | `0.009558173262s` | `190.567938` | `74.440601` |
+  | 1 | `0.015324508139s` | `118.860674` | `46.429951` |
+  | 2 | `0.010587501406s` | `172.040720` | `67.203406` |
+  | 3 | `0.009565891432s` | `190.414180` | `74.380539` |
+  | 4 | `0.009538531569s` | `190.960354` | `74.593888` |
+  | 5 | `0.014714029584s` | `123.792151` | `48.356309` |
+  | 6 | `0.009544583437s` | `190.839274` | `74.546591` |
+  | 7 | `0.009648417721s` | `188.785501` | `73.744336` |
+
+- Summary:
+  - Median: `0.009607154577s`, `189.599840 TFLOP/s/rank`.
+  - Range: `118.860674` to `190.960354 TFLOP/s/rank`.
+  - The fast mode is stable around `189-191`, but process-level repeats have a large slow tail.
+- Follow-up:
+  - Added `--repeat-runs` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py` so one setup/compile can emit multiple steady-state rows. This will isolate process/input/setup effects from kernel execution variability.
+
+### 2026-07-02 01:56 PDT - FWD-SWQ-067 Best fixed pocket in-process repeat
+- Question:
+  - Does the slow tail from FWD-SWQ-066 come from separate Python processes/input rebuilding, or from repeated kernel execution itself?
+- Code change:
+  - `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py` now supports `--repeat-runs`.
+  - `_time_jitted` reuses the same device inputs and compiled/jitted function, then emits one row per repeated steady-state timing block.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 job:
+  - `/dlwh/repro-source-push-fixed-inproc-repeat-20260702-085359`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same best fixed pocket as FWD-SWQ-066, but one process and `--repeat-runs 8`.
+
+  | repeat_run | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|
+  | 0 | `0.011876592113s` | `153.367342` | `59.909118` |
+  | 1 | `0.009596478161s` | `189.807275` | `74.143467` |
+  | 2 | `0.015052653716s` | `121.007326` | `47.268487` |
+  | 3 | `0.009564737856s` | `190.437145` | `74.389510` |
+  | 4 | `0.010157193856s` | `179.329192` | `70.050466` |
+  | 5 | `0.015546231431s` | `117.165461` | `45.767758` |
+  | 6 | `0.010841142419s` | `168.015630` | `65.631105` |
+  | 7 | `0.014964028129s` | `121.724001` | `47.548438` |
+
+- Summary:
+  - Median: `0.011358867266s`, `160.691486 TFLOP/s/rank`.
+  - Range: `117.165461` to `190.437145 TFLOP/s/rank`.
+- Interpretation:
+  - The slow tail persists when compilation, device inputs, and process setup are reused.
+  - Current fixed source-push path is therefore not just process/setup noisy; repeated kernel execution itself is unstable.
+  - This points at software-structure/scheduling contention in the semaphore/slot fixed-wait path, not an isolated WGMMA tile-size issue.
+  - No source-push H100 jobs are left running.
+
+### 2026-07-02 01:59 PDT - FWD-SWQ-068 Send-only in-process repeat
+- Question:
+  - Does the in-process slow tail persist when WGMMA/W13 compute is removed?
+- H100 job:
+  - `/dlwh/repro-source-push-send-only-inproc-repeat-20260702-085749`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same source-push routing/slot geometry as FWD-SWQ-067, but `implementation=send_only`, `output_mode=debug`, `--repeat-runs 8`, `warmup=2`, `steps=7`, `--separate-compile`, `--no-check`.
+
+  | repeat_run | steady_state_time | send GB/s/rank |
+  |---:|---:|---:|
+  | 0 | `0.007546702866s` | `94.281724` |
+  | 1 | `0.008228565866s` | `86.469036` |
+  | 2 | `0.012115386980s` | `58.728307` |
+  | 3 | `0.006489105855s` | `109.647797` |
+  | 4 | `0.006054872547s` | `117.511336` |
+  | 5 | `0.006713915583s` | `105.976334` |
+  | 6 | `0.011479832132s` | `61.979666` |
+  | 7 | `0.008532974869s` | `83.384303` |
+
+- Summary:
+  - Median: `0.007887634366s`, `90.375380 GB/s/rank`.
+  - Range: `58.728307` to `117.511336 GB/s/rank`.
+- Interpretation:
+  - Removing WGMMA does not remove the slow tail.
+  - The unstable part is already present in source-push copy/semaphore/output-scratch behavior; W13 scheduling is not the only limiter.
+
+### 2026-07-02 02:03 PDT - FWD-SWQ-069 Slot-group receiver schedule sweep
+- Question:
+  - If fixed-wait instability is driven by per-entry semaphore/job fanout, does assigning a fixed group of receiver workers to each slot improve median throughput?
+- H100 job:
+  - `/dlwh/repro-source-push-slot-group-sweep-20260702-085941`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target source-push pocket with `receiver_schedule=slot_group`, `workers_per_slot={1,2,3,5,6,10,15,30}`, `repeat_runs=3`, `warmup=2`, `steps=7`, `--separate-compile`, `--no-check`.
+
+  | workers_per_slot | repeat TFLOP/s/rank rows | median TFLOP/s/rank | min | max |
+  |---:|---|---:|---:|---:|
+  | 1 | `64.23, 62.68, 62.86` | `62.86` | `62.68` | `64.23` |
+  | 2 | `81.58, 89.56, 99.19` | `89.56` | `81.58` | `99.19` |
+  | 3 | `98.33, 137.45, 100.79` | `100.79` | `98.33` | `137.45` |
+  | 5 | `155.35, 117.52, 145.41` | `145.41` | `117.52` | `155.35` |
+  | 6 | `143.41, 118.19, 180.65` | `143.41` | `118.19` | `180.65` |
+  | 10 | `140.99, 137.21, 200.70` | `140.99` | `137.21` | `200.70` |
+  | 15 | `137.46, 153.77, 148.56` | `148.56` | `137.46` | `153.77` |
+  | 30 | `92.11, 110.29, 98.30` | `98.30` | `92.11` | `110.29` |
+
+- Interpretation:
+  - `slot_group` is not a speedup over fixed-wait. It reduces semaphore fanout but loses too much parallelism or introduces worse lane imbalance.
+  - The `workers_per_slot=10` single `200.70 TFLOP/s/rank` row is not stable enough to treat as progress; its median is `140.99`.
+  - Current best remains fixed-wait, but its stable median is below 210 and its in-process distribution has a large slow tail.
+
+### 2026-07-02 02:07 PDT - FWD-SWQ-070 Scratch inbox storage smoke
+- Question:
+  - Can the full remote-write inbox be moved from a returned output buffer to non-returned GMEM scratch to reduce output/scratch allocation pressure?
+- Code change:
+  - Added experimental `--inbox-storage {output,scratch}` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The scratch variant wires the full inbox through `scratch_shapes=(mgpu.GMEM(...),)` and returns a tiny placeholder inbox in `output_mode=perf`.
+- H100 smoke:
+  - `/dlwh/repro-source-push-scratch-inbox-smoke-20260702-090531`, cluster `cw-us-east-02a`, succeeded as a job but scratch row failed.
+
+  | inbox_storage | repeat_run | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | result |
+  |---|---:|---:|---:|---:|---|
+  | output | 0 | `0.003919158597s` | `0.136451` | `0.266506` | tiny-shape smoke baseline |
+  | output | 1 | `0.010931410672s` | `0.048921` | `0.095549` | tiny-shape smoke baseline |
+  | scratch | n/a | n/a | n/a | n/a | `NotImplementedError: Unsupported memory space: gmem` |
+
+- Interpretation:
+  - Pallas/Mosaic currently does not support `mgpu.GMEM` in `scratch_shapes` for this kernel path.
+  - The scratch-inbox approach cannot be used as a small patch unless we move away from `mgpu.kernel` scratch allocation or find a different aliasing mechanism.
+  - `inbox_storage=scratch` is now disabled in validation to avoid accidental target sweeps.
+
+### 2026-07-02 02:08 PDT - FWD-SWQ-071 Send-only perf-output repeat
+- Question:
+  - How much of the send-only source-push tax in FWD-SWQ-068 came from debug `seen_payload`/`seen_meta` writes and their output allocation, rather than the inbox copy/semaphore protocol itself?
+- Code change:
+  - `output_mode=perf` now supports `implementation=send_only` with `metadata_mode=static_recv`.
+  - In this mode the send-only path skips slot metadata writes and receiver debug `seen_*` writes; it still remote-writes the full inbox and uses the same empty/full semaphore protocol.
+- H100 job:
+  - `/dlwh/repro-source-push-send-only-perf-repeat-20260702-020508`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same target source-push routing/slot geometry as FWD-SWQ-068, but `implementation=send_only`, `output_mode=perf`, `--repeat-runs 8`, `warmup=2`, `steps=7`, `--separate-compile`, `--no-check`.
+
+  | repeat_run | steady_state_time | send GB/s/rank |
+  |---:|---:|---:|
+  | 0 | `0.012597401294s` | `56.481186` |
+  | 1 | `0.005783228570s` | `123.030960` |
+  | 2 | `0.006046383575s` | `117.676319` |
+  | 3 | `0.006035404147s` | `117.890392` |
+  | 4 | `0.007975454442s` | `89.213244` |
+  | 5 | `0.012893703167s` | `55.183228` |
+  | 6 | `0.005775786703s` | `123.189480` |
+  | 7 | `0.005699594006s` | `124.836288` |
+
+- Summary:
+  - Median: `0.006040893861s`, `117.783355 GB/s/rank`.
+  - Prior send-only debug-output median from FWD-SWQ-068: `0.007887634366s`, `90.375380 GB/s/rank`.
+- Interpretation:
+  - Debug side-output writes/allocations are a real tax for send-only: removing them improved median by about `23.4%` in time (`0.0078876s -> 0.0060409s`).
+  - The slow tail did not disappear: repeats `0` and `5` are still about `0.0126-0.0129s`.
+  - Current bottleneck judgment remains source-push copy/semaphore/output-scratch scheduling instability, not just WGMMA or debug-output overhead.

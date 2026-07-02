@@ -50,6 +50,7 @@ OUTPUT_MODES = ("debug", "perf")
 RECEIVER_SCHEDULES = ("fixed_wait", "ordered_wait", "ready_scan", "slot_group")
 SCAN_ORDERS = ("current", "rotated", "hash")
 SOURCE_PUSH_MODES = ("packed",)
+INBOX_STORAGE_MODES = ("output", "scratch")
 ROUTING_MODES = (
     "balanced",
     "uniform",
@@ -118,6 +119,7 @@ class PushInboxConfig:
     scan_order: str = "rotated"
     workers_per_slot: int = 1
     source_push_mode: str = "packed"
+    inbox_storage: str = "output"
     routing: str = "balanced"
     tokens_per_rank: int = 32768
     topk: int = 4
@@ -187,10 +189,21 @@ class PushInboxConfig:
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"unknown output_mode={self.output_mode!r}; expected one of {OUTPUT_MODES}")
         if self.output_mode == "perf":
-            if self.implementation != "m_n_slots":
-                raise ValueError("output_mode=perf is currently implemented only for implementation=m_n_slots")
+            if self.implementation not in ("send_only", "m_n_slots"):
+                raise ValueError("output_mode=perf is currently implemented only for send_only and m_n_slots")
             if self.metadata_mode != "static_recv":
                 raise ValueError("output_mode=perf requires metadata_mode=static_recv")
+        if self.inbox_storage not in INBOX_STORAGE_MODES:
+            raise ValueError(f"unknown inbox_storage={self.inbox_storage!r}; expected one of {INBOX_STORAGE_MODES}")
+        if self.inbox_storage == "scratch":
+            raise ValueError(
+                "inbox_storage=scratch is disabled: Mosaic GPU scratch_shapes with mgpu.GMEM fail with "
+                "NotImplementedError: Unsupported memory space: gmem"
+            )
+            if self.implementation != "m_n_slots":
+                raise ValueError("inbox_storage=scratch is currently implemented only for implementation=m_n_slots")
+            if self.output_mode != "perf":
+                raise ValueError("inbox_storage=scratch requires output_mode=perf")
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -205,11 +218,18 @@ class PushInboxConfig:
             )
         if self.receiver_schedule == "ready_scan":
             raise ValueError(
-                "receiver_schedule=ready_scan is disabled: current H100 smokes either deadlock or produce wrong hidden"
-                " values"
+                "receiver_schedule=ready_scan is disabled: source-aware grid_switch ready scan compiles but deadlocks"
+                " in the checked smoke"
             )
         if self.receiver_schedule == "slot_group":
-            raise ValueError("receiver_schedule=slot_group is not implemented yet")
+            num_compute_sms = self.num_sms - self.num_send_sms
+            if self.workers_per_slot > num_compute_sms:
+                raise ValueError(
+                    "receiver_schedule=slot_group requires workers_per_slot <= num_compute_sms; "
+                    f"got {self.workers_per_slot=} {num_compute_sms=}"
+                )
+            if self.direct_self_compute:
+                raise ValueError("receiver_schedule=slot_group does not support direct_self_compute")
         if self.receiver_schedule != "fixed_wait" and self.implementation != "m_n_slots":
             raise ValueError("receiver_schedule modes are currently implemented only for implementation=m_n_slots")
         if self.scan_candidates < 0:
@@ -281,6 +301,7 @@ def _make_kernel(config: PushInboxConfig):
     )
     rounds_per_slot = (config.entries_per_rank + config.inbox_slots - 1) // config.inbox_slots
     num_compute_sms = config.num_sms - config.num_send_sms
+    num_slot_groups = num_compute_sms // config.workers_per_slot
     send_dst_offsets = tuple(range(config.ep_size)) if config.traffic_pattern == "all_to_all" else (1,)
     recv_src_offsets = (
         tuple(range(config.ep_size)) if config.traffic_pattern == "all_to_all" else (config.ep_size - 1,)
@@ -291,12 +312,14 @@ def _make_kernel(config: PushInboxConfig):
         send_meta_ref: Int[Ref, "DST Q F"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
         w_ref: Float[Ref, "E D twoI"],
-        inbox_ref: Float[Ref, "SRC SLOTS M D"],
+        inbox_out_ref: Float[Ref, "SRC SLOTS M D"],
         meta_ref: Int[Ref, "SRC SLOTS F"],
         seen_payload_ref: Float[Ref, "SRC Q"],
         seen_meta_ref: Int[Ref, "SRC Q F"],
         hidden_ref: Float[Ref, "rows I"],
+        inbox_scratch_ref: Float[Ref, "SRC SLOTS M D"] | None = None,
     ) -> None:
+        inbox_ref = inbox_scratch_ref if config.inbox_storage == "scratch" else inbox_out_ref
         empty_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         full_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         done_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
@@ -392,23 +415,25 @@ def _make_kernel(config: PushInboxConfig):
 
                                     @pl.when(dst_offset == 0)
                                     def _write_local_meta() -> None:
-                                        meta_ref[rank, slot, 0] = rank
-                                        meta_ref[rank, slot, 1] = expert
-                                        meta_ref[rank, slot, 2] = dst_row_start
-                                        meta_ref[rank, slot, 3] = valid_rows
+                                        if config.output_mode != "perf":
+                                            meta_ref[rank, slot, 0] = rank
+                                            meta_ref[rank, slot, 1] = expert
+                                            meta_ref[rank, slot, 2] = dst_row_start
+                                            meta_ref[rank, slot, 3] = valid_rows
                                         pl.semaphore_signal(full_sem_ref.at[rank, slot])
 
                                     @pl.when(dst_offset != 0)
                                     def _write_remote_meta() -> None:
-                                        remote_meta_ref = mgpu.remote_ref(
-                                            meta_ref,
-                                            dst,
-                                            device_id_type=pl.DeviceIdType.LOGICAL,
-                                        )
-                                        remote_meta_ref[rank, slot, 0] = rank
-                                        remote_meta_ref[rank, slot, 1] = expert
-                                        remote_meta_ref[rank, slot, 2] = dst_row_start
-                                        remote_meta_ref[rank, slot, 3] = valid_rows
+                                        if config.output_mode != "perf":
+                                            remote_meta_ref = mgpu.remote_ref(
+                                                meta_ref,
+                                                dst,
+                                                device_id_type=pl.DeviceIdType.LOGICAL,
+                                            )
+                                            remote_meta_ref[rank, slot, 0] = rank
+                                            remote_meta_ref[rank, slot, 1] = expert
+                                            remote_meta_ref[rank, slot, 2] = dst_row_start
+                                            remote_meta_ref[rank, slot, 3] = valid_rows
                                         pl.semaphore_signal(
                                             full_sem_ref.at[rank, slot],
                                             device_id=dst,
@@ -422,7 +447,9 @@ def _make_kernel(config: PushInboxConfig):
                 dst = (rank + dst_offset) % config.ep_size
                 remote_inbox_ref = None
                 remote_meta_ref = None
-                write_slot_metadata = config.metadata_mode == "remote_slot" or config.implementation == "send_only"
+                write_slot_metadata = config.metadata_mode == "remote_slot" or (
+                    config.implementation == "send_only" and config.output_mode != "perf"
+                )
                 if dst_offset != 0:
                     remote_inbox_ref = mgpu.remote_ref(inbox_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
                     if write_slot_metadata:
@@ -960,11 +987,12 @@ def _make_kernel(config: PushInboxConfig):
                     _compute_hidden_n_tile(src, slot, expert, dst_row_start, n_tile)
 
             else:
-                seen_payload_ref[src, entry] = inbox_ref[src, slot, 0, 0]
-                seen_meta_ref[src, entry, 0] = meta_ref[src, slot, 0]
-                seen_meta_ref[src, entry, 1] = meta_ref[src, slot, 1]
-                seen_meta_ref[src, entry, 2] = meta_ref[src, slot, 2]
-                seen_meta_ref[src, entry, 3] = meta_ref[src, slot, 3]
+                if config.output_mode != "perf":
+                    seen_payload_ref[src, entry] = inbox_ref[src, slot, 0, 0]
+                    seen_meta_ref[src, entry, 0] = meta_ref[src, slot, 0]
+                    seen_meta_ref[src, entry, 1] = meta_ref[src, slot, 1]
+                    seen_meta_ref[src, entry, 2] = meta_ref[src, slot, 2]
+                    seen_meta_ref[src, entry, 3] = meta_ref[src, slot, 3]
             _signal_empty_to_src(src, src_offset, slot)
 
         if config.implementation == "m_n_slots":
@@ -1047,6 +1075,39 @@ def _make_kernel(config: PushInboxConfig):
 
                             @pl.when(n_group_i < n_work_groups)
                             def _job_n_group() -> None:
+                                _compute_hidden_n_group(
+                                    src,
+                                    slot,
+                                    expert,
+                                    dst_row_start,
+                                    n_group_i,
+                                )
+
+                    def _slot_group_id(slot):
+                        return (src_ordinal * config.inbox_slots + slot) % num_slot_groups
+
+                    def _slot_group_owner(slot):
+                        return (compute_worker // config.workers_per_slot) == _slot_group_id(slot)
+
+                    def _slot_group_lane():
+                        return compute_worker % config.workers_per_slot
+
+                    def _compute_slot_group_entry(entry, slot) -> None:
+                        if config.metadata_mode == "static_recv":
+                            expert = recv_meta_ref[src_ordinal, entry, 1]
+                            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
+                        else:
+                            expert = meta_ref[src, slot, 1]
+                            dst_row_start = meta_ref[src, slot, 2]
+
+                        lane = _slot_group_lane()
+
+                        @pl.loop(0, n_work_groups)
+                        def _n_group_loop(n_group_i) -> None:
+                            should_compute_group = (n_group_i % config.workers_per_slot) == lane
+
+                            @pl.when(should_compute_group)
+                            def _n_group() -> None:
                                 _compute_hidden_n_group(
                                     src,
                                     slot,
@@ -1239,6 +1300,43 @@ def _make_kernel(config: PushInboxConfig):
                                                 pl.semaphore_signal(done_sem_ref.at[src, slot])
 
                                         _release_completed_slot(round_i, slot)
+
+                    elif config.receiver_schedule == "slot_group":
+
+                        @pl.loop(0, rounds_per_slot)
+                        def _round_loop(round_i) -> None:
+                            @pl.loop(0, config.inbox_slots)
+                            def _slot_loop(slot) -> None:
+                                entry = slot + round_i * config.inbox_slots
+
+                                @pl.when(entry < config.entries_per_rank)
+                                def _maybe_recv_slot_entry() -> None:
+                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+
+                                    @pl.when(valid_rows > 0)
+                                    def _recv_slot_entry() -> None:
+                                        should_compute = _slot_group_owner(slot)
+
+                                        @pl.when(should_compute)
+                                        def _recv_slot_group() -> None:
+                                            pl.semaphore_wait(
+                                                full_sem_ref.at[src, slot],
+                                                value=round_i + 1,
+                                                decrement=False,
+                                            )
+                                            _compute_slot_group_entry(entry, slot)
+                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                                            should_release = _slot_group_lane() == 0
+
+                                            @pl.when(should_release)
+                                            def _release_slot() -> None:
+                                                pl.semaphore_wait(
+                                                    done_sem_ref.at[src, slot],
+                                                    value=(round_i + 1) * config.workers_per_slot,
+                                                    decrement=False,
+                                                )
+                                                _signal_empty_to_src(src, src_offset, slot)
 
                     else:
 
@@ -1440,27 +1538,31 @@ def _make_kernel(config: PushInboxConfig):
                     for src_offset in recv_src_offsets:
                         _recv_src(src_offset)
 
+    inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
     if config.output_mode == "perf":
+        returned_inbox_shape = (1, 1, 1, 1) if config.inbox_storage == "scratch" else inbox_shape
         meta_shape = (1, 1, META_FIELDS)
         seen_payload_shape = (1, 1)
         seen_meta_shape = (1, 1, META_FIELDS)
     else:
+        returned_inbox_shape = inbox_shape
         meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
         seen_payload_shape = (config.ep_size, config.entries_per_rank)
         seen_meta_shape = (config.ep_size, config.entries_per_rank, META_FIELDS)
+    scratch_shapes = ()
+    if config.inbox_storage == "scratch":
+        scratch_shapes = (mgpu.GMEM(inbox_shape, jnp.bfloat16),)
 
     return mgpu.kernel(
         body,
         out_shape=[
-            jax.ShapeDtypeStruct(
-                (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim),
-                jnp.bfloat16,
-            ),
+            jax.ShapeDtypeStruct(returned_inbox_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(meta_shape, jnp.int32),
             jax.ShapeDtypeStruct(seen_payload_shape, jnp.bfloat16),
             jax.ShapeDtypeStruct(seen_meta_shape, jnp.int32),
             jax.ShapeDtypeStruct(config.hidden_output_shape, jnp.bfloat16),
         ],
+        scratch_shapes=scratch_shapes,
         grid=(
             (len(send_dst_offsets), config.num_sms)
             if config.peer_loop in ("grid", "grid_switch")
@@ -1579,12 +1681,13 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
+    compute_jobs_per_entry = config.workers_per_slot if config.receiver_schedule == "slot_group" else n_compute_jobs
     ready_scan_jobs = config.inbox_slots * n_compute_jobs
     ready_scan_candidates = (
         ready_scan_jobs if config.scan_candidates == 0 else min(config.scan_candidates, ready_scan_jobs)
     )
     if config.implementation == "m_n_slots":
-        compute_wait_full_count = payload_send_entries_total * n_compute_jobs
+        compute_wait_full_count = payload_send_entries_total * compute_jobs_per_entry
     elif config.implementation in ("m_owner", "m_owner_slots"):
         compute_wait_full_count = payload_send_entries_total
     else:
@@ -1611,8 +1714,8 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         "source_push_mode": config.source_push_mode,
         "n_groups_per_job": config.n_groups_per_job,
         "n_work_groups_per_entry": n_work_groups,
-        "num_compute_jobs_per_entry": n_compute_jobs,
-        "done_signals_per_entry": n_compute_jobs,
+        "num_compute_jobs_per_entry": compute_jobs_per_entry,
+        "done_signals_per_entry": compute_jobs_per_entry,
         "ready_scan_jobs_per_round": ready_scan_jobs,
         "send_entries_total": live_entries_total,
         "recv_entries_total": live_entries_total,
@@ -1884,6 +1987,7 @@ def _time_jitted(
     *args,
     warmup: int,
     steps: int,
+    repeat_runs: int,
     separate_compile: bool,
     progress: Callable[[str], None] | None = None,
 ):
@@ -1925,16 +2029,19 @@ def _time_jitted(
     for _ in range(warmup):
         out = fn(*args)
         _block_until_ready(out)
-    if progress is not None:
-        progress("steady_state_start")
-    start = time.perf_counter()
-    for _ in range(steps):
-        out = fn(*args)
-        _block_until_ready(out)
-    steady_state_time = (time.perf_counter() - start) / steps
-    if progress is not None:
-        progress("steady_state_done")
-    return compile_time, steady_state_time, out, lower_compile_time, first_run_time
+
+    steady_state_times = []
+    for _ in range(repeat_runs):
+        if progress is not None:
+            progress("steady_state_start")
+        start = time.perf_counter()
+        for _ in range(steps):
+            out = fn(*args)
+            _block_until_ready(out)
+        steady_state_times.append((time.perf_counter() - start) / steps)
+        if progress is not None:
+            progress("steady_state_done")
+    return compile_time, steady_state_times, out, lower_compile_time, first_run_time
 
 
 def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -> np.ndarray:
@@ -2057,13 +2164,16 @@ def _run_one(
     *,
     warmup: int,
     steps: int,
+    repeat_runs: int,
     check: bool,
     debug_exceptions: bool,
     separate_compile: bool,
     progress_events: bool,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     try:
         _emit_progress(config, progress_events, "validate_start")
+        if repeat_runs <= 0:
+            raise ValueError(f"repeat_runs must be positive, got {repeat_runs}")
         config.validate()
         if check and config.output_mode == "perf":
             raise ValueError("output_mode=perf uses tiny debug outputs and requires --no-check")
@@ -2081,7 +2191,7 @@ def _run_one(
 
         (
             compile_time,
-            steady_state_time,
+            steady_state_times,
             (inbox, meta, seen_payload, seen_meta, hidden),
             lower_compile_time,
             first_run_time,
@@ -2093,6 +2203,7 @@ def _run_one(
             w,
             warmup=warmup,
             steps=steps,
+            repeat_runs=repeat_runs,
             separate_compile=separate_compile,
             progress=lambda event: _emit_progress(config, progress_events, event),
         )
@@ -2121,51 +2232,63 @@ def _run_one(
             hidden_all_max_abs_diff = validation["hidden_all_max_abs_diff"]
             hidden_unwritten_max_abs = validation["hidden_unwritten_max_abs"]
         bytes_per_rank = queue_stats["send_rounded_rows_per_rank_mean"] * config.hidden_dim * BYTES_PER_BF16
-        w13_tflops_per_rank = None
+        flops_per_rank = None
         if config.implementation != "send_only":
             flops_per_rank = (
                 queue_stats["rounded_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
             )
-            w13_tflops_per_rank = flops_per_rank / steady_state_time / 1e12
-        return {
-            "config": asdict(config),
-            "queue_stats": queue_stats,
-            "compile_time": compile_time,
-            "lower_compile_time": lower_compile_time,
-            "first_run_time": first_run_time,
-            "steady_state_time": steady_state_time,
-            "bytes_per_rank": bytes_per_rank,
-            "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
-            "w13_tflops_per_rank": w13_tflops_per_rank,
-            "max_abs_diff": max_abs_diff,
-            "metadata_mismatches": metadata_mismatches,
-            "hidden_max_abs_diff": hidden_max_abs_diff,
-            "hidden_mean_abs_diff": hidden_mean_abs_diff,
-            "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
-            "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
-            "error": None,
-        }
+        rows = []
+        for repeat_run, steady_state_time in enumerate(steady_state_times):
+            rows.append(
+                {
+                    "config": asdict(config),
+                    "queue_stats": queue_stats,
+                    "compile_time": compile_time,
+                    "lower_compile_time": lower_compile_time,
+                    "first_run_time": first_run_time,
+                    "repeat_run": repeat_run,
+                    "repeat_runs": repeat_runs,
+                    "steady_state_time": steady_state_time,
+                    "bytes_per_rank": bytes_per_rank,
+                    "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
+                    "w13_tflops_per_rank": (
+                        None if flops_per_rank is None else flops_per_rank / steady_state_time / 1e12
+                    ),
+                    "max_abs_diff": max_abs_diff,
+                    "metadata_mismatches": metadata_mismatches,
+                    "hidden_max_abs_diff": hidden_max_abs_diff,
+                    "hidden_mean_abs_diff": hidden_mean_abs_diff,
+                    "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
+                    "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
+                    "error": None,
+                }
+            )
+        return rows
     except Exception as exc:  # noqa: BLE001 - repro rows should capture unsupported candidates.
         if debug_exceptions:
             raise
-        return {
-            "config": asdict(config),
-            "compile_time": None,
-            "lower_compile_time": None,
-            "first_run_time": None,
-            "steady_state_time": None,
-            "bytes_per_rank": None,
-            "send_gbps_per_rank": None,
-            "w13_tflops_per_rank": None,
-            "max_abs_diff": None,
-            "metadata_mismatches": None,
-            "hidden_max_abs_diff": None,
-            "hidden_mean_abs_diff": None,
-            "hidden_all_max_abs_diff": None,
-            "hidden_unwritten_max_abs": None,
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc(),
-        }
+        return [
+            {
+                "config": asdict(config),
+                "compile_time": None,
+                "lower_compile_time": None,
+                "first_run_time": None,
+                "repeat_run": None,
+                "repeat_runs": repeat_runs,
+                "steady_state_time": None,
+                "bytes_per_rank": None,
+                "send_gbps_per_rank": None,
+                "w13_tflops_per_rank": None,
+                "max_abs_diff": None,
+                "metadata_mismatches": None,
+                "hidden_max_abs_diff": None,
+                "hidden_mean_abs_diff": None,
+                "hidden_all_max_abs_diff": None,
+                "hidden_unwritten_max_abs": None,
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+        ]
     finally:
         jax.clear_caches()
 
@@ -2254,6 +2377,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--workers-per-slot", type=int, default=1)
     parser.add_argument("--sweep-workers-per-slot", type=_parse_int_csv, default=None)
     parser.add_argument("--source-push-mode", choices=SOURCE_PUSH_MODES, default="packed")
+    parser.add_argument("--inbox-storage", choices=INBOX_STORAGE_MODES, default="output")
     parser.add_argument("--routing", choices=ROUTING_MODES, default="balanced")
     parser.add_argument("--tokens-per-rank", type=int, default=32768)
     parser.add_argument("--topk", type=int, default=4)
@@ -2261,6 +2385,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--direct-self-compute", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--repeat-runs", type=int, default=1)
     parser.add_argument("--check", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--debug-exceptions", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--separate-compile", action=argparse.BooleanOptionalAction, default=False)
@@ -2321,6 +2446,7 @@ def main() -> None:
                                                                 scan_order=scan_order,
                                                                 workers_per_slot=workers_per_slot,
                                                                 source_push_mode=args.source_push_mode,
+                                                                inbox_storage=args.inbox_storage,
                                                                 experts_per_rank=args.experts_per_rank,
                                                                 num_send_sms=num_send_sms,
                                                                 num_sms=num_sms,
@@ -2338,20 +2464,22 @@ def main() -> None:
                                                                 routing_seed=args.routing_seed,
                                                                 direct_self_compute=args.direct_self_compute,
                                                             )
-                                                            row = _run_one(
+                                                            rows = _run_one(
                                                                 config,
                                                                 warmup=args.warmup,
                                                                 steps=args.steps,
+                                                                repeat_runs=args.repeat_runs,
                                                                 check=args.check,
                                                                 debug_exceptions=args.debug_exceptions,
                                                                 separate_compile=args.separate_compile,
                                                                 progress_events=args.progress_events,
                                                             )
-                                                            line = json.dumps(row, sort_keys=True)
-                                                            print(line, flush=True)
-                                                            if args.jsonl:
-                                                                with open(args.jsonl, "a", encoding="utf-8") as f:
-                                                                    print(line, file=f, flush=True)
+                                                            for row in rows:
+                                                                line = json.dumps(row, sort_keys=True)
+                                                                print(line, flush=True)
+                                                                if args.jsonl:
+                                                                    with open(args.jsonl, "a", encoding="utf-8") as f:
+                                                                        print(line, file=f, flush=True)
 
 
 if __name__ == "__main__":
