@@ -18,11 +18,10 @@ import threading
 import time
 from unittest.mock import MagicMock
 
+from conftest import _TEST_TASK_COST
 from zephyr.shuffle import ListShard
 from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot
-
-from tests.conftest import _TEST_TASK_COST
 
 
 def test_check_worker_group_skips_after_completed_stage(coordinator):
