@@ -1,0 +1,32 @@
+@import '@fontsource-variable/noto-sans';
+@import '@fontsource-variable/noto-sans-mono';
+@import 'tailwindcss';
+
+/* Tailwind v4 does not auto-load a JS config — @config pulls in the color aliases
+   (surface/text/accent/status) defined in tailwind.config.ts. */
+@config '../../tailwind.config.ts';
+
+/* Design tokens (light). buoy palette: navy accent. */
+:root {
+  --c-surface: #f7f9fc;
+  --c-surface-raised: #ffffff;
+  --c-surface-sunken: #eef2f6;
+  --c-surface-border: #e2e8f0;
+  --c-text: #1a1a1a;
+  --c-text-secondary: #4a5568;
+  --c-text-muted: #718096;
+  --c-accent: #0d3b66;
+  --c-accent-hover: #0a2f52;
+  --c-accent-subtle: #eef4fb;
+  --c-status-success: #2f855a;
+  --c-status-danger: #e53e3e;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}

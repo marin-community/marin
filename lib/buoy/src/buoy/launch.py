@@ -1,0 +1,155 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""``buoy`` CLI: submit the viewer as a self-registering service job on a cluster.
+
+Resolves the named cluster's controller (auto-tunnel), submits an Iris job whose
+entrypoint serves the app and registers ``/buoy``, then waits for the endpoint and
+prints the proxy URL. buoy is a uv workspace member, so the container installs it
+from the frozen lock and the entrypoint (``serve_in_job``) ships by reference.
+"""
+
+from __future__ import annotations
+
+import logging
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import click
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.client import IrisClient
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
+from iris.cluster.constraints import region_constraint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.rpc import job_pb2
+from rigging.config_discovery import resolve_cluster_config
+from rigging.connect import proxy_path
+from rigging.filesystem import marin_temp_bucket, region_from_prefix
+from rigging.timing import Duration
+
+from buoy.config import CACHE_PREFIX, CACHE_TTL_DAYS
+from buoy.serve import serve_in_job
+
+logger = logging.getLogger("buoy.launch")
+
+DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "dashboard"
+# The built SPA is gitignored; this glob (relative to the workspace root) tells the
+# Iris bundle to ship it to the worker (mirrors ducky's deploy).
+DASHBOARD_DIST_INCLUDE = "lib/buoy/dashboard/dist/**/*"
+# Keep the viewer up as a best-effort service: never let a preemption or a container
+# death end the job (the job-level max_task_failures budget defaults to 0, so it's the
+# critical one), and recreate on redeploy. Mirrors ducky's always-on job.
+_UNLIMITED_RETRIES = 1_000_000
+
+
+def _build_dashboard() -> None:
+    """Build the Vue dashboard so the gitignored ``dashboard/dist`` ships in the bundle.
+
+    Runs ``npm install`` (only if deps are missing) then ``npm run build``. The Iris
+    bundle re-includes the gitignored ``dist`` via ``GENERATED_ARTIFACT_GLOBS``.
+    """
+    npm = shutil.which("npm")
+    if npm is None:
+        raise click.UsageError("npm not found — install Node, or build the dashboard and pass --skip-build.")
+    if not (DASHBOARD_DIR / "node_modules").is_dir():
+        logger.info("installing dashboard deps (npm install)…")
+        subprocess.run([npm, "install"], cwd=DASHBOARD_DIR, check=True)
+    logger.info("building dashboard (npm run build)…")
+    subprocess.run([npm, "run", "build"], cwd=DASHBOARD_DIR, check=True)
+
+
+@click.command(context_settings={"show_default": True})
+@click.option("--cluster", default="marin", help="Named Iris cluster to submit to.")
+@click.option("--endpoint-name", default="/buoy", help="Endpoint to register (absolute, no '.').")
+@click.option("--name", default="buoy", help="Iris job name.")
+@click.option(
+    "--cache-root",
+    default="",
+    help="GCS prefix for the run cache. Empty = derive a region-local marin_temp_bucket "
+    "from the cluster's state region (avoids cross-region reads).",
+)
+@click.option("--cpu", type=float, default=2.0)
+@click.option("--memory", default="12g")
+@click.option("--disk", default="50g")
+@click.option("--timeout", type=int, default=0, help="Job timeout seconds (0 = no timeout).")
+@click.option("--wait-timeout", type=float, default=600.0)
+@click.option("--skip-build", is_flag=True, help="Skip the dashboard `npm run build` (use an already-built dist).")
+def cli(
+    cluster: str,
+    endpoint_name: str,
+    name: str,
+    cache_root: str,
+    cpu: float,
+    memory: str,
+    disk: str,
+    timeout: int,
+    wait_timeout: float,
+    skip_build: bool,
+) -> None:
+    logging.basicConfig(level=logging.INFO, format="[buoy-launch] %(message)s")
+    if not endpoint_name.startswith("/") or "." in endpoint_name:
+        raise click.ClickException("--endpoint-name must be absolute (start with '/') and contain no '.'.")
+    if not skip_build:
+        _build_dashboard()
+
+    resolved = resolve_cluster_config(cluster, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    config = load_config(str(resolved))
+    dashboard_url = config.dashboard_url or None
+    # Pin the cache to the cluster's own region. The state dir's bucket fixes the
+    # region directly (no MARIN_PREFIX needed on the worker), so the service never
+    # reads/writes the cache cross-region.
+    if not cache_root:
+        cache_root = marin_temp_bucket(CACHE_TTL_DAYS, CACHE_PREFIX, source_prefix=config.storage.remote_state_dir)
+    # Pin the worker to the cache's region so the service never moves history/profile
+    # data cross-region (the cache bucket determines the region).
+    region = region_from_prefix(cache_root)
+    constraints = [region_constraint([region])] if region else None
+    logger.info("cache_root %s region %s", cache_root, region)
+    bundle = provider_bundle(config)
+    controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
+    logger.info("opening tunnel to controller %s", controller_address)
+
+    with (
+        bundle.controller.tunnel(address=controller_address) as controller_url,
+        IrisClient.remote(
+            controller_url, workspace=Path.cwd(), extra_bundle_includes=[DASHBOARD_DIST_INCLUDE]
+        ) as client,
+    ):
+        job = client.submit(
+            entrypoint=Entrypoint.from_callable(serve_in_job, endpoint_name),
+            name=name,
+            resources=ResourceSpec(cpu=cpu, memory=memory, disk=disk),
+            environment=EnvironmentSpec(env_vars={"BUOY_CACHE_ROOT": cache_root}),
+            ports=["http"],
+            constraints=constraints,
+            timeout=Duration.from_seconds(timeout) if timeout else None,
+            max_retries_preemption=_UNLIMITED_RETRIES,  # never let a preemption end the service
+            max_retries_failure=_UNLIMITED_RETRIES,  # per-task budget for whole-container deaths
+            max_task_failures=_UNLIMITED_RETRIES,  # job-level cumulative budget (defaults to 0!)
+            existing_job_policy=job_pb2.EXISTING_JOB_POLICY_RECREATE,  # redeploy recreates in place
+        )
+        proxy = proxy_path(endpoint_name)
+        share = f"{dashboard_url.rstrip('/')}{proxy}/" if dashboard_url else f"{proxy}/"
+        logger.info("submitted job %s", job)
+        logger.info("endpoint     %s", endpoint_name)
+        logger.info("share url    %s", share)
+        logger.info("stop with    iris job stop %s --cluster %s", job, cluster)
+
+        deadline = time.monotonic() + wait_timeout
+        while time.monotonic() < deadline:
+            if is_job_finished(job.state):
+                raise click.ClickException(f"job {job} finished before registering; check `iris job logs {job}`")
+            endpoints = client._cluster_client.list_endpoints(endpoint_name, exact=True)
+            if endpoints:
+                logger.info("READY — endpoint at %s", endpoints[0].address)
+                logger.info("open: %s", share)
+                return
+            time.sleep(5)
+        logger.warning("timed out waiting for endpoint; job may still be booting (`iris job logs %s`)", job)
+
+
+if __name__ == "__main__":
+    cli()

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- href is rewritten at serve time from X-Forwarded-Prefix so the bundle
+         works under the controller proxy sub-path (/proxy/buoy/); fetch() and
+         asset URLs both resolve relative to it. -->
+    <base href="/" />
+    <title><%= title %></title>
+  </head>
+  <body class="bg-surface text-text font-sans antialiased">
+    <div id="app"></div>
+  </body>
+</html>
