@@ -47,33 +47,17 @@ _PEER_RPC_ERRORS = (ConnectError, ConnectionError, OSError)
 
 
 def encode_remote_job_id(cluster_id: str, parent_job_id: JobName) -> str:
-    """The deterministic, globally-unique job id a peer runs a handoff under.
-
-    Folds this cluster's id into the root job-name component, keeping a valid
-    two-component root ``JobName`` (``/<user>/<cluster>~<name>``): globally unique
-    because ``cluster_id`` is, deterministic so a re-sent handoff is a same-name
-    submit the peer's KEEP policy dedups, and a legal name component (a name may
-    not contain ``/``). Ownership is never parsed back out of it — the peer reads
-    it from the explicit ``FederationHandoff`` field.
-    """
-    if not cluster_id:
-        raise ValueError("federation cluster_id is required to hand a job off")
-    if "~" in cluster_id:
-        raise ValueError(f"federation cluster_id must not contain '~' (got {cluster_id!r})")
-    root = parent_job_id.root_job
-    return JobName.root(root.user, f"{cluster_id}~{root.name}").to_wire()
+    """The deterministic, globally-unique wire id a peer runs a handoff under:
+    ``parent_job_id``'s root folded under ``cluster_id`` (``/<user>/<cluster>~<name>``)."""
+    return JobName.federated_remote_root(cluster_id, parent_job_id.root_job).to_wire()
 
 
 def _rebase_task_id(task_id: str, remote_job_id: str) -> str:
-    """Rewrite a full task wire id onto the peer's ``remote_job_id`` root job.
-
-    ``task_id`` is a plain task :class:`~iris.cluster.types.JobName`
-    (``/user/job/0``), whose components may legally contain ``:`` — so it is parsed
-    as a ``JobName``, never a ``TaskAttempt`` (which would mis-split a ``:`` in a
-    job name as an attempt qualifier). Its root job is replaced by ``remote_job_id``
-    while the child path and task index are preserved.
-    """
+    """Rewrite a full task wire id (``/user/job/0``) onto ``remote_job_id``'s root job,
+    preserving the child path and task index."""
     remote_root = JobName.from_wire(remote_job_id)
+    # Parse as a JobName, not a TaskAttempt: a ':' is legal in a job-name component,
+    # and TaskAttempt.from_wire would mis-split it as an attempt qualifier.
     return JobName.from_wire(task_id).with_root_job(remote_root).to_wire()
 
 

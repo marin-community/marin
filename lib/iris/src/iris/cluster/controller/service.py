@@ -87,6 +87,7 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.types import (
+    FEDERATION_DELIMITER,
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
@@ -1156,6 +1157,18 @@ class ControllerServiceImpl:
             )
 
         job_id = JobName.from_wire(request.name)
+
+        # '~' is reserved as the federation cluster-dispatch delimiter (it joins a
+        # cluster id to a root name in a handed-off job's remote id), so a user may
+        # not name a job with it — that would be ambiguous with a handed-off root.
+        # Only the job's own leaf name is checked, so a child spawned on a peer under
+        # a '~'-bearing federated root is fine; a received handoff, whose root name IS
+        # the encoded cluster~name, is exempt.
+        if FEDERATION_DELIMITER in job_id.name and not request.HasField("federation"):
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Job name {job_id.name!r} may not contain {FEDERATION_DELIMITER!r} (reserved for federation).",
+            )
 
         # Reject root RPC submissions from stale clients. Direct in-process
         # calls have no wire client; tests and harnesses use ctx=None.

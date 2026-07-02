@@ -109,6 +109,34 @@ def test_job_name_with_root_job_requires_a_root():
         JobName.from_string("/alice/job/0").with_root_job(JobName.from_string("/alice/cw~job/child"))
 
 
+def test_federated_remote_root_encodes_and_reverses():
+    root = JobName.from_string("/alice/train")
+    remote = JobName.federated_remote_root("cw", root)
+    assert remote == JobName.from_string("/alice/cw~train")
+    assert remote.is_federated_remote
+    assert remote.split_federated_root() == ("cw", root)
+    # Reversible even when the original name itself contains the delimiter: the
+    # cluster id is delimiter-free, so the first '~' is the join.
+    weird = JobName.federated_remote_root("cw", JobName.from_string("/alice/a~b"))
+    assert weird.split_federated_root() == ("cw", JobName.from_string("/alice/a~b"))
+
+
+def test_federated_remote_root_rejects_bad_cluster_id_and_non_root():
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("", JobName.from_string("/alice/train"))
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("c~w", JobName.from_string("/alice/train"))
+    with pytest.raises(ValueError):
+        JobName.federated_remote_root("cw", JobName.from_string("/alice/train/child"))
+
+
+def test_split_federated_root_rejects_a_local_name():
+    local = JobName.from_string("/alice/train/0")
+    assert not local.is_federated_remote
+    with pytest.raises(ValueError):
+        local.split_federated_root()
+
+
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
 def test_job_name_dashboard_url(base: str):
     job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")

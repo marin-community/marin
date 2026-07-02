@@ -88,6 +88,13 @@ class WellKnownAttribute(StrEnum):
     GPU_COUNT = "gpu-count"
 
 
+# Joins a federation cluster id to a root job name in the globally-unique id a
+# handed-off job runs under on its peer (``/<user>/<cluster>~<name>``, see
+# ``JobName.federated_remote_root``). Reserved: a user-submitted job name may not
+# contain it, so ``cluster~name`` is unambiguous and losslessly reversible.
+FEDERATION_DELIMITER = "~"
+
+
 @dataclass(frozen=True, slots=True)
 class JobName:
     """Structured hierarchical job name.
@@ -163,6 +170,48 @@ class JobName:
         if not root.is_root:
             raise ValueError(f"with_root_job requires a root job, got {root}")
         return JobName((*root._parts, *self._parts[2:]))
+
+    @classmethod
+    def federated_remote_root(cls, cluster_id: str, root: "JobName") -> "JobName":
+        """The remote root a peer runs ``root`` under: ``/<user>/<cluster_id>~<name>``.
+
+        Joins ``cluster_id`` into ``root``'s name with the reserved
+        ``FEDERATION_DELIMITER``, keeping a legal two-component root. ``cluster_id``
+        must be non-empty and delimiter-free and ``root`` must be a root job.
+
+        Example:
+            JobName.federated_remote_root("cw", JobName.from_string("/alice/train"))
+                -> JobName(("alice", "cw~train"))
+        """
+        if not cluster_id:
+            raise ValueError("cluster_id is required to build a federated remote root")
+        if FEDERATION_DELIMITER in cluster_id:
+            raise ValueError(f"cluster_id must not contain {FEDERATION_DELIMITER!r} (got {cluster_id!r})")
+        if not root.is_root:
+            raise ValueError(f"federated_remote_root requires a root job, got {root}")
+        return cls.root(root.user, f"{cluster_id}{FEDERATION_DELIMITER}{root.name}")
+
+    @property
+    def is_federated_remote(self) -> bool:
+        """Whether this name's root was assigned by federation dispatch.
+
+        True iff the root name carries the reserved delimiter — a reliable signal
+        because a user-submitted job name may not contain it.
+        """
+        return FEDERATION_DELIMITER in self.root_job.name
+
+    def split_federated_root(self) -> "tuple[str, JobName]":
+        """The owning cluster id and original pre-handoff root of a federated remote
+        root. Raises ``ValueError`` if this name is not a federated remote root.
+
+        The split is on the first delimiter — ``cluster_id`` is delimiter-free, so a
+        ``~`` in the original name (were one ever allowed) stays with the name.
+        """
+        root = self.root_job
+        cluster_id, sep, name = root.name.partition(FEDERATION_DELIMITER)
+        if not sep:
+            raise ValueError(f"{self} is not a federated remote root")
+        return cluster_id, JobName.root(root.user, name)
 
     @property
     def parent(self) -> "JobName | None":
