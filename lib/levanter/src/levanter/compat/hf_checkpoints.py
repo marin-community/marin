@@ -34,7 +34,7 @@ from fsspec.asyn import get_loop
 from fsspec.asyn import sync as fsspec_sync
 from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
-from haliax.jax_utils import is_jax_array_like
+from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
@@ -56,7 +56,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
+from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 

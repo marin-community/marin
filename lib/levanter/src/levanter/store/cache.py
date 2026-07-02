@@ -25,6 +25,7 @@ import tensorstore as ts
 from dataclasses_json import dataclass_json
 from fray import ResourceConfig
 from fsspec import AbstractFileSystem
+from haliax.jax_utils import broadcast_one_to_all
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, ZephyrContext
@@ -33,7 +34,6 @@ from rigging.filesystem import atomic_rename
 from zephyr.writers import ThreadedBatchWriter, batchify, ensure_parent_dir
 
 from levanter.data.dataset import AsyncDataset
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.thread_utils import blocking_wait
 
 from levanter.data._preprocessor import BatchProcessor, BatchResult, canonicalize_batch, dict_from_record_batch

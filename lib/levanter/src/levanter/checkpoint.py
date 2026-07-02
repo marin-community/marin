@@ -29,7 +29,7 @@ import jax
 import jax.numpy as jnp
 from draccus import field
 from fsspec import AbstractFileSystem
-from haliax.jax_utils import is_in_jit, is_jax_array_like
+from haliax.jax_utils import broadcast_one_to_all, is_in_jit, is_jax_array_like
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
@@ -39,7 +39,6 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
