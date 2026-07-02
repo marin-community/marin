@@ -289,6 +289,7 @@ def _apply_job_filters(
     name_filter: str,
     job_id_prefix: str,
     backend_id_filter: str = "",
+    child_cluster_filter: str = "",
 ):
     """Apply the standard set of job WHERE predicates to ``stmt``.
 
@@ -307,6 +308,8 @@ def _apply_job_filters(
         stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
     if backend_id_filter:
         stmt = stmt.where(jobs_table.c.backend_id == backend_id_filter)
+    if child_cluster_filter:
+        stmt = stmt.where(jobs_table.c.child_cluster == child_cluster_filter)
     return stmt
 
 
@@ -365,6 +368,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
+        child_cluster_filter=query.child_cluster,
     )
 
     if needs_task_agg:
@@ -380,6 +384,7 @@ def list_jobs(
         name_filter=query.name_filter,
         job_id_prefix=query.job_id_prefix,
         backend_id_filter=query.backend_id,
+        child_cluster_filter=query.child_cluster,
     )
 
     offset = max(query.offset, 0)

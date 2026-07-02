@@ -1525,6 +1525,9 @@ class ControllerServiceImpl:
             # Aggregate task counts via a single GROUP BY query.
             summaries = reads.task_summaries_for_jobs(q, {job.job_id})
             has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
+            # A federated job's subtree lives on the peer; expose the peer-side
+            # job id so the dashboard can deep-link to the peer's job page.
+            handle = reads.federated_handle(q, job.job_id) if job.child_cluster else None
         summary = summaries.get(job.job_id)
 
         # Get scheduling diagnostics for pending jobs from cache
@@ -1555,6 +1558,7 @@ class ControllerServiceImpl:
             parent_job_id=job.parent_job_id.to_wire() if job.parent_job_id else "",
             backend_id=job.backend_id or "",
             child_cluster=job.child_cluster or "",
+            remote_job_id=handle.remote_job_id if handle else "",
             **_job_status_counts(summary, job.job_id),
         )
         if job.started_at_ms:

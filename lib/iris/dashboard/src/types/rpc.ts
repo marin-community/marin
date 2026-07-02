@@ -102,6 +102,9 @@ export interface TaskStatus {
   // the latest failed attempt, so this carries the true count for the badge.
   failureCount?: number
   backendId?: string
+  // Federation discriminator: "" (or absent) == owned locally, "<peer>" == handed
+  // off to that peer cluster (backendId then empty).
+  childCluster?: string
 }
 
 // -- Jobs --
@@ -129,6 +132,11 @@ export interface JobStatus {
   hasChildren?: boolean
   parentJobId?: string
   backendId?: string
+  // Federation discriminator: "" (or absent) == local, "<peer>" == handed off.
+  childCluster?: string
+  // Peer-side job id for a federated job (deterministic rebased wire id). Empty
+  // for a local job; lets the dashboard deep-link to the peer's job page.
+  remoteJobId?: string
 }
 
 export interface JobQuery {
@@ -143,6 +151,8 @@ export interface JobQuery {
   // Anchored prefix match against the full wire job_id (e.g. "/alice/").
   jobIdPrefix?: string
   backendId?: string
+  // Filter to jobs handed off to one peer cluster. Empty = all clusters.
+  childCluster?: string
 }
 
 // -- Controller RPC Responses --
@@ -657,4 +667,27 @@ export interface ListBackendsResponse {
   backends: BackendSummary[]
   unroutableJobCount: number
   unroutableSample: UnroutableJob[]
+}
+
+// -- Federation peers --
+
+/** A federation peer returned by the ListPeers RPC: a remote Iris controller
+ *  this cluster may hand whole jobs to, plus its forwarded backend topology. */
+export interface PeerSummary {
+  peerId: string
+  controllerAddress: string
+  dashboardUrl: string
+  /** Last capability heartbeat succeeded. */
+  reachable: boolean
+  /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
+  lastSyncMs?: string
+  activeFederatedJobs?: number
+  /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
+  aggregateSpendMicros?: string
+  /** The peer's own backends, forwarded from its ListBackends. */
+  backends: BackendSummary[]
+}
+
+export interface ListPeersResponse {
+  peers: PeerSummary[]
 }

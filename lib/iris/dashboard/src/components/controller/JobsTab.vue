@@ -22,7 +22,7 @@ import { useBackends } from '@/composables/useBackends'
 // locator's `.first` matcher in CI).
 const isMobile = useMediaQuery('(max-width: 639px)')
 
-const { multiBackend, currentBackend } = useBackends()
+const { multiBackend, currentBackend, currentCluster, ensurePeers } = useBackends()
 
 const PAGE_SIZE = 50
 
@@ -70,10 +70,13 @@ function queryStr(v: LocationQueryValue | LocationQueryValue[] | undefined): str
 const selectedUser = computed(() => queryStr(route.query.user))
 const showAll = computed(() => queryStr(route.query.all) === '1')
 const backendId = computed(() => currentBackend(route))
-// Scoping to one backend drills straight into the (server-side backend-filtered)
-// job list: the cross-fleet UsersOverview is an all-backends aggregate and has no
-// per-backend filter, so it stays the "All backends" landing view.
-const inJobList = computed(() => !!selectedUser.value || showAll.value || !!backendId.value)
+const clusterId = computed(() => currentCluster(route))
+// Scoping to one backend or one peer cluster drills straight into the
+// (server-side filtered) job list: the cross-fleet UsersOverview is an
+// all-targets aggregate with no such filter, so it stays the landing view.
+const inJobList = computed(
+  () => !!selectedUser.value || showAll.value || !!backendId.value || !!clusterId.value,
+)
 
 function parseSort(v: string): SortField {
   return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'date'
@@ -124,6 +127,7 @@ const {
     stateFilter: stateFilter.value || undefined,
     jobIdPrefix: jobIdPrefix.value,
     backendId: backendId.value || undefined,
+    childCluster: clusterId.value || undefined,
   } satisfies JobQuery,
 }))
 
@@ -185,10 +189,13 @@ async function fetchAll() {
 }
 
 onMounted(fetchAll)
+// Load the peer roster so `?cluster=` validation and the Cluster column's
+// filter target resolve; inert (no roster) on a single-cluster deployment.
+onMounted(ensurePeers)
 useAutoRefresh(fetchAll, DEFAULT_REFRESH_MS)
 
 // Re-fetch from scratch whenever the scope or any query knob changes.
-watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll, backendId], () => {
+watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll, backendId, clusterId], () => {
   childJobsByParent.value = new Map()
   expandedJobs.value = new Set()
   saveExpandedJobs()
@@ -197,7 +204,7 @@ watch([page, sortField, sortDir, nameFilter, stateFilter, selectedUser, showAll,
 
 // A different owner (or the all-jobs view) is a different result set — start at
 // the first page so a stale offset can't land out of range.
-watch([stateFilter, selectedUser, showAll, backendId], () => {
+watch([stateFilter, selectedUser, showAll, backendId, clusterId], () => {
   page.value = 0
 })
 
@@ -471,6 +478,13 @@ function sortIndicator(field: SortField): string {
       <!-- Row 2: state + counters -->
       <div class="mt-1.5 pl-5 flex items-center gap-2 flex-wrap">
         <StatusBadge :status="node.job.state" size="sm" />
+        <span
+          v-if="node.job.childCluster"
+          class="inline-flex items-center rounded bg-surface-sunken px-1.5 py-0.5 font-mono text-[11px] text-text-secondary"
+          :title="'Handed off to ' + node.job.childCluster"
+        >
+          {{ node.job.childCluster }}
+        </span>
         <span class="text-xs text-text-muted font-mono">
           {{ jobDuration(node.job) }}
           <span v-if="(node.job.failureCount ?? 0) > 0" class="text-status-danger">
@@ -537,6 +551,14 @@ function sortIndicator(field: SortField): string {
             class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
           >
             Backend
+          </th>
+          <!-- Cluster (federation): always rendered; cells are blank for local
+               jobs so a single-cluster deployment just sees an empty column. -->
+          <th
+            scope="col"
+            class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary"
+          >
+            Cluster
           </th>
           <th scope="col" class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Tasks
@@ -632,6 +654,19 @@ function sortIndicator(field: SortField): string {
               @click="router.replace({ query: { ...route.query, backend: node.job.backendId } })"
             >
               {{ node.job.backendId }}
+            </button>
+            <span v-else class="text-text-muted">—</span>
+          </td>
+
+          <!-- Cluster (federation): the peer a federated job was handed to;
+               clicking filters the list to that peer. Blank for local jobs. -->
+          <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
+            <button
+              v-if="node.job.childCluster"
+              class="text-accent hover:underline font-mono text-xs"
+              @click="router.replace({ query: { ...route.query, cluster: node.job.childCluster } })"
+            >
+              {{ node.job.childCluster }}
             </button>
             <span v-else class="text-text-muted">—</span>
           </td>

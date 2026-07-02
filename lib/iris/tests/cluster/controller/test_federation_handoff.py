@@ -197,6 +197,49 @@ def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
         assert mirrored.child_cluster == "cw"
 
 
+def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_client):
+    """The dashboard reads see a federated job: GetJobStatus stamps child_cluster
+    and the peer-side remote_job_id (for the deep-link), and the ListJobs
+    child_cluster filter isolates federated jobs from local ones."""
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+
+        fed = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
+        fed_job_id = JobName.from_wire(fed.job_id)
+        remote_job_id = encode_remote_job_id("parent", fed_job_id)
+        local = parent_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
+
+        # GetJobStatus exposes the discriminator + the peer-side id the deep-link needs.
+        fed_status = parent_service.get_job_status(
+            controller_pb2.Controller.GetJobStatusRequest(job_id=fed.job_id), None
+        ).job
+        assert fed_status.child_cluster == "cw"
+        assert fed_status.remote_job_id == remote_job_id
+
+        # A local job carries neither (the deep-link falls back to nothing).
+        local_status = parent_service.get_job_status(
+            controller_pb2.Controller.GetJobStatusRequest(job_id=local.job_id), None
+        ).job
+        assert local_status.child_cluster == ""
+        assert local_status.remote_job_id == ""
+
+        def _list(child_cluster: str) -> set[str]:
+            resp = parent_service.list_jobs(
+                controller_pb2.Controller.ListJobsRequest(
+                    query=controller_pb2.Controller.JobQuery(child_cluster=child_cluster)
+                ),
+                None,
+            )
+            return {j.job_id for j in resp.jobs}
+
+        # Unfiltered: both jobs. Filtered to the peer: only the federated one.
+        assert {fed.job_id, local.job_id} <= _list("")
+        assert _list("cw") == {fed.job_id}
+        assert _list("no-such-peer") == set()
+
+
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)

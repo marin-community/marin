@@ -13,6 +13,7 @@ import type {
 import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
+import { peerJobUrl } from '@/utils/federation'
 import { batchSummarySql } from '@/utils/taskStatus'
 import { openSpeedscopeWindow } from '@/utils/speedscope'
 import PageShell from '@/components/layout/PageShell.vue'
@@ -23,6 +24,8 @@ import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
 import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
+import ClusterLink from '@/components/shared/ClusterLink.vue'
+import FederatedLogsNotice from '@/components/shared/FederatedLogsNotice.vue'
 import { useMediaQuery } from '@/composables/useMediaQuery'
 
 // Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
@@ -33,7 +36,7 @@ const props = defineProps<{
   jobId: string
 }>()
 
-const { multiBackend } = useBackends()
+const { multiBackend, peerById, ensurePeers } = useBackends()
 
 const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
@@ -323,12 +326,24 @@ async function fetchData() {
 
 
 onMounted(fetchData)
+// Peer roster resolves the child cluster's dashboard URL for the deep-link;
+// inert (no roster, no deep-link) on a single-cluster deployment.
+onMounted(ensurePeers)
 
 // Auto-refresh while job is not terminal
 const isTerminal = computed(() => {
   if (!job.value) return false
   return TERMINAL_STATES.has(stateToName(job.value.state))
 })
+
+// Deep-link a federated job to its page on the peer cluster's dashboard — the
+// one place the parent's mirror of the peer stops. Undefined when local, or when
+// the peer roster / remote id isn't available (falls back to plain text).
+const peerDeepLink = computed(() =>
+  job.value?.childCluster
+    ? peerJobUrl(peerById(job.value.childCluster)?.dashboardUrl, job.value.remoteJobId)
+    : undefined,
+)
 
 const { stop: stopRefresh, start: startRefresh } = useAutoRefresh(fetchData, 10_000)
 
@@ -960,6 +975,15 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
             <span class="font-mono">{{ job!.backendId }}</span>
           </InfoRow>
+          <!-- Cluster: shown for a federated job regardless of the Backend row's
+               multiBackend gate; deep-links to the peer's job page when known. -->
+          <InfoRow v-if="job?.childCluster" label="Cluster">
+            <ClusterLink
+              :cluster="job.childCluster"
+              :href="peerDeepLink"
+              :title="'Open on ' + job.childCluster + ' dashboard'"
+            />
+          </InfoRow>
         </InfoCard>
 
         <InfoCard title="Task Summary">
@@ -1503,7 +1527,13 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary mb-3">
           Job Logs
         </h3>
-        <LogViewer :task-id="jobId" />
+        <FederatedLogsNotice
+          v-if="job?.childCluster"
+          :cluster="job.childCluster"
+          subject="job"
+          :href="peerDeepLink"
+        />
+        <LogViewer v-else :task-id="jobId" />
       </div>
     </template>
 

@@ -383,6 +383,12 @@ message JobStatus {
 
   // Federation discriminator. See TaskStatus.child_cluster.
   string child_cluster = 35;
+
+  // For a federated job (child_cluster set), the peer's own job id for this
+  // handoff: the deterministic rebased wire id the peer runs it under
+  // ("/<user>/<parent_cluster>~<name>"). Empty for a local job. Lets the
+  // dashboard deep-link to the peer's job page.
+  string remote_job_id = 36;
 }
 
 // ============================================================================

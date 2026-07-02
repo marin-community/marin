@@ -211,6 +211,9 @@ message Controller {
     string job_id_prefix = 9;
     // Filter to one backend. Empty = all backends.
     string backend_id = 10;
+    // Filter to jobs handed off to one peer cluster (matched against
+    // jobs.child_cluster). Empty = all clusters, local and federated.
+    string child_cluster = 11;
   }
 
   message ListJobsRequest {
