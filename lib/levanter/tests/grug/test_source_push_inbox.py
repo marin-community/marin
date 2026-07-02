@@ -35,7 +35,6 @@ def test_source_push_profile_applies_current_best_candidate_defaults(
     assert args.routing == config.routing == expected_routing
     assert args.send_pipeline_depth == config.send_pipeline_depth == expected_send_pipeline_depth
     assert args.implementation == config.implementation == "m_n_slots"
-    assert args.metadata_mode == config.metadata_mode == "static_recv"
     assert args.hidden_output_mode == config.hidden_output_mode == "queue"
     assert args.n_groups_per_job == config.n_groups_per_job == 2
     assert args.repeat_runs == settings.repeat_runs == 48
@@ -99,6 +98,25 @@ def test_disabled_modes_are_not_public_cli_choices():
         source_push_inbox.parse_source_push_inbox_args(["--inbox-storage", "alias"])
 
 
+def test_removed_experimental_modes_are_not_config_fields():
+    for kwargs in (
+        {"metadata_mode": "remote_slot"},
+        {"receiver_schedule": "slot_group"},
+        {"direct_self_compute": True},
+    ):
+        with pytest.raises(TypeError):
+            source_push_inbox.PushInboxConfig(**kwargs)
+
+
+def test_removed_send_pipeline_depths_are_rejected_by_config_validation():
+    for kwargs in (
+        {"implementation": "m_owner"},
+        {"send_pipeline_depth": 3},
+    ):
+        with pytest.raises(ValueError):
+            source_push_inbox.PushInboxConfig(**kwargs).validate()
+
+
 def test_compact_routing_inputs_match_synthetic_queue_metadata():
     config = source_push_inbox.PushInboxConfig(
         implementation="m_n_slots",
@@ -113,9 +131,6 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
         experts_per_rank=2,
         num_send_sms=1,
         num_sms=4,
-        traffic_pattern="all_to_all",
-        peer_loop="grid_switch",
-        queue_mode="routing",
         routing="balanced",
         tokens_per_rank=8,
         topk=2,
@@ -151,18 +166,18 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     assert rows[0]["repeat_runs"] == 1
 
 
-def test_source_push_cli_runs_every_workers_per_slot_sweep_value(monkeypatch, capsys):
+def test_source_push_cli_runs_every_send_pipeline_depth_sweep_value(monkeypatch, capsys):
     calls = []
 
     def fake_run_source_push_inbox(config, **kwargs):
-        calls.append((config.workers_per_slot, kwargs["repeat_runs"]))
-        return [{"workers_per_slot": config.workers_per_slot, "repeat_runs": kwargs["repeat_runs"]}]
+        calls.append((config.send_pipeline_depth, kwargs["repeat_runs"]))
+        return [{"send_pipeline_depth": config.send_pipeline_depth, "repeat_runs": kwargs["repeat_runs"]}]
 
     monkeypatch.setattr(source_push_inbox, "run_source_push_inbox", fake_run_source_push_inbox)
 
     source_push_inbox.main(
         [
-            "--sweep-workers-per-slot",
+            "--sweep-send-pipeline-depth",
             "1,2",
             "--repeat-runs",
             "1",
@@ -171,4 +186,4 @@ def test_source_push_cli_runs_every_workers_per_slot_sweep_value(monkeypatch, ca
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert calls == [(1, 1), (2, 1)]
-    assert [row["workers_per_slot"] for row in rows] == [1, 2]
+    assert [row["send_pipeline_depth"] for row in rows] == [1, 2]

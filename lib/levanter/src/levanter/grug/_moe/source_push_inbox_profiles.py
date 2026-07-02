@@ -21,11 +21,7 @@ SOURCE_PUSH_PROFILES = (
 _COMMON_HOPPER_QUEUE_DEFAULTS: Mapping[str, Any] = MappingProxyType(
     {
         "implementation": "m_n_slots",
-        "queue_mode": "routing",
-        "traffic_pattern": "all_to_all",
-        "peer_loop": "grid_switch",
         "lowering_semantics": "lane",
-        "metadata_mode": "static_recv",
         "output_mode": "perf",
         "hidden_output_mode": "queue",
         "tokens_per_rank": 32768,
@@ -42,8 +38,6 @@ _COMMON_HOPPER_QUEUE_DEFAULTS: Mapping[str, Any] = MappingProxyType(
         "block_n": 128,
         "n_group": 1,
         "n_groups_per_job": 2,
-        "receiver_schedule": "fixed_wait",
-        "slot_order": "current",
         "warmup": 2,
         "steps": 7,
         "repeat_runs": 48,

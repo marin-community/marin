@@ -52,25 +52,10 @@ LOWERING_SEMANTICS: Mapping[str, mgpu.LoweringSemantics] = MappingProxyType(
 )
 META_FIELDS = 4
 BYTES_PER_BF16 = 2
-IMPLEMENTATIONS = ("send_only", "m_owner", "m_owner_slots", "m_n_slots")
-TRAFFIC_PATTERNS = ("next_rank", "all_to_all")
-PEER_LOOP_MODES = ("static", "switch", "dynamic", "grid", "grid_switch")
-COMPUTE_PIPELINE_MODES = ("manual", "emit")
-QUEUE_MODES = ("rectangular", "routing")
-METADATA_MODES = ("remote_slot", "static_recv")
+IMPLEMENTATIONS = ("m_n_slots", "send_only")
 OUTPUT_MODES = ("debug", "perf")
-HIDDEN_OUTPUT_MODES = ("full", "queue", "sink")
+HIDDEN_OUTPUT_MODES = ("full", "queue")
 HIDDEN_COMPUTE_MODES = ("wgmma", "store_zero")
-RECEIVER_SCHEDULES = ("fixed_wait",)
-_EXPERIMENTAL_RECEIVER_SCHEDULES = ("owned_jobs", "owned_slots", "ordered_wait", "slot_group")
-_DISABLED_RECEIVER_SCHEDULES = ("ready_scan",)
-_ALL_RECEIVER_SCHEDULES = RECEIVER_SCHEDULES + _EXPERIMENTAL_RECEIVER_SCHEDULES + _DISABLED_RECEIVER_SCHEDULES
-SCAN_ORDERS = ("current", "rotated", "hash")
-SLOT_ORDERS = ("current", "rotated", "hash")
-SOURCE_PUSH_MODES = ("packed",)
-INBOX_STORAGE_MODES = ("output",)
-_DISABLED_INBOX_STORAGE_MODES = ("alias", "scratch")
-_ALL_INBOX_STORAGE_MODES = INBOX_STORAGE_MODES + _DISABLED_INBOX_STORAGE_MODES
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -113,7 +98,7 @@ def _wgmma_smem(shape: tuple[int, int], dtype: Any, *, lowering_semantics: str):
 
 @dataclass(frozen=True)
 class PushInboxConfig:
-    implementation: str = "send_only"
+    implementation: str = "m_n_slots"
     ep_size: int = 8
     entries_per_rank: int = 2
     inbox_slots: int = 2
@@ -128,28 +113,14 @@ class PushInboxConfig:
     num_sms: int = 16
     send_pipeline_depth: int = 1
     lowering_semantics: str = "lane"
-    traffic_pattern: str = "next_rank"
-    peer_loop: str = "static"
-    compute_pipeline: str = "manual"
-    max_concurrent_steps: int = 4
-    queue_mode: str = "rectangular"
-    metadata_mode: str = "static_recv"
     output_mode: str = "debug"
     hidden_output_mode: str = "full"
     hidden_compute_mode: str = "wgmma"
     n_groups_per_job: int = 1
-    receiver_schedule: str = "fixed_wait"
-    scan_candidates: int = 8
-    scan_order: str = "rotated"
-    slot_order: str = "current"
-    workers_per_slot: int = 1
-    source_push_mode: str = "packed"
-    inbox_storage: str = "output"
     routing: str = "balanced"
     tokens_per_rank: int = 32768
     topk: int = 4
     routing_seed: int = 0
-    direct_self_compute: bool = False
 
     def validate(self) -> None:
         if self.implementation not in IMPLEMENTATIONS:
@@ -188,32 +159,12 @@ class PushInboxConfig:
                 "num_sms must leave at least one destination receiver program; "
                 f"got {self.num_sms=} {self.num_send_sms=}"
             )
-        if self.send_pipeline_depth not in (1, 2, 3, 4):
-            raise ValueError(f"send_pipeline_depth must be in (1, 2, 3, 4), got {self.send_pipeline_depth}")
-        if self.send_pipeline_depth > 1 and self.peer_loop in ("dynamic", "grid"):
-            raise ValueError("send_pipeline_depth > 1 is implemented only for static, switch, and grid_switch")
+        if self.send_pipeline_depth not in (1, 2):
+            raise ValueError(f"send_pipeline_depth must be in (1, 2), got {self.send_pipeline_depth}")
         if self.lowering_semantics not in LOWERING_SEMANTICS:
             raise ValueError(
                 f"unknown lowering_semantics={self.lowering_semantics!r}; "
                 f"expected one of {sorted(LOWERING_SEMANTICS)}"
-            )
-        if self.traffic_pattern not in TRAFFIC_PATTERNS:
-            raise ValueError(f"unknown traffic_pattern={self.traffic_pattern!r}; expected one of {TRAFFIC_PATTERNS}")
-        if self.peer_loop not in PEER_LOOP_MODES:
-            raise ValueError(f"unknown peer_loop={self.peer_loop!r}; expected one of {PEER_LOOP_MODES}")
-        if self.compute_pipeline not in COMPUTE_PIPELINE_MODES:
-            raise ValueError(
-                f"unknown compute_pipeline={self.compute_pipeline!r}; expected one of {COMPUTE_PIPELINE_MODES}"
-            )
-        if self.queue_mode not in QUEUE_MODES:
-            raise ValueError(f"unknown queue_mode={self.queue_mode!r}; expected one of {QUEUE_MODES}")
-        if self.metadata_mode not in METADATA_MODES:
-            raise ValueError(f"unknown metadata_mode={self.metadata_mode!r}; expected one of {METADATA_MODES}")
-        if self.metadata_mode == "static_recv" and self.implementation not in ("send_only", "m_n_slots"):
-            raise ValueError("metadata_mode=static_recv is currently implemented only for send_only and m_n_slots")
-        if self.metadata_mode == "static_recv" and self.peer_loop in ("dynamic", "grid"):
-            raise ValueError(
-                "metadata_mode=static_recv requires static peer offsets; use static, switch, or grid_switch"
             )
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"unknown output_mode={self.output_mode!r}; expected one of {OUTPUT_MODES}")
@@ -221,10 +172,6 @@ class PushInboxConfig:
             raise ValueError(
                 f"unknown hidden_output_mode={self.hidden_output_mode!r}; expected one of {HIDDEN_OUTPUT_MODES}"
             )
-        if self.hidden_output_mode == "sink" and self.output_mode != "perf":
-            raise ValueError("hidden_output_mode=sink requires output_mode=perf")
-        if self.hidden_output_mode == "sink" and self.implementation != "m_n_slots":
-            raise ValueError("hidden_output_mode=sink is currently implemented only for implementation=m_n_slots")
         if self.hidden_output_mode == "queue" and self.implementation != "m_n_slots":
             raise ValueError("hidden_output_mode=queue is currently implemented only for implementation=m_n_slots")
         if self.hidden_compute_mode not in HIDDEN_COMPUTE_MODES:
@@ -239,21 +186,6 @@ class PushInboxConfig:
         if self.output_mode == "perf":
             if self.implementation not in ("send_only", "m_n_slots"):
                 raise ValueError("output_mode=perf is currently implemented only for send_only and m_n_slots")
-        if self.inbox_storage not in _ALL_INBOX_STORAGE_MODES:
-            raise ValueError(
-                f"unknown inbox_storage={self.inbox_storage!r}; expected one of {_ALL_INBOX_STORAGE_MODES}"
-            )
-        if self.inbox_storage == "scratch":
-            raise ValueError(
-                "inbox_storage=scratch is disabled: Mosaic GPU scratch_shapes with mgpu.GMEM fail with "
-                "NotImplementedError: Unsupported memory space: gmem"
-            )
-        if self.inbox_storage == "alias":
-            raise ValueError(
-                "inbox_storage=alias is disabled: forcing direct pl.pallas_call specs to GMEM avoids the earlier "
-                "whole-inbox SMEM blowup, but global semaphore lowering then fails with an out-of-bounds "
-                "reserve_semaphores slice. This path needs an mgpu.kernel-level alias mechanism."
-            )
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -262,85 +194,28 @@ class PushInboxConfig:
                 f"got {self.n_groups_per_job=} with "
                 f"{self.intermediate_dim=} {self.block_n=} {self.n_group=}"
             )
-        if self.receiver_schedule not in _ALL_RECEIVER_SCHEDULES:
-            raise ValueError(
-                f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {_ALL_RECEIVER_SCHEDULES}"
-            )
-        if self.receiver_schedule == "ready_scan":
-            raise ValueError(
-                "receiver_schedule=ready_scan is disabled: ready-scan variants compile but deadlock in checked "
-                "H100 smokes, including the multi-candidate receiver scan"
-            )
-        if self.receiver_schedule == "slot_group":
-            num_compute_sms = self.num_sms - self.num_send_sms
-            if self.workers_per_slot > num_compute_sms:
-                raise ValueError(
-                    "receiver_schedule=slot_group requires workers_per_slot <= num_compute_sms; "
-                    f"got {self.workers_per_slot=} {num_compute_sms=}"
-                )
-            if self.direct_self_compute:
-                raise ValueError("receiver_schedule=slot_group does not support direct_self_compute")
-        if self.receiver_schedule != "fixed_wait" and self.implementation != "m_n_slots":
-            raise ValueError("receiver_schedule modes are currently implemented only for implementation=m_n_slots")
-        if self.scan_candidates < 0:
-            raise ValueError("scan_candidates must be non-negative; use 0 to mean all candidates")
-        if self.scan_order not in SCAN_ORDERS:
-            raise ValueError(f"unknown scan_order={self.scan_order!r}; expected one of {SCAN_ORDERS}")
-        if self.slot_order not in SLOT_ORDERS:
-            raise ValueError(f"unknown slot_order={self.slot_order!r}; expected one of {SLOT_ORDERS}")
-        if self.workers_per_slot <= 0:
-            raise ValueError(f"workers_per_slot must be positive, got {self.workers_per_slot}")
-        if self.source_push_mode not in SOURCE_PUSH_MODES:
-            raise ValueError(
-                f"unknown source_push_mode={self.source_push_mode!r}; expected one of {SOURCE_PUSH_MODES}"
-            )
         if self.routing not in ROUTING_MODES:
             raise ValueError(f"unknown routing={self.routing!r}; expected one of {ROUTING_MODES}")
-        if self.queue_mode == "routing" and self.traffic_pattern != "all_to_all":
-            raise ValueError("queue_mode=routing currently supports traffic_pattern=all_to_all only")
         if self.tokens_per_rank <= 0:
             raise ValueError(f"tokens_per_rank must be positive, got {self.tokens_per_rank}")
         if self.topk <= 0:
             raise ValueError(f"topk must be positive, got {self.topk}")
-        if self.max_concurrent_steps <= 0:
-            raise ValueError(f"max_concurrent_steps must be positive, got {self.max_concurrent_steps}")
-        if self.compute_pipeline == "emit" and self.n_group != 1:
-            raise ValueError("compute_pipeline=emit is currently implemented only for n_group=1")
-        if self.direct_self_compute:
-            if self.implementation != "m_n_slots":
-                raise ValueError("direct_self_compute is currently implemented only for implementation=m_n_slots")
-            if self.traffic_pattern != "all_to_all":
-                raise ValueError("direct_self_compute is currently implemented only for traffic_pattern=all_to_all")
-            if self.n_group != 1:
-                raise ValueError("direct_self_compute is currently implemented only for n_group=1")
-            if self.compute_pipeline != "manual":
-                raise ValueError("direct_self_compute is currently implemented only for compute_pipeline=manual")
-            if self.peer_loop in ("dynamic", "grid"):
-                raise ValueError(
-                    "direct_self_compute requires static peer offsets; use static, switch, or grid_switch"
-                )
 
     @property
     def traffic_fanout(self) -> int:
-        if self.traffic_pattern == "all_to_all":
-            return self.ep_size
-        return 1
+        return self.ep_size
 
     @property
     def hidden_rows_per_rank(self) -> int:
         return self.traffic_fanout * self.entries_per_rank * self.block_m
 
     def host_dst_row_start(self, src: int, entry: int) -> int:
-        if self.traffic_pattern == "all_to_all":
-            return (src * self.entries_per_rank + entry) * self.block_m
-        return entry * self.block_m
+        return (src * self.entries_per_rank + entry) * self.block_m
 
     @property
     def hidden_output_shape(self) -> tuple[int, int]:
         if self.implementation == "send_only":
             return (1, 1)
-        if self.hidden_output_mode == "sink":
-            return (self.ep_size * self.inbox_slots * self.block_m, self.intermediate_dim)
         return (self.hidden_rows_per_rank, self.intermediate_dim)
 
 
@@ -412,19 +287,9 @@ def _make_kernel(config: PushInboxConfig):
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
     num_compute_sms = config.num_sms - config.num_send_sms
-    local_work_groups = config.inbox_slots * n_compute_jobs
-    owned_work_groups_per_worker = (local_work_groups + num_compute_sms - 1) // num_compute_sms
-    owned_slot_jobs_per_worker = (n_compute_jobs + num_compute_sms - 1) // num_compute_sms
-    ready_scan_jobs = config.inbox_slots * n_compute_jobs
-    ready_scan_candidates = (
-        ready_scan_jobs if config.scan_candidates == 0 else min(config.scan_candidates, ready_scan_jobs)
-    )
     rounds_per_slot = (config.entries_per_rank + config.inbox_slots - 1) // config.inbox_slots
-    num_slot_groups = num_compute_sms // config.workers_per_slot
-    send_dst_offsets = tuple(range(config.ep_size)) if config.traffic_pattern == "all_to_all" else (1,)
-    recv_src_offsets = (
-        tuple(range(config.ep_size)) if config.traffic_pattern == "all_to_all" else (config.ep_size - 1,)
-    )
+    send_dst_offsets = tuple(range(config.ep_size))
+    recv_src_offsets = tuple(range(config.ep_size))
 
     def body(
         x_ref: Float[Ref, "DST Q M D"],
@@ -442,140 +307,20 @@ def _make_kernel(config: PushInboxConfig):
         full_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         done_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         rank = lax.axis_index(AXIS)
-        if config.peer_loop in ("grid", "grid_switch"):
-            peer_ordinal = pl.program_id(0)
-            sm = pl.program_id(1)
-        else:
-            sm = pl.program_id(0)
-            peer_ordinal = None
+        peer_ordinal = pl.program_id(0)
+        sm = pl.program_id(1)
 
         def _slot_for_position(peer_index, slot_pos, round_i):
-            if config.slot_order == "current":
-                return slot_pos
-            if config.slot_order == "rotated":
-                return (slot_pos + peer_index + 3 * round_i) % config.inbox_slots
-            return (5 * slot_pos + 3 * peer_index + 7 * round_i) % config.inbox_slots
+            return slot_pos
 
         @pl.when(sm < config.num_send_sms)
         def _send_worker() -> None:
 
-            def _send_to_dynamic_dst(dst_ordinal) -> None:
-                if config.traffic_pattern == "all_to_all":
-                    dst_offset = dst_ordinal
-                else:
-                    dst_offset = 1
-                dst = (rank + dst_offset) % config.ep_size
-
-                @pl.loop(0, rounds_per_slot)
-                def _round_loop(round_i) -> None:
-                    @pl.loop(0, config.inbox_slots)
-                    def _slot_loop(slot_pos) -> None:
-                        slot = _slot_for_position(dst_ordinal, slot_pos, round_i)
-                        send_task = dst_ordinal * config.inbox_slots + slot
-                        should_send_slot = (send_task % config.num_send_sms) == sm
-
-                        @pl.when(should_send_slot)
-                        def _send_slot_entry() -> None:
-                            entry = slot + round_i * config.inbox_slots
-
-                            @pl.when(entry < config.entries_per_rank)
-                            def _maybe_send_entry() -> None:
-                                valid_rows = send_meta_ref[dst_ordinal, entry, 3]
-
-                                @pl.when(valid_rows > 0)
-                                def _send_entry() -> None:
-                                    if config.direct_self_compute and dst_offset == 0:
-                                        return
-
-                                    expert = send_meta_ref[dst_ordinal, entry, 1]
-                                    dst_row_start = send_meta_ref[dst_ordinal, entry, 2]
-                                    pl.semaphore_wait(empty_sem_ref.at[dst, slot])
-
-                                    def _copy_scope(tile_smem) -> None:
-                                        @pl.loop(0, k_tiles)
-                                        def _k_loop(kk) -> None:
-                                            k_start = kk * config.block_k
-                                            tile_smem[:, :] = x_ref[
-                                                dst_ordinal,
-                                                entry,
-                                                pl.ds(0, config.block_m),
-                                                pl.ds(k_start, config.block_k),
-                                            ]
-                                            mgpu.commit_smem()
-
-                                            @pl.when(dst_offset == 0)
-                                            def _copy_local() -> None:
-                                                mgpu.copy_smem_to_gmem(
-                                                    tile_smem,
-                                                    inbox_ref.at[
-                                                        rank,
-                                                        slot,
-                                                        pl.ds(0, config.block_m),
-                                                        pl.ds(k_start, config.block_k),
-                                                    ],
-                                                )
-
-                                            @pl.when(dst_offset != 0)
-                                            def _copy_remote() -> None:
-                                                remote_inbox_ref = mgpu.remote_ref(
-                                                    inbox_ref,
-                                                    dst,
-                                                    device_id_type=pl.DeviceIdType.LOGICAL,
-                                                )
-                                                mgpu.copy_smem_to_gmem(
-                                                    tile_smem,
-                                                    remote_inbox_ref.at[
-                                                        rank,
-                                                        slot,
-                                                        pl.ds(0, config.block_m),
-                                                        pl.ds(k_start, config.block_k),
-                                                    ],
-                                                )
-
-                                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                                    pl.run_scoped(
-                                        _copy_scope,
-                                        tile_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                    )
-
-                                    @pl.when(dst_offset == 0)
-                                    def _write_local_meta() -> None:
-                                        if config.metadata_mode == "remote_slot" or config.output_mode != "perf":
-                                            meta_ref[rank, slot, 0] = rank
-                                            meta_ref[rank, slot, 1] = expert
-                                            meta_ref[rank, slot, 2] = dst_row_start
-                                            meta_ref[rank, slot, 3] = valid_rows
-                                        pl.semaphore_signal(full_sem_ref.at[rank, slot])
-
-                                    @pl.when(dst_offset != 0)
-                                    def _write_remote_meta() -> None:
-                                        if config.metadata_mode == "remote_slot" or config.output_mode != "perf":
-                                            remote_meta_ref = mgpu.remote_ref(
-                                                meta_ref,
-                                                dst,
-                                                device_id_type=pl.DeviceIdType.LOGICAL,
-                                            )
-                                            remote_meta_ref[rank, slot, 0] = rank
-                                            remote_meta_ref[rank, slot, 1] = expert
-                                            remote_meta_ref[rank, slot, 2] = dst_row_start
-                                            remote_meta_ref[rank, slot, 3] = valid_rows
-                                        pl.semaphore_signal(
-                                            full_sem_ref.at[rank, slot],
-                                            device_id=dst,
-                                            device_id_type=pl.DeviceIdType.LOGICAL,
-                                        )
-
             def _send_to_dst(dst_ordinal: int, dst_offset: int) -> None:
-                if config.direct_self_compute and dst_offset == 0:
-                    return
-
                 dst = (rank + dst_offset) % config.ep_size
                 remote_inbox_ref = None
                 remote_meta_ref = None
-                write_slot_metadata = config.metadata_mode == "remote_slot" or (
-                    config.implementation == "send_only" and config.output_mode != "perf"
-                )
+                write_slot_metadata = config.implementation == "send_only" and config.output_mode != "perf"
                 if dst_offset != 0:
                     remote_inbox_ref = mgpu.remote_ref(inbox_ref, dst, device_id_type=pl.DeviceIdType.LOGICAL)
                     if write_slot_metadata:
@@ -673,73 +418,6 @@ def _make_kernel(config: PushInboxConfig):
                                                 (config.block_m, config.block_k), dtype=x_ref.dtype
                                             ),
                                         )
-                                    elif config.send_pipeline_depth == 3:
-
-                                        def _copy_scope(tile_smem_0, tile_smem_1, tile_smem_2) -> None:
-                                            @pl.loop(0, k_tiles)
-                                            def _k_loop(kk) -> None:
-                                                k_start = kk * config.block_k
-
-                                                @pl.when(kk >= 3)
-                                                def _wait_for_reusable_buffer() -> None:
-                                                    mgpu.wait_smem_to_gmem(2, wait_read_only=False)
-
-                                                @pl.when((kk % 3) == 0)
-                                                def _copy_buffer_0() -> None:
-                                                    _copy_buffer(tile_smem_0, k_start)
-
-                                                @pl.when((kk % 3) == 1)
-                                                def _copy_buffer_1() -> None:
-                                                    _copy_buffer(tile_smem_1, k_start)
-
-                                                @pl.when((kk % 3) == 2)
-                                                def _copy_buffer_2() -> None:
-                                                    _copy_buffer(tile_smem_2, k_start)
-
-                                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                                        pl.run_scoped(
-                                            _copy_scope,
-                                            tile_smem_0=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_1=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_2=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                        )
-                                    else:
-
-                                        def _copy_scope(tile_smem_0, tile_smem_1, tile_smem_2, tile_smem_3) -> None:
-                                            @pl.loop(0, k_tiles)
-                                            def _k_loop(kk) -> None:
-                                                k_start = kk * config.block_k
-
-                                                @pl.when(kk >= 4)
-                                                def _wait_for_reusable_buffer() -> None:
-                                                    mgpu.wait_smem_to_gmem(3, wait_read_only=False)
-
-                                                @pl.when((kk % 4) == 0)
-                                                def _copy_buffer_0() -> None:
-                                                    _copy_buffer(tile_smem_0, k_start)
-
-                                                @pl.when((kk % 4) == 1)
-                                                def _copy_buffer_1() -> None:
-                                                    _copy_buffer(tile_smem_1, k_start)
-
-                                                @pl.when((kk % 4) == 2)
-                                                def _copy_buffer_2() -> None:
-                                                    _copy_buffer(tile_smem_2, k_start)
-
-                                                @pl.when((kk % 4) == 3)
-                                                def _copy_buffer_3() -> None:
-                                                    _copy_buffer(tile_smem_3, k_start)
-
-                                            mgpu.wait_smem_to_gmem(0, wait_read_only=False)
-
-                                        pl.run_scoped(
-                                            _copy_scope,
-                                            tile_smem_0=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_1=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_2=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                            tile_smem_3=mgpu.SMEM((config.block_m, config.block_k), dtype=x_ref.dtype),
-                                        )
                                     if dst_offset == 0:
                                         if write_slot_metadata:
                                             meta_ref[rank, slot, 0] = rank
@@ -773,54 +451,10 @@ def _make_kernel(config: PushInboxConfig):
                 )
                 lax.switch(dst_ordinal, branches, None)
 
-            if config.peer_loop == "grid":
-                _send_to_dynamic_dst(peer_ordinal)
-
-            elif config.peer_loop == "grid_switch":
-                _switch_send_to_dst(peer_ordinal)
-
-            elif config.peer_loop == "dynamic":
-
-                @pl.loop(0, len(send_dst_offsets))
-                def _dst_loop(dst_ordinal) -> None:
-                    _send_to_dynamic_dst(dst_ordinal)
-
-            elif config.peer_loop == "switch":
-
-                @pl.loop(0, len(send_dst_offsets))
-                def _dst_loop(dst_ordinal) -> None:
-                    _switch_send_to_dst(dst_ordinal)
-
-            else:
-                for dst_ordinal, dst_offset in enumerate(send_dst_offsets):
-                    _send_to_dst(dst_ordinal, dst_offset)
+            _switch_send_to_dst(peer_ordinal)
 
         def _init_empty_slots() -> None:
-            def _init_empty_for_dynamic_src(src_ordinal) -> None:
-                if config.traffic_pattern == "all_to_all":
-                    src_offset = src_ordinal
-                else:
-                    src_offset = config.ep_size - 1
-                src = (rank + src_offset) % config.ep_size
-
-                @pl.loop(0, config.inbox_slots)
-                def _init_empty_slot(slot) -> None:
-                    @pl.when(src_offset == 0)
-                    def _signal_local() -> None:
-                        pl.semaphore_signal(empty_sem_ref.at[rank, slot])
-
-                    @pl.when(src_offset != 0)
-                    def _signal_remote() -> None:
-                        pl.semaphore_signal(
-                            empty_sem_ref.at[rank, slot],
-                            device_id=src,
-                            device_id_type=pl.DeviceIdType.LOGICAL,
-                        )
-
             def _init_empty_for_src(src_offset: int) -> None:
-                if config.direct_self_compute and src_offset == 0:
-                    return
-
                 src = (rank + src_offset) % config.ep_size
 
                 @pl.loop(0, config.inbox_slots)
@@ -844,45 +478,9 @@ def _make_kernel(config: PushInboxConfig):
                 branches = tuple(_branch(static_src_offset) for static_src_offset in recv_src_offsets)
                 lax.switch(src_ordinal, branches, None)
 
-            if config.peer_loop == "grid":
-                _init_empty_for_dynamic_src(peer_ordinal)
-
-            elif config.peer_loop == "grid_switch":
-                _switch_init_empty_for_src(peer_ordinal)
-
-            elif config.peer_loop == "dynamic":
-
-                @pl.loop(0, len(recv_src_offsets))
-                def _src_loop(src_ordinal) -> None:
-                    _init_empty_for_dynamic_src(src_ordinal)
-
-            elif config.peer_loop == "switch":
-
-                @pl.loop(0, len(recv_src_offsets))
-                def _src_loop(src_ordinal) -> None:
-                    _switch_init_empty_for_src(src_ordinal)
-
-            else:
-                for src_offset in recv_src_offsets:
-                    _init_empty_for_src(src_offset)
+            _switch_init_empty_for_src(peer_ordinal)
 
         def _signal_empty_to_src(src, src_offset: int, slot) -> None:
-            if config.peer_loop in ("dynamic", "grid"):
-
-                @pl.when(src_offset == 0)
-                def _signal_local() -> None:
-                    pl.semaphore_signal(empty_sem_ref.at[rank, slot])
-
-                @pl.when(src_offset != 0)
-                def _signal_remote() -> None:
-                    pl.semaphore_signal(
-                        empty_sem_ref.at[rank, slot],
-                        device_id=src,
-                        device_id_type=pl.DeviceIdType.LOGICAL,
-                    )
-
-                return
-
             if src_offset == 0:
                 pl.semaphore_signal(empty_sem_ref.at[rank, slot])
             else:
@@ -892,23 +490,13 @@ def _make_kernel(config: PushInboxConfig):
                     device_id_type=pl.DeviceIdType.LOGICAL,
                 )
 
-        def _sink_hidden(src_ordinal, slot, n_tile, hidden) -> None:
-            sink_row = (src_ordinal * config.inbox_slots + slot) * config.block_m
+        def _store_hidden(src_ordinal, entry, slot, dst_row_start, n_tile, hidden) -> None:
+            if config.hidden_output_mode == "queue":
+                dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
             hidden_ref[
-                pl.ds(sink_row, config.block_m),
+                pl.ds(dst_row_start, config.block_m),
                 pl.ds(n_tile * config.block_n, config.block_n),
             ] = hidden.astype(hidden_ref.dtype)
-
-        def _store_hidden(src_ordinal, entry, slot, dst_row_start, n_tile, hidden) -> None:
-            if config.hidden_output_mode == "sink":
-                _sink_hidden(src_ordinal, slot, n_tile, hidden)
-            else:
-                if config.hidden_output_mode == "queue":
-                    dst_row_start = (src_ordinal * config.entries_per_rank + entry) * config.block_m
-                hidden_ref[
-                    pl.ds(dst_row_start, config.block_m),
-                    pl.ds(n_tile * config.block_n, config.block_n),
-                ] = hidden.astype(hidden_ref.dtype)
 
         def _store_zero_hidden(src_ordinal, entry, slot, dst_row_start, n_tile) -> None:
             zero_hidden = jnp.zeros((config.block_m, config.block_n), dtype=jnp.float32)
@@ -920,55 +508,6 @@ def _make_kernel(config: PushInboxConfig):
                 return
 
             def acc_scope(gate_acc_ref, up_acc_ref) -> jax.Array:
-                if config.compute_pipeline == "emit":
-
-                    def wgmma_step(_, lhs_smem, gate_smem, up_smem) -> None:
-                        mgpu.wgmma(gate_acc_ref, lhs_smem, gate_smem)
-                        mgpu.wgmma(up_acc_ref, lhs_smem, up_smem)
-
-                    mgpu.emit_pipeline(
-                        wgmma_step,
-                        grid=(k_tiles,),
-                        in_specs=[
-                            mgpu.BlockSpec(
-                                (config.block_m, config.block_k),
-                                lambda kk: (0, kk),
-                                delay_release=1,
-                                transforms=_wgmma_transforms(
-                                    (config.block_m, config.block_k),
-                                    inbox_ref.dtype,
-                                    lowering_semantics=config.lowering_semantics,
-                                ),
-                            ),
-                            mgpu.BlockSpec(
-                                (config.block_k, config.block_n),
-                                lambda kk: (kk, n_tile),
-                                delay_release=1,
-                                transforms=_wgmma_transforms(
-                                    (config.block_k, config.block_n),
-                                    w_ref.dtype,
-                                    lowering_semantics=config.lowering_semantics,
-                                ),
-                            ),
-                            mgpu.BlockSpec(
-                                (config.block_k, config.block_n),
-                                lambda kk: (kk, n_tile + n_tiles),
-                                delay_release=1,
-                                transforms=_wgmma_transforms(
-                                    (config.block_k, config.block_n),
-                                    w_ref.dtype,
-                                    lowering_semantics=config.lowering_semantics,
-                                ),
-                            ),
-                        ],
-                        max_concurrent_steps=config.max_concurrent_steps,
-                    )(
-                        inbox_ref.at[src, slot],
-                        w_ref.at[expert],
-                        w_ref.at[expert],
-                    )
-                    return _silu(gate_acc_ref[...]) * up_acc_ref[...]
-
                 def smem_scope(lhs_smem, gate_smem, up_smem, ready_barrier) -> None:
                     @pl.loop(0, k_tiles)
                     def _k_loop(kk) -> None:
@@ -1034,80 +573,6 @@ def _make_kernel(config: PushInboxConfig):
                 up_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
             )
             _store_hidden(src_ordinal, entry, slot, dst_row_start, n_tile, hidden)
-
-        def _compute_hidden_n_tile_from_x(dst_ordinal, entry, expert, dst_row_start, n_tile) -> None:
-            if config.hidden_compute_mode == "store_zero":
-                slot = entry % config.inbox_slots
-                _store_zero_hidden(dst_ordinal, entry, slot, dst_row_start, n_tile)
-                return
-
-            def acc_scope(gate_acc_ref, up_acc_ref) -> jax.Array:
-                def smem_scope(lhs_smem, gate_smem, up_smem, ready_barrier) -> None:
-                    @pl.loop(0, k_tiles)
-                    def _k_loop(kk) -> None:
-                        k_start = kk * config.block_k
-                        mgpu.copy_gmem_to_smem(
-                            x_ref.at[
-                                dst_ordinal,
-                                entry,
-                                pl.ds(0, config.block_m),
-                                pl.ds(k_start, config.block_k),
-                            ],
-                            lhs_smem,
-                            ready_barrier,
-                        )
-                        mgpu.copy_gmem_to_smem(
-                            w_ref.at[
-                                expert,
-                                pl.ds(k_start, config.block_k),
-                                pl.ds(n_tile * config.block_n, config.block_n),
-                            ],
-                            gate_smem,
-                            ready_barrier,
-                        )
-                        mgpu.copy_gmem_to_smem(
-                            w_ref.at[
-                                expert,
-                                pl.ds(k_start, config.block_k),
-                                pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
-                            ],
-                            up_smem,
-                            ready_barrier,
-                        )
-                        mgpu.barrier_wait(ready_barrier)
-                        mgpu.commit_smem()
-                        mgpu.wgmma(gate_acc_ref, lhs_smem, gate_smem)
-                        mgpu.wgmma(up_acc_ref, lhs_smem, up_smem)
-                        mgpu.wgmma_wait(0)
-
-                pl.run_scoped(
-                    smem_scope,
-                    lhs_smem=_wgmma_smem(
-                        (config.block_m, config.block_k),
-                        x_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
-                    gate_smem=_wgmma_smem(
-                        (config.block_k, config.block_n),
-                        w_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
-                    up_smem=_wgmma_smem(
-                        (config.block_k, config.block_n),
-                        w_ref.dtype,
-                        lowering_semantics=config.lowering_semantics,
-                    ),
-                    ready_barrier=mgpu.Barrier(num_arrivals=3),
-                )
-                return _silu(gate_acc_ref[...]) * up_acc_ref[...]
-
-            hidden = pl.run_scoped(
-                acc_scope,
-                gate_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
-                up_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
-            )
-            slot = entry % config.inbox_slots
-            _store_hidden(dst_ordinal, entry, slot, dst_row_start, n_tile, hidden)
 
         def _compute_hidden_n_group(src, src_ordinal, entry, slot, expert, dst_row_start, n_group_i) -> None:
             if config.n_group == 1:
@@ -1229,22 +694,12 @@ def _make_kernel(config: PushInboxConfig):
 
         def _consume_entry(src, src_offset: int, entry, slot) -> None:
             pl.semaphore_wait(full_sem_ref.at[src, slot])
-            expert = meta_ref[src, slot, 1]
-            dst_row_start = meta_ref[src, slot, 2]
-
-            if config.implementation in ("m_owner", "m_owner_slots"):
-
-                @pl.loop(0, n_tiles)
-                def _n_tile_loop(n_tile) -> None:
-                    _compute_hidden_n_tile(src, src, entry, slot, expert, dst_row_start, n_tile)
-
-            else:
-                if config.output_mode != "perf":
-                    seen_payload_ref[src, entry] = inbox_ref[src, slot, 0, 0]
-                    seen_meta_ref[src, entry, 0] = meta_ref[src, slot, 0]
-                    seen_meta_ref[src, entry, 1] = meta_ref[src, slot, 1]
-                    seen_meta_ref[src, entry, 2] = meta_ref[src, slot, 2]
-                    seen_meta_ref[src, entry, 3] = meta_ref[src, slot, 3]
+            if config.output_mode != "perf":
+                seen_payload_ref[src, entry] = inbox_ref[src, slot, 0, 0]
+                seen_meta_ref[src, entry, 0] = meta_ref[src, slot, 0]
+                seen_meta_ref[src, entry, 1] = meta_ref[src, slot, 1]
+                seen_meta_ref[src, entry, 2] = meta_ref[src, slot, 2]
+                seen_meta_ref[src, entry, 3] = meta_ref[src, slot, 3]
             _signal_empty_to_src(src, src_offset, slot)
 
         if config.implementation == "m_n_slots":
@@ -1257,253 +712,10 @@ def _make_kernel(config: PushInboxConfig):
             def _n_tile_recv_worker() -> None:
                 compute_worker = sm - config.num_send_sms
 
-                def _recv_n_tile_dynamic_src(src_ordinal) -> None:
-                    if config.traffic_pattern == "all_to_all":
-                        src_offset = src_ordinal
-                    else:
-                        src_offset = config.ep_size - 1
-                    _recv_n_tile_src(src_ordinal, src_offset)
-
                 def _recv_n_tile_src(src_ordinal: int, src_offset: int) -> None:
                     src = (rank + src_offset) % config.ep_size
 
-                    if config.direct_self_compute and src_offset == 0:
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _self_round_loop(round_i) -> None:
-                            @pl.loop(0, config.inbox_slots)
-                            def _self_slot_loop(slot) -> None:
-                                entry = slot + round_i * config.inbox_slots
-
-                                @pl.when(entry < config.entries_per_rank)
-                                def _maybe_self_entry() -> None:
-                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                    @pl.when(valid_rows > 0)
-                                    def _self_entry() -> None:
-                                        @pl.loop(0, n_compute_jobs)
-                                        def _self_job_loop(job_i) -> None:
-                                            work_group = (
-                                                src_ordinal * config.inbox_slots + slot
-                                            ) * n_compute_jobs + job_i
-                                            should_compute = (work_group % num_compute_sms) == compute_worker
-
-                                            @pl.when(should_compute)
-                                            def _self_job() -> None:
-                                                expert = recv_meta_ref[src_ordinal, entry, 1]
-                                                dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-
-                                                @pl.loop(0, config.n_groups_per_job)
-                                                def _self_job_n_group_loop(group_offset) -> None:
-                                                    n_group_i = job_i * config.n_groups_per_job + group_offset
-
-                                                    @pl.when(n_group_i < n_work_groups)
-                                                    def _self_job_n_group() -> None:
-                                                        _compute_hidden_n_tile_from_x(
-                                                            src_ordinal,
-                                                            entry,
-                                                            expert,
-                                                            dst_row_start,
-                                                            n_group_i,
-                                                        )
-
-                        return
-
-                    def _job_owner(slot, job_i):
-                        work_group = (src_ordinal * config.inbox_slots + slot) * n_compute_jobs + job_i
-                        return (work_group % num_compute_sms) == compute_worker
-
-                    def _compute_recv_job(entry, slot, job_i) -> None:
-                        if config.metadata_mode == "static_recv":
-                            expert = recv_meta_ref[src_ordinal, entry, 1]
-                            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-                        else:
-                            expert = meta_ref[src, slot, 1]
-                            dst_row_start = meta_ref[src, slot, 2]
-
-                        @pl.loop(0, config.n_groups_per_job)
-                        def _job_n_group_loop(group_offset) -> None:
-                            n_group_i = job_i * config.n_groups_per_job + group_offset
-
-                            @pl.when(n_group_i < n_work_groups)
-                            def _job_n_group() -> None:
-                                _compute_hidden_n_group(
-                                    src,
-                                    src_ordinal,
-                                    entry,
-                                    slot,
-                                    expert,
-                                    dst_row_start,
-                                    n_group_i,
-                                )
-
-                    def _slot_group_id(slot):
-                        return (src_ordinal * config.inbox_slots + slot) % num_slot_groups
-
-                    def _slot_group_owner(slot):
-                        return (compute_worker // config.workers_per_slot) == _slot_group_id(slot)
-
-                    def _slot_group_lane():
-                        return compute_worker % config.workers_per_slot
-
-                    def _compute_slot_group_entry(entry, slot) -> None:
-                        if config.metadata_mode == "static_recv":
-                            expert = recv_meta_ref[src_ordinal, entry, 1]
-                            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-                        else:
-                            expert = meta_ref[src, slot, 1]
-                            dst_row_start = meta_ref[src, slot, 2]
-
-                        lane = _slot_group_lane()
-
-                        @pl.loop(0, n_work_groups)
-                        def _n_group_loop(n_group_i) -> None:
-                            should_compute_group = (n_group_i % config.workers_per_slot) == lane
-
-                            @pl.when(should_compute_group)
-                            def _n_group() -> None:
-                                _compute_hidden_n_group(
-                                    src,
-                                    src_ordinal,
-                                    entry,
-                                    slot,
-                                    expert,
-                                    dst_row_start,
-                                    n_group_i,
-                                )
-
-                    def _signal_recv_job_done(slot) -> None:
-                        pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                    def _scan_candidate_id(work_i, scan_attempt, round_i):
-                        if config.scan_order == "current":
-                            start = work_i
-                        elif config.scan_order == "rotated":
-                            start = compute_worker + 5 * round_i + work_i
-                        else:
-                            start = compute_worker * 17 + round_i * 31 + work_i * 7
-                        return (start + scan_attempt) % ready_scan_jobs
-
-                    def _ordered_wait_slot(slot_pos, round_i):
-                        if config.receiver_schedule == "fixed_wait" or config.scan_order == "current":
-                            return slot_pos
-                        if config.scan_order == "rotated":
-                            return (slot_pos + compute_worker + 5 * round_i) % config.inbox_slots
-                        return (compute_worker * 3 + round_i * 5 + slot_pos * 3) % config.inbox_slots
-
-                    def _maybe_select_ready_candidate(round_i, candidate_id, selected_ref) -> None:
-                        slot = candidate_id // n_compute_jobs
-                        job_i = candidate_id % n_compute_jobs
-                        entry = slot + round_i * config.inbox_slots
-
-                        @pl.when(entry < config.entries_per_rank)
-                        def _maybe_live_entry() -> None:
-                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                            @pl.when(valid_rows > 0)
-                            def _live_entry() -> None:
-                                should_compute = _job_owner(slot, job_i)
-
-                                @pl.when(should_compute)
-                                def _owned_job() -> None:
-                                    full_value = pl.semaphore_read(full_sem_ref.at[src, slot])
-                                    ready = full_value >= (round_i + 1)
-                                    not_selected = selected_ref[0] < 0
-
-                                    @pl.when(ready & not_selected)
-                                    def _select_ready_job() -> None:
-                                        selected_ref[0] = candidate_id
-
-                    def _maybe_compute_ready_candidate(round_i, candidate_id, computed_ref) -> None:
-                        slot = candidate_id // n_compute_jobs
-                        job_i = candidate_id % n_compute_jobs
-                        entry = slot + round_i * config.inbox_slots
-
-                        @pl.when(entry < config.entries_per_rank)
-                        def _maybe_live_entry() -> None:
-                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                            @pl.when(valid_rows > 0)
-                            def _live_entry() -> None:
-                                should_compute = _job_owner(slot, job_i)
-
-                                @pl.when(should_compute)
-                                def _owned_job() -> None:
-                                    not_computed = computed_ref[candidate_id] == 0
-
-                                    @pl.when(not_computed)
-                                    def _maybe_ready_job() -> None:
-                                        full_value = pl.semaphore_read(full_sem_ref.at[src, slot])
-                                        ready = full_value >= (round_i + 1)
-
-                                        @pl.when(ready)
-                                        def _compute_ready_job() -> None:
-                                            _compute_recv_job(entry, slot, job_i)
-                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
-                                            computed_ref[candidate_id] = jnp.int32(1)
-
-                    def _wait_and_compute_fixed_candidate(round_i, candidate_id) -> None:
-                        slot = candidate_id // n_compute_jobs
-                        job_i = candidate_id % n_compute_jobs
-                        entry = slot + round_i * config.inbox_slots
-
-                        @pl.when(entry < config.entries_per_rank)
-                        def _maybe_live_entry() -> None:
-                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                            @pl.when(valid_rows > 0)
-                            def _live_entry() -> None:
-                                should_compute = _job_owner(slot, job_i)
-
-                                @pl.when(should_compute)
-                                def _owned_job() -> None:
-                                    pl.semaphore_wait(
-                                        full_sem_ref.at[src, slot],
-                                        value=round_i + 1,
-                                        decrement=False,
-                                    )
-                                    _compute_recv_job(entry, slot, job_i)
-                                    pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                    def _release_completed_slot(round_i, slot) -> None:
-                        entry = slot + round_i * config.inbox_slots
-
-                        @pl.when(entry < config.entries_per_rank)
-                        def _maybe_release_entry() -> None:
-                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                            @pl.when(valid_rows > 0)
-                            def _release_live_entry() -> None:
-                                release_group = src_ordinal * config.inbox_slots + slot
-                                should_release = (release_group % num_compute_sms) == compute_worker
-
-                                @pl.when(should_release)
-                                def _release_slot() -> None:
-                                    pl.semaphore_wait(
-                                        done_sem_ref.at[src, slot],
-                                        value=(round_i + 1) * n_compute_jobs,
-                                        decrement=False,
-                                    )
-                                    _signal_empty_to_src(src, src_offset, slot)
-
-                    def _release_completed_slots(round_i) -> None:
-                        @pl.loop(0, config.inbox_slots)
-                        def _release_slot_loop(slot) -> None:
-                            _release_completed_slot(round_i, slot)
-
-                    def _owned_local_work_group(owned_i):
-                        source_base_work_group = src_ordinal * local_work_groups
-                        first_local_work_group = (
-                            compute_worker - (source_base_work_group % num_compute_sms)
-                        ) % num_compute_sms
-                        return first_local_work_group + owned_i * num_compute_sms
-
-                    def _owned_slot_job(slot, owned_i):
-                        slot_base_work_group = (src_ordinal * config.inbox_slots + slot) * n_compute_jobs
-                        first_job = (compute_worker - (slot_base_work_group % num_compute_sms)) % num_compute_sms
-                        return first_job + owned_i * num_compute_sms
-
-                    if config.receiver_schedule == "fixed_wait":
+                    def _recv_fixed_wait() -> None:
 
                         @pl.loop(0, rounds_per_slot)
                         def _round_loop(round_i) -> None:
@@ -1532,12 +744,8 @@ def _make_kernel(config: PushInboxConfig):
                                                     value=round_i + 1,
                                                     decrement=False,
                                                 )
-                                                if config.metadata_mode == "static_recv":
-                                                    expert = recv_meta_ref[src_ordinal, entry, 1]
-                                                    dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-                                                else:
-                                                    expert = meta_ref[src, slot, 1]
-                                                    dst_row_start = meta_ref[src, slot, 2]
+                                                expert = recv_meta_ref[src_ordinal, entry, 1]
+                                                dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
 
                                                 @pl.loop(0, config.n_groups_per_job)
                                                 def _job_n_group_loop(group_offset) -> None:
@@ -1569,162 +777,7 @@ def _make_kernel(config: PushInboxConfig):
                                             )
                                             _signal_empty_to_src(src, src_offset, slot)
 
-                    # Historical receiver schedules are retained for debugging but are no longer exposed as
-                    # ordinary CLI sweep choices. The stable profile uses fixed_wait.
-                    elif config.receiver_schedule == "owned_jobs":
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _round_loop(round_i) -> None:
-                            @pl.loop(0, owned_work_groups_per_worker)
-                            def _owned_work_loop(owned_i) -> None:
-                                local_work_group = _owned_local_work_group(owned_i)
-
-                                @pl.when(local_work_group < local_work_groups)
-                                def _owned_live_work_group() -> None:
-                                    slot = local_work_group // n_compute_jobs
-                                    job_i = local_work_group - slot * n_compute_jobs
-                                    entry = slot + round_i * config.inbox_slots
-
-                                    @pl.when(entry < config.entries_per_rank)
-                                    def _maybe_live_entry() -> None:
-                                        valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                        @pl.when(valid_rows > 0)
-                                        def _live_entry() -> None:
-                                            pl.semaphore_wait(
-                                                full_sem_ref.at[src, slot],
-                                                value=round_i + 1,
-                                                decrement=False,
-                                            )
-                                            _compute_recv_job(entry, slot, job_i)
-                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                            _release_completed_slots(round_i)
-
-                    elif config.receiver_schedule == "owned_slots":
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _round_loop(round_i) -> None:
-                            @pl.loop(0, config.inbox_slots)
-                            def _slot_loop(slot) -> None:
-                                entry = slot + round_i * config.inbox_slots
-
-                                @pl.when(entry < config.entries_per_rank)
-                                def _maybe_recv_slot_entry() -> None:
-                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                    @pl.when(valid_rows > 0)
-                                    def _recv_slot_entry() -> None:
-                                        @pl.loop(0, owned_slot_jobs_per_worker)
-                                        def _owned_slot_job_loop(owned_i) -> None:
-                                            job_i = _owned_slot_job(slot, owned_i)
-
-                                            @pl.when(job_i < n_compute_jobs)
-                                            def _owned_live_job() -> None:
-                                                pl.semaphore_wait(
-                                                    full_sem_ref.at[src, slot],
-                                                    value=round_i + 1,
-                                                    decrement=False,
-                                                )
-                                                _compute_recv_job(entry, slot, job_i)
-                                                pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                                        _release_completed_slot(round_i, slot)
-
-                    elif config.receiver_schedule == "ordered_wait":
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _round_loop(round_i) -> None:
-                            @pl.loop(0, config.inbox_slots)
-                            def _slot_loop(slot_pos) -> None:
-                                slot = _ordered_wait_slot(slot_pos, round_i)
-                                entry = slot + round_i * config.inbox_slots
-
-                                @pl.when(entry < config.entries_per_rank)
-                                def _maybe_recv_slot_entry() -> None:
-                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                    @pl.when(valid_rows > 0)
-                                    def _recv_slot_entry() -> None:
-                                        @pl.loop(0, n_compute_jobs)
-                                        def _job_loop(job_i) -> None:
-                                            should_compute = _job_owner(slot, job_i)
-
-                                            @pl.when(should_compute)
-                                            def _recv_job() -> None:
-                                                pl.semaphore_wait(
-                                                    full_sem_ref.at[src, slot],
-                                                    value=round_i + 1,
-                                                    decrement=False,
-                                                )
-                                                _compute_recv_job(entry, slot, job_i)
-                                                pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                                        _release_completed_slot(round_i, slot)
-
-                    elif config.receiver_schedule == "slot_group":
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _round_loop(round_i) -> None:
-                            @pl.loop(0, config.inbox_slots)
-                            def _slot_loop(slot) -> None:
-                                entry = slot + round_i * config.inbox_slots
-
-                                @pl.when(entry < config.entries_per_rank)
-                                def _maybe_recv_slot_entry() -> None:
-                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                    @pl.when(valid_rows > 0)
-                                    def _recv_slot_entry() -> None:
-                                        should_compute = _slot_group_owner(slot)
-
-                                        @pl.when(should_compute)
-                                        def _recv_slot_group() -> None:
-                                            pl.semaphore_wait(
-                                                full_sem_ref.at[src, slot],
-                                                value=round_i + 1,
-                                                decrement=False,
-                                            )
-                                            _compute_slot_group_entry(entry, slot)
-                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
-
-                                            should_release = _slot_group_lane() == 0
-
-                                            @pl.when(should_release)
-                                            def _release_slot() -> None:
-                                                pl.semaphore_wait(
-                                                    done_sem_ref.at[src, slot],
-                                                    value=(round_i + 1) * config.workers_per_slot,
-                                                    decrement=False,
-                                                )
-                                                _signal_empty_to_src(src, src_offset, slot)
-
-                    else:
-
-                        @pl.loop(0, rounds_per_slot)
-                        def _round_loop(round_i) -> None:
-                            def _ready_scan_scope(computed_ref):
-                                @pl.loop(0, ready_scan_jobs)
-                                def _init_computed_loop(candidate_id) -> None:
-                                    computed_ref[candidate_id] = jnp.int32(0)
-
-                                @pl.loop(0, ready_scan_candidates)
-                                def _scan_attempt_loop(scan_attempt) -> None:
-                                    candidate_id = _scan_candidate_id(0, scan_attempt, round_i)
-                                    _maybe_compute_ready_candidate(round_i, candidate_id, computed_ref)
-
-                                @pl.loop(0, ready_scan_jobs)
-                                def _fallback_loop(candidate_id) -> None:
-                                    @pl.when(computed_ref[candidate_id] == 0)
-                                    def _fallback_candidate() -> None:
-                                        _wait_and_compute_fixed_candidate(round_i, candidate_id)
-
-                            pl.run_scoped(
-                                _ready_scan_scope,
-                                computed_ref=mgpu.SMEM((ready_scan_jobs,), dtype=jnp.int32),
-                            )
-
-                            _release_completed_slots(round_i)
+                    _recv_fixed_wait()
 
                 def _switch_recv_n_tile_src(src_ordinal) -> None:
                     def _branch(static_src_ordinal: int, static_src_offset: int):
@@ -1739,100 +792,7 @@ def _make_kernel(config: PushInboxConfig):
                     )
                     lax.switch(src_ordinal, branches, None)
 
-                if config.peer_loop == "grid":
-                    _recv_n_tile_dynamic_src(peer_ordinal)
-
-                elif config.peer_loop == "grid_switch":
-                    _switch_recv_n_tile_src(peer_ordinal)
-
-                elif config.peer_loop == "dynamic":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _recv_n_tile_dynamic_src(src_ordinal)
-
-                elif config.peer_loop == "switch":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _switch_recv_n_tile_src(src_ordinal)
-
-                else:
-                    for src_ordinal, src_offset in enumerate(recv_src_offsets):
-                        _recv_n_tile_src(src_ordinal, src_offset)
-
-        elif config.implementation == "m_owner_slots":
-
-            @pl.when(sm == config.num_send_sms)
-            def _init_worker() -> None:
-                _init_empty_slots()
-
-            @pl.when(sm >= config.num_send_sms)
-            def _slot_recv_worker() -> None:
-                compute_worker = sm - config.num_send_sms
-
-                def _recv_slot_dynamic_src(src_ordinal) -> None:
-                    if config.traffic_pattern == "all_to_all":
-                        src_offset = src_ordinal
-                    else:
-                        src_offset = config.ep_size - 1
-                    _recv_slot_src(src_ordinal, src_offset)
-
-                def _recv_slot_src(src_ordinal: int, src_offset: int) -> None:
-                    src = (rank + src_offset) % config.ep_size
-
-                    @pl.loop(0, rounds_per_slot)
-                    def _round_loop(round_i) -> None:
-                        @pl.loop(0, config.inbox_slots)
-                        def _slot_loop(slot) -> None:
-                            entry = slot + round_i * config.inbox_slots
-                            recv_group = src_ordinal * config.inbox_slots + slot
-                            should_recv = (recv_group % num_compute_sms == compute_worker) & (
-                                entry < config.entries_per_rank
-                            )
-
-                            @pl.when(should_recv)
-                            def _maybe_recv_slot_entry() -> None:
-                                valid_rows = recv_meta_ref[src_ordinal, entry, 3]
-
-                                @pl.when(valid_rows > 0)
-                                def _recv_slot_entry() -> None:
-                                    _consume_entry(src, src_offset, entry, slot)
-
-                def _switch_recv_slot_src(src_ordinal) -> None:
-                    def _branch(static_src_ordinal: int, static_src_offset: int):
-                        def _recv_branch(_) -> None:
-                            _recv_slot_src(static_src_ordinal, static_src_offset)
-
-                        return _recv_branch
-
-                    branches = tuple(
-                        _branch(static_src_ordinal, static_src_offset)
-                        for static_src_ordinal, static_src_offset in enumerate(recv_src_offsets)
-                    )
-                    lax.switch(src_ordinal, branches, None)
-
-                if config.peer_loop == "grid":
-                    _recv_slot_dynamic_src(peer_ordinal)
-
-                elif config.peer_loop == "grid_switch":
-                    _switch_recv_slot_src(peer_ordinal)
-
-                elif config.peer_loop == "dynamic":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _recv_slot_dynamic_src(src_ordinal)
-
-                elif config.peer_loop == "switch":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _switch_recv_slot_src(src_ordinal)
-
-                else:
-                    for src_ordinal, src_offset in enumerate(recv_src_offsets):
-                        _recv_slot_src(src_ordinal, src_offset)
+                _switch_recv_n_tile_src(peer_ordinal)
 
         else:
 
@@ -1840,19 +800,9 @@ def _make_kernel(config: PushInboxConfig):
             def _recv_worker() -> None:
                 _init_empty_slots()
 
-                def _recv_dynamic_src(src_ordinal) -> None:
-                    if config.traffic_pattern == "all_to_all":
-                        src_offset = src_ordinal
-                    else:
-                        src_offset = config.ep_size - 1
-                    _recv_src(src_offset)
-
                 def _recv_src(src_offset: int) -> None:
                     src = (rank + src_offset) % config.ep_size
-                    if config.traffic_pattern == "all_to_all":
-                        src_ordinal = src_offset
-                    else:
-                        src_ordinal = 0
+                    src_ordinal = src_offset
 
                     @pl.loop(0, config.entries_per_rank)
                     def _recv_entry(entry) -> None:
@@ -1873,35 +823,12 @@ def _make_kernel(config: PushInboxConfig):
                     branches = tuple(_branch(static_src_offset) for static_src_offset in recv_src_offsets)
                     lax.switch(src_ordinal, branches, None)
 
-                if config.peer_loop == "grid":
-                    _recv_dynamic_src(peer_ordinal)
-
-                elif config.peer_loop == "grid_switch":
-                    _switch_recv_src(peer_ordinal)
-
-                elif config.peer_loop == "dynamic":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _recv_dynamic_src(src_ordinal)
-
-                elif config.peer_loop == "switch":
-
-                    @pl.loop(0, len(recv_src_offsets))
-                    def _src_loop(src_ordinal) -> None:
-                        _switch_recv_src(src_ordinal)
-
-                else:
-                    for src_offset in recv_src_offsets:
-                        _recv_src(src_offset)
+                _switch_recv_src(peer_ordinal)
 
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
     if config.output_mode == "perf":
         returned_inbox_shape = inbox_shape
-        if config.metadata_mode == "remote_slot":
-            meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
-        else:
-            meta_shape = (1, 1, META_FIELDS)
+        meta_shape = (1, 1, META_FIELDS)
         seen_payload_shape = (1, 1)
         seen_meta_shape = (1, 1, META_FIELDS)
     else:
@@ -1909,9 +836,7 @@ def _make_kernel(config: PushInboxConfig):
         meta_shape = (config.ep_size, config.inbox_slots, META_FIELDS)
         seen_payload_shape = (config.ep_size, config.entries_per_rank)
         seen_meta_shape = (config.ep_size, config.entries_per_rank, META_FIELDS)
-    grid = (
-        (len(send_dst_offsets), config.num_sms) if config.peer_loop in ("grid", "grid_switch") else (config.num_sms,)
-    )
+    grid = (len(send_dst_offsets), config.num_sms)
     compiler_params = mgpu.CompilerParams(lowering_semantics=LOWERING_SEMANTICS[config.lowering_semantics])
     out_shape = [
         jax.ShapeDtypeStruct(returned_inbox_shape, jnp.bfloat16),
@@ -1925,7 +850,7 @@ def _make_kernel(config: PushInboxConfig):
         body,
         out_shape=out_shape,
         grid=grid,
-        grid_names=("peer_phase", "sm") if config.peer_loop in ("grid", "grid_switch") else ("sm",),
+        grid_names=("peer_phase", "sm"),
         compiler_params=compiler_params,
     )
 
@@ -1938,21 +863,15 @@ def _make_mesh(ep_size: int) -> Mesh:
 
 
 def _destination_ranks(config: PushInboxConfig, src: int):
-    if config.traffic_pattern == "all_to_all":
-        return range(config.ep_size)
-    return ((src + 1) % config.ep_size,)
+    return range(config.ep_size)
 
 
 def _dst_ordinal(config: PushInboxConfig, src: int, dst: int) -> int:
-    if config.traffic_pattern == "all_to_all":
-        return (dst - src) % config.ep_size
-    return 0
+    return (dst - src) % config.ep_size
 
 
 def _recv_src_ordinal(config: PushInboxConfig, dst: int, src: int) -> int:
-    if config.traffic_pattern == "all_to_all":
-        return (src - dst) % config.ep_size
-    return 0
+    return (src - dst) % config.ep_size
 
 
 def _make_weights(config: PushInboxConfig):
@@ -1988,21 +907,13 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     valid_rows = send_meta[:, :, :, 3]
     live = valid_rows > 0
     live_entries_per_rank = np.sum(live, axis=(1, 2))
-    direct_self_entries_per_rank = (
-        np.sum(live[:, 0, :], axis=1)
-        if config.direct_self_compute and config.traffic_pattern == "all_to_all"
-        else np.zeros((config.ep_size,), dtype=np.int64)
-    )
+    direct_self_entries_per_rank = np.zeros((config.ep_size,), dtype=np.int64)
     send_entries_per_rank = live_entries_per_rank - direct_self_entries_per_rank
     valid_rows_per_rank = np.sum(valid_rows, axis=(1, 2))
     rounded_rows_per_rank = live_entries_per_rank * config.block_m
     masked_rows = live.astype(np.int64) * config.block_m - valid_rows
     masked_rows_per_rank = np.sum(masked_rows, axis=(1, 2))
-    direct_self_masked_rows_per_rank = (
-        np.sum(masked_rows[:, 0, :], axis=1)
-        if config.direct_self_compute and config.traffic_pattern == "all_to_all"
-        else np.zeros((config.ep_size,), dtype=np.int64)
-    )
+    direct_self_masked_rows_per_rank = np.zeros((config.ep_size,), dtype=np.int64)
     send_rounded_rows_per_rank = send_entries_per_rank * config.block_m
     send_masked_rows_per_rank = masked_rows_per_rank - direct_self_masked_rows_per_rank
     entries_per_pair = np.sum(live, axis=2)
@@ -2038,21 +949,13 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
-    num_compute_sms = config.num_sms - config.num_send_sms
     local_work_groups = config.inbox_slots * n_compute_jobs
-    owned_work_groups_per_worker = (local_work_groups + num_compute_sms - 1) // num_compute_sms
-    owned_slot_jobs_per_worker = (n_compute_jobs + num_compute_sms - 1) // num_compute_sms
-    compute_jobs_per_entry = config.workers_per_slot if config.receiver_schedule == "slot_group" else n_compute_jobs
-    ready_scan_jobs = config.inbox_slots * n_compute_jobs
-    ready_scan_candidates = (
-        ready_scan_jobs if config.scan_candidates == 0 else min(config.scan_candidates, ready_scan_jobs)
+    compute_jobs_per_entry = n_compute_jobs
+    compute_wait_full_count = (
+        payload_send_entries_total * compute_jobs_per_entry
+        if config.implementation == "m_n_slots"
+        else payload_send_entries_total
     )
-    if config.implementation == "m_n_slots":
-        compute_wait_full_count = payload_send_entries_total * compute_jobs_per_entry
-    elif config.implementation in ("m_owner", "m_owner_slots"):
-        compute_wait_full_count = payload_send_entries_total
-    else:
-        compute_wait_full_count = payload_send_entries_total
     capacity_entries_total = config.ep_size * config.traffic_fanout * config.entries_per_rank
     nonzero_expert_entries = entries_by_source_destination_expert[entries_by_source_destination_expert > 0]
     if nonzero_expert_entries.size:
@@ -2062,29 +965,16 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         per_expert_pair_min_nonzero = 0
         per_expert_pair_max = 0
     return {
-        "queue_mode": config.queue_mode,
         "routing": config.routing,
-        "metadata_mode": config.metadata_mode,
-        "direct_self_compute": config.direct_self_compute,
         "output_mode": config.output_mode,
         "hidden_output_mode": config.hidden_output_mode,
         "hidden_compute_mode": config.hidden_compute_mode,
-        "receiver_schedule": config.receiver_schedule,
-        "scan_candidates": config.scan_candidates,
-        "scan_candidates_effective": ready_scan_candidates,
-        "scan_order": config.scan_order,
-        "slot_order": config.slot_order,
-        "workers_per_slot": config.workers_per_slot,
-        "source_push_mode": config.source_push_mode,
         "send_pipeline_depth": config.send_pipeline_depth,
         "n_groups_per_job": config.n_groups_per_job,
         "n_work_groups_per_entry": n_work_groups,
         "num_compute_jobs_per_entry": compute_jobs_per_entry,
         "local_work_groups_per_source": local_work_groups,
-        "owned_work_groups_per_worker_round": owned_work_groups_per_worker,
-        "owned_slot_jobs_per_worker": owned_slot_jobs_per_worker,
         "done_signals_per_entry": compute_jobs_per_entry,
-        "ready_scan_jobs_per_round": ready_scan_jobs,
         "send_entries_total": live_entries_total,
         "recv_entries_total": live_entries_total,
         "live_entries_total": live_entries_total,
@@ -2162,28 +1052,6 @@ def _fill_block(x_host: np.ndarray, src: int, dst_ordinal: int, entry: int, vali
     value = 0.25 + 0.125 * src + 0.015 * dst_ordinal + 0.01 * entry
     x_host[src, dst_ordinal, entry, :, :] = 0.0
     x_host[src, dst_ordinal, entry, :valid_rows, :] = value
-
-
-def _make_rectangular_inputs(config: PushInboxConfig) -> HostInputs:
-    x_host = np.zeros(
-        (config.ep_size, config.traffic_fanout, config.entries_per_rank, config.block_m, config.hidden_dim),
-        dtype=np.float32,
-    )
-    send_meta = np.zeros((config.ep_size, config.traffic_fanout, config.entries_per_rank, META_FIELDS), dtype=np.int32)
-    for src in range(config.ep_size):
-        for dst in _destination_ranks(config, src):
-            dst_ordinal = _dst_ordinal(config, src, dst)
-            for entry in range(config.entries_per_rank):
-                expert = entry % config.experts_per_rank
-                dst_row_start = config.host_dst_row_start(src, entry)
-                send_meta[src, dst_ordinal, entry, :] = (src, expert, dst_row_start, config.block_m)
-                _fill_block(x_host, src, dst_ordinal, entry, config.block_m)
-
-    recv_meta = _recv_meta_from_send_meta(config, send_meta)
-    stats = _queue_stats(config, send_meta)
-    stats["dropped_entries_total"] = 0
-    stats["dropped_rows_total"] = 0
-    return HostInputs(x=x_host, send_meta=send_meta, recv_meta=recv_meta, queue_stats=stats)
 
 
 def _routing_counts(config: PushInboxConfig) -> np.ndarray:
@@ -2333,11 +1201,6 @@ def _make_source_tokens(config: PushInboxConfig, src: int) -> np.ndarray:
 
 def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
     """Build source-push queue inputs from the compact expert-sorted routing layout."""
-    if config.queue_mode != "routing":
-        raise ValueError("compact routing smoke requires queue_mode=routing")
-    if config.traffic_pattern != "all_to_all":
-        raise ValueError("compact routing smoke currently requires traffic_pattern=all_to_all")
-
     counts = _routing_counts(config)
     _, expert_base, src_base = _routing_row_bases(config, counts)
     global_experts = config.ep_size * config.experts_per_rank
@@ -2396,10 +1259,7 @@ def _make_compact_routing_inputs(config: PushInboxConfig) -> HostInputs:
 
 
 def _make_host_inputs(config: PushInboxConfig) -> HostInputs:
-    if config.queue_mode == "routing":
-        host_inputs = _make_routing_inputs(config)
-    else:
-        host_inputs = _make_rectangular_inputs(config)
+    host_inputs = _make_routing_inputs(config)
     host_inputs.queue_stats["input_mode"] = "synthetic_blocks"
     return host_inputs
 
@@ -2554,8 +1414,7 @@ def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -
     send_meta = np.asarray(send_meta_host, dtype=np.int32)
     w_float = np.asarray(w_host, dtype=np.float32)
     for src in range(config.ep_size):
-        dsts = range(config.ep_size) if config.traffic_pattern == "all_to_all" else ((src + 1) % config.ep_size,)
-        for dst in dsts:
+        for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
             recv_src_ordinal = _recv_src_ordinal(config, dst, src)
             for entry in range(config.entries_per_rank):
@@ -2577,8 +1436,7 @@ def _hidden_live_row_mask(config: PushInboxConfig, send_meta_host) -> np.ndarray
     mask = np.zeros((config.ep_size, config.hidden_rows_per_rank), dtype=np.bool_)
     send_meta = np.asarray(send_meta_host, dtype=np.int32)
     for src in range(config.ep_size):
-        dsts = range(config.ep_size) if config.traffic_pattern == "all_to_all" else ((src + 1) % config.ep_size,)
-        for dst in dsts:
+        for dst in range(config.ep_size):
             dst_ordinal = _dst_ordinal(config, src, dst)
             recv_src_ordinal = _recv_src_ordinal(config, dst, src)
             for entry in range(config.entries_per_rank):
@@ -2605,7 +1463,6 @@ def _validate(
     hidden,
 ) -> ValidationMetrics:
     inbox_host = np.asarray(inbox, dtype=np.float32)
-    meta_host = np.asarray(meta, dtype=np.int32)
     seen_payload_host = np.asarray(seen_payload, dtype=np.float32)
     seen_meta_host = np.asarray(seen_meta, dtype=np.int32)
     x_expected = np.asarray(x_host, dtype=np.float32)
@@ -2627,21 +1484,16 @@ def _validate(
                         float(np.max(np.abs(seen_payload_host[dst, src, entry] - expected_payload))),
                     )
                     metadata_mismatches += int(np.sum(seen_meta_host[dst, src, entry, :] != expected_meta))
-            if config.direct_self_compute and src == dst:
-                continue
             for slot in range(min(config.inbox_slots, live_entries)):
                 entry = slot + ((live_entries - 1 - slot) // config.inbox_slots) * config.inbox_slots
                 observed = inbox_host[dst, src, slot, :, :]
                 expected = x_expected[src, dst_ordinal, entry, :, :]
                 max_abs_diff = max(max_abs_diff, float(np.max(np.abs(observed - expected))))
-                if config.metadata_mode == "remote_slot":
-                    expected_meta = send_meta_expected[src, dst_ordinal, entry, :]
-                    metadata_mismatches += int(np.sum(meta_host[dst, src, slot, :] != expected_meta))
     hidden_max_abs_diff = None
     hidden_mean_abs_diff = None
     hidden_all_max_abs_diff = None
     hidden_unwritten_max_abs = None
-    if config.implementation in ("m_owner", "m_owner_slots", "m_n_slots"):
+    if config.implementation == "m_n_slots":
         hidden_expected = _reference_hidden(config, x_host, send_meta_host, w_host)
         hidden_diff = np.abs(np.asarray(hidden, dtype=np.float32) - hidden_expected)
         hidden_all_max_abs_diff = float(np.max(hidden_diff))
@@ -2857,22 +1709,6 @@ def _parse_int_csv(value: str) -> tuple[int, ...]:
     return values
 
 
-def _parse_scan_candidates(value: str) -> int:
-    if value == "all":
-        return 0
-    parsed = int(value)
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("scan candidates must be non-negative or 'all'")
-    return parsed
-
-
-def _parse_scan_candidates_csv(value: str) -> tuple[int, ...]:
-    values = tuple(_parse_scan_candidates(part) for part in value.split(",") if part)
-    if not values:
-        raise argparse.ArgumentTypeError("expected a comma-separated list of integers or 'all'")
-    return values
-
-
 def _parse_choice_csv(value: str, choices: tuple[str, ...], name: str) -> tuple[str, ...]:
     values = tuple(part for part in value.split(",") if part)
     if not values:
@@ -2881,18 +1717,6 @@ def _parse_choice_csv(value: str, choices: tuple[str, ...], name: str) -> tuple[
     if unknown:
         raise argparse.ArgumentTypeError(f"unknown {name} values {unknown}; expected one of {choices}")
     return values
-
-
-def _parse_receiver_schedule_csv(value: str) -> tuple[str, ...]:
-    return _parse_choice_csv(value, RECEIVER_SCHEDULES, "receiver_schedule")
-
-
-def _parse_scan_order_csv(value: str) -> tuple[str, ...]:
-    return _parse_choice_csv(value, SCAN_ORDERS, "scan_order")
-
-
-def _parse_slot_order_csv(value: str) -> tuple[str, ...]:
-    return _parse_choice_csv(value, SLOT_ORDERS, "slot_order")
 
 
 def _parse_hidden_output_mode_csv(value: str) -> tuple[str, ...]:
@@ -2919,7 +1743,7 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-push-profile", choices=SOURCE_PUSH_PROFILES, default="none")
-    parser.add_argument("--implementation", choices=IMPLEMENTATIONS, default=default("implementation", "send_only"))
+    parser.add_argument("--implementation", choices=IMPLEMENTATIONS, default=default("implementation", "m_n_slots"))
     parser.add_argument("--ep-size", type=int, default=default("ep_size", 8))
     parser.add_argument("--entries-per-rank", type=int, default=default("entries_per_rank", 2))
     parser.add_argument("--sweep-entries-per-rank", type=_parse_int_csv, default=None)
@@ -2945,15 +1769,6 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument(
         "--lowering-semantics", choices=tuple(LOWERING_SEMANTICS), default=default("lowering_semantics", "lane")
     )
-    parser.add_argument("--traffic-pattern", choices=TRAFFIC_PATTERNS, default=default("traffic_pattern", "next_rank"))
-    parser.add_argument("--peer-loop", choices=PEER_LOOP_MODES, default=default("peer_loop", "static"))
-    parser.add_argument(
-        "--compute-pipeline", choices=COMPUTE_PIPELINE_MODES, default=default("compute_pipeline", "manual")
-    )
-    parser.add_argument("--max-concurrent-steps", type=int, default=default("max_concurrent_steps", 4))
-    parser.add_argument("--sweep-max-concurrent-steps", type=_parse_int_csv, default=None)
-    parser.add_argument("--queue-mode", choices=QUEUE_MODES, default=default("queue_mode", "rectangular"))
-    parser.add_argument("--metadata-mode", choices=METADATA_MODES, default=default("metadata_mode", "static_recv"))
     parser.add_argument("--output-mode", choices=OUTPUT_MODES, default=default("output_mode", "debug"))
     parser.add_argument(
         "--hidden-output-mode", choices=HIDDEN_OUTPUT_MODES, default=default("hidden_output_mode", "full")
@@ -2965,27 +1780,10 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument("--sweep-hidden-compute-mode", type=_parse_hidden_compute_mode_csv, default=None)
     parser.add_argument("--n-groups-per-job", type=int, default=default("n_groups_per_job", 1))
     parser.add_argument("--sweep-n-groups-per-job", type=_parse_int_csv, default=None)
-    parser.add_argument(
-        "--receiver-schedule", choices=RECEIVER_SCHEDULES, default=default("receiver_schedule", "fixed_wait")
-    )
-    parser.add_argument("--sweep-receiver-schedule", type=_parse_receiver_schedule_csv, default=None)
-    parser.add_argument("--scan-candidates", type=_parse_scan_candidates, default=default("scan_candidates", 8))
-    parser.add_argument("--sweep-scan-candidates", type=_parse_scan_candidates_csv, default=None)
-    parser.add_argument("--scan-order", choices=SCAN_ORDERS, default=default("scan_order", "rotated"))
-    parser.add_argument("--sweep-scan-order", type=_parse_scan_order_csv, default=None)
-    parser.add_argument("--slot-order", choices=SLOT_ORDERS, default=default("slot_order", "current"))
-    parser.add_argument("--sweep-slot-order", type=_parse_slot_order_csv, default=None)
-    parser.add_argument("--workers-per-slot", type=int, default=default("workers_per_slot", 1))
-    parser.add_argument("--sweep-workers-per-slot", type=_parse_int_csv, default=None)
-    parser.add_argument("--source-push-mode", choices=SOURCE_PUSH_MODES, default=default("source_push_mode", "packed"))
-    parser.add_argument("--inbox-storage", choices=INBOX_STORAGE_MODES, default=default("inbox_storage", "output"))
     parser.add_argument("--routing", choices=ROUTING_MODES, default=default("routing", "balanced"))
     parser.add_argument("--tokens-per-rank", type=int, default=default("tokens_per_rank", 32768))
     parser.add_argument("--topk", type=int, default=default("topk", 4))
     parser.add_argument("--routing-seed", type=int, default=default("routing_seed", 0))
-    parser.add_argument(
-        "--direct-self-compute", action=argparse.BooleanOptionalAction, default=default("direct_self_compute", False)
-    )
     parser.add_argument("--warmup", type=int, default=default("warmup", 1))
     parser.add_argument("--steps", type=int, default=default("steps", 5))
     parser.add_argument("--repeat-runs", type=int, default=default("repeat_runs", 1))
@@ -3019,14 +1817,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     send_pipeline_depth_values = args.sweep_send_pipeline_depth or (args.send_pipeline_depth,)
     n_group_values = args.sweep_n_groups or (args.n_group,)
     n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
-    max_concurrent_steps_values = args.sweep_max_concurrent_steps or (args.max_concurrent_steps,)
-    receiver_schedule_values = args.sweep_receiver_schedule or (args.receiver_schedule,)
-    scan_candidates_values = args.sweep_scan_candidates or (args.scan_candidates,)
-    scan_order_values = args.sweep_scan_order or (args.scan_order,)
-    slot_order_values = args.sweep_slot_order or (args.slot_order,)
     hidden_output_mode_values = args.sweep_hidden_output_mode or (args.hidden_output_mode,)
     hidden_compute_mode_values = args.sweep_hidden_compute_mode or (args.hidden_compute_mode,)
-    workers_per_slot_values = args.sweep_workers_per_slot or (args.workers_per_slot,)
     if args.jsonl:
         jsonl_dir = os.path.dirname(args.jsonl)
         if jsonl_dir:
@@ -3042,77 +1834,53 @@ def main(argv: Sequence[str] | None = None) -> None:
                                 for send_pipeline_depth in send_pipeline_depth_values:
                                     for n_group in n_group_values:
                                         for n_groups_per_job in n_groups_per_job_values:
-                                            for max_concurrent_steps in max_concurrent_steps_values:
-                                                for receiver_schedule in receiver_schedule_values:
-                                                    for scan_candidates in scan_candidates_values:
-                                                        for scan_order in scan_order_values:
-                                                            for slot_order in slot_order_values:
-                                                                for hidden_output_mode in hidden_output_mode_values:
-                                                                    for (
-                                                                        hidden_compute_mode
-                                                                    ) in hidden_compute_mode_values:
-                                                                        for (
-                                                                            workers_per_slot
-                                                                        ) in workers_per_slot_values:
-                                                                            config = PushInboxConfig(
-                                                                                implementation=args.implementation,
-                                                                                ep_size=args.ep_size,
-                                                                                entries_per_rank=entries_per_rank,
-                                                                                inbox_slots=inbox_slots,
-                                                                                hidden_dim=args.hidden_dim,
-                                                                                intermediate_dim=args.intermediate_dim,
-                                                                                block_m=block_m,
-                                                                                block_n=block_n,
-                                                                                block_k=block_k,
-                                                                                n_group=n_group,
-                                                                                n_groups_per_job=n_groups_per_job,
-                                                                                receiver_schedule=receiver_schedule,
-                                                                                scan_candidates=scan_candidates,
-                                                                                scan_order=scan_order,
-                                                                                slot_order=slot_order,
-                                                                                workers_per_slot=workers_per_slot,
-                                                                                source_push_mode=args.source_push_mode,
-                                                                                inbox_storage=args.inbox_storage,
-                                                                                experts_per_rank=args.experts_per_rank,
-                                                                                num_send_sms=num_send_sms,
-                                                                                num_sms=num_sms,
-                                                                                send_pipeline_depth=send_pipeline_depth,
-                                                                                lowering_semantics=args.lowering_semantics,
-                                                                                traffic_pattern=args.traffic_pattern,
-                                                                                peer_loop=args.peer_loop,
-                                                                                compute_pipeline=args.compute_pipeline,
-                                                                                max_concurrent_steps=max_concurrent_steps,
-                                                                                queue_mode=args.queue_mode,
-                                                                                metadata_mode=args.metadata_mode,
-                                                                                output_mode=args.output_mode,
-                                                                                hidden_output_mode=hidden_output_mode,
-                                                                                hidden_compute_mode=hidden_compute_mode,
-                                                                                routing=args.routing,
-                                                                                tokens_per_rank=args.tokens_per_rank,
-                                                                                topk=args.topk,
-                                                                                routing_seed=args.routing_seed,
-                                                                                direct_self_compute=args.direct_self_compute,
-                                                                            )
-                                                                            rows = run_source_push_inbox(
-                                                                                config,
-                                                                                warmup=args.warmup,
-                                                                                steps=args.steps,
-                                                                                repeat_runs=args.repeat_runs,
-                                                                                check=args.check,
-                                                                                debug_exceptions=args.debug_exceptions,
-                                                                                separate_compile=args.separate_compile,
-                                                                                progress_events=args.progress_events,
-                                                                            )
-                                                                            for row in rows:
-                                                                                line = json.dumps(row, sort_keys=True)
-                                                                                print(line, flush=True)
-                                                                                if args.jsonl:
-                                                                                    with open(
-                                                                                        args.jsonl,
-                                                                                        "a",
-                                                                                        encoding="utf-8",
-                                                                                    ) as f:
-                                                                                        print(line, file=f, flush=True)
+                                            for hidden_output_mode in hidden_output_mode_values:
+                                                for hidden_compute_mode in hidden_compute_mode_values:
+                                                    config = PushInboxConfig(
+                                                        implementation=args.implementation,
+                                                        ep_size=args.ep_size,
+                                                        entries_per_rank=entries_per_rank,
+                                                        inbox_slots=inbox_slots,
+                                                        hidden_dim=args.hidden_dim,
+                                                        intermediate_dim=args.intermediate_dim,
+                                                        block_m=block_m,
+                                                        block_n=block_n,
+                                                        block_k=block_k,
+                                                        n_group=n_group,
+                                                        n_groups_per_job=n_groups_per_job,
+                                                        experts_per_rank=args.experts_per_rank,
+                                                        num_send_sms=num_send_sms,
+                                                        num_sms=num_sms,
+                                                        send_pipeline_depth=send_pipeline_depth,
+                                                        lowering_semantics=args.lowering_semantics,
+                                                        output_mode=args.output_mode,
+                                                        hidden_output_mode=hidden_output_mode,
+                                                        hidden_compute_mode=hidden_compute_mode,
+                                                        routing=args.routing,
+                                                        tokens_per_rank=args.tokens_per_rank,
+                                                        topk=args.topk,
+                                                        routing_seed=args.routing_seed,
+                                                    )
+                                                    rows = run_source_push_inbox(
+                                                        config,
+                                                        warmup=args.warmup,
+                                                        steps=args.steps,
+                                                        repeat_runs=args.repeat_runs,
+                                                        check=args.check,
+                                                        debug_exceptions=args.debug_exceptions,
+                                                        separate_compile=args.separate_compile,
+                                                        progress_events=args.progress_events,
+                                                    )
+                                                    for row in rows:
+                                                        line = json.dumps(row, sort_keys=True)
+                                                        print(line, flush=True)
+                                                        if args.jsonl:
+                                                            with open(
+                                                                args.jsonl,
+                                                                "a",
+                                                                encoding="utf-8",
+                                                            ) as f:
+                                                                print(line, file=f, flush=True)
 
 
 if __name__ == "__main__":
