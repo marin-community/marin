@@ -125,6 +125,9 @@ class GrugModelConfig:
     moe_up_fixed_scale: float | None = None
     """Fixed (non-learnable) multiplier applied to the routed output after ``moe_up``.
     Compensates the init-time RMS shrink of the up-projection."""
+    routing_renorm_sum: float = _ROUTING_RENORM_SUM
+    """Sum the top-k combine weights are renormalized to (default 2.5). Scaling this up
+    scales the routed contribution to the residual proportionally."""
     moe_down_init_std: float | None = None
     """Override the init std of ``moe_down``. None uses ``initializer_std`` (0.5/sqrt(D))."""
     moe_up_init_std: float | None = None
@@ -806,9 +809,9 @@ class MoEMLP(eqx.Module):
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        # Renormalize K combine weights to sum to ``cfg.routing_renorm_sum`` (default 2.5).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
