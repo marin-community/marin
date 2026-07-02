@@ -193,7 +193,7 @@ def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> t
 
 
 def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
-    if "model" not in mesh.shape or int(mesh.shape["model"]) != 1:
+    if "model" not in mesh.shape:
         return None
     return "model"
 

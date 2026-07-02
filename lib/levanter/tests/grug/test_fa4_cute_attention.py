@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from jax.sharding import AxisType, Mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
@@ -143,6 +143,12 @@ def test_fa4_frontend_enters_shard_map_before_ffi(monkeypatch):
         )
 
     assert any(eqn.primitive.name == "shard_map" for eqn in traced.jaxpr.eqns)
+
+
+def test_fa4_head_axis_uses_nontrivial_model_axis():
+    mesh = AbstractMesh((1, 1, 1, 2), ("replica_dcn", "data", "expert", "model"))
+
+    assert fa4_cute._head_axis(mesh) == "model"
 
 
 def test_fa4_forward_backend_does_not_pass_valid_to_forward_launcher(monkeypatch):
