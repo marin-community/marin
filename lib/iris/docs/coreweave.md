@@ -188,12 +188,52 @@ spec:
             backend: {service: {name: iris-controller-svc, port: {number: 10000}}}
 ```
 
-It needs an ingress controller (e.g. `ingress-nginx`) and, for `tls_secret`, a
-TLS secret for the host; point the cluster's `dashboard_url` at
-`public_proxy_host` so `marin-serve`'s printed off-cluster URLs and the `BEARER`
-token are usable as-is. A plain `type: LoadBalancer` Service on the controller
-port would be simpler but exposes the whole origin (RPC surface included,
-JWT-gated only) — the path-restricted Ingress keeps only `/proxy` public.
+A plain `type: LoadBalancer` Service on the controller port would be simpler but
+exposes the whole origin (RPC surface included, JWT-gated only) — the
+path-restricted Ingress keeps only `/proxy` public.
+
+#### Prerequisite, external IP, and DNS
+
+Unlike the GCP arm (a reserved static IP on the shared GCLB), CoreWeave has no
+in-repo LB/DNS automation. The external address is served by the **ingress
+controller's own LoadBalancer**, not the controller Pod — so an ingress
+controller (e.g. `ingress-nginx`, exposed as a `Service type=LoadBalancer`) must
+be installed and provide the configured `ingress_class`. `start_controller`
+**warns** if that `IngressClass` is absent (the Ingress is applied anyway and
+serves once a controller appears); it never blocks controller startup.
+
+Find the external address the LB assigned, then point DNS at it:
+
+```bash
+# Verify a controller exists and provides the class:
+kubectl get ingressclass
+kubectl get pods -A | grep -i ingress
+
+# The address the ingress controller's LoadBalancer assigned:
+kubectl get ingress iris-controller-proxy -n iris -o wide
+kubectl get ingress iris-controller-proxy -n iris \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
+# or straight from the controller's LB Service:
+kubectl get svc -A -l app.kubernetes.io/name=ingress-nginx   # EXTERNAL-IP column
+```
+
+`oa.dev` DNS is hosted at **Namecheap** (Advanced DNS panel, or their API). Add a
+record for `public_proxy_host`:
+
+- LB gave an **IP** → an **A** record `iris-cw.oa.dev → <ip>`.
+- LB gave a **hostname** → a **CNAME** `iris-cw.oa.dev → <lb-hostname>` (prefer
+  this — it survives LB IP churn; CoreWeave LB IPs are not reserved by default).
+
+Three values must agree: this DNS record, `public_proxy_host`, and the cluster's
+`dashboard_url` (so `marin-serve`'s printed off-cluster URLs + the `BEARER` token
+are usable as-is).
+
+**TLS terminates in-cluster** (there is no IAP/edge layer and Namecheap does not
+proxy/terminate TLS). Populate `tls_secret` with a cert for the host — e.g. via
+`cert-manager` issuing Let's Encrypt certs (DNS-01 through the Namecheap API, or
+HTTP-01 through the same ingress). Leave `tls_secret` empty for plain HTTP (dev
+only). Rate-limiting is not provided at a DNS edge here; add it at the ingress
+controller if needed.
 
 ## 3. Tools
 

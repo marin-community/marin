@@ -443,10 +443,16 @@ class CoreweaveControllerConfig(_Config):
     # creates an Ingress that publishes ONLY the /proxy path off-cluster (the
     # dashboard and RPC surface stay ClusterIP-internal). CoreWeave has no IAP
     # layer, so the controller's own per-endpoint auth is the sole gate — keep
-    # auth.provider set. Empty host = no ingress (ClusterIP only).
+    # auth.provider set. Requires an ingress controller (Traefik, CoreWeave's
+    # blessed one) + cert-manager — install them with scripts/install_cw.py.
+    # Empty host = no ingress (ClusterIP only). See docs/coreweave.md.
     public_proxy_host: str = ""
-    ingress_class: str = "nginx"  # ingressClassName for the /proxy ingress
-    tls_secret: str = ""  # TLS secret for public_proxy_host; empty = no TLS block
+    ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
+    tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host
+    # cert-manager ClusterIssuer. When set, the Ingress is annotated
+    # cert-manager.io/cluster-issuer=<name> so cert-manager auto-issues the cert
+    # into tls_secret. Empty = bring your own cert in tls_secret (or no TLS).
+    cluster_issuer: str = ""
 
 
 class ControllerVmConfig(_OneofConfig):

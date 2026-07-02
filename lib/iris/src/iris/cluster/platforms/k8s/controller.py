@@ -22,7 +22,13 @@ import s3fs
 from rigging.timing import Deadline
 
 from iris.cluster.backends.types import InfraError, Labels, local_queue_name
-from iris.cluster.config import ControllerVmConfig, CoreweavePlatformConfig, IrisClusterConfig, config_to_dict
+from iris.cluster.config import (
+    ControllerVmConfig,
+    CoreweaveControllerConfig,
+    CoreweavePlatformConfig,
+    IrisClusterConfig,
+    config_to_dict,
+)
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -234,14 +240,30 @@ _CONTROLLER_PROXY_INGRESS_NAME = "iris-controller-proxy"
 
 
 def _build_controller_proxy_ingress(
-    *, namespace: str, service_name: str, port: int, host: str, ingress_class: str, tls_secret: str
+    *,
+    namespace: str,
+    service_name: str,
+    port: int,
+    host: str,
+    ingress_class: str,
+    tls_secret: str,
+    cluster_issuer: str,
 ) -> dict:
     """Build the Ingress that publishes ONLY the controller's ``/proxy`` path.
 
     The dashboard and RPC surface stay ClusterIP-internal — only ``/proxy`` is
     routed in. CoreWeave has no IAP layer, so the controller's own per-endpoint
     auth (PRIVATE/PUBLIC/BEARER) is the sole gate for that path.
+
+    Ingress-controller-agnostic: no controller-specific annotations. Traefik (the
+    default class) streams responses without buffering, so vLLM SSE works out of
+    the box; raise long-request timeouts at the Traefik entrypoint if needed.
+    When ``cluster_issuer`` is set, cert-manager auto-issues the TLS cert into
+    ``tls_secret``.
     """
+    metadata: dict = {"name": _CONTROLLER_PROXY_INGRESS_NAME, "namespace": namespace}
+    if cluster_issuer:
+        metadata["annotations"] = {"cert-manager.io/cluster-issuer": cluster_issuer}
     spec: dict = {
         "ingressClassName": ingress_class,
         "rules": [
@@ -261,20 +283,7 @@ def _build_controller_proxy_ingress(
     }
     if tls_secret:
         spec["tls"] = [{"hosts": [host], "secretName": tls_secret}]
-    return {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "Ingress",
-        "metadata": {
-            "name": _CONTROLLER_PROXY_INGRESS_NAME,
-            "namespace": namespace,
-            # Stream vLLM SSE without buffering; long reads for inference.
-            "annotations": {
-                "nginx.ingress.kubernetes.io/proxy-buffering": "off",
-                "nginx.ingress.kubernetes.io/proxy-read-timeout": "3600",
-            },
-        },
-        "spec": spec,
-    }
+    return {"apiVersion": "networking.k8s.io/v1", "kind": "Ingress", "metadata": metadata, "spec": spec}
 
 
 # ============================================================================
@@ -423,18 +432,7 @@ class K8sControllerProvider:
         # the controller stays ClusterIP-internal; the controller's per-endpoint
         # auth gates /proxy (CoreWeave has no IAP layer). Idempotent apply.
         if cw.public_proxy_host:
-            ingress_manifest = _build_controller_proxy_ingress(
-                namespace=self._namespace,
-                service_name=service_name,
-                port=port,
-                host=cw.public_proxy_host,
-                ingress_class=cw.ingress_class,
-                tls_secret=cw.tls_secret,
-            )
-            self._kubectl.apply_json(ingress_manifest)
-            logger.info(
-                "Controller /proxy Ingress %s applied (host=%s)", _CONTROLLER_PROXY_INGRESS_NAME, cw.public_proxy_host
-            )
+            self._apply_proxy_ingress(cw, service_name=service_name, port=port)
 
         pdb_manifest = {
             "apiVersion": "policy/v1",
@@ -455,6 +453,46 @@ class K8sControllerProvider:
             self._persist_deployment_without_fresh(deploy_kwargs)
 
         return self.discover_controller(config.controller)
+
+    def _apply_proxy_ingress(self, cw: CoreweaveControllerConfig, *, service_name: str, port: int) -> None:
+        """Apply the /proxy Ingress and validate its prerequisites.
+
+        The external address is served by the ingress controller's own
+        LoadBalancer, not the controller Pod, so this warns (rather than fails)
+        when the configured ``IngressClass`` is absent: the Ingress is still
+        applied and starts serving once a controller providing that class exists.
+        A missing ingress controller must not block the controller itself, which
+        is fine on its ClusterIP Service.
+        """
+        if self._kubectl.get_json(K8sResource.INGRESS_CLASSES, cw.ingress_class) is None:
+            logger.warning(
+                "IngressClass %r not found — the /proxy Ingress %s will stay pending (no external "
+                "address) until an ingress controller providing that class is installed (e.g. "
+                "ingress-nginx exposed as a LoadBalancer Service).",
+                cw.ingress_class,
+                _CONTROLLER_PROXY_INGRESS_NAME,
+            )
+        ingress_manifest = _build_controller_proxy_ingress(
+            namespace=self._namespace,
+            service_name=service_name,
+            port=port,
+            host=cw.public_proxy_host,
+            ingress_class=cw.ingress_class,
+            tls_secret=cw.tls_secret,
+            cluster_issuer=cw.cluster_issuer,
+        )
+        self._kubectl.apply_json(ingress_manifest)
+        logger.info(
+            "Controller /proxy Ingress %s applied (host=%s). Point DNS for %s at the ingress "
+            "controller's LoadBalancer external IP/hostname (kubectl get ingress %s -n %s -o wide); "
+            "TLS terminates in-cluster via the %s secret.",
+            _CONTROLLER_PROXY_INGRESS_NAME,
+            cw.public_proxy_host,
+            cw.public_proxy_host,
+            _CONTROLLER_PROXY_INGRESS_NAME,
+            self._namespace,
+            cw.tls_secret or "(none configured)",
+        )
 
     def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:
         """Re-apply the controller Deployment with ``--fresh`` stripped from the pod command.

@@ -45,6 +45,7 @@ class K8sResource(Enum):
 
     # Networking v1
     INGRESSES = ("networking.k8s.io", "v1", True, "ingresses", "Ingress")
+    INGRESS_CLASSES = ("networking.k8s.io", "v1", False, "ingressclasses", "IngressClass")
 
     # Policy v1
     PDBS = ("policy", "v1", True, "poddisruptionbudgets", "PodDisruptionBudget")
