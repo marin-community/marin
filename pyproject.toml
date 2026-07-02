@@ -10,14 +10,11 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     # workspaces
-    "marin-iris",
-    "marin-fray",
-    "marin-haliax",
-    "marin-levanter",
-    "marin-core",
-    "marin-rigging",
-    "marin-zephyr",
     "marin-buoy",
+    "marin-core",
+    # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
+    # a workspace member so service fixes land without a wheel republish.
+    "marin-ducky",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
@@ -26,9 +23,12 @@ dependencies = [
     # marin-iris, which depends on it explicitly. `scripts/rust_mode.py dev` swaps
     # marin-finelog-server to a local source build.
     "marin-finelog",
-    # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
-    # a workspace member so service fixes land without a wheel republish.
-    "marin-ducky",
+    "marin-fray",
+    "marin-haliax",
+    "marin-iris",
+    "marin-levanter",
+    "marin-rigging",
+    "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
     # marin-dupekit is a native (maturin) package shipped as pre-built platform
@@ -122,16 +122,16 @@ conflicts = [
 
 [tool.uv.workspace]
 members = [
-    "lib/iris",
-    "lib/fray",
-    "lib/finelog",
+    "lib/buoy",
     "lib/ducky",
+    "lib/finelog",
+    "lib/fray",
     "lib/haliax",
+    "lib/iris",
     "lib/levanter",
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
-    "lib/buoy",
 ]
 # lib/finelog/rust (marin-finelog-server, maturin) is NOT a member: the native
 # log-server ext is consumed as a pre-built wheel by default and only built from
@@ -150,16 +150,16 @@ vllm = [
 ]
 
 [tool.uv.sources]
-marin-iris = { workspace = true }
-marin-fray = { workspace = true }
-marin-finelog = { workspace = true }
-marin-ducky = { workspace = true }
-marin-haliax = { workspace = true }
-marin-levanter = { workspace = true }
+marin-buoy = { workspace = true }
 marin-core = { workspace = true }
+marin-ducky = { workspace = true }
+marin-finelog = { workspace = true }
+marin-fray = { workspace = true }
+marin-haliax = { workspace = true }
+marin-iris = { workspace = true }
+marin-levanter = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
-marin-buoy = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
