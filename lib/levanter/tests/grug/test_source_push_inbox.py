@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 
 import levanter.grug._moe.source_push_inbox as source_push_inbox
@@ -96,3 +98,26 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     assert rows[0]["error_type"] == "ValueError"
     assert rows[0]["kernel"] == "source_push_inbox"
     assert rows[0]["repeat_runs"] == 1
+
+
+def test_source_push_cli_runs_every_workers_per_slot_sweep_value(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_inbox(config, **kwargs):
+        calls.append((config.workers_per_slot, kwargs["repeat_runs"]))
+        return [{"workers_per_slot": config.workers_per_slot, "repeat_runs": kwargs["repeat_runs"]}]
+
+    monkeypatch.setattr(source_push_inbox, "run_source_push_inbox", fake_run_source_push_inbox)
+
+    source_push_inbox.main(
+        [
+            "--sweep-workers-per-slot",
+            "1,2",
+            "--repeat-runs",
+            "1",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [(1, 1), (2, 1)]
+    assert [row["workers_per_slot"] for row in rows] == [1, 2]

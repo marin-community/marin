@@ -2958,24 +2958,26 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                                                 routing_seed=args.routing_seed,
                                                                                 direct_self_compute=args.direct_self_compute,
                                                                             )
-                                                                        rows = run_source_push_inbox(
-                                                                            config,
-                                                                            warmup=args.warmup,
-                                                                            steps=args.steps,
-                                                                            repeat_runs=args.repeat_runs,
-                                                                            check=args.check,
-                                                                            debug_exceptions=args.debug_exceptions,
-                                                                            separate_compile=args.separate_compile,
-                                                                            progress_events=args.progress_events,
-                                                                        )
-                                                                        for row in rows:
-                                                                            line = json.dumps(row, sort_keys=True)
-                                                                            print(line, flush=True)
-                                                                            if args.jsonl:
-                                                                                with open(
-                                                                                    args.jsonl, "a", encoding="utf-8"
-                                                                                ) as f:
-                                                                                    print(line, file=f, flush=True)
+                                                                            rows = run_source_push_inbox(
+                                                                                config,
+                                                                                warmup=args.warmup,
+                                                                                steps=args.steps,
+                                                                                repeat_runs=args.repeat_runs,
+                                                                                check=args.check,
+                                                                                debug_exceptions=args.debug_exceptions,
+                                                                                separate_compile=args.separate_compile,
+                                                                                progress_events=args.progress_events,
+                                                                            )
+                                                                            for row in rows:
+                                                                                line = json.dumps(row, sort_keys=True)
+                                                                                print(line, flush=True)
+                                                                                if args.jsonl:
+                                                                                    with open(
+                                                                                        args.jsonl,
+                                                                                        "a",
+                                                                                        encoding="utf-8",
+                                                                                    ) as f:
+                                                                                        print(line, file=f, flush=True)
 
 
 if __name__ == "__main__":
