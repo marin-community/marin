@@ -1,7 +1,8 @@
 # Iris production configuration for Marin cluster
 # Usage: uv run iris --cluster=marin cluster start
 
-log_server_config: marin
+finelog:
+  config: marin
 dashboard_url: https://iris.oa.dev
 
 platform:

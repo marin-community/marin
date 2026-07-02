@@ -248,7 +248,7 @@ Get a profile for a task — open the dashboard task page and use the "Profile h
 
 Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
 
-Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `log_server_config`):
+Query the namespace directly with the finelog CLI (opens a tunnel to the cluster's finelog deployment named by `finelog.config`):
 
 ```bash
 cd lib/finelog

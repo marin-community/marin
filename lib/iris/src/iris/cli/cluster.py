@@ -448,19 +448,18 @@ def cluster_restart(ctx):
 
 @cluster.group("log-server")
 def log_server() -> None:
-    """Manage the log server referenced by this cluster's log_server_config."""
+    """Manage the log server referenced by this cluster's finelog.config."""
 
 
 def _require_log_server_config(ctx: click.Context) -> str:
     cfg = ctx.obj.get("config")
     if cfg is None:
         raise click.ClickException("--config is required for cluster log-server commands")
-    if not cfg.log_server_config:
+    if not cfg.finelog.config:
         raise click.ClickException(
-            "cluster does not declare log_server_config; "
-            "set it or manage the log server via `finelog deploy` directly"
+            "cluster does not declare finelog.config; " "set it or manage the log server via `finelog deploy` directly"
         )
-    return cfg.log_server_config
+    return cfg.finelog.config
 
 
 @log_server.command("up")

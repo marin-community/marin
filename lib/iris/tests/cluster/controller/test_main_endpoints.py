@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-from iris.cluster.config import EndpointSpec, IrisClusterConfig
+from iris.cluster.config import ClusterFinelogConfig, EndpointSpec, IrisClusterConfig
 from iris.cluster.controller.main import LOG_SERVER_ENDPOINT_NAME, _resolve_cluster_endpoints
 
 
@@ -39,7 +39,7 @@ def _write_finelog_config(path: Path, body: dict) -> None:
     path.write_text(yaml.safe_dump(body))
 
 
-def test_log_server_config_synthesizes_gcp_endpoint(tmp_path: Path):
+def test_finelog_config_synthesizes_gcp_endpoint(tmp_path: Path):
     finelog_path = tmp_path / "test.yaml"
     _write_finelog_config(
         finelog_path,
@@ -57,7 +57,7 @@ def test_log_server_config_synthesizes_gcp_endpoint(tmp_path: Path):
         },
     )
 
-    cfg = IrisClusterConfig(log_server_config=str(finelog_path))
+    cfg = IrisClusterConfig(finelog=ClusterFinelogConfig(config=str(finelog_path)))
 
     fake = subprocess.CompletedProcess(
         args=[],
@@ -72,7 +72,7 @@ def test_log_server_config_synthesizes_gcp_endpoint(tmp_path: Path):
     assert mock_run.call_count == 1
 
 
-def test_log_server_config_synthesizes_k8s_endpoint(tmp_path: Path):
+def test_finelog_config_synthesizes_k8s_endpoint(tmp_path: Path):
     finelog_path = tmp_path / "test.yaml"
     _write_finelog_config(
         finelog_path,
@@ -89,7 +89,7 @@ def test_log_server_config_synthesizes_k8s_endpoint(tmp_path: Path):
         },
     )
 
-    cfg = IrisClusterConfig(log_server_config=str(finelog_path))
+    cfg = IrisClusterConfig(finelog=ClusterFinelogConfig(config=str(finelog_path)))
 
     with patch("iris.cluster.endpoints.subprocess.run") as mock_run:
         resolved = _resolve_cluster_endpoints(cfg)
@@ -98,7 +98,7 @@ def test_log_server_config_synthesizes_k8s_endpoint(tmp_path: Path):
     assert mock_run.call_count == 0
 
 
-def test_log_server_config_with_explicit_endpoint_raises(tmp_path: Path):
+def test_finelog_config_with_explicit_endpoint_raises(tmp_path: Path):
     finelog_path = tmp_path / "test.yaml"
     _write_finelog_config(
         finelog_path,
@@ -112,7 +112,7 @@ def test_log_server_config_with_explicit_endpoint_raises(tmp_path: Path):
     )
 
     cfg = IrisClusterConfig(
-        log_server_config=str(finelog_path),
+        finelog=ClusterFinelogConfig(config=str(finelog_path)),
         endpoints={LOG_SERVER_ENDPOINT_NAME: EndpointSpec(uri="http://logs.example:10001")},
     )
 
@@ -120,8 +120,8 @@ def test_log_server_config_with_explicit_endpoint_raises(tmp_path: Path):
         _resolve_cluster_endpoints(cfg)
 
 
-def test_log_server_config_missing_file_raises():
-    cfg = IrisClusterConfig(log_server_config="definitely-not-a-real-config-name-xyz")
+def test_finelog_config_missing_file_raises():
+    cfg = IrisClusterConfig(finelog=ClusterFinelogConfig(config="definitely-not-a-real-config-name-xyz"))
 
     with pytest.raises(FileNotFoundError):
         _resolve_cluster_endpoints(cfg)

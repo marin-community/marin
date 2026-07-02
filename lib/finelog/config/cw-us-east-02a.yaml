@@ -2,7 +2,7 @@
 #
 # Deployed as an in-cluster k8s Deployment + ClusterIP Service in the `iris`
 # namespace, the same namespace as the iris controller. iris references it from
-# its cluster config via `log_server_config: cw-us-east-02a`, which resolves to
+# its cluster config via `finelog.config: cw-us-east-02a`, which resolves to
 # the endpoint `k8s://finelog-cw-use02a.iris` ->
 # finelog-cw-use02a.iris.svc.cluster.local:10001.
 #
