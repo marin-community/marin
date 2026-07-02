@@ -570,6 +570,13 @@ fallback only.
   `verify_aud=False`, enforce audience at the proxy (§2).
 - **Access + address resolve in one lookup** returning the row, so
   authorization and forwarding cannot disagree (§3).
+- **The public `/proxy` opening is the default on both provider arms** (user
+  decision). GCP: `iap_gclb.py deploy` runs the `public-proxy` stage by default
+  (idempotent; `--no-public-proxy` opts out). CoreWeave: the `/proxy` Ingress is
+  part of `start_controller` — config-driven via `controller.coreweave`
+  (`public_proxy_host`, `ingress_class`, `tls_secret`); an empty host leaves it
+  ClusterIP-only. It publishes only `/proxy`; the controller's per-endpoint auth
+  is the sole gate (no IAP layer on CoreWeave).
 - **Minting stays a separate RPC, not folded into `RegisterEndpoint`** (user
   decision). `MintEndpointToken` keeps its owner-*user* authorization
   (`authorize_resource_owner(row.task_id.user)`); it is not merged into the
@@ -592,6 +599,5 @@ fallback only.
    endpoints" if we ever want it.
 2. **Subdomain form under the public route**: keep `*.proxy.<host>` as a public
    arm too (needs a wildcard cert + URL-map host rule), or restrict the public
-   ingress to path-style `/proxy/*` only initially? I lean path-only first.
-3. **CoreWeave default**: path-restricted Ingress (recommended) vs. plain
-   `LoadBalancer` — do we want a managed cert / DNS story there now or later?
+   ingress to path-style `/proxy/*` only initially? I lean path-only first
+   (shipped path-only).
