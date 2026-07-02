@@ -256,7 +256,16 @@ class ZephyrCoordinator:
     receiving a SHUTDOWN signal.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        chunk_prefix: str,
+        map_cost: ZephyrTaskResources,
+        reduce_cost: ZephyrTaskResources,
+        no_workers_timeout: float = 60.0,
+        heartbeat_timeout: float = 120.0,
+        max_shard_failures: int = MAX_SHARD_FAILURES,
+        max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
+    ) -> None:
         # Task management state
         self._task_queue: deque[ShardTask] = deque()
         self._results: dict[int, TaskResult] = {}
@@ -277,12 +286,12 @@ class ZephyrCoordinator:
         self._task_error_attempts: dict[int, int] = {}
         self._fatal_error: str | None = None
         self._shard_errors: dict[int, list[str]] = {}
-        self._chunk_prefix: str = ""
+        self._chunk_prefix = chunk_prefix
         self._execution_id: str = ""
-        self._no_workers_timeout: float = 60.0
-        self._heartbeat_timeout: float = 120.0
-        self._max_shard_failures: int = MAX_SHARD_FAILURES
-        self._max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+        self._no_workers_timeout = no_workers_timeout
+        self._heartbeat_timeout = heartbeat_timeout
+        self._max_shard_failures = max_shard_failures
+        self._max_shard_infra_failures = max_shard_infra_failures
         # Per-worker in-flight counter snapshots and completed snapshots.
         # Each snapshot carries a monotonic generation so the coordinator
         # can discard stale or out-of-order heartbeats.
@@ -306,15 +315,12 @@ class ZephyrCoordinator:
         self._current_stage: PhysicalStage | None = None
         # Per-task resource cost computed from worker_resources / workers_per_actor.
         # Stored by stage type so _run_worker_stage can bake costs into ShardTasks.
-        self._map_cost: ZephyrTaskResources | None = None
-        self._reduce_cost: ZephyrTaskResources | None = None
-        self._initialized: bool = False
+        self._map_cost = map_cost
+        self._reduce_cost = reduce_cost
         self._pipeline_running: bool = False
 
         # Set at each _start_stage so _log_status can show average throughput since stage start.
         self._stage_monotonic_start: float | None = None
-
-        self._stats_writer: StatsWriter = StatsWriter(None)
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
@@ -326,39 +332,6 @@ class ZephyrCoordinator:
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
 
-    def initialize(
-        self,
-        chunk_prefix: str,
-        coordinator_handle: ActorHandle,
-        map_cost: ZephyrTaskResources,
-        reduce_cost: ZephyrTaskResources,
-        no_workers_timeout: float = 60.0,
-        heartbeat_timeout: float = 120.0,
-        max_shard_failures: int = MAX_SHARD_FAILURES,
-        max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
-    ) -> None:
-        """Initialize coordinator for push-based worker registration.
-
-        Args:
-            chunk_prefix: Storage prefix for intermediate chunks
-            coordinator_handle: Handle to this coordinator actor (passed from context)
-            map_cost: Resource cost deducted per dispatched map task.
-            reduce_cost: Resource cost deducted per dispatched reduce task.
-            no_workers_timeout: Seconds to wait for at least one worker before failing.
-            heartbeat_timeout: Seconds without a worker heartbeat before requeue.
-            max_shard_failures: Per-shard cap on explicit task errors before abort.
-            max_shard_infra_failures: Per-shard cap on infra failures (preemption /
-                heartbeat) observed while the same shard is in flight before abort.
-        """
-        self._chunk_prefix = chunk_prefix
-        self._self_handle = coordinator_handle
-        self._no_workers_timeout = no_workers_timeout
-        self._heartbeat_timeout = heartbeat_timeout
-        self._max_shard_failures = max_shard_failures
-        self._max_shard_infra_failures = max_shard_infra_failures
-        self._map_cost = map_cost
-        self._reduce_cost = reduce_cost
-
         self._stats_writer = StatsWriter.connect()
 
         logger.info("Coordinator initialized")
@@ -368,7 +341,6 @@ class ZephyrCoordinator:
             target=self._coordinator_loop, daemon=True, name="zephyr-coordinator-loop"
         )
         self._coordinator_thread.start()
-        self._initialized = True
 
     def set_worker_group(self, worker_group: Any) -> None:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
@@ -1043,8 +1015,6 @@ class ZephyrCoordinator:
         with self._lock:
             self._current_stage = stage
 
-        if self._map_cost is None or self._reduce_cost is None:
-            raise RuntimeError("ZephyrCoordinator.initialize() must be called before running stages")
         cost = self._map_cost if stage.stage_type == StageType.MAP_WORKER else self._reduce_cost
         tasks = _compute_tasks_from_shards(
             shards,
@@ -1134,12 +1104,6 @@ class ZephyrCoordinator:
         self._stats_writer.close()
 
         logger.info("Coordinator shutdown complete")
-
-    def set_chunk_config(self, prefix: str, execution_id: str) -> None:
-        """Configure chunk storage for this execution."""
-        with self._lock:
-            self._chunk_prefix = prefix
-            self._execution_id = execution_id
 
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
@@ -1562,10 +1526,31 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
 
     client = current_client()
 
+    # Compute per-task resource costs from worker spec and concurrency limits.
+    total = ZephyrTaskResources(
+        cpu=config.worker_resources.cpu,
+        memory=int(humanfriendly.parse_size(config.worker_resources.ram, binary=True)),
+    )
+    map_cost = ZephyrTaskResources(
+        cpu=total.cpu / max(1, config.map_workers_per_actor),
+        memory=total.memory // max(1, config.map_workers_per_actor),
+    )
+    reduce_cost = ZephyrTaskResources(
+        cpu=total.cpu / max(1, config.reduce_workers_per_actor),
+        memory=total.memory // max(1, config.reduce_workers_per_actor),
+    )
+
     # Host coordinator actor in this process (no child job needed)
     coord_name = f"zephyr-{config.name}-p{config.pipeline_id}-coord"
     hosted = client.host_actor(
         ZephyrCoordinator,
+        config.chunk_storage_prefix,
+        map_cost,
+        reduce_cost,
+        config.no_workers_timeout,
+        config.heartbeat_timeout,
+        config.max_shard_failures,
+        config.max_shard_infra_failures,
         name=coord_name,
         actor_config=ActorConfig(max_concurrency=100),
     )
@@ -1575,31 +1560,6 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
     # run on every exit path or the process will stay alive after the main
     # body raises and the Iris task will be stuck RUNNING.
     try:
-        # Compute per-task resource costs from worker spec and concurrency limits.
-        total = ZephyrTaskResources(
-            cpu=config.worker_resources.cpu,
-            memory=int(humanfriendly.parse_size(config.worker_resources.ram, binary=True)),
-        )
-        map_cost = ZephyrTaskResources(
-            cpu=total.cpu / max(1, config.map_workers_per_actor),
-            memory=total.memory // max(1, config.map_workers_per_actor),
-        )
-        reduce_cost = ZephyrTaskResources(
-            cpu=total.cpu / max(1, config.reduce_workers_per_actor),
-            memory=total.memory // max(1, config.reduce_workers_per_actor),
-        )
-
-        coordinator.initialize.remote(
-            config.chunk_storage_prefix,
-            coordinator,
-            map_cost,
-            reduce_cost,
-            config.no_workers_timeout,
-            config.heartbeat_timeout,
-            config.max_shard_failures,
-            config.max_shard_infra_failures,
-        ).result()
-
         # Create workers (child jobs)
         num_shards = config.plan.num_shards
         actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0

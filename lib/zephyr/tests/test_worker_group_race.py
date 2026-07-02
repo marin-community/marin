@@ -18,23 +18,11 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-import pytest
-from zephyr.execution import ZephyrCoordinator
 from zephyr.shuffle import ListShard
-from zephyr.stage_io import ShardTask, TaskResult, ZephyrTaskResources
+from zephyr.stage_io import ShardTask, TaskResult
 from zephyr.worker_context import CounterSnapshot
 
-# Default ZephyrContext worker: 1 CPU, 1 GiB RAM, one concurrent task per actor.
-_TEST_WORKER_RAM = 1 << 30
-_TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
-
-
-@pytest.fixture
-def coordinator(actor_context, tmp_path):
-    coord = ZephyrCoordinator()
-    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-    yield coord
-    coord.shutdown()
+from tests.conftest import _TEST_TASK_COST
 
 
 def test_check_worker_group_skips_after_completed_stage(coordinator):
