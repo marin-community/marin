@@ -659,6 +659,10 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
     smoke_page.route("**/ListPeers", _fulfill_peers)
     try:
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
+        # The prior test already sits on #/backends, and a same-hash goto does not
+        # reload — the tab would keep its peerless roster and never re-issue
+        # ListPeers under the mock. Reload to force a fresh mount + refetch.
+        smoke_page.reload()
         wait_for_dashboard_ready(smoke_page)
         _wait_for_backends_tab_ready(smoke_page)
         smoke_page.wait_for_function(
