@@ -275,20 +275,23 @@ def _should_log_loop_metrics(*, step: int, log_every: int) -> bool:
     return step % log_every == 0
 
 
-def _mirror_profiler_dir_to_output(profile_dir: Path, output_path: str | None) -> str | None:
+def _mirror_profiler_dir_to_output(profile_dir: Path, output_path: str | None, *, process_index: int) -> str | None:
     if output_path is None:
         return None
     if not profile_dir.exists():
         logger.warning("Grug profiler directory does not exist; skipping mirror: %s", profile_dir)
         return None
 
+    process_dir = profile_dir / f"process_{process_index:05d}"
+    if not process_dir.exists():
+        logger.warning("Grug profiler process directory does not exist; skipping mirror: %s", process_dir)
+        return None
+
     target_url = join_path(output_path, "profiler")
     fs, target_path = url_to_fs(target_url)
-    if fs.exists(target_path):
-        fs.rm(target_path, recursive=True)
     fs.makedirs(target_path, exist_ok=True)
 
-    for source_path in profile_dir.rglob("*"):
+    for source_path in process_dir.rglob("*"):
         relative_path = source_path.relative_to(profile_dir).as_posix()
         destination_path = posixpath.join(target_path.rstrip("/"), relative_path)
         if source_path.is_dir():
@@ -297,7 +300,7 @@ def _mirror_profiler_dir_to_output(profile_dir: Path, output_path: str | None) -
         fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
         fs.put_file(str(source_path), destination_path)
 
-    logger.info("Mirrored Grug profiler directory to %s", target_url)
+    logger.info("Mirrored Grug profiler process directory to %s", join_path(target_url, process_dir.name))
     return target_url
 
 
@@ -871,9 +874,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 checkpointer.on_step(tree=state, step=int(state.step), force=True)
                 checkpointer.wait_until_finished()
 
+            if profiler_enabled:
+                profiler_dir = trainer.log_dir / run_id / "profiler"
+                _mirror_profiler_dir_to_output(profiler_dir, config.output_path, process_index=jax.process_index())
             if profiler_enabled and jax.process_index() == 0:
                 profiler_dir = trainer.log_dir / run_id / "profiler"
-                _mirror_profiler_dir_to_output(profiler_dir, config.output_path)
                 logger.info("Logging Grug profiler artifact: %s", profiler_dir)
                 levanter.tracker.current_tracker().log_artifact(
                     profiler_dir,
