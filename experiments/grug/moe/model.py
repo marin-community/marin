@@ -93,6 +93,13 @@ class GrugModelConfig:
     shared_expert_intermediate_dim: int = 512
     num_experts: int = 256
     num_experts_per_token: int = 4
+    alternating_dense_moe: bool = False
+    """When True, alternate dense FFN layers (even index) and MoE layers (odd index)
+    instead of every layer being MoE. Dense layers are a single GLU MLP of width
+    ``dense_intermediate_dim``; MoE layers use the standard expert config. Set
+    ``shared_expert_intermediate_dim=0`` in this mode (the dense layers play that role)."""
+    dense_intermediate_dim: int | None = None
+    """Intermediate dim of the dense FFN layers when ``alternating_dense_moe`` is set."""
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -135,6 +142,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.alternating_dense_moe and not self.dense_intermediate_dim:
+            raise ValueError("alternating_dense_moe requires dense_intermediate_dim to be set")
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -520,16 +529,25 @@ class Block(eqx.Module):
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
     mlp_gated_norm: GatedNorm
-    mlp: MoEMLP
+    mlp: MoEMLP | DenseMLP
     shared: DenseMLP | None
+    is_dense: bool = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, is_dense: bool = False) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+        if is_dense:
+            # Dense FFN layer: a single GLU MLP of width dense_intermediate_dim, no MoE/shared.
+            mlp: MoEMLP | DenseMLP = DenseMLP.init(
+                cfg.hidden_dim, cfg.dense_intermediate_dim, cfg.initializer_std, key=mlp_key
+            )
+            shared = None
+        else:
+            mlp = MoEMLP.init(cfg, key=mlp_key)
+            shared = (
+                DenseMLP.init(cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key)
+                if cfg.shared_expert_intermediate_dim > 0
+                else None
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -537,8 +555,9 @@ class Block(eqx.Module):
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
+            mlp=mlp,
             shared=shared,
+            is_dense=is_dense,
         )
 
     @named_call
@@ -552,6 +571,9 @@ class Block(eqx.Module):
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        if self.is_dense:
+            x = x + self.mlp(mlp_in, activation=ActivationFunctionEnum.silu)
+            return x, {}
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -576,7 +598,10 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        blocks = tuple(
+            Block.init(cfg, key=block_keys[i], is_dense=(cfg.alternating_dense_moe and i % 2 == 0))
+            for i in range(cfg.num_layers)
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -623,7 +648,9 @@ class Transformer(eqx.Module):
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden, layer_mask, use_pko, disable_rope
             )
-            moe_router_stats.append(router_stats)
+            # Dense blocks return no router stats; only MoE layers contribute.
+            if not block.is_dense:
+                moe_router_stats.append(router_stats)
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),

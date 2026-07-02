@@ -255,7 +255,7 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
-        if block.mlp is None:
+        if block.is_dense:
             continue
         new_bias = -qb_betas[moe_idx]
         new_bias = new_bias - jnp.mean(new_bias)
@@ -274,7 +274,7 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    num_moe_layers = sum(1 for b in params.blocks if not b.is_dense)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
