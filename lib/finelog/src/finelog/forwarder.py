@@ -22,6 +22,13 @@ On first run the watermark is seeded at the source's current max cursor, so enab
 forwarder ships new logs going forward without backfilling the whole retention window.
 The state file also records the target it tracks; pointing a forwarder at a different
 target reseeds rather than replaying stale cursors into a new store's id space.
+
+The watermark is deliberately local best-effort state: it is fsync'd so it survives a
+process restart on the same host, but it is not part of any external checkpoint. If the
+state file is lost (e.g. the host is replaced), the forwarder reseeds at the source's
+current max — accepting a bounded gap of un-forwarded logs rather than replaying the
+retention window. That trade suits a log relay, where a gap degrades observability, not
+correctness.
 """
 
 import json
@@ -142,6 +149,11 @@ class LogForwarder:
                 # A keyless entry can't be namespaced; drop it rather than stall the
                 # watermark (the source always keys its writes).
                 continue
+            if self._key_prefix and entry.key.startswith(self._key_prefix):
+                # Already under our prefix — a row this forwarder produced (source and
+                # target are the same store, or otherwise share one). Skipping it stops
+                # an unbounded /c/x/c/x/... re-forward loop; the watermark still advances.
+                continue
             groups[entry.key].append(entry)
 
         try:
@@ -157,7 +169,9 @@ class LogForwarder:
             )
             return 0
 
-        forwarded = len(response.entries)
+        # Count what was actually pushed, not what was fetched: keyless and
+        # already-namespaced entries are skipped above but still advance the watermark.
+        forwarded = sum(len(entries) for entries in groups.values())
         self._forwarded += forwarded
         self._write_watermark(response.cursor)
         return forwarded

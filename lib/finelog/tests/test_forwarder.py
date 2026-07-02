@@ -192,3 +192,44 @@ def test_forwarder_refuses_corrupt_state_instead_of_skipping(tmp_path, servers):
 
     source.close()
     target.close()
+
+
+def test_forwarder_skips_already_namespaced_keys_no_amplification(tmp_path):
+    if not is_available():
+        pytest.skip("finelog native server extension (finelog_server) not available")
+    embedded = require_embedded_server()
+    # source == target: a shared store that is also its own source. Without the guard the
+    # forwarder would re-read its own /c/marin/... rows and re-push them as /c/marin/c/marin/...
+    store = embedded(log_dir=str(tmp_path / "store"))  # default policy admits loopback
+    try:
+        source = LogClient.connect(store.address)
+        target = LogClient.connect(store.address)
+        state = tmp_path / "watermark.json"
+        forwarder = LogForwarder(
+            source=source, target=target, target_label=store.address, key_prefix=_PREFIX, state_path=state
+        )
+        assert forwarder.forward_once() == 0  # seed
+
+        writer = LogClient.connect(store.address)
+        writer.push_batch("/user/job-9/task-0:0", _entries(3))
+        writer.close()
+
+        # Forwards the /user/... rows into the same store as /c/marin/user/...
+        assert forwarder.forward_once() == 3
+        # The next tick sees those /c/marin/... rows; the guard skips them, so nothing is
+        # re-forwarded — no /c/marin/c/marin/... amplification.
+        assert forwarder.forward_once() == 0
+
+        reader = LogClient.connect(store.address)
+        doubled = reader.fetch_logs(
+            logging_pb2.FetchLogsRequest(
+                source=_PREFIX + _PREFIX, match_scope=logging_pb2.MATCH_SCOPE_PREFIX, max_lines=100
+            )
+        )
+        assert list(doubled.entries) == [], "already-namespaced rows must not be re-forwarded"
+
+        reader.close()
+        source.close()
+        target.close()
+    finally:
+        store.stop()
