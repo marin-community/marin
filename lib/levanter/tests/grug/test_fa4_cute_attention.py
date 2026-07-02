@@ -26,20 +26,6 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     return q, k, v
 
 
-def _jaxpr_has_primitive(jaxpr, primitive_name: str) -> bool:
-    for eqn in jaxpr.eqns:
-        if eqn.primitive.name == primitive_name:
-            return True
-        for value in eqn.params.values():
-            if hasattr(value, "jaxpr") and _jaxpr_has_primitive(value.jaxpr, primitive_name):
-                return True
-            if isinstance(value, (tuple, list)):
-                for item in value:
-                    if hasattr(item, "jaxpr") and _jaxpr_has_primitive(item.jaxpr, primitive_name):
-                        return True
-    return False
-
-
 def test_packed_segment_backward_block_sparse_indices_are_q_direction():
     segment_ids = jnp.array([[0, 0, 0, 0, 1, 1, 1, -1]], dtype=jnp.int32)
     lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
@@ -156,7 +142,7 @@ def test_fa4_frontend_enters_shard_map_before_ffi(monkeypatch):
             v,
         )
 
-    assert _jaxpr_has_primitive(traced.jaxpr, "shard_map")
+    assert any(eqn.primitive.name == "shard_map" for eqn in traced.jaxpr.eqns)
 
 
 def test_fa4_forward_backend_does_not_pass_valid_to_forward_launcher(monkeypatch):
