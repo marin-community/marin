@@ -23,16 +23,23 @@ issuers use DNS-01 against ``acme.coreweave.com`` and only cover
 coreweave.app FQDN) needs HTTP-01, which validates through Traefik for any host
 that resolves to the LoadBalancer.
 
+Target a cluster with ``--cluster <name>`` (resolved the same way as ``iris
+--cluster``): the host, ingress class, and kubeconfig come from that config's
+``controller.coreweave`` block, so it matches what the controller will use. For a
+cluster with no checked-in config, point at it with ``--context``/``--kubeconfig``
+and pass ``--host`` directly. Run it once per CoreWeave cluster (Traefik +
+cert-manager are per-cluster).
+
 Without ``--apply`` it prints the helm commands and ClusterIssuer manifests and
 stops. With ``--apply`` it installs them, then reads the Traefik LoadBalancer's
 allocated ``*.coreweave.app`` FQDN and prints the DNS record to create and the
-``controller.coreweave`` config block. Pass ``--host`` to name your actual host in
-that output.
+restart/config step.
 
 Usage:
-    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev            # dry run
-    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev \\
-        --host iris-cw.oa.dev --apply
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
+        --acme-email you@oa.dev                                              # dry run
+    uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
+        --acme-email you@oa.dev --apply
 """
 
 import subprocess
@@ -40,6 +47,10 @@ import time
 
 import click
 import yaml
+from click.core import ParameterSource
+from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
+from iris.cluster.config import load_config
+from rigging.config_discovery import resolve_cluster_config
 
 CW_REPO_NAME = "coreweave"
 CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
@@ -168,6 +179,7 @@ def install(
     *,
     acme_email: str | None,
     host: str,
+    from_cluster: str = "",
     ingress_class: str,
     traefik_namespace: str,
     traefik_release: str,
@@ -239,6 +251,7 @@ def install(
 
     _print_next_steps(
         host=host,
+        from_cluster=from_cluster,
         ingress_class=ingress_class,
         traefik_namespace=traefik_namespace,
         traefik_release=traefik_release,
@@ -260,6 +273,7 @@ def _helm_install(chart: str, release: str, namespace: str, version: str | None,
 def _print_next_steps(
     *,
     host: str,
+    from_cluster: str,
     ingress_class: str,
     traefik_namespace: str,
     traefik_release: str,
@@ -284,17 +298,29 @@ def _print_next_steps(
         )
         click.echo(f"        {host_label}   CNAME   <that>{_COREWEAVE_APP}")
 
-    # 2. The config block, with the host filled in.
-    click.secho(
-        "  2) Set the cluster config's controller.coreweave block, then (re)start the controller:", fg="green", bold=True
-    )
-    click.echo(f"       public_proxy_host: {host or 'your-host.oa.dev'}")
-    click.echo(f"       ingress_class: {ingress_class}")
-    click.echo("       tls_secret: iris-controller-proxy-tls")
-    if not skip_issuers:
-        click.echo(
-            f"       cluster_issuer: {ISSUER_NAMES['staging']}   # switch to {ISSUER_NAMES['prod']} once verified"
+    # 2. The controller config. With --cluster and a host already set, the block
+    # is already in the config — just restart. Otherwise print the block to add.
+    if from_cluster and host:
+        click.secho(
+            f"  2) {from_cluster} already sets controller.coreweave (public_proxy_host={host}) — "
+            "restart the controller so it creates the /proxy Ingress:",
+            fg="green",
+            bold=True,
         )
+        click.echo(f"       iris --cluster {from_cluster} cluster restart")
+    else:
+        click.secho(
+            "  2) Set the cluster config's controller.coreweave block, then (re)start the controller:",
+            fg="green",
+            bold=True,
+        )
+        click.echo(f"       public_proxy_host: {host or 'your-host.oa.dev'}")
+        click.echo(f"       ingress_class: {ingress_class}")
+        click.echo("       tls_secret: iris-controller-proxy-tls")
+        if not skip_issuers:
+            click.echo(
+                f"       cluster_issuer: {ISSUER_NAMES['staging']}   # switch to {ISSUER_NAMES['prod']} once verified"
+            )
     click.secho(
         "  HTTP-01 issuance needs the CNAME live first (Let's Encrypt fetches http://<host>/.well-known/…); "
         "use the staging issuer first to avoid LE rate limits, then flip to prod.",
@@ -302,7 +328,34 @@ def _print_next_steps(
     )
 
 
+def _derive_from_cluster(name: str) -> dict:
+    """Read a named Iris cluster config and return its CoreWeave ingress settings.
+
+    Resolves ``name`` the same way ``iris --cluster`` does, so the host, ingress
+    class, and kubeconfig come from the one config the controller also reads.
+    """
+    try:
+        path = resolve_cluster_config(name, dirs=IRIS_CLUSTER_CONFIG_DIRS)
+    except FileNotFoundError as exc:
+        raise click.ClickException(f"Unknown cluster {name!r}; run `iris cluster list`.") from exc
+    config = load_config(str(path))
+    cw = config.controller.coreweave
+    if cw is None:
+        raise click.ClickException(f"Cluster {name!r} has no controller.coreweave block — not a CoreWeave cluster.")
+    platform = config.platform.coreweave
+    return {
+        "host": cw.public_proxy_host,
+        "ingress_class": cw.ingress_class,
+        "kubeconfig": platform.kubeconfig_path if platform else "",
+    }
+
+
 @click.command()
+@click.option(
+    "--cluster",
+    default="",
+    help="Iris cluster name; derives --host, --ingress-class, and --kubeconfig from its controller.coreweave block.",
+)
 @click.option(
     "--acme-email",
     default=None,
@@ -328,7 +381,10 @@ def _print_next_steps(
 @click.option("--kubeconfig", default=None, help="kubeconfig to use (else $KUBECONFIG / ~/.kube/config).")
 @click.option("--context", default=None, help="kube context to target.")
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
+@click.pass_context
 def main(
+    ctx: click.Context,
+    cluster: str,
     acme_email: str | None,
     host: str,
     ingress_class: str,
@@ -346,9 +402,23 @@ def main(
     apply: bool,
 ) -> None:
     """Install Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
+    if cluster:
+        # Fill host / ingress-class / kubeconfig from the cluster config, but let
+        # an explicitly-passed flag win over the derived value.
+        derived = _derive_from_cluster(cluster)
+
+        def pick(name: str, cli_value, cfg_value):
+            explicit = ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
+            return cli_value if explicit else (cfg_value or cli_value)
+
+        host = pick("host", host, derived["host"])
+        ingress_class = pick("ingress_class", ingress_class, derived["ingress_class"])
+        kubeconfig = pick("kubeconfig", kubeconfig, derived["kubeconfig"])
+
     install(
         acme_email=acme_email,
         host=host,
+        from_cluster=cluster,
         ingress_class=ingress_class,
         traefik_namespace=traefik_namespace,
         traefik_release=traefik_release,
