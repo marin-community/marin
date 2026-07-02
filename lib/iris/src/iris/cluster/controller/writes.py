@@ -20,6 +20,7 @@ Areas covered:
 
 import secrets
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 
 from rigging.timing import Timestamp
 from sqlalchemy import Table, bindparam, case, delete, func, insert, select, text, update
@@ -312,6 +313,37 @@ def delete_slice(tx: Tx, slice_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _ChangelogGate:
+    """Per-transaction memo for the federation changelog gate.
+
+    ``record_federation_change`` runs on every job/task mutation but writes a row
+    only for a root this controller received via handoff. ``has_received`` caches the
+    one-shot "is this controller ever a peer?" probe so a controller that never is
+    short-circuits; ``requester_by_root`` caches each received root's requester
+    (``""`` = not received) so a reconcile flush resolves it once per root.
+    """
+
+    has_received: bool | None = None
+    requester_by_root: dict[str, str] = field(default_factory=dict)
+
+
+_CHANGELOG_GATE_KEY = "federation_changelog_gate"
+
+
+def _changelog_gate(tx: Tx) -> _ChangelogGate:
+    """The changelog gate's cache for ``tx``, created on first use.
+
+    Lives in ``Tx.memo`` (a generic per-transaction slot) so it is dropped with the
+    transaction and can never go stale — unlike a controller-lifetime cache.
+    """
+    gate = tx.memo.get(_CHANGELOG_GATE_KEY)
+    if not isinstance(gate, _ChangelogGate):
+        gate = _ChangelogGate()
+        tx.memo[_CHANGELOG_GATE_KEY] = gate
+    return gate
+
+
 @writes_to(federated_jobs_table)
 def insert_received_handle(
     tx: Tx,
@@ -345,8 +377,9 @@ def insert_received_handle(
     )
     # Keep the per-transaction requester resolution consistent with this insert so a
     # changelog event recorded later in the same transaction sees the row.
-    tx.memo["federation_has_received"] = True
-    tx.memo.setdefault("federation_requester", {})[job_id.to_wire()] = requester_id
+    gate = _changelog_gate(tx)
+    gate.has_received = True
+    gate.requester_by_root[job_id.to_wire()] = requester_id
 
 
 def _federation_has_received(tx: Tx) -> bool:
@@ -356,9 +389,9 @@ def _federation_has_received(tx: Tx) -> bool:
     is never a peer (its ``federated_jobs`` has no RECEIVED rows), so such a
     controller writes no changelog rows and issues no per-mutation lookup.
     """
-    flag = tx.memo.get("federation_has_received")
-    if flag is None:
-        flag = (
+    gate = _changelog_gate(tx)
+    if gate.has_received is None:
+        gate.has_received = (
             tx.execute(
                 select(federated_jobs_table.c.job_id)
                 .where(federated_jobs_table.c.direction == int(FederationDirection.RECEIVED))
@@ -366,8 +399,7 @@ def _federation_has_received(tx: Tx) -> bool:
             ).first()
             is not None
         )
-        tx.memo["federation_has_received"] = flag
-    return flag
+    return gate.has_received
 
 
 def _received_requester(tx: Tx, root: JobName) -> str:
@@ -376,12 +408,12 @@ def _received_requester(tx: Tx, root: JobName) -> str:
     Resolved from the RECEIVED ``federated_jobs`` row (the source of truth) and
     memoized per transaction so a reconcile flush does one lookup per distinct root.
     """
-    cache: dict[str, str] = tx.memo.setdefault("federation_requester", {})
+    gate = _changelog_gate(tx)
     key = root.to_wire()
-    if key in cache:
-        return cache[key]
+    if key in gate.requester_by_root:
+        return gate.requester_by_root[key]
     if not _federation_has_received(tx):
-        cache[key] = ""
+        gate.requester_by_root[key] = ""
         return ""
     row = tx.execute(
         select(federated_jobs_table.c.peer_id).where(
@@ -390,7 +422,7 @@ def _received_requester(tx: Tx, root: JobName) -> str:
         )
     ).first()
     requester = row[0] if row is not None else ""
-    cache[key] = requester
+    gate.requester_by_root[key] = requester
     return requester
 
 

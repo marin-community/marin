@@ -88,7 +88,14 @@ def _peer_credentials(peer: PeerConfig) -> ClientCredentials:
 
 
 class _PeerRpcConnection:
-    """A :class:`PeerConnection` over the generated controller stub."""
+    """A :class:`PeerConnection` over the generated controller stub.
+
+    One instance is shared across the heartbeat thread, the sync thread, and the
+    RPC-handler threads that deliver a handoff or a routed cancel. That is safe: the
+    stub's transport is a connection-pooled ``reqwest`` client built for concurrent
+    use, and each call builds its request independently — there is no per-call
+    mutable client state to guard.
+    """
 
     def __init__(self, controller_address: str, interceptors: Iterable[InterceptorSync]):
         self._client = ControllerServiceClientSync(address=controller_address, interceptors=interceptors)
