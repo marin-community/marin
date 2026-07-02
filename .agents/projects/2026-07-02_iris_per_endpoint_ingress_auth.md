@@ -564,6 +564,19 @@ fallback only.
   `verify_aud=False`, enforce audience at the proxy (§2).
 - **Access + address resolve in one lookup** returning the row, so
   authorization and forwarding cannot disagree (§3).
+- **Minting stays a separate RPC, not folded into `RegisterEndpoint`** (user
+  decision). `MintEndpointToken` keeps its owner-*user* authorization
+  (`authorize_resource_owner(row.task_id.user)`); it is not merged into the
+  leased, universal `RegisterEndpoint` path. Rationale: registration is a
+  renewing, general service-discovery call made in-job under the worker token
+  (`system:worker`), so folding minting in would either return a secret on every
+  renewal or require first-registration idempotency, and would couple credential
+  issuance to discovery. Keeping mint standalone preserves rotation, re-mint
+  after TTL, one-token-per-consumer, and PRIVATE→BEARER upgrades. Consequence:
+  the in-job process does **not** self-mint; a human/CLI holding the launching
+  user's JWT mints and injects the token (see the serve flow in §Implementation
+  step 7). Broadening mint authz to accept the owning task's worker token was
+  considered and declined for now.
 
 ## Open questions for review
 
@@ -571,15 +584,8 @@ fallback only.
    frozenset[str]` on `VerifiedIdentity`? Single `audience` is enough for
    one-endpoint-per-token; a set generalizes to "this token for these N
    endpoints" if we ever want it.
-2. **Who mints in the serve flow**: CLI-side (recommended — the CLI holds the
-   launching user's JWT, so `authorize_resource_owner` passes naturally, and it
-   already waits for the endpoint before printing URLs) vs. in-job. In-job
-   minting authenticates as the shared worker token (`system:worker`,
-   `composer.py:238`), which the owner check must reject — allowing the worker
-   role to mint would let *any* task mint tokens for *any* endpoint. Keep the
-   `iris serve token <ep>` CLI for rotation either way.
-3. **Subdomain form under the public route**: keep `*.proxy.<host>` as a public
+2. **Subdomain form under the public route**: keep `*.proxy.<host>` as a public
    arm too (needs a wildcard cert + URL-map host rule), or restrict the public
    ingress to path-style `/proxy/*` only initially? I lean path-only first.
-4. **CoreWeave default**: path-restricted Ingress (recommended) vs. plain
+3. **CoreWeave default**: path-restricted Ingress (recommended) vs. plain
    `LoadBalancer` — do we want a managed cert / DNS story there now or later?
