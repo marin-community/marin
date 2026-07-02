@@ -485,13 +485,12 @@ class K8sControllerProvider:
         logger.info(
             "Controller /proxy Ingress %s applied (host=%s). Point DNS for %s at the ingress "
             "controller's LoadBalancer external IP/hostname (kubectl get ingress %s -n %s -o wide); "
-            "TLS terminates in-cluster via the %s secret.",
+            "TLS terminates in-cluster via cert-manager.",
             _CONTROLLER_PROXY_INGRESS_NAME,
             cw.public_proxy_host,
             cw.public_proxy_host,
             _CONTROLLER_PROXY_INGRESS_NAME,
             self._namespace,
-            cw.tls_secret or "(none configured)",
         )
 
     def _persist_deployment_without_fresh(self, deploy_kwargs: dict) -> None:

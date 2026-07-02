@@ -133,6 +133,7 @@ def _authorize_proxy(
     resolved: ResolvedEndpoint | None,
     policy: RequestAuthPolicy,
     *,
+    auth_enabled: bool,
     token: str | None = None,
 ) -> Response | None:
     """Authorize a ``/proxy`` request against its endpoint's access mode.
@@ -150,13 +151,18 @@ def _authorize_proxy(
 
     ``token`` overrides where the credential comes from: the URL-token fallback
     passes the token lifted from the path; otherwise it is read from the
-    ``Authorization`` header or session cookie. In null-auth mode (no verifier
-    configured) every request is allowed, matching the rest of the dashboard.
+    ``Authorization`` header or session cookie. ``auth_enabled`` is the
+    dashboard's own "auth is enforced" signal (an auth provider is configured
+    *and* the policy has a verifier) — the same condition that installs
+    ``_RouteAuthMiddleware``. When it is false the controller is in null-auth
+    mode (note a DB-backed null-auth controller still has a JWT verifier for
+    worker tokens, so ``policy.request_auth_enabled`` alone is not enough), so
+    every request is allowed, matching the rest of the dashboard.
     """
     access = resolved.access if resolved is not None else EndpointAccess.PRIVATE
     if access is EndpointAccess.PUBLIC:
         return None
-    if not policy.request_auth_enabled:
+    if not auth_enabled:
         return None
     headers = dict(request.headers)
     if token is None:
@@ -407,11 +413,13 @@ class _SubdomainProxyMiddleware:
         endpoint_proxy: EndpointProxy,
         endpoint_service: EndpointServiceImpl,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
+        auth_enabled: bool = False,
     ):
         self._app = app
         self._endpoint_proxy = endpoint_proxy
         self._endpoint_service = endpoint_service
         self._auth_policy = auth_policy
+        self._auth_enabled = auth_enabled
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -427,7 +435,7 @@ class _SubdomainProxyMiddleware:
         # access mode — the same policy the path-style proxy route uses.
         resolved = self._endpoint_service.resolve_endpoint_row(encoded_name)
         request = Request(scope, receive=receive)
-        deny = _authorize_proxy(request, resolved, self._auth_policy)
+        deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=self._auth_enabled)
         if deny is not None:
             await deny(scope, receive, send)
             return
@@ -535,6 +543,12 @@ class ControllerDashboard:
 
         self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
+        # Auth is enforced exactly when a provider is configured AND the policy
+        # has a verifier — the same condition that installs _RouteAuthMiddleware.
+        # A DB-backed null-auth controller still has a JWT verifier (for worker
+        # tokens), so request_auth_enabled alone would wrongly gate the proxy.
+        proxy_auth_enabled = self._auth_provider is not None and self._auth_policy.request_auth_enabled
+
         # The proxy routes are @public so the route-annotation middleware does
         # not apply the whole-dashboard @requires_auth (which would over-grant a
         # served-model token the RPC surface). They enforce their own
@@ -543,7 +557,7 @@ class ControllerDashboard:
         async def _proxy_endpoint(request: Request) -> Response:
             name = request.path_params["endpoint_name"]
             resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy)
+            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled)
             if deny is not None:
                 return deny
             return await self._endpoint_proxy.dispatch(
@@ -562,7 +576,7 @@ class ControllerDashboard:
             token = request.path_params["token"]
             name = request.path_params["endpoint_name"]
             resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy, token=token)
+            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled, token=token)
             if deny is not None:
                 return deny
             return await self._endpoint_proxy.dispatch(
@@ -584,7 +598,7 @@ class ControllerDashboard:
             # browser's current origin, so no internal address leaks.
             name = request.path_params["endpoint_name"]
             resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy)
+            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled)
             if deny is not None:
                 return deny
             query = f"?{request.url.query}" if request.url.query else ""
@@ -668,6 +682,7 @@ class ControllerDashboard:
             endpoint_proxy=self._endpoint_proxy,
             endpoint_service=self._endpoint_service,
             auth_policy=self._auth_policy,
+            auth_enabled=self._auth_provider is not None and self._auth_policy.request_auth_enabled,
         )
         return wrapped
 

@@ -92,56 +92,68 @@ def policy(jwt) -> RequestAuthPolicy:
 
 
 def test_public_allows_without_token(policy):
-    assert _authorize_proxy(_request(), _resolved(EndpointAccess.PUBLIC), policy) is None
+    assert _authorize_proxy(_request(), _resolved(EndpointAccess.PUBLIC), policy, auth_enabled=True) is None
 
 
-def test_bearer_accepts_matching_scoped_token(jwt, policy):
+def test_bearer_accepts_matching_scoped_token(jwt, policy, auth_enabled=True):
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
-    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy) is None
+    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True) is None
 
 
-def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy):
+def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy, auth_enabled=True):
     token = jwt.create_endpoint_token("/serve/other", "k", ttl_seconds=60)
-    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy)
+    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 403
 
 
-def test_bearer_accepts_full_identity(jwt, policy):
+def test_bearer_accepts_full_identity(jwt, policy, auth_enabled=True):
     token = jwt.create_token("alice", "admin", "k1")
-    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy) is None
+    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True) is None
 
 
-def test_private_rejects_scoped_token(jwt, policy):
+def test_private_rejects_scoped_token(jwt, policy, auth_enabled=True):
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
-    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy)
+    deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 403
 
 
 def test_private_rejects_missing_token(policy):
-    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), policy)
+    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 401
 
 
-def test_private_accepts_full_identity(jwt, policy):
+def test_private_accepts_full_identity(jwt, policy, auth_enabled=True):
     token = jwt.create_token("alice", "admin", "k1")
-    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy) is None
+    assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True) is None
 
 
 def test_unknown_endpoint_treated_as_private(policy):
-    deny = _authorize_proxy(_request(), None, policy)
+    deny = _authorize_proxy(_request(), None, policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 401
 
 
 def test_null_auth_allows_everything():
-    """With no verifier configured, the proxy gate defers to null-auth (allow)."""
+    """With auth disabled the proxy gate allows everything (matches the dashboard)."""
     null = RequestAuthPolicy.from_verifiers(verifier=None)
-    assert _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), null) is None
+    assert _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), null, auth_enabled=False) is None
+
+
+def test_null_auth_with_worker_verifier_still_allows(jwt):
+    """DB-backed null-auth: a verifier exists (worker tokens) but auth is off.
+
+    ``request_auth_enabled`` is True (the JWT verifier), yet ``auth_enabled`` is
+    False (no provider), so a PRIVATE endpoint must still be allowed — regression
+    for the null-auth proxy gate.
+    """
+    policy = RequestAuthPolicy.from_verifiers(verifier=jwt)
+    assert policy.request_auth_enabled  # verifier present, as in a DB-backed null-auth controller
+    assert _authorize_proxy(_request(), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=False) is None
 
 
 def test_token_in_url_override(jwt, policy):
     """The URL-token fallback reuses the same check via the token override."""
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
-    assert _authorize_proxy(_request(), _resolved(EndpointAccess.BEARER), policy, token=token) is None
+    assert _authorize_proxy(_request(), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True, token=token) is None
     wrong = jwt.create_endpoint_token("/serve/other", "k", ttl_seconds=60)
-    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.BEARER), policy, token=wrong)
+    deny = _authorize_proxy(_request(), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True, token=wrong)
     assert deny is not None and deny.status_code == 403
