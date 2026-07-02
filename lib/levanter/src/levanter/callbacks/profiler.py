@@ -249,6 +249,7 @@ def profile(
     profiler_options: jax.profiler.ProfileOptions | None = None,
     stop_barrier_timeout: float = 200,
     remote_profile_dir: str | None = None,
+    profile_context_factory: Callable[..., AbstractContextManager[None]] = profile_ctx,
 ) -> Callable[[StepInfo], None]:
     trace_started = False
     active_profile: AbstractContextManager[None] | None = None
@@ -265,7 +266,7 @@ def profile(
             if force or trace_started:
                 return
             logger.info("Starting profiler until step %s.", start_step + num_steps)
-            active_profile = profile_ctx(
+            active_profile = profile_context_factory(
                 path,
                 create_perfetto_link,
                 profiler_options=profiler_options,
