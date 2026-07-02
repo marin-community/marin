@@ -9,6 +9,7 @@ import gc
 import logging as pylogging
 import operator
 import os
+import re
 import threading
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -1378,7 +1379,19 @@ async def _consolidate_metadata(dest_path: str, exemplar: dict, shard_infos: lis
                 raise
 
 
+def _collapse_duplicate_slashes(path: str) -> str:
+    """Collapse duplicate ``/`` in a path while preserving a URL scheme's ``://``.
+
+    Matches the normalization ``zephyr.dataset.format_shard_path`` applies when
+    writing shards, so consolidation is insensitive to a trailing slash in
+    ``MARIN_PREFIX`` (which yields ``//`` after the ``StepSpec`` path join).
+    """
+    return re.sub(r"(?<!:)//+", "/", path)
+
+
 def _relative_shard_path(output_path: str, shard_path: str) -> str:
+    output_path = _collapse_duplicate_slashes(output_path)
+    shard_path = _collapse_duplicate_slashes(shard_path)
     if "://" in output_path or "://" in shard_path:
         prefix = output_path.rstrip("/") + "/"
         if shard_path.startswith(prefix):

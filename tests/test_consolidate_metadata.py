@@ -112,6 +112,16 @@ def test_relative_shard_path_requires_child_uri_paths():
         _relative_shard_path(output_path, external_shard)
 
 
+def test_relative_shard_path_tolerates_double_slash_output():
+    # A trailing slash in MARIN_PREFIX yields a `//` after the StepSpec path join,
+    # while shard writes normalize `//`->`/`. Consolidation must treat both as the
+    # same location instead of raising "not under output path".
+    output_path = "s3://marin-na/marin//slimpajama-6b/2026.06.28/train"
+    shard_path = "s3://marin-na/marin/slimpajama-6b/2026.06.28/train/part-00000-of-00048"
+
+    assert _relative_shard_path(output_path, shard_path) == "part-00000-of-00048"
+
+
 @pytest.mark.asyncio
 async def test_consolidate_external_shards_rejected():
     with tempfile.TemporaryDirectory(prefix="levanter-test-external-shards-") as tmpdir:
