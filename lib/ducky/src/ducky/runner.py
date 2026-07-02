@@ -161,8 +161,8 @@ class QueryRunner:
 
     @property
     def created_view_names(self) -> frozenset[str]:
-        """Identifiers of the catalog views that were actually created (for the /api/catalog
-        endpoint to advertise only what's queryable)."""
+        """Qualified identifiers of the catalog views that were successfully created — the
+        subset actually queryable, after skipping absent/credential-less datasets."""
         return frozenset(self._created_view_names)
 
     def _create_catalog_views(self) -> None:
