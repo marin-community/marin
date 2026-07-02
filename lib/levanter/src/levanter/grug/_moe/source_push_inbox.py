@@ -27,7 +27,8 @@ import time
 import traceback
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, fields
-from typing import Any, Callable
+from types import MappingProxyType
+from typing import Any, Callable, Mapping
 
 import jax
 import jax.numpy as jnp
@@ -41,10 +42,12 @@ from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILES, 
 
 
 AXIS = "expert"
-LOWERING_SEMANTICS = {
-    "warpgroup": mgpu.LoweringSemantics.Warpgroup,
-    "lane": mgpu.LoweringSemantics.Lane,
-}
+LOWERING_SEMANTICS: Mapping[str, mgpu.LoweringSemantics] = MappingProxyType(
+    {
+        "warpgroup": mgpu.LoweringSemantics.Warpgroup,
+        "lane": mgpu.LoweringSemantics.Lane,
+    }
+)
 META_FIELDS = 4
 BYTES_PER_BF16 = 2
 IMPLEMENTATIONS = ("send_only", "m_owner", "m_owner_slots", "m_n_slots")
@@ -56,11 +59,12 @@ METADATA_MODES = ("remote_slot", "static_recv")
 OUTPUT_MODES = ("debug", "perf")
 HIDDEN_OUTPUT_MODES = ("full", "queue", "sink")
 HIDDEN_COMPUTE_MODES = ("wgmma", "store_zero")
-RECEIVER_SCHEDULES = ("fixed_wait", "owned_jobs", "owned_slots", "ordered_wait", "ready_scan", "slot_group")
+RECEIVER_SCHEDULES = ("fixed_wait", "owned_jobs", "owned_slots", "ordered_wait", "slot_group")
+DISABLED_RECEIVER_SCHEDULES = ("ready_scan",)
 SCAN_ORDERS = ("current", "rotated", "hash")
 SLOT_ORDERS = ("current", "rotated", "hash")
-SOURCE_PUSH_MODES = ("packed",)
-INBOX_STORAGE_MODES = ("output", "alias", "scratch")
+INBOX_STORAGE_MODES = ("output",)
+DISABLED_INBOX_STORAGE_MODES = ("alias", "scratch")
 ROUTING_MODES = (
     "balanced",
     "roughly_balanced",
@@ -133,7 +137,6 @@ class PushInboxConfig:
     scan_order: str = "rotated"
     slot_order: str = "current"
     workers_per_slot: int = 1
-    source_push_mode: str = "packed"
     inbox_storage: str = "output"
     routing: str = "balanced"
     tokens_per_rank: int = 32768
@@ -231,8 +234,6 @@ class PushInboxConfig:
                 raise ValueError("output_mode=perf is currently implemented only for send_only and m_n_slots")
             if self.metadata_mode != "static_recv":
                 raise ValueError("output_mode=perf requires metadata_mode=static_recv")
-        if self.inbox_storage not in INBOX_STORAGE_MODES:
-            raise ValueError(f"unknown inbox_storage={self.inbox_storage!r}; expected one of {INBOX_STORAGE_MODES}")
         if self.inbox_storage == "scratch":
             raise ValueError(
                 "inbox_storage=scratch is disabled: Mosaic GPU scratch_shapes with mgpu.GMEM fail with "
@@ -244,6 +245,9 @@ class PushInboxConfig:
                 "whole-inbox SMEM blowup, but global semaphore lowering then fails with an out-of-bounds "
                 "reserve_semaphores slice. This path needs an mgpu.kernel-level alias mechanism."
             )
+        if self.inbox_storage not in INBOX_STORAGE_MODES:
+            expected = INBOX_STORAGE_MODES + DISABLED_INBOX_STORAGE_MODES
+            raise ValueError(f"unknown inbox_storage={self.inbox_storage!r}; expected one of {expected}")
         if self.n_groups_per_job <= 0:
             raise ValueError(f"n_groups_per_job must be positive, got {self.n_groups_per_job}")
         if self.n_groups_per_job > self.intermediate_dim // self.block_n // self.n_group:
@@ -252,15 +256,14 @@ class PushInboxConfig:
                 f"got {self.n_groups_per_job=} with "
                 f"{self.intermediate_dim=} {self.block_n=} {self.n_group=}"
             )
-        if self.receiver_schedule not in RECEIVER_SCHEDULES:
-            raise ValueError(
-                f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {RECEIVER_SCHEDULES}"
-            )
         if self.receiver_schedule == "ready_scan":
             raise ValueError(
                 "receiver_schedule=ready_scan is disabled: ready-scan variants compile but deadlock in checked "
                 "H100 smokes, including the multi-candidate receiver scan"
             )
+        if self.receiver_schedule not in RECEIVER_SCHEDULES:
+            expected = RECEIVER_SCHEDULES + DISABLED_RECEIVER_SCHEDULES
+            raise ValueError(f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {expected}")
         if self.receiver_schedule == "slot_group":
             num_compute_sms = self.num_sms - self.num_send_sms
             if self.workers_per_slot > num_compute_sms:
@@ -280,10 +283,6 @@ class PushInboxConfig:
             raise ValueError(f"unknown slot_order={self.slot_order!r}; expected one of {SLOT_ORDERS}")
         if self.workers_per_slot <= 0:
             raise ValueError(f"workers_per_slot must be positive, got {self.workers_per_slot}")
-        if self.source_push_mode not in SOURCE_PUSH_MODES:
-            raise ValueError(
-                f"unknown source_push_mode={self.source_push_mode!r}; expected one of {SOURCE_PUSH_MODES}"
-            )
         if self.routing not in ROUTING_MODES:
             raise ValueError(f"unknown routing={self.routing!r}; expected one of {ROUTING_MODES}")
         if self.queue_mode == "routing" and self.traffic_pattern != "all_to_all":
@@ -2088,7 +2087,6 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         "scan_order": config.scan_order,
         "slot_order": config.slot_order,
         "workers_per_slot": config.workers_per_slot,
-        "source_push_mode": config.source_push_mode,
         "send_pipeline_depth": config.send_pipeline_depth,
         "n_groups_per_job": config.n_groups_per_job,
         "n_work_groups_per_entry": n_work_groups,
@@ -2923,7 +2921,6 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument("--sweep-slot-order", type=_parse_slot_order_csv, default=None)
     parser.add_argument("--workers-per-slot", type=int, default=default("workers_per_slot", 1))
     parser.add_argument("--sweep-workers-per-slot", type=_parse_int_csv, default=None)
-    parser.add_argument("--source-push-mode", choices=SOURCE_PUSH_MODES, default=default("source_push_mode", "packed"))
     parser.add_argument("--inbox-storage", choices=INBOX_STORAGE_MODES, default=default("inbox_storage", "output"))
     parser.add_argument("--routing", choices=ROUTING_MODES, default=default("routing", "balanced"))
     parser.add_argument("--tokens-per-rank", type=int, default=default("tokens_per_rank", 32768))
@@ -3017,7 +3014,6 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                                                 scan_order=scan_order,
                                                                                 slot_order=slot_order,
                                                                                 workers_per_slot=workers_per_slot,
-                                                                                source_push_mode=args.source_push_mode,
                                                                                 inbox_storage=args.inbox_storage,
                                                                                 experts_per_rank=args.experts_per_rank,
                                                                                 num_send_sms=num_send_sms,
