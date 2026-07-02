@@ -6,46 +6,33 @@
 
 CKS ships no ingress controller and no TLS issuer, so the controller's ``/proxy``
 Ingress (created per-cluster by ``K8sControllerProvider.start_controller``) needs
-two cluster-wide, install-once components in place first:
+two cluster-wide components installed first. This script installs them, once, from
+the operator's kubeconfig (the controller's own ServiceAccount can't install CRDs):
 
-  * **Traefik** — CoreWeave's blessed ingress controller (``coreweave/traefik``).
-    Installed as a ``Service type=LoadBalancer`` that CKS fronts with a stable
-    wildcard ``*.<ORG-ID>-<CLUSTER>.coreweave.app`` DNS name (the chart sets the
-    ``service.beta.kubernetes.io/external-hostname: '*'`` annotation for you).
-    Registers IngressClass ``traefik``.
-  * **cert-manager** — issues the TLS cert Traefik terminates with
-    (``coreweave/cert-manager``).
+  * **Traefik** (``coreweave/traefik``) — the ingress controller. Its chart exposes
+    Traefik as a ``Service type=LoadBalancer`` and sets
+    ``service.beta.kubernetes.io/external-hostname: '*'``, so CKS allocates it a
+    wildcard ``*.<ORG-ID>-<CLUSTER>.coreweave.app`` DNS name. Registers IngressClass
+    ``traefik``.
+  * **cert-manager** (``coreweave/cert-manager``) — issues the TLS cert Traefik
+    terminates with.
 
-CoreWeave's *bundled* Let's Encrypt issuers validate via DNS-01 against
-``acme.coreweave.com`` and therefore only cover ``*.coreweave.app``. To serve a
-**custom** host (e.g. ``iris-cw.oa.dev`` CNAME'd to the coreweave.app FQDN) this
-script instead installs **HTTP-01** ClusterIssuers validated through Traefik,
-which work for any host that already resolves to the Traefik LoadBalancer.
+It also creates **HTTP-01** Let's Encrypt ClusterIssuers. CoreWeave's bundled
+issuers use DNS-01 against ``acme.coreweave.com`` and only cover
+``*.coreweave.app``; a custom host (e.g. ``iris-cw.oa.dev`` CNAME'd to the
+coreweave.app FQDN) needs HTTP-01, which validates through Traefik for any host
+that resolves to the LoadBalancer.
 
-This mirrors ``install_kueue.py``: the heavyweight cluster-wide controllers live
-here (operator-run, one-time); the per-cluster objects (the ``/proxy`` Ingress)
-are reconciled by the Iris controller at start. This is the operator's job, not
-the controller Pod's — the controller has no authority to install CRDs.
-
-SAFE BY DEFAULT: prints the plan (helm commands + ClusterIssuer manifests) and
-stops. Pass ``--apply`` to mutate the cluster.
-
-After it runs:
-  1. Read the Traefik LoadBalancer FQDN:
-       kubectl get svc traefik -n traefik \\
-         -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
-  2. CNAME your host at your DNS provider (e.g. Namecheap):
-       iris-cw.oa.dev  CNAME  <that>.coreweave.app
-  3. Point the cluster config's controller.coreweave block at it:
-       public_proxy_host: iris-cw.oa.dev
-       ingress_class: traefik
-       tls_secret: iris-controller-proxy-tls
-       cluster_issuer: letsencrypt-http01-prod   # use -staging first to avoid LE rate limits
-     start_controller then creates the /proxy Ingress and cert-manager issues the cert.
+Without ``--apply`` it prints the helm commands and ClusterIssuer manifests and
+stops. With ``--apply`` it installs them, then reads the Traefik LoadBalancer's
+allocated ``*.coreweave.app`` FQDN and prints the DNS record to create and the
+``controller.coreweave`` config block. Pass ``--host`` to name your actual host in
+that output.
 
 Usage:
     uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev            # dry run
-    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev --apply
+    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev \\
+        --host iris-cw.oa.dev --apply
 """
 
 import subprocess
@@ -68,6 +55,12 @@ ISSUER_NAMES = {"prod": "letsencrypt-http01-prod", "staging": "letsencrypt-http0
 
 CLUSTERISSUER_CRD = "clusterissuers.cert-manager.io"
 _CRD_WAIT_SECONDS = 120.0
+
+# CoreWeave's External Hostname Controller allocates the LB's *.coreweave.app
+# FQDN asynchronously and reports it in the Service's ExternalRecords condition.
+_FQDN_JSONPATH = '{.status.conditions[?(@.type=="ExternalRecords")].message}'
+_FQDN_WAIT_SECONDS = 90.0
+_COREWEAVE_APP = ".coreweave.app"
 
 
 # --------------------------------------------------------------------------
@@ -120,6 +113,29 @@ def wait_for_crd(crd: str, kflags: list[str]) -> None:
     raise click.ClickException(f"CRD {crd} not present after {_CRD_WAIT_SECONDS:.0f}s (is cert-manager installed?)")
 
 
+def read_traefik_fqdn(release: str, namespace: str, kflags: list[str]) -> str:
+    """Poll the Traefik LoadBalancer Service for its allocated ``*.coreweave.app`` FQDN.
+
+    Returns the bare FQDN, or "" if not allocated within the wait window (the
+    External Hostname Controller assigns it asynchronously). Polls quietly (no
+    per-attempt command echo) since it may take several tries.
+    """
+    click.secho(f"==> Reading Traefik LoadBalancer FQDN (svc/{release} -n {namespace}) …", fg="blue", bold=True)
+    deadline = time.monotonic() + _FQDN_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["kubectl", *kflags, "get", "svc", release, "-n", namespace, "-o", f"jsonpath={_FQDN_JSONPATH}"],
+            capture_output=True,
+            text=True,
+        )
+        for token in (result.stdout or "").replace(",", " ").split():
+            candidate = token.strip(".;\"'")
+            if candidate.endswith(_COREWEAVE_APP):
+                return candidate
+        time.sleep(3.0)
+    return ""
+
+
 # --------------------------------------------------------------------------
 # Manifests
 # --------------------------------------------------------------------------
@@ -151,6 +167,7 @@ def _http01_issuer(env: str, email: str, ingress_class: str) -> dict:
 def install(
     *,
     acme_email: str | None,
+    host: str,
     ingress_class: str,
     traefik_namespace: str,
     traefik_release: str,
@@ -220,7 +237,15 @@ def install(
         wait_for_crd(CLUSTERISSUER_CRD, kflags)
         kubectl_apply_docs(issuer_docs, kflags)
 
-    _print_next_steps(traefik_namespace, traefik_release, ingress_class, skip_issuers)
+    _print_next_steps(
+        host=host,
+        ingress_class=ingress_class,
+        traefik_namespace=traefik_namespace,
+        traefik_release=traefik_release,
+        skip_traefik=skip_traefik,
+        skip_issuers=skip_issuers,
+        kflags=kflags,
+    )
 
 
 def _helm_install(chart: str, release: str, namespace: str, version: str | None, hflags: list[str]) -> None:
@@ -232,25 +257,47 @@ def _helm_install(chart: str, release: str, namespace: str, version: str | None,
         raise click.ClickException(f"helm install of {chart} failed")
 
 
-def _print_next_steps(traefik_namespace: str, traefik_release: str, ingress_class: str, skip_issuers: bool) -> None:
-    issuer = ISSUER_NAMES["prod"]
-    click.secho("==> Done. Finish wiring the public /proxy route:", fg="green", bold=True)
-    click.echo(
-        "  1. Read the Traefik LoadBalancer's stable FQDN:\n"
-        f"       kubectl get svc {traefik_release} -n {traefik_namespace} "
-        "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
-    )
-    click.echo("  2. CNAME your host to it at your DNS provider (Namecheap): iris-cw.oa.dev CNAME <that>.coreweave.app")
-    click.echo(
-        "  3. Set the cluster config's controller.coreweave block, then (re)start the controller:\n"
-        "       public_proxy_host: iris-cw.oa.dev\n"
-        f"       ingress_class: {ingress_class}\n"
-        "       tls_secret: iris-controller-proxy-tls\n"
-        + ("" if skip_issuers else f"       cluster_issuer: {issuer}   # use letsencrypt-http01-staging first\n")
-    )
+def _print_next_steps(
+    *,
+    host: str,
+    ingress_class: str,
+    traefik_namespace: str,
+    traefik_release: str,
+    skip_traefik: bool,
+    skip_issuers: bool,
+    kflags: list[str],
+) -> None:
+    """Print exactly what the operator must do next — the DNS record and config."""
+    host_label = host or "<your-host>.oa.dev"
+    click.secho("==> Done. Two steps to finish wiring the public /proxy route:", fg="green", bold=True)
+
+    # 1. The concrete DNS record. Read the real Traefik FQDN so we can print it.
+    click.secho("  1) Create this DNS record at your DNS provider (e.g. Namecheap):", fg="green", bold=True)
+    fqdn = "" if skip_traefik else read_traefik_fqdn(traefik_release, traefik_namespace, kflags)
+    if fqdn:
+        click.echo(f"        {host_label}   CNAME   {fqdn}")
+    else:
+        click.secho("       (Traefik's FQDN isn't allocated yet — read it in a minute, then CNAME to it:)", fg="yellow")
+        click.echo(
+            f"       kubectl get svc {traefik_release} -n {traefik_namespace} "
+            "-o=jsonpath='{.status.conditions[?(@.type==\"ExternalRecords\")].message}'"
+        )
+        click.echo(f"        {host_label}   CNAME   <that>{_COREWEAVE_APP}")
+
+    # 2. The config block, with the host filled in.
     click.secho(
-        "  HTTP-01 issuance needs the CNAME live first (Let's Encrypt fetches http://<host>/.well-known/...). "
-        "Validate with letsencrypt-http01-staging before switching to prod.",
+        "  2) Set the cluster config's controller.coreweave block, then (re)start the controller:", fg="green", bold=True
+    )
+    click.echo(f"       public_proxy_host: {host or 'your-host.oa.dev'}")
+    click.echo(f"       ingress_class: {ingress_class}")
+    click.echo("       tls_secret: iris-controller-proxy-tls")
+    if not skip_issuers:
+        click.echo(
+            f"       cluster_issuer: {ISSUER_NAMES['staging']}   # switch to {ISSUER_NAMES['prod']} once verified"
+        )
+    click.secho(
+        "  HTTP-01 issuance needs the CNAME live first (Let's Encrypt fetches http://<host>/.well-known/…); "
+        "use the staging issuer first to avoid LE rate limits, then flip to prod.",
         fg="yellow",
     )
 
@@ -260,6 +307,9 @@ def _print_next_steps(traefik_namespace: str, traefik_release: str, ingress_clas
     "--acme-email",
     default=None,
     help="Email for the Let's Encrypt HTTP-01 ClusterIssuers (required unless --skip-issuers).",
+)
+@click.option(
+    "--host", default="", help="Public endpoint host (e.g. iris-cw.oa.dev); used to print the exact DNS + config."
 )
 @click.option(
     "--ingress-class", default="traefik", show_default=True, help="IngressClass the HTTP-01 solver routes through."
@@ -280,6 +330,7 @@ def _print_next_steps(traefik_namespace: str, traefik_release: str, ingress_clas
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
 def main(
     acme_email: str | None,
+    host: str,
     ingress_class: str,
     traefik_namespace: str,
     traefik_release: str,
@@ -297,6 +348,7 @@ def main(
     """Install Traefik + cert-manager + HTTP-01 issuers for the CoreWeave /proxy ingress."""
     install(
         acme_email=acme_email,
+        host=host,
         ingress_class=ingress_class,
         traefik_namespace=traefik_namespace,
         traefik_release=traefik_release,
