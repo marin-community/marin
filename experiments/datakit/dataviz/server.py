@@ -8,8 +8,7 @@ upstream stage datasets (:mod:`experiments.datakit.dataviz.lineage`) and serves 
 single-page dashboard with a tab per stage — normalized data, decontamination,
 deduplication, quality classifier, and the final cluster x quality store. All
 data is fetched by issuing SQL to the ducky service
-(:mod:`experiments.datakit.dataviz.ducky`); the dashboard never reads parquet
-directly.
+(:class:`ducky.client.DuckyClient`); the dashboard never reads parquet directly.
 
 Queries run **asynchronously** (``POST /api/query`` -> ``query_id``, poll
 ``GET /api/result/{id}``) so a slow aggregate never trips the controller proxy's
@@ -38,6 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
+from ducky.client import DuckyClient, DuckyError, iap_token_provider
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.dashboard_common import on_shutdown
@@ -49,7 +49,6 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from experiments.datakit.dataviz.ducky import DEFAULT_BASE_URL, DuckyClient, DuckyError, iap_token_provider
 from experiments.datakit.dataviz.lineage import StoreLineage, load_lineage, resolve_lineage, save_lineage
 from experiments.datakit.dataviz.queries import DEFAULT_SEED, Dataviz
 from experiments.datakit.store.datakit_store import ClusteredStoreData
@@ -63,6 +62,10 @@ _MAX_WORKERS = 8
 # proxy routes ``/proxy/dataviz/`` to the namespaced endpoint. Must match deploy.py.
 PORT_NAME = "dataviz"
 ENDPOINT_NAME = "/dataviz"
+
+# Local-dev fallback: reach ducky through the public IAP-gated proxy (needs an
+# IAP token). In-cluster we use the controller's internal proxy (no token).
+_LOCAL_IAP_DUCKY_URL = "https://iris.oa.dev/proxy/ducky"
 
 
 def _quality_range(quality_bucket: int, thresholds: list[float]) -> str:
@@ -285,7 +288,7 @@ def _build_ducky(explicit_url: str | None) -> DuckyClient:
     elif os.environ.get("IRIS_CONTROLLER_URL"):
         url, needs_iap = f"{os.environ['IRIS_CONTROLLER_URL'].rstrip('/')}/proxy/ducky", False
     else:
-        url, needs_iap = DEFAULT_BASE_URL, True
+        url, needs_iap = _LOCAL_IAP_DUCKY_URL, True
     timeout = float(os.environ.get("DATAVIZ_QUERY_TIMEOUT", "900"))
     logger.info("ducky endpoint %s (iap=%s, timeout=%.0fs)", url, needs_iap, timeout)
     return DuckyClient(url, token_provider=iap_token_provider() if needs_iap else None, timeout=timeout)

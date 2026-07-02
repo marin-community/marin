@@ -4,7 +4,7 @@
 """Stage-explorer queries: turn a resolved :class:`StoreLineage` into ducky SQL.
 
 Every method builds SQL over the stage parquet (schemas validated live) and runs
-it through :class:`~experiments.datakit.dataviz.ducky.DuckyClient`, returning
+it through :class:`~ducky.client.DuckyClient`, returning
 plain JSON-serializable structures the dashboard renders. The dashboard never
 sees raw SQL — it names a view + params and this layer composes the query.
 
@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import logging
 
-from experiments.datakit.dataviz.ducky import DuckyClient, QueryResult
+from ducky.client import DuckyClient, QueryResult
+
 from experiments.datakit.dataviz.lineage import StoreLineage
 
 logger = logging.getLogger(__name__)

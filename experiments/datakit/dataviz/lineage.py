@@ -33,10 +33,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from ducky.client import DuckyClient
 from marin.execution.artifact import read_artifact, read_record
 from rigging.filesystem import marin_prefix, open_url
 
-from experiments.datakit.dataviz.ducky import DuckyClient
 from experiments.datakit.reference_pipeline import DEFAULT_SCALE, reference_datakit_steps, select_sources
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 
