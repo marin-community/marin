@@ -52,15 +52,14 @@ _FINELOG_NAMESPACES: tuple[tuple[str, str], ...] = (
 # The step-name path segment is everything between the root and the `_<hash8>` suffix; it
 # may contain a slash (a nested family/subset). Chosen for size / general usefulness — the
 # full set (~100+) lives in lib/marin/src/marin/datakit/sources.py; browse it via the
-# example query rather than baking every one as an eagerly-bound view.
+# example query rather than baking every one as an eagerly-bound view. Which of these are
+# present depends on what's replicated to `datakit_root`; the nemotron_cc_math_v1 subsets are
+# in us-east5 today, the rest are canonical in eu-west4. Absent ones are skipped at startup.
 _DATAKIT_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("nemotron_cc_math_v1_4plus_mind", "nemotron_cc_math_v1/4plus_mind", "Nemotron-CC math, 4+ MIND high-quality."),
+    ("nemotron_cc_math_v1_4plus", "nemotron_cc_math_v1/4plus", "Nemotron-CC math, quality 4+ subset."),
     ("finetranslations", "finetranslations", "Normalized translation corpus (~3.0T tokens)."),
     ("nemotron_cc_v2_high_quality", "nemotron_cc_v2/high_quality", "Nemotron-CC v2 high-quality subset."),
-    (
-        "nemotron_cc_v2_medium_quality",
-        "nemotron_cc_v2/medium_quality",
-        "Nemotron-CC v2 medium-quality subset (~2.1T tokens).",
-    ),
     ("finepdfs", "finepdfs", "FinePDFs normalized text (all languages)."),
     ("institutional_books", "institutional_books", "Institutional Books normalized text."),
     ("cp_peS2o", "cp/peS2o", "Common Pile peS2o (academic papers)."),
@@ -134,19 +133,29 @@ def _finelog_examples(views: list[View]) -> list[ExampleQuery]:
     by_name = {view.name: view.qualified_name for view in views}
     return [
         ExampleQuery(
-            "Recent log lines",
-            "Latest 100 rows from the base finelog log.",
-            f"SELECT epoch_ms, level, source, key, data\nFROM {by_name['log']}\nORDER BY seq DESC\nLIMIT 100",
+            "Log level breakdown",
+            "Row count per log level — reads only the tiny `level` column, so it stays cheap "
+            "even though the `log` table is tens of GB (the `data` blob is ~80% of the bytes).",
+            f"SELECT level, count(*) AS rows\nFROM {by_name['log']}\nGROUP BY level\nORDER BY level",
+        ),
+        ExampleQuery(
+            "Recent errors",
+            "Latest error/critical log lines (finelog level: DEBUG=1, INFO=2, WARNING=3, ERROR=4, "
+            "CRITICAL=5). Filters on `level` and truncates `data` with left(), so only the ~100 "
+            "matching rows materialize the text blob.",
+            f"SELECT epoch_ms, source, key, left(data, 500) AS data\nFROM {by_name['log']}\n"
+            f"WHERE level >= 4\nORDER BY seq DESC\nLIMIT 100",
         ),
         ExampleQuery(
             "Iris task resource usage",
-            "Most recent per-task cpu/memory samples.",
-            f"SELECT task_id, attempt_id, worker_id, ts, cpu_millicores, memory_mb, memory_peak_mb\n"
+            "Most recent per-task cpu/memory samples. Projects the handful of numeric columns "
+            "it needs rather than SELECT *.",
+            f"SELECT task_id, worker_id, ts, cpu_millicores, memory_mb, memory_peak_mb\n"
             f"FROM {by_name['iris.task']}\nORDER BY ts DESC\nLIMIT 100",
         ),
         ExampleQuery(
             "Worker utilization snapshot",
-            "Latest heartbeat per worker with cpu/memory and running task count.",
+            "Latest heartbeats with cpu/memory and running task count.",
             f"SELECT worker_id, ts, status, cpu_pct, mem_bytes, running_task_count, device_variant\n"
             f"FROM {by_name['iris.worker']}\nORDER BY ts DESC\nLIMIT 100",
         ),
@@ -159,21 +168,34 @@ def _finelog_examples(views: list[View]) -> list[ExampleQuery]:
     ]
 
 
-def _datakit_examples(root: str, views: list[View]) -> list[ExampleQuery]:
+def _datakit_examples(root: str) -> list[ExampleQuery]:
     root = root.rstrip("/")
-    sample = views[0].qualified_name if views else "datakit.finetranslations"
+    # A read_parquet template rather than a fixed view: which normalized datasets are present
+    # varies by region/replication, so the sample/count examples take an editable <dataset>
+    # placeholder the user fills from the browse query. Cheap by construction (glob metadata,
+    # footer-only count, LIMIT + truncated text).
+    dataset_glob = f"{root}/<dataset>_*/outputs/main/*.parquet"
     return [
         ExampleQuery(
             "Browse normalized datasets",
-            "List every normalized dataset directory (one glob over the first shard of each).",
+            "List every normalized dataset directory. Uses glob() (object listing only) over the "
+            "first shard of each dataset, so it reads no parquet data.",
             "SELECT DISTINCT regexp_extract(file, 'normalized/(.+)_[0-9a-f]{8}/outputs', 1) AS dataset\n"
             f"FROM glob('{root}/**/outputs/main/part-00000-*.parquet')\n"
             "ORDER BY dataset",
         ),
         ExampleQuery(
+            "Count rows in a dataset",
+            "Total rows for one normalized dataset. count(*) is answered from parquet footers, so "
+            "it doesn't read the id/text data. Replace <dataset> with a name from the browse query.",
+            f"SELECT count(*) AS rows\nFROM read_parquet('{dataset_glob}')",
+        ),
+        ExampleQuery(
             "Sample normalized rows",
-            "Peek at id/text from a curated normalized dataset.",
-            f"SELECT id, length(text) AS text_len, text\nFROM {sample}\nLIMIT 20",
+            "Peek at id/text from one normalized dataset. LIMIT reads only the first shard's first "
+            "row group, and left() truncates the text. Replace <dataset> with a browsed name.",
+            f"SELECT id, length(text) AS chars, left(text, 500) AS preview\n"
+            f"FROM read_parquet('{dataset_glob}')\nLIMIT 20",
         ),
     ]
 
@@ -194,8 +216,7 @@ def build_catalog(config: DuckyConfig) -> Catalog:
         examples.extend(_finelog_examples(finelog_views))
 
     if config.datakit_root:
-        datakit_views = _datakit_views(config.datakit_root)
-        views.extend(datakit_views)
-        examples.extend(_datakit_examples(config.datakit_root, datakit_views))
+        views.extend(_datakit_views(config.datakit_root))
+        examples.extend(_datakit_examples(config.datakit_root))
 
     return Catalog(views=tuple(views), examples=tuple(examples))

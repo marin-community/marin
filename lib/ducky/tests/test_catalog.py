@@ -51,8 +51,18 @@ def test_build_catalog_examples_reference_existing_views():
     # every finelog example query targets a view we actually built
     for example in finelog_examples:
         assert any(ident in example.sql for ident in view_idents)
-    # the datakit browse example globs the configured root directly
+    # the datakit examples reference the configured root directly (browse glob + read_parquet)
     assert any("gs://b/normalized" in e.sql for e in catalog.examples)
+
+
+def test_example_queries_avoid_unbounded_scans():
+    """Every example is bounded — a LIMIT, an aggregate, or a metadata-only glob — never a
+    bulk `SELECT *` over a view, which would pull the multi-GB text/data column."""
+    catalog = build_catalog(_config(finelog_root="gs://b/finelog", datakit_root="gs://b/normalized"))
+    for example in catalog.examples:
+        assert "SELECT *" not in example.sql, f"{example.title!r} bulk-selects all columns"
+        bounded = any(token in example.sql for token in ("LIMIT", "count(", "GROUP BY", "glob("))
+        assert bounded, f"{example.title!r} is an unbounded row scan"
 
 
 def test_build_catalog_empty_without_roots():

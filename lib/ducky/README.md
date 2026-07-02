@@ -93,6 +93,13 @@ queries are fast because ducky enables DuckDB's parquet-footer cache
 (`parquet_metadata_cache`) and HTTP metadata cache, so re-reading the same files skips the
 footer round-trips.
 
+The example queries are written to be cost-aware: DuckDB reads parquet column-wise with
+projection and predicate pushdown, so the bytes fetched scale with the columns and row
+groups a query touches. The big `data`/`text` blob dominates size (≈80% of the finelog
+`log` table), so the examples project explicit small columns, prefer `count(*)`/`GROUP BY`
+over a small column (answered from footers / cheap columns), and truncate text with
+`left(...)` under a `LIMIT` — never a bulk `SELECT *` over a multi-GB dataset.
+
 ## Deploy
 
 ```bash
