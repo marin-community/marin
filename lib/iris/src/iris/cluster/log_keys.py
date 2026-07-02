@@ -17,11 +17,6 @@ from iris.cluster.types import JobName, TaskAttempt
 CONTROLLER_LOG_KEY = "/system/controller"
 _WORKER_LOG_PREFIX = "/system/worker/"
 
-# Prefix a relay stamps on every key it forwards to the shared global finelog, so
-# the bare per-cluster keys below (`/user/...`, `/system/...`) don't collide when
-# many clusters land in one store: `/c/<cluster_id><key>`.
-CLUSTER_NAMESPACE_PREFIX = "/c/"
-
 # Default level per capture stream when a line carries no parseable prefix.
 # "error" is the synthetic source iris uses for injected failure lines (OOM
 # kills, infrastructure errors). Streams not listed here (e.g. "build") fall
@@ -76,17 +71,3 @@ def build_log_source(target: JobName, attempt_id: int = -1) -> tuple[str, loggin
             return f"{wire}:{attempt_id}", logging_pb2.MATCH_SCOPE_EXACT
         return f"{wire}:", logging_pb2.MATCH_SCOPE_PREFIX
     return f"{wire}/", logging_pb2.MATCH_SCOPE_PREFIX
-
-
-def cluster_namespace_prefix(cluster_id: str) -> str:
-    """The key prefix stamped on every log a cluster forwards: ``/c/<cluster_id>``.
-
-    Bare iris keys are per-cluster and collide across clusters in one global finelog,
-    so the forwarder prefixes every forwarded key with this. ``cluster_id`` may not
-    contain ``/`` (it would break the hierarchical prefix).
-    """
-    if not cluster_id:
-        raise ValueError("cluster_id is required to namespace a log key")
-    if "/" in cluster_id:
-        raise ValueError(f"cluster_id must not contain '/' (got {cluster_id!r})")
-    return f"{CLUSTER_NAMESPACE_PREFIX}{cluster_id}"

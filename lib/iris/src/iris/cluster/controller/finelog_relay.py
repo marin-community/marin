@@ -20,9 +20,8 @@ from finelog.client.log_client import LogClient
 from finelog.forwarder import LogForwarder
 from rigging.auth import BearerTokenInjector, StaticTokenProvider
 
-from iris.cluster.config import FinelogRelayConfig
+from iris.cluster.config import ClusterFinelogConfig
 from iris.cluster.controller.auth import JwtTokenManager
-from iris.cluster.log_keys import cluster_namespace_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class _DelegationTokenProvider:
             return self._token
 
 
-def finelog_relay_interceptors(config: FinelogRelayConfig, subject: str) -> tuple:
+def finelog_relay_interceptors(config: ClusterFinelogConfig, subject: str) -> tuple:
     """Resolve the client interceptors the forwarder presents to the global finelog.
 
     ``delegation_key`` (preferred) mints short-lived JWTs — under ``subject`` (this
@@ -88,23 +87,21 @@ def finelog_relay_interceptors(config: FinelogRelayConfig, subject: str) -> tupl
 
 def build_log_forwarder(
     *,
-    config: FinelogRelayConfig,
+    config: ClusterFinelogConfig,
     cluster_id: str,
     source_client: LogClient,
     state_dir: Path,
 ) -> LogForwarder:
-    """Construct a forwarder from ``source_client`` to ``config.address``.
+    """Construct a forwarder from ``source_client`` to ``config.relay_address``.
 
     The target client is authenticated with this cluster's delegation credential (minted
     under ``cluster_id``) and owned by the forwarder (closed on its ``stop``);
-    ``source_client`` is the controller's local finelog client and is not. Keys are
-    stamped with ``/c/<cluster_id>``.
+    ``source_client`` is the controller's local finelog client and is not.
     """
-    target = LogClient.connect(config.address, interceptors=finelog_relay_interceptors(config, cluster_id))
+    target = LogClient.connect(config.relay_address, interceptors=finelog_relay_interceptors(config, cluster_id))
     return LogForwarder(
         source=source_client,
         target=target,
-        target_label=config.address,
-        key_prefix=cluster_namespace_prefix(cluster_id),
+        target_label=config.relay_address,
         state_path=state_dir / _STATE_FILENAME,
     )

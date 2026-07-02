@@ -87,25 +87,13 @@ def test_peers_config_rejects_static_token_without_cluster():
 
 
 # ---------------------------------------------------------------------------
-# finelog.relay: validation
+# finelog relay: validation
 # ---------------------------------------------------------------------------
-
-
-def test_finelog_relay_rejects_missing_cluster_name():
-    # The relay namespaces forwarded logs under /c/<name>; without a name the forwarder
-    # would raise at controller startup, so validation must catch it at config load.
-    with pytest.raises(ValueError, match="cluster must set a top-level name"):
-        parse_config(_config(name="", finelog={"relay": {"address": "dns:///g:1"}}))
 
 
 def test_finelog_relay_rejects_short_delegation_key():
     with pytest.raises(ValueError, match="delegation_key must be at least 16 bytes"):
-        parse_config(_config(finelog={"relay": {"address": "dns:///g:1", "delegation_key": "short"}}))
-
-
-def test_finelog_relay_rejects_empty_address():
-    with pytest.raises(ValueError, match="address is required"):
-        parse_config(_config(finelog={"relay": {"address": "  "}}))
+        parse_config(_config(finelog={"relay_address": "dns:///g:1", "delegation_key": "short"}))
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable log forwarder: tail one finelog, forward to another (the "log-proxy").
+"""Durable log forwarder: tail one finelog, replicate it into another (the "log-proxy").
 
-A :class:`LogForwarder` reads a source finelog's log store and re-appends each batch
-to a target finelog under a caller-supplied key prefix. It is the mechanism behind
-Iris federation's global-finelog relay (each cluster forwards its logs to one shared
-store under a ``/c/<cluster>`` prefix), but it is generic: source, target, and prefix
-are all injected, and it holds no Iris concepts.
+A :class:`LogForwarder` reads a source finelog's log store and re-appends each new batch
+to a target finelog under the same keys. It is the mechanism behind Iris federation's
+global-finelog relay (each cluster forwards its logs to one shared store), but it is
+generic: source and target are injected and it holds no Iris concepts. Source and target
+must be distinct stores — it does not dedupe its own writes, so forwarding a store into
+itself would loop.
 
 Durability leans on the source, which is itself durable (finelog persists to parquet
 with a retention window). The forwarder therefore stores only a forward *watermark* —
@@ -63,11 +64,10 @@ class CorruptForwarderStateError(RuntimeError):
 
 
 class LogForwarder:
-    """Tails ``source`` and forwards new log batches to ``target`` under ``key_prefix``.
+    """Tails ``source`` and forwards new log batches to ``target`` under the same keys.
 
     The forwarder owns ``target`` (created for it) and closes it on :meth:`stop`; it
-    never closes ``source`` (owned by the caller). ``key_prefix`` is prepended to every
-    forwarded key (e.g. ``/c/marin``); empty forwards keys unchanged.
+    never closes ``source`` (owned by the caller).
     """
 
     def __init__(
@@ -76,7 +76,6 @@ class LogForwarder:
         source: LogClient,
         target: LogClient,
         target_label: str,
-        key_prefix: str,
         state_path: Path,
         batch_lines: int = _DEFAULT_BATCH_LINES,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
@@ -84,7 +83,6 @@ class LogForwarder:
         self._source = source
         self._target = target
         self._target_label = target_label
-        self._key_prefix = key_prefix
         self._state_path = Path(state_path)
         self._batch_lines = batch_lines
         self._poll_interval = poll_interval_seconds
@@ -164,20 +162,14 @@ class LogForwarder:
         groups: dict[str, list[logging_pb2.LogEntry]] = defaultdict(list)
         for entry in response.entries:
             if not entry.key:
-                # A keyless entry can't be namespaced; drop it rather than stall the
-                # watermark (the source always keys its writes).
-                continue
-            if self._key_prefix and entry.key.startswith(self._key_prefix + "/"):
-                # Already under our prefix — a row this forwarder produced (source and
-                # target are the same store, or otherwise share one). Skipping it stops
-                # an unbounded /c/x/c/x/... re-forward loop; the watermark still advances.
-                # The trailing "/" keeps a sibling prefix (/c/x-dev) from matching /c/x.
+                # A keyless entry has no key to replicate under; drop it rather than
+                # stall the watermark (the source always keys its writes).
                 continue
             groups[entry.key].append(entry)
 
         try:
             for key, entries in groups.items():
-                self._target.push_batch(self._key_prefix + key, entries)
+                self._target.push_batch(key, entries)
         except Exception as exc:
             self._failed += 1
             logger.warning(
@@ -193,8 +185,8 @@ class LogForwarder:
         # poll interval. Reset to 0 on every non-forwarding path (seed, empty, failure).
         self._last_fetched = len(response.entries)
 
-        # Count what was actually pushed, not what was fetched: keyless and
-        # already-namespaced entries are skipped above but still advance the watermark.
+        # Count what was actually pushed, not what was fetched: keyless entries are
+        # skipped above but still advance the watermark.
         forwarded = sum(len(entries) for entries in groups.values())
         self._forwarded += forwarded
         self._write_watermark(response.cursor)

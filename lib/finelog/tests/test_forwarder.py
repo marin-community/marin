@@ -6,9 +6,9 @@
 Boots two real embedded finelog servers — a source (loopback-admitting default) and a
 target fronted by a jwt-only auth policy — and drives the forwarder through the native
 wire contract. Covers the federation relay's guarantees: a batch ingested at the source
-is forwarded to the target under a cluster-namespaced key and readable there with auth;
-and a forward that fails (an unauthenticated push) advances no watermark, so a later
-authed forwarder ships the same batch exactly once (durable, at-least-once, no loss).
+is forwarded to the target under the same key and readable there with auth; and a forward
+that fails (an unauthenticated push) advances no watermark, so a later authed forwarder
+ships the same batch exactly once (durable, at-least-once, no loss).
 
 Skips when the native extension is not built.
 """
@@ -32,8 +32,6 @@ _TOKEN = (
     ".kTVu3jf6JUbqdHe8WYswdHWzw7WBNT1NfyCxtMoiaPE"
 )
 _JWT_POLICY = json.dumps([{"type": "jwt", "keys": [{"cluster": "marin", "secret": _KEY}]}])
-
-_PREFIX = "/c/marin"
 
 
 def _entries(n: int, base_ms: int = 1_000) -> list[logging_pb2.LogEntry]:
@@ -65,10 +63,10 @@ def servers(tmp_path):
         target.stop()
 
 
-def _read_namespaced(reader: LogClient, key: str) -> list[logging_pb2.LogEntry]:
+def _read_key(reader: LogClient, key: str) -> list[logging_pb2.LogEntry]:
     resp = reader.fetch_logs(
         logging_pb2.FetchLogsRequest(
-            source=_PREFIX + key,
+            source=key,
             match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
             max_lines=100,
         )
@@ -76,7 +74,7 @@ def _read_namespaced(reader: LogClient, key: str) -> list[logging_pb2.LogEntry]:
     return list(resp.entries)
 
 
-def test_forwarder_forwards_under_namespaced_key_with_auth(tmp_path, servers):
+def test_forwarder_forwards_with_auth(tmp_path, servers):
     source_server, target_server = servers
     state = tmp_path / "watermark.json"
     source = LogClient.connect(source_server.address)
@@ -85,7 +83,6 @@ def test_forwarder_forwards_under_namespaced_key_with_auth(tmp_path, servers):
         source=source,
         target=target,
         target_label=target_server.address,
-        key_prefix=_PREFIX,
         state_path=state,
     )
 
@@ -98,13 +95,13 @@ def test_forwarder_forwards_under_namespaced_key_with_auth(tmp_path, servers):
     writer.push_batch(key, _entries(5))
     writer.close()
 
-    # Next tick forwards the newly-ingested batch.
+    # Next tick forwards the newly-ingested batch under the same key.
     assert forwarder.forward_once() == 5
 
     reader = _authed_client(target_server.address)
-    entries = _read_namespaced(reader, key)
+    entries = _read_key(reader, key)
     assert {e.data for e in entries} == {f"line {i}" for i in range(5)}
-    assert all(e.key == _PREFIX + key for e in entries)
+    assert all(e.key == key for e in entries)
 
     reader.close()
     source.close()
@@ -118,9 +115,7 @@ def test_forwarder_retries_after_failed_push_without_loss(tmp_path, servers):
 
     # Seed, then ingest a batch at the source.
     good_target = _authed_client(target_server.address)
-    seeder = LogForwarder(
-        source=source, target=good_target, target_label=target_server.address, key_prefix=_PREFIX, state_path=state
-    )
+    seeder = LogForwarder(source=source, target=good_target, target_label=target_server.address, state_path=state)
     assert seeder.forward_once() == 0  # seed
 
     key = "/user/job-2/task-0:0"
@@ -137,7 +132,6 @@ def test_forwarder_retries_after_failed_push_without_loss(tmp_path, servers):
         source=source,
         target=unauthed_target,
         target_label=target_server.address,
-        key_prefix=_PREFIX,
         state_path=state,
     )
     assert failing.forward_once() == 0
@@ -150,13 +144,12 @@ def test_forwarder_retries_after_failed_push_without_loss(tmp_path, servers):
         source=source,
         target=recovered_target,
         target_label=target_server.address,
-        key_prefix=_PREFIX,
         state_path=state,
     )
     assert recovered.forward_once() == 3
 
     reader = _authed_client(target_server.address)
-    entries = _read_namespaced(reader, key)
+    entries = _read_key(reader, key)
     assert {e.data for e in entries} == {f"line {i}" for i in range(3)}
     assert len(entries) == 3, "batch forwarded exactly once despite the earlier failure"
 
@@ -172,9 +165,7 @@ def test_forwarder_refuses_corrupt_state_instead_of_skipping(tmp_path, servers):
     state = tmp_path / "watermark.json"
     source = LogClient.connect(source_server.address)
     target = _authed_client(target_server.address)
-    forwarder = LogForwarder(
-        source=source, target=target, target_label=target_server.address, key_prefix=_PREFIX, state_path=state
-    )
+    forwarder = LogForwarder(source=source, target=target, target_label=target_server.address, state_path=state)
     assert forwarder.forward_once() == 0  # seed at the empty source
 
     # Ingest a batch that is now pending forwarding.
@@ -194,54 +185,6 @@ def test_forwarder_refuses_corrupt_state_instead_of_skipping(tmp_path, servers):
     target.close()
 
 
-def test_forwarder_skips_already_namespaced_keys_no_amplification(tmp_path):
-    if not is_available():
-        pytest.skip("finelog native server extension (finelog_server) not available")
-    embedded = require_embedded_server()
-    # source == target: a shared store that is also its own source. Without the guard the
-    # forwarder would re-read its own /c/marin/... rows and re-push them as /c/marin/c/marin/...
-    store = embedded(log_dir=str(tmp_path / "store"))  # default policy admits loopback
-    try:
-        source = LogClient.connect(store.address)
-        target = LogClient.connect(store.address)
-        state = tmp_path / "watermark.json"
-        forwarder = LogForwarder(
-            source=source, target=target, target_label=store.address, key_prefix=_PREFIX, state_path=state
-        )
-        assert forwarder.forward_once() == 0  # seed
-
-        writer = LogClient.connect(store.address)
-        writer.push_batch("/user/job-9/task-0:0", _entries(3))
-        writer.close()
-
-        # Forwards the /user/... rows into the same store as /c/marin/user/...
-        assert forwarder.forward_once() == 3
-        # The next tick sees those /c/marin/... rows; the guard skips them, so nothing is
-        # re-forwarded — no /c/marin/c/marin/... amplification.
-        assert forwarder.forward_once() == 0
-
-        reader = LogClient.connect(store.address)
-        doubled = reader.fetch_logs(
-            logging_pb2.FetchLogsRequest(
-                source=_PREFIX + _PREFIX, match_scope=logging_pb2.MATCH_SCOPE_PREFIX, max_lines=100
-            )
-        )
-        assert list(doubled.entries) == [], "already-namespaced rows must not be re-forwarded"
-
-        # A sibling cluster's namespace (/c/marin-dev) shares the /c/marin text but is a
-        # different prefix: the trailing-separator guard must forward it, not false-skip it.
-        sibling = LogClient.connect(store.address)
-        sibling.push_batch("/c/marin-dev/user/job-1/task-0:0", _entries(2))
-        sibling.close()
-        assert forwarder.forward_once() == 2
-
-        reader.close()
-        source.close()
-        target.close()
-    finally:
-        store.stop()
-
-
 def test_forwarder_drains_backlog_beyond_one_batch(tmp_path, servers):
     # A backlog larger than batch_lines must fully drain in one pass, not ship only
     # batch_lines per poll interval — that cap would let a busy cluster outrun the
@@ -254,7 +197,6 @@ def test_forwarder_drains_backlog_beyond_one_batch(tmp_path, servers):
         source=source,
         target=target,
         target_label=target_server.address,
-        key_prefix=_PREFIX,
         state_path=state,
         batch_lines=2,
     )
@@ -268,7 +210,7 @@ def test_forwarder_drains_backlog_beyond_one_batch(tmp_path, servers):
     # batch_lines=2 over a 5-row backlog → 3 fetch cycles (2+2+1); one drain ships all 5.
     assert forwarder._drain() == 5
     reader = _authed_client(target_server.address)
-    assert len(_read_namespaced(reader, key)) == 5
+    assert len(_read_key(reader, key)) == 5
 
     reader.close()
     source.close()

@@ -24,7 +24,7 @@ from sqlalchemy import Row
 
 from iris.cluster.backends.types import resolve_external_host
 from iris.cluster.bundle import BundleStore
-from iris.cluster.config import BackendConfig, FinelogRelayConfig, PeerConfig
+from iris.cluster.config import BackendConfig, ClusterFinelogConfig, PeerConfig
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.auth import ControllerAuth
@@ -268,9 +268,9 @@ class ControllerConfig:
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
 
-    finelog_relay: FinelogRelayConfig | None = None
-    """The shared global finelog to relay logs out to and read federated logs from.
-    ``None`` leaves the log plane single-cluster: no relay, local reads."""
+    finelog: ClusterFinelogConfig = field(default_factory=ClusterFinelogConfig)
+    """This cluster's finelog config. An empty ``relay_address`` leaves the log plane
+    single-cluster: no relay, local reads. Set it to forward logs to a shared store."""
 
     federation_heartbeat_interval: Duration = field(default_factory=lambda: DEFAULT_HEARTBEAT_INTERVAL)
     """How often the federation capability heartbeat probes each peer."""
@@ -404,19 +404,19 @@ class Controller:
         self._log_handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
         logging.getLogger("iris").addHandler(self._log_handler)
 
-        # Finelog relay: when configured, durably forwards this cluster's local finelog
-        # to the shared global store under cluster-namespaced keys. The forwarding
-        # mechanism lives in finelog; this only supplies the local client, the cluster
-        # credential, and a state path. None (no finelog.relay) leaves the log plane
-        # single-cluster — no forwarder thread, no egress, byte-identical behavior.
+        # Finelog relay: when a relay target is configured, durably forwards this cluster's
+        # local finelog to the shared global store. The forwarding mechanism lives in
+        # finelog; this only supplies the local client, the cluster credential, and a state
+        # path. An empty relay_address leaves the log plane single-cluster — no forwarder
+        # thread, no egress, byte-identical behavior.
         self._log_forwarder = (
             build_log_forwarder(
-                config=config.finelog_relay,
+                config=config.finelog,
                 cluster_id=config.cluster_id,
                 source_client=self._log_client,
                 state_dir=self._db.db_dir,
             )
-            if config.finelog_relay is not None
+            if config.finelog.relay_address
             else None
         )
 
