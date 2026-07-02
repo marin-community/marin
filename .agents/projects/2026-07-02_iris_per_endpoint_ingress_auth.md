@@ -574,9 +574,17 @@ fallback only.
   decision). GCP: `iap_gclb.py deploy` runs the `public-proxy` stage by default
   (idempotent; `--no-public-proxy` opts out). CoreWeave: the `/proxy` Ingress is
   part of `start_controller` — config-driven via `controller.coreweave`
-  (`public_proxy_host`, `ingress_class`, `tls_secret`); an empty host leaves it
-  ClusterIP-only. It publishes only `/proxy`; the controller's per-endpoint auth
-  is the sole gate (no IAP layer on CoreWeave).
+  (`public_proxy_host`, `ingress_class`, `tls_secret`, `cluster_issuer`); an empty
+  host leaves it ClusterIP-only. It publishes only `/proxy`; the controller's
+  per-endpoint auth is the sole gate (no IAP layer on CoreWeave).
+- **CoreWeave uses Traefik + cert-manager, verified against CKS docs** (not
+  nginx — that was a wrong first assumption, since fixed). CKS ships no ingress
+  controller/issuer, so `scripts/install_cw.py` (operator-run, `--apply`-gated,
+  mirrors `install_kueue.py`) installs `coreweave/traefik` + `coreweave/cert-manager`
+  + HTTP-01 Let's Encrypt ClusterIssuers. Traefik's LB gets a stable
+  `*.<ORG-ID>-<CLUSTER>.coreweave.app` FQDN (external-hostname); a custom `oa.dev`
+  host CNAMEs to it. CoreWeave's bundled issuers are DNS-01 for `*.coreweave.app`
+  only, so custom hosts need the HTTP-01 issuers `install_cw.py` creates.
 - **Minting stays a separate RPC, not folded into `RegisterEndpoint`** (user
   decision). `MintEndpointToken` keeps its owner-*user* authorization
   (`authorize_resource_owner(row.task_id.user)`); it is not merged into the
