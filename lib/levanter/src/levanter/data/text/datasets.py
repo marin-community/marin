@@ -492,6 +492,9 @@ def dataset_for_component(
     block_cross_document_attention: bool,
     pack_override: bool | int | Literal["pad"] | None = None,
 ) -> AsyncDataset[GrugLmExample]:
+    # pack_override is the mixture-wide LmDataConfig.pack. None means "no override": fall back to
+    # this component's own pack (or its format default). Any non-None value — including False/0 to
+    # force the whole mixture unpacked — overrides the component's setting.
     pack = pack_override if pack_override is not None else _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):

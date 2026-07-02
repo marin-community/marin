@@ -185,7 +185,11 @@ def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tm
     components = list(data.components.values())
     assert components
     assert all(isinstance(component, DatasetComponent) for component in components)
-    assert {component.pack for component in components} == {1}
+    # The THD path expresses "pack every example to a single fixed-shape segment" as a
+    # mixture-wide override (LmDataConfig.pack), applied per component at load time, rather
+    # than rewriting each component's own pack. Components keep their defaults (pack is None).
+    assert data.pack == 1
+    assert {component.pack for component in components} == {None}
 
 
 @pytest.mark.parametrize(
