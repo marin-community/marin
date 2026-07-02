@@ -316,12 +316,24 @@ class Fp8RaggedDotOp(OverwriteWithGradient):
         comp_dtype = rhs.dtype if self.compute_dtype is None else self.compute_dtype
         lhs = jnp.asarray(lhs, comp_dtype)
         rhs = jnp.asarray(rhs, comp_dtype)
-        # Local import to break the quantization ↔ nn.ragged_dot import cycle;
+        # Local import to break the quantization ↔ fp8_ragged ↔ nn.ragged_dot cycle;
         # this is the sanctioned exception to the all-imports-at-top rule.
-        from .nn.ragged_dot import ragged_dot as _ragged_dot  # noqa: PLC0415
+        from ._src.fp8_ragged import fp8_scaled_ragged_dot  # noqa: PLC0415
 
-        # TODO: swap this bf16 matmul for fp8_scaled_ragged_dot (delayed-scaling FP8) in a follow-up.
-        return _ragged_dot(lhs, rhs, group_sizes, op=None)
+        return fp8_scaled_ragged_dot(
+            lhs,
+            rhs,
+            group_sizes,
+            lhs_scale=self.input_scale,
+            rhs_scale=self.kernel_scale,
+            grad_scale=self.output_grad_scale,
+            lhs_amax_history=self.input_amax_history,
+            rhs_amax_history=self.kernel_amax_history,
+            grad_amax_history=self.output_grad_amax_history,
+            quantize_compute_type=comp_dtype,
+            fwd_dtype=self.fwd_dtype,
+            rev_dtype=self.rev_dtype,
+        )
 
 
 class Int8DotGeneralOp(OverwriteWithGradient):

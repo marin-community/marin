@@ -82,3 +82,59 @@ def test_cute_ragged_dot_guard_non_conforming_shapes():
             ragged_dot_cute.cute_ragged_dot(a[:, :64], b_bad_k, gs, out_dtype=jnp.bfloat16, out_scale=jnp.ones((1,)))
     finally:
         ragged_dot_cute.cute_available = original
+
+
+# ---------------------------------------------------------------------------
+# FP8 forward + dgrad (E5M2 x E4M3), bf16 wgrad
+#
+# Shapes: N=256 (tile_n=256), K=256 so both the forward (b=[E,N,K]) and dgrad
+# (b=[E,K,N]) passes satisfy the CuTe guard (N%256==0 and K%128==0 for each).
+# ---------------------------------------------------------------------------
+
+
+@gpu_only
+def test_fp8_forward_rel_fro():
+    """FP8 ragged_dot output should be within 5% of bf16 reference."""
+    from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
+    from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+    out = ragged_dot(lhs, rhs, gs, op=op)
+    ref = ragged_dot(lhs, rhs, gs, op=None)
+    assert _rel_fro(out, ref) < 5e-2
+
+
+@gpu_only
+def test_fp8_dgrad_and_bf16_wgrad():
+    """dlhs from FP8 dgrad (E5M2 x E4M3) within 8% of bf16; drhs (bf16 wgrad) < 0.1%."""
+    from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
+    from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
+    op = Fp8RaggedDotOp.init(rev_dtype=jnp.float8_e5m2)
+
+    def loss(l, r, o):
+        return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
+
+    g_lhs_fp8, g_rhs_fp8 = jax.grad(lambda l, r: loss(l, r, op), argnums=(0, 1))(lhs, rhs)
+    g_lhs_ref, g_rhs_ref = jax.grad(lambda l, r: loss(l, r, None), argnums=(0, 1))(lhs, rhs)
+    assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 8e-2  # fp8 dgrad (E5M2 x E4M3)
+    assert _rel_fro(g_rhs_fp8, g_rhs_ref) < 1e-3  # bf16-exact wgrad
+
+
+@gpu_only
+def test_fp8_output_grad_amax_history_updates():
+    """The output-grad amax history must roll on the backward (delayed scaling)."""
+    from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
+    from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
+    op = Fp8RaggedDotOp.init(amax_history_length=4, rev_dtype=jnp.float8_e5m2)
+
+    def loss(o):
+        return ragged_dot(lhs, rhs, gs, op=o).astype(jnp.float32).sum()
+
+    grads = jax.grad(loss)(op)
+    # OverwriteWithGradient returns the new state as the "gradient" of the op fields.
+    assert not jnp.allclose(grads.output_grad_amax_history, op.output_grad_amax_history)

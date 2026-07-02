@@ -157,16 +157,6 @@ def test_op_none_matches_xla_reference():
     np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
 
 
-def test_op_routes_to_op_and_runs_end_to_end():
-    lhs, rhs, gs = _fp8_inputs()
-    op = Fp8RaggedDotOp.init()
-    # The op is still a bf16 placeholder at this point; FP8 kernels land in later commits.
-    out = ragged_dot(lhs, rhs, gs, op=op)
-    ref = ragged_dot(lhs, rhs, gs, op=None)
-    assert out.shape == ref.shape
-    np.testing.assert_allclose(np.asarray(out), np.asarray(ref), rtol=2e-2, atol=2e-2)
-
-
 def test_op_with_explicit_implementation_raises():
     lhs, rhs, gs = _fp8_inputs()
     op = Fp8RaggedDotOp.init()
