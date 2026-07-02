@@ -189,6 +189,6 @@ def build_peers(
     """Build one :class:`FederationPeer` per configured peer, ordered by peer id.
 
     ``connect`` builds each peer connection; the default opens a real
-    authenticated ``RemoteClusterClient``.
+    authenticated connection to the peer's controller stub.
     """
     return [FederationPeer(peer_id, config, connect(config)) for peer_id, config in sorted(peers.items())]
