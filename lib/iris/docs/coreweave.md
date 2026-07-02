@@ -151,9 +151,21 @@ register the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or
 `BEARER` (a scoped endpoint token) — the same access modes as the GCP path. Keep
 `auth.provider` set (never null-auth) so `PRIVATE`/`BEARER` are actually enforced.
 
-Configure it under the controller's `coreweave` block; setup then creates
-(idempotently, on every `start_controller`) a path-restricted Ingress that keeps
-the dashboard and RPC surface cluster-internal and publishes just `/proxy`:
+CKS ships **no** ingress controller and no TLS issuer, so two cluster-wide,
+install-once prerequisites must be in place first — install them with
+`scripts/install_cw.py` (operator-run, safe-by-default; mirrors
+`install_kueue.py`):
+
+```bash
+# Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
+uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev            # dry run
+uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev --apply
+```
+
+Then configure the controller's `coreweave` block. `start_controller` reconciles
+(idempotently, on every start) a path-restricted `iris-controller-proxy` Ingress
+that keeps the dashboard and RPC surface cluster-internal and publishes just
+`/proxy`; cert-manager auto-issues the TLS cert into `tls_secret`:
 
 ```yaml
 controller:
@@ -161,79 +173,49 @@ controller:
     scale_group: cpu
     # Publish only /proxy off-cluster. Empty host = ClusterIP only (no ingress).
     public_proxy_host: iris-cw.oa.dev
-    ingress_class: nginx            # ingressClassName (default: nginx)
-    tls_secret: iris-controller-proxy-tls  # optional; omit for no TLS block
+    ingress_class: traefik                    # CoreWeave's blessed controller
+    tls_secret: iris-controller-proxy-tls
+    cluster_issuer: letsencrypt-http01-prod   # cert-manager auto-issues into tls_secret
 ```
 
-This applies an `iris-controller-proxy` Ingress equivalent to:
+`start_controller` **warns** (never fails) if the `IngressClass` is absent — the
+Ingress is applied anyway and starts serving once Traefik is present. A plain
+`type: LoadBalancer` Service on the controller port would be simpler but exposes
+the whole origin (RPC surface included, JWT-gated only); the path-restricted
+Ingress keeps only `/proxy` public.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: iris-controller-proxy
-  namespace: iris
-  annotations:               # stream vLLM SSE without buffering; long reads
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-spec:
-  ingressClassName: nginx
-  tls: [{hosts: [iris-cw.oa.dev], secretName: iris-controller-proxy-tls}]
-  rules:
-    - host: iris-cw.oa.dev
-      http:
-        paths:
-          - path: /proxy            # only /proxy* is published; / and the RPC
-            pathType: Prefix        # mounts stay ClusterIP-internal.
-            backend: {service: {name: iris-controller-svc, port: {number: 10000}}}
-```
+#### External address and DNS (`oa.dev` → `coreweave.app`)
 
-A plain `type: LoadBalancer` Service on the controller port would be simpler but
-exposes the whole origin (RPC surface included, JWT-gated only) — the
-path-restricted Ingress keeps only `/proxy` public.
-
-#### Prerequisite, external IP, and DNS
-
-Unlike the GCP arm (a reserved static IP on the shared GCLB), CoreWeave has no
-in-repo LB/DNS automation. The external address is served by the **ingress
-controller's own LoadBalancer**, not the controller Pod — so an ingress
-controller (e.g. `ingress-nginx`, exposed as a `Service type=LoadBalancer`) must
-be installed and provide the configured `ingress_class`. `start_controller`
-**warns** if that `IngressClass` is absent (the Ingress is applied anyway and
-serves once a controller appears); it never blocks controller startup.
-
-Find the external address the LB assigned, then point DNS at it:
+The external address is served by **Traefik's** LoadBalancer, not the controller
+Pod. `install_cw.py`'s Traefik gets a **stable CoreWeave-managed FQDN** under
+`*.<ORG-ID>-<CLUSTER>.coreweave.app` (the chart sets
+`service.beta.kubernetes.io/external-hostname: '*'`), so you never chase a
+churning IP. Read it and CNAME your host to it (`oa.dev` DNS is at **Namecheap**,
+Advanced DNS panel):
 
 ```bash
-# Verify a controller exists and provides the class:
-kubectl get ingressclass
-kubectl get pods -A | grep -i ingress
-
-# The address the ingress controller's LoadBalancer assigned:
-kubectl get ingress iris-controller-proxy -n iris -o wide
-kubectl get ingress iris-controller-proxy -n iris \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}{.status.loadBalancer.ingress[0].hostname}'
-# or straight from the controller's LB Service:
-kubectl get svc -A -l app.kubernetes.io/name=ingress-nginx   # EXTERNAL-IP column
+kubectl get svc traefik -n traefik \
+  -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
+# → e.g. <something>.<ORG-ID>-<CLUSTER>.coreweave.app
+#
+# Namecheap:  iris-cw.oa.dev  CNAME  <that>.coreweave.app
 ```
 
-`oa.dev` DNS is hosted at **Namecheap** (Advanced DNS panel, or their API). Add a
-record for `public_proxy_host`:
+Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
+Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s
+printed off-cluster URLs + the `BEARER` token are usable as-is). The
+`coreweave.app` name is only a stable CNAME target — all routing, Host matching,
+and TLS are on the `oa.dev` name.
 
-- LB gave an **IP** → an **A** record `iris-cw.oa.dev → <ip>`.
-- LB gave a **hostname** → a **CNAME** `iris-cw.oa.dev → <lb-hostname>` (prefer
-  this — it survives LB IP churn; CoreWeave LB IPs are not reserved by default).
-
-Three values must agree: this DNS record, `public_proxy_host`, and the cluster's
-`dashboard_url` (so `marin-serve`'s printed off-cluster URLs + the `BEARER` token
-are usable as-is).
-
-**TLS terminates in-cluster** (there is no IAP/edge layer and Namecheap does not
-proxy/terminate TLS). Populate `tls_secret` with a cert for the host — e.g. via
-`cert-manager` issuing Let's Encrypt certs (DNS-01 through the Namecheap API, or
-HTTP-01 through the same ingress). Leave `tls_secret` empty for plain HTTP (dev
-only). Rate-limiting is not provided at a DNS edge here; add it at the ingress
-controller if needed.
+**TLS** terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
+`install_cw.py` creates **HTTP-01** Let's Encrypt ClusterIssuers
+(`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
+Traefik — CoreWeave's *bundled* issuers only cover `*.coreweave.app` (DNS-01 via
+`acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs
+the CNAME **live first** (Let's Encrypt fetches `http://<host>/.well-known/...`);
+issue with `letsencrypt-http01-staging` first to avoid LE rate limits, then flip
+`cluster_issuer` to prod. Leave `tls_secret`/`cluster_issuer` empty for plain
+HTTP (dev only).
 
 ## 3. Tools
 
