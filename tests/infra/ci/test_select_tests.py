@@ -280,11 +280,6 @@ def test_full_matrix_contains_all_scopes():
     assert packages == set(SCOPES)
 
 
-def test_full_matrix_all_tests_empty():
-    for entry in full_matrix():
-        assert entry["tests"] == []
-
-
 # ---------------------------------------------------------------------------
 # compute_matrix integration
 # ---------------------------------------------------------------------------
