@@ -33,7 +33,10 @@ def quantized_ragged_dot(
 
     ``q_lhs[T,K]`` / ``q_rhs_t[E,N,K]`` are E4M3 (k-contiguous, forward). ``q_rhs``
     is the natural-layout ``[E,K,N]`` E4M3 weight the dgrad contracts over N.
-    ``out_scale = lhs_scale*rhs_scale``. ``grad_scale``/``grad_amax_history`` carry
+    ``out_scale = 1/(lhs_scale*rhs_scale)``: the raw fp8 product is
+    ``(a/s_a)·(b/s_b) = (a·b)/(s_a·s_b)``, so recovering ``a·b`` MULTIPLIES by
+    ``s_a·s_b`` — but the CuTe epilogue DIVIDES the accumulator by ``out_scale``,
+    hence we pass the reciprocal. ``grad_scale``/``grad_amax_history`` carry
     the output-grad delayed-scaling state; the backward returns their updates as
     cotangents (OverwriteWithGradient). ``lhs``/``rhs`` are the bf16 operands the
     bf16 wgrad differentiates. ``rev_dtype`` is the output-grad FP8 dtype (E5M2).
@@ -58,8 +61,10 @@ def _qrd_bwd(group_sizes, rev_dtype, res, g):
     # --- FP8 dgrad: g(E5M2) @ rhs(E4M3), contract N (natural layout) -> dlhs[M,K] ---
     # q_rhs is [E,K,N]; the CuTe kernel maps b[E,N_tile,K_contr], so passing q_rhs
     # contracts the last axis N (the fwd output dim) producing dlhs[M,K].
-    # out_scale is shape (1,) float32 to match the kernel's epilogue divisor.
-    dgrad_scale = jnp.reshape((new_grad_scale * rhs_scale).astype(jnp.float32), (1,))
+    # dgrad_scale = 1/(grad_scale*rhs_scale): dequant is a MULTIPLY by the scale
+    # product, but the kernel epilogue DIVIDES by out_scale, so pass the reciprocal
+    # (shape (1,) float32 to match the epilogue divisor).
+    dgrad_scale = jnp.reshape((1.0 / (new_grad_scale * rhs_scale)).astype(jnp.float32), (1,))
     grad_lhs = cute_ragged_dot(q_g, q_rhs, group_sizes, out_dtype=lhs.dtype, out_scale=dgrad_scale)
 
     # --- bf16-exact wgrad: differentiate the reference bf16 ragged_dot for grad_rhs only ---
@@ -116,8 +121,10 @@ def fp8_scaled_ragged_dot(
     q_rhs, new_rhs_scale = in_q(comp, fwd_dtype, rhs, rhs_scale, rhs_amax_history)
     # Transpose to [E,N,K] for the forward pass (CuTe kernel contracts K, the last axis).
     q_rhs_t = quantize(jnp.swapaxes(rhs, 1, 2), fwd_dtype, new_rhs_scale, comp)
-    # out_scale must be shape (1,) float32 — the kernel epilogue divides by it.
-    out_scale = jnp.reshape((new_lhs_scale * new_rhs_scale).astype(jnp.float32), (1,))
+    # out_scale = 1/(lhs_scale*rhs_scale): dequant is a MULTIPLY by the scale product,
+    # but the kernel epilogue DIVIDES by out_scale, so pass the reciprocal (shape (1,)
+    # float32 to match the epilogue divisor).
+    out_scale = jnp.reshape((1.0 / (new_lhs_scale * new_rhs_scale)).astype(jnp.float32), (1,))
     return quantized_ragged_dot(
         q_lhs,
         q_rhs_t,

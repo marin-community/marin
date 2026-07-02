@@ -124,6 +124,49 @@ def test_fp8_dgrad_and_bf16_wgrad():
 
 
 @gpu_only
+def test_fp8_nonunit_scale_regression():
+    """Regression for the output-scale inversion under a NON-unit applied scale.
+
+    The CuTe epilogue DIVIDES the accumulator by ``out_scale``, while the raw fp8
+    product ``q_a·q_b = (a/s_a)·(b/s_b) = (a·b)/(s_a·s_b)`` recovers ``a·b`` by
+    MULTIPLYING by ``s_a·s_b``. So ``out_scale`` must be ``1/(s_a·s_b)`` (fwd) and
+    ``1/(s_grad·s_rhs)`` (dgrad). With init scales=1 a single step applies scale 1
+    and the inversion is invisible. Here we prime the amax histories so the applied
+    scales are amax/448 ≪ 1: the buggy product-scale then over-scales by
+    ``1/(s·s)^2`` and blows up the error, while the reciprocal fix stays in tol.
+    """
+    import dataclasses  # noqa: PLC0415
+
+    from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
+    from haliax.quantization import Fp8RaggedDotOp  # noqa: PLC0415
+
+    lhs, rhs, gs = _nonuniform_fp8(512, 256, 4, 256)
+    op = Fp8RaggedDotOp.init(amax_history_length=4, rev_dtype=jnp.float8_e5m2)
+
+    # Prime the delayed-scaling state with the true per-tensor amax so the applied
+    # forward scales are amax/448 ≪ 1 (a realistic post-warmup scale), and prime the
+    # output-grad amax (loss=sum -> cotangent all-ones, amax 1) so the dgrad scale is
+    # non-unit too. This forces both scale paths off their identity value.
+    op = dataclasses.replace(
+        op,
+        input_amax_history=jnp.full_like(op.input_amax_history, jnp.max(jnp.abs(lhs)).astype(jnp.float32)),
+        kernel_amax_history=jnp.full_like(op.kernel_amax_history, jnp.max(jnp.abs(rhs)).astype(jnp.float32)),
+        output_grad_amax_history=jnp.ones_like(op.output_grad_amax_history),
+    )
+
+    def loss(l, r, o):
+        return ragged_dot(l, r, gs, op=o).astype(jnp.float32).sum()
+
+    out = ragged_dot(lhs, rhs, gs, op=op)
+    ref = ragged_dot(lhs, rhs, gs, op=None)
+    assert _rel_fro(out, ref) < 5e-2  # forward: reciprocal out_scale
+
+    g_lhs_fp8 = jax.grad(lambda l: loss(l, rhs, op))(lhs)
+    g_lhs_ref = jax.grad(lambda l: loss(l, rhs, None))(lhs)
+    assert _rel_fro(g_lhs_fp8, g_lhs_ref) < 8e-2  # dgrad: reciprocal dgrad_scale
+
+
+@gpu_only
 def test_fp8_output_grad_amax_history_updates():
     """The output-grad amax history must roll on the backward (delayed scaling)."""
     from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
