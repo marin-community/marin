@@ -47,6 +47,9 @@ COMPUTE_PIPELINE_MODES = ("manual", "emit")
 QUEUE_MODES = ("rectangular", "routing")
 METADATA_MODES = ("remote_slot", "static_recv")
 OUTPUT_MODES = ("debug", "perf")
+RECEIVER_SCHEDULES = ("fixed_wait", "ordered_wait", "ready_scan", "slot_group")
+SCAN_ORDERS = ("current", "rotated", "hash")
+SOURCE_PUSH_MODES = ("packed",)
 ROUTING_MODES = (
     "balanced",
     "uniform",
@@ -110,6 +113,11 @@ class PushInboxConfig:
     metadata_mode: str = "static_recv"
     output_mode: str = "debug"
     n_groups_per_job: int = 1
+    receiver_schedule: str = "fixed_wait"
+    scan_candidates: int = 8
+    scan_order: str = "rotated"
+    workers_per_slot: int = 1
+    source_push_mode: str = "packed"
     routing: str = "balanced"
     tokens_per_rank: int = 32768
     topk: int = 4
@@ -191,6 +199,29 @@ class PushInboxConfig:
                 f"got {self.n_groups_per_job=} with "
                 f"{self.intermediate_dim=} {self.block_n=} {self.n_group=}"
             )
+        if self.receiver_schedule not in RECEIVER_SCHEDULES:
+            raise ValueError(
+                f"unknown receiver_schedule={self.receiver_schedule!r}; expected one of {RECEIVER_SCHEDULES}"
+            )
+        if self.receiver_schedule == "ready_scan":
+            raise ValueError(
+                "receiver_schedule=ready_scan is disabled: current H100 smokes either deadlock or produce wrong hidden"
+                " values"
+            )
+        if self.receiver_schedule == "slot_group":
+            raise ValueError("receiver_schedule=slot_group is not implemented yet")
+        if self.receiver_schedule != "fixed_wait" and self.implementation != "m_n_slots":
+            raise ValueError("receiver_schedule modes are currently implemented only for implementation=m_n_slots")
+        if self.scan_candidates < 0:
+            raise ValueError("scan_candidates must be non-negative; use 0 to mean all candidates")
+        if self.scan_order not in SCAN_ORDERS:
+            raise ValueError(f"unknown scan_order={self.scan_order!r}; expected one of {SCAN_ORDERS}")
+        if self.workers_per_slot <= 0:
+            raise ValueError(f"workers_per_slot must be positive, got {self.workers_per_slot}")
+        if self.source_push_mode not in SOURCE_PUSH_MODES:
+            raise ValueError(
+                f"unknown source_push_mode={self.source_push_mode!r}; expected one of {SOURCE_PUSH_MODES}"
+            )
         if self.routing not in ROUTING_MODES:
             raise ValueError(f"unknown routing={self.routing!r}; expected one of {ROUTING_MODES}")
         if self.queue_mode == "routing" and self.traffic_pattern != "all_to_all":
@@ -244,6 +275,10 @@ def _make_kernel(config: PushInboxConfig):
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
+    ready_scan_jobs = config.inbox_slots * n_compute_jobs
+    ready_scan_candidates = (
+        ready_scan_jobs if config.scan_candidates == 0 else min(config.scan_candidates, ready_scan_jobs)
+    )
     rounds_per_slot = (config.entries_per_rank + config.inbox_slots - 1) // config.inbox_slots
     num_compute_sms = config.num_sms - config.num_send_sms
     send_dst_offsets = tuple(range(config.ep_size)) if config.traffic_pattern == "all_to_all" else (1,)
@@ -994,64 +1029,247 @@ def _make_kernel(config: PushInboxConfig):
 
                         return
 
-                    @pl.loop(0, rounds_per_slot)
-                    def _round_loop(round_i) -> None:
+                    def _job_owner(slot, job_i):
+                        work_group = (src_ordinal * config.inbox_slots + slot) * n_compute_jobs + job_i
+                        return (work_group % num_compute_sms) == compute_worker
+
+                    def _compute_recv_job(entry, slot, job_i) -> None:
+                        if config.metadata_mode == "static_recv":
+                            expert = recv_meta_ref[src_ordinal, entry, 1]
+                            dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
+                        else:
+                            expert = meta_ref[src, slot, 1]
+                            dst_row_start = meta_ref[src, slot, 2]
+
+                        @pl.loop(0, config.n_groups_per_job)
+                        def _job_n_group_loop(group_offset) -> None:
+                            n_group_i = job_i * config.n_groups_per_job + group_offset
+
+                            @pl.when(n_group_i < n_work_groups)
+                            def _job_n_group() -> None:
+                                _compute_hidden_n_group(
+                                    src,
+                                    slot,
+                                    expert,
+                                    dst_row_start,
+                                    n_group_i,
+                                )
+
+                    def _signal_recv_job_done(slot) -> None:
+                        pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                    def _scan_candidate_id(work_i, scan_attempt, round_i):
+                        if config.scan_order == "current":
+                            start = work_i
+                        elif config.scan_order == "rotated":
+                            start = compute_worker + 5 * round_i + work_i
+                        else:
+                            start = compute_worker * 17 + round_i * 31 + work_i * 7
+                        return (start + scan_attempt) % ready_scan_jobs
+
+                    def _ordered_wait_slot(slot_pos, round_i):
+                        if config.receiver_schedule == "fixed_wait" or config.scan_order == "current":
+                            return slot_pos
+                        if config.scan_order == "rotated":
+                            return (slot_pos + compute_worker + 5 * round_i) % config.inbox_slots
+                        return (compute_worker * 3 + round_i * 5 + slot_pos * 3) % config.inbox_slots
+
+                    def _maybe_select_ready_candidate(round_i, candidate_id, selected_ref) -> None:
+                        slot = candidate_id // n_compute_jobs
+                        job_i = candidate_id % n_compute_jobs
+                        entry = slot + round_i * config.inbox_slots
+
+                        @pl.when(entry < config.entries_per_rank)
+                        def _maybe_live_entry() -> None:
+                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+
+                            @pl.when(valid_rows > 0)
+                            def _live_entry() -> None:
+                                should_compute = _job_owner(slot, job_i)
+
+                                @pl.when(should_compute)
+                                def _owned_job() -> None:
+                                    full_value = pl.semaphore_read(full_sem_ref.at[src, slot])
+                                    ready = full_value >= (round_i + 1)
+                                    not_selected = selected_ref[0] < 0
+
+                                    @pl.when(ready & not_selected)
+                                    def _select_ready_job() -> None:
+                                        selected_ref[0] = candidate_id
+
+                    def _wait_and_compute_fixed_candidate(round_i, candidate_id) -> None:
+                        slot = candidate_id // n_compute_jobs
+                        job_i = candidate_id % n_compute_jobs
+                        entry = slot + round_i * config.inbox_slots
+
+                        @pl.when(entry < config.entries_per_rank)
+                        def _maybe_live_entry() -> None:
+                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+
+                            @pl.when(valid_rows > 0)
+                            def _live_entry() -> None:
+                                should_compute = _job_owner(slot, job_i)
+
+                                @pl.when(should_compute)
+                                def _owned_job() -> None:
+                                    pl.semaphore_wait(
+                                        full_sem_ref.at[src, slot],
+                                        value=round_i + 1,
+                                        decrement=False,
+                                    )
+                                    _compute_recv_job(entry, slot, job_i)
+                                    pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                    def _release_completed_slot(round_i, slot) -> None:
+                        entry = slot + round_i * config.inbox_slots
+
+                        @pl.when(entry < config.entries_per_rank)
+                        def _maybe_release_entry() -> None:
+                            valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+
+                            @pl.when(valid_rows > 0)
+                            def _release_live_entry() -> None:
+                                release_group = src_ordinal * config.inbox_slots + slot
+                                should_release = (release_group % num_compute_sms) == compute_worker
+
+                                @pl.when(should_release)
+                                def _release_slot() -> None:
+                                    pl.semaphore_wait(
+                                        done_sem_ref.at[src, slot],
+                                        value=(round_i + 1) * n_compute_jobs,
+                                        decrement=False,
+                                    )
+                                    _signal_empty_to_src(src, src_offset, slot)
+
+                    def _release_completed_slots(round_i) -> None:
                         @pl.loop(0, config.inbox_slots)
-                        def _slot_loop(slot) -> None:
-                            entry = slot + round_i * config.inbox_slots
+                        def _release_slot_loop(slot) -> None:
+                            _release_completed_slot(round_i, slot)
 
-                            @pl.when(entry < config.entries_per_rank)
-                            def _maybe_recv_slot_entry() -> None:
-                                valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+                    if config.receiver_schedule == "fixed_wait":
 
-                                @pl.when(valid_rows > 0)
-                                def _recv_slot_entry() -> None:
-                                    @pl.loop(0, n_compute_jobs)
-                                    def _job_loop(job_i) -> None:
-                                        work_group = (src_ordinal * config.inbox_slots + slot) * n_compute_jobs + job_i
-                                        should_compute = (work_group % num_compute_sms) == compute_worker
+                        @pl.loop(0, rounds_per_slot)
+                        def _round_loop(round_i) -> None:
+                            @pl.loop(0, config.inbox_slots)
+                            def _slot_loop(slot) -> None:
+                                entry = slot + round_i * config.inbox_slots
 
-                                        @pl.when(should_compute)
-                                        def _recv_job() -> None:
+                                @pl.when(entry < config.entries_per_rank)
+                                def _maybe_recv_slot_entry() -> None:
+                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
+
+                                    @pl.when(valid_rows > 0)
+                                    def _recv_slot_entry() -> None:
+                                        @pl.loop(0, n_compute_jobs)
+                                        def _job_loop(job_i) -> None:
+                                            work_group = (
+                                                src_ordinal * config.inbox_slots + slot
+                                            ) * n_compute_jobs + job_i
+                                            should_compute = (work_group % num_compute_sms) == compute_worker
+
+                                            @pl.when(should_compute)
+                                            def _recv_job() -> None:
+                                                pl.semaphore_wait(
+                                                    full_sem_ref.at[src, slot],
+                                                    value=round_i + 1,
+                                                    decrement=False,
+                                                )
+                                                if config.metadata_mode == "static_recv":
+                                                    expert = recv_meta_ref[src_ordinal, entry, 1]
+                                                    dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
+                                                else:
+                                                    expert = meta_ref[src, slot, 1]
+                                                    dst_row_start = meta_ref[src, slot, 2]
+
+                                                @pl.loop(0, config.n_groups_per_job)
+                                                def _job_n_group_loop(group_offset) -> None:
+                                                    n_group_i = job_i * config.n_groups_per_job + group_offset
+
+                                                    @pl.when(n_group_i < n_work_groups)
+                                                    def _job_n_group() -> None:
+                                                        _compute_hidden_n_group(
+                                                            src,
+                                                            slot,
+                                                            expert,
+                                                            dst_row_start,
+                                                            n_group_i,
+                                                        )
+
+                                                pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                                        release_group = src_ordinal * config.inbox_slots + slot
+                                        should_release = (release_group % num_compute_sms) == compute_worker
+
+                                        @pl.when(should_release)
+                                        def _release_slot() -> None:
                                             pl.semaphore_wait(
-                                                full_sem_ref.at[src, slot],
-                                                value=round_i + 1,
+                                                done_sem_ref.at[src, slot],
+                                                value=(round_i + 1) * n_compute_jobs,
                                                 decrement=False,
                                             )
-                                            if config.metadata_mode == "static_recv":
-                                                expert = recv_meta_ref[src_ordinal, entry, 1]
-                                                dst_row_start = recv_meta_ref[src_ordinal, entry, 2]
-                                            else:
-                                                expert = meta_ref[src, slot, 1]
-                                                dst_row_start = meta_ref[src, slot, 2]
+                                            _signal_empty_to_src(src, src_offset, slot)
 
-                                            @pl.loop(0, config.n_groups_per_job)
-                                            def _job_n_group_loop(group_offset) -> None:
-                                                n_group_i = job_i * config.n_groups_per_job + group_offset
+                    elif config.receiver_schedule == "ordered_wait":
 
-                                                @pl.when(n_group_i < n_work_groups)
-                                                def _job_n_group() -> None:
-                                                    _compute_hidden_n_group(
-                                                        src,
-                                                        slot,
-                                                        expert,
-                                                        dst_row_start,
-                                                        n_group_i,
-                                                    )
+                        @pl.loop(0, rounds_per_slot)
+                        def _round_loop(round_i) -> None:
+                            @pl.loop(0, config.inbox_slots)
+                            def _slot_loop(slot_pos) -> None:
+                                slot = _ordered_wait_slot(slot_pos, round_i)
+                                entry = slot + round_i * config.inbox_slots
 
-                                            pl.semaphore_signal(done_sem_ref.at[src, slot])
+                                @pl.when(entry < config.entries_per_rank)
+                                def _maybe_recv_slot_entry() -> None:
+                                    valid_rows = recv_meta_ref[src_ordinal, entry, 3]
 
-                                    release_group = src_ordinal * config.inbox_slots + slot
-                                    should_release = (release_group % num_compute_sms) == compute_worker
+                                    @pl.when(valid_rows > 0)
+                                    def _recv_slot_entry() -> None:
+                                        @pl.loop(0, n_compute_jobs)
+                                        def _job_loop(job_i) -> None:
+                                            should_compute = _job_owner(slot, job_i)
 
-                                    @pl.when(should_release)
-                                    def _release_slot() -> None:
-                                        pl.semaphore_wait(
-                                            done_sem_ref.at[src, slot],
-                                            value=(round_i + 1) * n_compute_jobs,
-                                            decrement=False,
-                                        )
-                                        _signal_empty_to_src(src, src_offset, slot)
+                                            @pl.when(should_compute)
+                                            def _recv_job() -> None:
+                                                pl.semaphore_wait(
+                                                    full_sem_ref.at[src, slot],
+                                                    value=round_i + 1,
+                                                    decrement=False,
+                                                )
+                                                _compute_recv_job(entry, slot, job_i)
+                                                pl.semaphore_signal(done_sem_ref.at[src, slot])
+
+                                        _release_completed_slot(round_i, slot)
+
+                    else:
+
+                        @pl.loop(0, rounds_per_slot)
+                        def _round_loop(round_i) -> None:
+                            def _select_scope(selected_ref):
+                                selected_ref[0] = jnp.int32(-1)
+
+                                @pl.loop(0, ready_scan_candidates)
+                                def _scan_attempt_loop(scan_attempt) -> None:
+                                    candidate_id = _scan_candidate_id(0, scan_attempt, round_i)
+                                    _maybe_select_ready_candidate(round_i, candidate_id, selected_ref)
+
+                                return selected_ref[0]
+
+                            selected_candidate = pl.run_scoped(
+                                _select_scope,
+                                selected_ref=mgpu.SMEM((128,), dtype=jnp.int32),
+                            )
+
+                            @pl.when(selected_candidate >= 0)
+                            def _compute_selected_candidate() -> None:
+                                _wait_and_compute_fixed_candidate(round_i, selected_candidate)
+
+                            @pl.loop(0, ready_scan_jobs)
+                            def _fallback_loop(candidate_id) -> None:
+                                @pl.when(candidate_id != selected_candidate)
+                                def _fallback_candidate() -> None:
+                                    _wait_and_compute_fixed_candidate(round_i, candidate_id)
+
+                            _release_completed_slots(round_i)
 
                 def _switch_recv_n_tile_src(src_ordinal) -> None:
                     def _branch(static_src_ordinal: int, static_src_offset: int):
@@ -1319,7 +1537,15 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     send_entries_per_rank = live_entries_per_rank - direct_self_entries_per_rank
     valid_rows_per_rank = np.sum(valid_rows, axis=(1, 2))
     rounded_rows_per_rank = live_entries_per_rank * config.block_m
+    masked_rows = live.astype(np.int64) * config.block_m - valid_rows
+    masked_rows_per_rank = np.sum(masked_rows, axis=(1, 2))
+    direct_self_masked_rows_per_rank = (
+        np.sum(masked_rows[:, 0, :], axis=1)
+        if config.direct_self_compute and config.traffic_pattern == "all_to_all"
+        else np.zeros((config.ep_size,), dtype=np.int64)
+    )
     send_rounded_rows_per_rank = send_entries_per_rank * config.block_m
+    send_masked_rows_per_rank = masked_rows_per_rank - direct_self_masked_rows_per_rank
     entries_per_pair = np.sum(live, axis=2)
     entries_by_dst = np.zeros((config.ep_size,), dtype=np.int64)
     entries_by_local_expert = np.zeros((config.experts_per_rank,), dtype=np.int64)
@@ -1353,6 +1579,10 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
+    ready_scan_jobs = config.inbox_slots * n_compute_jobs
+    ready_scan_candidates = (
+        ready_scan_jobs if config.scan_candidates == 0 else min(config.scan_candidates, ready_scan_jobs)
+    )
     if config.implementation == "m_n_slots":
         compute_wait_full_count = payload_send_entries_total * n_compute_jobs
     elif config.implementation in ("m_owner", "m_owner_slots"):
@@ -1373,10 +1603,17 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         "metadata_mode": config.metadata_mode,
         "direct_self_compute": config.direct_self_compute,
         "output_mode": config.output_mode,
+        "receiver_schedule": config.receiver_schedule,
+        "scan_candidates": config.scan_candidates,
+        "scan_candidates_effective": ready_scan_candidates,
+        "scan_order": config.scan_order,
+        "workers_per_slot": config.workers_per_slot,
+        "source_push_mode": config.source_push_mode,
         "n_groups_per_job": config.n_groups_per_job,
         "n_work_groups_per_entry": n_work_groups,
         "num_compute_jobs_per_entry": n_compute_jobs,
         "done_signals_per_entry": n_compute_jobs,
+        "ready_scan_jobs_per_round": ready_scan_jobs,
         "send_entries_total": live_entries_total,
         "recv_entries_total": live_entries_total,
         "live_entries_total": live_entries_total,
@@ -1397,12 +1634,27 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
         "tail_entries_total": tail_entries_total,
         "tail_fraction": float(tail_entries_total / live_entries_total) if live_entries_total else 0.0,
         "zero_entries_skipped": int(capacity_entries_total - live_entries_total),
+        "masked_rows_total": int(np.sum(masked_rows)),
+        "masked_rows_per_rank_min": int(np.min(masked_rows_per_rank)),
+        "masked_rows_per_rank_mean": float(np.mean(masked_rows_per_rank)),
+        "masked_rows_per_rank_max": int(np.max(masked_rows_per_rank)),
+        "masked_row_fraction": (
+            float(np.sum(masked_rows) / max(float(np.sum(rounded_rows_per_rank)), 1.0)) if live_entries_total else 0.0
+        ),
         "valid_rows_per_rank_min": int(np.min(valid_rows_per_rank)),
         "valid_rows_per_rank_mean": float(np.mean(valid_rows_per_rank)),
         "valid_rows_per_rank_max": int(np.max(valid_rows_per_rank)),
         "rounded_rows_per_rank_min": int(np.min(rounded_rows_per_rank)),
         "rounded_rows_per_rank_mean": float(np.mean(rounded_rows_per_rank)),
         "rounded_rows_per_rank_max": int(np.max(rounded_rows_per_rank)),
+        "send_masked_rows_per_rank_min": int(np.min(send_masked_rows_per_rank)),
+        "send_masked_rows_per_rank_mean": float(np.mean(send_masked_rows_per_rank)),
+        "send_masked_rows_per_rank_max": int(np.max(send_masked_rows_per_rank)),
+        "send_masked_row_fraction": (
+            float(np.sum(send_masked_rows_per_rank) / max(float(np.sum(send_rounded_rows_per_rank)), 1.0))
+            if payload_send_entries_total
+            else 0.0
+        ),
         "send_rounded_rows_per_rank_min": int(np.min(send_rounded_rows_per_rank)),
         "send_rounded_rows_per_rank_mean": float(np.mean(send_rounded_rows_per_rank)),
         "send_rounded_rows_per_rank_max": int(np.max(send_rounded_rows_per_rank)),
@@ -1709,6 +1961,22 @@ def _reference_hidden(config: PushInboxConfig, x_host, send_meta_host, w_host) -
     return hidden
 
 
+def _hidden_live_row_mask(config: PushInboxConfig, send_meta_host) -> np.ndarray:
+    mask = np.zeros((config.ep_size, config.hidden_rows_per_rank), dtype=np.bool_)
+    send_meta = np.asarray(send_meta_host, dtype=np.int32)
+    for src in range(config.ep_size):
+        dsts = range(config.ep_size) if config.traffic_pattern == "all_to_all" else ((src + 1) % config.ep_size,)
+        for dst in dsts:
+            dst_ordinal = _dst_ordinal(config, src, dst)
+            for entry in range(config.entries_per_rank):
+                valid_rows = send_meta[src, dst_ordinal, entry, 3]
+                if valid_rows <= 0:
+                    continue
+                row = send_meta[src, dst_ordinal, entry, 2]
+                mask[dst, row : row + config.block_m] = True
+    return mask
+
+
 def _validate(
     config: PushInboxConfig,
     x_host,
@@ -1755,17 +2023,32 @@ def _validate(
                     metadata_mismatches += int(np.sum(meta_host[dst, src, slot, :] != expected_meta))
     hidden_max_abs_diff = None
     hidden_mean_abs_diff = None
+    hidden_all_max_abs_diff = None
+    hidden_unwritten_max_abs = None
     if config.implementation in ("m_owner", "m_owner_slots", "m_n_slots"):
         hidden_expected = _reference_hidden(config, x_host, send_meta_host, w_host)
         hidden_diff = np.abs(np.asarray(hidden, dtype=np.float32) - hidden_expected)
-        hidden_max_abs_diff = float(np.max(hidden_diff))
-        hidden_mean_abs_diff = float(np.mean(hidden_diff))
+        hidden_all_max_abs_diff = float(np.max(hidden_diff))
+        live_row_mask = _hidden_live_row_mask(config, send_meta_host)
+        if np.any(live_row_mask):
+            hidden_live_diff = hidden_diff[live_row_mask, :]
+            hidden_max_abs_diff = float(np.max(hidden_live_diff))
+            hidden_mean_abs_diff = float(np.mean(hidden_live_diff))
+        else:
+            hidden_max_abs_diff = 0.0
+            hidden_mean_abs_diff = 0.0
+        if np.any(~live_row_mask):
+            hidden_unwritten_max_abs = float(np.max(hidden_diff[~live_row_mask, :]))
+        else:
+            hidden_unwritten_max_abs = 0.0
         max_abs_diff = max(max_abs_diff, hidden_max_abs_diff)
     return {
         "max_abs_diff": max_abs_diff,
         "metadata_mismatches": metadata_mismatches,
         "hidden_max_abs_diff": hidden_max_abs_diff,
         "hidden_mean_abs_diff": hidden_mean_abs_diff,
+        "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
+        "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
     }
 
 
@@ -1817,6 +2100,8 @@ def _run_one(
         metadata_mismatches = None
         hidden_max_abs_diff = None
         hidden_mean_abs_diff = None
+        hidden_all_max_abs_diff = None
+        hidden_unwritten_max_abs = None
         if check:
             validation = _validate(
                 config,
@@ -1833,6 +2118,8 @@ def _run_one(
             metadata_mismatches = validation["metadata_mismatches"]
             hidden_max_abs_diff = validation["hidden_max_abs_diff"]
             hidden_mean_abs_diff = validation["hidden_mean_abs_diff"]
+            hidden_all_max_abs_diff = validation["hidden_all_max_abs_diff"]
+            hidden_unwritten_max_abs = validation["hidden_unwritten_max_abs"]
         bytes_per_rank = queue_stats["send_rounded_rows_per_rank_mean"] * config.hidden_dim * BYTES_PER_BF16
         w13_tflops_per_rank = None
         if config.implementation != "send_only":
@@ -1854,6 +2141,8 @@ def _run_one(
             "metadata_mismatches": metadata_mismatches,
             "hidden_max_abs_diff": hidden_max_abs_diff,
             "hidden_mean_abs_diff": hidden_mean_abs_diff,
+            "hidden_all_max_abs_diff": hidden_all_max_abs_diff,
+            "hidden_unwritten_max_abs": hidden_unwritten_max_abs,
             "error": None,
         }
     except Exception as exc:  # noqa: BLE001 - repro rows should capture unsupported candidates.
@@ -1872,6 +2161,8 @@ def _run_one(
             "metadata_mismatches": None,
             "hidden_max_abs_diff": None,
             "hidden_mean_abs_diff": None,
+            "hidden_all_max_abs_diff": None,
+            "hidden_unwritten_max_abs": None,
             "error": f"{type(exc).__name__}: {exc}",
             "traceback": traceback.format_exc(),
         }
@@ -1886,6 +2177,40 @@ def _parse_int_csv(value: str) -> tuple[int, ...]:
     return values
 
 
+def _parse_scan_candidates(value: str) -> int:
+    if value == "all":
+        return 0
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("scan candidates must be non-negative or 'all'")
+    return parsed
+
+
+def _parse_scan_candidates_csv(value: str) -> tuple[int, ...]:
+    values = tuple(_parse_scan_candidates(part) for part in value.split(",") if part)
+    if not values:
+        raise argparse.ArgumentTypeError("expected a comma-separated list of integers or 'all'")
+    return values
+
+
+def _parse_choice_csv(value: str, choices: tuple[str, ...], name: str) -> tuple[str, ...]:
+    values = tuple(part for part in value.split(",") if part)
+    if not values:
+        raise argparse.ArgumentTypeError(f"expected a comma-separated list of {name} values")
+    unknown = tuple(part for part in values if part not in choices)
+    if unknown:
+        raise argparse.ArgumentTypeError(f"unknown {name} values {unknown}; expected one of {choices}")
+    return values
+
+
+def _parse_receiver_schedule_csv(value: str) -> tuple[str, ...]:
+    return _parse_choice_csv(value, RECEIVER_SCHEDULES, "receiver_schedule")
+
+
+def _parse_scan_order_csv(value: str) -> tuple[str, ...]:
+    return _parse_choice_csv(value, SCAN_ORDERS, "scan_order")
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--implementation", choices=IMPLEMENTATIONS, default="send_only")
@@ -1897,6 +2222,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-dim", type=int, default=2560)
     parser.add_argument("--intermediate-dim", type=int, default=1280)
     parser.add_argument("--block-m", type=int, default=64)
+    parser.add_argument("--sweep-block-m", type=_parse_int_csv, default=None)
     parser.add_argument("--block-n", type=int, default=128)
     parser.add_argument("--sweep-block-n", type=_parse_int_csv, default=None)
     parser.add_argument("--block-k", type=int, default=128)
@@ -1919,6 +2245,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-mode", choices=OUTPUT_MODES, default="debug")
     parser.add_argument("--n-groups-per-job", type=int, default=1)
     parser.add_argument("--sweep-n-groups-per-job", type=_parse_int_csv, default=None)
+    parser.add_argument("--receiver-schedule", choices=RECEIVER_SCHEDULES, default="fixed_wait")
+    parser.add_argument("--sweep-receiver-schedule", type=_parse_receiver_schedule_csv, default=None)
+    parser.add_argument("--scan-candidates", type=_parse_scan_candidates, default=8)
+    parser.add_argument("--sweep-scan-candidates", type=_parse_scan_candidates_csv, default=None)
+    parser.add_argument("--scan-order", choices=SCAN_ORDERS, default="rotated")
+    parser.add_argument("--sweep-scan-order", type=_parse_scan_order_csv, default=None)
+    parser.add_argument("--workers-per-slot", type=int, default=1)
+    parser.add_argument("--sweep-workers-per-slot", type=_parse_int_csv, default=None)
+    parser.add_argument("--source-push-mode", choices=SOURCE_PUSH_MODES, default="packed")
     parser.add_argument("--routing", choices=ROUTING_MODES, default="balanced")
     parser.add_argument("--tokens-per-rank", type=int, default=32768)
     parser.add_argument("--topk", type=int, default=4)
@@ -1938,6 +2273,7 @@ def main() -> None:
     args = _parse_args()
     entries_per_rank_values = args.sweep_entries_per_rank or (args.entries_per_rank,)
     inbox_slots_values = args.sweep_inbox_slots or (args.inbox_slots,)
+    block_m_values = args.sweep_block_m or (args.block_m,)
     block_n_values = args.sweep_block_n or (args.block_n,)
     block_k_values = args.sweep_block_k or (args.block_k,)
     num_send_sms_values = args.sweep_num_send_sms or (args.num_send_sms,)
@@ -1945,6 +2281,10 @@ def main() -> None:
     n_group_values = args.sweep_n_groups or (args.n_group,)
     n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
     max_concurrent_steps_values = args.sweep_max_concurrent_steps or (args.max_concurrent_steps,)
+    receiver_schedule_values = args.sweep_receiver_schedule or (args.receiver_schedule,)
+    scan_candidates_values = args.sweep_scan_candidates or (args.scan_candidates,)
+    scan_order_values = args.sweep_scan_order or (args.scan_order,)
+    workers_per_slot_values = args.sweep_workers_per_slot or (args.workers_per_slot,)
     if args.jsonl:
         jsonl_dir = os.path.dirname(args.jsonl)
         if jsonl_dir:
@@ -1952,56 +2292,66 @@ def main() -> None:
 
     for entries_per_rank in entries_per_rank_values:
         for inbox_slots in inbox_slots_values:
-            for block_n in block_n_values:
-                for block_k in block_k_values:
-                    for num_send_sms in num_send_sms_values:
-                        for num_sms in num_sms_values:
-                            for n_group in n_group_values:
-                                for n_groups_per_job in n_groups_per_job_values:
-                                    for max_concurrent_steps in max_concurrent_steps_values:
-                                        config = PushInboxConfig(
-                                            implementation=args.implementation,
-                                            ep_size=args.ep_size,
-                                            entries_per_rank=entries_per_rank,
-                                            inbox_slots=inbox_slots,
-                                            hidden_dim=args.hidden_dim,
-                                            intermediate_dim=args.intermediate_dim,
-                                            block_m=args.block_m,
-                                            block_n=block_n,
-                                            block_k=block_k,
-                                            n_group=n_group,
-                                            n_groups_per_job=n_groups_per_job,
-                                            experts_per_rank=args.experts_per_rank,
-                                            num_send_sms=num_send_sms,
-                                            num_sms=num_sms,
-                                            lowering_semantics=args.lowering_semantics,
-                                            traffic_pattern=args.traffic_pattern,
-                                            peer_loop=args.peer_loop,
-                                            compute_pipeline=args.compute_pipeline,
-                                            max_concurrent_steps=max_concurrent_steps,
-                                            queue_mode=args.queue_mode,
-                                            metadata_mode=args.metadata_mode,
-                                            output_mode=args.output_mode,
-                                            routing=args.routing,
-                                            tokens_per_rank=args.tokens_per_rank,
-                                            topk=args.topk,
-                                            routing_seed=args.routing_seed,
-                                            direct_self_compute=args.direct_self_compute,
-                                        )
-                                        row = _run_one(
-                                            config,
-                                            warmup=args.warmup,
-                                            steps=args.steps,
-                                            check=args.check,
-                                            debug_exceptions=args.debug_exceptions,
-                                            separate_compile=args.separate_compile,
-                                            progress_events=args.progress_events,
-                                        )
-                                        line = json.dumps(row, sort_keys=True)
-                                        print(line, flush=True)
-                                        if args.jsonl:
-                                            with open(args.jsonl, "a", encoding="utf-8") as f:
-                                                print(line, file=f, flush=True)
+            for block_m in block_m_values:
+                for block_n in block_n_values:
+                    for block_k in block_k_values:
+                        for num_send_sms in num_send_sms_values:
+                            for num_sms in num_sms_values:
+                                for n_group in n_group_values:
+                                    for n_groups_per_job in n_groups_per_job_values:
+                                        for max_concurrent_steps in max_concurrent_steps_values:
+                                            for receiver_schedule in receiver_schedule_values:
+                                                for scan_candidates in scan_candidates_values:
+                                                    for scan_order in scan_order_values:
+                                                        for workers_per_slot in workers_per_slot_values:
+                                                            config = PushInboxConfig(
+                                                                implementation=args.implementation,
+                                                                ep_size=args.ep_size,
+                                                                entries_per_rank=entries_per_rank,
+                                                                inbox_slots=inbox_slots,
+                                                                hidden_dim=args.hidden_dim,
+                                                                intermediate_dim=args.intermediate_dim,
+                                                                block_m=block_m,
+                                                                block_n=block_n,
+                                                                block_k=block_k,
+                                                                n_group=n_group,
+                                                                n_groups_per_job=n_groups_per_job,
+                                                                receiver_schedule=receiver_schedule,
+                                                                scan_candidates=scan_candidates,
+                                                                scan_order=scan_order,
+                                                                workers_per_slot=workers_per_slot,
+                                                                source_push_mode=args.source_push_mode,
+                                                                experts_per_rank=args.experts_per_rank,
+                                                                num_send_sms=num_send_sms,
+                                                                num_sms=num_sms,
+                                                                lowering_semantics=args.lowering_semantics,
+                                                                traffic_pattern=args.traffic_pattern,
+                                                                peer_loop=args.peer_loop,
+                                                                compute_pipeline=args.compute_pipeline,
+                                                                max_concurrent_steps=max_concurrent_steps,
+                                                                queue_mode=args.queue_mode,
+                                                                metadata_mode=args.metadata_mode,
+                                                                output_mode=args.output_mode,
+                                                                routing=args.routing,
+                                                                tokens_per_rank=args.tokens_per_rank,
+                                                                topk=args.topk,
+                                                                routing_seed=args.routing_seed,
+                                                                direct_self_compute=args.direct_self_compute,
+                                                            )
+                                                            row = _run_one(
+                                                                config,
+                                                                warmup=args.warmup,
+                                                                steps=args.steps,
+                                                                check=args.check,
+                                                                debug_exceptions=args.debug_exceptions,
+                                                                separate_compile=args.separate_compile,
+                                                                progress_events=args.progress_events,
+                                                            )
+                                                            line = json.dumps(row, sort_keys=True)
+                                                            print(line, flush=True)
+                                                            if args.jsonl:
+                                                                with open(args.jsonl, "a", encoding="utf-8") as f:
+                                                                    print(line, file=f, flush=True)
 
 
 if __name__ == "__main__":

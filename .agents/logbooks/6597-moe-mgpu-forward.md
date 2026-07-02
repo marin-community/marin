@@ -2238,3 +2238,104 @@ description: Hopper Pallas Mosaic MGPU expert-parallel MoE forward/permute_up wo
   - `block_n=256` is not competitive, and `block_k=256,block_n=256` is invalid on shared-memory footprint.
   - Static/switch peer loops blocked in this harness; treat `grid_switch` as the viable peer scheduling path for now.
   - Current bottleneck judgment: communication plus software structure. The source-push inbox protocol can approach 200 TFLOP/s/rank, but the current implementation does not have a stable checked target win beyond the existing best row.
+
+### 2026-07-02 01:10 PDT - FWD-SWQ-060 Receiver scheduling and fixed SMS follow-up
+- Question:
+  - Test whether receiver-side head-of-line blocking in the source-push inbox harness is the reason the best rows are not stable above 200 TFLOP/s/rank.
+  - Specifically, try a ready-style receiver schedule, lower-risk ordered slot variants, and a fixed-only SMS/slot repeat around the current best shape.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `receiver_schedule`, `scan_order`, `scan_candidates`, `workers_per_slot`, and `source_push_mode` config/CLI fields and queue stats.
+    - Added `ordered_wait`, a diagnostic that keeps the same wait/release protocol but changes receiver slot visit order.
+    - Tried multiple `ready_scan` variants during the pass; the current file now rejects `receiver_schedule=ready_scan` at validation because H100 smokes either deadlocked or produced wrong hidden values.
+    - `slot_group` is still rejected as not implemented.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- Ready-scan H100 results on `cw-us-east-02a`:
+  - `/dlwh/repro-source-push-ready-scan-smoke-20260702-001238`: failed before useful row because the tiny test capacity was invalid for 32 experts.
+  - `/dlwh/repro-source-push-ready-scan-smoke-20260702-001506`: fixed tiny row passed (`steady_state_time=0.001476853s`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774`); ready row hung and was stopped.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-002159`: ready-only, `scan_candidates=1`; reached `first_call_start` and hung, stopped.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-003002`: SMEM flag attempt failed lowering with `memref<4xi32, #gpu.address_space<workgroup>> must have a number of elements that is a multiple of 128`.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-003332`: padded SMEM flag attempt compiled, then hung in first run, stopped.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-003952`: HBM flag attempt compiled, then hung in first run, stopped.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-004115`: current fallback-style ready scan completed but was wrong: `steady_state_time=0.002412586s`, `w13_tflops_per_rank=0.22166`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.671875`.
+  - `/dlwh/repro-source-push-ready-scan-min-smoke-20260702-004828`: compiled then made no progress; stopped.
+- Ordered/fixed receiver schedule rows:
+
+  | job | schedule | scan_order | steady_state_time | W13 TFLOP/s/rank | correctness |
+  |---|---|---|---:|---:|---|
+  | `/dlwh/repro-source-push-ordered-wait-smoke-20260702-004459` | fixed | current | `0.001839216s` | `0.29076` | `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774` |
+  | `/dlwh/repro-source-push-ordered-wait-smoke-20260702-004459` | ordered | current | `0.001978554s` | `0.27029` | `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774` |
+  | `/dlwh/repro-source-push-live-mask-smoke-20260702-010245` | fixed | rotated | `0.002558922s` | `0.20898` | `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774` |
+  | `/dlwh/repro-source-push-live-mask-smoke-20260702-010245` | ordered | rotated | `0.002221976s` | `0.24067` | `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774` |
+  | `/dlwh/repro-source-push-ordered-target-20260702-004805` | fixed | rotated | `0.010260116s` | `177.53` | perf-only |
+  | `/dlwh/repro-source-push-ordered-target-20260702-010700` | fixed | current | `0.010889653s` | `167.27` | perf-only |
+  | `/dlwh/repro-source-push-ordered-target-20260702-010700` | fixed | rotated | `0.013704646s` | `132.91` | perf-only |
+  | `/dlwh/repro-source-push-ordered-target-20260702-010700` | fixed | hash | `0.009793478s` | `185.99` | perf-only |
+  | `/dlwh/repro-source-push-ordered-target-20260702-010700` | ordered | current | `0.012363681s` | `147.33` | perf-only |
+
+- Ordered target outcome:
+  - `/dlwh/repro-source-push-ordered-target-20260702-004805` hung after the first fixed row and was stopped.
+  - `/dlwh/repro-source-push-ordered-target-20260702-010700` hung at the ordered/rotated first call and was stopped.
+  - The only target ordered row that completed was slower than fixed (`147.33` vs fixed/hash `185.99` TFLOP/s/rank in the same job).
+- Fixed-only SMS/slot sweep:
+  - Job: `/dlwh/repro-source-push-fixed-sms-sweep-20260702-010151`, cluster `cw-us-east-02a`, succeeded with 12 rows.
+
+  | inbox_slots | num_send_sms | num_sms | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 4 | 2 | 32 | `0.009513282s` | `191.47` | `74.79` |
+  | 8 | 1 | 32 | `0.011302224s` | `161.16` | `62.95` |
+  | 8 | 1 | 16 | `0.012038354s` | `151.31` | `59.10` |
+  | 4 | 2 | 16 | `0.012392647s` | `146.98` | `57.41` |
+  | 4 | 1 | 32 | `0.013233860s` | `137.64` | `53.76` |
+  | 8 | 2 | 32 | `0.013294513s` | `137.01` | `53.52` |
+  | 4 | 2 | 64 | `0.014473559s` | `125.85` | `49.16` |
+  | 4 | 1 | 16 | `0.014937385s` | `121.94` | `47.63` |
+  | 4 | 1 | 64 | `0.018163113s` | `100.28` | `39.17` |
+  | 8 | 2 | 64 | `0.020159322s` | `90.35` | `35.29` |
+  | 8 | 2 | 16 | `0.021094127s` | `86.35` | `33.73` |
+  | 8 | 1 | 64 | `0.032533448s` | `55.99` | `21.87` |
+
+- Interpretation:
+  - No stable speedup this pass. The best fixed-only row here (`191.47 TFLOP/s/rank`) is below the prior one-shot `199.55` and checked `197.12` target rows from FWD-SWQ-059.
+  - Increasing total SMS to 64 regressed badly in this sweep. `inbox_slots=8` was also mostly worse. The best shape remains around `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`.
+  - `ordered_wait` is useful only as a diagnostic. It preserves blocking waits and does not create real overlap; at target it is either slower or hangs for some orders.
+  - The ready-scan attempts did not establish a correct nonblocking receiver schedule. Current evidence points to a software/protocol synchronization problem rather than a WGMMA compute limit.
+  - No source-push H100 jobs are left running.
+
+### 2026-07-02 01:21 PDT - FWD-SWQ-061 Block-M and tail-padding tax
+- Question:
+  - Is the target uniform-routing source-push path losing mainly to tail padding/masked row work, or to per-entry/semaphore overhead?
+  - Compare `block_m=64` against `block_m=128`, which roughly halves live entries and semaphore waits but increases padded rows per tail entry.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added `--sweep-block-m`.
+    - Added queue counters for masked row work: `masked_rows_total`, `masked_rows_per_rank_*`, `masked_row_fraction`, `send_masked_rows_per_rank_*`, and `send_masked_row_fraction`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 jobs on `cw-us-east-02a`:
+  - `/dlwh/repro-source-push-blockm-tail-sweep-20260702-011709`, succeeded.
+  - `/dlwh/repro-source-push-blockm128-target-20260702-011900`, succeeded; this was an extra `block_m=128` target row found while checking active jobs.
+
+  | job | block_m | entries_per_rank | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | live entries | masked rows/rank | masked row fraction | tail entry fraction | result |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | `/dlwh/repro-source-push-blockm-tail-sweep-20260702-011709` | 32 | 576 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | invalid: WGMMA requires `m` multiple of 64 |
+  | `/dlwh/repro-source-push-blockm-tail-sweep-20260702-011709` | 64 | 288 | `0.011840745s` | `153.83` | `60.09` | `17371` | `7896` | `5.6819%` | `11.6055%` | valid, slower/noisy |
+  | `/dlwh/repro-source-push-blockm-tail-sweep-20260702-011709` | 128 | 160 | `0.014755931s` | `130.43` | `50.95` | `9177` | `15760` | `10.7334%` | `21.9680%` | valid regression |
+  | `/dlwh/repro-source-push-blockm128-target-20260702-011900` | 128 | 192 | `0.012782207s` | `150.57` | `58.81` | `9177` | `15760` | `10.7334%` | `21.9680%` | valid regression |
+
+- Interpretation:
+  - `block_m=32` is not available for this WGMMA path.
+  - `block_m=128` cuts live entries from `17371` to `9177`, but it doubles masked-row fraction from `5.68%` to `10.73%` and is slower in both 128-row runs.
+  - Therefore the target path is not simply dominated by the number of slot semaphore events. Larger M reduces queue pressure but hurts the WGMMA/copy shape and padding enough to lose.
+  - The 64-row row in this sweep was slower than the earlier best 64-row rows, so absolute timing is noisy; the relative `block_m=128` regression is still consistent across two runs.
+  - No source-push H100 jobs are left running.
+
+Addendum:
+- Live-row validation now separates correctness from unwritten hidden arena contents. In `/dlwh/repro-source-push-live-mask-smoke-20260702-010245`, both fixed and ordered rows had live `hidden_max_abs_diff=0.028977394104003906`, while `hidden_all_max_abs_diff=0.671875` and `hidden_unwritten_max_abs=0.671875`. The former is the useful correctness signal; the latter is the expected no-zeroing diagnostic for rows never written by live routing metadata.
+- `/dlwh/repro-source-push-ordered-missing-target-20260702-011330` was launched only for missing `ordered_wait` rotated/hash target rows. It reached `ordered_wait/rotated` `first_call_start`, emitted no completed rows after several minutes, and was stopped. `ordered_wait/rotated` is therefore a runtime stall at target shape in the current implementation.
+- `block_m=128` source-push target probe `/dlwh/repro-source-push-blockm128-target-20260702-011900` succeeded but regressed: `steady_state_time=0.0127822074241s`, `w13_tflops_per_rank=150.565260486`, `send_gbps_per_rank=58.8145548775`, `live_entries_total=9177`, `slot_full_waits=91770`, `rounded_rows_per_rank_mean=146832`, dropped entries `0`. Halving queue entries and semaphore waits did not offset larger CTA/accumulator pressure and extra rounded-row work.
