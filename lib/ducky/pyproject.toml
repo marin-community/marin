@@ -21,7 +21,7 @@ dependencies = [
 ducky = "ducky.cli:cli"
 
 [dependency-groups]
-dev = [
+test = [
     "pytest>=8.4",
     "pytest-timeout",
 ]
