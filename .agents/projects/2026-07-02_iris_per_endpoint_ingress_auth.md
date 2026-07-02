@@ -5,7 +5,7 @@
 > PR #6857). Follow-up to #6545 (public-endpoint discussion) and #6556
 > (marin-serve).
 >
-> **Landed (stages 1–7, all tests green):** proto (`EndpointAccess`,
+> **Landed (stages 1–8, all tests green):** proto (`EndpointAccess`,
 > `RegisterEndpointRequest.access`, `MintEndpointToken`), migration `0036`,
 > `VerifiedIdentity.audience`, `JwtTokenManager.create_endpoint_token` +
 > `verify_aud=False`, `resolve_endpoint_row`, `_authorize_proxy` + the RPC/HTTP
@@ -14,9 +14,13 @@
 > and the **`marin-serve` flow**: `--access {private|public|bearer}` registers
 > the endpoint with the mode and, for `bearer`, mints a scoped token CLI-side
 > (`RemoteClusterClient.mint_endpoint_token`) once vLLM registers and prints the
-> off-cluster OpenAI `base_url` + `api_key`.
-> **Remaining:** infra stage 8 (operator-run `iap_gclb.py public-proxy` and the
-> CoreWeave ingress) + docs.
+> off-cluster OpenAI `base_url` + `api_key`, and the **infra stage 8**:
+> `iap_gclb.py public-proxy` (IAP-free backend on the same NEG + a `/proxy/*`
+> URL-map path rule, standalone or via `deploy --with-public-proxy`), the
+> CoreWeave path-restricted Ingress, and the docs for both.
+> **Remaining:** none for the controller/serve/GCP arms — only real-GCP
+> execution of the `public-proxy` stage (needs an operator with gcloud auth; the
+> code is idempotent and `--dry-run`-able).
 
 ## Problem
 
