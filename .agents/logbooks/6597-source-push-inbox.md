@@ -1,6 +1,6 @@
 ---
 topic: 6597-source-push-inbox
-issue: TBD
+issue: https://github.com/marin-community/marin/issues/6848
 description: Source-push inbox MGPU MoE permute_up plus W13 research follow-up to #6597.
 author: dlwh
 ---
@@ -17,7 +17,7 @@ author: dlwh
 - Goal: Track source-push inbox MGPU MoE forward research that follows #6597, especially production relevance, decomposition, and next-step overlap/kernel design work.
 - Primary metrics: target-shape elapsed time for `permute_up + W13`, W13 TFLOP/s/rank over full path time, send GB/s/rank, drops, metadata mismatches, and max absolute diff for correctness smokes.
 - Constraints: Use H100 cluster `cw-us-east-02a`; do not restart or bounce Iris; babysit H100 jobs; preserve production PR cleanliness.
-- Coordinating issue/PR: Parent issue #6597, production PR #6841, coordinating experiment issue TBD.
+- Coordinating issue/PR: Parent issue #6597, production PR #6841, experiment issue #6848.
 - Experiment ID prefix: `MOE-SP`
 - Shared tags: `MOE-SP`, `issue-6597`, `source-push-inbox`, `mgpu-moe`
 
@@ -102,7 +102,7 @@ author: dlwh
   - `num_sms=16`: `13.912ms`, `131.02 TFLOP/s/rank`
   - `direct_self_compute=true`: `8.466ms`, `215.28 TFLOP/s/rank`
 - Interpretation: The stable path is faster than the serial ring+Pallas hybrid estimate and should be tracked as the current proven source-push baseline. The decomposition shows a `5.6ms` send/store-zero floor and about `2.7ms` additional full-WGMMA cost.
-- Next action: Open the coordinating experiment issue and link it to this logbook, parent issue #6597, PR #6841, and the research branch.
+- Next action: Use issue #6848 for promoted milestones and keep detailed commands/results in this logbook.
 
 ### 2026-07-02 09:08 - MOE-SP-002 compact-routing integration smoke
 - Hypothesis: The source-push inbox kernel can be fed from production-like compact routing metadata and source-pack-like payload layout without changing the winning profile.
