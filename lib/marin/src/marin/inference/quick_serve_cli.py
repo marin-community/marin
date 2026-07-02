@@ -31,11 +31,13 @@ from iris.client import IrisClient, Job
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import load_config
 from iris.cluster.constraints import region_constraint
+from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from rigging.config_discovery import resolve_cluster_config
 from rigging.connect import proxy_path
+from rigging.timing import Duration
 
 from marin.inference.quick_serve import QuickServeConfig, serve_in_job
 
@@ -117,6 +119,30 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
     )
 
 
+def _print_bearer_access(client: IrisClient, endpoint: str, dashboard_url: str | None, ttl_hours: float) -> None:
+    """Mint a scoped endpoint token and print the off-cluster OpenAI base_url + api_key.
+
+    Runs CLI-side under the launching user's identity, so the controller's
+    owner check passes. The token authorizes only this endpoint's ``/proxy``
+    path and expires after ``ttl_hours`` (clamped to the controller's maximum).
+    """
+    resp = client._cluster_client.mint_endpoint_token(endpoint, ttl=Duration.from_hours(ttl_hours))
+    hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
+    click.echo("  BEARER — off-cluster access (scoped token):")
+    if dashboard_url:
+        base_url = f"{dashboard_url.rstrip('/')}{proxy_path(endpoint)}/v1"
+        click.echo(f"    base_url   {base_url}")
+    else:
+        # No public origin known (bare --controller); the operator must front the
+        # controller's /proxy route for this to be reachable off-cluster.
+        click.echo(f"    proxy path {proxy_path(endpoint)}/v1  (front the controller /proxy route to reach it)")
+    click.echo(f"    api_key    {resp.token}")
+    click.echo(f"    expires    in {hours_left:.1f}h")
+    if dashboard_url:
+        click.echo(f'    example    curl {base_url}/models -H "Authorization: Bearer <api_key>"')
+    click.echo("")
+
+
 @click.command(context_settings={"show_default": True})
 @click.argument("model")
 @click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
@@ -138,6 +164,13 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
     "--no-cache", is_flag=True, default=False, help="Skip the GCS model cache; always download from HuggingFace."
 )
 @click.option("--timeout-hours", type=float, default=24.0, help="Wall-clock lifetime before the server self-stops.")
+@click.option(
+    "--access",
+    type=click.Choice(["private", "public", "bearer"]),
+    default="private",
+    help="Proxy access. private: cluster identity only. public: open. bearer: mints a "
+    "scoped off-cluster token (printed once vLLM is ready).",
+)
 @click.option("--region", default=None, help="Comma-separated region(s) to pin the slice to.")
 @click.option("--cpu", type=float, default=8.0)
 @click.option("--memory", default="64g")
@@ -166,6 +199,7 @@ def main(
     cache_ttl_days: int,
     no_cache: bool,
     timeout_hours: float,
+    access: str,
     region: str | None,
     cpu: float,
     memory: str,
@@ -197,10 +231,13 @@ def main(
     if "." in endpoint:
         raise click.ClickException("--endpoint-name cannot contain '.' (it breaks controller proxy routing).")
 
+    endpoint_access = EndpointAccess[access.upper()]
+
     config = QuickServeConfig(
         model=model,
         tpu_type=tpu,
         endpoint_name=endpoint,
+        access=endpoint_access,
         dtype=dtype,
         max_model_len=max_model_len,
         max_num_batched_tokens=max_num_batched_tokens,
@@ -250,6 +287,8 @@ def main(
 
             if not wait:
                 click.echo("Submitted. Open the dashboard from the Iris UI once vLLM has booted.")
+                if endpoint_access is EndpointAccess.BEARER:
+                    click.echo("Re-run with --wait once vLLM registers to mint the off-cluster bearer token.")
                 return
 
             click.echo("Waiting for vLLM to boot and register (Ctrl-C to detach; the job keeps running) …")
@@ -260,6 +299,10 @@ def main(
             if dashboard_url:
                 click.echo(f"        share:     {dashboard_url.rstrip('/')}{proxy_path(endpoint)}/")
             click.echo("")
+            if endpoint_access is EndpointAccess.BEARER:
+                # Mint after the endpoint registers (the controller resolves the row
+                # for owner authz), so the token is bound to a live endpoint.
+                _print_bearer_access(client, endpoint, dashboard_url, timeout_hours)
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
                 while True:

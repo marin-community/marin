@@ -401,6 +401,22 @@ class RemoteClusterClient:
         """Unregister an endpoint via RPC."""
         self._endpoint_client.unregister(endpoint_id)
 
+    def mint_endpoint_token(
+        self, endpoint_name: str, ttl: Duration | None = None
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse:
+        """Mint a scoped bearer token for ``endpoint_name``'s /proxy path.
+
+        Authorized to the endpoint's owning user (or admin); the CLI holds that
+        identity. ``ttl`` is clamped server-side to the controller's maximum.
+        """
+        request = controller_pb2.Controller.MintEndpointTokenRequest(
+            endpoint_name=endpoint_name,
+            ttl=duration_to_proto(ttl) if ttl is not None else None,
+        )
+        return call_with_retry(
+            f"mint_endpoint_token({endpoint_name})", lambda: self._client.mint_endpoint_token(request)
+        )
+
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]:
         return self._endpoint_client.list_endpoints(prefix, exact=exact)
 

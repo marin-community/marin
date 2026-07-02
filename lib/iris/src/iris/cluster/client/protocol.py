@@ -79,6 +79,10 @@ class ClusterClient(Protocol):
 
     def unregister_endpoint(self, endpoint_id: str) -> None: ...
 
+    def mint_endpoint_token(
+        self, endpoint_name: str, ttl: Duration | None = None
+    ) -> controller_pb2.Controller.MintEndpointTokenResponse: ...
+
     def list_endpoints(self, prefix: str, *, exact: bool = False) -> list[controller_pb2.Controller.Endpoint]: ...
 
     def list_workers(
