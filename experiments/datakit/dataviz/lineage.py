@@ -176,8 +176,26 @@ def _pick_data_prefix(store_path: str, ducky: DuckyClient) -> str:
     return best
 
 
-def _load_store_payload(store_path: str) -> ClusteredStoreData:
-    return read_artifact(store_path, ClusteredStoreData)
+def read_store_payload(store_path: str) -> ClusteredStoreData:
+    """Load the store's :class:`ClusteredStoreData`, tolerating both artifact formats.
+
+    New stores wrap the payload in an ``ArtifactRecord.result`` (``read_artifact``).
+    Legacy stores (e.g. ``store_8ac06c74``) wrote the raw payload directly to
+    ``.artifact.json`` — which the current ``read_artifact`` no longer reads (it
+    now expects a record), so fall back to parsing that file as the payload.
+    """
+    try:
+        return read_artifact(store_path, ClusteredStoreData)
+    except (FileNotFoundError, ValueError):
+        pass
+    base = store_path.rstrip("/")
+    for name in (".artifact.json", "artifact.json"):
+        try:
+            with open_url(f"{base}/{name}", "r") as f:
+                return ClusteredStoreData.model_validate_json(f.read())
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(f"no ClusteredStoreData payload at {store_path}")
 
 
 # Stage -> subtree root under the data prefix (normalize lives at ``normalized/``,
@@ -213,7 +231,7 @@ def _resolve_legacy(
     domain_centroids: str | None,
     quality_model: str | None,
 ) -> StoreLineage:
-    payload = _load_store_payload(store_path)
+    payload = read_store_payload(store_path)
     known = set(select_sources(None))
     sources = [s for s in payload.source_names if s in known]
     dropped = sorted(set(payload.source_names) - known)

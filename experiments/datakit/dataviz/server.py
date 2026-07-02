@@ -41,7 +41,6 @@ from ducky.client import DuckyClient, DuckyError, iap_token_provider
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.dashboard_common import on_shutdown
-from marin.execution.artifact import read_artifact
 from marin.utils import fsspec_exists
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -49,7 +48,13 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
-from experiments.datakit.dataviz.lineage import StoreLineage, load_lineage, resolve_lineage, save_lineage
+from experiments.datakit.dataviz.lineage import (
+    StoreLineage,
+    load_lineage,
+    read_store_payload,
+    resolve_lineage,
+    save_lineage,
+)
 from experiments.datakit.dataviz.queries import DEFAULT_SEED, Dataviz
 from experiments.datakit.store.datakit_store import ClusteredStoreData
 
@@ -295,7 +300,7 @@ def _build_ducky(explicit_url: str | None) -> DuckyClient:
 
 
 def _load(store_path: str, ducky: DuckyClient, cache_path: str | None) -> tuple[StoreLineage, ClusteredStoreData]:
-    payload = read_artifact(store_path, ClusteredStoreData)
+    payload = read_store_payload(store_path)
     # fsspec_exists handles gs:// (os.path.exists would silently miss a remote
     # cache and force a ducky-dependent re-resolve at startup).
     if cache_path and fsspec_exists(cache_path):
