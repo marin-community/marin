@@ -91,7 +91,7 @@ def test_fp8_grads_parity_vs_reference():
     # 5-token expert.
     lhs, rhs, _ = _nonuniform(128, 128, 4, 128, seed=3)
     gs = jnp.asarray([13, 5, 47, 63], jnp.int32)  # non-uniform, sums to T=128
-    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e4m3 (uniform backward)
+    op = Fp8RaggedDotOp.init()  # rev_dtype defaults to e5m2 (mixed backward)
 
     def loss(l, r):
         return ragged_dot(l, r, gs, op=op).astype(jnp.float32).sum()
