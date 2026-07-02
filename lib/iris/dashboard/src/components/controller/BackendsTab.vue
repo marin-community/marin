@@ -19,6 +19,13 @@ const TABLE_THRESHOLD = 8
 
 const { listBackends, listPeers } = useBackends()
 
+// proto3 JSON omits empty repeated fields, so a backend with no scale groups or
+// capabilities arrives with those keys absent. Fill them in at the boundary so
+// the card/table renderers can treat them as always-present arrays.
+function normalizeBackend(b: BackendSummary): BackendSummary {
+  return { ...b, capabilities: b.capabilities ?? [], scaleGroups: b.scaleGroups ?? [] }
+}
+
 const backendSummaries = ref<BackendSummary[]>([])
 const peerSummaries = ref<PeerSummary[]>([])
 const unroutableJobCount = ref(0)
@@ -52,10 +59,13 @@ async function refresh() {
       listBackends(),
       listPeers().catch(() => ({ peers: [] }) as ListPeersResponse),
     ])
-    backendSummaries.value = backendsResp.backends ?? []
+    backendSummaries.value = (backendsResp.backends ?? []).map(normalizeBackend)
     unroutableJobCount.value = backendsResp.unroutableJobCount ?? 0
     unroutableSample.value = backendsResp.unroutableSample ?? []
-    peerSummaries.value = peersResp.peers ?? []
+    peerSummaries.value = (peersResp.peers ?? []).map((p) => ({
+      ...p,
+      backends: (p.backends ?? []).map(normalizeBackend),
+    }))
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {

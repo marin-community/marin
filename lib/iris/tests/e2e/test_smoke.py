@@ -571,15 +571,17 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def _wait_for_backends_tab_ready(page) -> None:
     # The combined execution-targets tab renders backend (and peer) cards only
-    # after ListBackends/ListPeers resolve; anchor on the route hash, the h2, and
-    # a structural label present in both the card grid and the table variant.
+    # after ListBackends resolves. Anchor on the route hash plus the "N backend(s)"
+    # count subtitle in the tab's h2 — that subtitle renders only once the RPC
+    # resolves, unlike the persistent "Backends"/"Workers" nav links, so it marks
+    # the tab content (not just the shell) as loaded.
     check = """
         () => {
             const routeReady = decodeURIComponent(window.location.hash) === "#/backends";
-            const text = document.body.textContent || "";
-            const hasHeading = Array.from(document.querySelectorAll("h2"))
-                .some((h) => (h.textContent || "").trim().startsWith("Backends"));
-            return routeReady && hasHeading && text.includes("Workers");
+            const heading = Array.from(document.querySelectorAll("h2"))
+                .find((h) => (h.textContent || "").trim().startsWith("Backends"));
+            const loaded = !!heading && /\\d+\\s+backend/.test(heading.textContent || "");
+            return routeReady && loaded;
         }
     """
     _await_stable_screenshot(page, check)
@@ -593,10 +595,10 @@ def test_dashboard_backends_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/backends")
     wait_for_dashboard_ready(smoke_page)
+    # The readiness gate requires the "N backend(s)" subtitle, so reaching here
+    # already proves the backend cards rendered. With no peers configured, the
+    # roster is empty: no peer tag.
     _wait_for_backends_tab_ready(smoke_page)
-    # Local backends render...
-    assert_visible(smoke_page, "text=Workers")
-    # ...and with no peers configured, the peers roster is empty: no peer tag.
     if not isinstance(smoke_page, _NoOpPage):
         from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
