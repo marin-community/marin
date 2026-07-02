@@ -27,6 +27,11 @@
 # restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`.
 log_server_config: cw-us-east-02a
 
+# Public origin for off-cluster proxy links. Only /proxy is served here (see
+# controller.coreweave.public_proxy_host); marin-serve uses this to print the
+# off-cluster OpenAI base_url + BEARER api_key.
+dashboard_url: https://iris-cw-us-east-02a.oa.dev
+
 platform:
   label_prefix: cw-use02a
   coreweave:
