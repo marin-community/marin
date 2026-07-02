@@ -153,13 +153,13 @@ register the endpoint `PRIVATE` (a cluster identity / JWT), `PUBLIC` (open), or
 
 CKS ships **no** ingress controller and no TLS issuer, so two cluster-wide,
 install-once prerequisites must be in place first — install them with
-`scripts/install_cw.py` (operator-run, safe-by-default; mirrors
+`scripts/install_traefik_proxy.py` (operator-run, safe-by-default; mirrors
 `install_kueue.py`):
 
 ```bash
 # Traefik (CoreWeave's blessed ingress controller) + cert-manager + HTTP-01 issuers.
-uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev            # dry run
-uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev --apply
+uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev            # dry run
+uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev --apply
 ```
 
 Then configure the controller's `coreweave` block. `start_controller` reconciles
@@ -187,7 +187,7 @@ Ingress keeps only `/proxy` public.
 #### External address and DNS (`oa.dev` → `coreweave.app`)
 
 The external address is served by **Traefik's** LoadBalancer, not the controller
-Pod. `install_cw.py`'s Traefik gets a **stable CoreWeave-managed FQDN** under
+Pod. `install_traefik_proxy.py`'s Traefik gets a **stable CoreWeave-managed FQDN** under
 `*.<ORG-ID>-<CLUSTER>.coreweave.app` (the chart sets
 `service.beta.kubernetes.io/external-hostname: '*'`), so you never chase a
 churning IP. Read it and CNAME your host to it (`oa.dev` DNS is at **Namecheap**,
@@ -208,7 +208,7 @@ printed off-cluster URLs + the `BEARER` token are usable as-is). The
 and TLS are on the `oa.dev` name.
 
 **TLS** terminates in-cluster (no IAP/edge layer; Namecheap doesn't proxy TLS).
-`install_cw.py` creates **HTTP-01** Let's Encrypt ClusterIssuers
+`install_traefik_proxy.py` creates **HTTP-01** Let's Encrypt ClusterIssuers
 (`letsencrypt-http01-staging`, `letsencrypt-http01-prod`) validated through
 Traefik — CoreWeave's *bundled* issuers only cover `*.coreweave.app` (DNS-01 via
 `acme.coreweave.com`), so a custom `oa.dev` host needs these. Note: HTTP-01 needs

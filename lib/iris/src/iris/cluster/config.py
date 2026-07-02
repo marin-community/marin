@@ -444,7 +444,7 @@ class CoreweaveControllerConfig(_Config):
     # dashboard and RPC surface stay ClusterIP-internal). CoreWeave has no IAP
     # layer, so the controller's own per-endpoint auth is the sole gate — keep
     # auth.provider set. Requires an ingress controller (Traefik, CoreWeave's
-    # blessed one) + cert-manager — install them with scripts/install_cw.py.
+    # blessed one) + cert-manager — install them with scripts/install_traefik_proxy.py.
     # Empty host = no ingress (ClusterIP only). See docs/coreweave.md.
     public_proxy_host: str = ""
     ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress

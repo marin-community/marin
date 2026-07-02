@@ -44,8 +44,8 @@ After it runs:
      start_controller then creates the /proxy Ingress and cert-manager issues the cert.
 
 Usage:
-    uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev            # dry run
-    uv run lib/iris/scripts/install_cw.py --acme-email you@oa.dev --apply
+    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev            # dry run
+    uv run lib/iris/scripts/install_traefik_proxy.py --acme-email you@oa.dev --apply
 """
 
 import subprocess
