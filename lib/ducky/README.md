@@ -63,6 +63,36 @@ print(result["columns"], result["rows"])
 `gcloud auth print-identity-token --audiences=$AUD` mints the same token for a service-account
 credential. `Proxy-Authorization: Bearer …` works interchangeably with `Authorization`.
 
+## Pre-baked views & queries
+
+ducky ships a small catalog of named views over common Marin data sources, plus
+click-to-fill example queries surfaced in the dashboard (`GET /api/catalog`). The views
+are ordinary DuckDB views, so you can `SELECT` from them without spelling out a
+`read_parquet` glob:
+
+- **finelog** (`finelog.log`, `finelog."iris.task"`, `finelog."iris.worker"`,
+  `finelog."iris.task_status"`, `finelog."iris.profile"`, `finelog."iris.provisioning"`,
+  `finelog."zephyr.stage"`, `finelog."zephyr.worker"`) over
+  `DUCKY_FINELOG_ROOT/<namespace>/seg_L*.parquet`. The namespace directory names contain
+  dots, so quote them: `SELECT * FROM finelog."iris.task"`.
+- **datakit** normalized parquet — a curated subset (`datakit.finetranslations`,
+  `datakit.finepdfs`, `datakit.nemotron_cc_v2_high_quality`, …) over
+  `DUCKY_DATAKIT_ROOT/<name>_<hash>/outputs/main/*.parquet`. The full ~100-source set
+  lives in `lib/marin/src/marin/datakit/sources.py`; use the dashboard's **Browse
+  normalized datasets** example query to list what's present.
+
+Roots are config (`DUCKY_FINELOG_ROOT` / `DUCKY_DATAKIT_ROOT`); set either to empty to
+disable that source's views. Defaults are the real production locations
+(`gs://marin-us-central2/finelog/marin`, `gs://marin-us-east5/normalized`). finelog's
+marin deployment lives in us-central2 — querying it from a ducky in another region incurs
+cross-region egress; the datakit default is us-east5 (same region as the default deploy).
+
+Views are bound (and their parquet footers cached) at startup; a view over an
+absent/unreachable dataset is logged and skipped rather than failing the service. Repeat
+queries are fast because ducky enables DuckDB's parquet-footer cache
+(`parquet_metadata_cache`) and HTTP metadata cache, so re-reading the same files skips the
+footer round-trips.
+
 ## Deploy
 
 ```bash

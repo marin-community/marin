@@ -48,6 +48,14 @@ _BACKEND_ENV = {
 PORT_NAME = "ducky"
 ENDPOINT_NAME = "/ducky"
 
+# Default object-store roots for the pre-baked catalog (see catalog.py). These are the
+# real production locations, applied by `from_environment` when the env var is unset;
+# set `DUCKY_FINELOG_ROOT=`/`DUCKY_DATAKIT_ROOT=` (empty) to disable a source's views.
+# finelog's marin deployment writes to us-central2 (querying it from another region incurs
+# egress); datakit normalized parquet is expected same-region as ducky in us-east5.
+DEFAULT_FINELOG_ROOT = "gs://marin-us-central2/finelog/marin"
+DEFAULT_DATAKIT_ROOT = "gs://marin-us-east5/normalized"
+
 
 @dataclasses.dataclass(frozen=True)
 class DuckyConfig:
@@ -78,6 +86,16 @@ class DuckyConfig:
     """DuckDB SECRET scope for the R2 backend (the s3:// bucket prefix it serves)."""
     cw_scope: str = "s3://marin-us-east-02a"
     """DuckDB SECRET scope for the CoreWeave backend."""
+
+    finelog_root: str | None = None
+    """Object-store root of the finelog store (``<root>/<namespace>/seg_L*.parquet``).
+    Pre-baked ``finelog.*`` views are created over it. ``None``/empty skips them.
+    `from_environment` supplies :data:`DEFAULT_FINELOG_ROOT`; direct construction defaults
+    to ``None`` so unit tests don't reach the network binding views."""
+    datakit_root: str | None = None
+    """Object-store root of datakit normalized parquet
+    (``<root>/<name>_<hash>/outputs/main/*.parquet``). Curated ``datakit.*`` views are
+    created over it. ``None``/empty skips them; see :attr:`finelog_root` on the default."""
 
     preview_row_cap: int = 10_000
     """Max rows returned inline to the browser. The full result always spills to parquet."""
@@ -164,5 +182,7 @@ class DuckyConfig:
             result_ttl_days=int(os.environ.get(f"{_ENV_PREFIX}RESULT_TTL_DAYS", cls.result_ttl_days)),
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
             cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
+            finelog_root=os.environ.get(f"{_ENV_PREFIX}FINELOG_ROOT", DEFAULT_FINELOG_ROOT) or None,
+            datakit_root=os.environ.get(f"{_ENV_PREFIX}DATAKIT_ROOT", DEFAULT_DATAKIT_ROOT) or None,
             **creds,
         )

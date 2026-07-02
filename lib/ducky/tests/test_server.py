@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import time
 
 import pytest
@@ -95,6 +96,25 @@ def test_api_config_returns_ttl():
     resp = _client(_FakeRunner()).get("/api/config")
     assert resp.status_code == 200
     assert resp.json() == {"result_ttl_days": 7}
+
+
+def test_api_catalog_lists_views_and_examples():
+    config = dataclasses.replace(
+        _CONFIG, finelog_root="gs://marin-us-central2/finelog/marin", datakit_root="gs://marin-us-east5/normalized"
+    )
+    app = create_app(_FakeRunner(), config, executor=_InlineExecutor())
+    payload = TestClient(app).get("/api/catalog").json()
+
+    idents = {v["qualified_name"] for v in payload["views"]}
+    assert 'finelog."iris.task"' in idents and 'datakit."finetranslations"' in idents
+    task_view = next(v for v in payload["views"] if v["qualified_name"] == 'finelog."iris.task"')
+    assert task_view["insert_sql"] == 'SELECT * FROM finelog."iris.task" LIMIT 100'
+    assert any("Browse normalized datasets" == e["title"] for e in payload["examples"])
+
+
+def test_api_catalog_empty_without_roots():
+    payload = _client(_FakeRunner()).get("/api/catalog").json()  # _CONFIG has no catalog roots
+    assert payload == {"views": [], "examples": []}
 
 
 def test_query_accepts_and_returns_uuid_query_id():

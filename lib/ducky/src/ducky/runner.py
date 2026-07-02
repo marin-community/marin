@@ -28,6 +28,7 @@ import time
 import duckdb
 from iris.env_resources import TaskResources
 
+from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
 from ducky.config import DuckyConfig
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,46 @@ class QueryRunner:
             self._con.execute("SET disabled_filesystems = 'LocalFileSystem'")
         # Lock the configuration last so a query can't SET any of these guards back off.
         self._con.execute("SET lock_configuration = true")
+        # Register the pre-baked catalog views on the shared connection (cursors inherit
+        # the catalog). Done after secrets/locking so the views can read object storage.
+        self._create_catalog_views()
+
+    def _create_catalog_views(self) -> None:
+        """Create the pre-baked catalog views (finelog.*, datakit.*) on the shared connection.
+
+        DuckDB binds a view's schema at CREATE time, so each view reads its dataset's footer
+        now — this both validates the view and warms the parquet-metadata cache. A view over
+        an absent/unreachable dataset fails to create; that's best-effort, so we log and move
+        on rather than fail startup. Views over a root whose backend has no credentials are
+        skipped up front (a creds-free smoke deploy would otherwise attempt doomed reads).
+        """
+        for view in build_catalog(self._config).views:
+            root = self._root_for(view)
+            if root is None or not self._backend_ready(root):
+                continue
+            try:
+                self._con.execute(f"CREATE SCHEMA IF NOT EXISTS {view.schema}")
+                self._con.execute(f"CREATE OR REPLACE VIEW {view.qualified_name} AS {view.definition_sql}")
+            except duckdb.Error as e:
+                logger.warning("skipping catalog view %s: %s", view.qualified_name, str(e).splitlines()[0])
+            else:
+                logger.info("registered catalog view %s", view.qualified_name)
+
+    def _root_for(self, view: View) -> str | None:
+        """The configured object-store root backing a catalog view (by its schema)."""
+        if view.schema == FINELOG_SCHEMA:
+            return self._config.finelog_root
+        if view.schema == DATAKIT_SCHEMA:
+            return self._config.datakit_root
+        return None
+
+    def _backend_ready(self, root: str) -> bool:
+        """Whether the object-store backend for ``root``'s scheme has credentials loaded."""
+        if root.startswith("gs://"):
+            return self._config.gcs_enabled
+        if root.startswith("s3://"):
+            return self._config.r2_enabled or self._config.cw_enabled
+        return True  # local path (smoke/tests)
 
     def _install_secrets(self) -> None:
         """Load httpfs and create a DuckDB SECRET for each configured object-store backend."""
@@ -168,6 +209,13 @@ class QueryRunner:
         self._con.execute("SET GLOBAL http_retries = 10")
         self._con.execute("SET GLOBAL http_retry_wait_ms = 200")
         self._con.execute("SET GLOBAL http_retry_backoff = 2")
+        # Cache parquet footers (row-group/column metadata) so repeat queries over the same
+        # object-store files skip re-reading and re-parsing the footer — a big win for the
+        # pre-baked views, which point at stable file sets queried over and over. GLOBAL so the
+        # per-query cursors inherit it. enable_external_file_cache is on by default (caches file
+        # bytes in memory); enable_http_metadata_cache avoids re-issuing HEADs for file size.
+        self._con.execute("SET GLOBAL parquet_metadata_cache = true")
+        self._con.execute("SET GLOBAL enable_http_metadata_cache = true")
         if cfg.gcs_enabled:
             self._con.execute(
                 f"CREATE OR REPLACE SECRET ducky_gcs "

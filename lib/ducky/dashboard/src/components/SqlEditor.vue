@@ -76,6 +76,17 @@ watch(
   (dark) => view?.dispatch({ effects: themeComp.reconfigure(editorTheme(dark)) }),
 )
 
+// Reflect external model changes (e.g. clicking a catalog view/example to pre-fill) into
+// the editor. Guard against the echo of our own updateListener emit, which would reset the
+// cursor on every keystroke.
+watch(
+  () => props.modelValue,
+  (next) => {
+    if (!view || next === view.state.doc.toString()) return
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } })
+  },
+)
+
 onBeforeUnmount(() => view?.destroy())
 </script>
 

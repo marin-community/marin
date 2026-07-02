@@ -39,6 +39,7 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from ducky.catalog import Catalog, build_catalog
 from ducky.config import ENDPOINT_NAME, PORT_NAME, DuckyConfig
 from ducky.runner import DuckyError, QueryResult, QueryRunner
 
@@ -245,12 +246,37 @@ def _index_html(dist: Path, forwarded_prefix: str) -> HTMLResponse:
     return HTMLResponse(html)
 
 
+def _catalog_payload(catalog: Catalog) -> dict:
+    """Serialize the pre-baked catalog for the dashboard's sources/examples panel.
+
+    ``insert_sql`` is the ready-to-run starter a click drops into the editor: a capped
+    SELECT over the view. The dashboard treats views and examples uniformly as SQL snippets.
+    """
+    return {
+        "views": [
+            {
+                "schema": view.schema,
+                "name": view.name,
+                "qualified_name": view.qualified_name,
+                "description": view.description,
+                "insert_sql": f"SELECT * FROM {view.qualified_name} LIMIT 100",
+            }
+            for view in catalog.views
+        ],
+        "examples": [
+            {"title": example.title, "description": example.description, "sql": example.sql}
+            for example in catalog.examples
+        ],
+    }
+
+
 def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | None = None) -> Starlette:
     """Build the ducky Starlette app over a query runner. No Iris context required.
 
     ``executor`` overrides the query executor (tests inject a synchronous one).
     """
     dist = _dashboard_dist()
+    catalog = build_catalog(config)
     manager = QueryManager(
         runner,
         executor=executor,
@@ -282,6 +308,10 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     async def api_config(_request: Request) -> JSONResponse:
         return JSONResponse({"result_ttl_days": config.result_ttl_days})
 
+    @requires_auth
+    async def api_catalog(_request: Request) -> JSONResponse:
+        return JSONResponse(_catalog_payload(catalog))
+
     @public
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "healthy"})
@@ -291,6 +321,7 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
         Route("/query", query, methods=["POST"]),
         Route("/result/{query_id:str}", result),
         Route("/api/config", api_config),
+        Route("/api/catalog", api_catalog),
         Route("/health", health),
     ]
     # check_dir=False: the app still boots (index shows a "not built" page) when the

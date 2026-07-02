@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import SqlEditor from './components/SqlEditor.vue'
 import ResultTable from './components/ResultTable.vue'
 import StatusBar from './components/StatusBar.vue'
+import Catalog from './components/Catalog.vue'
 import { useQuery } from './composables/useQuery'
 
 const sqlText = ref('')
@@ -50,6 +51,8 @@ onMounted(async () => {
         {{ dark ? '☀️' : '🌙' }}
       </button>
     </header>
+
+    <Catalog @select="sqlText = $event" />
 
     <SqlEditor v-model="sqlText" :dark="dark" @run="runQuery" />
 
