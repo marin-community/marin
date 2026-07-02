@@ -651,7 +651,7 @@ function sortIndicator(field: SortField): string {
             <button
               v-if="node.job.backendId"
               class="text-accent hover:underline font-mono text-xs"
-              @click="router.replace({ query: { ...route.query, backend: node.job.backendId } })"
+              @click="router.replace({ query: { ...route.query, backend: node.job.backendId, cluster: undefined } })"
             >
               {{ node.job.backendId }}
             </button>
@@ -664,7 +664,7 @@ function sortIndicator(field: SortField): string {
             <button
               v-if="node.job.childCluster"
               class="text-accent hover:underline font-mono text-xs"
-              @click="router.replace({ query: { ...route.query, cluster: node.job.childCluster } })"
+              @click="router.replace({ query: { ...route.query, cluster: node.job.childCluster, backend: undefined } })"
             >
               {{ node.job.childCluster }}
             </button>

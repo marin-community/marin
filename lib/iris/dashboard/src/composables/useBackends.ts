@@ -34,6 +34,8 @@ const capabilities = ref<string[]>([])
 const peers = ref<PeerSummary[]>([])
 let _configFetched = false
 let _peersFetched = false
+// In-flight ensurePeers() request, shared so concurrent callers issue one RPC.
+let _peersPromise: Promise<void> | null = null
 
 export interface AuthConfig {
   authEnabled: boolean
@@ -111,16 +113,19 @@ export function useBackends() {
 
   /**
    * Load the peer roster once (for gates and `?cluster=` validation). Safe to
-   * call from many components — only the first successful fetch performs the RPC;
-   * a failure leaves the roster empty and lets a later call retry.
+   * call from many components: concurrent callers share one in-flight request,
+   * and a failure clears the memo so a later call retries (leaving the roster
+   * empty for an older controller / unauthed session in the meantime).
    */
-  async function ensurePeers(): Promise<void> {
-    if (_peersFetched) return
-    try {
-      await listPeers()
-    } catch {
-      // Peers unavailable (older controller / not authed) — leave roster empty.
-    }
+  function ensurePeers(): Promise<void> {
+    if (_peersFetched) return Promise.resolve()
+    if (_peersPromise) return _peersPromise
+    _peersPromise = listPeers()
+      .then(() => undefined)
+      .catch(() => {
+        _peersPromise = null
+      })
+    return _peersPromise
   }
 
   /**

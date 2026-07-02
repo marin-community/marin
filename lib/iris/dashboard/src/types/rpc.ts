@@ -675,17 +675,19 @@ export interface ListBackendsResponse {
  *  this cluster may hand whole jobs to, plus its forwarded backend topology. */
 export interface PeerSummary {
   peerId: string
-  controllerAddress: string
-  dashboardUrl: string
+  // proto3 JSON omits default-valued fields, so string/bool/repeated fields are
+  // absent on the wire when empty — hence optional here.
+  controllerAddress?: string
+  dashboardUrl?: string
   /** Last capability heartbeat succeeded. */
-  reachable: boolean
+  reachable?: boolean
   /** Last successful contact, ms since epoch (0/absent if never contacted). int64 → string. */
   lastSyncMs?: string
   activeFederatedJobs?: number
   /** Aggregate spend across this peer's federated jobs, micros. int64 → string. */
   aggregateSpendMicros?: string
   /** The peer's own backends, forwarded from its ListBackends. */
-  backends: BackendSummary[]
+  backends?: BackendSummary[]
 }
 
 export interface ListPeersResponse {
