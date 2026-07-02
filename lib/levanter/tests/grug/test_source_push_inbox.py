@@ -45,6 +45,8 @@ def test_source_push_profile_applies_current_best_candidate_defaults(
     assert args.routing == config.routing == expected_routing
     assert args.send_pipeline_depth == config.send_pipeline_depth == expected_send_pipeline_depth
     assert args.n_groups_per_job == config.n_groups_per_job == 2
+    assert args.send_worker_programs_per_peer == config.send_worker_programs_per_peer == 2
+    assert args.worker_programs_per_peer == config.worker_programs_per_peer == 32
     assert args.repeat_runs == settings.repeat_runs == 48
 
 
@@ -57,6 +59,10 @@ def test_source_push_profile_allows_explicit_overrides():
             "uniform",
             "--send-pipeline-depth",
             "2",
+            "--send-worker-programs-per-peer",
+            "1",
+            "--worker-programs-per-peer",
+            "16",
             "--repeat-runs",
             "3",
         ]
@@ -64,6 +70,8 @@ def test_source_push_profile_allows_explicit_overrides():
 
     assert args.routing == "uniform"
     assert args.send_pipeline_depth == 2
+    assert args.send_worker_programs_per_peer == 1
+    assert args.worker_programs_per_peer == 16
     assert args.repeat_runs == 3
     assert args.n_groups_per_job == 2
 
@@ -84,6 +92,8 @@ def test_source_push_profile_returns_typed_config_and_run_settings():
     assert config.routing == "roughly_balanced"
     assert config.n_groups_per_job == 2
     assert config.send_pipeline_depth == 1
+    assert config.send_worker_programs_per_peer == 2
+    assert config.worker_programs_per_peer == 32
     assert settings.warmup == 2
     assert settings.steps == 7
     assert settings.repeat_runs == 48
@@ -112,6 +122,12 @@ def test_disabled_modes_are_not_public_cli_choices():
     with pytest.raises(SystemExit):
         source_push_cli.parse_source_push_inbox_args(["--hidden-compute-mode", "store_zero"])
 
+    with pytest.raises(SystemExit):
+        source_push_cli.parse_source_push_inbox_args(["--num-send-sms", "2"])
+
+    with pytest.raises(SystemExit):
+        source_push_cli.parse_source_push_inbox_args(["--num-sms", "32"])
+
 
 def test_removed_experimental_modes_are_not_config_fields():
     for kwargs in (
@@ -123,6 +139,8 @@ def test_removed_experimental_modes_are_not_config_fields():
         {"implementation": "send_only"},
         {"hidden_output_mode": "full"},
         {"hidden_compute_mode": "store_zero"},
+        {"num_send_sms": 2},
+        {"num_sms": 32},
     ):
         with pytest.raises(TypeError):
             source_push_inbox.PushInboxConfig(**kwargs)
@@ -145,8 +163,8 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
         block_k=4,
         block_n=4,
         experts_per_rank=2,
-        num_send_sms=1,
-        num_sms=4,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
         routing="balanced",
         tokens_per_rank=8,
         topk=2,

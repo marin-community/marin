@@ -177,8 +177,8 @@ def _integration_smoke_config(config: PushInboxConfig) -> PushInboxConfig:
         block_k=64,
         block_n=64,
         n_groups_per_job=2,
-        num_send_sms=2,
-        num_sms=16,
+        send_worker_programs_per_peer=2,
+        worker_programs_per_peer=16,
     )
 
 

@@ -92,8 +92,8 @@ class PushInboxConfig:
     block_k: int = 128
     n_group: int = 1
     experts_per_rank: int = 32
-    num_send_sms: int = 4
-    num_sms: int = 16
+    send_worker_programs_per_peer: int = 4
+    worker_programs_per_peer: int = 16
     send_pipeline_depth: int = 1
     n_groups_per_job: int = 1
     routing: str = "balanced"
@@ -127,12 +127,14 @@ class PushInboxConfig:
             raise ValueError(f"W13 inbox prototypes currently support n_group in (1, 2), got {self.n_group}")
         if self.experts_per_rank <= 0:
             raise ValueError(f"experts_per_rank must be positive, got {self.experts_per_rank}")
-        if self.num_send_sms <= 0:
-            raise ValueError(f"num_send_sms must be positive, got {self.num_send_sms}")
-        if self.num_sms <= self.num_send_sms:
+        if self.send_worker_programs_per_peer <= 0:
             raise ValueError(
-                "num_sms must leave at least one destination receiver program; "
-                f"got {self.num_sms=} {self.num_send_sms=}"
+                f"send_worker_programs_per_peer must be positive, got {self.send_worker_programs_per_peer}"
+            )
+        if self.worker_programs_per_peer <= self.send_worker_programs_per_peer:
+            raise ValueError(
+                "worker_programs_per_peer must leave at least one destination receiver program; "
+                f"got {self.worker_programs_per_peer=} {self.send_worker_programs_per_peer=}"
             )
         if self.send_pipeline_depth not in (1, 2):
             raise ValueError(f"send_pipeline_depth must be in (1, 2), got {self.send_pipeline_depth}")
@@ -231,7 +233,7 @@ def _make_kernel(config: PushInboxConfig):
     n_tiles = config.intermediate_dim // config.block_n
     n_work_groups = n_tiles // config.n_group
     n_compute_jobs = (n_work_groups + config.n_groups_per_job - 1) // config.n_groups_per_job
-    num_compute_sms = config.num_sms - config.num_send_sms
+    compute_worker_programs_per_peer = config.worker_programs_per_peer - config.send_worker_programs_per_peer
     rounds_per_slot = (config.entries_per_rank + config.inbox_slots - 1) // config.inbox_slots
     send_dst_offsets = tuple(range(config.ep_size))
     recv_src_offsets = tuple(range(config.ep_size))
@@ -250,9 +252,9 @@ def _make_kernel(config: PushInboxConfig):
         done_sem_ref = pl.get_global(mgpu.SemaphoreType.REGULAR((config.ep_size, config.inbox_slots)))
         rank = lax.axis_index(AXIS)
         peer_ordinal = pl.program_id(0)
-        sm = pl.program_id(1)
+        worker_program = pl.program_id(1)
 
-        @pl.when(sm < config.num_send_sms)
+        @pl.when(worker_program < config.send_worker_programs_per_peer)
         def _send_worker() -> None:
 
             def _send_to_dst(dst_ordinal: int, dst_offset: int) -> None:
@@ -267,7 +269,7 @@ def _make_kernel(config: PushInboxConfig):
                     def _slot_loop(slot_pos) -> None:
                         slot = slot_pos
                         send_task = dst_ordinal * config.inbox_slots + slot
-                        should_send_slot = (send_task % config.num_send_sms) == sm
+                        should_send_slot = (send_task % config.send_worker_programs_per_peer) == worker_program
 
                         @pl.when(should_send_slot)
                         def _send_slot_entry() -> None:
@@ -569,13 +571,13 @@ def _make_kernel(config: PushInboxConfig):
                     up_n1_acc=mgpu.ACC((config.block_m, config.block_n)),
                 )
 
-        @pl.when(sm == config.num_send_sms)
+        @pl.when(worker_program == config.send_worker_programs_per_peer)
         def _init_worker() -> None:
             _init_empty_slots()
 
-        @pl.when(sm >= config.num_send_sms)
+        @pl.when(worker_program >= config.send_worker_programs_per_peer)
         def _n_tile_recv_worker() -> None:
-            compute_worker = sm - config.num_send_sms
+            compute_worker = worker_program - config.send_worker_programs_per_peer
 
             def _recv_n_tile_src(src_ordinal: int, src_offset: int) -> None:
                 src = (rank + src_offset) % config.ep_size
@@ -598,7 +600,9 @@ def _make_kernel(config: PushInboxConfig):
                                     @pl.loop(0, n_compute_jobs)
                                     def _job_loop(job_i) -> None:
                                         work_group = (src_ordinal * config.inbox_slots + slot) * n_compute_jobs + job_i
-                                        should_compute = (work_group % num_compute_sms) == compute_worker
+                                        should_compute = (
+                                            work_group % compute_worker_programs_per_peer
+                                        ) == compute_worker
 
                                         @pl.when(should_compute)
                                         def _recv_job() -> None:
@@ -627,7 +631,9 @@ def _make_kernel(config: PushInboxConfig):
                                             pl.semaphore_signal(done_sem_ref.at[src, slot])
 
                                     release_group = src_ordinal * config.inbox_slots + slot
-                                    should_release = (release_group % num_compute_sms) == compute_worker
+                                    should_release = (
+                                        release_group % compute_worker_programs_per_peer
+                                    ) == compute_worker
 
                                     @pl.when(should_release)
                                     def _release_slot() -> None:
@@ -656,7 +662,7 @@ def _make_kernel(config: PushInboxConfig):
             _switch_recv_n_tile_src(peer_ordinal)
 
     inbox_shape = (config.ep_size, config.inbox_slots, config.block_m, config.hidden_dim)
-    grid = (len(send_dst_offsets), config.num_sms)
+    grid = (len(send_dst_offsets), config.worker_programs_per_peer)
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     out_shape = [
         jax.ShapeDtypeStruct(inbox_shape, jnp.bfloat16),
@@ -667,7 +673,7 @@ def _make_kernel(config: PushInboxConfig):
         body,
         out_shape=out_shape,
         grid=grid,
-        grid_names=("peer_phase", "sm"),
+        grid_names=("peer_phase", "worker_program"),
         compiler_params=compiler_params,
     )
 

@@ -58,10 +58,20 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument("--n-group", type=int, default=default("n_group", 1))
     parser.add_argument("--sweep-n-groups", type=_parse_int_csv, default=None)
     parser.add_argument("--experts-per-rank", type=int, default=default("experts_per_rank", 32))
-    parser.add_argument("--num-send-sms", type=int, default=default("num_send_sms", 4))
-    parser.add_argument("--sweep-num-send-sms", type=_parse_int_csv, default=None)
-    parser.add_argument("--num-sms", type=int, default=default("num_sms", 16))
-    parser.add_argument("--sweep-num-sms", type=_parse_int_csv, default=None)
+    parser.add_argument(
+        "--send-worker-programs-per-peer",
+        type=int,
+        default=default("send_worker_programs_per_peer", 4),
+        help="Logical sender programs in each peer-phase grid slice.",
+    )
+    parser.add_argument("--sweep-send-worker-programs-per-peer", type=_parse_int_csv, default=None)
+    parser.add_argument(
+        "--worker-programs-per-peer",
+        type=int,
+        default=default("worker_programs_per_peer", 16),
+        help="Total logical programs launched in each peer-phase grid slice.",
+    )
+    parser.add_argument("--sweep-worker-programs-per-peer", type=_parse_int_csv, default=None)
     parser.add_argument("--send-pipeline-depth", type=int, default=default("send_pipeline_depth", 1))
     parser.add_argument("--sweep-send-pipeline-depth", type=_parse_int_csv, default=None)
     parser.add_argument("--n-groups-per-job", type=int, default=default("n_groups_per_job", 1))
@@ -94,8 +104,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     block_m_values = args.sweep_block_m or (args.block_m,)
     block_n_values = args.sweep_block_n or (args.block_n,)
     block_k_values = args.sweep_block_k or (args.block_k,)
-    num_send_sms_values = args.sweep_num_send_sms or (args.num_send_sms,)
-    num_sms_values = args.sweep_num_sms or (args.num_sms,)
+    send_worker_programs_per_peer_values = args.sweep_send_worker_programs_per_peer or (
+        args.send_worker_programs_per_peer,
+    )
+    worker_programs_per_peer_values = args.sweep_worker_programs_per_peer or (args.worker_programs_per_peer,)
     send_pipeline_depth_values = args.sweep_send_pipeline_depth or (args.send_pipeline_depth,)
     n_group_values = args.sweep_n_groups or (args.n_group,)
     n_groups_per_job_values = args.sweep_n_groups_per_job or (args.n_groups_per_job,)
@@ -109,8 +121,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             for block_m in block_m_values:
                 for block_n in block_n_values:
                     for block_k in block_k_values:
-                        for num_send_sms in num_send_sms_values:
-                            for num_sms in num_sms_values:
+                        for send_worker_programs_per_peer in send_worker_programs_per_peer_values:
+                            for worker_programs_per_peer in worker_programs_per_peer_values:
                                 for send_pipeline_depth in send_pipeline_depth_values:
                                     for n_group in n_group_values:
                                         for n_groups_per_job in n_groups_per_job_values:
@@ -126,8 +138,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                 n_group=n_group,
                                                 n_groups_per_job=n_groups_per_job,
                                                 experts_per_rank=args.experts_per_rank,
-                                                num_send_sms=num_send_sms,
-                                                num_sms=num_sms,
+                                                send_worker_programs_per_peer=send_worker_programs_per_peer,
+                                                worker_programs_per_peer=worker_programs_per_peer,
                                                 send_pipeline_depth=send_pipeline_depth,
                                                 routing=args.routing,
                                                 tokens_per_rank=args.tokens_per_rank,
