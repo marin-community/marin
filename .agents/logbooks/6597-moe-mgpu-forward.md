@@ -2359,6 +2359,30 @@ description: Hopper Pallas Mosaic MGPU expert-parallel MoE forward/permute_up wo
   - `inbox_slots=3` is worse, and `send_sms=2` is especially bad at 3 slots, likely from poorer modulo assignment/slot-owner balance.
   - No source-push H100 jobs are left running.
 
+### 2026-07-02 01:33 PDT - FWD-SWQ-063 Source-aware ready-scan smoke
+- Question:
+  - The earlier ready-scan attempts only scanned slots within one source loop. The revised objective describes a full `(src_ordinal, slot)` candidate space.
+  - Implement a source-aware `ready_scan` for `peer_loop=grid_switch` where each `(peer_phase, compute_sm)` is a global receiver worker and candidates are `(src_ordinal, slot, n_job)`.
+- Code change:
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+    - Added a source-aware `ready_scan` branch for `implementation=m_n_slots`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`.
+    - Global ownership uses `candidate_id % (num_sources * num_compute_sms)` so each `(src, slot, n_job)` is owned by one receiver worker.
+    - Slot release ownership is also global over `(src, slot)`.
+    - Re-disabled `receiver_schedule=ready_scan` in validation after the checked smoke deadlocked, to avoid accidental target sweeps.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `uv run --package marin-levanter --group test python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- H100 checked smoke:
+  - Job: `/dlwh/repro-source-push-global-ready-smoke-20260702-013121`, cluster `cw-us-east-02a`, stopped after ready-scan first-run hang.
+  - Config: `routing=tail_debug`, `D=256`, `I=256`, `experts_per_rank=4`, `entries_per_rank=24`, `inbox_slots=2`, `block_m=64`, `block_k=64`, `block_n=128`, `num_send_sms=4`, `num_sms=16`, fixed vs ready, `--check`, `--separate-compile`.
+  - Fixed row passed: `steady_state_time=0.009216695s`, `w13_tflops_per_rank=0.05802`, `metadata_mismatches=0`, `hidden_max_abs_diff=0.0289774`, `hidden_mean_abs_diff=0.00114439`.
+  - Ready row: lower/compile completed, then no progress after `first_run_start`; job was stopped.
+- Interpretation:
+  - Source-aware ready scanning still deadlocks before correctness can be established.
+  - The failure is now on the full candidate-space design requested by the revised objective, not the earlier slot-local approximation.
+  - Current status satisfies the "ready_scan correctness/deadlock issue" branch of the stop-condition tree for this design. Continue fixed-schedule tuning or move to a different producer/consumer design; do not run target ready-scan sweeps with the current implementation.
+
 Addendum:
 - Live-row validation now separates correctness from unwritten hidden arena contents. In `/dlwh/repro-source-push-live-mask-smoke-20260702-010245`, both fixed and ordered rows had live `hidden_max_abs_diff=0.028977394104003906`, while `hidden_all_max_abs_diff=0.671875` and `hidden_unwritten_max_abs=0.671875`. The former is the useful correctness signal; the latter is the expected no-zeroing diagnostic for rows never written by live routing metadata.
 - `/dlwh/repro-source-push-ordered-missing-target-20260702-011330` was launched only for missing `ordered_wait` rotated/hash target rows. It reached `ordered_wait/rotated` `first_call_start`, emitted no completed rows after several minutes, and was stopped. `ordered_wait/rotated` is therefore a runtime stall at target shape in the current implementation.
@@ -2377,3 +2401,8 @@ Addendum:
   | 3 | 2 | `0.0176231221762s` | `103.357472722` | `40.3740127821` |
 
   This reinforces `inbox_slots=4,num_send_sms=2,num_sms=32` as the best current fixed-wait neighborhood, but still below the 210 TFLOP/s/rank goal.
+
+- Uncommitted global ready-scan smoke `/dlwh/repro-source-push-ready-scan-global-smoke-20260702-013200`:
+  - A later ready-scan variant that scans across all source/slot/job candidates compiled on the tiny checked target (`compile_done` after about `1.91s`) but stalled after `first_run_start`.
+  - It emitted no row and was stopped.
+  - Conclusion unchanged: current ready-scan structure still deadlocks/stalls before it can be a performance path.
