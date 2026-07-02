@@ -156,7 +156,14 @@ class QueryRunner:
         self._con.execute("SET lock_configuration = true")
         # Register the pre-baked catalog views on the shared connection (cursors inherit
         # the catalog). Done after secrets/locking so the views can read object storage.
+        self._created_view_names: set[str] = set()
         self._create_catalog_views()
+
+    @property
+    def created_view_names(self) -> frozenset[str]:
+        """Identifiers of the catalog views that were actually created (for the /api/catalog
+        endpoint to advertise only what's queryable)."""
+        return frozenset(self._created_view_names)
 
     def _create_catalog_views(self) -> None:
         """Create the pre-baked catalog views (finelog.*, datakit.*) on the shared connection.
@@ -166,10 +173,19 @@ class QueryRunner:
         an absent/unreachable dataset fails to create; that's best-effort, so we log and move
         on rather than fail startup. Views over a root whose backend has no credentials are
         skipped up front (a creds-free smoke deploy would otherwise attempt doomed reads).
+
+        A view whose root falls outside ``allowed_buckets`` is skipped too: the allowlist is
+        the same-region/cost guardrail, and ``run_query`` only scans a query's literal URIs —
+        it can't see a URI hidden behind a view — so an out-of-region root must be refused
+        here rather than let a ``SELECT * FROM finelog."log"`` egress across regions.
         """
+        allowed = self._config.allowed_buckets
         for view in build_catalog(self._config).views:
             root = self._root_for(view)
             if root is None or not self._backend_ready(root):
+                continue
+            if allowed and not _is_allowed(root, allowed):
+                logger.info("skipping catalog view %s: root %s outside allowlist %s", view.qualified_name, root, allowed)
                 continue
             try:
                 self._con.execute(f"CREATE SCHEMA IF NOT EXISTS {view.schema}")
@@ -177,6 +193,7 @@ class QueryRunner:
             except duckdb.Error as e:
                 logger.warning("skipping catalog view %s: %s", view.qualified_name, str(e).splitlines()[0])
             else:
+                self._created_view_names.add(view.qualified_name)
                 logger.info("registered catalog view %s", view.qualified_name)
 
     def _root_for(self, view: View) -> str | None:

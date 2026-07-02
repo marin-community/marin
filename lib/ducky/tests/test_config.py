@@ -50,17 +50,32 @@ def test_partial_backend_creds_raise(monkeypatch):
 
 
 def test_catalog_roots_default_to_real_locations(monkeypatch):
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
     _set(monkeypatch, _BASE_ENV)
     config = DuckyConfig.from_environment()
     assert config.finelog_root == DEFAULT_FINELOG_ROOT
-    assert config.datakit_root == DEFAULT_DATAKIT_ROOT
+    assert config.datakit_root == DEFAULT_DATAKIT_ROOT  # fallback when MARIN_PREFIX unset
+
+
+def test_datakit_root_derived_from_marin_prefix(monkeypatch):
+    _set(monkeypatch, {**_BASE_ENV, "MARIN_PREFIX": "gs://marin-eu-west4"})
+    assert DuckyConfig.from_environment().datakit_root == "gs://marin-eu-west4/normalized"
 
 
 def test_catalog_root_override_and_disable(monkeypatch):
-    _set(monkeypatch, {**_BASE_ENV, "DUCKY_FINELOG_ROOT": "gs://elsewhere/finelog", "DUCKY_DATAKIT_ROOT": ""})
+    # explicit DUCKY_DATAKIT_ROOT wins over MARIN_PREFIX; empty disables the source
+    _set(
+        monkeypatch,
+        {
+            **_BASE_ENV,
+            "MARIN_PREFIX": "gs://marin-eu-west4",
+            "DUCKY_FINELOG_ROOT": "gs://elsewhere/finelog",
+            "DUCKY_DATAKIT_ROOT": "",
+        },
+    )
     config = DuckyConfig.from_environment()
     assert config.finelog_root == "gs://elsewhere/finelog"
-    assert config.datakit_root is None  # empty env var disables the source
+    assert config.datakit_root is None
 
 
 def test_directly_constructed_config_has_no_catalog_roots():

@@ -37,6 +37,7 @@ class _FakeRunner:
         self._result = result
         self._error = error
         self.received_query_id: str | None = None
+        self.created_view_names: frozenset[str] = frozenset()  # no catalog views by default
 
     def run_query(self, sql: str, query_id: str) -> QueryResult:
         self.received_query_id = query_id
@@ -98,18 +99,31 @@ def test_api_config_returns_ttl():
     assert resp.json() == {"result_ttl_days": 7}
 
 
-def test_api_catalog_lists_views_and_examples():
+class _CatalogRunner(_FakeRunner):
+    """A fake reporting a fixed set of created catalog views (what /api/catalog advertises)."""
+
+    def __init__(self, created: frozenset[str]):
+        super().__init__()
+        self.created_view_names = created
+
+
+def test_api_catalog_advertises_only_created_views():
     config = dataclasses.replace(
         _CONFIG, finelog_root="gs://marin-us-central2/finelog/marin", datakit_root="gs://marin-us-east5/normalized"
     )
-    app = create_app(_FakeRunner(), config, executor=_InlineExecutor())
+    # runner created the log + iris.task finelog views, but NOT iris.worker (e.g. absent dataset)
+    created = frozenset({'finelog."log"', 'finelog."iris.task"'})
+    app = create_app(_CatalogRunner(created), config, executor=_InlineExecutor())
     payload = TestClient(app).get("/api/catalog").json()
 
     idents = {v["qualified_name"] for v in payload["views"]}
-    assert 'finelog."iris.task"' in idents and 'datakit."finetranslations"' in idents
+    assert idents == created  # only created views advertised — not the skipped iris.worker
     task_view = next(v for v in payload["views"] if v["qualified_name"] == 'finelog."iris.task"')
     assert task_view["insert_sql"] == 'SELECT * FROM finelog."iris.task" LIMIT 100'
-    assert any("Browse normalized datasets" == e["title"] for e in payload["examples"])
+    # an example referencing the skipped iris.worker view is dropped; ones over created views stay
+    example_sql = " ".join(e["sql"] for e in payload["examples"])
+    assert 'finelog."iris.worker"' not in example_sql
+    assert 'finelog."log"' in example_sql
 
 
 def test_api_catalog_empty_without_roots():

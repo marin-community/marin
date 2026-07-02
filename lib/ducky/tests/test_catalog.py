@@ -69,3 +69,20 @@ def test_build_catalog_empty_without_roots():
     catalog = build_catalog(_config(finelog_root=None, datakit_root=None))
     assert catalog.views == ()
     assert catalog.examples == ()
+
+
+def test_build_catalog_available_filters_views_and_examples():
+    # only the `log` view is available; the catalog must drop the other views and any example
+    # that references a view we didn't create.
+    catalog = build_catalog(_config(finelog_root="gs://b/finelog", datakit_root=None), available={'finelog."log"'})
+    assert {v.qualified_name for v in catalog.views} == {'finelog."log"'}
+    assert catalog.examples  # log-only examples survive
+    for example in catalog.examples:
+        assert 'finelog."iris.task"' not in example.sql
+        assert 'finelog."iris.worker"' not in example.sql
+
+
+def test_build_catalog_available_empty_drops_source_entirely():
+    catalog = build_catalog(_config(finelog_root="gs://b/finelog", datakit_root="gs://b/normalized"), available=set())
+    assert catalog.views == ()
+    assert catalog.examples == ()  # no examples advertised for a source with no created views

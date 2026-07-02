@@ -200,23 +200,46 @@ def _datakit_examples(root: str) -> list[ExampleQuery]:
     ]
 
 
-def build_catalog(config: DuckyConfig) -> Catalog:
+def _select_examples(
+    examples: list[ExampleQuery], candidates: list[View], available: set[str] | None
+) -> list[ExampleQuery]:
+    """Keep only examples every view they reference is actually available.
+
+    An example referencing a view that wasn't created (absent dataset, or a root outside the
+    allowlist) would error if run, so it's dropped. Examples that reference no view (the
+    datakit read_parquet/glob templates) are kept — the caller gates those on the source
+    having any available view.
+    """
+    if available is None:
+        return examples
+    names = [view.qualified_name for view in candidates]
+    return [e for e in examples if all(name in available for name in names if name in e.sql)]
+
+
+def build_catalog(config: DuckyConfig, available: set[str] | None = None) -> Catalog:
     """Assemble the pre-baked catalog from the configured source roots.
 
-    A source with no configured root contributes nothing. Example queries reference the
-    views by name (finelog) or the root directly (datakit browse), so they line up with
-    whatever views got built.
+    A source with no configured root contributes nothing. When ``available`` is given (the set
+    of view identifiers the runner actually created), each source contributes only its
+    available views, and only if it has at least one — so the dashboard never advertises a view
+    that was skipped (absent dataset, or a root outside the bucket allowlist). ``available=None``
+    returns the full potential catalog (what the runner iterates over to decide what to create).
     """
     views: list[View] = []
     examples: list[ExampleQuery] = []
 
     if config.finelog_root:
         finelog_views = _finelog_views(config.finelog_root)
-        views.extend(finelog_views)
-        examples.extend(_finelog_examples(finelog_views))
+        present = [v for v in finelog_views if available is None or v.qualified_name in available]
+        if present:
+            views.extend(present)
+            examples.extend(_select_examples(_finelog_examples(finelog_views), finelog_views, available))
 
     if config.datakit_root:
-        views.extend(_datakit_views(config.datakit_root))
-        examples.extend(_datakit_examples(config.datakit_root))
+        datakit_views = _datakit_views(config.datakit_root)
+        present = [v for v in datakit_views if available is None or v.qualified_name in available]
+        if present:
+            views.extend(present)
+            examples.extend(_datakit_examples(config.datakit_root))
 
     return Catalog(views=tuple(views), examples=tuple(examples))

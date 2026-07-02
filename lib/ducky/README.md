@@ -82,13 +82,21 @@ are ordinary DuckDB views, so you can `SELECT` from them without spelling out a
   normalized datasets** example query to list what's present.
 
 Roots are config (`DUCKY_FINELOG_ROOT` / `DUCKY_DATAKIT_ROOT`); set either to empty to
-disable that source's views. Defaults are the real production locations
-(`gs://marin-us-central2/finelog/marin`, `gs://marin-us-east5/normalized`). finelog's
-marin deployment lives in us-central2 — querying it from a ducky in another region incurs
-cross-region egress; the datakit default is us-east5 (same region as the default deploy).
+disable that source's views. The datakit root defaults to `<MARIN_PREFIX>/normalized` (the
+datakit corpus is canonical in eu-west4); finelog defaults to its marin deployment at
+`gs://marin-us-central2/finelog/marin`.
+
+A catalog view whose root falls outside `DUCKY_ALLOWED_BUCKETS` is **not created** — the
+allowlist is ducky's same-region/cost guardrail, and `run_query` can't see a URI hidden
+behind a view, so an out-of-region root is refused at view-creation time rather than left
+to egress on `SELECT * FROM finelog."log"`. So the defaults never silently read
+cross-region: to actually use finelog (us-central2) or an eu-west4 datakit corpus from a
+us-east5 ducky, add that bucket to the allowlist (accepting the egress) or point the root
+at a same-region copy.
 
 Views are bound (and their parquet footers cached) at startup; a view over an
-absent/unreachable dataset is logged and skipped rather than failing the service. Repeat
+absent/unreachable dataset is logged and skipped rather than failing the service. The
+`/api/catalog` endpoint and dashboard advertise only the views that were actually created. Repeat
 queries are fast because ducky enables DuckDB's parquet-footer cache
 (`parquet_metadata_cache`) and HTTP metadata cache, so re-reading the same files skips the
 footer round-trips.

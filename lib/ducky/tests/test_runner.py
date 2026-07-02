@@ -177,6 +177,22 @@ def test_catalog_views_are_queryable(make_runner, tmp_path):
     assert runner.run_query('SELECT data FROM finelog."log"', uuid.uuid4().hex).preview_rows == [["hi"]]
     # the dotted namespace resolves as a quoted view name
     assert runner.run_query('SELECT task_id FROM finelog."iris.task"', uuid.uuid4().hex).preview_rows == [["task-1"]]
+    # created views are tracked (so the server advertises only what exists)
+    assert {'finelog."log"', 'finelog."iris.task"'} <= runner.created_view_names
+
+
+def test_catalog_view_outside_allowlist_is_skipped(make_runner, tmp_path):
+    # the allowlist is the same-region guardrail; a view whose root falls outside it must not be
+    # created, else `SELECT * FROM finelog."log"` would read the disallowed root behind the view.
+    finelog_root = tmp_path / "finelog"
+    con = duckdb.connect()
+    _write_parquet(con, finelog_root / "log" / "seg_L0_0.parquet", "SELECT 1 AS level")
+    con.close()
+
+    runner = make_runner(finelog_root=str(finelog_root), allowed_buckets=("gs://marin-us-east5",))
+    assert runner.created_view_names == frozenset()  # local root not covered by the gs:// allowlist
+    with pytest.raises(QueryError):
+        runner.run_query('SELECT * FROM finelog."log"', uuid.uuid4().hex)
 
 
 def test_datakit_view_globs_hashed_dir(make_runner, tmp_path):

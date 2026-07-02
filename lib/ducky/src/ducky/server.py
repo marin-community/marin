@@ -276,7 +276,9 @@ def create_app(runner: QueryRunner, config: DuckyConfig, executor: Executor | No
     ``executor`` overrides the query executor (tests inject a synchronous one).
     """
     dist = _dashboard_dist()
-    catalog = build_catalog(config)
+    # Advertise only the views the runner actually created — an absent dataset or a root
+    # outside the allowlist is skipped, and the dashboard shouldn't offer a view that errors.
+    catalog = build_catalog(config, available=set(runner.created_view_names))
     manager = QueryManager(
         runner,
         executor=executor,

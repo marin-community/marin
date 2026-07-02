@@ -48,13 +48,30 @@ _BACKEND_ENV = {
 PORT_NAME = "ducky"
 ENDPOINT_NAME = "/ducky"
 
-# Default object-store roots for the pre-baked catalog (see catalog.py). These are the
-# real production locations, applied by `from_environment` when the env var is unset;
-# set `DUCKY_FINELOG_ROOT=`/`DUCKY_DATAKIT_ROOT=` (empty) to disable a source's views.
-# finelog's marin deployment writes to us-central2 (querying it from another region incurs
-# egress); datakit normalized parquet is expected same-region as ducky in us-east5.
+# Default object-store roots for the pre-baked catalog (see catalog.py), applied by
+# `from_environment` when the DUCKY_* env var is unset; set `DUCKY_FINELOG_ROOT=`/
+# `DUCKY_DATAKIT_ROOT=` (empty) to disable a source's views. Catalog views over a root
+# outside `allowed_buckets` are skipped, so these defaults never silently egress across
+# regions — the allowlist gates them (see QueryRunner._create_catalog_views).
+#
+# finelog's marin deployment writes to us-central2. datakit normalized parquet lives under
+# `<MARIN_PREFIX>/normalized`, so its root is derived from the MARIN_PREFIX env when set
+# (the datakit corpus is canonical in eu-west4); the constant is only a last-resort fallback.
 DEFAULT_FINELOG_ROOT = "gs://marin-us-central2/finelog/marin"
 DEFAULT_DATAKIT_ROOT = "gs://marin-us-east5/normalized"
+_MARIN_PREFIX_ENV = "MARIN_PREFIX"
+
+
+def _resolve_datakit_root() -> str | None:
+    """Datakit normalized-parquet root: explicit DUCKY_DATAKIT_ROOT wins (empty disables),
+    else ``<MARIN_PREFIX>/normalized`` when MARIN_PREFIX is set, else the fallback constant."""
+    explicit = os.environ.get(f"{_ENV_PREFIX}DATAKIT_ROOT")
+    if explicit is not None:
+        return explicit or None
+    marin_prefix = os.environ.get(_MARIN_PREFIX_ENV)
+    if marin_prefix:
+        return f"{marin_prefix.rstrip('/')}/normalized"
+    return DEFAULT_DATAKIT_ROOT
 
 
 @dataclasses.dataclass(frozen=True)
@@ -183,6 +200,6 @@ class DuckyConfig:
             r2_scope=os.environ.get(f"{_ENV_PREFIX}R2_SCOPE", cls.r2_scope),
             cw_scope=os.environ.get(f"{_ENV_PREFIX}CW_SCOPE", cls.cw_scope),
             finelog_root=os.environ.get(f"{_ENV_PREFIX}FINELOG_ROOT", DEFAULT_FINELOG_ROOT) or None,
-            datakit_root=os.environ.get(f"{_ENV_PREFIX}DATAKIT_ROOT", DEFAULT_DATAKIT_ROOT) or None,
+            datakit_root=_resolve_datakit_root(),
             **creds,
         )
