@@ -121,6 +121,7 @@ def _dedup_attr_map(lineage: StoreLineage) -> dict[str, str]:
 
 def _build_views(dv: Dataviz) -> dict[str, Callable[[dict], object]]:
     """Map dashboard view name -> handler(params) -> JSON-serializable result."""
+
     def _seed(p: dict) -> int:
         return int(p.get("seed", DEFAULT_SEED))
 
