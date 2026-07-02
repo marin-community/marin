@@ -3,7 +3,7 @@
 
 """Shared types, routing helpers, and layout utilities for Grug MoE."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -24,11 +24,13 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
+    "pallas_mgpu",  # Expert-parallel Hopper Pallas Mosaic GPU backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
     "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
+MoeImplementationSpec: TypeAlias = MoeImplementation | str | Sequence[MoeImplementation | str] | None
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
-_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep", "pallas_mgpu")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -77,6 +79,16 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
     return cast(MoeImplementation, implementation)
+
+
+def resolve_moe_implementations(implementation: MoeImplementationSpec) -> tuple[MoeImplementation, ...]:
+    if implementation is None or isinstance(implementation, str):
+        return (resolve_moe_implementation(implementation),)
+
+    implementations = tuple(implementation)
+    if not implementations:
+        raise ValueError("implementation sequence must contain at least one implementation")
+    return tuple(resolve_moe_implementation(candidate) for candidate in implementations)
 
 
 def split_moe_w13_output(

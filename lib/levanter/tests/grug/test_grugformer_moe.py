@@ -15,6 +15,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.pallas_mgpu import MoeMgpuConfig
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -759,6 +760,27 @@ def test_moe_mlp_reports_positive_drop_count_in_ring_ep_when_over_capacity():
     assert out.shape == (tokens, hidden_dim)
     assert dropped.shape == ()
     assert int(dropped) > 0
+
+
+def test_pallas_mgpu_moe_mlp_uses_explicit_config_for_validation():
+    mesh = _make_abstract_moe_mesh(data=1, expert=2, model=1)
+    x = jnp.ones((4, 128), dtype=jnp.bfloat16)
+    selected_experts = jnp.zeros((4, 1), dtype=jnp.int32)
+    combine_weights = jnp.ones((4, 1), dtype=jnp.bfloat16)
+    w_up_gate = jnp.ones((4, 128, 64), dtype=jnp.bfloat16)
+    w_down = jnp.ones((4, 32, 128), dtype=jnp.bfloat16)
+
+    with pytest.raises(ValueError, match="dispatch_chunk_copy_tile=256"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="pallas_mgpu",
+            mesh=mesh,
+            pallas_mgpu_config=MoeMgpuConfig(dispatch_chunk_copy_tile=256),
+        )
 
 
 def test_moe_mlp_reports_positive_drop_count_in_ragged_a2a_when_over_capacity():

@@ -38,11 +38,22 @@ from jaxtyping import Array, Float, Int
 
 EXPERT_AXIS = "expert"
 RING_IMPLEMENTATIONS = {"ring", "ring_copy", "ring_compute", "ring_queue"}
-IMPLEMENTATIONS = {"pull", *RING_IMPLEMENTATIONS}
+DIRECT_REMOTE_SMEM_IMPLEMENTATIONS = {"direct_remote_smem_blocking", "direct_remote_smem_double_buffer"}
+IMPLEMENTATIONS = {"pull", *RING_IMPLEMENTATIONS, *DIRECT_REMOTE_SMEM_IMPLEMENTATIONS}
+LOWERING_SEMANTICS = {
+    "warpgroup": mgpu.LoweringSemantics.Warpgroup,
+    "lane": mgpu.LoweringSemantics.Lane,
+}
+WGMMA_SWIZZLE_BYTES = 128
+WGMMA_TILE_M = 8
 
 
 def _is_ring_implementation(implementation: str) -> bool:
     return implementation in RING_IMPLEMENTATIONS
+
+
+def _is_direct_remote_smem_implementation(implementation: str) -> bool:
+    return implementation in DIRECT_REMOTE_SMEM_IMPLEMENTATIONS
 
 
 def _ring_stage_for_implementation(implementation: str) -> str:
@@ -57,11 +68,38 @@ def _ring_stage_for_implementation(implementation: str) -> str:
     raise ValueError(f"{implementation=} is not a ring implementation")
 
 
+def _lowering_semantics(name: str) -> mgpu.LoweringSemantics:
+    try:
+        return LOWERING_SEMANTICS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown lowering_semantics={name!r}; expected one of {sorted(LOWERING_SEMANTICS)}") from exc
+
+
+def _wgmma_smem(shape: tuple[int, int], dtype: Any, *, lowering_semantics: str):
+    if lowering_semantics != "lane":
+        return mgpu.SMEM(shape, dtype=dtype)
+    swizzle_elems = WGMMA_SWIZZLE_BYTES // jnp.dtype(dtype).itemsize
+    if shape[-2] % WGMMA_TILE_M or shape[-1] % swizzle_elems:
+        raise ValueError(
+            "Lane WGMMA SMEM operands must be divisible by "
+            f"tile=({WGMMA_TILE_M}, {swizzle_elems}); got shape={shape}"
+        )
+    return mgpu.SMEM(
+        shape,
+        dtype=dtype,
+        transforms=(
+            mgpu.TilingTransform((WGMMA_TILE_M, swizzle_elems)),
+            mgpu.SwizzleTransform(WGMMA_SWIZZLE_BYTES),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class CompactConfig:
     block_m: int = 64
     block_n: int = 128
     block_k: int = 128
+    lowering_semantics: str = "warpgroup"
     max_concurrent_steps: int = 4
     grid_block_n: int = 4
     expert_group_size: int = 32
@@ -89,6 +127,21 @@ class CompactConfig:
             )
         if implementation == "static" and shape.routing != "balanced":
             raise ValueError("compact static workqueue currently supports only --routing balanced")
+        if _is_direct_remote_smem_implementation(implementation):
+            if self.block_m != 64:
+                raise ValueError(
+                    "direct remote-SMEM prototype is constrained to block_m=64; " f"got block_m={self.block_m}"
+                )
+            if self.block_k not in (64, 128):
+                raise ValueError(
+                    "direct remote-SMEM prototype sweep is constrained to block_k in {64,128}; "
+                    f"got block_k={self.block_k}"
+                )
+            if self.expert_group_size != 1:
+                raise ValueError(
+                    "direct remote-SMEM prototype is constrained to expert_group_size=1; "
+                    f"got expert_group_size={self.expert_group_size}"
+                )
         if self.ring_block_tokens <= 0:
             raise ValueError(f"ring_block_tokens must be positive, got {self.ring_block_tokens}")
         if _is_ring_implementation(implementation) and (
@@ -116,6 +169,7 @@ class CompactConfig:
             raise ValueError(f"grid_block_n must be positive, got {self.grid_block_n}")
         if self.n_group not in (1, 2):
             raise ValueError(f"n_group must be 1 or 2 for the compact pull kernel, got {self.n_group}")
+        _lowering_semantics(self.lowering_semantics)
         if (shape.intermediate_dim // self.block_n) % self.n_group != 0:
             raise ValueError(
                 "intermediate_dim / block_n must be divisible by n_group; "
@@ -436,6 +490,7 @@ def compact_permute_up_mgpu(
     *,
     config: CompactConfig,
     ep_size: int,
+    remote_smem_double_buffer: bool = False,
 ) -> tuple[Float[Array, "C I"], Int[Array, "C"], Int[Array, "C"]]:
     """Destination-pull MGPU permute_up kernel for assignment-driven routing.
 
@@ -483,6 +538,11 @@ def compact_permute_up_mgpu(
     blocks_per_rank = max_rows_per_rank // config.block_m
     chunk_grid_m = expert_group_size * blocks_per_rank
     num_sms = config.num_sms or _device_core_count()
+    if remote_smem_double_buffer and expert_group_size != 1:
+        raise ValueError(
+            "direct remote-SMEM double-buffer prototype is constrained to expert_group_size=1; "
+            f"got expert_group_size={expert_group_size}"
+        )
 
     def body(
         sorted_x_ref: Float[Ref, "packed D"],
@@ -512,8 +572,7 @@ def compact_permute_up_mgpu(
                 expert_groups=expert_groups,
             )
 
-        def _compute_phase(phase):
-            expert_group, peer_phase = _phase(phase)
+        def _compute_expert_group_peer(expert_group, peer_phase):
             expert_group_start = expert_group * expert_group_size
             src = (rank + ep_size - peer_phase) % ep_size
             remote_sorted_x_ref = mgpu.remote_ref(sorted_x_ref, src, device_id_type=pl.DeviceIdType.LOGICAL)
@@ -534,6 +593,213 @@ def compact_permute_up_mgpu(
                 @pl.when(should_compute)
                 def _compute_live_block():
                     if n_group == 2:
+                        if remote_smem_double_buffer:
+
+                            def acc_scope(gate_n0_acc_ref, up_n0_acc_ref, gate_n1_acc_ref, up_n1_acc_ref):
+                                def smem_scope(
+                                    lhs0_smem,
+                                    lhs1_smem,
+                                    gate_n0_buf0_smem,
+                                    up_n0_buf0_smem,
+                                    gate_n1_buf0_smem,
+                                    up_n1_buf0_smem,
+                                    gate_n0_buf1_smem,
+                                    up_n0_buf1_smem,
+                                    gate_n1_buf1_smem,
+                                    up_n1_buf1_smem,
+                                    ready_barrier0,
+                                    ready_barrier1,
+                                ):
+                                    def _issue_prefetch(
+                                        kk,
+                                        lhs_smem,
+                                        gate_n0_smem,
+                                        up_n0_smem,
+                                        gate_n1_smem,
+                                        up_n1_smem,
+                                        ready_barrier,
+                                    ):
+                                        k_start = kk * config.block_k
+                                        n0 = n_group_i * 2
+                                        n1 = n0 + 1
+                                        mgpu.copy_gmem_to_smem(
+                                            remote_sorted_x_ref.at[
+                                                pl.ds(token_offset, config.block_m),
+                                                pl.ds(k_start, config.block_k),
+                                            ],
+                                            lhs_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds(n0 * config.block_n, config.block_n),
+                                            ],
+                                            gate_n0_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds((n0 + n_tiles) * config.block_n, config.block_n),
+                                            ],
+                                            up_n0_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds(n1 * config.block_n, config.block_n),
+                                            ],
+                                            gate_n1_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds((n1 + n_tiles) * config.block_n, config.block_n),
+                                            ],
+                                            up_n1_smem,
+                                            ready_barrier,
+                                        )
+
+                                    _issue_prefetch(
+                                        0,
+                                        lhs0_smem,
+                                        gate_n0_buf0_smem,
+                                        up_n0_buf0_smem,
+                                        gate_n1_buf0_smem,
+                                        up_n1_buf0_smem,
+                                        ready_barrier0,
+                                    )
+                                    mgpu.barrier_wait(ready_barrier0)
+                                    mgpu.commit_smem()
+                                    for kk in range(k_tiles):
+                                        if kk > 0:
+                                            mgpu.wgmma_wait(0)
+                                        next_kk = kk + 1
+                                        if kk % 2 == 0:
+                                            lhs_smem = lhs0_smem
+                                            gate_n0_smem = gate_n0_buf0_smem
+                                            up_n0_smem = up_n0_buf0_smem
+                                            gate_n1_smem = gate_n1_buf0_smem
+                                            up_n1_smem = up_n1_buf0_smem
+                                            next_lhs_smem = lhs1_smem
+                                            next_gate_n0_smem = gate_n0_buf1_smem
+                                            next_up_n0_smem = up_n0_buf1_smem
+                                            next_gate_n1_smem = gate_n1_buf1_smem
+                                            next_up_n1_smem = up_n1_buf1_smem
+                                            next_barrier = ready_barrier1
+                                        else:
+                                            lhs_smem = lhs1_smem
+                                            gate_n0_smem = gate_n0_buf1_smem
+                                            up_n0_smem = up_n0_buf1_smem
+                                            gate_n1_smem = gate_n1_buf1_smem
+                                            up_n1_smem = up_n1_buf1_smem
+                                            next_lhs_smem = lhs0_smem
+                                            next_gate_n0_smem = gate_n0_buf0_smem
+                                            next_up_n0_smem = up_n0_buf0_smem
+                                            next_gate_n1_smem = gate_n1_buf0_smem
+                                            next_up_n1_smem = up_n1_buf0_smem
+                                            next_barrier = ready_barrier0
+                                        if next_kk < k_tiles:
+                                            _issue_prefetch(
+                                                next_kk,
+                                                next_lhs_smem,
+                                                next_gate_n0_smem,
+                                                next_up_n0_smem,
+                                                next_gate_n1_smem,
+                                                next_up_n1_smem,
+                                                next_barrier,
+                                            )
+                                        mgpu.wgmma(gate_n0_acc_ref, lhs_smem, gate_n0_smem)
+                                        mgpu.wgmma(up_n0_acc_ref, lhs_smem, up_n0_smem)
+                                        mgpu.wgmma(gate_n1_acc_ref, lhs_smem, gate_n1_smem)
+                                        mgpu.wgmma(up_n1_acc_ref, lhs_smem, up_n1_smem)
+                                        if next_kk < k_tiles:
+                                            mgpu.barrier_wait(next_barrier)
+                                            mgpu.commit_smem()
+                                    mgpu.wgmma_wait(0)
+
+                                pl.run_scoped(
+                                    smem_scope,
+                                    lhs0_smem=_wgmma_smem(
+                                        (config.block_m, config.block_k),
+                                        sorted_x_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    lhs1_smem=_wgmma_smem(
+                                        (config.block_m, config.block_k),
+                                        sorted_x_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_n0_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_n0_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_n1_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_n1_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_n0_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_n0_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_n1_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_n1_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    ready_barrier0=mgpu.Barrier(num_arrivals=5),
+                                    ready_barrier1=mgpu.Barrier(num_arrivals=5),
+                                )
+                                return (
+                                    _silu(gate_n0_acc_ref[...]) * up_n0_acc_ref[...],
+                                    _silu(gate_n1_acc_ref[...]) * up_n1_acc_ref[...],
+                                )
+
+                            hidden_n0, hidden_n1 = pl.run_scoped(
+                                acc_scope,
+                                gate_n0_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                                up_n0_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                                gate_n1_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                                up_n1_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                            )
+                            hidden_ref[
+                                pl.ds(row, config.block_m), pl.ds(n_group_i * 2 * config.block_n, config.block_n)
+                            ] = hidden_n0.astype(hidden_ref.dtype)
+                            hidden_ref[
+                                pl.ds(row, config.block_m),
+                                pl.ds((n_group_i * 2 + 1) * config.block_n, config.block_n),
+                            ] = hidden_n1.astype(hidden_ref.dtype)
+                            return
 
                         def acc_scope(gate_n0_acc_ref, up_n0_acc_ref, gate_n1_acc_ref, up_n1_acc_ref):
                             def smem_scope(
@@ -599,11 +865,31 @@ def compact_permute_up_mgpu(
 
                             pl.run_scoped(
                                 smem_scope,
-                                lhs_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=sorted_x_ref.dtype),
-                                gate_n0_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_n0_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                gate_n1_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_n1_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
+                                lhs_smem=_wgmma_smem(
+                                    (config.block_m, config.block_k),
+                                    sorted_x_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_n0_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_n0_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_n1_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_n1_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
                                 ready_barrier=mgpu.Barrier(num_arrivals=4),
                             )
                             return (
@@ -626,6 +912,133 @@ def compact_permute_up_mgpu(
                             pl.ds((n_group_i * 2 + 1) * config.block_n, config.block_n),
                         ] = hidden_n1.astype(hidden_ref.dtype)
                     else:
+                        if remote_smem_double_buffer:
+
+                            def acc_scope(gate_acc_ref, up_acc_ref):
+                                def smem_scope(
+                                    lhs0_smem,
+                                    lhs1_smem,
+                                    gate_buf0_smem,
+                                    up_buf0_smem,
+                                    gate_buf1_smem,
+                                    up_buf1_smem,
+                                    ready_barrier0,
+                                    ready_barrier1,
+                                ):
+                                    def _issue_prefetch(kk, lhs_smem, gate_smem, up_smem, ready_barrier):
+                                        k_start = kk * config.block_k
+                                        n_tile = n_group_i
+                                        mgpu.copy_gmem_to_smem(
+                                            remote_sorted_x_ref.at[
+                                                pl.ds(token_offset, config.block_m),
+                                                pl.ds(k_start, config.block_k),
+                                            ],
+                                            lhs_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds(n_tile * config.block_n, config.block_n),
+                                            ],
+                                            gate_smem,
+                                            ready_barrier,
+                                        )
+                                        mgpu.copy_gmem_to_smem(
+                                            w_ref.at[
+                                                expert,
+                                                pl.ds(k_start, config.block_k),
+                                                pl.ds((n_tile + n_tiles) * config.block_n, config.block_n),
+                                            ],
+                                            up_smem,
+                                            ready_barrier,
+                                        )
+
+                                    _issue_prefetch(0, lhs0_smem, gate_buf0_smem, up_buf0_smem, ready_barrier0)
+                                    mgpu.barrier_wait(ready_barrier0)
+                                    mgpu.commit_smem()
+                                    for kk in range(k_tiles):
+                                        if kk > 0:
+                                            mgpu.wgmma_wait(0)
+                                        next_kk = kk + 1
+                                        if kk % 2 == 0:
+                                            lhs_smem = lhs0_smem
+                                            gate_smem = gate_buf0_smem
+                                            up_smem = up_buf0_smem
+                                            next_lhs_smem = lhs1_smem
+                                            next_gate_smem = gate_buf1_smem
+                                            next_up_smem = up_buf1_smem
+                                            next_barrier = ready_barrier1
+                                        else:
+                                            lhs_smem = lhs1_smem
+                                            gate_smem = gate_buf1_smem
+                                            up_smem = up_buf1_smem
+                                            next_lhs_smem = lhs0_smem
+                                            next_gate_smem = gate_buf0_smem
+                                            next_up_smem = up_buf0_smem
+                                            next_barrier = ready_barrier0
+                                        if next_kk < k_tiles:
+                                            _issue_prefetch(
+                                                next_kk,
+                                                next_lhs_smem,
+                                                next_gate_smem,
+                                                next_up_smem,
+                                                next_barrier,
+                                            )
+                                        mgpu.wgmma(gate_acc_ref, lhs_smem, gate_smem)
+                                        mgpu.wgmma(up_acc_ref, lhs_smem, up_smem)
+                                        if next_kk < k_tiles:
+                                            mgpu.barrier_wait(next_barrier)
+                                            mgpu.commit_smem()
+                                    mgpu.wgmma_wait(0)
+
+                                pl.run_scoped(
+                                    smem_scope,
+                                    lhs0_smem=_wgmma_smem(
+                                        (config.block_m, config.block_k),
+                                        sorted_x_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    lhs1_smem=_wgmma_smem(
+                                        (config.block_m, config.block_k),
+                                        sorted_x_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_buf0_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    gate_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    up_buf1_smem=_wgmma_smem(
+                                        (config.block_k, config.block_n),
+                                        w_ref.dtype,
+                                        lowering_semantics=config.lowering_semantics,
+                                    ),
+                                    ready_barrier0=mgpu.Barrier(num_arrivals=3),
+                                    ready_barrier1=mgpu.Barrier(num_arrivals=3),
+                                )
+                                return _silu(gate_acc_ref[...]) * up_acc_ref[...]
+
+                            hidden = pl.run_scoped(
+                                acc_scope,
+                                gate_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                                up_acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                            )
+                            hidden_ref[
+                                pl.ds(row, config.block_m), pl.ds(n_group_i * config.block_n, config.block_n)
+                            ] = hidden.astype(hidden_ref.dtype)
+                            return
 
                         def acc_scope(gate_acc_ref, up_acc_ref):
                             def smem_scope(lhs_smem, gate_smem, up_smem, ready_barrier):
@@ -668,9 +1081,21 @@ def compact_permute_up_mgpu(
 
                             pl.run_scoped(
                                 smem_scope,
-                                lhs_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=sorted_x_ref.dtype),
-                                gate_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
+                                lhs_smem=_wgmma_smem(
+                                    (config.block_m, config.block_k),
+                                    sorted_x_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
                                 ready_barrier=mgpu.Barrier(num_arrivals=2),
                             )
                             return _silu(gate_acc_ref[...]) * up_acc_ref[...]
@@ -684,6 +1109,18 @@ def compact_permute_up_mgpu(
                             hidden.astype(hidden_ref.dtype)
                         )
 
+        def _compute_phase(phase):
+            expert_group, peer_phase = _phase(phase)
+            if config.lowering_semantics != "lane" or not remote_smem_double_buffer:
+                _compute_expert_group_peer(expert_group, peer_phase)
+                return
+
+            for static_peer_phase in range(ep_size):
+
+                @pl.when(peer_phase == static_peer_phase)
+                def _compute_static_peer_phase(static_peer_phase=static_peer_phase):
+                    _compute_expert_group_peer(expert_group, static_peer_phase)
+
         @pl.loop(0, total_phases)
         def _phase_loop(phase):
             _compute_phase(phase)
@@ -693,7 +1130,7 @@ def compact_permute_up_mgpu(
         out_shape=jax.ShapeDtypeStruct((capacity, intermediate), x_local.dtype),
         grid=(num_sms,),
         grid_names=("sm",),
-        compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Warpgroup),
+        compiler_params=mgpu.CompilerParams(lowering_semantics=_lowering_semantics(config.lowering_semantics)),
     )
 
     source_pack = _source_pack_by_assignment(
@@ -971,11 +1408,31 @@ def compact_permute_up_mgpu_ring(
 
                             pl.run_scoped(
                                 smem_scope,
-                                lhs_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=scratch_ref.dtype),
-                                gate_n0_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_n0_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                gate_n1_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_n1_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
+                                lhs_smem=_wgmma_smem(
+                                    (config.block_m, config.block_k),
+                                    scratch_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_n0_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_n0_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_n1_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_n1_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
                                 ready_barrier=mgpu.Barrier(num_arrivals=4),
                             )
                             return (
@@ -1041,9 +1498,21 @@ def compact_permute_up_mgpu_ring(
 
                             pl.run_scoped(
                                 smem_scope,
-                                lhs_smem=mgpu.SMEM((config.block_m, config.block_k), dtype=scratch_ref.dtype),
-                                gate_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
-                                up_smem=mgpu.SMEM((config.block_k, config.block_n), dtype=w_ref.dtype),
+                                lhs_smem=_wgmma_smem(
+                                    (config.block_m, config.block_k),
+                                    scratch_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                gate_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
+                                up_smem=_wgmma_smem(
+                                    (config.block_k, config.block_n),
+                                    w_ref.dtype,
+                                    lowering_semantics=config.lowering_semantics,
+                                ),
                                 ready_barrier=mgpu.Barrier(num_arrivals=2),
                             )
                             return _silu(gate_acc_ref[...]) * up_acc_ref[...]
@@ -1111,7 +1580,7 @@ def compact_permute_up_mgpu_ring(
             out_shape=jax.ShapeDtypeStruct((capacity, intermediate), x_local.dtype),
             grid=(num_sms,),
             grid_names=("sm",),
-            compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Warpgroup),
+            compiler_params=mgpu.CompilerParams(lowering_semantics=_lowering_semantics(config.lowering_semantics)),
         )
     else:
 
@@ -1142,7 +1611,7 @@ def compact_permute_up_mgpu_ring(
             ],
             grid=(num_sms,),
             grid_names=("sm",),
-            compiler_params=mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Warpgroup),
+            compiler_params=mgpu.CompilerParams(lowering_semantics=_lowering_semantics(config.lowering_semantics)),
         )
 
     source_pack = _source_pack_by_assignment(
@@ -1420,13 +1889,14 @@ def _sharded_kernel(mesh: Mesh, config: CompactConfig, ep_size: int, topk: int, 
         x_local = x_local[0]
         routing_local = routing_local[0]
         w_local = w_local[0]
-        if implementation == "pull":
+        if implementation in DIRECT_REMOTE_SMEM_IMPLEMENTATIONS or implementation == "pull":
             hidden, src_rank, assignment = compact_permute_up_mgpu(
                 x_local,
                 routing_local,
                 w_local,
                 config=config,
                 ep_size=ep_size,
+                remote_smem_double_buffer=implementation == "direct_remote_smem_double_buffer",
             )
             return hidden[None, ...], src_rank[None, ...], assignment[None, ...]
         if implementation in ("ring", "ring_queue"):
@@ -1718,6 +2188,7 @@ def _run_one(
     steps: int,
     seed: int,
     check: bool,
+    debug_exceptions: bool,
 ) -> dict[str, Any]:
     if _is_ring_implementation(implementation):
         config = replace(config, ring_stage=_ring_stage_for_implementation(implementation))
@@ -1753,7 +2224,7 @@ def _run_one(
         max_abs_diff = None
         mean_abs_diff = None
         metadata_mismatches = None
-        if check and implementation in ("pull", "ring"):
+        if check and implementation in ("pull", "ring", *DIRECT_REMOTE_SMEM_IMPLEMENTATIONS):
             reference_fn = jax.jit(_sharded_reference(mesh, config, shape.ep_size, shape.topk))
             reference = reference_fn(x, routing, w)
             _block_until_ready(reference)
@@ -1782,6 +2253,8 @@ def _run_one(
             queue_stats=queue_stats,
         )
     except Exception as exc:  # noqa: BLE001 - tuning rows should capture unsupported candidates.
+        if debug_exceptions:
+            raise
         return _row(
             shape=shape,
             config=config,
@@ -1816,6 +2289,7 @@ def _config_sweep(args: argparse.Namespace) -> list[CompactConfig]:
     configs = []
     for (
         expert_group_size,
+        block_k,
         n_group,
         copy_tile,
         copy_rows,
@@ -1827,6 +2301,7 @@ def _config_sweep(args: argparse.Namespace) -> list[CompactConfig]:
         ring_queue_order,
     ) in itertools.product(
         _int_list(args.expert_group_sizes),
+        _optional_int_list(args.block_k_values, args.block_k),
         _int_list(args.n_groups),
         _int_list(args.copy_tiles),
         _int_list(args.copy_rows),
@@ -1841,7 +2316,8 @@ def _config_sweep(args: argparse.Namespace) -> list[CompactConfig]:
             CompactConfig(
                 block_m=args.block_m,
                 block_n=args.block_n,
-                block_k=args.block_k,
+                block_k=block_k,
+                lowering_semantics=args.lowering_semantics,
                 max_concurrent_steps=max_concurrent_steps,
                 grid_block_n=grid_block_n,
                 expert_group_size=expert_group_size,
@@ -1880,11 +2356,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--block-m", type=int, default=64)
     parser.add_argument("--block-n", type=int, default=128)
     parser.add_argument("--block-k", type=int, default=128)
+    parser.add_argument("--block-k-values", type=str, default=None)
+    parser.add_argument("--lowering-semantics", type=str, choices=tuple(LOWERING_SEMANTICS), default="warpgroup")
     parser.add_argument(
         "--implementations",
         type=str,
         default="pull",
-        help="Comma-separated compact implementations: pull,ring,ring_copy,ring_compute,ring_queue.",
+        help=(
+            "Comma-separated compact implementations: "
+            "pull,ring,ring_copy,ring_compute,ring_queue,"
+            "direct_remote_smem_blocking,direct_remote_smem_double_buffer."
+        ),
     )
     parser.add_argument("--expert-group-sizes", type=str, default="32")
     parser.add_argument("--n-groups", type=str, default="2")
@@ -1914,6 +2396,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--check", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--debug-exceptions", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--jsonl", type=str, default=None)
     return parser.parse_args()
 
@@ -1951,6 +2434,7 @@ def main() -> None:
                     steps=args.steps,
                     seed=args.seed,
                     check=args.check,
+                    debug_exceptions=args.debug_exceptions,
                 )
                 line = json.dumps(row, sort_keys=True)
                 print(line, flush=True)

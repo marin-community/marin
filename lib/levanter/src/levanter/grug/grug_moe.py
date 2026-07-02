@@ -14,8 +14,10 @@ Implementation overview:
   keeps the stable public API used by Grug model code and benchmarks.
 """
 
+import warnings
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -33,8 +35,10 @@ from levanter.grug._moe.common import (
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
+    MoeImplementationSpec,
     PspecAxis,
     resolve_moe_implementation,
+    resolve_moe_implementations,
     split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import (
@@ -44,6 +48,7 @@ from levanter.grug._moe.ep_common import (
     _shard_a2a_params as _shard_a2a_params,
 )
 from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
+from levanter.grug._moe.pallas_mgpu import MoeMgpuConfig, _moe_mlp_ep_pallas_mgpu_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
@@ -64,9 +69,10 @@ class MoEExpertMlp(eqx.Module):
 
     w_gate_up: jax.Array
     w_down: jax.Array
-    implementation: MoeImplementation = eqx.field(static=True)
+    implementation: MoeImplementation | tuple[MoeImplementation, ...] = eqx.field(static=True)
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
+    pallas_mgpu_config: MoeMgpuConfig | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(
@@ -76,12 +82,16 @@ class MoEExpertMlp(eqx.Module):
         intermediate_dim: int,
         initializer_std: float,
         key: jax.Array,
-        implementation: MoeImplementation | str | None = None,
+        implementation: MoeImplementationSpec = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        pallas_mgpu_config: MoeMgpuConfig | None = None,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
-        resolved_implementation = resolve_moe_implementation(implementation)
+        resolved_implementations = resolve_moe_implementations(implementation)
+        resolved_implementation = (
+            resolved_implementations[0] if len(resolved_implementations) == 1 else resolved_implementations
+        )
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
@@ -96,6 +106,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=resolved_implementation,
             activation=activation,
             capacity_factor=capacity_factor,
+            pallas_mgpu_config=pallas_mgpu_config,
         )
 
     @named_call
@@ -118,6 +129,7 @@ class MoEExpertMlp(eqx.Module):
             implementation=self.implementation,
             mesh=mesh,
             capacity_factor=self.capacity_factor,
+            pallas_mgpu_config=self.pallas_mgpu_config,
             report_capacity_overflow=report_capacity_overflow,
         )
 
@@ -131,9 +143,10 @@ def moe_mlp(
     w_down: Float[Array, "E I D"],
     *,
     activation: MoeActivation = ActivationFunctionEnum.silu,
-    implementation: MoeImplementation | str | None = None,
+    implementation: MoeImplementationSpec = None,
     mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    pallas_mgpu_config: MoeMgpuConfig | None = None,
     report_capacity_overflow: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
@@ -145,7 +158,36 @@ def moe_mlp(
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
     """
-    resolved_implementation = resolve_moe_implementation(implementation)
+    resolved_implementations = resolve_moe_implementations(implementation)
+    if len(resolved_implementations) > 1:
+        failures: list[tuple[MoeImplementation, Exception]] = []
+        for index, candidate in enumerate(resolved_implementations):
+            try:
+                return moe_mlp(
+                    x,
+                    selected_experts,
+                    combine_weights,
+                    w_up_gate,
+                    w_down,
+                    activation=activation,
+                    implementation=candidate,
+                    mesh=mesh,
+                    capacity_factor=capacity_factor,
+                    pallas_mgpu_config=pallas_mgpu_config,
+                    report_capacity_overflow=report_capacity_overflow,
+                )
+            except Exception as exc:
+                failures.append((candidate, exc))
+                if index + 1 < len(resolved_implementations):
+                    warnings.warn(
+                        f"MoE implementation {candidate!r} failed; trying next fallback. Error: {exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+        details = "; ".join(f"{candidate!r}: {type(exc).__name__}: {exc}" for candidate, exc in failures)
+        raise RuntimeError(f"No requested MoE implementation succeeded: {details}") from failures[-1][1]
+
+    resolved_implementation = resolved_implementations[0]
 
     if mesh is None:
         mesh = _current_mesh()
@@ -178,6 +220,28 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
+    if resolved_implementation == "pallas_mgpu" and (not has_expert_axis or expert_axis_size <= 1):
+        raise ValueError("implementation='pallas_mgpu' requires an expert mesh axis with size > 1")
+    if resolved_implementation == "pallas_mgpu" and _mesh_axis_size(mesh, "data") != 1:
+        raise ValueError("implementation='pallas_mgpu' currently requires data mesh axis size 1")
+    if resolved_implementation == "pallas_mgpu" and expert_axis_size > 8:
+        raise ValueError(f"implementation='pallas_mgpu' supports expert axis size <= 8, got {expert_axis_size}")
+    if resolved_implementation == "pallas_mgpu":
+        pallas_config = pallas_mgpu_config or MoeMgpuConfig(capacity_factor=capacity_factor)
+        if selected_experts.dtype != jnp.int32:
+            raise ValueError(
+                f"implementation='pallas_mgpu' requires selected_experts dtype int32, got {selected_experts.dtype}"
+            )
+        if x.dtype != jnp.bfloat16 or w_up_gate.dtype != jnp.bfloat16 or w_down.dtype != jnp.bfloat16:
+            raise ValueError(
+                "implementation='pallas_mgpu' requires bfloat16 activations and weights; "
+                f"got x={x.dtype}, w_up_gate={w_up_gate.dtype}, w_down={w_down.dtype}"
+            )
+        if x.shape[1] % pallas_config.dispatch_chunk_copy_tile != 0:
+            raise ValueError(
+                "implementation='pallas_mgpu' requires D to be divisible by "
+                f"dispatch_chunk_copy_tile={pallas_config.dispatch_chunk_copy_tile}, got D={x.shape[1]}"
+            )
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -212,9 +276,13 @@ def moe_mlp(
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "deepep":
             shard_local_fn = _moe_mlp_ep_deepep_local
+        elif resolved_implementation == "pallas_mgpu":
+            shard_local_fn = _moe_mlp_ep_pallas_mgpu_local
         else:
             raise AssertionError(f"Unhandled MoE implementation {resolved_implementation!r}")
 
+        if resolved_implementation == "pallas_mgpu":
+            batch_spec = P("expert")
         w_up_gate_spec = P("expert", None, None)
         w_down_spec = P("expert", None, None)
 
@@ -224,13 +292,16 @@ def moe_mlp(
         w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
         w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
+        shard_local_kwargs: dict[str, Any] = {
+            "activation_fn": activation_fn,
+            "num_experts": num_experts,
+            "capacity_factor": capacity_factor,
+        }
+        if resolved_implementation == "pallas_mgpu":
+            shard_local_kwargs["pallas_mgpu_config"] = pallas_mgpu_config
+
         shard_fn = shard_map(
-            partial(
-                shard_local_fn,
-                activation_fn=activation_fn,
-                num_experts=num_experts,
-                capacity_factor=capacity_factor,
-            ),
+            partial(shard_local_fn, **shard_local_kwargs),
             mesh=mesh,
             in_specs=(
                 batch_spec,
@@ -292,8 +363,10 @@ __all__ = [
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "MoeImplementationSpec",
     "PspecAxis",
     "moe_mlp",
     "resolve_moe_implementation",
+    "resolve_moe_implementations",
     "split_moe_w13_output",
 ]

@@ -2819,9 +2819,154 @@ Addendum:
   | 40 | `0.014844690067s` | `123.061323` | `48.070829` | `100.283028` | `130.602520` |
 
 - Interpretation:
-  - `num_sms=64` is strongly negative; adding more receiver workers increases overhead/contension instead of reducing slow tails.
+  - `num_sms=64` is strongly negative; adding more receiver workers increases overhead/contention instead of reducing slow tails.
   - The nearby `num_send_sms=2` sweep shows a sharp pocket at `num_sms=32`; even there two of six repeats are slow (`150.25` and `133.41 TFLOP/s/rank`).
   - Current bottleneck judgment remains software/protocol-structure-bound in the fixed-wait source-push semaphore/slot loop. It is not fixed by more receiver workers, more producer workers, hidden-output shrinking, or WGMMA tile retuning.
+
+### 2026-07-02 02:56 PDT - FWD-SWQ-078 Direct-owned receiver job schedule
+- Question:
+  - Can we keep fixed-wait correctness/protocol but reduce receiver-side software work by having each compute worker iterate only the `(slot, n_job)` work groups it owns?
+- Code change:
+  - Added experimental `receiver_schedule=owned_jobs` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The new branch preserves the existing `full_sem` wait and `done_sem` release protocol, but replaces the per-worker scan over all `inbox_slots * n_compute_jobs` candidates with a direct modular owner loop.
+  - Added queue stats: `local_work_groups_per_source` and `owned_work_groups_per_worker_round`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py .agents/logbooks/6597-moe-mgpu-forward.md`
+- H100 checked smoke attempts:
+  - `/dlwh/repro-source-push-owned-jobs-smoke-20260702-0947`, cluster `cw-us-east-02a`, succeeded as a job but both rows failed in host reference before kernel execution: default `entries_per_rank=2` was too small for `T=4096` routing.
+  - `/dlwh/repro-source-push-owned-jobs-smoke2-20260702-0948`, cluster `cw-us-east-02a`, succeeded as a job but both rows failed in host reference with `entries_per_rank=36`.
+  - `/dlwh/repro-source-push-owned-jobs-smoke3-20260702-0950`, cluster `cw-us-east-02a`, succeeded as a job but failed in host reference with `entries_per_rank=48`; local input stats showed `max_live_end=24896` with `hidden_rows=24576` because dropped earlier buckets can leave later live row bases beyond the compact hidden buffer.
+  - Local capacity check showed `entries_per_rank=56` has `dropped_entries_total=0`, `hidden_rows=28672`, `max_live_end=24960`.
+- Successful H100 smoke:
+  - `/dlwh/repro-source-push-owned-jobs-smoke4-20260702-0953`, cluster `cw-us-east-02a`, succeeded.
+  - Config: `tokens_per_rank=4096`, `entries_per_rank=56`, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=debug`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=1`, `steps=3`, checked.
+
+  | receiver_schedule | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | metadata_mismatches | max_abs_diff |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.008288928618s` | `37.875058` | `14.794945` | `0` | `0.061573` |
+  | `owned_jobs` | `0.003172392646s` | `98.961159` | `38.656703` | `0` | `0.061573` |
+
+- Interpretation:
+  - `owned_jobs` is a real correctness-preserving schedule improvement on the small checked smoke.
+  - For this shape, `local_work_groups_per_source=40` and `owned_work_groups_per_worker_round=2`, so the receiver worker scans far fewer dead candidates than fixed wait while keeping the same `10` done signals per entry.
+  - Target perf repeat is still required; held off because `/dlwh/repro-source-push-ready-multi-smoke-20260702-0953` is currently running and appears start-only after `first_run_start`.
+
+### 2026-07-02 02:59 PDT - FWD-SWQ-079 Direct-owned target repeat
+- Question:
+  - Does the small-shape `owned_jobs` win survive at target shape?
+- H100 job:
+  - `/dlwh/repro-source-push-owned-jobs-target-20260702-0957`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target current fixed pocket, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `traffic_pattern=all_to_all`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`, `--separate-compile`.
+
+  | receiver_schedule | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.009230798925s` | `197.326526` | `77.080674` | `142.586310` | `198.696572` |
+  | `owned_jobs` | `0.010791040441s` | `169.154311` | `66.075903` | `110.940220` | `178.910594` |
+
+- Interpretation:
+  - Target result is negative: `owned_jobs` reduces candidate scanning but regresses median target time by about `16.9%` versus the same-job fixed-wait row.
+  - Likely cause: the branch computes all directly owned jobs for a round and only then releases all slots, delaying empty-slot signals for earlier slots. This can stall producer reuse even though receiver candidate scanning is cheaper.
+  - Next experiment: keep direct job ownership but restore per-slot ordering/release, so each slot is released immediately after its owned N jobs complete.
+
+### 2026-07-02 03:05 PDT - FWD-SWQ-080 Direct-owned per-slot release schedule
+- Question:
+  - Can direct job ownership help at target if we preserve the fixed-wait per-slot release order?
+- Code change:
+  - Added experimental `receiver_schedule=owned_slots` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The branch loops slots in order, computes only directly owned `job_i` values for that slot, then calls the existing `_release_completed_slot` immediately.
+  - Added queue stat `owned_slot_jobs_per_worker`; target value is `1`.
+- Local checks:
+  - `uvx black@25.9.0 --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py .agents/logbooks/6597-moe-mgpu-forward.md`
+- H100 checked smoke:
+  - `/dlwh/repro-source-push-owned-slots-smoke-20260702-1000`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same zero-drop checked smoke as FWD-SWQ-078, sweeping `fixed_wait,owned_slots`.
+
+  | receiver_schedule | steady_state_time | W13 TFLOP/s/rank | send GB/s/rank | metadata_mismatches | max_abs_diff |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.003095567382s` | `101.417161` | `39.616078` | `0` | `0.061573` |
+  | `owned_slots` | `0.005162347651s` | `60.814125` | `23.755518` | `0` | `0.061573` |
+
+- H100 target repeat:
+  - `/dlwh/repro-source-push-owned-slots-target-20260702-1003`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target current fixed pocket, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `traffic_pattern=all_to_all`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`, `--separate-compile`.
+
+  | receiver_schedule | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.010753012129s` | `169.393029` | `66.169152` | `124.929544` | `197.632067` |
+  | `owned_slots` | `0.009304244570s` | `195.768926` | `76.472237` | `120.401905` | `197.654049` |
+
+- Interpretation:
+  - `owned_slots` is a target same-job win over `fixed_wait` in a noisy run and avoids the `owned_jobs` target regression.
+  - Absolute median `195.77 TFLOP/s/rank` is still not a confirmed improvement over the best fixed-wait fast pocket (`~197 TFLOP/s/rank` in FWD-SWQ-079, with historical rows around `190-193` and occasional fast rows).
+  - Next action: repeat `owned_slots` alone to measure stability without compiling/running a paired fixed-wait row.
+
+### 2026-07-02 03:09 PDT - FWD-SWQ-081 Owned-slots solo stability
+- Question:
+  - Is the `owned_slots` target same-job win stable when run alone for more repeats?
+- H100 job:
+  - `/dlwh/repro-source-push-owned-slots-solo-20260702-1006`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target current fixed pocket with `receiver_schedule=owned_slots`, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `traffic_pattern=all_to_all`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=16`, `--no-check`, `--separate-compile`.
+
+  | metric | value |
+  |---|---:|
+  | median steady_state_time | `0.009547218996s` |
+  | median W13 TFLOP/s/rank | `190.821228` |
+  | median send GB/s/rank | `74.539542` |
+  | min W13 TFLOP/s/rank | `125.735202` |
+  | max W13 TFLOP/s/rank | `198.085746` |
+
+- Interpretation:
+  - `owned_slots` is not a confirmed target speedup when run alone; median falls back near the fixed-wait baseline range because slow repeats remain.
+  - The branch still often reaches the fast pocket (`~194-198 TFLOP/s/rank`), but it does not remove the slow-tail mechanism.
+  - Next action: test whether reducing done-signal count per entry via `n_group` / `n_groups_per_job` helps now that per-slot ownership is available.
+
+### 2026-07-02 03:12 PDT - FWD-SWQ-082 Owned-slots N-group / jobs-per-entry sweep
+- Question:
+  - Does reducing done signals per entry help `owned_slots` once direct per-slot ownership is in place?
+- H100 job:
+  - `/dlwh/repro-source-push-owned-slots-ngroup-20260702-1010`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target current fixed pocket with `receiver_schedule=owned_slots`, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `traffic_pattern=all_to_all`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`, `--separate-compile`.
+
+  | n_group | n_groups_per_job | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 1 | 1 | `0.009227763213s` | `197.391456` | `77.106038` | `136.677539` | `198.431101` |
+  | 1 | 2 | `0.009646938432s` | `188.815363` | `73.756001` | `124.465835` | `191.552094` |
+  | 2 | 1 | `0.023298971421s` | `78.187533` | `30.542005` | `69.425444` | `84.784374` |
+  | 2 | 2 | `0.021237426920s` | `85.770951` | `33.504278` | `82.006268` | `92.736513` |
+
+- Interpretation:
+  - Grouping N work is negative. `n_groups_per_job=2` loses even without the two-N-tile fused body, and `n_group=2` is a severe regression.
+  - The best row remains plain `owned_slots`, `n_group=1`, `n_groups_per_job=1`.
+  - This sweep produced a fast `owned_slots` median (`197.39 TFLOP/s/rank`), but FWD-SWQ-081 showed the same config is not stable over 16 solo repeats (`190.82 TFLOP/s/rank` median). Treat this as noisy evidence, not a new baseline.
+
+### 2026-07-02 03:17 PDT - FWD-SWQ-083 Owned-slots bounded interaction sweep
+- Question:
+  - Does `owned_slots` prefer a different `block_k`, producer count, or total SM count than the fixed-wait pocket?
+- H100 job:
+  - `/dlwh/repro-source-push-owned-slots-interact-20260702-1014`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target `owned_slots`, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `traffic_pattern=all_to_all`, `implementation=m_n_slots`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `hidden_output_mode=full`, `block_m=64`, `block_n=128`, `inbox_slots=4`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`, `--separate-compile`.
+
+  | block_k | num_send_sms | num_sms | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 128 | 1 | 16 | `0.010667869489s` | `171.567473` | `67.018544` | `118.654045` | `188.397041` |
+  | 128 | 1 | 32 | `0.011029648561s` | `165.144423` | `64.509540` | `132.104969` | `167.097249` |
+  | 128 | 2 | 16 | `0.011941052724s` | `152.539605` | `59.585783` | `121.789318` | `153.166650` |
+  | 128 | 2 | 32 | `0.009183862513s` | `198.336084` | `77.475033` | `126.667036` | `198.963395` |
+  | 256 | 1 | 16 | `0.009462767447s` | `192.489482` | `75.191204` | `117.747700` | `193.420874` |
+  | 256 | 1 | 32 | `0.025886109298s` | `70.384603` | `27.493986` | `65.222722` | `77.928563` |
+  | 256 | 2 | 16 | `0.011592252213s` | `157.129233` | `61.378607` | `102.977414` | `158.583550` |
+  | 256 | 2 | 32 | `0.021712419810s` | `83.900228` | `32.773526` | `70.720900` | `88.210721` |
+
+- Interpretation:
+  - The best interaction remains `block_k=128`, `num_send_sms=2`, `num_sms=32`, i.e. the current fixed-wait pocket plus `owned_slots`.
+  - This job produced the best recent repeated median (`198.34 TFLOP/s/rank`) for `owned_slots`, with six fast rows near `198-199` and two slow rows.
+  - The result is still not stable enough to call solved because the same config was `190.82 TFLOP/s/rank` median in the 16-repeat solo run. The remaining problem is the slow-tail probability, not peak fast-pocket speed.
 
 ### 2026-07-02 02:42 PDT - FWD-SWQ-078 Send2 nearby compute-worker sweep
 - Question:
@@ -2842,3 +2987,1642 @@ Addendum:
   - This confirms the current local pocket: `num_send_sms=2,num_sms=32`.
   - Nearby lower/higher total worker counts regress. The fixed-wait path is sensitive to CTA count/scheduling, and simply adding compute workers does not stabilize the slow tail.
   - No speedup over the existing fixed-wait baseline was found in this pass.
+
+### 2026-07-02 02:58 PDT - FWD-SWQ-079 owned-jobs target regression and ready-scan deadlock
+- Question:
+  - Does direct receiver job ownership reduce fixed-wait software overhead at the target shape?
+  - Can a multi-candidate ready scan compute all currently ready local jobs and reduce head-of-line waits?
+- Code changes:
+  - Kept experimental `receiver_schedule=owned_jobs` in `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Tried a multi-candidate `ready_scan` receiver pass that marks already-computed candidates in SMEM and falls back to blocking fixed-wait for the rest of the round.
+  - Disabled `receiver_schedule=ready_scan` again after the checked smoke deadlocked.
+- H100 jobs:
+  - `/dlwh/repro-source-push-owned-jobs-target-20260702-0951`, cluster `cw-us-east-02a`, succeeded.
+  - `/dlwh/repro-source-push-ready-multi-smoke-20260702-0953`, cluster `cw-us-east-02a`, stopped after compile succeeded but first execution produced no row.
+- Target config:
+  - `implementation=m_n_slots`, `queue_mode=routing`, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `repeat_runs=6`.
+
+  | receiver_schedule | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.009461655647s` | `192.512947` | `75.200370` | `140.384635` | `194.780626` |
+  | `owned_jobs` | `0.010478099725s` | `173.837684` | `67.905345` | `134.911777` | `175.936923` |
+
+- Ready-scan smoke:
+  - Job `/dlwh/repro-source-push-ready-multi-smoke-20260702-0953` compiled (`compile_done` after about `10.52s`) and then stayed at `first_run_start` with zero result rows.
+  - Stopped manually after `4 minutes and 55.83 seconds`; final state `killed`, exit `0`.
+- Interpretation:
+  - `owned_jobs` is correct and was faster on a small checked shape, but target regresses by about `9.7%` vs the fixed-wait median. Reducing rectangular scan work alone is not enough; the altered receiver order likely hurts the target scheduling/CTA cadence.
+  - Multi-candidate ready scan is not a viable near-term path. It can deadlock even on a checked smoke after successful compile, so keep it gated off.
+  - Bottleneck judgment remains software-structure/scheduling-bound: fixed-wait has a sharp fast pocket but slow tails, while attempts to reduce work or add speculative readiness checks perturb the schedule more than they remove overhead.
+- Next action:
+  - Keep `fixed_wait` as the speed baseline.
+  - Test narrower fixed-wait variants that reduce release/done semaphore overhead or combine N work without changing producer count or receiver ownership.
+
+### 2026-07-02 03:01 PDT - FWD-SWQ-080 fixed-wait N job granularity sweep
+- Question:
+  - Can the current fixed-wait target pocket improve by computing multiple N groups per receiver job, reducing full/done semaphore waits, done signals, and receiver candidate work per received block?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-095941`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `implementation=m_n_slots`, `queue_mode=routing`, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `receiver_schedule=fixed_wait`, `warmup=2`, `steps=7`, `repeat_runs=6`.
+
+  | n_groups_per_job | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|---:|
+  | 1 | `0.010455207799s` | `176.172684` | `68.817455` | `119.486605` | `197.413588` |
+  | 2 | `0.011545417847s` | `157.774537` | `61.630679` | `128.538772` | `187.557457` |
+  | 5 | `0.017643561570s` | `103.541350` | `40.445840` | `90.216763` | `109.394312` |
+  | 10 | `0.028281084428s` | `64.455824` | `25.178056` | `58.577082` | `67.530847` |
+
+- Interpretation:
+  - Reducing the number of receiver N jobs is strongly negative. `n_groups_per_job=2` already regresses, and the larger values collapse WGMMA utilization.
+  - The full/done semaphore count is not the dominant cost when traded against N-tile CTA parallelism. Keep one N group per job in the current fixed-wait structure.
+  - The baseline row itself showed the same slow-tail issue as previous runs: fast repeats reached `194.73`, `195.74`, and `197.41 TFLOP/s/rank`, but slow repeats at `134.88`, `157.61`, and `119.49` pulled the median down.
+- Next action:
+  - Do not pursue `n_groups_per_job > 1`.
+  - Look for a way to preserve `n_groups_per_job=1` while stabilizing the slow-tail scheduling pocket.
+
+### 2026-07-02 03:06 PDT - FWD-SWQ-081 owned-slots receiver schedule
+- Question:
+  - Can we preserve fixed-wait round/slot order but prune each worker's per-slot job loop to only the N jobs it owns?
+  - This is narrower than `owned_jobs`: it keeps slot order and release shape, but avoids scanning all `n_compute_jobs` for every worker.
+- Code state:
+  - Tested the existing experimental `receiver_schedule=owned_slots` in `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+- Checked smoke:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-100338`, cluster `cw-us-east-02a`, succeeded.
+  - Config: `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `experts_per_rank=32`, `entries_per_rank=56`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `receiver_schedule=fixed_wait,owned_slots`, checked.
+
+  | receiver_schedule | steady_state_time | W13 TFLOP/s/rank | metadata_mismatches | hidden_max_abs_diff |
+  |---|---:|---:|---:|---:|
+  | `fixed_wait` | `0.001785373703s` | `17.584198` | `0` | `0.044435501` |
+  | `owned_slots` | `0.001740596335s` | `18.036557` | `0` | `0.044435501` |
+
+- Target repeat:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-100529`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target current fixed pocket, `tokens_per_rank=32768`, `entries_per_rank=288`, `routing=uniform`, `metadata_mode=static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | receiver_schedule | median steady_state_time | median W13 TFLOP/s/rank | median send GB/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---|---:|---:|---:|---:|---:|
+  | `fixed_wait` | `0.009798858913s` | `186.118165` | `72.702408` | `135.195429` | `197.602250` |
+  | `owned_slots` | `0.010483440710s` | `176.059348` | `68.773183` | `132.986509` | `198.042040` |
+
+- Interpretation:
+  - `owned_slots` is correct on the checked smoke and can hit the same fast mode as fixed-wait (`198.04 TFLOP/s/rank` max), but it worsens the target median.
+  - Receiver job-loop pruning does not remove the slow-tail source. Like `owned_jobs`, it perturbs schedule cadence enough to lose median throughput.
+  - Current best remains plain `fixed_wait` with the target source-push pocket. The unresolved problem is run-to-run/kernel-call slow-tail instability, not an obvious surplus job-loop scan.
+- Next action:
+  - Stop spending target runs on receiver-pruning variants unless a new mechanism also changes slot refill/scheduling stability.
+  - Shift to diagnosing why the same kernel alternates between fast and slow modes.
+
+### 2026-07-02 03:10 PDT - FWD-SWQ-082 per-launch slow-mode diagnostics
+- Question:
+  - Is the fixed-wait slow tail an artifact of averaging seven kernel launches per row, or does it show up on individual launches?
+  - Does the same per-launch slow mode remain when WGMMA/hidden compute is removed?
+- H100 jobs:
+  - Full W13 path: `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-100753`, cluster `cw-us-east-02a`, succeeded.
+  - Send-only perf path: `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-100934`, cluster `cw-us-east-02a`, succeeded.
+- Shared config:
+  - Target current fixed pocket, `routing=uniform`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `block_m=64`, `block_k=128`, `block_n=128`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=1`, `repeat_runs=32`, `--no-check`.
+- Full W13 path result:
+  - Median `steady_state_time=0.010136504541s`, median `179.755242 TFLOP/s/rank`.
+  - Range: `67.358396` to `195.556826 TFLOP/s/rank`.
+  - `9/32` launches were `>=190 TFLOP/s/rank`; `13/32` launches were `<160 TFLOP/s/rank`.
+  - Slow launches appeared in contiguous bands, especially repeats `10-16` and `20-25`, then returned to fast mode.
+- Send-only perf result:
+  - Median `steady_state_time=0.005503618042s`, median `129.281551 GB/s/rank`.
+  - Range: `125.767321` to `132.757171 GB/s/rank`.
+  - `32/32` launches were `>=110 GB/s/rank`; `0/32` launches were `<70 GB/s/rank`.
+- Interpretation:
+  - The slow tail is per-kernel-launch behavior, not just seven-launch averaging.
+  - In perf mode, send-only source-push copy/semaphore/inbox output is stable. The full-path slow mode requires WGMMA/hidden compute interacting with the source-push protocol.
+  - This supersedes the earlier send-only debug-output result: debug `seen_*` outputs could be noisy, but the current perf send-only path is not.
+  - Current bottleneck judgment: WGMMA/producer CTA coexistence or hidden-output compute/store scheduling, not raw remote-copy throughput alone and not receiver scan overhead.
+- Next action:
+  - Run the same per-launch diagnostic on compute-only or copy/compute-separated variants if available, then test whether changing compute CTA occupancy or producer/compute overlap shape removes the slow bands.
+
+### 2026-07-02 03:16 PDT - FWD-SWQ-083 hidden sink no-result and fine CTA-count step=1 sweep
+- Questions:
+  - Does replacing the full hidden scatter with the compact `hidden_output_mode=sink` path remove full-path slow bands?
+  - Do adjacent total CTA counts around the current `num_sms=32` pocket change the per-launch slow-mode behavior?
+- Hidden sink job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-101240`, cluster `cw-us-east-02a`, killed.
+  - Config: current target pocket with `hidden_output_mode=sink`, `steps=1`, `repeat_runs=24`.
+  - Result: no kernel row. The job stayed before `device_put_start` after `make_inputs_start` and was stopped after `1 minute and 32.72 seconds`.
+  - Interpretation: no performance signal; treat as a host-side harness stall/no-result.
+- Fine CTA-count H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-101447`, cluster `cw-us-east-02a`, succeeded.
+  - Config: current target fixed-wait pocket with `num_send_sms=2`, sweep `num_sms=31,32,33`, `warmup=2`, `steps=1`, `repeat_runs=16`, `output_mode=perf`, `--no-check`.
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 31 | `0.011112826527s` | `163.909244` | `72.028581` | `166.038985` | `0/16` | `6/16` |
+  | 32 | `0.009233551566s` | `197.267713` | `195.978266` | `199.878653` | `16/16` | `0/16` |
+  | 33 | `0.009244400077s` | `197.036235` | `193.908557` | `199.106016` | `16/16` | `0/16` |
+
+- Interpretation:
+  - `num_sms=31` is not viable; after early slow launches it stabilizes around `164-166 TFLOP/s/rank`.
+  - `num_sms=32` and `33` both showed stable fast per-launch behavior in this process, unlike the earlier single-config step=1 run where `num_sms=32` had contiguous slow bands.
+  - The slow mode is therefore not a deterministic property of the `num_sms=32` kernel. It is sensitive to run/process/GPU state or burn-in, while the fast-mode ceiling remains about `198-200 TFLOP/s/rank`.
+  - This improves the stability diagnosis but does not yet cross the `210 TFLOP/s/rank` target.
+- Next action:
+  - Re-test `num_sms=32/33` with normal `steps=7` after a longer burn-in to see whether the stable fast per-launch mode carries over to the benchmark metric.
+
+### 2026-07-02 03:18 PDT - FWD-SWQ-084 long-warmup steps=7 no-result
+- Question:
+  - Does the stable fast per-launch mode from FWD-SWQ-083 carry over to the normal benchmark metric with a longer burn-in?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-101714`, cluster `cw-us-east-02a`, killed.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, sweep `num_sms=32,33`, `warmup=24`, `steps=7`, `repeat_runs=8`, `output_mode=perf`, `--no-check`.
+- Result:
+  - No kernel row.
+  - The job emitted `validate_start`, `mesh_start`, and `make_inputs_start` for `num_sms=32`, then never reached `device_put_start`.
+  - Stopped manually after `1 minute and 34.53 seconds`; final state `killed`, exit `0`.
+- Interpretation:
+  - No performance signal. Treat this as a host setup/input-construction stall rather than a kernel result.
+  - The best actionable signal remains FWD-SWQ-083: with `steps=1`, `num_sms=32/33` can run in a stable fast mode around `197 TFLOP/s/rank`, but current source-push W13 still does not demonstrate a stable `>=210 TFLOP/s/rank` path.
+
+### 2026-07-02 03:24 PDT - FWD-SWQ-085 burn-in normal-steps stability result
+- Question:
+  - Does the stable fast per-launch mode from FWD-SWQ-083 carry over to the normal `steps=7` metric if the job avoids the host-side no-result seen with `warmup=24`?
+- H100 job:
+  - `/dlwh/repro-source-push-fixed-burnin-normal-20260702-1020`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, sweep `num_sms=32,33`, `warmup=16`, `steps=7`, `repeat_runs=8`, `output_mode=perf`, `--no-check`.
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 32 | `0.010824148211s` | `170.192751` | `117.910635` | `197.501167` | `3/8` | `4/8` |
+  | 33 | `0.011810014207s` | `154.239423` | `114.277907` | `195.996906` | `2/8` | `5/8` |
+
+- Interpretation:
+  - Longer burn-in does not make the stable `steps=1` fast pocket survive the normal seven-launch timing loop.
+  - Both `num_sms=32` and `33` can still hit fast individual rows around `195-198 TFLOP/s/rank`, but the median remains dominated by slow rows.
+  - Current bottleneck judgment remains software-structure / WGMMA-producer interaction. Send-only is stable, and CTA-count changes can influence fast-mode entry, but the full compute path still has slow-mode launches under the benchmark metric.
+- Next action:
+  - Stop treating warmup/CTA-count alone as the fix.
+  - Add or run a tighter decomposition that separates full hidden stores, WGMMA compute, and producer protocol under the same repeated-call metric.
+
+### 2026-07-02 03:29 PDT - FWD-SWQ-086 hidden-output sink decomposition
+- Question:
+  - Is the slow normal-metric tail tied to full hidden scatter/output footprint, or does it remain when WGMMA writes only a compact per-slot sink?
+- H100 job:
+  - `/dlwh/repro-source-push-hidden-sink-paired-20260702-102544`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `output_mode=perf`, `--no-check`.
+
+  | hidden_output_mode | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `full` | `0.011921322139s` | `153.267857` | `117.833982` | `196.789983` | `2/8` | `4/8` |
+  | `sink` | `0.009300199504s` | `195.854501` | `123.755533` | `197.208545` | `5/8` | `2/8` |
+
+- Interpretation:
+  - Compact sink output materially improves the median and fast-row frequency, so full hidden output footprint/scatter is part of the normal benchmark tax.
+  - The fast-mode ceiling remains about `197 TFLOP/s/rank`, and the sink mode still has slow rows. Full hidden stores are not the whole slow-mode mechanism.
+  - Current bottleneck judgment: WGMMA/source-push interaction is still the primary instability source; full hidden scatter increases how often the slow mode appears.
+
+### 2026-07-02 03:35 PDT - FWD-SWQ-087 store-zero decomposition
+- Question:
+  - With the same `m_n_slots` fixed-wait receiver/job/semaphore schedule, how much time is output store/protocol without WGMMA?
+- Code change:
+  - Added harness-only `hidden_compute_mode=store_zero`.
+  - This keeps the source-push receiver schedule and N-tile job structure but replaces WGMMA/SwiGLU with zero hidden stores.
+- H100 job:
+  - `/dlwh/repro-source-push-store-zero-20260702-102957`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `output_mode=perf`, `hidden_compute_mode=store_zero`, `--no-check`.
+
+  | hidden_output_mode | median steady_state_time | effective TFLOP/s/rank denominator | min effective TF | max effective TF | fast-equivalent >=300 | slow-equivalent <200 |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `full` | `0.005726062204s` | `318.273186` | `314.710574` | `322.773802` | `8/8` | `0/8` |
+  | `sink` | `0.005612719288s` | `324.528725` | `144.152636` | `326.583586` | `5/8` | `2/8` |
+
+- Interpretation:
+  - Store/protocol-only time is around `0.0056-0.0058s`, much faster than WGMMA sink (`~0.0093s`) or WGMMA full (`~0.0119s`) in FWD-SWQ-086.
+  - Full-output zero stores are stable in this run. Therefore the full-output store path alone is not enough to create the observed slow WGMMA tail.
+  - The slow-mode mechanism requires WGMMA/hidden compute interacting with the source-push receiver/protocol. Compact sink reduces the frequency but does not remove it.
+- Next action:
+  - Test the existing `compute_pipeline=emit` WGMMA staging under the same fixed-wait target schedule.
+
+### 2026-07-02 03:37 PDT - FWD-SWQ-088 emit pipeline default SMEM failure
+- Question:
+  - Does Mosaic `compute_pipeline=emit` improve WGMMA staging stability or fast-mode ceiling versus the manual K loop?
+- H100 job:
+  - `/dlwh/repro-source-push-emit-pipeline-20260702-103420`, cluster `cw-us-east-02a`, succeeded with error rows.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `compute_pipeline=emit`, swept `hidden_output_mode=sink,full`.
+- Result:
+  - Both rows failed during lowering:
+    - `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=327712 > max_smem_bytes=232448`
+- Interpretation:
+  - Default emit-pipeline staging is not directly viable at this tile shape.
+- Next action:
+  - Retry emit with smaller `max_concurrent_steps` to see whether a lower-buffered emit path fits and times.
+
+### 2026-07-02 03:39 PDT - FWD-SWQ-089 emit reduced-buffer sweep
+- Question:
+  - Can smaller `max_concurrent_steps` make `compute_pipeline=emit` fit and improve the WGMMA sink path?
+- H100 job:
+  - `/dlwh/repro-source-push-emit-mcs-sweep-20260702-103652`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `num_send_sms=2`, `num_sms=32`, `hidden_output_mode=sink`, `compute_pipeline=emit`, swept `max_concurrent_steps=1,2,3`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+- Results:
+  - `max_concurrent_steps=1` failed lowering:
+    - `ValueError: max_concurrent_steps must be greater than all delay_release values, but max_concurrent_steps=1 and delay_release_levels=[1].`
+  - `max_concurrent_steps=2` fit and timed:
+
+    | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank |
+    |---:|---:|---:|---:|
+    | `0.022424937292s` | `81.225783` | `71.873548` | `89.749197` |
+
+  - `max_concurrent_steps=3` failed lowering:
+    - `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=245784 > max_smem_bytes=232448`
+- Interpretation:
+  - Emit-pipeline staging is not a performance path at this tile shape. The only fitting setting is much slower than manual WGMMA sink (`~195.85 TFLOP/s/rank` in FWD-SWQ-086).
+- Next action:
+  - Stop pursuing emit for this repro.
+  - Tune manual-loop tile geometry that changes K-loop/barrier count without increasing SMEM beyond the current viable path.
+
+### 2026-07-02 03:43 PDT - FWD-SWQ-090 manual block_k sink sweep
+- Question:
+  - Does changing manual WGMMA K tile size improve the source-push sink path by reducing K-loop/barrier count or improving WGMMA staging?
+- H100 job:
+  - `/dlwh/repro-source-push-blockk-sink-20260702-103952`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `compute_pipeline=manual`, `num_send_sms=2`, `num_sms=32`, swept `block_k=64,128,256`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | block_k | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 64 | `0.010711036855s` | `170.175136` | `103.360957` | `171.216860` | `0/8` | `2/8` |
+  | 128 | `0.009197200283s` | `198.047402` | `131.252848` | `199.844759` | `6/8` | `1/8` |
+  | 256 | `0.023309882281s` | `78.150542` | `73.756341` | `87.122337` | `0/8` | `8/8` |
+
+- Interpretation:
+  - `block_k=128` remains the only good K tile in this source-push sink pocket.
+  - `block_k=64` likely pays too much loop/barrier overhead; `block_k=256` likely hurts occupancy/SMEM or WGMMA scheduling badly.
+- Next action:
+  - Sweep `block_n` at `block_k=128` to test output-tile width / CTA-count effects.
+
+### 2026-07-02 03:46 PDT - FWD-SWQ-091 manual block_n sink sweep
+- Question:
+  - Does changing output tile width improve CTA count, accumulator shape, or slow-tail stability for the manual WGMMA sink path?
+- H100 job:
+  - `/dlwh/repro-source-push-blockn-sink-20260702-104304`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `compute_pipeline=manual`, `block_k=128`, `num_send_sms=2`, `num_sms=32`, swept `block_n=64,128,256`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | block_n | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 64 | `0.010833995426s` | `168.309840` | `109.044382` | `176.042405` | `0/8` | `3/8` |
+  | 128 | `0.011294078147s` | `181.172568` | `107.388406` | `199.179513` | `4/8` | `3/8` |
+  | 256 | `0.028477389432s` | `63.972562` | `57.729078` | `68.906014` | `0/8` | `8/8` |
+
+- Interpretation:
+  - `block_n=128` remains the only good output tile, but this run reproduced the launch-to-launch slow-tail instability even in sink mode.
+  - `block_n=64` adds too many CTAs/jobs; `block_n=256` is a severe occupancy/scheduling regression.
+- Next action:
+  - Test `block_m=128` with adjusted `entries_per_rank=160` to trade larger CTAs/padding for fewer live blocks and fewer semaphore/job events.
+
+### 2026-07-02 03:49 PDT - FWD-SWQ-092 block_m=128 adjusted-capacity sink test
+- Question:
+  - Can `block_m=128` improve the source-push sink path by reducing live block count, slot traffic, and receiver jobs?
+- H100 job:
+  - `/dlwh/repro-source-push-blockm128-sink-20260702-104627`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `block_m=128`, `entries_per_rank=160`, `block_k=128`, `block_n=128`, `hidden_output_mode=sink`, `compute_pipeline=manual`, current fixed-wait target schedule, `num_send_sms=2`, `num_sms=32`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|
+  | `0.011908851139s` | `161.366736` | `110.851990` | `162.732348` | `0/8` | `3/8` |
+
+- Interpretation:
+  - `block_m=128` is slower despite fewer live blocks and semaphore/job events.
+  - Larger CTAs/padding/occupancy cost dominates. Keep `block_m=64`.
+- Next action:
+  - Test the existing `direct_self_compute` path to remove source-push protocol for local self-routes while preserving remote source-push behavior.
+
+### 2026-07-02 03:54 PDT - FWD-SWQ-093 direct-self sink test
+- Question:
+  - Does skipping source-push for local self-routes reduce protocol pressure enough to improve the sink path?
+- H100 job:
+  - `/dlwh/repro-source-push-direct-self-sink-20260702-104906`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `block_m=64`, `block_k=128`, `block_n=128`, `num_send_sms=2`, `num_sms=32`, `direct_self_compute=True`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|
+  | `0.009616135071s` | `189.551055` | `121.539628` | `196.230145` | `4/8` | `1/8` |
+
+- Interpretation:
+  - Direct self compute is not a speedup at this target config.
+  - It reduces counted send bytes for self routes and changes schedule shape, but the WGMMA sink fast ceiling remains under `200 TFLOP/s/rank`.
+- Next action:
+  - Sweep send/compute CTA allocation in sink mode to see whether the slow-tail frequency responds to producer pressure.
+
+### 2026-07-02 03:58 PDT - FWD-SWQ-094 send-SM allocation sink sweep
+- Question:
+  - Does producer CTA allocation change slow-tail frequency or sink-path throughput?
+- H100 job:
+  - `/dlwh/repro-source-push-send-sms-sink-20260702-105406`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `block_m=64`, `block_k=128`, `block_n=128`, `num_sms=32`, swept `num_send_sms=1,2,3,4`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | num_send_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 1 | `0.010948145298s` | `166.265372` | `117.405066` | `168.238500` | `0/8` | `3/8` |
+  | 2 | `0.009461618078s` | `192.514468` | `118.640292` | `198.800220` | `5/8` | `2/8` |
+  | 3 | `0.010942319929s` | `166.452003` | `108.701753` | `168.215376` | `0/8` | `3/8` |
+  | 4 | `0.012279707639s` | `148.893065` | `111.048242` | `164.103263` | `0/8` | `4/8` |
+
+- Interpretation:
+  - `num_send_sms=2` remains the best allocation.
+  - The slow-tail issue is not fixed by simply adding or removing producer CTAs. Too few or too many send CTAs regress the compute schedule.
+- Next action:
+  - Sweep total `num_sms` in sink mode around the current pocket while keeping `num_send_sms=2`.
+
+### 2026-07-02 04:02 PDT - FWD-SWQ-095 total num_sms sink sweep
+- Question:
+  - Does changing total producer+compute CTA count stabilize the normal `steps=7` sink path?
+- H100 job:
+  - `/dlwh/repro-source-push-num-sms-sink-20260702-105750`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `num_send_sms=2`, swept `num_sms=28,30,32,34,36`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 28 | `0.011688691431s` | `155.971801` | `108.156654` | `164.423576` | `0/8` | `5/8` |
+  | 30 | `0.011380845348s` | `160.050163` | `98.885528` | `163.009789` | `0/8` | `4/8` |
+  | 32 | `0.009361910933s` | `194.908301` | `115.486052` | `199.042827` | `6/8` | `2/8` |
+  | 34 | `0.013562356138s` | `134.304564` | `100.884211` | `136.134647` | `0/8` | `8/8` |
+  | 36 | `0.012745696300s` | `142.754081` | `94.883516` | `143.728891` | `0/8` | `8/8` |
+
+- Interpretation:
+  - Total `num_sms=32` remains the only good pocket.
+  - The slow-tail is sensitive to CTA count, but moving away from 32 quickly collapses WGMMA throughput.
+- Next action:
+  - Sweep inbox slot count to test producer/receiver pacing and slot reuse depth without changing WGMMA tile shape.
+
+### 2026-07-02 04:06 PDT - FWD-SWQ-096 inbox slot sink sweep
+- Question:
+  - Does increasing inbox buffering reduce producer/receiver pacing stalls and stabilize the sink path?
+- H100 job:
+  - `/dlwh/repro-source-push-inbox-slots-sink-20260702-110202`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Current target fixed-wait pocket, `hidden_output_mode=sink`, `num_send_sms=2`, `num_sms=32`, swept `inbox_slots=2,4,8`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | inbox_slots | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | fast >=210 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 2 | `0.014361527651s` | `121.321169` | `105.396758` | `150.449475` | `0/8` | `0/8` | `8/8` |
+  | 4 | `0.011568964708s` | `162.863359` | `114.070002` | `197.191185` | `5/8` | `0/8` | `4/8` |
+  | 8 | `0.008729882289s` | `208.649496` | `132.120815` | `210.142061` | `6/8` | `2/8` | `1/8` |
+
+- Interpretation:
+  - `inbox_slots=8` is a real improvement and the first run in this pass to hit `>=210 TFLOP/s/rank` on some normal `steps=7` rows.
+  - Median is still below the stable target (`~208.65 TFLOP/s/rank`) because one slow row and one mid row remain.
+  - Bottleneck hypothesis updates: receiver/producer pacing and slot reuse depth are a major part of the slow-tail mechanism. Larger buffering reduces, but does not fully eliminate, WGMMA slow mode.
+- Next action:
+  - Focus on the `inbox_slots=8` pocket: repeat for stability and sweep nearby total CTA counts before touching more structural code.
+
+### 2026-07-02 04:10 PDT - FWD-SWQ-097 slots=8 total CTA focused sweep
+- Question:
+  - In the improved `inbox_slots=8` sink pocket, does a nearby total CTA count push median throughput over `210 TFLOP/s/rank`?
+- H100 job:
+  - `/dlwh/repro-source-push-slots8-num-sms-20260702-110551`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `inbox_slots=8`, `hidden_output_mode=sink`, `num_send_sms=2`, swept `num_sms=31,32,33`, target shape, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`.
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=210 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 31 | `0.008889216091s` | `204.679486` | `113.011646` | `207.156522` | `0/12` | `3/12` |
+  | 32 | `0.008793331013s` | `207.269478` | `108.022979` | `209.591879` | `0/12` | `3/12` |
+  | 33 | `0.008644239012s` | `210.718777` | `126.409954` | `213.667406` | `6/12` | `2/12` |
+
+- Interpretation:
+  - `inbox_slots=8`, `num_sms=33`, `num_send_sms=2` is the best sink-output pocket so far and crosses the `210 TFLOP/s/rank` median target in this 12-repeat run.
+  - This is still a diagnostic sink-output path, not full hidden output. The full-output path must be measured before treating this as production-relevant forward speed.
+- Next action:
+  - Run the same `inbox_slots=8`, `num_sms=33` pocket with `hidden_output_mode=full`.
+
+### 2026-07-02 04:13 PDT - FWD-SWQ-098 slots=8 full-output measurement
+- Question:
+  - Does the `inbox_slots=8`, `num_sms=33` sink-output 210+ pocket survive full hidden materialization?
+- H100 job:
+  - `/dlwh/repro-source-push-slots8-full-20260702-110941`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `hidden_output_mode=full`, target shape, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`.
+
+  | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=210 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|
+  | `0.010121502215s` | `182.902172` | `107.452429` | `215.106489` | `4/12` | `6/12` |
+
+- Interpretation:
+  - Full output can hit faster individual rows than the sink run (`215.11 TFLOP/s/rank` max), but slow rows are frequent enough to pull the median down.
+  - The sink-output 210+ median is therefore not yet a production-materialization win.
+  - Full hidden materialization interacts with WGMMA/source-push pacing; store-only full output was stable in FWD-SWQ-087, so the full-output slow tail still requires WGMMA.
+- Next action:
+  - Try deeper buffering (`inbox_slots=16`) for the full-output path.
+
+### 2026-07-02 04:16 PDT - FWD-SWQ-099 slots=16 full-output measurement
+- Question:
+  - Does deeper buffering (`inbox_slots=16`) fix the full-output slow-tail seen at `inbox_slots=8`?
+- H100 job:
+  - `/dlwh/repro-source-push-slots16-full-20260702-111312`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `inbox_slots=16`, `num_send_sms=2`, `num_sms=33`, `hidden_output_mode=full`, target shape, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`.
+
+  | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=210 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|
+  | `0.008865553852s` | `205.456016` | `146.911398` | `209.424840` | `0/12` | `2/12` |
+
+- Interpretation:
+  - `inbox_slots=16` removes most of the full-output slow-tail but also lowers the fast ceiling compared with the best `slots=8` full rows.
+  - This is a better full-output median than `slots=8` (`205.46` vs `182.90 TFLOP/s/rank`) but does not reach `210`.
+- Next action:
+  - Sweep nearby `num_sms` for `inbox_slots=16` full output.
+
+### 2026-07-02 04:20 PDT - FWD-SWQ-100 slots=16 full-output num_sms sweep
+- Question:
+  - Can nearby total CTA counts improve the `inbox_slots=16` full-output pocket?
+- H100 job:
+  - `/dlwh/repro-source-push-slots16-full-num-sms-20260702-111625`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - `inbox_slots=16`, `hidden_output_mode=full`, `num_send_sms=2`, swept `num_sms=32,33,34,35`, target shape, `warmup=2`, `steps=7`, `repeat_runs=8`, `--no-check`.
+
+  | num_sms | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=210 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 32 | `0.010251194342s` | `179.480750` | `129.656141` | `200.481863` | `0/8` | `4/8` |
+  | 33 | `0.009717192368s` | `188.640718` | `128.552792` | `207.166075` | `0/8` | `2/8` |
+  | 34 | `0.011824262491s` | `154.402426` | `102.283443` | `162.373991` | `0/8` | `4/8` |
+  | 35 | `0.011688236014s` | `156.049376` | `108.215546` | `163.079219` | `0/8` | `4/8` |
+
+- Interpretation:
+  - This smaller sweep did not reproduce the earlier `205.46 TFLOP/s/rank` median for `num_sms=33`; run-to-run variance remains substantial.
+  - No slots=16 full-output configuration crosses `210`.
+  - Best confirmed diagnostic path remains `inbox_slots=8`, `num_sms=33`, sink output from FWD-SWQ-097.
+- Current bottleneck judgment:
+  - Sink output can cross 210 median with enough buffering and the right CTA count.
+  - Full hidden materialization still causes WGMMA/source-push slow-tail variance. Store-only full output is stable, so the full-output issue is not pure store bandwidth; it is the combination of WGMMA, output materialization, and source-push pacing.
+- Next action:
+  - Treat `inbox_slots=8`, `num_sms=33`, `num_send_sms=2` as the best diagnostic schedule.
+  - For production relevance, prefer avoiding full hidden materialization by fusing/streaming into the next stage, or add a separate output-consumer schedule instead of further blind tile sweeps.
+
+### 2026-07-02 03:29 PDT - FWD-SWQ-086 producer send double-buffer smoke
+- Question:
+  - Can the source-push producer legally keep two SMEM-to-GMEM copies in flight before waiting, and does that preserve correctness?
+- Code change:
+  - Added `send_pipeline_depth` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - `send_pipeline_depth=1` preserves the existing single-SMEM-buffer path.
+  - `send_pipeline_depth=2` uses two producer SMEM tiles and waits with `mgpu.wait_smem_to_gmem(1)` before reusing a tile, then `wait_smem_to_gmem(0)` before signaling the inbox slot full.
+  - Depth 2 is currently allowed only for `peer_loop in {"static", "switch", "grid_switch"}`; dynamic/grid sender loops remain single-buffered.
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-102549`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Checked small uniform all-to-all smoke, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=debug`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--check`.
+
+  | send_pipeline_depth | steady_state_time | W13 TFLOP/s/rank | max_abs_diff | metadata_mismatches |
+  |---:|---:|---:|---:|---:|
+  | 1 | `0.001798146327s` | `17.459294` | `0.0444355011` | `0` |
+  | 2 | `0.001744095003s` | `18.000376` | `0.0444355011` | `0` |
+
+- Interpretation:
+  - Two pending producer copies compile, run, and preserve the checked result at smoke shape.
+  - The small-shape signal is only a legality/correctness check; the speedup is too small to claim target-path value.
+- Next action:
+  - Run target repeated perf with `send_pipeline_depth=1,2` to see whether producer-copy buffering reduces the full W13 slow-mode bands or improves the fast-mode ceiling.
+
+### 2026-07-02 03:34 PDT - FWD-SWQ-087 target producer send double-buffer result
+- Question:
+  - Does producer-side double buffering reduce the repeated-launch full-W13 slow mode at target shape?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-103001`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=1`, `repeat_runs=16`, `--no-check`.
+
+  | send_pipeline_depth | median steady_state_time | median W13 TFLOP/s/rank | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 1 | `0.009581376449s` | `190.164023` | `77.866541` | `196.413938` | `8/16` | `5/16` |
+  | 2 | `0.009104238939s` | `200.069752` | `185.835695` | `204.200094` | `15/16` | `0/16` |
+
+- Depth 1 TFLOP rows:
+  - `196.413938, 196.225680, 195.393448, 196.316367, 185.760759, 119.870520, 77.866541, 165.285197, 141.191185, 89.111128, 142.592685, 186.854920, 195.763827, 195.002174, 194.901120, 193.473126`
+- Depth 2 TFLOP rows:
+  - `185.835695, 197.059849, 198.967216, 200.248455, 203.866550, 199.779717, 199.142934, 202.600809, 199.516249, 202.696672, 197.528409, 202.907930, 201.214476, 201.687592, 204.200094, 199.891048`
+- Interpretation:
+  - Producer double buffering is useful: it removes the severe `<160 TFLOP/s/rank` slow launches in this target step-1 repeated run.
+  - It does not reach the stage-1 target; the observed fast-mode ceiling is still about `204 TFLOP/s/rank`, below `210`.
+  - Current bottleneck judgment: still software-structure / CTA coexistence, but less dominated by producer-copy wait serialization. Next useful knob is CTA allocation under the depth-2 path.
+- Next action:
+  - Sweep nearby `num_send_sms` and `num_sms` with `send_pipeline_depth=2` to see whether the stabilized path has a better compute/producer allocation.
+
+### 2026-07-02 03:39 PDT - FWD-SWQ-088 depth-2 CTA allocation screen
+- Question:
+  - Once producer double buffering stabilizes the path, is there a better sender/compute CTA split than `num_send_sms=2`, `num_sms=32`?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-103448`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+  - Swept `num_send_sms in {1,2,3}` and `num_sms in {30,32,34,36}`.
+
+  | num_send_sms | num_sms | median W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 2 | 32 | `202.090737` | `0.009013194474s` | `197.295991` | `206.849809` | `8/8` | `0/8` |
+  | 3 | 30 | `199.632144` | `0.009124219068s` | `157.204719` | `204.744471` | `7/8` | `1/8` |
+  | 1 | 32 | `188.275815` | `0.009674541419s` | `83.887018` | `189.466785` | `0/8` | `1/8` |
+  | 1 | 30 | `174.164749` | `0.010458382661s` | `170.779086` | `175.473157` | `0/8` | `0/8` |
+  | 3 | 32 | `165.337279` | `0.011016816483s` | `163.163128` | `167.206972` | `0/8` | `0/8` |
+  | 2 | 30 | `160.479901` | `0.011350225075s` | `160.072437` | `162.884679` | `0/8` | `0/8` |
+  | 3 | 34 | `148.767223` | `0.012243957957s` | `134.805010` | `150.529815` | `0/8` | `8/8` |
+  | 3 | 36 | `147.075783` | `0.012384790112s` | `142.641449` | `149.152805` | `0/8` | `8/8` |
+  | 2 | 36 | `143.420241` | `0.012700309046s` | `142.023091` | `146.018434` | `0/8` | `8/8` |
+  | 2 | 34 | `133.323603` | `0.013663021964s` | `70.373342` | `136.315786` | `0/8` | `8/8` |
+  | 1 | 34 | `104.280438` | `0.017511342070s` | `79.881167` | `116.683913` | `0/8` | `8/8` |
+  | 1 | 36 | `102.850096` | `0.017941443482s` | `60.730091` | `115.725349` | `0/8` | `8/8` |
+
+- Interpretation:
+  - The original `num_send_sms=2`, `num_sms=32` split remains best under double buffering.
+  - Higher total CTA counts (`34`, `36`) are consistently bad for this path; widening total CTAs is not the route to `210`.
+  - `num_send_sms=3`, `num_sms=30` is near the best but less stable and still below the current best.
+- Next action:
+  - Keep `num_send_sms=2`, `num_sms=32` and test deeper producer copy buffering (`send_pipeline_depth=3,4`) before considering a more structural producer/consumer split.
+
+### 2026-07-02 03:51 PDT - FWD-SWQ-089 deeper producer buffering smokes
+- Question:
+  - Are producer copy depths 3 and 4 legal/correct, and do they look promising enough for target timing?
+- Code change:
+  - Extended `send_pipeline_depth` validation to allow `1,2,3,4`.
+  - Added static producer-copy branches for depths 3 and 4 using three/four SMEM tiles and `mgpu.wait_smem_to_gmem(2/3)` before reusing a tile.
+- Multi-depth smoke no-result:
+  - Job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-104055`, cluster `cw-us-east-02a`, stopped.
+  - Config swept `send_pipeline_depth=2,3,4` at small checked shape.
+  - Result: no kernel row; stuck before `device_put_start` after `make_inputs_start` for depth 2.
+  - Interpretation: recurring host setup/no-result mode, not a kernel signal.
+- Single-depth smoke results:
+
+  | send_pipeline_depth | job | result | steady_state_time | W13 TFLOP/s/rank | max_abs_diff | metadata_mismatches |
+  |---:|---|---|---:|---:|---:|---:|
+  | 3 | `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-104547` | succeeded | `0.001829319013s` | `17.161777` | `0.0444355011` | `0` |
+  | 4 | `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-104830` | succeeded | `0.003804757648s` | `8.251344` | `0.0444355011` | `0` |
+
+- Interpretation:
+  - Depth 3 and 4 are legal/correct at smoke shape.
+  - Depth 4 is clearly too slow and should not be taken to target.
+  - Depth 3 is correct but slower than prior depth-2 small smoke (`18.000376 TFLOP/s/rank`), so it only gets one target screen before declaring deeper buffering negative.
+- Next action:
+  - Run a single target screen for `send_pipeline_depth=3`, `num_send_sms=2`, `num_sms=32`.
+
+### 2026-07-02 03:55 PDT - FWD-SWQ-090 target depth-3 producer buffering result
+- Question:
+  - Does producer copy depth 3 help at target shape even though it is slower at smoke shape?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-105141`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=3`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+- Result:
+  - Median `steady_state_time=0.009091190528s`, median `200.356748 TFLOP/s/rank`.
+  - Range: `173.587496` to `202.563616 TFLOP/s/rank`.
+  - `7/8` rows were `>=190 TFLOP/s/rank`; `0/8` rows were `<160`.
+  - TFLOP rows: `200.361320, 199.778335, 199.351255, 201.636279, 200.352176, 202.563616, 201.354652, 173.587496`.
+- Interpretation:
+  - Depth 3 is worse than the depth-2 CTA screen best (`202.090737` median, `206.849809` max).
+  - Deeper producer buffering beyond 2 is negative; keep `send_pipeline_depth=2`.
+- Next action:
+  - Move to the spec's physical tile candidates: test larger `block_k=256` and `block_m=128` under the depth-2 path.
+
+### 2026-07-02 04:01 PDT - FWD-SWQ-091 tile screen A, block_m=64 block_k sweep
+- Question:
+  - Does the spec's `64 x 256` copy/compute tile improve the stabilized depth-2 path?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-105602`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_n=128`, sweep `block_k in {128,256}`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+
+  | block_k | median W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank |
+  |---:|---:|---:|---:|---:|
+  | 128 | `198.060451` | `0.009196653962s` | `148.283591` | `200.364163` |
+  | 256 | `87.746351` | `0.020758488565s` | `75.455626` | `87.981646` |
+
+- Interpretation:
+  - `block_k=256` is a hard loss in the `block_m=64` path.
+  - Keep `block_k=128`.
+- Next action:
+  - Test `block_m=128` with reduced queue capacity (`entries_per_rank=160`) under the same depth-2 path.
+
+### 2026-07-02 04:05 PDT - FWD-SWQ-092 tile screen B, block_m=128 block_k sweep
+- Question:
+  - Does the spec's `128 x 128` or `128 x 256` tile improve the stabilized depth-2 path by reducing queue/metadata overhead?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-110204`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=160`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=128`, `block_n=128`, sweep `block_k in {128,256}`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+
+  | block_k | median W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 128 | `160.152317` | `0.012017086963s` | `157.286402` | `161.125454` | `0/8` | `4/8` |
+  | 256 | `67.239333` | `0.028622489539s` | `66.005997` | `67.986773` | `0/8` | `8/8` |
+
+- Interpretation:
+  - `128 x 128` and `128 x 256` are both negative.
+  - Original `64 x 128` remains the only viable tile among the tested physical copy candidates.
+- Next action:
+  - Test `n_group=2` under `block_m=64`, `block_k=128`, `send_pipeline_depth=2`; this targets N scheduling/adjacent-tile overhead rather than physical copy tile shape.
+
+### 2026-07-02 04:09 PDT - FWD-SWQ-093 n_group screen
+- Question:
+  - Does computing two adjacent N tiles per entry reduce scheduling overhead enough to improve target performance?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-110605`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, sweep `n_group in {1,2}`, `n_groups_per_job=1`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+
+  | n_group | median W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | fast >=190 | slow <160 |
+  |---:|---:|---:|---:|---:|---:|---:|
+  | 1 | `199.403200` | `0.009134744061s` | `192.082613` | `204.125815` | `8/8` | `0/8` |
+  | 2 | `79.965641` | `0.022793063428s` | `49.467314` | `84.392264` | `0/8` | `8/8` |
+
+- Interpretation:
+  - The adjacent-N grouped path is a hard loss.
+  - Keep `n_group=1`.
+- Next action:
+  - Check the existing `compute_pipeline` mode as the last bounded non-structural WGMMA scheduling knob before returning to producer/consumer structure.
+
+### 2026-07-02 04:14 PDT - FWD-SWQ-094 emit compute-pipeline screen
+- Question:
+  - Does `mgpu.emit_pipeline` improve receiver-side WGMMA scheduling versus the manual copy/WGMMA loop?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-111009`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `compute_pipeline=emit`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, sweep `max_concurrent_steps in {1,2,4}`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+- Result:
+  - `max_concurrent_steps=1`: invalid, `ValueError: max_concurrent_steps must be greater than all delay_release values`.
+  - `max_concurrent_steps=2`: median `steady_state_time=0.020948013524s`, median `86.953368 TFLOP/s/rank`, range `59.129428` to `89.445244`; `0/8 >=190`, `8/8 <160`.
+  - `max_concurrent_steps=4`: compile failure, `ValueError: Mosaic GPU kernel exceeds available shared memory: smem_bytes=327712 > max_smem_bytes=232448`.
+- Interpretation:
+  - `compute_pipeline=emit` is a hard loss.
+  - Manual receiver compute remains best.
+- Next action:
+  - Inspect and test `direct_self_compute` under all-to-all traffic to skip the self-rank inbox path.
+
+### 2026-07-02 04:17 PDT - FWD-SWQ-095 direct-self compute smoke
+- Question:
+  - Does skipping the self-rank inbox send preserve correctness and look promising enough for target timing?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-111445`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Checked small uniform all-to-all, `direct_self_compute=true`, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=debug`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--check`.
+- Result:
+  - `steady_state_time=0.005313082676s`, `5.908880 TFLOP/s/rank`.
+  - `max_abs_diff=0.0444355011`, `metadata_mismatches=0`.
+  - `direct_self_entries_total=367`, `payload_send_entries_total=2627`.
+- Interpretation:
+  - Correctness passes, but smoke performance collapses versus the non-direct-self depth-2 smoke (`18.000376 TFLOP/s/rank`).
+  - Do not take `direct_self_compute` to target.
+- Next action:
+  - Screen remaining receiver schedules (`ordered_wait`, `slot_group`) while keeping `ready_scan` disabled.
+
+### 2026-07-02 04:24 PDT - FWD-SWQ-096 mixed receiver-schedule screen stopped
+- Question:
+  - Do `ordered_wait` or `slot_group` improve over `fixed_wait`?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-111827`, cluster `cw-us-east-02a`, stopped manually.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, sweep `receiver_schedule in {fixed_wait, ordered_wait, slot_group}`, `workers_per_slot=1`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+- Partial result:
+  - `fixed_wait`: median `steady_state_time=0.013173047453s`, median `146.759327 TFLOP/s/rank`, range `77.158404` to `199.214376`, `3/8 >=190`, `4/8 <160`.
+  - `ordered_wait`: hung in `first_run_start` with no timing row.
+  - `slot_group`: did not run because `ordered_wait` blocked the sweep.
+- Interpretation:
+  - `ordered_wait` is not viable in this harness shape; it appears to deadlock/hang.
+  - The fixed-wait rows in this run were unusually noisy and are not a new best-signal baseline.
+- Next action:
+  - Run `slot_group` alone so it is not blocked by `ordered_wait`.
+
+### 2026-07-02 04:28 PDT - FWD-SWQ-097 slot_group receiver schedule result
+- Question:
+  - Does `receiver_schedule=slot_group` improve over `fixed_wait` when run alone?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-112417`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `send_pipeline_depth=2`, `receiver_schedule=slot_group`, `workers_per_slot=1`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `entries_per_rank=288`, `inbox_slots=4`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=1`, `repeat_runs=8`, `--no-check`.
+- Result:
+  - Median `steady_state_time=0.028224333539s`, median `64.630832 TFLOP/s/rank`.
+  - Range: `45.152868` to `67.953045 TFLOP/s/rank`.
+  - `0/8 >=190`, `8/8 <160`.
+- Interpretation:
+  - `slot_group` is a hard loss.
+  - `ordered_wait` hung, `ready_scan` remains disabled, and `slot_group` is slow; keep `fixed_wait`.
+- Current overall bottleneck judgment:
+  - The only positive local tuning result in this sequence is `send_pipeline_depth=2`, which stabilized the target step-1 path around `200 TFLOP/s/rank` and removed severe `<160` rows in that run.
+  - CTA allocation, deeper buffering, physical tile shape, N grouping, emit pipeline, direct self compute, and receiver schedule variants did not find a stable `>=210 TFLOP/s/rank` candidate.
+  - Remaining path to `>=210` likely requires a structural producer/consumer overlap change, not another local tile/schedule knob.
+
+### 2026-07-02 04:34 PDT - FWD-SWQ-098 queue-output correctness smoke
+- Question:
+  - Is `hidden_output_mode=queue` correct when combined with the best known buffering knobs (`send_pipeline_depth=2`, `inbox_slots=8`, `num_sms=33`)?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-113119`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Checked small uniform all-to-all, `send_pipeline_depth=2`, `hidden_output_mode=queue`, `peer_loop=grid_switch`, `receiver_schedule=fixed_wait`, `metadata_mode=static_recv`, `output_mode=debug`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--check`.
+- Result:
+  - `steady_state_time=0.003052875710s`, `10.283539 TFLOP/s/rank`.
+  - `max_abs_diff=0.0444355011`, `hidden_max_abs_diff=0.0444355011`, `hidden_mean_abs_diff=0.0029928540`, `metadata_mismatches=0`.
+- Interpretation:
+  - `hidden_output_mode=queue` is correct at smoke shape.
+  - It is now safe to test the target schedule across `hidden_output_mode in {sink, queue, full}`.
+
+### 2026-07-02 04:31 PDT - FWD-SWQ-101 queue-output target candidate
+- Question:
+  - Can a correct receive-queue hidden layout preserve the fast sink-output schedule without overwriting slots?
+- Code change under test:
+  - Added `hidden_output_mode=queue` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The queue mode writes W13 hidden output by `(recv_src_ordinal, queue_entry, block_m, n_tile)`, avoiding the expert-row scatter in `hidden_output_mode=full` while preserving one persistent output row per live queue block.
+- Correctness smoke:
+  - H100 job `/dlwh/repro-source-push-queue-smoke-20260702-112416`, cluster `cw-us-east-02a`, succeeded.
+  - Small checked uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `output_mode=debug`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=256`, `entries_per_rank=64`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--check`, `--separate-compile`.
+  - Result: `metadata_mismatches=0`, `max_abs_diff=0.0444355011`, `hidden_max_abs_diff=0.0444355011`, `hidden_unwritten_max_abs=0.015625`, `dropped_entries_total=0`, `dropped_rows_total=0`.
+- Target timing:
+  - H100 job `/dlwh/repro-source-push-queue-target-20260702-112659`, cluster `cw-us-east-02a`, succeeded.
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `receiver_schedule=fixed_wait`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`, `--separate-compile`.
+- Target result:
+  - Median `steady_state_time=0.008591692545s`, median `212.004953 TFLOP/s/rank`.
+  - Range: `106.955105` to `214.932681 TFLOP/s/rank`.
+  - `8/12 >=210`, `2/12 <160`.
+  - Per-row TFLOP/s/rank: `208.799280`, `213.001762`, `211.993486`, `142.836548`, `165.966235`, `214.932681`, `213.326043`, `212.710309`, `213.254830`, `212.016420`, `210.411280`, `106.955105`.
+- Interpretation:
+  - This is the first correct, non-overwriting hidden-output layout in this harness to clear `>=210 TFLOP/s/rank` median at the target shape.
+  - It is not stable enough to call complete: the schedule still has intermittent slow rows, including two severe rows below `160 TFLOP/s/rank`.
+  - The result suggests the full expert-row output scatter was a meaningful part of the full-output tax, but instability remains in source-push/inbox scheduling rather than the final W13 store alone.
+- Next action:
+  - Run a longer target repeat for stability and a bounded `hidden_output_mode=queue` sweep over nearby slot/CTA settings before consolidating the path.
+
+### 2026-07-02 04:39 PDT - FWD-SWQ-102 mixed hidden-output sweep after queue mode
+- Question:
+  - Does the best depth-2/source-push schedule still clear `>=210 TFLOP/s/rank` when `sink`, `queue`, and `full` hidden-output modes are swept in one process?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-113542`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`, `--separate-compile`; swept `hidden_output_mode in {sink,queue,full}`.
+- Result:
+
+  | hidden_output_mode | median W13 TFLOP/s/rank | mean W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <160 |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | `full` | `208.508561` | `198.402069` | `0.008735763142s` | `124.560425` | `210.645685` | `4/12` | `1/12` |
+  | `queue` | `205.769014` | `183.729782` | `0.008852089922s` | `118.596089` | `209.717749` | `0/12` | `4/12` |
+  | `sink` | `200.534513` | `188.505011` | `0.009096722651s` | `130.680923` | `210.873266` | `1/12` | `2/12` |
+
+- Per-row TFLOP/s/rank:
+  - `full`: `208.481054`, `209.723717`, `210.364821`, `210.240864`, `210.045948`, `210.645685`, `188.005588`, `124.560425`, `207.184939`, `208.536068`, `207.437484`, `185.598241`
+  - `queue`: `122.902087`, `206.184465`, `208.630668`, `209.717749`, `209.328071`, `209.457292`, `149.270741`, `157.460157`, `205.447567`, `206.090461`, `201.672041`, `118.596089`
+  - `sink`: `178.059956`, `174.083600`, `145.086935`, `209.950543`, `209.602767`, `208.359783`, `210.873266`, `208.554385`, `185.738943`, `130.680923`, `192.783233`, `208.285793`
+- Interpretation:
+  - The combined sweep did not reproduce the queue-only median from FWD-SWQ-101 (`212.004953 TFLOP/s/rank`).
+  - `queue` being slower than `full` in this mixed run argues against a simple routed-output-scatter-only tax; the remaining issue is still slow-tail instability in the source-push/WGMMA schedule.
+  - Treat this as a diagnostic miss, not a regression: it may include per-process/order interference from sweeping three separately compiled output modes.
+- Next action:
+  - Run an isolated `hidden_output_mode=queue` target repeat with more rows before changing the kernel structure again.
+
+### 2026-07-02 04:42 PDT - FWD-SWQ-103 queue-only stability repeat
+- Question:
+  - Was the prior queue-only `212.004953 TFLOP/s/rank` median a stable candidate or a fast-mode sample?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-113953`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Isolated target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=24`, `--no-check`, `--separate-compile`.
+- Result:
+  - Median `steady_state_time=0.009692862846s`, median `189.099314 TFLOP/s/rank`.
+  - Mean `181.668463 TFLOP/s/rank`.
+  - Range: `130.949784` to `210.625815 TFLOP/s/rank`.
+  - `12/24 >=190`, `2/24 >=210`, `6/24 <160`.
+- Per-row TFLOP/s/rank:
+  - `173.569778`, `136.317238`, `209.624036`, `209.842886`, `149.472691`, `131.260001`, `208.481845`, `209.247967`, `209.066908`, `207.760075`, `134.885700`, `174.164956`, `208.049762`, `206.982275`, `166.087865`, `151.760521`, `204.033672`, `210.493102`, `210.625815`, `171.001947`, `165.324213`, `208.529926`, `172.510145`, `130.949784`
+- Interpretation:
+  - The earlier queue-only `>=210` median was not stable over a longer repeat.
+  - Queue output remains useful as a correctness-preserving diagnostic layout, but it does not solve the source-push/WGMMA slow-tail.
+- Next action:
+  - Inspect whether slow rows correlate with queue metadata changes across repeats or with nondeterministic runtime scheduling for identical metadata.
+
+### 2026-07-02 04:46 PDT - FWD-SWQ-104 queue-output per-call timing distribution
+- Question:
+  - Do normal `steps=7` slow rows come from occasional individual slow invocations, whole seven-step batches entering slow mode, or different routing metadata?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-114348`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Same queue-only target config as FWD-SWQ-103, but `warmup=2`, `steps=1`, `repeat_runs=96`.
+- Result:
+  - Median `steady_state_time=0.008701298968s`, median `209.334425 TFLOP/s/rank`.
+  - Mean `192.161062 TFLOP/s/rank`.
+  - Percentiles: p10 `126.013778`, p25 `202.976401`, p75 `211.067498`, p90 `212.398281`.
+  - Range: `87.433856` to `216.176655 TFLOP/s/rank`.
+  - `73/96 >=190`, `72/96 >=200`, `41/96 >=210`, `17/96 <160`, `14/96 <140`.
+- Pattern:
+  - The first 13 timed invocations were mostly slow, rows 13-35 were fast, rows 36-47 were another slow cluster, and rows 48-95 were mostly clean fast-mode rows around `208-213 TFLOP/s/rank`.
+- Interpretation:
+  - The same metadata and compiled executable are reused for every repeat, so the slow rows are not caused by routing balance changes.
+  - Slow rows are clustered, not independent single-call outliers.
+  - Queue-output fast mode is close to the Stage 1 target, but normal `steps=7` timing is polluted by clustered slow bands.
+- Next action:
+  - Compare with `hidden_output_mode=sink` under the same per-call timing to see whether the cluster is driven mainly by large queue/full hidden outputs.
+
+### 2026-07-02 04:48 PDT - FWD-SWQ-105 sink-output per-call timing distribution
+- Question:
+  - Does the clustered slow mode disappear when W13 writes only the tiny per-slot sink output?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-114612`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Same target config as FWD-SWQ-104, but `hidden_output_mode=sink`, `warmup=2`, `steps=1`, `repeat_runs=96`.
+- Result:
+  - Median `steady_state_time=0.008918763953s`, median `204.230250 TFLOP/s/rank`.
+  - Mean `194.205325 TFLOP/s/rank`.
+  - Percentiles: p10 `147.419997`, p25 `202.105671`, p75 `206.132526`, p90 `208.305902`.
+  - Range: `82.352096` to `211.051663 TFLOP/s/rank`.
+  - `84/96 >=190`, `84/96 >=200`, `3/96 >=210`, `11/96 <160`, `9/96 <140`.
+- Pattern:
+  - Slow rows again appeared in clusters, including a severe cluster around rows 26-30 and another around rows 53-58.
+  - The fast-mode ceiling is lower than queue output (`~204-208` for sink versus `~208-213` for queue).
+- Interpretation:
+  - The clustered slow mode is not mainly the large queue/full hidden-output size; it persists with the tiny sink output.
+  - Queue output is still the better fast-mode layout, but the schedule needs the clustered slow bands removed or avoided.
+- Next action:
+  - Run a queue-output normal-metric test with a long warmup (`warmup=64`, `steps=7`) to determine whether the clusters are early transient or recurring.
+
+### 2026-07-02 04:51 PDT - FWD-SWQ-106 queue-output long-warmup no-signal
+- Question:
+  - Does queue-output normal `steps=7` timing stabilize if the early clustered slow bands from FWD-SWQ-104 are burned off with `warmup=64`?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-114814`, cluster `cw-us-east-02a`, stopped manually.
+- Config:
+  - Same queue-only target config as FWD-SWQ-103, but `warmup=64`, `steps=7`, `repeat_runs=12`, `--progress-events`.
+- Result:
+  - No timing rows.
+  - The job emitted `validate_start`, `mesh_start`, and `make_inputs_start`, then did not reach `device_put_start`.
+  - Stopped after it remained in that state for about 2.5 minutes.
+- Interpretation:
+  - This reproduces the earlier long-warmup no-signal pattern from FWD-SWQ-084.
+  - Because `warmup` is not used until after inputs are created and moved to devices, this is a host setup/resource stall rather than a kernel performance signal.
+  - Do not count this for or against the source-push kernel.
+- Next action:
+  - Stop treating long warmup alone as a path. Focus on avoiding repeated output/inbox lifecycle or changing source-push scheduling.
+
+### 2026-07-02 04:57 PDT - FWD-SWQ-107 GMEM-spec alias experiment
+- Question:
+  - Can the inbox output be passed as an input/output alias so repeated calls avoid allocating/returning a fresh full inbox buffer?
+- Code change under test:
+  - Re-enabled the existing `inbox_storage=alias` scaffold and added explicit `pl.BlockSpec(..., memory_space=mgpu.GMEM)` specs for the direct `pl.pallas_call` alias wrapper.
+  - This was intended to avoid the earlier alias failure where the wrapper mapped the full inbox into the kernel memory footprint and exceeded SMEM.
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-115259`, cluster `cw-us-east-02a`, succeeded as an Iris job but emitted an error row.
+- Config:
+  - Small uniform all-to-all smoke, `implementation=m_n_slots`, `hidden_output_mode=queue`, `inbox_storage=alias`, `output_mode=perf`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `send_pipeline_depth=2`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--no-check`, `--separate-compile`.
+- Result:
+  - The job reached `lower_start` and produced no timing row.
+  - Error:
+    - `IndexError: Slice DynamicSlice(base=64, length=64) along axis 0 is out of bounds for shape [64]`
+    - The traceback is inside `jax/_src/pallas/mosaic_gpu/lowering.py` while lowering `pl.get_global(mgpu.SemaphoreType.REGULAR(...))` / `reserve_semaphores`.
+- Interpretation:
+  - Explicit GMEM specs avoid the previous whole-inbox SMEM accounting failure, but raw `pl.pallas_call` is still not equivalent to `mgpu.kernel` for this 2D grid with global semaphores.
+  - `mgpu.kernel` passes Mosaic GPU mesh/grid names into lowering; `pl.pallas_call`/`GridSpec` does not expose the same grid-name environment, which likely changes global semaphore scoping.
+  - `inbox_storage=alias` is re-disabled in validation with this updated reason. A real fix likely needs an `mgpu.kernel`-level alias mechanism or a different kernel boundary.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py .agents/logbooks/6597-moe-mgpu-forward.md`
+
+### 2026-07-02 05:02 PDT - FWD-SWQ-108 slot-order scheduling knob and checked smoke
+- Question:
+  - Can changing inbox slot traversal order break fixed-wait source/receiver lockstep without changing the default schedule?
+- Code change:
+  - Added `slot_order in {current,rotated,hash}` and `--sweep-slot-order` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - Default `slot_order=current` preserves existing behavior.
+  - Send workers and `receiver_schedule=fixed_wait` now use `_slot_for_position(...)` so rotated/hash variants can traverse slots out of ascending order.
+  - `queue_stats` records `slot_order`.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --help`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py .agents/logbooks/6597-moe-mgpu-forward.md`
+  - `uv run black --config lib/levanter/pyproject.toml lib/levanter/scripts/bench/repro_source_push_inbox_queue.py` failed locally because `black` is not installed in this environment.
+- H100 checked smoke:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-115917`, cluster `cw-us-east-02a`, succeeded.
+- Smoke config:
+  - Small uniform all-to-all, `hidden_output_mode=queue`, `output_mode=debug`, `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `send_pipeline_depth=2`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--check`, swept `slot_order in {current,rotated,hash}`.
+- Smoke result:
+
+  | slot_order | steady_state_time | W13 TFLOP/s/rank | max_abs_diff | hidden_max_abs_diff | metadata_mismatches |
+  |---|---:|---:|---:|---:|---:|
+  | `current` | `0.002519001641s` | `12.463019` | `0.0444355011` | `0.0444355011` | `0` |
+  | `rotated` | `0.001903161018s` | `16.495906` | `0.0444355011` | `0.0444355011` | `0` |
+  | `hash` | `0.001997661001s` | `15.715562` | `0.0444355011` | `0.0444355011` | `0` |
+
+- Interpretation:
+  - Rotated/hash slot traversal is correct at the checked small shape and materially faster there.
+  - This is a plausible small schedule perturbation for the target slow-band problem.
+- Next action:
+  - Run target queue-output timing with `slot_order in {current,rotated,hash}`.
+
+### 2026-07-02 05:06 PDT - FWD-SWQ-109 target slot-order timing sweep
+- Question:
+  - Does rotated/hash inbox slot traversal reduce the target queue-output slow bands?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-120241`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`, swept `slot_order in {current,rotated,hash}`.
+- Result:
+
+  | slot_order | median W13 TFLOP/s/rank | mean W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <160 |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | `current` | `210.512307` | `193.890519` | `0.008652632441s` | `142.728924` | `212.140232` | `8/12` | `2/12` |
+  | `hash` | `146.825110` | `138.096847` | `0.012405795378s` | `105.322104` | `147.507356` | `0/12` | `12/12` |
+  | `rotated` | `156.920350` | `153.038900` | `0.011607894424s` | `110.026310` | `158.545555` | `0/12` | `12/12` |
+
+- Per-row TFLOP/s/rank:
+  - `current`: `165.951213`, `159.341014`, `212.140232`, `210.833654`, `210.190959`, `210.157932`, `142.728924`, `169.728124`, `210.933028`, `211.382664`, `211.350334`, `211.948150`
+  - `rotated`: `156.156325`, `156.082301`, `155.294404`, `158.309141`, `110.026310`, `154.316531`, `158.545555`, `157.593150`, `157.689663`, `158.317248`, `157.888616`, `156.247550`
+  - `hash`: `146.928601`, `142.917045`, `105.322104`, `147.240016`, `147.366417`, `147.294542`, `147.152473`, `123.270633`, `113.204813`, `147.507356`, `146.721619`, `142.236541`
+- Interpretation:
+  - Rotated/hash slot traversal is a hard target-shape loss despite the checked small-shape speedup.
+  - The current/default slot order again shows a 210+ median fast-mode sample, but the result is not stable: two rows are below `160`, and FWD-SWQ-103 current-only 24-repeat fell to `189.099314`.
+- Next action:
+  - Rerun the unchanged `slot_order=current` path alone after this code shape with 24 repeats. If it does not reproduce, treat the 210+ median as another fast-mode sample.
+
+### 2026-07-02 05:09 PDT - FWD-SWQ-110 current slot-order stability repeat
+- Question:
+  - Does the `slot_order=current` 210+ median from FWD-SWQ-109 reproduce in isolation after the slot-order code shape change?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-120626`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `slot_order=current`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=24`, `--no-check`.
+- Result:
+  - Median `steady_state_time=0.008699176517s`, median `209.385969 TFLOP/s/rank`.
+  - Mean `192.354136 TFLOP/s/rank`.
+  - Range: `119.070001` to `212.513595 TFLOP/s/rank`.
+  - `18/24 >=190`, `16/24 >=200`, `10/24 >=210`, `4/24 <160`.
+- Per-row TFLOP/s/rank:
+  - `210.578172`, `212.039398`, `166.813992`, `138.966451`, `210.605313`, `212.513595`, `211.716096`, `119.070001`, `191.338379`, `209.070655`, `207.933264`, `195.996810`, `206.618671`, `122.643655`, `211.432916`, `208.991296`, `209.817492`, `211.125180`, `212.500330`, `147.309576`, `166.214967`, `209.701282`, `212.034249`, `211.467523`
+- Interpretation:
+  - Not stable enough to call a 210 candidate.
+  - The queue/current fast mode is real and close, but clustered slow bands remain.
+- Next action:
+  - Sweep nearby `num_sms` for `hidden_output_mode=queue`, `slot_order=current` before abandoning this local scheduling line.
+
+### 2026-07-02 05:12 PDT - FWD-SWQ-111 queue/current total CTA-count screen
+- Question:
+  - Can a nearby total persistent-CTA count stabilize the near-210 queue/current path?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-120923`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `slot_order=current`, `num_send_sms=2`, swept `num_sms in {31,32,33,34,35}`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`.
+- Result:
+
+  | num_sms | median W13 TFLOP/s/rank | mean W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 31 | `193.880373` | `180.234649` | `0.009394879004s` | `127.680033` | `196.815846` | `0/12` | `3/12` |
+  | 32 | `204.837545` | `188.728931` | `0.008892332786s` | `123.477270` | `207.559119` | `0/12` | `2/12` |
+  | 33 | `206.953291` | `191.666553` | `0.008801440941s` | `144.695123` | `209.428387` | `0/12` | `2/12` |
+  | 34 | `142.823734` | `140.571208` | `0.012781691421s` | `114.336567` | `161.639467` | `0/12` | `8/12` |
+  | 35 | `157.678354` | `147.046572` | `0.011601282799s` | `101.923592` | `170.537003` | `0/12` | `6/12` |
+
+- Interpretation:
+  - Nearby total CTA count does not stabilize the queue/current fast mode.
+  - `num_sms=33` remains the best local value in this sweep, but it did not cross `210 TFLOP/s/rank`.
+  - Higher counts (`34`, `35`) are hard losses.
+- Next action:
+  - Run a final bounded producer/compute split screen for queue/current (`num_send_sms`) around the best `num_sms=33` pocket.
+
+### 2026-07-02 05:16 PDT - FWD-SWQ-112 queue/current producer split screen
+- Question:
+  - Can changing the source-push producer/compute persistent-CTA split stabilize the near-210 queue/current path?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-121246`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `slot_order=current`, `num_sms=33`, swept `num_send_sms in {1,2,3,4}`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `lowering_semantics=lane`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=8`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=1`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=2`, `warmup=2`, `steps=7`, `repeat_runs=12`, `--no-check`.
+- Result:
+
+  | num_send_sms | median W13 TFLOP/s/rank | mean W13 TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|
+  | 1 | `176.750356` | `164.673174` | `0.010305392423s` | `116.022834` | `179.741248` | `0/12` | `3/12` |
+  | 2 | `207.352762` | `185.182695` | `0.008784519858s` | `121.674884` | `211.428421` | `2/12` | `4/12` |
+  | 3 | `189.818445` | `171.057626` | `0.009603278645s` | `123.021412` | `198.547419` | `0/12` | `5/12` |
+  | 4 | `195.044347` | `177.154725` | `0.009339340696s` | `115.352191` | `198.984136` | `0/12` | `2/12` |
+
+- Interpretation:
+  - `num_send_sms=2` remains the best split, but still has frequent slow bands.
+  - Producer/compute split does not stabilize the queue/current fast mode.
+  - The bounded local tuning line (`slot_order`, total CTAs, producer split) is exhausted unless the job granularity or kernel boundary changes.
+- Next action:
+  - Re-check prior `n_groups_per_job`/job granularity experiments before deciding whether to reduce semaphore/job count or move to a larger kernel-boundary change.
+
+### 2026-07-02 04:53 PDT - FWD-SWQ-107 queue-output post-compaction repeat and nearby sweep
+- Correction/note:
+  - The queue-output target candidate in FWD-SWQ-101 used `send_pipeline_depth=1`, confirmed from the JSON row config. Later depth-2 runs are separate candidates.
+- Question:
+  - Does `hidden_output_mode=queue` remain a stable `>=210 TFLOP/s/rank` path when rerun for more rows, and do nearby `inbox_slots`/`num_sms` settings suppress the slow rows?
+- Long repeat of initial queue candidate:
+  - H100 job `/dlwh/repro-source-push-queue-longrepeat-20260702-113253`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target uniform all-to-all, `hidden_output_mode=queue`, `inbox_slots=8`, `num_send_sms=2`, `num_sms=33`, `send_pipeline_depth=1`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=24`, `--no-check`, `--separate-compile`.
+  - Result: median `steady_state_time=0.009217505360s`, median `197.977160 TFLOP/s/rank`, range `115.114956` to `215.137282`, `8/24 >=210`, `12/24 <190`, `7/24 <160`.
+  - Interpretation: the earlier `212.004953 TFLOP/s/rank` median was not stable over 24 rows.
+- Nearby depth-1 slot/CTA sweep:
+  - H100 job `/dlwh/repro-source-push-queue-slots-sms-20260702-113344`, cluster `cw-us-east-02a`, succeeded.
+  - Config: same target config, `hidden_output_mode=queue`, `send_pipeline_depth=1`, swept `inbox_slots in {8,12,16}` and `num_sms in {32,33,34}`, `repeat_runs=6`.
+- Result:
+
+  | inbox_slots | num_sms | median TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <190 | <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 8 | 32 | `189.643527` | `0.009680599207s` | `122.195700` | `209.877307` | `0/6` | `3/6` | `1/6` |
+  | 8 | 33 | `148.885965` | `0.012300048439s` | `118.439105` | `210.065057` | `1/6` | `5/6` | `4/6` |
+  | 8 | 34 | `161.190875` | `0.011300345916s` | `129.494530` | `162.987340` | `0/6` | `6/6` | `2/6` |
+  | 12 | 32 | `188.928575` | `0.009843685282s` | `141.717373` | `216.679483` | `3/6` | `3/6` | `2/6` |
+  | 12 | 33 | `209.681560` | `0.008686903432s` | `208.306618` | `211.138944` | `2/6` | `0/6` | `0/6` |
+  | 12 | 34 | `136.175747` | `0.013403092361s` | `101.072595` | `151.837312` | `0/6` | `6/6` | `6/6` |
+  | 16 | 32 | `186.093886` | `0.009788017288s` | `144.704199` | `187.434557` | `0/6` | `6/6` | `2/6` |
+  | 16 | 33 | `173.066149` | `0.010525345486s` | `117.718170` | `206.953252` | `0/6` | `4/6` | `2/6` |
+  | 16 | 34 | `161.621979` | `0.011270010295s` | `158.589233` | `162.825440` | `0/6` | `6/6` | `1/6` |
+
+- Interpretation:
+  - `inbox_slots=12,num_sms=33,send_pipeline_depth=1` was the only stable-looking neighbor in this small sweep, but its median was just below `210`.
+  - The original `slots=8,num_sms=33` candidate was noisy again.
+- Next action:
+  - Isolate `slots=12` with `send_pipeline_depth` and `num_sms` sweeps.
+
+### 2026-07-02 04:54 PDT - FWD-SWQ-108 slots=12 depth/CTA focused sweep and isolated repeats
+- Question:
+  - Does source-push depth 2 recover a stable `>=210 TFLOP/s/rank` median at the more stable `inbox_slots=12` setting?
+- Focused sweep:
+  - H100 job `/dlwh/repro-source-push-queue-slots12-depth-sms-20260702-113826`, cluster `cw-us-east-02a`, succeeded.
+  - Config: target uniform all-to-all, `hidden_output_mode=queue`, `inbox_slots=12`, `num_send_sms=2`, swept `num_sms in {31,32,33}` and `send_pipeline_depth in {1,2}`, `warmup=2`, `steps=7`, `repeat_runs=8`.
+- Result:
+
+  | send_pipeline_depth | num_sms | median TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <190 | <160 |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 1 | 31 | `165.793488` | `0.011021286848s` | `116.027655` | `176.890003` | `0/8` | `8/8` | `4/8` |
+  | 1 | 32 | `205.445823` | `0.008879936284s` | `124.026270` | `220.599763` | `4/8` | `3/8` | `2/8` |
+  | 1 | 33 | `194.027426` | `0.009453364515s` | `125.702837` | `211.091806` | `4/8` | `4/8` | `2/8` |
+  | 2 | 31 | `158.643037` | `0.011603117438s` | `131.766857` | `175.308175` | `0/8` | `8/8` | `4/8` |
+  | 2 | 32 | `212.120094` | `0.008587092843s` | `138.457557` | `213.720344` | `5/8` | `1/8` | `1/8` |
+  | 2 | 33 | `207.951806` | `0.008759172500s` | `128.722923` | `209.793682` | `0/8` | `2/8` | `1/8` |
+
+- Isolated repeats:
+  - `/dlwh/repro-source-push-queue-s12-s33-d1-repeat-20260702-114147`, cluster `cw-us-east-02a`, succeeded. `inbox_slots=12`, `num_sms=33`, `send_pipeline_depth=1`, `repeat_runs=24`: median `208.474787 TFLOP/s/rank`, median `0.008737186436s`, range `128.865983` to `211.903813`, `8/24 >=210`, `6/24 <190`, `4/24 <160`.
+  - `/dlwh/repro-source-push-queue-s12-s32-d2-repeat-20260702-114147`, cluster `cw-us-east-02a`, succeeded. `inbox_slots=12`, `num_sms=32`, `send_pipeline_depth=2`, `repeat_runs=24`: median `210.142612 TFLOP/s/rank`, median `0.008667834718s`, range `140.022184` to `215.244428`, `13/24 >=210`, `7/24 <190`, `5/24 <160`.
+- Interpretation:
+  - `inbox_slots=12,num_sms=32,send_pipeline_depth=2` is the best correct queue-output median found in this pass, but it still has severe slow rows.
+  - `inbox_slots=12,num_sms=33,send_pipeline_depth=1` is not stable once isolated for 24 rows.
+- Next action:
+  - Split the slow-tail source between output/store/protocol and WGMMA/receiver scheduling using `store_zero` and `sink`.
+
+### 2026-07-02 04:56 PDT - FWD-SWQ-109 store/protocol versus WGMMA slow-tail diagnostics
+- Question:
+  - Are the severe slow rows from large queue hidden-output materialization, store/protocol overhead, or WGMMA/receiver scheduling?
+- Diagnostics at current best median config:
+  - Base config: target uniform all-to-all, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `block_m=64`, `block_k=128`, `block_n=128`, `warmup=2`, `steps=7`, `repeat_runs=24`.
+- Queue + store-zero:
+  - H100 job `/dlwh/repro-source-push-queue-s12-s32-d2-zero-20260702-114452`, cluster `cw-us-east-02a`, succeeded.
+  - Config delta: `hidden_output_mode=queue`, `hidden_compute_mode=store_zero`.
+  - Result: median effective `359.021792 TFLOP/s/rank`, median `0.005073456875s`, range `174.561827` to `366.504074`, `20/24 >=300`, `4/24 <250`, `0/24 <160`.
+- Sink + WGMMA:
+  - H100 job `/dlwh/repro-source-push-sink-s12-s32-d2-repeat-20260702-114452`, cluster `cw-us-east-02a`, succeeded.
+  - Config delta: `hidden_output_mode=sink`, WGMMA on.
+  - Result: median `209.321992 TFLOP/s/rank`, median `0.008701815636s`, range `124.993411` to `214.212530`, `11/24 >=210`, `9/24 <190`, `7/24 <160`.
+- Interpretation:
+  - The severe `<160 TFLOP/s/rank` slow rows are not primarily caused by the large persistent queue hidden output; they persist with the tiny sink output.
+  - Store/protocol has smaller variability, but the main slow-tail is WGMMA/receiver scheduling or source-push synchronization.
+  - Current bottleneck judgment: software-structure/scheduling-bound, not pure compute-bound and not pure output-bandwidth-bound.
+- Follow-up screen:
+  - H100 job `/dlwh/repro-source-push-queue-s12-s32-d2-ngroups-20260702-114931`, cluster `cw-us-east-02a`, stopped manually.
+  - Config: same best median config, swept `n_groups_per_job in {1,2,5,10}`, `repeat_runs=8`, no `--progress-events`.
+  - Result: no timing rows; raw logs only showed Iris setup and dependency install. Stopped after remaining quiet far longer than the identical single-config `n_groups_per_job=1` runs.
+  - Interpretation: this screen was inconclusive. If revisited, rerun with `--progress-events` and a single `n_groups_per_job` value at a time.
+- Next action:
+  - Do not claim the queue-output candidate is complete. The best median candidate is `slots=12,num_sms=32,send_pipeline_depth=2` at `210.142612 TFLOP/s/rank`, but it is still too unstable (`5/24 <160`).
+  - A real forward performance path likely needs a receiver scheduling/producer-consumer structural change or a way to eliminate the clustered slow mode, not just output layout tuning.
+
+### 2026-07-02 05:16 PDT - FWD-SWQ-110 alias-output dead end and step-1 recurrence check
+- Question:
+  - Are the severe slow bands a transient/output-buffer lifecycle artifact that can be removed by output aliasing or by burning off early calls?
+- Alias-output attempt:
+  - Local patch tried extending the existing `inbox_storage=alias` path to alias both inbox and hidden outputs across timed calls.
+  - H100 job `/dlwh/repro-source-push-alias-smoke-20260702-115903`, cluster `cw-us-east-02a`, failed immediately at validation.
+  - Failure reason: the file already gates `inbox_storage=alias` with `ValueError: inbox_storage=alias is disabled: forcing direct pl.pallas_call specs to GMEM avoids the earlier whole-inbox SMEM blowup, but global semaphore lowering then fails with an out-of-bounds reserve_semaphores slice. This path needs an mgpu.kernel-level alias mechanism.`
+  - Action: reverted the local hidden-alias experiment. Do not pursue raw `pl.pallas_call` aliasing for this semaphore-using MGPU kernel unless Mosaic gains an `mgpu.kernel`-level alias mechanism.
+- Step-1 recurrence diagnostic:
+  - H100 job `/dlwh/repro-source-push-queue-s12-s32-d2-step1-20260702-120125`, cluster `cw-us-east-02a`, succeeded.
+  - Config: current best uniform queue config, `hidden_output_mode=queue`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `warmup=2`, `steps=1`, `repeat_runs=128`, `--progress-events`, `--no-check`.
+- Result:
+  - All rows: median `209.940126 TFLOP/s/rank`, mean `196.204918`, range `88.135396` to `219.089260`, `63/128 >=210`, `22/128 <190`, `19/128 <160`.
+  - Tail after 64 timed calls: median `207.674254`, mean `190.632694`, range `88.135396` to `214.464433`, `20/64 >=210`, `15/64 <190`, `12/64 <160`.
+- Interpretation:
+  - The slow bands recur late; this is not just an early transient that a larger warmup can honestly remove.
+  - Larger warmup is not a valid stabilization fix for the uniform target config.
+
+### 2026-07-02 05:17 PDT - FWD-SWQ-111 current-best slot-order target sweep
+- Question:
+  - Does the small-shape slot-order win transfer to the current best `inbox_slots=12,num_sms=32,send_pipeline_depth=2` target config?
+- H100 job:
+  - `/dlwh/repro-source-push-queue-s12-s32-d2-slotorder-20260702-120406`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `traffic_pattern=all_to_all`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `receiver_schedule=fixed_wait`, `warmup=2`, `steps=7`, `repeat_runs=12`, swept `slot_order in {current,rotated,hash}`.
+- Result:
+
+  | slot_order | median TFLOP/s/rank | mean TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <190 | <160 |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | `current` | `200.855893` | `186.178821` | `0.009079848499s` | `114.696808` | `212.873949` | `2/12` | `4/12` | `2/12` |
+  | `hash` | `178.771520` | `159.126419` | `0.010188879844s` | `107.477189` | `181.026590` | `0/12` | `12/12` | `4/12` |
+  | `rotated` | `152.238298` | `147.928264` | `0.012077857624s` | `117.697389` | `168.016227` | `0/12` | `12/12` | `6/12` |
+
+- Interpretation:
+  - Non-current slot orders are hard target losses at the current best config.
+  - Keep `slot_order=current`; the small-shape rotated/hash win does not transfer.
+
+### 2026-07-02 05:18 PDT - FWD-SWQ-112 exact-balanced diagnostic
+- Question:
+  - Are the uniform target slow bands caused primarily by multinomial tails/masked work, or do they persist with exact balanced routing?
+- H100 job:
+  - `/dlwh/repro-source-push-queue-s12-s32-d2-balanced-20260702-120833`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Same as FWD-SWQ-111 current-best config, but `routing=balanced`, `slot_order=current`, `repeat_runs=24`.
+- Result:
+  - Median `steady_state_time=0.007915820211s`, median `217.032155 TFLOP/s/rank`, mean `204.105129`.
+  - Range: `132.585203` to `221.655624 TFLOP/s/rank`.
+  - `18/24 >=210`, `5/24 <190`, `3/24 <160`.
+  - Queue stats: `tail_fraction=0.0`, `masked_row_fraction=0.0`, `entries_by_src_min=max=2048`, `entries_by_dst_min=max=2048`, `max_slot_reuse_depth=22`.
+- Interpretation:
+  - Exact balance removes tail/masked work and raises the median/ceiling substantially.
+  - The severe slow-band problem still persists, so tails are not the root cause.
+  - This is diagnostic only: exact balanced is not the final interesting production condition.
+
+### 2026-07-02 05:19 PDT - FWD-SWQ-113 exact-balanced slot-count diagnostic
+- Question:
+  - Under exact balanced routing, does aligning `inbox_slots` with the 8 blocks/expert structure improve stability?
+- H100 job:
+  - `/dlwh/repro-source-push-balanced-slots-20260702-121146`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Exact-balanced target, `hidden_output_mode=queue`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, swept `inbox_slots in {8,12,16}`, `warmup=2`, `steps=7`, `repeat_runs=12`.
+- Result:
+
+  | inbox_slots | median TFLOP/s/rank | mean TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | <190 | <160 | max slot reuse |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 8 | `208.932462` | `200.558971` | `0.008222729284s` | `129.168040` | `211.453188` | `2/12` | `2/12` | `1/12` | `32` |
+  | 12 | `217.607463` | `207.058181` | `0.007894891713s` | `111.051930` | `219.912773` | `10/12` | `1/12` | `1/12` | `22` |
+  | 16 | `192.464500` | `166.296772` | `0.008928788560s` | `101.918180` | `198.318502` | `0/12` | `6/12` | `5/12` | `16` |
+
+- Interpretation:
+  - `inbox_slots=12` remains best even under exact balance.
+  - Aligning to 8 slots does not stabilize or speed up the path; reducing reuse depth to 16 slots is worse.
+  - Current judgment: exact-balanced routing can produce a repeated `>=210` median, but the roughly balanced/uniform target still lacks a stable `>=210` median and both cases retain recurring slow bands.
+
+### 2026-07-02 05:25 PDT - FWD-SWQ-114 low receiver-CTA screen for current best queue path
+- Question:
+  - Are the recurring slow bands in the current best queue-output source-push path caused by receiver grid pressure from `grid_switch` launching `8 * num_sms` receiver CTAs per rank?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-122137`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `warmup=2`, `steps=7`, `repeat_runs=12`, swept `num_sms in {16,20,24,28,32}`.
+- Result:
+
+  | num_sms | median TFLOP/s/rank | mean TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | >=200 | <160 | median send GB/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 16 | `145.139208` | `136.968712` | `0.012549894646s` | `98.188436` | `146.073841` | `0/12` | `0/12` | `12/12` | `56.695003` |
+  | 20 | `182.509923` | `164.128926` | `0.009980363572s` | `116.627086` | `186.507895` | `0/12` | `0/12` | `4/12` | `71.292939` |
+  | 24 | `167.311028` | `162.978609` | `0.010886810221s` | `114.794813` | `168.857067` | `0/12` | `0/12` | `1/12` | `65.355870` |
+  | 28 | `165.509056` | `153.094848` | `0.011005342273s` | `119.487737` | `166.856386` | `0/12` | `0/12` | `4/12` | `64.651975` |
+  | 32 | `210.637540` | `202.653704` | `0.008647467924s` | `117.599549` | `213.518905` | `8/12` | `11/12` | `1/12` | `82.280289` |
+
+- Interpretation:
+  - Lowering receiver CTA count is not a stabilization fix. It underfills the WGMMA/receiver side and drops median performance sharply.
+  - The current best `num_sms=32` remains the only row near the target median, but this screen still has a slow outlier (`117.6 TFLOP/s/rank`), consistent with the earlier repeated slow-band evidence.
+  - The bottleneck hypothesis shifts away from simple grid oversubscription; the path still looks WGMMA/receiver scheduling/synchronization-bound rather than communication-bound.
+
+### 2026-07-02 05:30 PDT - FWD-SWQ-115 single `n_groups_per_job=2` check at slots=12
+- Question:
+  - Does reducing per-entry N-job fanout from 10 to 5 improve the current best queue-output geometry now that the earlier slots=12 grouped-job sweep was inconclusive?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-122643`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `n_groups_per_job=2`, `warmup=2`, `steps=7`, `repeat_runs=12`.
+- Result:
+  - Median `steady_state_time=0.008622289003s`, median `211.449565 TFLOP/s/rank`, mean `191.344788`.
+  - Range: `123.859057` to `220.837295 TFLOP/s/rank`.
+  - `6/12 >=210`, `8/12 >=200`, `8/12 >=190`, `3/12 <160`.
+  - Median send bandwidth: `82.597486 GB/s/rank`.
+  - Queue stats subset: `n_work_groups_per_entry=10`, `num_compute_jobs_per_entry=5`, `done_signals_per_entry=5`, `compute_wait_full_count=86855`, `max_slot_reuse_depth=24`, `tail_fraction=0.11605549479016752`, `masked_row_fraction=0.056818835991019515`.
+- Interpretation:
+  - Grouping two adjacent N jobs raises the fast ceiling (`220.84 TFLOP/s/rank`) and keeps a `>210` median in this short run, so semaphore/job overhead is visible in the fast mode.
+  - It worsens stability versus the same `num_sms=32` `n_groups_per_job=1` low-CTA row (`1/12 <160` there vs `3/12 <160` here), and the mean falls to `191.34`.
+  - Do not treat this as a solved path. If explored further, it needs CTA-count tuning around `n_groups_per_job=2`; otherwise keep `n_groups_per_job=1` as the less unstable baseline.
+
+### 2026-07-02 05:37 PDT - FWD-SWQ-116 `n_groups_per_job=2` producer split with 30 compute workers
+- Question:
+  - Can the higher fast-mode ceiling from `n_groups_per_job=2` be stabilized by changing producer count while keeping receiver compute workers fixed at 30?
+- H100 job:
+  - `/dlwh/iris-run-job-20260702-123114`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `n_groups_per_job=2`, `warmup=2`, `steps=7`, `repeat_runs=12`.
+  - Paired sweep keeps `num_sms - num_send_sms = 30` for every row.
+- Result:
+
+  | num_sms | num_send_sms | median TFLOP/s/rank | mean TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | >=200 | <160 | median send GB/s/rank |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 31 | 1 | `179.269308` | `170.725624` | `0.010160592202s` | `113.531295` | `183.689814` | `0/12` | `0/12` | `2/12` | `70.027073` |
+  | 32 | 2 | `218.227439` | `210.722064` | `0.008346821714s` | `130.472201` | `220.590474` | `11/12` | `11/12` | `1/12` | `85.245094` |
+  | 33 | 3 | `210.680226` | `201.233427` | `0.008645720131s` | `134.180181` | `213.049521` | `8/12` | `10/12` | `1/12` | `82.296963` |
+  | 34 | 4 | `145.029587` | `140.765402` | `0.012559385787s` | `99.906788` | `145.800899` | `0/12` | `0/12` | `12/12` | `56.652182` |
+
+- Interpretation:
+  - One producer is a hard loss even with 30 compute workers; median send bandwidth falls to about `70 GB/s/rank`.
+  - Four producers are also a hard loss, likely because producer CTAs interfere with the WGMMA/receiver side.
+  - The existing two-producer split is still the best point. In this paired run, `n_groups_per_job=2,num_send_sms=2,num_sms=32` is a strong candidate (`218.23` median, `11/12 >=210`), but it contradicts the prior isolated 12-row sample from FWD-SWQ-115 (`211.45` median, `3/12 <160`).
+  - Next action: run a longer isolated repeat of exactly `n_groups_per_job=2,num_send_sms=2,num_sms=32` before treating this as a stable speedup.
+
+### 2026-07-02 05:42 PDT - FWD-SWQ-117 isolated 48-repeat validation of grouped-job queue candidate
+- Question:
+  - Does the strong `n_groups_per_job=2,num_send_sms=2,num_sms=32` paired-row result hold in a longer isolated repeat?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-123853`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `n_group=1`, `n_groups_per_job=2`, `warmup=2`, `steps=7`, `repeat_runs=48`, `--no-check`.
+- Result:
+  - Median `steady_state_time=0.008288984719s`, median `219.747234 TFLOP/s/rank`, mean `208.494879`.
+  - Range: `131.283484` to `223.101574 TFLOP/s/rank`.
+  - `20/48 >=220`, `38/48 >=210`, `39/48 >=200`, `41/48 >=190`, `5/48 <160`.
+  - Median send bandwidth: `85.838763 GB/s/rank`.
+  - First 24 repeats: median `219.204851`.
+  - Tail 24 repeats: median `220.210963`, `2/24 <160`.
+- Interpretation:
+  - This is the best repeated median found for the source-push queue harness so far.
+  - Compared with the prior best `n_groups_per_job=1` isolated queue candidate (`0.008667834718s`, `210.142612 TFLOP/s/rank`, FWD-SWQ-108), this is about `4.57%` faster by median time and `4.57%` higher by median TFLOP/s/rank.
+  - It does not eliminate the severe slow tail: `5/48 <160` still appears. The improvement is a strong median/fast-mode improvement from reduced N-job/semaphore fanout, not a complete scheduling-stability fix.
+  - Next action: run a checked smoke for the same grouped-job schedule before treating it as a correctness-preserving candidate.
+
+### 2026-07-02 05:46 PDT - FWD-SWQ-118 checked smoke for grouped-job queue candidate
+- Question:
+  - Does the `n_groups_per_job=2` queue candidate preserve correctness in a checked smoke?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-124258`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Same schedule knobs as FWD-SWQ-117 but small checked geometry: `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `n_groups_per_job=2`, `output_mode=debug`, `--check`, `warmup=1`, `steps=3`, `repeat_runs=1`.
+- Result:
+  - `metadata_mismatches=0`.
+  - `max_abs_diff=0.04443550109863281`.
+  - `hidden_max_abs_diff=0.04443550109863281`.
+  - `hidden_mean_abs_diff=0.0029928539879620075`.
+  - `hidden_all_max_abs_diff=0.04443550109863281`.
+  - `hidden_unwritten_max_abs=0.015625`.
+  - Timing row: `steady_state_time=0.001716642718s`, `18.288235 TFLOP/s/rank`.
+- Interpretation:
+  - The grouped-job queue schedule passes the same style of small checked smoke used for earlier source-push harness variants.
+  - Current candidate status: correctness-smoked, target median speedup validated over 48 repeats, but slow-tail outliers remain.
+
+### 2026-07-02 05:50 PDT - FWD-SWQ-119 grouped-job inbox slot sweep
+- Question:
+  - Does changing inbox buffering / slot reuse depth stabilize the `n_groups_per_job=2` queue candidate?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-124709`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Target uniform all-to-all, `implementation=m_n_slots`, `hidden_output_mode=queue`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `n_groups_per_job=2`, `warmup=2`, `steps=7`, `repeat_runs=12`, swept `inbox_slots in {6,12,18,24}`.
+- Result:
+
+  | inbox_slots | median TFLOP/s/rank | mean TFLOP/s/rank | median steady_state_time | min TFLOP/s/rank | max TFLOP/s/rank | >=210 | >=200 | <160 | median send GB/s/rank | max slot reuse | local work groups/source |
+  |---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | 6 | `181.532853` | `173.822052` | `0.010131654296s` | `127.028813` | `200.740505` | `0/12` | `2/12` | `5/12` | `70.911271` | `47` | `30` |
+  | 12 | `217.568665` | `208.711074` | `0.008371987929s` | `125.780223` | `220.670654` | `10/12` | `11/12` | `1/12` | `84.987760` | `24` | `60` |
+  | 18 | `168.847808` | `158.322952` | `0.010787724002s` | `116.060427` | `171.346620` | `0/12` | `0/12` | `3/12` | `65.956175` | `16` | `90` |
+  | 24 | `174.270285` | `163.780910` | `0.010468218309s` | `129.598134` | `183.850283` | `0/12` | `0/12` | `5/12` | `68.074330` | `12` | `120` |
+
+- Interpretation:
+  - `inbox_slots=12` remains the best point for the grouped-job queue candidate.
+  - Reducing slot reuse depth with more buffering (`18` or `24` slots) does not stabilize the path and instead collapses median throughput.
+  - `inbox_slots=6` under-buffers / under-schedules this path.
+  - Remaining slow-tail outliers are not explained by simple slot reuse depth.
+
+### 2026-07-02 05:57 PDT - FWD-SWQ-120 grouped-job sink-output diagnostic
+- Question:
+  - Does replacing queue hidden output stores with tiny sink output stabilize the `n_groups_per_job=2` candidate?
+- H100 job:
+  - `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-125338`, cluster `cw-us-east-02a`, succeeded.
+- Config:
+  - Same as FWD-SWQ-117 except `hidden_output_mode=sink`: target uniform all-to-all, `implementation=m_n_slots`, `queue_mode=routing`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `output_mode=perf`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`, `receiver_schedule=fixed_wait`, `n_group=1`, `n_groups_per_job=2`, `warmup=2`, `steps=7`, `repeat_runs=48`, `--no-check`.
+- Result:
+  - Median `steady_state_time=0.008325638566s`, median `218.779985 TFLOP/s/rank`, mean `199.344143`.
+  - Range: `108.412940` to `223.383378 TFLOP/s/rank`.
+  - `18/48 >=220`, `31/48 >=210`, `34/48 >=200`, `35/48 >=190`, `8/48 <160`.
+  - Median send bandwidth: `85.460932 GB/s/rank`.
+  - First 24 repeats: median `218.014956`.
+  - Tail 24 repeats: median `220.642147`, `3/24 <160`.
+- Interpretation:
+  - Sink output is not a stabilization fix. It has a comparable median to queue output but a worse slow-tail count (`8/48 <160` vs `5/48 <160` for queue).
+  - The remaining slow-tail outliers are not primarily caused by queue hidden-output stores.
+  - Current best candidate remains `hidden_output_mode=queue`, `n_groups_per_job=2`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `send_pipeline_depth=2`, `slot_order=current`.
+
+### 2026-07-02 06:00 PDT - FWD-SWQ-121 named profile for current best queue candidate
+- Change:
+  - Added `--source-push-profile hopper_queue_ngroups2_210` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The profile sets the current best repeated target candidate as parser defaults while still allowing explicit CLI overrides for one-axis sweeps.
+- Profile defaults:
+  - `implementation=m_n_slots`
+  - `queue_mode=routing`
+  - `routing=uniform`
+  - `traffic_pattern=all_to_all`
+  - `peer_loop=grid_switch`
+  - `lowering_semantics=lane`
+  - `metadata_mode=static_recv`
+  - `output_mode=perf`
+  - `hidden_output_mode=queue`
+  - `tokens_per_rank=32768`
+  - `hidden_dim=2560`
+  - `intermediate_dim=1280`
+  - `experts_per_rank=32`
+  - `topk=4`
+  - `entries_per_rank=288`
+  - `inbox_slots=12`
+  - `num_send_sms=2`
+  - `num_sms=32`
+  - `block_m=64`
+  - `block_k=128`
+  - `block_n=128`
+  - `n_group=1`
+  - `n_groups_per_job=2`
+  - `receiver_schedule=fixed_wait`
+  - `send_pipeline_depth=2`
+  - `slot_order=current`
+  - `warmup=2`
+  - `steps=7`
+  - `repeat_runs=48`
+  - `check=False`
+  - `separate_compile=True`
+  - `progress_events=True`
+- Evidence behind profile:
+  - FWD-SWQ-117 target validation job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-123853`: median `0.008288984719s`, `219.747234 TFLOP/s/rank`, `38/48 >=210`, `5/48 <160`.
+  - FWD-SWQ-118 checked smoke job `/dlwh/iris-run-repro_source_push_inbox_queue-20260702-124258`: `metadata_mismatches=0`, `max_abs_diff=0.04443550109863281`.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --source-push-profile hopper_queue_ngroups2_210 --help`
+  - parser assertion that the profile applies the expected defaults
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+- Interpretation:
+  - This does not make the kernel production-ready, but it turns the current best candidate into a reproducible named profile and gives the production branch a stable boundary to extract from.
+
+### 2026-07-02 06:05 PDT - FWD-SWQ-122 source-push profile parser regression test
+- Change:
+  - Added a benchmark CLI regression test for `--source-push-profile hopper_queue_ngroups2_210` in `lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`.
+  - The test imports the self-contained source-push script directly and asserts that the profile applies the exact current-best defaults while preserving explicit override behavior through the normal parser path.
+- Local checks:
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_applies_current_best_candidate_defaults`
+    - Result: `1 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `55 passed, 11 warnings`.
+- Interpretation:
+  - The profile is now covered by a cheap local parser regression test.
+  - This is still harness consolidation rather than a production kernel boundary; the current best H100 candidate remains the FWD-SWQ-117 queue profile.
+
+### 2026-07-02 06:06 PDT - FWD-SWQ-123 roughly-balanced routing and target tuning
+- Hypothesis:
+  - Exact balanced is too artificial and multinomial uniform adds high seed noise; a deterministic low-variance `roughly_balanced` routing mode should exercise tails and masked work while preserving per-source assignment totals and avoiding capacity drops.
+- Code change:
+  - Added `routing=roughly_balanced` to `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The new mode jitters each source's global expert counts around the balanced count, clips to a bounded range, then adjusts counts back to the exact per-source assignment total.
+  - Target shape host stats for seed 0: per-source sums `131072`, count range `449..575`, no drops with `entries_per_rank=288`, live entries/rank mean `2172.75`, max live entries/pair `276`, tail fraction `0.1169025429`, masked row fraction `0.0574157174`.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py .agents/logbooks/6597-moe-mgpu-forward.md`
+- H100 jobs:
+  - Checked smoke: `/dlwh/repro-source-push-roughly-balanced-smoke-20260702-052211`, succeeded, metadata mismatches `0`, dropped entries/rows `0`, reduced-shape steady state `0.0017134467s`.
+  - Mistake row: `/dlwh/repro-source-push-roughly-balanced-target-20260702-052459`, succeeded with harness error only because `output_mode=perf` was launched without `--no-check`.
+  - Target seed 0 depth 2: `/dlwh/repro-source-push-roughly-balanced-target-nocheck-20260702-052728`, succeeded.
+  - Slots/depth sweep: `/dlwh/repro-source-push-roughly-balanced-slots-depth-20260702-053037`, succeeded.
+  - Depth 1 seed confirmation: `/dlwh/repro-source-push-roughly-balanced-depth1-seeds-20260702-053553`, succeeded.
+  - Longer averaging check: `/dlwh/repro-source-push-roughly-balanced-depth1-steps21-20260702-054124`, succeeded.
+  - Compute-tax sweep: `/dlwh/repro-source-push-roughly-balanced-compute-tax-20260702-054640`, succeeded.
+  - N-group sweep: `/dlwh/repro-source-push-roughly-balanced-ngroup-20260702-054947`, succeeded.
+  - `n_groups_per_job=2` seed confirmation: `/dlwh/repro-source-push-roughly-balanced-ngpj2-seeds-20260702-055716`, succeeded.
+  - SM-count sweep: `/dlwh/repro-source-push-roughly-balanced-sm-count-20260702-060010`, succeeded.
+- Results:
+
+  | Experiment | Best config / note | Median steady_state_time | Median TFLOP/s/rank | Slow bands |
+  |---|---|---:|---:|---:|
+  | Initial target | slots 12, depth 2, `n_groups_per_job=1`, seed 0 | `0.008540005s` | `213.423170` | `14/24 >=210`, `8/24 <190`, `5/24 <160` |
+  | Slots/depth sweep | slots 12, depth 1 | `0.008309496s` | `219.343614` | `11/12 >=210`, `1/12 <190`, `1/12 <160` |
+  | Depth 1 seeds | slots 12, depth 1, seeds 0/1/2 | `0.008544623s` overall | `213.418` overall | `49/72 >=210`, `17/72 <190`, `11/72 <160` |
+  | Steps 21 | slots 12, depth 1, seed 0 | `0.008507563s` | `214.268338` | `13/24 >=210`, `10/24 <190`, `1/24 <160` |
+  | Compute tax | `store_zero` vs WGMMA, slots 12, depth 1 | `0.005645133s` vs `0.008390887s` | equivalent `322.869` vs `217.216` | store-zero still has `1/24 <160` |
+  | N grouping | `n_group=1`, `n_groups_per_job=2` | `0.008288255s` | `219.906` | `9/12 >=210`, `3/12 <190`, `2/12 <160` |
+  | `n_groups_per_job=2` seeds | seeds 0/1/2 | `0.008391041s` overall | `217.325` overall | `51/72 >=210`, `19/72 <190`, `11/72 <160` |
+  | SM-count sweep | `num_send_sms=2`, `num_sms=32` remains best | `0.008406207s` | `216.820` | `10/12 >=210`, `2/12 <190`, `1/12 <160` |
+
+- Interpretation:
+  - `roughly_balanced` gives a controlled middle ground between exact-balanced and multinomial uniform: no dropped entries, realistic tails/masked rows, and low source/destination imbalance.
+  - For roughly-balanced target, the best config is `inbox_slots=12`, `send_pipeline_depth=1`, `n_group=1`, `n_groups_per_job=2`, `num_send_sms=2`, `num_sms=32`, `slot_order=current`.
+  - `n_groups_per_job=2` is the only positive tuning result in this pass; it halves compute semaphore waits/signals per entry and improves the multi-seed median from about `213.4` to `217.3 TFLOP/s/rank`.
+  - `n_group=2` is a hard loss (`41.9` to `57.6 TFLOP/s/rank` medians in the sweep), and larger `num_sms` values are also hard losses.
+  - Slow-tail outliers remain even in `store_zero`, so the tail is not purely WGMMA compute. The bottleneck judgment remains software-structure/runtime-tail-bound, with meaningful compute cost on top of a ~`5.65ms` source-push/slot/store-zero floor.
+- Next action:
+  - Keep `roughly_balanced` as the target-like deterministic harness mode.
+  - If turning this into a profile, use the rough-balanced best config above; do not switch the existing uniform profile without a separate uniform confirmation.
+
+### 2026-07-02 06:10 PDT - FWD-SWQ-123 source-push profile coverage check
+- Observation:
+  - The current worktree already includes `--source-push-profile hopper_queue_roughly_balanced_ngroups2_210` in `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py`.
+  - The profile keeps the FWD-SWQ-117 uniform profile separate and encodes the FWD-SWQ-122 rough-balanced depth-1, `n_groups_per_job=2` candidate as its own harness entrypoint.
+- Local checks:
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `57 passed, 11 warnings`.
+- Interpretation:
+  - Both named source-push harness profiles are locally covered:
+    - `hopper_queue_ngroups2_210`: uniform, depth 2, 48 repeats.
+    - `hopper_queue_roughly_balanced_ngroups2_210`: rough-balanced, depth 1, 48 repeats.
+  - This remains harness consolidation. The source-push inbox kernel is still not extracted into the production `pallas_mgpu.py` permute_up hook.
+
+### 2026-07-02 06:24 PDT - FWD-SWQ-124 source-push profile boundary consolidation
+- Goal:
+  - Make the current source-push queue candidates easier to extract into a package-private production branch without changing kernel behavior.
+- Code change:
+  - Added `--source-push-profile hopper_queue_roughly_balanced_ngroups2_210`.
+  - Documented `--source-push-profile` in the repro docstring as the package-private extraction boundary for current Hopper source-push candidates.
+  - Converted the source-push parser regression test to cover both named profiles:
+    - `hopper_queue_ngroups2_210`: uniform-routing repeated target candidate from FWD-SWQ-117, `send_pipeline_depth=2`.
+    - `hopper_queue_roughly_balanced_ngroups2_210`: target-like deterministic routing diagnostic from FWD-SWQ-123, `send_pipeline_depth=1`.
+  - Added an explicit override test so profile defaults do not prevent one-axis sweeps.
+  - Renumbered the previous rough-balanced entry from duplicate `FWD-SWQ-122` to `FWD-SWQ-123`.
+- Local checks:
+  - `python -m py_compile lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+  - `git diff --check -- lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py .agents/logbooks/6597-moe-mgpu-forward.md`
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_applies_current_best_candidate_defaults lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_allows_explicit_overrides`
+    - Result: `3 passed, 11 warnings`.
+  - `./infra/pre-commit.py --fix --files lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `57 passed, 11 warnings`.
+  - `python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --source-push-profile hopper_queue_roughly_balanced_ngroups2_210 --help`
+    - Result: parser/help succeeds.
+- H100:
+  - No H100 job launched for this patch; it only changes named defaults, tests, and documentation around already-measured configs.
+- Interpretation:
+  - Stage 1 evidence remains the uniform profile from FWD-SWQ-117: median `219.747234 TFLOP/s/rank` over 48 target repeats with a checked smoke in FWD-SWQ-118.
+  - The rough-balanced profile is now an explicit target-like diagnostic boundary backed by FWD-SWQ-123, not a replacement for the uniform production candidate.
+  - Remaining Stage 2 work is to extract the profile-backed source-push kernel/harness into a cleaner package-private module/branch and keep the benchmark script as an experiment driver rather than the only API boundary.
+
+### 2026-07-02 06:32 PDT - FWD-SWQ-125 package-private source-push profile module
+- Goal:
+  - Move the source-push candidate profile boundary out of the benchmark script and into package-private `_moe` code as the first production-branch extraction step.
+- Code change:
+  - Added `lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py`.
+  - Moved `SOURCE_PUSH_PROFILES` and named profile defaults into that module.
+  - Added `source_push_profile_defaults(profile)` which returns a copy of the profile defaults.
+  - Updated `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py` to import the profile choices/defaults from `_moe`.
+  - Added `test_source_push_profile_defaults_are_copied`.
+- Local checks:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+  - `git diff --check -- lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py .agents/logbooks/6597-moe-mgpu-forward.md`
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_applies_current_best_candidate_defaults lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_allows_explicit_overrides lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py::test_source_push_profile_defaults_are_copied`
+    - Result: `4 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --source-push-profile hopper_queue_roughly_balanced_ngroups2_210 --help`
+    - Result: parser/help succeeds.
+  - `./infra/pre-commit.py --fix --files lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed, including Pyrefly.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `58 passed, 11 warnings`.
+- H100:
+  - No H100 job launched. This patch moves/covers profile metadata only and does not change kernel behavior or measured config values.
+- Interpretation:
+  - This is not the full Stage 2 production branch yet, but it creates a concrete `_moe` package-private boundary for the profile-backed source-push candidates.
+  - Next extraction step is to move the source-push Pallas kernel/wrapper behind `_moe` code and leave the benchmark script as a thin CLI around the package-private entrypoint.
+
+### 2026-07-02 06:40 PDT - FWD-SWQ-126 package-private source-push harness extraction
+- Observation:
+  - The source-push inbox prototype has now been moved behind package-private `_moe` code.
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox.py` contains `PushInboxConfig`, the Pallas kernel factory, the sharded wrapper, input generation, validation, timing, parser, and `main()`.
+  - Added `run_source_push_inbox(config, ...)` as the explicit package-private runner used by the CLI wrapper path.
+  - `lib/levanter/scripts/bench/repro_source_push_inbox_queue.py` is now only a CLI wrapper that imports `main()` from `_moe.source_push_inbox`.
+  - `lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py` now documents the actual boundary: profiles live next to the package-private source-push harness and benchmark scripts should remain thin wrappers.
+- Local checks:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+  - `git diff --check -- lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py .agents/logbooks/6597-moe-mgpu-forward.md`
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --source-push-profile hopper_queue_roughly_balanced_ngroups2_210 --help`
+    - Result: parser/help succeeds.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `59 passed, 11 warnings`.
+  - `./infra/pre-commit.py --fix --files lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed, including Pyrefly.
+- H100:
+  - Launched post-extraction wrapper/profile validation job `/dlwh/repro-source-push-extracted-profile-20260702-0640`, cluster `cw-us-east-02a`.
+  - Config: `--source-push-profile hopper_queue_ngroups2_210`, JSONL `scratch/repro_source_push_extracted_profile_20260702_0640.jsonl`.
+  - Job state: succeeded, exit `0`, duration `1 minute and 45.29 seconds`.
+  - Results over 48 repeats:
+
+  | metric | value |
+  |---|---:|
+  | median steady_state_time | `0.008370955358s` |
+  | mean steady_state_time | `0.009399717622s` |
+  | min steady_state_time | `0.008172136299s` |
+  | max steady_state_time | `0.015787412845s` |
+  | median W13 TFLOP/s/rank | `217.595407` |
+  | mean W13 TFLOP/s/rank | `200.679220` |
+  | min W13 TFLOP/s/rank | `115.375546` |
+  | max W13 TFLOP/s/rank | `222.889255` |
+  | median send GB/s/rank | `84.998206` |
+  | rows >=210 TFLOP/s/rank | `35/48` |
+  | rows <190 TFLOP/s/rank | `10/48` |
+  | rows <160 TFLOP/s/rank | `8/48` |
+  | dropped entries / rows | `0 / 0` |
+
+  - Errors: none.
+- Interpretation:
+  - Stage 2 extraction is materially further along: the source-push kernel/harness no longer lives only in `scripts/bench`.
+  - The post-extraction wrapper/profile run preserves the fast source-push profile behavior, but this repeat is noisier than FWD-SWQ-117 (`217.60` vs `219.75` median TFLOP/s/rank and `35/48` vs `38/48` rows >=210).
+  - This is still a package-private prototype boundary, not public `moe_mlp` integration.
+
+### 2026-07-02 06:22 PDT - FWD-SWQ-127 extracted-wrapper H100 checked smoke
+- Question:
+  - Does the thin `scripts/bench/repro_source_push_inbox_queue.py` wrapper correctly execute the extracted package-private `source_push_inbox.py` implementation on H100?
+- H100 job:
+  - `/dlwh/repro_source_push_extract_smoke-20260702-0619`, cluster `cw-us-east-02a`, succeeded.
+- Command shape:
+  - Wrapper CLI with `--source-push-profile hopper_queue_ngroups2_210`.
+  - Overrides: `tokens_per_rank=4096`, `hidden_dim=256`, `intermediate_dim=1280`, `entries_per_rank=56`, `output_mode=debug`, `--check`, `warmup=1`, `steps=3`, `repeat_runs=1`, `--no-separate-compile`.
+- Result:
+  - Terminal state: `JOB_STATE_SUCCEEDED`.
+  - `metadata_mismatches=0`.
+  - `max_abs_diff=0.04443550109863281`.
+  - `hidden_max_abs_diff=0.04443550109863281`.
+  - `hidden_mean_abs_diff=0.0029928539879620075`.
+  - `hidden_unwritten_max_abs=0.015625`.
+  - Debug-shape `steady_state_time=0.006517660338431597s`, `w13_tflops_per_rank=4.816815208193975`, `send_gbps_per_rank=1.8815684407007711`.
+- Interpretation:
+  - The extraction is not only a local import change; the wrapper drives the extracted package-private implementation through compile/run/check on H100.
+  - This is a correctness/import smoke only. It does not replace the target performance evidence from FWD-SWQ-117.
+
+### 2026-07-02 06:29 PDT - FWD-SWQ-128 extracted rough-balanced 96-repeat validation
+- Question:
+  - Does the extracted package-private source-push path preserve a stable median above `210 TFLOP/s/rank` on the target-like `roughly_balanced` routing profile?
+- H100 job:
+  - `/dlwh/repro-source-push-rough-extracted-96-20260702-0645`, cluster `cw-us-east-02a`, succeeded.
+- Command shape:
+  - `uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait --job-name repro-source-push-rough-extracted-96-20260702-0645 --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 --enable-extra-resources --extra gpu -- timeout 3600s uv run --package marin-levanter --group test python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --source-push-profile hopper_queue_roughly_balanced_ngroups2_210 --repeat-runs 96 --jsonl scratch/repro_source_push_rough_extracted_96_20260702_0645.jsonl`
+- Config:
+  - Profile `hopper_queue_roughly_balanced_ngroups2_210`: `implementation=m_n_slots`, `routing=roughly_balanced`, `hidden_output_mode=queue`, `peer_loop=grid_switch`, `metadata_mode=static_recv`, `tokens_per_rank=32768`, `hidden_dim=2560`, `intermediate_dim=1280`, `experts_per_rank=32`, `topk=4`, `entries_per_rank=288`, `inbox_slots=12`, `num_send_sms=2`, `num_sms=32`, `block_m=64`, `block_k=128`, `block_n=128`, `n_group=1`, `n_groups_per_job=2`, `receiver_schedule=fixed_wait`, `send_pipeline_depth=1`, `slot_order=current`, `warmup=2`, `steps=7`, `repeat_runs=96`, `--no-check`, `--separate-compile`.
+- Results:
+
+  | metric | value |
+  |---|---:|
+  | median steady_state_time | `0.008262450441s` |
+  | mean steady_state_time | `0.009176977219s` |
+  | min steady_state_time | `0.008118119590s` |
+  | max steady_state_time | `0.015110662274s` |
+  | median W13 TFLOP/s/rank | `220.592534` |
+  | mean W13 TFLOP/s/rank | `204.663667` |
+  | min W13 TFLOP/s/rank | `120.619121` |
+  | max W13 TFLOP/s/rank | `224.514407` |
+  | median send GB/s/rank | `86.168958` |
+  | rows >=220 TFLOP/s/rank | `58/96` |
+  | rows >=210 TFLOP/s/rank | `69/96` |
+  | rows >=200 TFLOP/s/rank | `73/96` |
+  | rows <190 TFLOP/s/rank | `21/96` |
+  | rows <160 TFLOP/s/rank | `13/96` |
+  | first 48 median W13 TFLOP/s/rank | `220.533451` |
+  | tail 48 median W13 TFLOP/s/rank | `220.738143` |
+  | dropped entries / rows | `0 / 0` |
+
+  - Compile time: `5.523906586925s` total, `3.840899118921s` lower/compile, `1.683007468004s` first run.
+  - Queue stats: `live_entries_total=17382`, `rounded_rows_per_rank_mean=139056.0`, `masked_row_fraction=0.05741571740881372`.
+  - Errors: none.
+- Interpretation:
+  - This is the strongest Stage 1 evidence so far for the target-like route distribution: the extracted package-private rough-balanced profile has a replicated median well above `210 TFLOP/s/rank` over 96 repeats, and both halves of the run have medians above `220`.
+  - Severe slow-tail rows remain (`13/96 <160`), so the schedule is not outlier-free. The current claim should be `stable median >=210`, not eliminated variance.
+  - Stage 2 should now focus on PR consolidation: keep this as the current rough-balanced profile evidence, document the slow-tail limitation, and avoid more blind schedule tuning unless a new structural idea directly attacks the tail.
+
+### 2026-07-02 06:29 PDT - FWD-SWQ-128 post-compaction source-push extraction validation
+- Scope:
+  - Revalidated the extracted package-private source-push inbox boundary after context compaction.
+  - No kernel scheduling/control-flow changes.
+- Local checks:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `60 passed, 11 warnings`.
+  - `./infra/pre-commit.py --fix --files lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed, including Pyrefly.
+  - `git diff --check -- .agents/logbooks/6597-moe-mgpu-forward.md .agents/projects/20260629-mgpu_permute_up.md lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed.
+- H100:
+  - No new H100 job launched for this entry.
+- Interpretation:
+  - The package-private extraction remains locally clean.
+  - Continue from the source-push inbox path; the closed `lax.switch` experiment should not be revisited.
+
+### 2026-07-02 06:34 PDT - FWD-SWQ-129 full touched-file cleanup before WIP snapshot
+- Scope:
+  - Cleaned mechanical lint issues across the current MoE/Pallas forward WIP set before snapshotting the branch.
+  - Moved Mosaic debug imports in `bench_grug_moe_pallas_mgpu.py` to module scope, removed one unused metadata gather in `pallas_mgpu.py`, accepted Black formatting, and added Levanter license headers to the small peer-copy repro scripts.
+- Local checks:
+  - `./infra/pre-commit.py --fix --files .agents/logbooks/6597-moe-mgpu-forward.md .agents/projects/20260629-mgpu_permute_up.md lib/levanter/src/levanter/grug/_moe/pallas_mgpu.py lib/levanter/src/levanter/grug/_moe/source_push_inbox.py lib/levanter/src/levanter/grug/_moe/source_push_inbox_profiles.py lib/levanter/src/levanter/grug/_moe/common.py lib/levanter/src/levanter/grug/grug_moe.py lib/levanter/scripts/bench/bench_grug_moe_pallas_mgpu.py lib/levanter/scripts/bench/compact_moe_permute_up_mgpu.py lib/levanter/scripts/bench/repro_source_push_inbox_queue.py lib/levanter/scripts/bench/repro_source_push_inbox_sem.py lib/levanter/scripts/bench/repro_remote_gmem_to_smem_peer_lane.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer.py lib/levanter/scripts/bench/repro_smem_to_remote_gmem_peer_grid.py lib/levanter/tests/grug/test_grugformer_moe.py lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: passed, including Pyrefly.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grug_moe_pallas_mgpu_bench.py`
+    - Result: `60 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test pytest -q lib/levanter/tests/grug/test_grugformer_moe.py::test_pallas_mgpu_moe_mlp_uses_explicit_config_for_validation`
+    - Result: `1 passed, 11 warnings`.
+  - `git diff --check -- <current MoE/Pallas forward WIP files>`
+    - Result: passed.
+- H100:
+  - No new H100 job launched for this entry.
+- Interpretation:
+  - The branch is locally clean enough for a WIP checkpoint commit/push of the current forward package.
