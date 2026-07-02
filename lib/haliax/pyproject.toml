@@ -30,6 +30,14 @@ dependencies = [
 ]
 dynamic =[ "version" ]
 
+[project.optional-dependencies]
+# CuTe (CUTLASS Python DSL) FP8 grouped ragged_dot backend for Hopper H100.
+# Leaf pip dependency only -- no reverse deps into levanter/marin. Mirrors the
+# pin in lib/levanter/pyproject.toml. GPU/Linux only.
+gpu = [
+  "nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6; sys_platform == 'linux'",
+]
+
 
 [dependency-groups]
 test = [
