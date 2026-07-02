@@ -33,7 +33,7 @@ from iris.cluster.federation.store import (
     HandoffAdmission,
     HandoffSpec,
 )
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, TaskAttempt
 from iris.managed_thread import ManagedThread, ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
 
@@ -62,6 +62,21 @@ def encode_remote_job_id(cluster_id: str, parent_job_id: JobName) -> str:
         raise ValueError(f"federation cluster_id must not contain '~' (got {cluster_id!r})")
     root = parent_job_id.root_job
     return JobName.root(root.user, f"{cluster_id}~{root.name}").to_wire()
+
+
+def _rebase_target(target: str, remote_job_id: str) -> str:
+    """Rewrite a task/attempt wire id onto the peer's ``remote_job_id`` root job.
+
+    ``target`` is a :class:`~iris.cluster.types.TaskAttempt` wire string — a full
+    task id (``/user/job/0``) or one with an attempt qualifier (``/user/job/0:3``).
+    Its root job is replaced by ``remote_job_id`` while the child path, task index,
+    and any attempt qualifier are preserved, so the peer resolves the same task in
+    its own tree.
+    """
+    parsed = TaskAttempt.from_wire(target)
+    remote_root = JobName.from_wire(remote_job_id)
+    rebased = TaskAttempt(task_id=parsed.task_id.with_root_job(remote_root), attempt_id=parsed.attempt_id)
+    return rebased.to_wire()
 
 
 class FederationManager:
@@ -147,9 +162,7 @@ class FederationManager:
         """
         if self._store is None:
             raise RuntimeError("federation handoff requires a store")
-        peer = self._peers.get(peer_id)
-        if peer is None:
-            raise ValueError(f"unknown federation peer {peer_id!r}")
+        self._require_peer(peer_id)
 
         remote_job_id = encode_remote_job_id(self._cluster_id, parent_job_id)
         spec = HandoffSpec(
@@ -213,7 +226,57 @@ class FederationManager:
                 exc,
             )
 
+    # -- on-demand proxy (parent side) ---------------------------------------
+
+    def proxy_profile(
+        self,
+        *,
+        peer_id: str,
+        remote_job_id: str,
+        request: job_pb2.ProfileTaskRequest,
+    ) -> job_pb2.ProfileTaskResponse:
+        """Forward a profile RPC for a federated task to its peer controller.
+
+        Rewrites the request's target onto the peer's remote root job (preserving
+        the task index and any attempt qualifier) so the peer resolves the same
+        task in its own tree, then proxies to the peer's ``ProfileTask``. The peer
+        is authoritative: its answer — including a ``NOT_FOUND`` for a task it has
+        since moved or finished — propagates back verbatim.
+        """
+        peer = self._require_peer(peer_id)
+        forwarded = job_pb2.ProfileTaskRequest()
+        forwarded.CopyFrom(request)
+        forwarded.target = _rebase_target(request.target, remote_job_id)
+        return peer.profile_task(forwarded)
+
+    def proxy_exec(
+        self,
+        *,
+        peer_id: str,
+        remote_job_id: str,
+        request: controller_pb2.Controller.ExecInContainerRequest,
+    ) -> controller_pb2.Controller.ExecInContainerResponse:
+        """Forward an exec RPC for a federated task to its peer controller.
+
+        Rewrites the request's task id onto the peer's remote root job (preserving
+        the task index) so the peer resolves the same task in its own tree, then
+        proxies to the peer's ``ExecInContainer``. The peer is authoritative: its
+        answer — including a ``NOT_FOUND`` — propagates back verbatim.
+        """
+        peer = self._require_peer(peer_id)
+        forwarded = controller_pb2.Controller.ExecInContainerRequest()
+        forwarded.CopyFrom(request)
+        forwarded.task_id = _rebase_target(request.task_id, remote_job_id)
+        return peer.exec_in_container(forwarded)
+
     # -- background loops ----------------------------------------------------
+
+    def _require_peer(self, peer_id: str) -> FederationPeer:
+        """The configured peer named ``peer_id``, or raise if it is unknown."""
+        peer = self._peers.get(peer_id)
+        if peer is None:
+            raise ValueError(f"unknown federation peer {peer_id!r}")
+        return peer
 
     def _run_loop(self, stop_event: threading.Event, step: Callable[[], None], interval: float) -> None:
         """Run ``step`` every ``interval`` seconds until ``stop_event`` is set."""

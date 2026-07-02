@@ -93,6 +93,22 @@ def test_job_name_roundtrip_and_hierarchy():
     assert not parsed.is_ancestor_of(JobName.root("test-user", "root"), include_self=False)
 
 
+def test_job_name_with_root_job_rebases_below_the_root():
+    # A direct task and a nested-child task both keep everything below the root.
+    remote_root = JobName.from_string("/alice/cw~job")
+    assert JobName.from_string("/alice/job/0").with_root_job(remote_root) == JobName.from_string("/alice/cw~job/0")
+    assert JobName.from_string("/alice/job/child/0").with_root_job(remote_root) == JobName.from_string(
+        "/alice/cw~job/child/0"
+    )
+    # The root itself rebases to the new root.
+    assert JobName.from_string("/alice/job").with_root_job(remote_root) == remote_root
+
+
+def test_job_name_with_root_job_requires_a_root():
+    with pytest.raises(ValueError):
+        JobName.from_string("/alice/job/0").with_root_job(JobName.from_string("/alice/cw~job/child"))
+
+
 @pytest.mark.parametrize("base", ["https://iris.oa.dev", "https://iris.oa.dev/"])
 def test_job_name_dashboard_url(base: str):
     job = JobName.from_string("/rav/datakit-ref-smoke-20260604-135004")

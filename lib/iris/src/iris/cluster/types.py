@@ -148,6 +148,22 @@ class JobName:
         """
         return JobName((*self._parts, str(index)))
 
+    def with_root_job(self, root: "JobName") -> "JobName":
+        """Return this name with its root job replaced by ``root``.
+
+        Keeps every component below the root — the child path and any task index —
+        so a task or child name resolves to the same node under a differently-named
+        root. ``root`` must itself be a root job (``/<user>/<name>``).
+
+        Example:
+            JobName.from_string("/alice/job/child/0").with_root_job(
+                JobName.from_string("/alice/peer~job")
+            ) -> JobName(("alice", "peer~job", "child", "0"))
+        """
+        if not root.is_root:
+            raise ValueError(f"with_root_job requires a root job, got {root}")
+        return JobName((*root._parts, *self._parts[2:]))
+
     @property
     def parent(self) -> "JobName | None":
         """Get parent job name, or None if this is a root job."""

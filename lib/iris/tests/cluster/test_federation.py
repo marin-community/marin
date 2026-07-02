@@ -10,8 +10,10 @@ live backends, the ListPeers view, and the submit router's decision matrix
 
 import pydantic
 import pytest
+from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig, config_to_dict, parse_config
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
+from iris.cluster.federation import peer as peer_module
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.federation.router import PeerRouter, RoutingRequest
@@ -153,6 +155,38 @@ def test_list_peers_view_surfaces_heartbeat_backends():
     assert forwarded.kind == "worker-daemon"
     assert forwarded.worker_count == 3
     assert summary.last_sync_ms > 0
+
+
+class _RecordingStub:
+    """A controller stub that records the deadline each on-demand RPC was given."""
+
+    def __init__(self):
+        self.exec_timeout_ms = 0
+
+    def exec_in_container(self, request, timeout_ms):
+        self.exec_timeout_ms = timeout_ms
+        return controller_pb2.Controller.ExecInContainerResponse()
+
+    def close(self):
+        pass
+
+
+def test_exec_proxy_deadline_outlasts_the_peer(monkeypatch):
+    """The parent->peer exec hop must give the peer at least its own exec budget.
+
+    A negative ("no caller limit") timeout is capped at EXEC_IN_CONTAINER_MAX_TIMEOUT
+    on the peer, so the parent's deadline must clear that cap rather than collapse to
+    the proxy margin; a positive timeout carries the caller's budget plus margin.
+    """
+    stub = _RecordingStub()
+    monkeypatch.setattr(peer_module, "ControllerServiceClientSync", lambda **kwargs: stub)
+    connection = peer_module._PeerRpcConnection("http://peer:10000", [])
+
+    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=-1))
+    assert stub.exec_timeout_ms >= EXEC_IN_CONTAINER_MAX_TIMEOUT.to_ms()
+
+    connection.exec_in_container(controller_pb2.Controller.ExecInContainerRequest(task_id="/u/j/0", timeout_seconds=30))
+    assert stub.exec_timeout_ms > 30 * 1000
 
 
 def test_heartbeat_loop_refreshes_backends_and_stop_releases_connections():
