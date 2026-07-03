@@ -86,8 +86,35 @@ improvement over the stock Llama-3 tokenizer** for target grug-moe models.
   (low-rank + up-proj), init norm-matched to base (ratio 1.0), buckets swept. Screen at s3500.
 - **Buckets swept**: 65_537 (repro-bad) · 786_433 · 3_145_739 · 4_000_037 (all primes chosen to
   avoid integer multiples of the 128,256 base vocab, per the paper's collision-spike warning).
-- **Reproduce**: env `BAKEOFF_NGRAM=1 BAKEOFF_NGRAM_COMBINE=mean BAKEOFF_NGRAM_ORDERS=2,3,4
-  BAKEOFF_NGRAM_RANK=128 BAKEOFF_NGRAM_BUCKETS=<b> BAKEOFF_NGRAM_RATIO=1.0` on
-  `launch_tokenizer_bakeoff` with the proxy shape (see the driver).
-- **Result**: _pending_
+- **Reproduce**: `uv run python -m experiments.tokenize.launch_ngram_sweep --base marin-128k --steps 3500 --rev 2 --run`
+  (7 configs: b65k/b786k/b3M/b4M + b4M-o345/b4M-r0p5/b4M-r2).
+- **Collect**: `python -m experiments.tokenize.collect_ladder --prefix grug-ngram- --out results/ngram_screen.json`
+  (each config is its own arm key, e.g. `marin-128k-b4M`).
+- **Infra fix (OOMKilled)**: the first launch of this sweep OOM-killed the 256g training pod. The
+  n-gram tables are ~12 GB (4M×128×6, fp32), ~50 GB with Adam state; the *forced final checkpoint*
+  gathers that whole train state to host to serialize it, overflowing 256g. Fixed by requesting
+  `SCALE_RAM=512g` (nodes have ~1.5 TB) — verified by a 10-step smoke. NOT a config error; the
+  n-gram method itself trains fine (steady-state fits GPU; only the checkpoint gather overflowed).
+  10-step eval BPB was finite. The original 256g wave was killed and relaunched at 512g (rev 2).
+- **Result**: _pending (512g wave)_
 - **Conclusion**: _pending_
+
+## EXP-005 — n-gram (paper config b4M) stacked on superbpe-128k _(pending)_
+
+- **Hypothesis**: the n-gram lever is orthogonal to the tokenizer, so superbpe-128k (−4.7% feBPB) +
+  n-gram compounds toward the 10% feBPB goal. The n-gram adds ~0 serving FLOPs, so any BPB drop is
+  a near-pure feBPB gain on top of superbpe's serving discount.
+- **Config**: base superbpe-128k, b4M paper config (mean, orders 2,3,4, rank 128, ratio 1.0),
+  full ladder (s1500/s3500/s8000), SCALE_RAM 512g.
+- **Reproduce**: `launch_tokenizer_bakeoff` with `BAKEOFF_ARM=superbpe-128k BAKEOFF_NGRAM=1 …b4M…`
+  at each step point (job-name `grug-ngram-superbpe-128k-b4M-s<steps>`).
+- **Result / Conclusion**: _pending_
+
+---
+
+## Track B — TokenMonster & other tokenizer options (#5837) _(under investigation)_
+
+Investigating whether TokenMonster (ungreedy subword vocab) or its `<cap>`/`<token_join>` plans
+pack more bytes/token than SuperBPE. Note: the LM head is only ~1.7% of serving FLOPs, so
+vocab-shrinking tricks have little feBPB leverage; only bytes/token (fertility) gains matter.
+Feasibility + fertility measurement in progress; will add EXP entries for anything worth training.
