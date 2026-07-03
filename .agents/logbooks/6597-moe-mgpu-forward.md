@@ -1688,3 +1688,26 @@ for W13 and W2.
     block-aligned plans.
   - This still does not make exact layout the production default because tail-block plans require the source-padded
     layout until the W13 store path masks or splits partial tiles.
+
+## 2026-07-03 15:10 - Verify repro wrapper and planner capacity contracts
+
+Confirmed the source-push queue repro wrapper imports the benchmark `main` from
+`lib/levanter/scripts/bench/bench_source_push_inbox.py`; the stale package-private `source_push_inbox.main` import is
+not present in the branch.
+
+- Code:
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added planner coverage for count-derived expert/source offsets, matching accepted assignments back to token/route
+    ids.
+  - Added capacity clipping coverage against `_clip_receiver_group_sizes`.
+  - Added a hard-error check for undersized source-push queue capacity.
+- Local verification:
+  - `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/repro_source_push_inbox_queue.py --help`
+    - Result: passed; the wrapper prints the source-push benchmark CLI help.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'repro or source_push_plan_offsets or source_push_plan_capacity or source_push_plan_rejects_queue'`
+    - Result: `4 passed, 11 warnings in 40.01s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_plan'`
+    - Result: `7 passed, 11 warnings in 36.03s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.

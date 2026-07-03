@@ -16,6 +16,7 @@ import levanter.grug._moe.source_push_combine as source_push_combine
 import levanter.grug._moe.source_push_forward as source_push_forward
 import levanter.grug._moe.source_push_w2_return as source_push_w2_return
 import levanter.grug._moe.source_push_plan as source_push_plan
+from levanter.grug._moe.ep_common import _clip_receiver_group_sizes
 from levanter.grug._moe.source_push_inbox_profiles import (
     SOURCE_PUSH_PROFILE_STABLE_216,
     SOURCE_PUSH_PROFILES,
@@ -231,6 +232,132 @@ def test_compact_routing_inputs_match_synthetic_queue_metadata():
         compact_inputs.queue_stats["compact_pack_rows_total"] == config.ep_size * config.tokens_per_rank * config.topk
     )
     assert not np.all(compact_inputs.x[0, 0, 0, 0, :] == compact_inputs.x[0, 0, 0, 0, 0])
+
+
+def test_source_push_plan_offsets_match_accepted_count_prefixes():
+    selected_experts = np.asarray(
+        [
+            [[0, 0], [1, 2], [2, 3], [3, 3]],
+            [[0, 1], [1, 1], [2, 2], [3, 3]],
+        ],
+        dtype=np.int32,
+    )
+    combine_weights = np.arange(selected_experts.size, dtype=np.float32).reshape(selected_experts.shape) / 100.0
+
+    plan = source_push_plan.build_source_push_plan(
+        jnp.asarray(selected_experts),
+        jnp.asarray(combine_weights),
+        ep_size=2,
+        experts_per_rank=2,
+        block_m=2,
+        capacity_factor=2.0,
+        entries_per_dst=3,
+    )
+
+    expected_counts = np.asarray(
+        [
+            [[2, 1], [2, 3]],
+            [[1, 3], [2, 2]],
+        ],
+        dtype=np.int32,
+    )
+    expected_rows_per_local_expert = np.asarray([[3, 4], [4, 5]], dtype=np.int32)
+    expected_expert_base = np.asarray([[0, 3], [0, 4]], dtype=np.int32)
+    expected_src_base = np.asarray(
+        [
+            [[0, 0], [2, 1]],
+            [[0, 0], [2, 3]],
+        ],
+        dtype=np.int32,
+    )
+
+    np.testing.assert_array_equal(np.asarray(plan.counts_by_src_dst_expert), expected_counts)
+    np.testing.assert_array_equal(np.asarray(plan.rows_per_local_expert), expected_rows_per_local_expert)
+    np.testing.assert_array_equal(np.asarray(plan.expert_base), expected_expert_base)
+    np.testing.assert_array_equal(np.asarray(plan.src_base_by_expert), expected_src_base)
+    assert int(np.asarray(plan.dropped_routes)) == 0
+
+    assignment_ids = np.asarray(plan.assignment_ids)
+    token_ids = np.asarray(plan.token_ids)
+    route_slots = np.asarray(plan.route_slots)
+    valid_mask = np.asarray(plan.valid_mask)
+    local_experts = np.asarray(plan.local_experts)
+    local_row_starts = np.asarray(plan.local_row_starts)
+    send_meta = np.asarray(plan.send_meta)
+    for src, dst_ordinal, entry, row in np.argwhere(valid_mask):
+        assignment_id = int(assignment_ids[src, dst_ordinal, entry, row])
+        token = int(token_ids[src, dst_ordinal, entry, row])
+        route_slot = int(route_slots[src, dst_ordinal, entry, row])
+        dst = (src + dst_ordinal) % 2
+        expert = int(local_experts[src, dst_ordinal, entry])
+
+        assert token == assignment_id // selected_experts.shape[-1]
+        assert route_slot == assignment_id % selected_experts.shape[-1]
+        assert int(selected_experts[src, token, route_slot]) == dst * 2 + expert
+        assert int(send_meta[src, dst_ordinal, entry, source_push_plan.SOURCE_PUSH_META_SRC_RANK]) == src
+        assert int(send_meta[src, dst_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]) == expert
+        assert int(send_meta[src, dst_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START]) == int(
+            local_row_starts[src, dst_ordinal, entry]
+        )
+
+
+def test_source_push_plan_capacity_clipping_matches_ep_reference_and_keeps_prefix_assignments():
+    selected_experts = np.asarray(
+        [
+            [[0, 0], [0, 1], [0, 1], [0, 1]],
+            [[0, 0], [1, 1], [0, 1], [0, 1]],
+        ],
+        dtype=np.int32,
+    )
+    combine_weights = np.ones_like(selected_experts, dtype=np.float32)
+    group_sizes = np.stack(
+        [np.bincount(source.reshape(-1), minlength=4).astype(np.int32) for source in selected_experts],
+        axis=0,
+    )
+    expected_counts = np.asarray(
+        _clip_receiver_group_sizes(
+            jnp.asarray(group_sizes),
+            local_expert_size=2,
+            receiver_capacity=2,
+        )
+    ).reshape(2, 2, 2)
+
+    plan = source_push_plan.build_source_push_plan(
+        jnp.asarray(selected_experts),
+        jnp.asarray(combine_weights),
+        ep_size=2,
+        experts_per_rank=2,
+        block_m=2,
+        capacity_factor=0.25,
+        entries_per_dst=1,
+    )
+
+    np.testing.assert_array_equal(np.asarray(plan.counts_by_src_dst_expert), expected_counts)
+    assert int(np.asarray(plan.dropped_routes)) == selected_experts.size - int(np.sum(expected_counts))
+
+    src = 0
+    dst = 0
+    dst_ordinal = source_push_plan.dst_ordinal(src, dst, ep_size=2)
+    accepted = plan.assignment_ids[src, dst_ordinal, 0]
+
+    np.testing.assert_array_equal(np.asarray(accepted), np.asarray([0, 1], dtype=np.int32))
+    assert not np.any(np.asarray(plan.valid_mask[1]))
+
+
+def test_source_push_plan_rejects_queue_capacity_overflow():
+    selected_experts = np.zeros((2, 4, 1), dtype=np.int32)
+    combine_weights = np.ones_like(selected_experts, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="source-push queue capacity overflow"):
+        source_push_plan.build_source_push_plan(
+            jnp.asarray(selected_experts),
+            jnp.asarray(combine_weights),
+            ep_size=2,
+            experts_per_rank=1,
+            block_m=2,
+            capacity_factor=1.0,
+            entries_per_dst=1,
+        )
 
 
 def test_source_push_plan_inputs_use_source_padded_row_starts():
