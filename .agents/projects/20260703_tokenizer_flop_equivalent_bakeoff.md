@@ -327,6 +327,30 @@ Grouped by mechanism and by cost signature. "Cost" = effect on
   OT's ablations show the gap *widening* past 200B tokens, expect a real but
   smaller effect at our 5–30B-token budget — track loss-vs-tokens curves, not
   a single checkpoint.
+- **Build (grug).** A config-gated Equinox module
+  `lib/levanter/src/levanter/grug/ngram_embed.py` (`NgramEmbedConfig`:
+  `orders=(2,3)`, `num_hashes=2`, `hash_buckets` prime, `rank`, `combine`,
+  `init_std_scale=0.0`) plus a `ngram: NgramEmbedConfig | None = None` field on
+  `GrugModelConfig` (default `None` = byte-for-byte the current model). The
+  n-gram ids are a **causal** rolling polynomial hash of the token stream (look
+  back only — a right-shift would leak the future), computed **on the fly in the
+  forward** so the tokenized cache and its identity never change (a sweep over
+  `hash_buckets`/`orders` is a model-config change, not a re-tokenize). Tables are
+  row-sharded on the model axis like `token_embed`; `init_std_scale=0` warm-starts
+  the arm identical to its base tokenizer, so any BPB drop at **identical serving
+  cost** is pure uplift. Full-rank tables add **exactly 0** matmul FLOPs; the
+  optional low-rank up-projection adds a one-time ~0.1% at deployment scale.
+  Caveat to size before scaling the table: a multi-billion-row table under Adam
+  carries 2× optimizer state, which can dominate HBM more than the weights —
+  consider a lighter param group for the n-gram tables (§11).
+- **SCONE** (arXiv:2502.01637) is the heavier cousin: frequency-selected f-grams
+  embedded by an auxiliary transformer at train time, then **precomputed and
+  offloaded to CPU/NVMe** so inference adds *zero* accelerator FLOPs *and* zero
+  accelerator HBM (1.1 ms NVMe lookup). Its unique win — table off-accelerator —
+  only matters if inference HBM, not compute, is the binding constraint; for an
+  HBM-rich MoE that row-shards the table across the mesh it is not worth the far
+  larger build (aux model + offline precompute + serving KV store + longest-match
+  matcher). Deferred behind the OT-style hashed-table arm.
 
 ### E. Byte / tokenizer-free (reference floor, likely negative — but see caveat)
 - Byte-level (256 vocab, fertility 1.0). Under our rubric, priced at deployment
