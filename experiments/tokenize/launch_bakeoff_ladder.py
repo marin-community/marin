@@ -61,10 +61,15 @@ class LadderCell:
     command: list[str]
 
 
-def build_cell(arm_name: str, steps: int, cluster: str) -> LadderCell:
+def build_cell(arm_name: str, steps: int, cluster: str, ngram: bool = False) -> LadderCell:
     arm = arm_by_name(arm_name)  # validates the arm exists and is registered
-    run_id = f"bakeoff-{arm.name}-s{steps}"
+    suffix = "-ngram" if ngram else ""
+    run_id = f"bakeoff-{arm.name}{suffix}-s{steps}"
     env = {**PROXY_SHAPE, "BAKEOFF_ARM": arm.name, "SCALE_STEPS": str(steps), "RUN_ID": run_id}
+    if ngram:
+        # Enables the hashed n-gram input embedding on this same arm; the launcher reads
+        # BAKEOFF_NGRAM. Pairing an arm's plain and -ngram ladders isolates the n-gram uplift.
+        env["BAKEOFF_NGRAM"] = "1"
     # --no-wait detaches so all ladder cells run concurrently; iris job run otherwise blocks
     # until the job completes, which would serialize the whole ladder.
     cmd = [
@@ -80,7 +85,7 @@ def build_cell(arm_name: str, steps: int, cluster: str) -> LadderCell:
         "--extra",
         "cpu",
         "--job-name",
-        f"grug-bakeoff-{arm.name}-s{steps}",
+        f"grug-bakeoff-{arm.name}{suffix}-s{steps}",
     ]
     for key, value in env.items():
         cmd += ["-e", key, value]
@@ -93,12 +98,15 @@ def main() -> None:
     ap.add_argument("--arms", default=",".join(DEFAULT_ARMS), help="comma-separated arm names")
     ap.add_argument("--steps", default=",".join(map(str, DEFAULT_STEP_POINTS)), help="comma-separated step points")
     ap.add_argument("--cluster", default="cw-rno2a")
+    ap.add_argument(
+        "--ngram", action="store_true", help="enable the n-gram input embedding (BAKEOFF_NGRAM) on every cell"
+    )
     ap.add_argument("--run", action="store_true", help="submit the jobs (default: print the plan only)")
     args = ap.parse_args()
 
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     step_points = [int(s) for s in args.steps.split(",")]
-    cells = [build_cell(arm, steps, args.cluster) for arm in arms for steps in step_points]
+    cells = [build_cell(arm, steps, args.cluster, ngram=args.ngram) for arm in arms for steps in step_points]
 
     print(f"ladder: {len(arms)} arms x {len(step_points)} points = {len(cells)} runs on {args.cluster}")
     for cell in cells:
