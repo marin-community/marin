@@ -11,7 +11,7 @@ import json
 import time
 import traceback
 from dataclasses import asdict, dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -74,6 +74,9 @@ FORWARD_STAGE_W13 = "w13"
 FORWARD_STAGE_W2_RETURN = "w2_return"
 FORWARD_STAGE_COMBINE = "combine"
 FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMBINE)
+SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE = "reference"
+SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
+SourcePushForwardImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
 
 
 @dataclass(frozen=True)
@@ -364,6 +367,55 @@ def reference_source_push_forward(
     return source_push_combine(jnp.asarray(source_return, dtype=jnp.bfloat16), host_inputs.plan)
 
 
+def source_push_forward(
+    config: PushInboxConfig,
+    x: Float[Array, "S T D"],
+    selected_experts: Int[Array, "S T K"],
+    combine_weights: Float[Array, "S T K"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+    *,
+    implementation: SourcePushForwardImplementation = SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    execution_mode: str = FORWARD_EXECUTION_STAGED_HOST_SYNC,
+    mesh: Mesh | None = None,
+) -> tuple[Float[Array, "S T D"], Int[Array, ""]]:
+    """Run source-push full forward from explicit source-major EP inputs.
+
+    This is package-private while the planner remains host-side. It is the
+    integration-facing boundary for the staged source-push prototype: callers
+    provide real source-local tokens, routing, combine weights, and local expert
+    weights, and receive source-local token outputs plus the clipped-route count.
+    """
+
+    if implementation not in (
+        SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE,
+        SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU,
+    ):
+        raise ValueError(
+            "source-push forward implementation must be one of "
+            f"{(SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE, SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU)}, "
+            f"got {implementation!r}"
+        )
+    host_inputs = make_source_push_forward_inputs(
+        config,
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+    )
+    if implementation == SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE:
+        return reference_source_push_forward(config, host_inputs), host_inputs.plan.dropped_routes
+
+    out = _execute_source_push_forward_host_inputs(
+        config,
+        host_inputs,
+        mesh=mesh,
+        execution_mode=execution_mode,
+    )
+    return out, host_inputs.plan.dropped_routes
+
+
 def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
     w13_kernel = _sharded_kernel(mesh, config)
     w2_return_kernel = _sharded_w2_return_to_source_kernel(mesh, config)
@@ -423,6 +475,98 @@ def _sharded_remote_write_completion_barrier(mesh: Mesh):
         in_specs=P(AXIS, None, None, None, None),
         out_specs=P(AXIS, None, None, None, None),
         check_vma=False,
+    )
+
+
+def _execute_source_push_forward_host_inputs(
+    config: PushInboxConfig,
+    host_inputs: SourcePushForwardHostInputs,
+    *,
+    mesh: Mesh | None,
+    execution_mode: str,
+) -> Float[Array, "S T D"]:
+    if execution_mode not in FORWARD_EXECUTION_MODES:
+        raise ValueError(f"unknown execution_mode={execution_mode!r}; expected one of {FORWARD_EXECUTION_MODES}")
+    if mesh is None:
+        mesh = _make_mesh(config.ep_size)
+    inputs = _shard_source_push_forward_inputs(
+        mesh,
+        device_source_push_forward_inputs_from_host(config, host_inputs),
+    )
+    out = _call_source_push_forward_device_inputs(mesh, config, inputs, execution_mode=execution_mode)
+    _block_until_ready(out)
+    return out
+
+
+def _shard_source_push_forward_inputs(
+    mesh: Mesh,
+    inputs: SourcePushForwardDeviceInputs,
+) -> SourcePushForwardDeviceInputs:
+    return SourcePushForwardDeviceInputs(
+        x=jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None))),
+        send_meta=jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        recv_meta=jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None))),
+        expert_base=jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None))),
+        src_base_by_expert=jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None))),
+        w_gate_up=jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None))),
+        w_down=jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None))),
+        queue_dst_ord=jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_entry=jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_row=jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None))),
+        route_combine_weights=jax.device_put(
+            inputs.route_combine_weights,
+            NamedSharding(mesh, P(AXIS, None, None)),
+        ),
+        route_valid_mask=jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None))),
+        queue_stats=inputs.queue_stats,
+    )
+
+
+def _call_source_push_forward_device_inputs(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    inputs: SourcePushForwardDeviceInputs,
+    *,
+    execution_mode: str,
+) -> Float[Array, "S T D"]:
+    if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
+        w13_fn = jax.jit(_sharded_kernel(mesh, config))
+        w2_return_fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+        combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
+        _, hidden = w13_fn(
+            inputs.x,
+            inputs.send_meta,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_gate_up,
+        )
+        _block_until_ready(hidden)
+        _, source_return = w2_return_fn(hidden, inputs.recv_meta, inputs.w_down)
+        _block_until_ready(source_return)
+        return combine_fn(
+            source_return,
+            inputs.queue_dst_ord,
+            inputs.queue_entry,
+            inputs.queue_row,
+            inputs.route_combine_weights,
+            inputs.route_valid_mask,
+        )
+
+    fn = jax.jit(_sharded_source_push_forward_kernel(mesh, config))
+    return fn(
+        inputs.x,
+        inputs.send_meta,
+        inputs.recv_meta,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        inputs.w_gate_up,
+        inputs.w_down,
+        inputs.queue_dst_ord,
+        inputs.queue_entry,
+        inputs.queue_row,
+        inputs.route_combine_weights,
+        inputs.route_valid_mask,
     )
 
 
@@ -576,21 +720,19 @@ def _run_forward_one(
         host_inputs = input_builder(config)
         inputs = device_source_push_forward_inputs_from_host(config, host_inputs)
         _emit_progress(config, settings.progress_events, "device_put_start")
-        x = jax.device_put(inputs.x, NamedSharding(mesh, P(AXIS, None, None, None, None)))
-        send_meta = jax.device_put(inputs.send_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
-        recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
-        expert_base = jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None)))
-        src_base_by_expert = jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None)))
-        w_gate_up = jax.device_put(inputs.w_gate_up, NamedSharding(mesh, P(AXIS, None, None, None)))
-        w_down = jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None)))
-        queue_dst_ord = jax.device_put(inputs.queue_dst_ord, NamedSharding(mesh, P(AXIS, None, None)))
-        queue_entry = jax.device_put(inputs.queue_entry, NamedSharding(mesh, P(AXIS, None, None)))
-        queue_row = jax.device_put(inputs.queue_row, NamedSharding(mesh, P(AXIS, None, None)))
-        route_combine_weights = jax.device_put(
-            inputs.route_combine_weights,
-            NamedSharding(mesh, P(AXIS, None, None)),
-        )
-        route_valid_mask = jax.device_put(inputs.route_valid_mask, NamedSharding(mesh, P(AXIS, None, None)))
+        inputs = _shard_source_push_forward_inputs(mesh, inputs)
+        x = inputs.x
+        send_meta = inputs.send_meta
+        recv_meta = inputs.recv_meta
+        expert_base = inputs.expert_base
+        src_base_by_expert = inputs.src_base_by_expert
+        w_gate_up = inputs.w_gate_up
+        w_down = inputs.w_down
+        queue_dst_ord = inputs.queue_dst_ord
+        queue_entry = inputs.queue_entry
+        queue_row = inputs.queue_row
+        route_combine_weights = inputs.route_combine_weights
+        route_valid_mask = inputs.route_valid_mask
         _emit_progress(config, settings.progress_events, "jit_start")
         if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
             timing = _time_staged_source_push_forward(

@@ -719,6 +719,15 @@ def test_source_push_forward_real_inputs_match_independent_moe_reference():
         w_down,
     )
     observed = np.asarray(source_push_forward.reference_source_push_forward(config, inputs), dtype=np.float32)
+    observed_from_api, dropped_routes = source_push_forward.source_push_forward(
+        config,
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+        implementation="reference",
+    )
     expected = _naive_source_push_forward(config, x, selected_experts, combine_weights, w_gate_up, w_down)
 
     valid_routes = np.argwhere(inputs.route_valid_mask)
@@ -734,6 +743,8 @@ def test_source_push_forward_real_inputs_match_independent_moe_reference():
     np.testing.assert_array_equal(inputs.w_down, w_down)
     assert inputs.route_combine_weights[src, token, route_slot] == combine_weights[src, token, route_slot]
     np.testing.assert_allclose(observed, expected, atol=2e-3, rtol=2e-3)
+    np.testing.assert_allclose(np.asarray(observed_from_api, dtype=np.float32), expected, atol=2e-3, rtol=2e-3)
+    assert int(dropped_routes) == 0
 
 
 def _naive_source_push_forward(
