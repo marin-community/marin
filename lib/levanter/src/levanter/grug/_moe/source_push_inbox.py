@@ -1718,7 +1718,12 @@ def _run_one(
             hidden_unwritten_max_abs = validation.hidden_unwritten_max_abs
         queue_stats = inputs.queue_stats
         bytes_per_rank = queue_stats["send_rounded_rows_per_rank_mean"] * config.hidden_dim * BYTES_PER_BF16
-        flops_per_rank = queue_stats["rounded_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
+        rounded_w13_flops_per_rank = (
+            queue_stats["rounded_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
+        )
+        useful_w13_flops_per_rank = (
+            queue_stats["valid_rows_per_rank_mean"] * config.hidden_dim * config.intermediate_dim * 4
+        )
         rows = []
         for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
             row = {
@@ -1735,7 +1740,9 @@ def _run_one(
                 "steady_state_time": steady_state_time,
                 "bytes_per_rank": bytes_per_rank,
                 "send_gbps_per_rank": bytes_per_rank / steady_state_time / 1e9,
-                "w13_tflops_per_rank": flops_per_rank / steady_state_time / 1e12,
+                "w13_tflops_per_rank": rounded_w13_flops_per_rank / steady_state_time / 1e12,
+                "rounded_w13_tflops_per_rank": rounded_w13_flops_per_rank / steady_state_time / 1e12,
+                "useful_w13_tflops_per_rank": useful_w13_flops_per_rank / steady_state_time / 1e12,
                 "max_abs_diff": max_abs_diff,
                 "metadata_mismatches": metadata_mismatches,
                 "hidden_max_abs_diff": hidden_max_abs_diff,
@@ -1765,6 +1772,8 @@ def _run_one(
             "bytes_per_rank": None,
             "send_gbps_per_rank": None,
             "w13_tflops_per_rank": None,
+            "rounded_w13_tflops_per_rank": None,
+            "useful_w13_tflops_per_rank": None,
             "max_abs_diff": None,
             "metadata_mismatches": None,
             "hidden_max_abs_diff": None,

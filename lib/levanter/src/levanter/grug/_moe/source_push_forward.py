@@ -808,6 +808,7 @@ def _run_forward_one(
         rounded_rows = queue_stats["rounded_rows_per_rank_mean"]
         useful_rows = queue_stats["valid_rows_per_rank_mean"]
         w13_flops_per_rank = rounded_rows * config.hidden_dim * config.intermediate_dim * 4
+        useful_w13_flops_per_rank = useful_rows * config.hidden_dim * config.intermediate_dim * 4
         w2_flops_per_rank = rounded_rows * config.intermediate_dim * config.hidden_dim * 2
         useful_forward_flops_per_rank = useful_rows * config.hidden_dim * config.intermediate_dim * 6
         rounded_forward_flops_per_rank = w13_flops_per_rank + w2_flops_per_rank
@@ -837,6 +838,8 @@ def _run_forward_one(
                 "rounded_forward_tflops_per_rank": rounded_forward_flops_per_rank / steady_state_time / 1e12,
                 "useful_forward_tflops_per_rank": useful_forward_flops_per_rank / steady_state_time / 1e12,
                 "w13_tflops_per_rank": w13_flops_per_rank / steady_state_time / 1e12,
+                "rounded_w13_tflops_per_rank": w13_flops_per_rank / steady_state_time / 1e12,
+                "useful_w13_tflops_per_rank": useful_w13_flops_per_rank / steady_state_time / 1e12,
                 "w2_tflops_per_rank": w2_flops_per_rank / steady_state_time / 1e12,
                 "max_abs_diff": None if validation is None else validation.max_abs_diff,
                 "mean_abs_diff": None if validation is None else validation.mean_abs_diff,
@@ -869,6 +872,8 @@ def _run_forward_one(
                     "rounded_forward_tflops_per_rank": None,
                     "useful_forward_tflops_per_rank": None,
                     "w13_tflops_per_rank": None,
+                    "rounded_w13_tflops_per_rank": None,
+                    "useful_w13_tflops_per_rank": None,
                     "w2_tflops_per_rank": None,
                     "combine_gbps_per_rank": None,
                     "max_abs_diff": None,
@@ -881,6 +886,10 @@ def _run_forward_one(
                     stage_row["bytes_per_rank"] = send_bytes_per_rank
                     stage_row["forward_gbps_per_rank"] = send_bytes_per_rank / stage_steady_state_time / 1e9
                     stage_row["w13_tflops_per_rank"] = w13_flops_per_rank / stage_steady_state_time / 1e12
+                    stage_row["rounded_w13_tflops_per_rank"] = w13_flops_per_rank / stage_steady_state_time / 1e12
+                    stage_row["useful_w13_tflops_per_rank"] = (
+                        useful_w13_flops_per_rank / stage_steady_state_time / 1e12
+                    )
                 elif stage == FORWARD_STAGE_W2_RETURN:
                     stage_row["bytes_per_rank"] = w2_bytes_per_rank
                     stage_row["forward_gbps_per_rank"] = w2_bytes_per_rank / stage_steady_state_time / 1e9
@@ -912,6 +921,8 @@ def _run_forward_one(
                 "rounded_forward_tflops_per_rank": None,
                 "useful_forward_tflops_per_rank": None,
                 "w13_tflops_per_rank": None,
+                "rounded_w13_tflops_per_rank": None,
+                "useful_w13_tflops_per_rank": None,
                 "w2_tflops_per_rank": None,
                 "max_abs_diff": None,
                 "mean_abs_diff": None,

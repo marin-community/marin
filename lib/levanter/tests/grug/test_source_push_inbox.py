@@ -801,6 +801,8 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     assert rows[0]["error_type"] == "ValueError"
     assert rows[0]["kernel"] == "source_push_inbox"
     assert rows[0]["repeat_runs"] == 1
+    assert rows[0]["rounded_w13_tflops_per_rank"] is None
+    assert rows[0]["useful_w13_tflops_per_rank"] is None
 
 
 def test_source_push_w2_runner_returns_structured_validation_errors():
@@ -1012,6 +1014,8 @@ def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys)
                 "repeat_runs": kwargs["repeat_runs"],
                 "steady_state_time": 1.0,
                 "w13_tflops_per_rank": 2.0,
+                "rounded_w13_tflops_per_rank": 2.0,
+                "useful_w13_tflops_per_rank": 1.5,
                 "send_gbps_per_rank": 3.0,
                 "compile_time": 4.0,
                 "lower_compile_time": 5.0,
@@ -1045,6 +1049,14 @@ def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys)
         "semaphore_only",
         "copy_release_only",
         "copy_release_only",
+    ]
+    assert [row.get("median_rounded_w13_tflops_per_rank") for row in rows if row["row_type"] == "summary"] == [
+        2.0,
+        2.0,
+    ]
+    assert [row.get("median_useful_w13_tflops_per_rank") for row in rows if row["row_type"] == "summary"] == [
+        1.5,
+        1.5,
     ]
 
 

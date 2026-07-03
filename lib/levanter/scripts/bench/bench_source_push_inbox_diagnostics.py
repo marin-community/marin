@@ -26,6 +26,8 @@ from levanter.grug._moe.source_push_inbox_profiles import SOURCE_PUSH_PROFILE_ST
 SUMMARY_METRICS = (
     "steady_state_time",
     "w13_tflops_per_rank",
+    "rounded_w13_tflops_per_rank",
+    "useful_w13_tflops_per_rank",
     "send_gbps_per_rank",
     "compile_time",
     "lower_compile_time",

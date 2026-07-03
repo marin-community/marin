@@ -408,6 +408,40 @@ def test_source_push_plan_capacity_clipping_matches_existing_ep_reference():
     assert stats.masked_row_fraction == pytest.approx(1.0 - stats.useful_rows / stats.rounded_rows)
 
 
+def test_source_push_plan_balanced_capacity_factor_one_has_no_drops():
+    ep_size = 4
+    experts_per_rank = 2
+    tokens_per_source = 8
+    topk = 2
+    block_m = 2
+    global_experts = ep_size * experts_per_rank
+    assignments_per_source = tokens_per_source * topk
+    source_experts = np.tile(np.arange(global_experts, dtype=np.int32), assignments_per_source // global_experts)
+    selected_experts = np.broadcast_to(
+        source_experts.reshape(tokens_per_source, topk), (ep_size, tokens_per_source, topk)
+    )
+    combine_weights = np.ones((ep_size, tokens_per_source, topk), dtype=np.float32)
+
+    plan = build_source_push_plan(
+        jnp.asarray(selected_experts),
+        jnp.asarray(combine_weights),
+        ep_size=ep_size,
+        experts_per_rank=experts_per_rank,
+        block_m=block_m,
+        capacity_factor=1.0,
+    )
+    stats = source_push_plan_row_stats(plan)
+
+    assert int(plan.dropped_routes) == 0
+    assert stats.useful_rows == ep_size * assignments_per_source
+    assert stats.rounded_rows == stats.useful_rows
+    assert stats.masked_row_fraction == 0.0
+    np.testing.assert_array_equal(
+        np.asarray(plan.counts_by_src_dst_expert),
+        np.full((ep_size, ep_size, experts_per_rank), 2, dtype=np.int32),
+    )
+
+
 def test_source_push_plan_rejects_queue_capacity_overflow():
     selected_experts, combine_weights = _small_routing_inputs()
 
