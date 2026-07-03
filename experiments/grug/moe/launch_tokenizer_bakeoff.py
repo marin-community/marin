@@ -161,7 +161,11 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    # The n-gram embedding adds up to ~12 GB of hash tables (~50 GB with fp32 Adam state), and the
+    # final checkpoint gathers that whole train state to host to serialize it. SCALE_RAM lets the
+    # heavy n-gram runs request enough host memory (the nodes have ~1.5 TB) to survive that gather.
+    ram = os.environ.get("SCALE_RAM", "256g")
+    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram=ram, disk="256g", replicas=replicas)
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")

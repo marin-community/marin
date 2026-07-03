@@ -78,16 +78,24 @@ SCREEN_SWEEP: tuple[NgramConfig, ...] = (
 )
 
 
-def build_command(base_arm: str, steps: int, cluster: str, config: NgramConfig) -> list[str]:
-    """The iris command that launches one (base arm, n-gram config, step budget) cell."""
+def build_command(base_arm: str, steps: int, cluster: str, config: NgramConfig, rev: int = 0) -> list[str]:
+    """The iris command that launches one (base arm, n-gram config, step budget) cell.
+
+    ``rev`` appends an ``-r<rev>`` suffix (a fresh run id for a relaunch); ``collect_ladder``'s
+    arm regex strips ``-r<n>`` so the point still lands under the base config's arm.
+    """
     arm = arm_by_name(base_arm)  # validates the base tokenizer exists
-    run_id = f"ngram-{arm.name}-{config.label}-s{steps}"
+    suffix = f"-r{rev}" if rev else ""
+    run_id = f"ngram-{arm.name}-{config.label}-s{steps}{suffix}"
     env = {
         **PROXY_SHAPE,
         **config.env(),
         "BAKEOFF_ARM": arm.name,
         "SCALE_STEPS": str(steps),
         "RUN_ID": run_id,
+        # The large hash tables + fp32 Adam state + checkpoint gather need well over the 256g
+        # default; the nodes have ~1.5 TB, so ask for plenty.
+        "SCALE_RAM": "512g",
     }
     cmd = [
         "iris",
@@ -102,7 +110,7 @@ def build_command(base_arm: str, steps: int, cluster: str, config: NgramConfig) 
         "--extra",
         "cpu",
         "--job-name",
-        f"grug-ngram-{arm.name}-{config.label}-s{steps}",
+        f"grug-ngram-{arm.name}-{config.label}-s{steps}{suffix}",
     ]
     for key, value in env.items():
         cmd += ["-e", key, value]
@@ -115,12 +123,13 @@ def main() -> None:
     ap.add_argument("--base", default="marin-128k", help="base tokenizer arm the n-gram sits on")
     ap.add_argument("--steps", type=int, default=3500, help="training steps (isoFLOP point)")
     ap.add_argument("--cluster", default="cw-rno2a")
+    ap.add_argument("--rev", type=int, default=0, help="relaunch revision: appends -r<rev> to run/job names")
     ap.add_argument("--run", action="store_true", help="submit the jobs (default: print the plan only)")
     args = ap.parse_args()
 
     print(f"n-gram sweep on {args.base}: {len(SCREEN_SWEEP)} configs @ {args.steps} steps on {args.cluster}")
     for config in SCREEN_SWEEP:
-        cmd = build_command(args.base, args.steps, args.cluster, config)
+        cmd = build_command(args.base, args.steps, args.cluster, config, rev=args.rev)
         print(f"\n# {config.label}: buckets={config.buckets} orders={config.orders} ratio={config.ratio}")
         print(" ".join(cmd))
         if args.run:
