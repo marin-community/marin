@@ -13,12 +13,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    InfraError,
-    Labels,
-    QuotaExhaustedError,
-)
 from iris.cluster.config import (
     GcpPlatformConfig,
     GcpSliceConfig,
@@ -49,6 +43,12 @@ from iris.cluster.platforms.gcp.workers import (
 from iris.cluster.platforms.manual.controller import ManualControllerProvider
 from iris.cluster.platforms.manual.workers import ManualWorkerProvider
 from iris.cluster.platforms.remote_exec import GceRemoteExec, GcloudRemoteExec
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    InfraError,
+    Labels,
+    QuotaExhaustedError,
+)
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode

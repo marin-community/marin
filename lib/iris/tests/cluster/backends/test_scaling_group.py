@@ -11,13 +11,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    CloudWorkerState,
-    Labels,
-    QuotaExhaustedError,
-    SliceStatus,
-)
 from iris.cluster.config import (
     CoreweaveSliceConfig,
     GcpSliceConfig,
@@ -36,6 +29,13 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     _zones_from_config,
     prepare_slice_config,
     slice_state_to_proto,
+)
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    CloudWorkerState,
+    Labels,
+    QuotaExhaustedError,
+    SliceStatus,
 )
 from iris.cluster.types import AcceleratorType, CapacityType, WorkerStatus, WorkerUsability
 from iris.rpc import vm_pb2

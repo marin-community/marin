@@ -10,10 +10,10 @@ need a full cluster fixture.
 import unittest.mock
 
 import pytest
-from iris.cluster.backends.types import CloudSliceState, QuotaExhaustedError
 from iris.cluster.config import GcpPlatformConfig, GcpSliceConfig, SliceConfig, WorkerConfig
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.types import CloudSliceState, QuotaExhaustedError
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import AcceleratorType
 

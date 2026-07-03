@@ -18,14 +18,6 @@ from datetime import UTC, datetime, timedelta
 
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
-from iris.cluster.backends.types import (
-    InfraError,
-    Labels,
-    ListedSlice,
-    RemoteWorkerHandle,
-    SliceHandle,
-    generate_slice_suffix,
-)
 from iris.cluster.config import (
     GcpPlatformConfig,
     GcpSliceConfig,
@@ -61,6 +53,14 @@ from iris.cluster.platforms.gcp.worker_bootstrap import (
     zone_to_multi_region,
 )
 from iris.cluster.platforms.remote_exec import GceRemoteExec
+from iris.cluster.platforms.types import (
+    InfraError,
+    Labels,
+    ListedSlice,
+    RemoteWorkerHandle,
+    SliceHandle,
+    generate_slice_suffix,
+)
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import AcceleratorType, CapacityType, GcpSliceMode

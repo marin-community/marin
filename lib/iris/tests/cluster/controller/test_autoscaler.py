@@ -11,11 +11,6 @@ Integration tests with real GcpWorkerProvider are in test_autoscaler_integration
 """
 
 import pytest
-from iris.cluster.backends.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    SliceStatus,
-)
 from iris.cluster.config import AutoscalerConfig, ScaleGroupConfig, WorkerConfig, WorkerSettings
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
@@ -24,6 +19,11 @@ from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDeci
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability, ScalingGroup
 from iris.cluster.controller.worker_health import CONSECUTIVE_FAILURE_THRESHOLD
+from iris.cluster.platforms.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    SliceStatus,
+)
 from iris.cluster.types import AcceleratorType, WorkerStatus
 from iris.rpc import vm_pb2
 from rigging.timing import Duration, Timestamp
