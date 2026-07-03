@@ -1,7 +1,7 @@
 # CoreWeave RNO2A cluster (cluster name: cw-rno2a).
 #
 # Reserved H100 fleet: 64x gd-8xh100ib-i128 (8 GPU each, 512 H100 total) plus a
-# single turin-gp-l4 CPU node for the controller. Same KubernetesProvider model
+# single turin-gp-l CPU node for the controller. Same KubernetesProvider model
 # as cw-us-east-02a: task Pods dispatch directly to the k8s API (Pod-per-task),
 # Kueue gang-admits coscheduled groups, and CoreWeave's cluster autoscaler
 # provisions nodes. See lib/iris/docs/coreweave.md.
@@ -10,10 +10,13 @@
 # fleet is prepaid, so there is nothing to save by autoscaling it down.
 #
 # Workflow:
-#   1. Set R2 object storage credentials (required for s3:// storage URIs):
-#        export R2_ACCESS_KEY_ID=<your-r2-access-key-id>
-#        export R2_SECRET_ACCESS_KEY=<your-r2-secret-access-key>
-#      `iris cluster start` turns these into the iris-task-env Secret.
+#   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
+#      Access Keys). The env var names are historical — they feed any
+#      S3-compatible backend, and `iris cluster start` turns them into the
+#      iris-task-env Secret (addressing style is derived from the endpoint
+#      domain):
+#        export R2_ACCESS_KEY_ID=<coreweave-access-key-id>
+#        export R2_SECRET_ACCESS_KEY=<coreweave-access-key-secret>
 #   2. Point kubectl/iris at the region kubeconfig:
 #        export KUBECONFIG=~/.kube/coreweave-iris-rno2a   # context marin-rn02a_RNO2A
 #   3. Start / inspect the cluster:
@@ -33,10 +36,14 @@ platform:
     region: RNO2A
     namespace: iris
     kubeconfig_path: ~/.kube/coreweave-iris-rno2a
-    object_storage_endpoint: https://74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com
+    # CoreWeave AI Object Storage via LOTA, the in-cluster local cache
+    # endpoint (use https://cwobject.com from outside CoreWeave). Bare
+    # endpoint only: buckets use virtual-hosted addressing
+    # (http://<bucket>.cwlota.com), which iris detects from this domain.
+    object_storage_endpoint: http://cwlota.com
 
 storage:
-  remote_state_dir: s3://marin-na/iris/cw-rno2a/state
+  remote_state_dir: s3://marin-us-east-02a/iris/cw-rno2a/state
 
 kubernetes_provider:
   namespace: iris
@@ -72,7 +79,11 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    MARIN_PREFIX: s3://marin-na/marin
+    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
+    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
+    # data under s3://marin-na/ is not reachable from jobs unless they override
+    # AWS_ENDPOINT_URL and credentials themselves.
+    MARIN_PREFIX: s3://marin-us-east-02a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces; pin the
     # NCCL bootstrap socket to the host ethernet PF (carries the node IP).
     NCCL_SOCKET_IFNAME: =enp90s0np0
