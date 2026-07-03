@@ -39,6 +39,7 @@ import os
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.grug.ngram_embed import NgramEmbedConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -123,6 +124,23 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     # The model shape comes from SCALE_* exactly as in the scale launcher; only the vocab is
     # the arm's, so the output head and embedding table size track the tokenizer under test.
     model = dataclasses.replace(build_scale_model(), vocab_size=arm.vocab_size)
+
+    # BAKEOFF_NGRAM toggles the hashed multi-gram input embedding (axis D). It adds input-side
+    # embedding capacity at the same vocab, output head, and serving FLOPs, so a BPB drop vs the
+    # same arm without it is a compute-free uplift. combine="sum" keeps the no-n-gram model a
+    # clean ablation baseline; init_std_scale > 0 lets the tables contribute from the start.
+    ngram_enabled = bool(os.environ.get("BAKEOFF_NGRAM"))
+    if ngram_enabled:
+        model = dataclasses.replace(
+            model,
+            ngram=NgramEmbedConfig(
+                orders=(2, 3),
+                num_hashes=2,
+                hash_buckets=env_int("BAKEOFF_NGRAM_BUCKETS", 65_537),
+                combine="sum",
+                init_std_scale=1.0,
+            ),
+        )
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
@@ -146,7 +164,8 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
 
     train = slimpajama_6b_for(arm.name, arm.ref)
     validation = bakeoff_validation(arm.name, arm.ref)
-    name = f"grug-bakeoff-{arm.name}-d{model.hidden_dim}-L{model.num_layers}"
+    variant = "-ngram" if ngram_enabled else ""
+    name = f"grug-bakeoff-{arm.name}{variant}-d{model.hidden_dim}-L{model.num_layers}"
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         if use_wandb:

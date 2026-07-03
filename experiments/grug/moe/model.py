@@ -44,6 +44,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
+from levanter.grug.ngram_embed import NgramEmbedConfig, NgramInputEmbed
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
@@ -51,6 +52,9 @@ from transformers import PretrainedConfig as HfConfig
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
+# Derives the n-gram embedding PRNG key from the model key without disturbing the
+# base weight split, so enabling n-grams never perturbs the other parameters.
+_NGRAM_KEY_FOLD = 0x6E677261
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -127,6 +131,9 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    ngram: NgramEmbedConfig | None = None
+    """Optional hashed multi-gram INPUT embedding (Over-Tokenized / LongCat n-gram).
+    ``None`` leaves the model identical to the plain unigram-embedding baseline."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -600,6 +607,7 @@ class Block(eqx.Module):
 
 class Transformer(eqx.Module):
     token_embed: jax.Array
+    ngram_embed: NgramInputEmbed | None
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
@@ -634,8 +642,12 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        ngram_embed = None
+        if cfg.ngram is not None:
+            ngram_embed = NgramInputEmbed.init(cfg.ngram, cfg.hidden_dim, key=random.fold_in(key, _NGRAM_KEY_FOLD))
         return Transformer(
             token_embed=token_embed,
+            ngram_embed=ngram_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
@@ -661,6 +673,8 @@ class Transformer(eqx.Module):
         batch_spec = _batch_spec()
         cfg = self.config
         hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
+        if self.ngram_embed is not None:
+            hidden = self.ngram_embed.combine_into(hidden, token_ids)
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
         if not isinstance(mask, AttentionMask):
