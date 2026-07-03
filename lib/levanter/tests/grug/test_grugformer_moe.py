@@ -835,7 +835,7 @@ def test_source_push_stage_kernels_match_references_on_h100(ep_size, topk):
     )
     combine_row = combine_rows[0]
     assert combine_row["error_type"] is None
-    assert combine_row["combine_mode"] == "route_buffer_gather_sum"
+    assert combine_row["combine_mode"] == source_push_combine.SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM
     assert combine_row["dropped_routes"] == 0
     assert combine_row["max_abs_diff"] <= 0.03125
     assert combine_row["mean_abs_diff"] <= 0.002

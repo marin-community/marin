@@ -932,7 +932,7 @@ def test_source_push_combine_inputs_invert_queue_rows_to_route_slots():
     entry = inputs.queue_entry[src, token, route_slot]
     row = inputs.queue_row[src, token, route_slot]
 
-    assert inputs.queue_stats["combine_mode"] == "route_buffer_gather_sum"
+    assert inputs.queue_stats["combine_mode"] == source_push_combine.SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM
     assert inputs.queue_stats["dropped_routes"] == 0
     assert inputs.return_y.shape == (
         config.ep_size,
@@ -1005,7 +1005,7 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     row = inputs.queue_row[src, token, route_slot]
 
     assert inputs.queue_stats["forward_mode"] == "w13_w2_direct_return_combine"
-    assert inputs.queue_stats["combine_mode"] == "route_buffer_gather_sum"
+    assert inputs.queue_stats["combine_mode"] == source_push_combine.SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM
     assert inputs.queue_stats["dropped_routes"] == 0
     assert inputs.x.shape == (
         config.ep_size,

@@ -36,6 +36,7 @@ from levanter.grug._moe.source_push_plan import SourcePushPlan, build_source_pus
 
 
 KERNEL_NAME = "source_push_combine"
+SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM = "direct_gather_sum"
 
 
 @dataclass(frozen=True)
@@ -141,7 +142,7 @@ def reference_source_push_combine(
     return source_push_combine(return_y, plan)
 
 
-def _make_route_buffer_gather_kernel(config: PushInboxConfig):
+def _make_direct_gather_sum_kernel(config: PushInboxConfig):
     validate_source_combine_config(config)
     n_tiles = config.hidden_dim // config.block_n
     token_blocks = (config.tokens_per_rank + config.block_m - 1) // config.block_m
@@ -153,52 +154,48 @@ def _make_route_buffer_gather_kernel(config: PushInboxConfig):
         queue_row_ref: Int[Ref, "T K"],
         route_combine_weights_ref: Float[Ref, "T K"],
         route_valid_mask_ref: Bool[Ref, "T K"],
-        route_buffer_ref: Float[Ref, "T K D"],
+        out_ref: Float[Ref, "T D"],
     ) -> None:
         token_block = pl.program_id(0)
-        route_slot = pl.program_id(1)
-        n_tile = pl.program_id(2)
+        n_tile = pl.program_id(1)
 
         @pl.loop(0, config.block_m)
         def _row_loop(row) -> None:
             token = token_block * config.block_m + row
 
             @pl.when(token < config.tokens_per_rank)
-            def _write_route_row() -> None:
-                dst_ordinal = queue_dst_ord_ref[token, route_slot]
-                entry = queue_entry_ref[token, route_slot]
-                queue_row = queue_row_ref[token, route_slot]
-                weight = route_combine_weights_ref[token, route_slot]
-                valid = route_valid_mask_ref[token, route_slot]
-                value = return_y_ref[
-                    dst_ordinal,
-                    entry,
-                    queue_row,
-                    pl.ds(n_tile * config.block_n, config.block_n),
-                ]
-                zero = jnp.zeros((config.block_n,), dtype=route_buffer_ref.dtype)
-                route_buffer_ref[
-                    token,
-                    route_slot,
-                    pl.ds(n_tile * config.block_n, config.block_n),
-                ] = jnp.where(valid, (value * weight).astype(route_buffer_ref.dtype), zero)
+            def _combine_token_row() -> None:
+                acc = jnp.zeros((config.block_n,), dtype=jnp.float32)
+                for route_slot in range(config.topk):
+                    dst_ordinal = queue_dst_ord_ref[token, route_slot]
+                    entry = queue_entry_ref[token, route_slot]
+                    queue_row = queue_row_ref[token, route_slot]
+                    weight = route_combine_weights_ref[token, route_slot]
+                    valid = route_valid_mask_ref[token, route_slot]
+                    value = return_y_ref[
+                        dst_ordinal,
+                        entry,
+                        queue_row,
+                        pl.ds(n_tile * config.block_n, config.block_n),
+                    ]
+                    weighted = (value * weight).astype(out_ref.dtype).astype(jnp.float32)
+                    zero = jnp.zeros((config.block_n,), dtype=jnp.float32)
+                    acc += jnp.where(valid, weighted, zero)
+                out_ref[token, pl.ds(n_tile * config.block_n, config.block_n)] = acc.astype(out_ref.dtype)
 
-    out_shape = jax.ShapeDtypeStruct(
-        (config.tokens_per_rank, config.topk, config.hidden_dim),
-        jnp.bfloat16,
-    )
+    out_shape = jax.ShapeDtypeStruct((config.tokens_per_rank, config.hidden_dim), jnp.bfloat16)
     compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
     return mgpu.kernel(
         body,
         out_shape=out_shape,
-        grid=(token_blocks, config.topk, n_tiles),
-        grid_names=("token_block", "route_slot", "n_tile"),
+        grid=(token_blocks, n_tiles),
+        grid_names=("token_block", "n_tile"),
         compiler_params=compiler_params,
     )
 
 
 def _sharded_source_combine_kernel(mesh: Mesh, config: PushInboxConfig):
-    gather_kernel = _make_route_buffer_gather_kernel(config)
+    gather_sum_kernel = _make_direct_gather_sum_kernel(config)
 
     def local_fn(
         return_y_local: Float[Array, "1 DST Q M D"],
@@ -214,7 +211,7 @@ def _sharded_source_combine_kernel(mesh: Mesh, config: PushInboxConfig):
         queue_row_local = queue_row_local[0]
         route_combine_weights_local = route_combine_weights_local[0]
         route_valid_mask_local = route_valid_mask_local[0]
-        route_buffer = gather_kernel(
+        out = gather_sum_kernel(
             return_y_local,
             queue_dst_ord_local,
             queue_entry_local,
@@ -222,7 +219,7 @@ def _sharded_source_combine_kernel(mesh: Mesh, config: PushInboxConfig):
             route_combine_weights_local,
             route_valid_mask_local,
         )
-        return jnp.sum(route_buffer.astype(jnp.float32), axis=1).astype(return_y_local.dtype)[None, ...]
+        return out[None, ...]
 
     return shard_map(
         local_fn,
@@ -463,11 +460,10 @@ def _combine_queue_stats(config: PushInboxConfig, valid_mask: np.ndarray, droppe
     rounded_rows_per_rank = live_entries_per_rank * config.block_m
     useful_rows_total = int(np.sum(useful_rows_per_rank))
     rounded_rows_total = int(np.sum(rounded_rows_per_rank))
-    route_buffer_elements_per_rank = config.tokens_per_rank * config.topk * config.hidden_dim
     output_elements_per_rank = config.tokens_per_rank * config.hidden_dim
     return {
         "input_mode": "source_push_plan",
-        "combine_mode": "route_buffer_gather_sum",
+        "combine_mode": SOURCE_COMBINE_MODE_DIRECT_GATHER_SUM,
         "dropped_routes": dropped_routes,
         "live_entries_total": int(np.sum(live_entries_per_rank)),
         "live_entries_per_rank_min": int(np.min(live_entries_per_rank)),
@@ -483,20 +479,17 @@ def _combine_queue_stats(config: PushInboxConfig, valid_mask: np.ndarray, droppe
         "rounded_rows_total": rounded_rows_total,
         "row_efficiency": useful_rows_total / rounded_rows_total if rounded_rows_total else 1.0,
         "masked_row_fraction": 1.0 - useful_rows_total / rounded_rows_total if rounded_rows_total else 0.0,
-        "route_buffer_elements_per_rank": route_buffer_elements_per_rank,
+        "route_buffer_elements_per_rank": 0,
         "output_elements_per_rank": output_elements_per_rank,
     }
 
 
 def _combine_bytes_per_rank(config: PushInboxConfig, queue_stats: dict[str, Any]) -> float:
     valid_rows = queue_stats["valid_rows_per_rank_mean"]
-    route_buffer_elements = queue_stats["route_buffer_elements_per_rank"]
     output_elements = queue_stats["output_elements_per_rank"]
-    route_scatter_read = valid_rows * config.hidden_dim * BYTES_PER_BF16
-    route_scatter_write = valid_rows * config.hidden_dim * BYTES_PER_BF16
-    route_buffer_read = route_buffer_elements * BYTES_PER_BF16
+    route_gather_read = valid_rows * config.hidden_dim * BYTES_PER_BF16
     output_write = output_elements * BYTES_PER_BF16
-    return float(route_scatter_read + route_scatter_write + route_buffer_read + output_write)
+    return float(route_gather_read + output_write)
 
 
 def _emit_progress(config: PushInboxConfig, progress_events: bool, event: str) -> None:
