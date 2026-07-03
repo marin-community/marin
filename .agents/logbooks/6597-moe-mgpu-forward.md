@@ -170,3 +170,70 @@ Interpretation:
   benchmark reports it but does not fail on it.
 - Next action: implement exact expert-major stores behind a separate path that passes count-derived bases and masks tail
   rows, then validate on a small H100 shape before re-running the target profile.
+
+## 2026-07-03 source-plan W13 storage path
+
+Adapted the source-push inbox benchmark to accept real `SourcePushPlan`-packed tokens and source-owned inverse metadata.
+
+- Commits:
+  - `d3fbb4184`: added source-plan input mode and destination-side `expert_base + src_base + local_row_start` W13 store path.
+  - `cf3905547`: tried explicit WGMMA-layout row masks for exact tail stores.
+  - `095781e54`: switched to source-padded expert-major slices because masked GMEM stores are unsupported in Lane lowering.
+  - `d612a2af1`: added `--git-sha` metadata to the source-push benchmark rows.
+  - `b3bdb1f76`: precomputed source-padded expert-major row starts on the host to remove hot-kernel base lookups.
+- Local verification after final patch:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - `24 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+
+H100 lowering/correctness sequence:
+
+| job | commit | result |
+| --- | --- | --- |
+| `/dlwh/source-push-plan-exact-smoke-d3fbb4184-20260703-0038` | `d3fbb4184` | Failed bad smoke config: WGMMA `m=8` unsupported; WGMMA requires `m` multiple of 64. |
+| `/dlwh/source-push-plan-exact-smoke-d3fbb4184-20260703-0044` | `d3fbb4184` | Reached exact masked-store path; failed iota layout inference for row mask. |
+| `/dlwh/source-push-plan-exact-smoke-cf3905547-20260703-0110` | `cf3905547` | Row-mask iota fixed, but failed on `masked_swap`: masked GMEM stores are not implemented for Lane lowering in warpgroup code. |
+| `/dlwh/source-push-plan-padded-smoke-095781e54-20260703-0101` | `095781e54` | Succeeded with source-padded expert-major slices; no drops, `metadata_mismatches=0`, `max_abs_diff=2.40065e-4`, `hidden_unwritten_max_abs=0`. |
+| `/dlwh/source-push-plan-precomputed-smoke-b3bdb1f76-20260703-0117` | `b3bdb1f76` | Succeeded with precomputed source-padded row starts; no drops, `metadata_mismatches=0`, `max_abs_diff=2.40065e-4`, `hidden_unwritten_max_abs=0`. |
+
+Target rough-balanced H100 comparison, stable profile
+`hopper_source_push_inbox_rough_balanced_216` (`T/rank=32768`, `K=4`, `D=2560`, `I=1280`, `EP=8`,
+`block_m=64`, `block_n=128`, `block_k=128`, `entries_per_rank=288`, `inbox_slots=12`,
+`send_pipeline_depth=1`, `n_groups_per_job=2`, `capacity_factor=1.25`, 48 repeats):
+
+| input mode / row-start mode | job | median time | median rounded TFLOP/s/rank | median useful TFLOP/s/rank | drops |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `source_push_plan` / `local_row_start_source_padded` | `/dlwh/source-push-plan-target-rough-d612a2af1-20260703-0108` | `8.762 ms` | `208.02` | `196.07` | 0 |
+| `compact_routing` / precomputed row start | `/dlwh/source-push-compact-target-rough-d612a2af1-20260703-0112` | `8.582 ms` | `212.37` | `200.18` | 0 |
+| `source_push_plan` / `source_padded_row_start` | `/dlwh/source-push-plan-target-precomputed-b3bdb1f76-20260703-0120` | `8.441 ms` | `215.94` | `203.54` | 0 |
+
+Common row accounting for target runs:
+
+- `plan_useful_rows_total=1048576`
+- `plan_padded_rows_total=1112448`
+- `plan_padded_rows_per_rank_mean=139056`
+- `plan_row_efficiency=0.9425843`
+- `plan_masked_row_fraction=0.0574157`
+- `live_entries_total=17382`
+- `tail_entries_total=2032`
+- `zero_entries_skipped=1050`
+
+Interpretation:
+
+- Exact contiguous per-source slices would require tail masking, but Mosaic currently cannot lower masked GMEM stores
+  from this Lane/WGMMA path (`masked_swap` unsupported). A separate tail kernel or structural split is needed for exact
+  contiguous hidden rows.
+- Source-padded expert-major slices preserve the source-owned plan/inverse contract and avoid overlapping tail writes:
+  invalid packed rows are zero, full-tile stores are unique, and W2 can ignore source padding using the same plan metadata.
+- Computing `expert_base + src_base + local_row_start` in the hot W13 store path costs about `0.18 ms` on the target
+  profile. Precomputing the source-padded row start before launch recovers the compact fast path and meets the useful
+  throughput bar (`203.54 TFLOP/s/rank`, median).
+- Current best production-relevant W13 source-plan result is commit `b3bdb1f76`, job
+  `/dlwh/source-push-plan-target-precomputed-b3bdb1f76-20260703-0120`.
+
+Next action:
+
+- Use `source_padded_row_start` as the Phase 2 W13 layout for integration.
+- Carry the richer source-owned inverse metadata forward into W2 return/combine; exact contiguous source slices can be
+  revisited only if a supported tail-store path or separate compaction kernel is added.
