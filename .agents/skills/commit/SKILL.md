@@ -109,7 +109,7 @@ guidelines — apply them when they make the code *better*; the goal is
 high-quality code, not blind adherence.
 
 Each run writes the raw per-arm prompts and outputs, the combined findings, and a
-summary under `/tmp/marin-linter/<timestamp>/` (the path is printed at the end) —
+summary under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/` (the path is printed at the end) —
 read it when a lane is slow or a run looks wrong.
 
 ## 7. Push
