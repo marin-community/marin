@@ -781,3 +781,43 @@ Added an H100 integration assertion for deterministic repeated public source-pus
 - Interpretation:
   - The public opt-in source-push backend now has direct H100 coverage for the integration acceptance requirement that
     repeated fixed-seed/fixed-input runs are deterministic.
+
+## 2026-07-03 06:15 - Public source-push tail/empty/top-k-4 edge smoke
+
+Added an H100 public-backend edge-case smoke for non-full queue blocks, empty local experts, and `topk=4`.
+
+- Commit Hashes:
+  - `e76764efd`: add the edge-case public H100 smoke.
+  - `8c71fd694`: scale random test values down so the smoke checks routing/layout rather than large-magnitude bf16
+    drift.
+- Code:
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Change:
+  - Added `test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100`.
+  - Shape: `EP=8`, `T/rank=65`, `K=4`, `D=128`, `I=128`, `E_local=2`.
+  - Routing uses only local expert `0` on each destination, leaving local expert `1` empty everywhere.
+  - The test asserts the route counts include live blocks with `valid_rows % 64 != 0`, then compares public
+    `implementation="pallas_mgpu_source_push"` against public `ragged_all_to_all` and `ring` with zero drops.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push' -n 0`
+    - Result after scaling fix: `1 passed, 2 skipped, 19 deselected, 1 warning in 1.81s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 attempt 1:
+  - Job: `/dlwh/source-push-public-edge-h100-pytest-e76764efd-20260703-130908`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+  - Result: failed, `1 failed, 2 passed, 19 deselected, 1 warning in 102.90s`.
+  - Iris summary: failed, one task, `exit_code=1`, `duration_ms=132351`.
+  - Failure: edge test `max_abs_diff=32.0` against a public baseline with random-normal unscaled inputs/weights.
+  - Interpretation: the routing/layout executed but the random-normal data made the existing bf16 absolute tolerance a
+    magnitude stress test rather than a targeted edge-case smoke.
+- H100 rerun:
+  - Job: `/dlwh/source-push-public-edge-h100-pytest-8c71fd694-20260703-131305`
+  - Command:
+    `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push`
+  - Result: succeeded, `3 passed, 19 deselected, 1 warning in 97.72s`.
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=121470`.
+- Interpretation:
+  - The public opt-in backend now has H100 integration coverage for tail-block transport, empty local experts, and
+    `topk=4` source combine through the public `moe_mlp` API.
