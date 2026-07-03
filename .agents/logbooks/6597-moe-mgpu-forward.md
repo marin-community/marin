@@ -1161,6 +1161,9 @@ W2 output plus separate return-copy kernel is paying avoidable local-GMEM stagin
     ```
   - Result: `steady_state_time=1.798 ms`, `max_abs_diff=0.007897`, `source_queue_max_abs_diff=0.007897`,
     `dropped_routes=0`.
+  - Note: after this run, the W2 benchmark CLI was consolidated from `--copy-to-source`/`--direct-to-source` booleans to
+    `--return-mode {destination_local,separate_copy,direct_remote}`. The current equivalent for this smoke is
+    `--return-mode direct_remote`.
 - Target decomposition commands used the rough-balanced target profile:
   ```bash
   uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
@@ -1173,6 +1176,8 @@ W2 output plus separate return-copy kernel is paying avoidable local-GMEM stagin
     --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events \
     --git-sha 480e5ec3 --jsonl scratch/<mode>.jsonl
   ```
+  The current equivalent mode flags are `--return-mode destination_local`, `--return-mode separate_copy`, and
+  `--return-mode direct_remote`.
 - Target rows:
 
   | mode | job | median time | min/max time | W2 TFLOP/s/rank | return GB/s/rank | drops |

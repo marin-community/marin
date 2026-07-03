@@ -48,6 +48,11 @@ DIRECT_RETURN_KERNEL_NAME = "source_push_w2_return_direct"
 W2_RETURN_MODE_DESTINATION_LOCAL = "destination_local"
 W2_RETURN_MODE_SEPARATE_COPY = "separate_copy"
 W2_RETURN_MODE_DIRECT_REMOTE = "direct_remote"
+W2_RETURN_MODES = (
+    W2_RETURN_MODE_DESTINATION_LOCAL,
+    W2_RETURN_MODE_SEPARATE_COPY,
+    W2_RETURN_MODE_DIRECT_REMOTE,
+)
 W2_HIDDEN_INPUT_W13_REFERENCE = "w13_reference"
 W2_HIDDEN_INPUT_SYNTHETIC = "synthetic"
 W2_HIDDEN_INPUT_MODES = (W2_HIDDEN_INPUT_W13_REFERENCE, W2_HIDDEN_INPUT_SYNTHETIC)
@@ -698,13 +703,11 @@ def _run_w2_return_one(
     input_builder: Callable[[PushInboxConfig], W2ReturnHostInputs],
     *,
     row_metadata: dict[str, Any] | None = None,
-    copy_to_source: bool = False,
-    direct_to_source: bool = False,
+    return_mode: str = W2_RETURN_MODE_DESTINATION_LOCAL,
 ) -> list[dict[str, Any]]:
     row_metadata = row_metadata or {}
-    return_mode = _requested_w2_return_mode(copy_to_source=copy_to_source, direct_to_source=direct_to_source)
     try:
-        return_mode = _w2_return_mode(copy_to_source=copy_to_source, direct_to_source=direct_to_source)
+        _validate_w2_return_mode(return_mode)
         if settings.repeat_runs <= 0:
             raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
         validate_w2_return_config(config)
@@ -770,8 +773,8 @@ def _run_w2_return_one(
             row = {
                 "kernel": KERNEL_NAME,
                 "implementation": _w2_return_implementation_name(return_mode),
-                "copy_to_source": copy_to_source,
-                "direct_to_source": direct_to_source,
+                "copy_to_source": return_mode == W2_RETURN_MODE_SEPARATE_COPY,
+                "direct_to_source": return_mode == W2_RETURN_MODE_DIRECT_REMOTE,
                 "return_mode": return_mode,
                 "depends_on_kernel": W13_KERNEL_NAME,
                 "config": asdict(config),
@@ -803,8 +806,8 @@ def _run_w2_return_one(
         row = {
             "kernel": KERNEL_NAME,
             "implementation": _w2_return_implementation_name(return_mode),
-            "copy_to_source": copy_to_source,
-            "direct_to_source": direct_to_source,
+            "copy_to_source": return_mode == W2_RETURN_MODE_SEPARATE_COPY,
+            "direct_to_source": return_mode == W2_RETURN_MODE_DIRECT_REMOTE,
             "return_mode": return_mode,
             "config": asdict(config),
             "compile_time": None,
@@ -831,22 +834,9 @@ def _run_w2_return_one(
         jax.clear_caches()
 
 
-def _w2_return_mode(*, copy_to_source: bool, direct_to_source: bool) -> str:
-    if copy_to_source and direct_to_source:
-        raise ValueError("copy_to_source and direct_to_source are mutually exclusive")
-    if direct_to_source:
-        return W2_RETURN_MODE_DIRECT_REMOTE
-    if copy_to_source:
-        return W2_RETURN_MODE_SEPARATE_COPY
-    return W2_RETURN_MODE_DESTINATION_LOCAL
-
-
-def _requested_w2_return_mode(*, copy_to_source: bool, direct_to_source: bool) -> str:
-    if direct_to_source:
-        return W2_RETURN_MODE_DIRECT_REMOTE
-    if copy_to_source:
-        return W2_RETURN_MODE_SEPARATE_COPY
-    return W2_RETURN_MODE_DESTINATION_LOCAL
+def _validate_w2_return_mode(return_mode: str) -> None:
+    if return_mode not in W2_RETURN_MODES:
+        raise ValueError(f"unknown return_mode={return_mode!r}; expected one of {W2_RETURN_MODES}")
 
 
 def _w2_return_implementation_name(return_mode: str) -> str:
@@ -868,10 +858,9 @@ def run_source_push_w2_return_source_plan(
     separate_compile: bool = False,
     progress_events: bool = False,
     hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
-    copy_to_source: bool = False,
-    direct_to_source: bool = False,
+    return_mode: str = W2_RETURN_MODE_DESTINATION_LOCAL,
 ) -> list[dict[str, Any]]:
-    """Run destination-local W2 over source-padded SourcePushPlan hidden rows."""
+    """Run W2 over source-padded SourcePushPlan hidden rows."""
 
     settings = SourcePushInboxRunSettings(
         warmup=warmup,
@@ -889,8 +878,7 @@ def run_source_push_w2_return_source_plan(
             run_config,
             hidden_input_mode=hidden_input_mode,
         ),
-        copy_to_source=copy_to_source,
-        direct_to_source=direct_to_source,
+        return_mode=return_mode,
     )
 
 

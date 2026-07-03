@@ -831,7 +831,7 @@ def test_source_push_w2_runner_tags_copy_to_source_errors():
         steps=1,
         repeat_runs=1,
         check=False,
-        copy_to_source=True,
+        return_mode=source_push_w2_return.W2_RETURN_MODE_SEPARATE_COPY,
     )
 
     assert len(rows) == 1
@@ -849,7 +849,7 @@ def test_source_push_w2_runner_tags_direct_to_source_errors():
         steps=1,
         repeat_runs=1,
         check=False,
-        direct_to_source=True,
+        return_mode=source_push_w2_return.W2_RETURN_MODE_DIRECT_REMOTE,
     )
 
     assert len(rows) == 1
