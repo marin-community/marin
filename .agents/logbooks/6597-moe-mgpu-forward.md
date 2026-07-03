@@ -361,3 +361,59 @@ separate for now; it does not fuse remote stores into the WGMMA kernel.
   - Wire the source-visible return queue into deterministic source combine, then benchmark W13 + W2 + return + combine
     end to end. In parallel, investigate whether W2 can directly remote-store output tiles without the separate
     GMEM-to-SMEM-to-remote-GMEM return-copy kernel.
+
+## 2026-07-03 Source-side deterministic combine harness
+
+Added a package-private Phase 4 source-combine harness. The kernel consumes the source-visible return queue
+`[src, dst_ordinal, entry, row, D]` plus source-owned inverse metadata, writes a dense route buffer `[T, K, D]`,
+and sums route slots in fixed order to produce source-local `[T, D]` outputs. The Pallas kernel uses a route-inverse
+gather instead of scatter into an uninitialized output buffer, so dropped route slots write deterministic zero rows.
+
+- Commit Hash: `22144d46b`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_combine.py`
+  - `lib/levanter/scripts/bench/bench_source_push_combine.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q`
+  - `29 passed, 11 warnings`
+  - `./infra/pre-commit.py --changed-files --fix`
+  - all checks passed
+- H100 smoke, invalid config:
+  - Job: `/dlwh/source-push-combine-smoke-22144d46b-20260703-0231`
+  - Config: `EP=8`, `T/rank=64`, `K=2`, `D=128`, `I=128`, `E_local=2`, `block_m=64`,
+    `block_k=64`, `block_n=64`, `entries_per_rank=2`, `check=true`.
+  - Result: failed during Mosaic lowering with
+    `memref<64xbf16, strided<[1], offset: ?>> must have a number of elements that is a multiple of 128`.
+  - Interpretation: bad smoke config for Lane-lowered bf16 vector loads; target profile uses `block_n=128`.
+- H100 correctness smoke:
+  - Job: `/dlwh/source-push-combine-smoke-22144d46b-20260703-0234`
+  - Config: `EP=8`, `T/rank=64`, `K=2`, `D=128`, `I=128`, `E_local=2`, `block_m=64`,
+    `block_k=64`, `block_n=128`, `entries_per_rank=2`, `check=true`.
+  - Result: succeeded, `steady_state_time=0.000630316s`, `combine_gbps_per_rank=0.181953`,
+    `max_abs_diff=0.0009765625`, `mean_abs_diff=0.00012967`, `dropped_routes=0`.
+- Target rough-balanced combine timing:
+  - Job: `/dlwh/source-push-combine-target-22144d46b-20260703-0237`
+  - Command: `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_combine.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha 22144d46b --jsonl scratch/source_push_combine_target_22144d46b.jsonl`
+  - Rows: `rounded_rows_per_rank=139056`, `useful_rows_per_rank=131072`, `row_efficiency=0.942584`,
+    `masked_row_fraction=0.057416`, `dropped_routes=0`.
+  - Repeat times: `[1.335, 1.333, 1.331, 1.333, 1.336] ms`.
+  - Median: `steady_state_time=1.333 ms`, `combine_gbps_per_rank=1635.95`.
+- Current forward-stage estimate:
+
+| path segment | target median |
+| --- | ---: |
+| source-push W13 stable profile (`216.949 TFLOP/s/rank`) | `~8.4 ms` |
+| W2 + separate return-copy (`971ac17c2`) | `5.935 ms` |
+| source combine (`22144d46b`) | `1.333 ms` |
+| estimated W13 + W2 + return + combine | `~15.7 ms` |
+
+- Interpretation:
+  - Deterministic source combine is not the dominant remaining tax: the dense route-buffer gather and fixed-order sum
+    costs about `1.33 ms` at the target rough-balanced shape.
+  - The route buffer is large (`335,544,320` bf16 elements/rank), so this is mostly a memory-bandwidth tax. The measured
+    model bandwidth is about `1.64 TB/s/rank` using the harness byte model.
+  - The separate W2 return-copy tax (`~3.0 ms`) remains the bigger post-W13 structural cost.
+- Next action:
+  - Wire the three package-private pieces into a full source-push forward comparison path, then compare full forward
+    against `ring`/`ragged_all_to_all` on a small H100 mesh before optimizing return-copy or fusing combine.
