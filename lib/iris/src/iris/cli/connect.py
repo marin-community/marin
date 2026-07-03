@@ -70,6 +70,7 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     )
     if p is not None
 )
+DEFAULT_CONTROLLER_TIMEOUT_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,7 @@ def client_credentials(config: IrisClusterConfig | None, cluster_name: str) -> C
 @contextmanager
 def open_controller_endpoint(
     *,
-    config_file: str | Path | None = None,
+    config_file: Path | None = None,
     controller_url: str | None = None,
     cluster_name: str | None = None,
 ) -> Iterator[ControllerEndpoint]:
@@ -182,7 +183,7 @@ def iris_client_for_ctx(
     ctx: click.Context,
     *,
     workspace: Path | None,
-    timeout_ms: int = 30_000,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
     extra_bundle_includes: Sequence[str] = (),
 ) -> IrisClient:
     """Build an IrisClient from an active Iris CLI context."""
@@ -199,11 +200,11 @@ def iris_client_for_ctx(
 @contextmanager
 def open_iris_client(
     *,
-    config_file: str | Path | None = None,
+    config_file: Path | None = None,
     controller_url: str | None = None,
     cluster_name: str | None = None,
     workspace: Path | None,
-    timeout_ms: int = 30_000,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
     extra_bundle_includes: Sequence[str] = (),
 ) -> Iterator[IrisClient]:
     """Open an IrisClient from a config file, cluster name, or direct controller URL."""
@@ -225,7 +226,7 @@ def open_iris_client(
 @contextmanager
 def open_iris_connection(
     *,
-    config_file: str | Path | None = None,
+    config_file: Path | None = None,
     controller_url: str | None = None,
     cluster_name: str | None = None,
     workspace: Path | None,
@@ -244,7 +245,7 @@ def open_iris_connection(
 def rpc_client(
     address: str,
     credentials: ClientCredentials | None = None,
-    timeout_ms: int = 30_000,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``.
 
@@ -265,7 +266,7 @@ def rpc_client_for_ctx(
     ctx: click.Context,
     *,
     url: str | None = None,
-    timeout_ms: int = 30_000,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
 ) -> ControllerServiceClientSync:
     """Build an RPC client from the CLI context, threading both auth tokens.
 
