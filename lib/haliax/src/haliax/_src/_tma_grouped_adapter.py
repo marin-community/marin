@@ -34,10 +34,8 @@ try:
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     utils = importlib.import_module("cutlass.utils")
-    _HAS_CUTLASS = True
 except Exception:
     cutlass = cute = cjax = utils = None
-    _HAS_CUTLASS = False
 
 # H100 has 132 SMs at occupancy 1 for the (128,256) 3-warpgroup FP8 kernel; the
 # tensormap workspace is sized by the total CTA count and the persistent grid is
@@ -107,6 +105,10 @@ def _build_tma_launcher(
 ):
     """Build the stream-first ``@cute.jit`` adapter launcher for ``cutlass_call``."""
     from haliax._src._tma_grouped_gemm import HopperGroupedGemmPersistentKernel  # noqa: PLC0415
+
+    # Guard against silent desync with the vendored class's fixed attributes.
+    assert HopperGroupedGemmPersistentKernel.bytes_per_tensormap == _TENSORMAP_BYTES
+    assert HopperGroupedGemmPersistentKernel.num_tensormaps == _NUM_TENSORMAPS
 
     # One prologue block; >= group_count threads, rounded up to a warp.
     addr_threads = max(32, ((group_count + 31) // 32) * 32)
@@ -315,6 +317,10 @@ def _build_tma_wgrad_launcher(
     dim, output cols are ``n``, and the contraction is the ragged token count.
     """
     from haliax._src._tma_grouped_gemm import HopperGroupedGemmPersistentKernel  # noqa: PLC0415
+
+    # Guard against silent desync with the vendored class's fixed attributes.
+    assert HopperGroupedGemmPersistentKernel.bytes_per_tensormap == _TENSORMAP_BYTES
+    assert HopperGroupedGemmPersistentKernel.num_tensormaps == _NUM_TENSORMAPS
 
     addr_threads = max(32, ((group_count + 31) // 32) * 32)
 
