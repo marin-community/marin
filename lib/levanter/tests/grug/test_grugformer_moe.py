@@ -783,17 +783,18 @@ def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
 
     key = jax.random.key(202)
     k_x, k_combine, k_w13, k_w2 = jax.random.split(key, 4)
-    x_source = jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden_dim), dtype=jnp.float32)
+    edge_value_scale = 0.2
+    x_source = edge_value_scale * jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden_dim), dtype=jnp.float32)
     combine_source = jax.nn.softmax(
         jax.random.normal(k_combine, (ep_size, tokens_per_rank, topk), dtype=jnp.float32),
         axis=-1,
     )
-    w_gate_up_source = jax.random.normal(
+    w_gate_up_source = edge_value_scale * jax.random.normal(
         k_w13,
         (ep_size, experts_per_rank, hidden_dim, 2 * intermediate_dim),
         dtype=jnp.float32,
     )
-    w_down_source = jax.random.normal(
+    w_down_source = edge_value_scale * jax.random.normal(
         k_w2,
         (ep_size, experts_per_rank, intermediate_dim, hidden_dim),
         dtype=jnp.float32,
