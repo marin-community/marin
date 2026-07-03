@@ -129,6 +129,42 @@ def _skip_without_h100x8() -> None:
         pytest.skip("source-push MGPU smoke is restricted to H100")
 
 
+def _shard_public_ep_arrays(
+    mesh: Mesh,
+    x_source: jax.Array,
+    selected_source: jax.Array,
+    combine_source: jax.Array,
+    w_gate_up_source: jax.Array,
+    w_down_source: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    ep_size, tokens_per_rank, hidden_dim = x_source.shape
+    experts_per_rank = w_gate_up_source.shape[1]
+    intermediate_dim = w_down_source.shape[2]
+    topk = selected_source.shape[2]
+
+    x = jnp.asarray(x_source.reshape(ep_size * tokens_per_rank, hidden_dim), dtype=jnp.bfloat16)
+    selected_experts = jnp.asarray(selected_source.reshape(ep_size * tokens_per_rank, topk), dtype=jnp.int32)
+    combine_weights = jnp.asarray(combine_source.reshape(ep_size * tokens_per_rank, topk), dtype=jnp.bfloat16)
+    w_gate_up = jnp.asarray(
+        w_gate_up_source.reshape(ep_size * experts_per_rank, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.bfloat16,
+    )
+    w_down = jnp.asarray(
+        w_down_source.reshape(ep_size * experts_per_rank, intermediate_dim, hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    return (
+        jax.device_put(x, batch_sharding),
+        jax.device_put(selected_experts, batch_sharding),
+        jax.device_put(combine_weights, batch_sharding),
+        jax.device_put(w_gate_up, expert_sharding),
+        jax.device_put(w_down, expert_sharding),
+    )
+
+
 def test_moe_mlp_runs_without_ep_axis():
     mesh = _make_dense_mesh()
     tokens = max(8, len(jax.devices()) * 8)
@@ -711,6 +747,101 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
 
     source_push_host = np.asarray(source_push_raw, dtype=np.float32)
     assert source_push_host.shape == (config.ep_size * config.tokens_per_rank, config.hidden_dim)
+    assert int(jax.device_get(source_push_dropped)) == 0
+    for baseline_out, baseline_dropped in baselines.values():
+        baseline_host = np.asarray(jax.device_get(baseline_out), dtype=np.float32)
+        diff = np.abs(source_push_host - baseline_host)
+        assert int(jax.device_get(baseline_dropped)) == 0
+        assert float(np.max(diff)) <= 0.03125
+        assert float(np.mean(diff)) <= 0.002
+
+
+def test_source_push_forward_handles_tail_blocks_empty_experts_topk4_on_h100():
+    _skip_without_h100x8()
+
+    ep_size = 8
+    tokens_per_rank = 65
+    hidden_dim = 128
+    intermediate_dim = 128
+    experts_per_rank = 2
+    topk = 4
+    capacity_factor = 2.0
+
+    token_ids = np.arange(tokens_per_rank, dtype=np.int32)
+    route_offsets = np.arange(topk, dtype=np.int32)
+    selected_by_source = []
+    for src in range(ep_size):
+        dst_ranks = (token_ids[:, None] + route_offsets[None, :] + src) % ep_size
+        selected_by_source.append(dst_ranks * experts_per_rank)
+    selected_source = jnp.asarray(np.stack(selected_by_source, axis=0), dtype=jnp.int32)
+    selected_host = np.asarray(selected_source)
+    np.testing.assert_array_equal(selected_host % experts_per_rank, np.zeros_like(selected_host))
+    counts_by_src_dst = np.zeros((ep_size, ep_size), dtype=np.int32)
+    for src in range(ep_size):
+        counts_by_src_dst[src] = np.bincount(selected_host[src].reshape(-1) // experts_per_rank, minlength=ep_size)
+    assert np.any((counts_by_src_dst > 0) & (counts_by_src_dst % 64 != 0))
+
+    key = jax.random.key(202)
+    k_x, k_combine, k_w13, k_w2 = jax.random.split(key, 4)
+    x_source = jax.random.normal(k_x, (ep_size, tokens_per_rank, hidden_dim), dtype=jnp.float32)
+    combine_source = jax.nn.softmax(
+        jax.random.normal(k_combine, (ep_size, tokens_per_rank, topk), dtype=jnp.float32),
+        axis=-1,
+    )
+    w_gate_up_source = jax.random.normal(
+        k_w13,
+        (ep_size, experts_per_rank, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.float32,
+    )
+    w_down_source = jax.random.normal(
+        k_w2,
+        (ep_size, experts_per_rank, intermediate_dim, hidden_dim),
+        dtype=jnp.float32,
+    )
+
+    mesh = Mesh(
+        np.asarray(jax.devices()[:ep_size]),
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x, selected_experts, combine_weights, w_gate_up, w_down = _shard_public_ep_arrays(
+        mesh,
+        x_source,
+        selected_source,
+        combine_source,
+        w_gate_up_source,
+        w_down_source,
+    )
+
+    with jax.set_mesh(mesh):
+        source_push_out, source_push_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=capacity_factor,
+            report_capacity_overflow=True,
+        )
+        baselines = {
+            implementation: moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_gate_up,
+                w_down,
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=capacity_factor,
+                report_capacity_overflow=True,
+            )
+            for implementation in ("ragged_all_to_all", "ring")
+        }
+
+    source_push_host = np.asarray(jax.device_get(source_push_out), dtype=np.float32)
+    assert source_push_host.shape == (ep_size * tokens_per_rank, hidden_dim)
     assert int(jax.device_get(source_push_dropped)) == 0
     for baseline_out, baseline_dropped in baselines.values():
         baseline_host = np.asarray(jax.device_get(baseline_out), dtype=np.float32)
