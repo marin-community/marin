@@ -276,6 +276,54 @@ def test_cute_wgrad_matches_reference():
 
 
 @gpu_only
+def test_cute_wgrad_non_aligned_group_sizes():
+    """Wgrad with group sizes NOT multiples of 16 -- the token-axis TMA alignment risk.
+
+    The contraction is the ragged token axis, so each group's slice starts at an
+    arbitrary token offset. A per-group base-pointer advance of ``offset`` fp8 bytes
+    would be non-16B-aligned (illegal for a TMA ``globalAddress``); the kernel instead
+    keeps the aligned full-buffer base and folds the offset into the TMA element
+    coordinate, bounding the ragged tail with the per-group descriptor extent (native
+    zero-fill). Correctness vs the f32 token-contracting reference -- plus a size-1
+    group and offsets at every residue -- guards that path against contamination.
+    """
+    from haliax._src.fp8_cast_transpose import cast_transpose  # noqa: PLC0415
+    from haliax._src.ragged_dot_cute import cute_wgrad  # noqa: PLC0415
+
+    K, N = 256, 256
+    sizes = np.array([17, 33, 1, 49, 65, 129], np.int64)  # each == 1 (mod 16); offsets unaligned
+    T = int(sizes.sum())
+    gs = jnp.asarray(sizes, jnp.int32)
+    rng = np.random.default_rng(3)
+    lhs = jnp.asarray(rng.standard_normal((T, K)) * 0.1, jnp.bfloat16)  # [T,K]
+    g = jnp.asarray(rng.standard_normal((T, N)) * 0.1, jnp.bfloat16)  # [T,N]
+    s_l = jnp.asarray(float(jnp.max(jnp.abs(lhs))) / 448.0, jnp.float32)
+    s_g = jnp.asarray(float(jnp.max(jnp.abs(g))) / 57344.0, jnp.float32)
+    _, lhs_t = cast_transpose(lhs, s_l, out_dtype=jnp.float8_e4m3fn)  # [K,T]
+    _, g_t = cast_transpose(g, s_g, out_dtype=jnp.float8_e5m2)  # [N,T]
+    out_scale = jnp.reshape((1.0 / (s_l * s_g)).astype(jnp.float32), (1,))
+    fn = jax.jit(lambda a, b: cute_wgrad(a, b, gs, out_dtype=jnp.bfloat16, out_scale=out_scale))
+    drhs = np.asarray(jax.block_until_ready(fn(lhs_t, g_t)))
+    ref = jax.lax.ragged_dot_general(
+        lhs.astype(jnp.float32),
+        g.astype(jnp.float32),
+        gs,
+        ragged_dot_dimension_numbers=jax.lax.RaggedDotDimensionNumbers(
+            dot_dimension_numbers=(((0,), (0,)), ((), ())),  # contract the token axis
+            lhs_ragged_dimensions=(0,),
+            rhs_group_dimensions=(),
+        ),
+    )
+    assert drhs.shape == ref.shape
+    # Cross-group contamination (loading an adjacent group's tokens in the ragged tail)
+    # would break per-group accuracy well beyond the E5M2 quant floor.
+    assert _rel_fro(drhs, ref) < 8e-2
+    # A stale coordinate or a non-deterministic tail would also perturb bits.
+    for _ in range(3):
+        assert np.array_equal(np.asarray(jax.block_until_ready(fn(lhs_t, g_t))), drhs)
+
+
+@gpu_only
 def test_fp8_wgrad_matches_bf16_within_tol():
     """Default FP8 wgrad (genuine E5M2 contraction) drhs within 8% of the bf16 grad."""
     from haliax.nn.ragged_dot import ragged_dot  # noqa: PLC0415
