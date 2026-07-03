@@ -62,7 +62,7 @@ from levanter.grug._moe.source_push_plan import (
     source_push_w2_return,
 )
 from levanter.grug._moe.source_push_w2_return import (
-    _sharded_w2_return_to_source_kernel,
+    _sharded_w2_return_direct_to_source_kernel,
     make_w_down,
     validate_w2_return_config,
 )
@@ -280,7 +280,7 @@ def _make_source_push_forward_inputs_from_plan(
     queue_stats.update(
         {
             "input_mode": input_mode,
-            "forward_mode": "w13_w2_return_copy_combine",
+            "forward_mode": "w13_w2_direct_return_combine",
             "row_start_mode": "source_padded_row_start",
             "combine_mode": combine_stats["combine_mode"],
             "dropped_routes": plan_stats.dropped_routes,
@@ -462,7 +462,7 @@ def source_push_forward(
 
 def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
     w13_kernel = _sharded_kernel(mesh, config)
-    w2_return_kernel = _sharded_w2_return_to_source_kernel(mesh, config)
+    w2_return_kernel = _sharded_w2_return_direct_to_source_kernel(mesh, config)
     remote_write_barrier = _sharded_remote_write_completion_barrier(mesh)
     combine_kernel = _sharded_source_combine_kernel(mesh, config)
 
@@ -488,7 +488,7 @@ def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
             src_base_by_expert,
             w_gate_up,
         )
-        _, source_return = w2_return_kernel(hidden, recv_meta, w_down)
+        source_return = w2_return_kernel(hidden, recv_meta, w_down)
         source_return = remote_write_barrier(source_return)
         return combine_kernel(
             source_return,
@@ -575,7 +575,7 @@ def _call_source_push_forward_device_inputs(
 ) -> Float[Array, "S T D"]:
     if execution_mode == FORWARD_EXECUTION_STAGED_HOST_SYNC:
         w13_fn = jax.jit(_sharded_kernel(mesh, config))
-        w2_return_fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+        w2_return_fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
         combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
         _, hidden = w13_fn(
             inputs.x,
@@ -586,7 +586,7 @@ def _call_source_push_forward_device_inputs(
             inputs.w_gate_up,
         )
         _block_until_ready(hidden)
-        _, source_return = w2_return_fn(hidden, inputs.recv_meta, inputs.w_down)
+        source_return = w2_return_fn(hidden, inputs.recv_meta, inputs.w_down)
         _block_until_ready(source_return)
         return combine_fn(
             source_return,
@@ -638,7 +638,7 @@ def _time_staged_source_push_forward(
     """Run full forward as three host-synchronized JIT stages for ordering diagnostics."""
 
     w13_fn = jax.jit(_sharded_kernel(mesh, config))
-    w2_return_fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+    w2_return_fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
     combine_fn = jax.jit(_sharded_source_combine_kernel(mesh, config))
 
     def call_stages(*, record_stage_times: bool = False):
@@ -658,7 +658,7 @@ def _time_staged_source_push_forward(
             stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        _, source_return = w2_return_fn(hidden, recv_meta, w_down)
+        source_return = w2_return_fn(hidden, recv_meta, w_down)
         _block_until_ready(source_return)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start

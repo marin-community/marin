@@ -1123,3 +1123,150 @@ This verifies that the summary rows are emitted at target shape and refreshes th
 - Next action:
   - Keep `831465357` as the current full-forward summary gate. The next production-relevant optimization remains W2-return
     transport or a producer/consumer return path; do not add more benchmark knobs unless they isolate that cost.
+
+## 2026-07-03 10:27 - Direct source-visible W2 return experiment
+
+Added an opt-in W2-return benchmark variant that computes W2 and writes each output block directly into the source-visible
+return queue via Lane-lowered remote SMEM-to-GMEM stores. This tests whether the existing staged path's destination-local
+W2 output plus separate return-copy kernel is paying avoidable local-GMEM staging cost.
+
+- Commit Hash: `480e5ec3` plus local diff in `source_push_w2_return.py`, `bench_source_push_w2_return.py`, and
+  `test_source_push_inbox.py`.
+- Local verification:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py lib/levanter/scripts/bench/bench_source_push_w2_return.py lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'w2_runner_tags or w2_bench_cli_imports or w2_destination_return_reorders_to_source_queue or w2_reference_uses_recv_metadata'`
+    - Result: `5 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 smoke:
+  - Job: `/dlwh/source-push-w2-direct-smoke-480e5ec3-20260703`
+  - Cluster: `cw-us-east-02a`
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=32972`.
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-w2-direct-smoke-480e5ec3-20260703 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 3600s uv run --package marin-levanter --group test python \
+      lib/levanter/scripts/bench/bench_source_push_w2_return.py \
+      --ep-size 8 --tokens-per-rank 16 --hidden-dim 128 --intermediate-dim 128 \
+      --experts-per-rank 2 --topk 2 --capacity-factor 1.25 \
+      --entries-per-rank 2 --inbox-slots 1 --block-m 64 --block-k 64 --block-n 128 \
+      --n-group 1 --n-groups-per-job 1 --send-worker-programs-per-peer 1 \
+      --worker-programs-per-peer 8 --send-pipeline-depth 1 --routing balanced \
+      --hidden-input-mode w13_reference --direct-to-source --check \
+      --warmup 0 --steps 1 --repeat-runs 1 --git-sha 480e5ec3 \
+      --jsonl scratch/source_push_w2_direct_smoke_480e5ec3.jsonl
+    ```
+  - Result: `steady_state_time=1.798 ms`, `max_abs_diff=0.007897`, `source_queue_max_abs_diff=0.007897`,
+    `dropped_routes=0`.
+- Target decomposition commands used the rough-balanced target profile:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_source_push_w2_return.py \
+    --source-push-profile hopper_source_push_inbox_rough_balanced_216 \
+    --hidden-input-mode synthetic <mode flag> --no-check \
+    --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events \
+    --git-sha 480e5ec3 --jsonl scratch/<mode>.jsonl
+  ```
+- Target rows:
+
+  | mode | job | median time | min/max time | W2 TFLOP/s/rank | return GB/s/rank | drops |
+  | --- | --- | ---: | ---: | ---: | ---: | ---: |
+  | W2 local-only | `/dlwh/source-push-w2-local-target-480e5ec3-20260703` | `2.864 ms` | `2.864/2.876 ms` | `318.14` | `372.82` | 0 |
+  | W2 + separate return copy | `/dlwh/source-push-w2-copy-target-480e5ec3-20260703` | `5.953 ms` | `5.842/6.120 ms` | `153.09` | `179.40` | 0 |
+  | W2 direct-to-source | `/dlwh/source-push-w2-direct-target-480e5ec3-20260703` | `4.006 ms` | `3.978/4.138 ms` | `227.47` | `266.56` | 0 |
+
+- Interpretation:
+  - Lane-lowered remote stores from the W2 kernel are legal for this pattern; the checked smoke compiled and matched the
+    source-visible reference queue.
+  - Direct-to-source W2 return saves `~1.947 ms` versus the separate-copy return path on the target rough-balanced profile.
+  - Direct-to-source still costs `~1.142 ms` over local W2-only, so remote return transport/store remains material, but the
+    larger staged local-GMEM output plus second-kernel copy tax is avoidable.
+  - Current staged rough-balanced full-forward W2-return was `~5.974 ms`; replacing it with the direct return kernel would
+    put the expected W2-return component near `4.006 ms` before any full-forward integration effects.
+- Next action:
+  - Clean the opt-in benchmark path and integrate the direct-to-source W2-return variant into the staged full-forward
+    source-push path for a new target full-forward gate.
+
+## 2026-07-03 10:38 - Direct W2 return integrated into full-forward gate
+
+Replaced the staged full-forward harness's W2 + separate return-copy stage with the direct source-visible W2-return kernel.
+The package-private W2 benchmark still exposes local-only, separate-copy, and direct-return variants for decomposition, but
+the full-forward path now uses the faster direct return by default and records `forward_mode=w13_w2_direct_return_combine`.
+
+- Commit Hash: `480e5ec3` plus local diff.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py`
+  - `lib/levanter/scripts/bench/bench_source_push_w2_return.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_w2_return.py lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/scripts/bench/bench_source_push_w2_return.py lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'w2_runner_tags or w2_bench_cli_imports or w2_destination_return_reorders_to_source_queue or w2_reference_uses_recv_metadata or forward_inputs_share_one_plan or forward_adds_summary or forward_runner_returns_structured_validation_errors or forward_cli_passes_profile_defaults'`
+    - Result: `9 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 integrated smoke:
+  - Job: `/dlwh/source-push-forward-direct-smoke-480e5ec3-20260703`
+  - Cluster: `cw-us-east-02a`
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=33381`.
+  - Result: `forward_mode=w13_w2_direct_return_combine`, total `4.443 ms`, W13 `2.293 ms`,
+    W2-return `1.790 ms`, combine `0.228 ms`, `max_abs_diff=0.0078125`.
+- Target gate:
+  - Job: `/dlwh/source-push-forward-direct-gate-480e5ec3-20260703`
+  - Cluster: `cw-us-east-02a`
+  - Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=288659`.
+  - Command:
+    ```bash
+    uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+      --job-name source-push-forward-direct-gate-480e5ec3-20260703 \
+      --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+      --enable-extra-resources --extra gpu -- \
+      timeout 7200s bash -lc 'set -euo pipefail
+    JSONL=scratch/source_push_forward_direct_gate_480e5ec3_20260703.jsonl
+    rm -f "$JSONL"
+    COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-check --no-progress-events --git-sha 480e5ec3 --jsonl $JSONL"
+    $COMMON --routing balanced --capacity-factor 1.0
+    $COMMON --routing balanced --capacity-factor 1.25
+    $COMMON --routing roughly_balanced --capacity-factor 1.25
+    '
+    ```
+- Full-forward summary rows:
+
+  | routing | capacity | repeats | median total | p90 total | p95 total | rounded forward TFLOP/s/rank | useful forward TFLOP/s/rank | row efficiency | drops |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | 5 | `13.640 ms` | `13.992 ms` | `14.002 ms` | `188.93` | `188.93` | `1.000000` | 0 |
+  | `balanced` | `1.25` | 5 | `13.386 ms` | `13.485 ms` | `13.496 ms` | `192.51` | `192.51` | `1.000000` | 0 |
+  | `roughly_balanced` | `1.25` | 5 | `13.992 ms` | `14.148 ms` | `14.185 ms` | `195.39` | `184.17` | `0.942584` | 0 |
+
+- Stage summary rows:
+
+  | routing | capacity | W13 median | W13 useful TFLOP/s/rank | W13 slow repeats `<160` | W2-return median | W2 TFLOP/s/rank | combine median | combine GB/s/rank |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | `8.090 ms` | `212.37` | `0/5` | `3.932 ms` | `218.45` | `1.341 ms` | `1626.92` |
+  | `balanced` | `1.25` | `8.027 ms` | `214.02` | `0/5` | `3.932 ms` | `218.44` | `1.342 ms` | `1625.62` |
+  | `roughly_balanced` | `1.25` | `8.536 ms` | `201.26` | `0/5` | `4.038 ms` | `225.66` | `1.337 ms` | `1631.54` |
+
+- Comparison to prior current-head gate (`/dlwh/source-push-forward-summary-gate-831465357-20260703`):
+
+  | routing | capacity | previous total | direct-return total | delta | previous W2-return | direct W2-return | W2 delta |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | `15.219 ms` | `13.640 ms` | `-1.579 ms` | `5.695 ms` | `3.932 ms` | `-1.763 ms` |
+  | `balanced` | `1.25` | `15.334 ms` | `13.386 ms` | `-1.948 ms` | `5.733 ms` | `3.932 ms` | `-1.801 ms` |
+  | `roughly_balanced` | `1.25` | `15.805 ms` | `13.992 ms` | `-1.813 ms` | `5.974 ms` | `4.038 ms` | `-1.936 ms` |
+
+- Interpretation:
+  - Direct W2 return is a meaningful full-forward speedup, not just a standalone W2 benchmark win.
+  - The rough-balanced target path improves from `163.04` useful TFLOP/s/rank to `184.17` useful TFLOP/s/rank.
+  - The W2-return component now lines up with the standalone direct-return median (`~4.0 ms`), so the integration did not
+    reintroduce the separate-copy tax.
+  - Remaining staged bottlenecks are W13 `~8.5 ms`, combine `~1.34 ms`, and the residual direct-return overhead over local
+    W2-only (`~1.17 ms` in the target decomposition).
+- Next action:
+  - Commit and push the direct W2-return path, then update PR #6841 status. A later pass can decide whether direct return
+    should be fused with combine or whether source combine needs a lower-memory deterministic variant.

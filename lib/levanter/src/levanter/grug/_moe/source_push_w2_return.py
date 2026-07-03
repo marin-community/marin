@@ -39,6 +39,10 @@ from levanter.grug._moe.source_push_inbox import (
 
 KERNEL_NAME = "source_push_w2_return"
 RETURN_COPY_KERNEL_NAME = "source_push_w2_return_copy"
+DIRECT_RETURN_KERNEL_NAME = "source_push_w2_return_direct"
+W2_RETURN_MODE_DESTINATION_LOCAL = "destination_local"
+W2_RETURN_MODE_SEPARATE_COPY = "separate_copy"
+W2_RETURN_MODE_DIRECT_REMOTE = "direct_remote"
 W2_HIDDEN_INPUT_W13_REFERENCE = "w13_reference"
 W2_HIDDEN_INPUT_SYNTHETIC = "synthetic"
 W2_HIDDEN_INPUT_MODES = (W2_HIDDEN_INPUT_W13_REFERENCE, W2_HIDDEN_INPUT_SYNTHETIC)
@@ -339,6 +343,163 @@ def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig):
     )
 
 
+def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
+    validate_w2_return_config(config)
+    k_tiles = config.intermediate_dim // config.block_k
+    n_tiles = config.hidden_dim // config.block_n
+    src_offsets = tuple(range(config.ep_size))
+
+    def body(
+        hidden_ref: Float[Ref, "rows I"],
+        recv_meta_ref: Int[Ref, "SRC Q F"],
+        w_down_ref: Float[Ref, "E I D"],
+        source_return_ref: Float[Ref, "DST Q M D"],
+    ) -> None:
+        rank = lax.axis_index(AXIS)
+        src_ordinal = pl.program_id(0)
+        entry = pl.program_id(1)
+        n_tile = pl.program_id(2)
+
+        def _compute_to_src(static_src_ordinal: int) -> None:
+            src = (rank + static_src_ordinal) % config.ep_size
+            dst_ordinal = (-static_src_ordinal) % config.ep_size
+            remote_source_return_ref = None
+            if static_src_ordinal != 0:
+                remote_source_return_ref = mgpu.remote_ref(
+                    source_return_ref,
+                    src,
+                    device_id_type=pl.DeviceIdType.LOGICAL,
+                )
+            valid_rows = recv_meta_ref[static_src_ordinal, entry, 3]
+
+            @pl.when(valid_rows > 0)
+            def _compute_return_block() -> None:
+                expert = recv_meta_ref[static_src_ordinal, entry, 1]
+                row_start = recv_meta_ref[static_src_ordinal, entry, 2]
+
+                def acc_scope(acc_ref) -> jax.Array:
+                    def smem_scope(hidden_smem, w_down_smem, ready_barrier) -> None:
+                        @pl.loop(0, k_tiles)
+                        def _k_loop(kk) -> None:
+                            k_start = kk * config.block_k
+                            mgpu.copy_gmem_to_smem(
+                                hidden_ref.at[
+                                    pl.ds(row_start, config.block_m),
+                                    pl.ds(k_start, config.block_k),
+                                ],
+                                hidden_smem,
+                                ready_barrier,
+                            )
+                            mgpu.copy_gmem_to_smem(
+                                w_down_ref.at[
+                                    expert,
+                                    pl.ds(k_start, config.block_k),
+                                    pl.ds(n_tile * config.block_n, config.block_n),
+                                ],
+                                w_down_smem,
+                                ready_barrier,
+                            )
+                            mgpu.barrier_wait(ready_barrier)
+                            mgpu.commit_smem()
+                            mgpu.wgmma(acc_ref, hidden_smem, w_down_smem)
+                            mgpu.wgmma_wait(0)
+
+                    pl.run_scoped(
+                        smem_scope,
+                        hidden_smem=_wgmma_smem((config.block_m, config.block_k), hidden_ref.dtype),
+                        w_down_smem=_wgmma_smem((config.block_k, config.block_n), w_down_ref.dtype),
+                        ready_barrier=mgpu.Barrier(num_arrivals=2),
+                    )
+                    return acc_ref[...].astype(source_return_ref.dtype)
+
+                output = pl.run_scoped(
+                    acc_scope,
+                    acc_ref=mgpu.ACC((config.block_m, config.block_n)),
+                )
+
+                def store_scope(output_smem) -> None:
+                    output_smem[:, :] = output
+                    mgpu.commit_smem()
+                    if static_src_ordinal == 0:
+                        mgpu.copy_smem_to_gmem(
+                            output_smem,
+                            source_return_ref.at[
+                                dst_ordinal,
+                                entry,
+                                pl.ds(0, config.block_m),
+                                pl.ds(n_tile * config.block_n, config.block_n),
+                            ],
+                        )
+                    else:
+                        mgpu.copy_smem_to_gmem(
+                            output_smem,
+                            remote_source_return_ref.at[
+                                dst_ordinal,
+                                entry,
+                                pl.ds(0, config.block_m),
+                                pl.ds(n_tile * config.block_n, config.block_n),
+                            ],
+                        )
+                    mgpu.wait_smem_to_gmem(0, wait_read_only=False)
+
+                pl.run_scoped(
+                    store_scope,
+                    output_smem=mgpu.SMEM((config.block_m, config.block_n), dtype=source_return_ref.dtype),
+                )
+
+        def _switch_compute_to_src(dynamic_src_ordinal) -> None:
+            def _branch(static_src_ordinal: int):
+                def _compute_branch(_) -> None:
+                    _compute_to_src(static_src_ordinal)
+
+                return _compute_branch
+
+            branches = tuple(_branch(static_src_ordinal) for static_src_ordinal in src_offsets)
+            lax.switch(dynamic_src_ordinal, branches, None)
+
+        _switch_compute_to_src(src_ordinal)
+
+    out_shape = jax.ShapeDtypeStruct(
+        (config.ep_size, config.entries_per_rank, config.block_m, config.hidden_dim),
+        jnp.bfloat16,
+    )
+    compiler_params = mgpu.CompilerParams(lowering_semantics=mgpu.LoweringSemantics.Lane)
+    return mgpu.kernel(
+        body,
+        out_shape=out_shape,
+        grid=(config.ep_size, config.entries_per_rank, n_tiles),
+        grid_names=("src_ordinal", "entry", "n_tile"),
+        compiler_params=compiler_params,
+    )
+
+
+def _sharded_w2_return_direct_to_source_kernel(mesh: Mesh, config: PushInboxConfig):
+    kernel = _make_w2_return_direct_to_source_kernel(config)
+
+    def local_fn(
+        hidden_local: Float[Array, "1 rows I"],
+        recv_meta_local: Int[Array, "1 SRC Q F"],
+        w_down_local: Float[Array, "1 E I D"],
+    ):
+        hidden_local = hidden_local[0]
+        recv_meta_local = recv_meta_local[0]
+        w_down_local = w_down_local[0]
+        source_return = kernel(hidden_local, recv_meta_local, w_down_local)
+        return source_return[None, ...]
+
+    return shard_map(
+        local_fn,
+        mesh=mesh,
+        in_specs=(
+            P(AXIS, None, None),
+            P(AXIS, None, None, None),
+            P(AXIS, None, None, None),
+        ),
+        out_specs=P(AXIS, None, None, None, None),
+        check_vma=False,
+    )
+
+
 def _make_return_copy_kernel(config: PushInboxConfig):
     validate_w2_return_config(config)
     n_tiles = config.hidden_dim // config.block_n
@@ -506,6 +667,26 @@ def _validate_w2_return(
     )
 
 
+def _validate_w2_return_source_queue(
+    config: PushInboxConfig,
+    hidden_host: np.ndarray,
+    recv_meta_host: np.ndarray,
+    w_down_host: np.ndarray,
+    source_return: jax.Array,
+) -> W2ReturnValidationMetrics:
+    expected = reference_w2_return_by_destination(config, hidden_host, recv_meta_host, w_down_host)
+    source_expected = source_queue_from_destination_return(config, expected)
+    observed_host = np.asarray(jax.device_get(source_return), dtype=np.float32)
+    expected_host = np.asarray(jax.device_get(source_expected), dtype=np.float32)
+    diff = np.abs(observed_host - expected_host)
+    return W2ReturnValidationMetrics(
+        max_abs_diff=float(np.max(diff)) if diff.size else 0.0,
+        mean_abs_diff=float(np.mean(diff)) if diff.size else 0.0,
+        all_max_abs_diff=float(np.max(diff)) if diff.size else 0.0,
+        source_queue_max_abs_diff=float(np.max(diff)) if diff.size else 0.0,
+    )
+
+
 def _run_w2_return_one(
     config: PushInboxConfig,
     settings: SourcePushInboxRunSettings,
@@ -513,9 +694,12 @@ def _run_w2_return_one(
     *,
     row_metadata: dict[str, Any] | None = None,
     copy_to_source: bool = False,
+    direct_to_source: bool = False,
 ) -> list[dict[str, Any]]:
     row_metadata = row_metadata or {}
+    return_mode = _requested_w2_return_mode(copy_to_source=copy_to_source, direct_to_source=direct_to_source)
     try:
+        return_mode = _w2_return_mode(copy_to_source=copy_to_source, direct_to_source=direct_to_source)
         if settings.repeat_runs <= 0:
             raise ValueError(f"repeat_runs must be positive, got {settings.repeat_runs}")
         validate_w2_return_config(config)
@@ -529,7 +713,9 @@ def _run_w2_return_one(
         recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
         w_down = jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
-        if copy_to_source:
+        if return_mode == W2_RETURN_MODE_DIRECT_REMOTE:
+            fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
+        elif return_mode == W2_RETURN_MODE_SEPARATE_COPY:
             fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
         else:
             fn = jax.jit(_sharded_w2_return_kernel(mesh, config))
@@ -547,16 +733,27 @@ def _run_w2_return_one(
         )
         validation = None
         if settings.check:
-            return_by_destination = timing.output[0] if copy_to_source else timing.output
-            source_return = timing.output[1] if copy_to_source else None
-            validation = _validate_w2_return(
-                config,
-                host_inputs.hidden,
-                host_inputs.recv_meta,
-                host_inputs.w_down,
-                return_by_destination,
-                source_return,
-            )
+            if return_mode == W2_RETURN_MODE_DIRECT_REMOTE:
+                validation = _validate_w2_return_source_queue(
+                    config,
+                    host_inputs.hidden,
+                    host_inputs.recv_meta,
+                    host_inputs.w_down,
+                    timing.output,
+                )
+            else:
+                return_by_destination = (
+                    timing.output[0] if return_mode == W2_RETURN_MODE_SEPARATE_COPY else timing.output
+                )
+                source_return = timing.output[1] if return_mode == W2_RETURN_MODE_SEPARATE_COPY else None
+                validation = _validate_w2_return(
+                    config,
+                    host_inputs.hidden,
+                    host_inputs.recv_meta,
+                    host_inputs.w_down,
+                    return_by_destination,
+                    source_return,
+                )
 
         queue_stats = inputs.queue_stats
         flops_per_rank = queue_stats["rounded_rows_per_rank_mean"] * config.intermediate_dim * config.hidden_dim * 2
@@ -567,8 +764,10 @@ def _run_w2_return_one(
         for repeat_run, steady_state_time in enumerate(timing.steady_state_times):
             row = {
                 "kernel": KERNEL_NAME,
-                "implementation": RETURN_COPY_KERNEL_NAME if copy_to_source else KERNEL_NAME,
+                "implementation": _w2_return_implementation_name(return_mode),
                 "copy_to_source": copy_to_source,
+                "direct_to_source": direct_to_source,
+                "return_mode": return_mode,
                 "depends_on_kernel": W13_KERNEL_NAME,
                 "config": asdict(config),
                 "queue_stats": queue_stats,
@@ -598,8 +797,10 @@ def _run_w2_return_one(
             raise
         row = {
             "kernel": KERNEL_NAME,
-            "implementation": RETURN_COPY_KERNEL_NAME if copy_to_source else KERNEL_NAME,
+            "implementation": _w2_return_implementation_name(return_mode),
             "copy_to_source": copy_to_source,
+            "direct_to_source": direct_to_source,
+            "return_mode": return_mode,
             "config": asdict(config),
             "compile_time": None,
             "lower_compile_time": None,
@@ -625,6 +826,32 @@ def _run_w2_return_one(
         jax.clear_caches()
 
 
+def _w2_return_mode(*, copy_to_source: bool, direct_to_source: bool) -> str:
+    if copy_to_source and direct_to_source:
+        raise ValueError("copy_to_source and direct_to_source are mutually exclusive")
+    if direct_to_source:
+        return W2_RETURN_MODE_DIRECT_REMOTE
+    if copy_to_source:
+        return W2_RETURN_MODE_SEPARATE_COPY
+    return W2_RETURN_MODE_DESTINATION_LOCAL
+
+
+def _requested_w2_return_mode(*, copy_to_source: bool, direct_to_source: bool) -> str:
+    if direct_to_source:
+        return W2_RETURN_MODE_DIRECT_REMOTE
+    if copy_to_source:
+        return W2_RETURN_MODE_SEPARATE_COPY
+    return W2_RETURN_MODE_DESTINATION_LOCAL
+
+
+def _w2_return_implementation_name(return_mode: str) -> str:
+    if return_mode == W2_RETURN_MODE_DIRECT_REMOTE:
+        return DIRECT_RETURN_KERNEL_NAME
+    if return_mode == W2_RETURN_MODE_SEPARATE_COPY:
+        return RETURN_COPY_KERNEL_NAME
+    return KERNEL_NAME
+
+
 def run_source_push_w2_return_source_plan(
     config: PushInboxConfig,
     *,
@@ -637,6 +864,7 @@ def run_source_push_w2_return_source_plan(
     progress_events: bool = False,
     hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
     copy_to_source: bool = False,
+    direct_to_source: bool = False,
 ) -> list[dict[str, Any]]:
     """Run destination-local W2 over source-padded SourcePushPlan hidden rows."""
 
@@ -657,6 +885,7 @@ def run_source_push_w2_return_source_plan(
             hidden_input_mode=hidden_input_mode,
         ),
         copy_to_source=copy_to_source,
+        direct_to_source=direct_to_source,
     )
 
 

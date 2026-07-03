@@ -656,7 +656,7 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     entry = inputs.queue_entry[src, token, route_slot]
     row = inputs.queue_row[src, token, route_slot]
 
-    assert inputs.queue_stats["forward_mode"] == "w13_w2_return_copy_combine"
+    assert inputs.queue_stats["forward_mode"] == "w13_w2_direct_return_combine"
     assert inputs.queue_stats["combine_mode"] == "route_buffer_gather_sum"
     assert inputs.queue_stats["dropped_routes"] == 0
     assert inputs.x.shape == (
@@ -838,6 +838,25 @@ def test_source_push_w2_runner_tags_copy_to_source_errors():
     assert rows[0]["error_type"] == "ValueError"
     assert rows[0]["implementation"] == "source_push_w2_return_copy"
     assert rows[0]["copy_to_source"]
+
+
+def test_source_push_w2_runner_tags_direct_to_source_errors():
+    config = source_push_inbox.PushInboxConfig(ep_size=1)
+
+    rows = source_push_w2_return.run_source_push_w2_return_source_plan(
+        config,
+        warmup=0,
+        steps=1,
+        repeat_runs=1,
+        check=False,
+        direct_to_source=True,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["error_type"] == "ValueError"
+    assert rows[0]["implementation"] == "source_push_w2_return_direct"
+    assert rows[0]["return_mode"] == "direct_remote"
+    assert rows[0]["direct_to_source"]
 
 
 def test_source_push_combine_runner_returns_structured_validation_errors():
