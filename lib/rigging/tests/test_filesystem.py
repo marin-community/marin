@@ -38,10 +38,10 @@ def test_prefix_join_uses_exactly_one_separator(prefix, expected):
         ("rel/path", "rel/path"),
     ],
 )
-def test_storage_path_parse_canonicalizes(raw, canonical):
+def test_storage_path_normalize_canonicalizes(raw, canonical):
     """parse -> str emits the canonical single-separator form: interior ``//`` collapsed,
     trailing ``/`` stripped, scheme and authority preserved."""
-    assert str(StoragePath.parse(raw)) == canonical
+    assert StoragePath.normalize(raw) == canonical
 
 
 def test_storage_path_join_uses_single_separators():

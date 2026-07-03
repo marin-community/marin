@@ -159,9 +159,9 @@ class DataConfig:
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
-            return str(StoragePath.parse(env_prefix))
+            return StoragePath.normalize(env_prefix)
         if self.root is not None:
-            return str(StoragePath.parse(self.root))
+            return StoragePath.normalize(self.root)
         region = region_from_metadata()
         if region is not None:
             spec = self.region_buckets.get(region)
@@ -375,6 +375,11 @@ class StoragePath:
                 scheme=scheme, netloc=netloc, segments=_key_segments(key), rooted=bool(netloc) or bool(sep)
             )
         return StoragePath(scheme=None, netloc="", segments=_key_segments(value), rooted=value.startswith("/"))
+
+    @staticmethod
+    def normalize(value: str) -> str:
+        """``value`` in canonical single-separator form (``str(StoragePath.parse(value))``)."""
+        return str(StoragePath.parse(value))
 
     def __truediv__(self, relative: str) -> "StoragePath":
         if "://" in relative or relative.startswith("/"):
