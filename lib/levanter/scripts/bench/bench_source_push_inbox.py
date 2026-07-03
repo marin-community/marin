@@ -101,6 +101,7 @@ def parse_source_push_inbox_args(argv: Sequence[str] | None = None) -> argparse.
     parser.add_argument(
         "--progress-events", action=argparse.BooleanOptionalAction, default=default("progress_events", False)
     )
+    parser.add_argument("--git-sha", type=str, default=None)
     parser.add_argument("--jsonl", type=str, default=None)
     return parser.parse_args(argv)
 
@@ -171,6 +172,8 @@ def main(argv: Sequence[str] | None = None) -> None:
                                                 progress_events=args.progress_events,
                                             )
                                             for row in rows:
+                                                if args.git_sha is not None:
+                                                    row["git_sha"] = args.git_sha
                                                 line = json.dumps(row, sort_keys=True)
                                                 print(line, flush=True)
                                                 if args.jsonl:

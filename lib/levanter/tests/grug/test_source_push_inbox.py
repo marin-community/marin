@@ -448,6 +448,8 @@ def test_source_push_cli_selects_source_push_plan_input_mode(monkeypatch, capsys
             "source_push_plan",
             "--capacity-factor",
             "1.0",
+            "--git-sha",
+            "abc123",
             "--repeat-runs",
             "1",
         ]
@@ -455,7 +457,7 @@ def test_source_push_cli_selects_source_push_plan_input_mode(monkeypatch, capsys
 
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert calls == [(1.0, 1)]
-    assert rows == [{"capacity_factor": 1.0, "input_mode": "source_push_plan"}]
+    assert rows == [{"capacity_factor": 1.0, "git_sha": "abc123", "input_mode": "source_push_plan"}]
 
 
 def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys):
