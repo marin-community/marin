@@ -31,7 +31,8 @@ MoeImplementation: TypeAlias = Literal[
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all", "deepep")
-# EP backends wired for injected ragged-dot ops (deepep resolves its own GEMMs).
+# EP backends wired for injected ragged-dot ops and FP8 wire collectives
+# (deepep resolves its own GEMMs and collectives).
 _QUANTIZED_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
