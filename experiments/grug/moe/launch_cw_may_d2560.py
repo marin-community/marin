@@ -39,17 +39,13 @@ for optimizer state and updates.
 import dataclasses
 import datetime
 import os
-from collections.abc import Sequence
 from typing import cast
 
-import jax.numpy as jnp
-import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data import AsyncDataset
-from levanter.data.text import BlockShuffleConfig, DirectDatasetComponent, GrugLmExample, LmDataConfig
+from levanter.data.text import BlockShuffleConfig, DirectDatasetComponent, LmDataConfig
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -61,6 +57,7 @@ from marin.training.training import LevanterCheckpoint
 from experiments.grug.moe.heuristic import MoeAdamHHeuristic
 from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
+    SyntheticGrugDataset,
     env_int,
     run_grug_moe_trial,
     slimpajama_6b_dataset,
@@ -91,33 +88,12 @@ DEFAULT_TOTAL_TOKENS = 1.0e13
 DEFAULT_WARMUP_FRACTION = 0.01
 OUTPUT_SUBDIR = "experiments/grug-moe-cw"
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
-SYNTHETIC_DATASET_LENGTH = 1 << 40
 
 MAY_HEURISTIC = MoeAdamHHeuristic(
     lr_coeff=0.06602,
     lr_tokens_exp=-0.395,
     lr_dim_exp=-0.150,
 )
-
-
-class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
-    def __init__(self, *, seq_len: int, vocab_size: int):
-        self.seq_len = seq_len
-        self.vocab_size = vocab_size
-
-    async def async_len(self) -> int:
-        return SYNTHETIC_DATASET_LENGTH
-
-    def is_finite(self) -> bool:
-        return True
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
-        examples: list[GrugLmExample] = []
-        positions = np.arange(self.seq_len, dtype=np.int32)
-        for index in indices:
-            tokens = ((positions + index * 9973) % self.vocab_size).astype(np.int32)
-            examples.append(GrugLmExample.causal(jnp.asarray(tokens)))
-        return examples
 
 
 def env_float(key: str, default: float) -> float:

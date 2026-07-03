@@ -17,15 +17,18 @@ dataset handles.
 
 import dataclasses
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
+import jax.numpy as jnp
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, latest_checkpoint_path
-from levanter.data.text import LmDataConfig
+from levanter.data import AsyncDataset
+from levanter.data.text import GrugLmExample, LmDataConfig
 from levanter.optim import OptimizerConfig
 from levanter.tracker import TrackerConfig
 from levanter.tracker.wandb import WandbConfig
@@ -69,6 +72,32 @@ _NEMOTRON_WEIGHTS = {
 }
 _STARCODER_WEIGHT = 0.25
 _PROOFPILE_WEIGHT = 0.055
+SYNTHETIC_DATASET_LENGTH = 1 << 40
+
+
+@dataclass(frozen=True)
+class SyntheticGrugDataset(AsyncDataset[GrugLmExample]):
+    seq_len: int
+    vocab_size: int
+    num_examples: int = SYNTHETIC_DATASET_LENGTH
+    eos_id: int | None = None
+    eos_interval: int | None = None
+
+    async def async_len(self) -> int:
+        return self.num_examples
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[GrugLmExample]:
+        positions = jnp.arange(self.seq_len, dtype=jnp.int32)
+        examples: list[GrugLmExample] = []
+        for index in indices:
+            tokens = (positions + index * 9973) % self.vocab_size
+            if self.eos_id is not None and self.eos_interval is not None:
+                tokens = tokens.at[self.eos_interval - 1 :: self.eos_interval].set(self.eos_id)
+            examples.append(GrugLmExample.causal(tokens, eos_id=self.eos_id))
+        return examples
 
 
 @dataclass(frozen=True)
