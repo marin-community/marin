@@ -6,6 +6,7 @@ import functools
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -322,6 +323,17 @@ def initial_state(
     )
 
 
+def _dump_state_sharding(
+    state: GrugTrainState,
+    *,
+    trainer: TrainerConfig,
+    run_id: str,
+    path_override: str | None,
+) -> None:
+    path = Path(path_override) if path_override is not None else default_grug_sharding_dump_path(trainer.log_dir, run_id)
+    dump_grug_state_sharding_artifact(state, path)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -481,10 +493,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
-        sharding_dump_path = config.trainer.sharding_dump_path
-        if sharding_dump_path is None:
-            sharding_dump_path = default_grug_sharding_dump_path(trainer.log_dir, run_id)
-        dump_grug_state_sharding_artifact(state, sharding_dump_path)
+        _dump_state_sharding(
+            state,
+            trainer=trainer,
+            run_id=run_id,
+            path_override=config.trainer.sharding_dump_path,
+        )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 

@@ -28,7 +28,7 @@ def grug_state_sharding_dict(state: GrugStateWithSharding) -> dict[str, dict[str
     }
 
 
-def dump_grug_state_sharding(state: GrugStateWithSharding, path: str | Path) -> None:
+def dump_grug_state_sharding(state: GrugStateWithSharding, path: Path) -> None:
     """Write Grug parameter and optimizer-state sharding specs as JSON."""
     output = grug_state_sharding_dict(state)
     serialized = json.dumps(output, indent=2, sort_keys=True)
@@ -38,14 +38,13 @@ def dump_grug_state_sharding(state: GrugStateWithSharding, path: str | Path) -> 
         out.write("\n")
 
 
-def dump_grug_state_sharding_artifact(state: GrugStateWithSharding, path: str | Path) -> None:
+def dump_grug_state_sharding_artifact(state: GrugStateWithSharding, path: Path) -> None:
     """Write Grug sharding specs and log them to the active tracker."""
     dump_grug_state_sharding(state, path)
     current_tracker().log_artifact(path, name=GRUG_SHARDING_ARTIFACT_NAME, type="sharding")
 
 
-def default_grug_sharding_dump_path(log_dir: str | Path, run_id: str) -> Path:
-    """Return the default run-local Grug sharding dump path."""
+def default_grug_sharding_dump_path(log_dir: Path, run_id: str) -> Path:
     return Path(log_dir) / run_id / "artifacts" / GRUG_SHARDING_DUMP_FILENAME
 
 
@@ -70,7 +69,7 @@ def _sharding_spec(value: Any) -> str:
     return repr(sharding)
 
 
-def _ensure_parent_dir(path: str | Path) -> None:
+def _ensure_parent_dir(path: Path) -> None:
     fs, _, paths = fsspec.get_fs_token_paths(str(path))
     plain_path = paths[0]
     parent = posixpath.dirname(plain_path)

@@ -40,15 +40,20 @@ def test_grug_state_sharding_dict_reports_params_and_opt_state() -> None:
 
 
 def test_dump_grug_state_sharding_writes_json(tmp_path) -> None:
+    mesh = Mesh(np.array(jax.devices()), ("data",))
+    sharding = NamedSharding(mesh, P("data"))
     state = _State(
-        params={"weight": jnp.ones((1,), dtype=jnp.float32)},
-        opt_state={"moment": jnp.zeros((1,), dtype=jnp.float32)},
+        params={"weight": jax.device_put(jnp.ones((jax.device_count(),), dtype=jnp.float32), sharding)},
+        opt_state={"moment": jax.device_put(jnp.zeros((jax.device_count(),), dtype=jnp.float32), sharding)},
     )
     path = tmp_path / "run" / "artifacts" / "sharding.json"
 
     dump_grug_state_sharding(state, path)
 
-    assert json.loads(path.read_text()) == grug_state_sharding_dict(state)
+    assert json.loads(path.read_text()) == {
+        "params": {"['weight']": "P('data',)"},
+        "opt_state": {"['moment']": "P('data',)"},
+    }
 
 
 def test_default_grug_sharding_dump_path_uses_run_artifacts_dir(tmp_path) -> None:
