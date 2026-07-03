@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -16,6 +15,8 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.source_push_forward import make_source_push_forward_source_plan_raw_inputs
+from levanter.grug._moe.source_push_inbox import PushInboxConfig
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -27,19 +28,6 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.utils.activation import ActivationFunctionEnum
-
-
-SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward_public_compare.py"
-)
-SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC = importlib.util.spec_from_file_location(
-    "bench_source_push_forward_public_compare",
-    SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_PATH,
-)
-assert SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC is not None
-source_push_forward_public_compare_cli = importlib.util.module_from_spec(SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC)
-assert SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC.loader is not None
-SOURCE_PUSH_PUBLIC_COMPARE_SCRIPT_SPEC.loader.exec_module(source_push_forward_public_compare_cli)
 
 
 def _make_dense_mesh() -> Mesh:
@@ -179,6 +167,28 @@ def test_moe_mlp_runs_without_ep_axis():
         )
         out_jit = jit_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
         np.testing.assert_allclose(np.asarray(out), np.asarray(out_jit), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_source_push_backend_requires_concrete_expert_mesh():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(101),
+        tokens=8,
+        hidden_dim=16,
+        intermediate_dim=16,
+        num_experts=2,
+        topk=1,
+    )
+
+    with pytest.raises(ValueError, match="requires a concrete expert-parallel H100 mesh"):
+        moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=None,
+        )
 
 
 def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
@@ -593,7 +603,7 @@ def test_moe_mlp_ragged_matches_ring_with_ep_axis_when_available():
 def test_source_push_forward_matches_public_ep_backends_on_h100():
     _skip_without_h100x8()
 
-    config = source_push_forward_public_compare_cli.PushInboxConfig(
+    config = PushInboxConfig(
         ep_size=8,
         entries_per_rank=2,
         inbox_slots=1,
@@ -613,23 +623,85 @@ def test_source_push_forward_matches_public_ep_backends_on_h100():
         topk=2,
         capacity_factor=1.25,
     )
-
-    rows = source_push_forward_public_compare_cli.run_source_push_forward_public_compare(
-        config,
-        source_push_implementation="pallas_mgpu",
-        source_push_execution_mode="staged_host_sync",
-        public_implementations=("ragged_all_to_all", "ring"),
+    raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
+    mesh = Mesh(
+        np.asarray(jax.devices()[: config.ep_size]),
+        ("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.asarray(
+        raw_inputs.x.reshape(config.ep_size * config.tokens_per_rank, config.hidden_dim),
+        dtype=jnp.bfloat16,
+    )
+    selected_experts = jnp.asarray(
+        raw_inputs.selected_experts.reshape(config.ep_size * config.tokens_per_rank, config.topk),
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.asarray(
+        raw_inputs.combine_weights.reshape(config.ep_size * config.tokens_per_rank, config.topk),
+        dtype=jnp.bfloat16,
+    )
+    w_gate_up = jnp.asarray(
+        raw_inputs.w_gate_up.reshape(
+            config.ep_size * config.experts_per_rank,
+            config.hidden_dim,
+            2 * config.intermediate_dim,
+        ),
+        dtype=jnp.bfloat16,
+    )
+    w_down = jnp.asarray(
+        raw_inputs.w_down.reshape(
+            config.ep_size * config.experts_per_rank,
+            config.intermediate_dim,
+            config.hidden_dim,
+        ),
+        dtype=jnp.bfloat16,
     )
 
-    assert {row["public_implementation"] for row in rows} == {"ragged_all_to_all", "ring"}
-    for row in rows:
-        assert row["error_type"] is None
-        assert row["source_push_dropped_routes"] == 0
-        assert row["public_dropped_routes"] == 0
-        assert row["dropped_route_delta"] == 0
-        assert row["output_shape"] == [8, 64, 128]
-        assert row["max_abs_diff"] <= 0.03125
-        assert row["mean_abs_diff"] <= 0.002
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    x = jax.device_put(x, batch_sharding)
+    selected_experts = jax.device_put(selected_experts, batch_sharding)
+    combine_weights = jax.device_put(combine_weights, batch_sharding)
+    w_gate_up = jax.device_put(w_gate_up, expert_sharding)
+    w_down = jax.device_put(w_down, expert_sharding)
+
+    with jax.set_mesh(mesh):
+        source_push_out, source_push_dropped = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_gate_up,
+            w_down,
+            implementation="pallas_mgpu_source_push",
+            mesh=mesh,
+            capacity_factor=config.capacity_factor,
+            report_capacity_overflow=True,
+        )
+        baselines = {
+            implementation: moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_gate_up,
+                w_down,
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=config.capacity_factor,
+                report_capacity_overflow=True,
+            )
+            for implementation in ("ragged_all_to_all", "ring")
+        }
+
+    source_push_host = np.asarray(jax.device_get(source_push_out), dtype=np.float32)
+    assert source_push_host.shape == (config.ep_size * config.tokens_per_rank, config.hidden_dim)
+    assert int(jax.device_get(source_push_dropped)) == 0
+    for baseline_out, baseline_dropped in baselines.values():
+        baseline_host = np.asarray(jax.device_get(baseline_out), dtype=np.float32)
+        diff = np.abs(source_push_host - baseline_host)
+        assert int(jax.device_get(baseline_dropped)) == 0
+        assert float(np.max(diff)) <= 0.03125
+        assert float(np.mean(diff)) <= 0.002
 
 
 def test_moe_mlp_runs_with_ep_axis_when_available():

@@ -47,6 +47,7 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug._moe.source_push_public import SOURCE_PUSH_PUBLIC_IMPLEMENTATION, moe_mlp_ep_source_push_mgpu
 from levanter.grug.sharding import (
     _batch_spec_from_x,
     _current_mesh,
@@ -180,6 +181,8 @@ def moe_mlp(
     expert_axis_size = _mesh_axis_size(mesh, "expert")
 
     if mesh is None or mesh.empty:
+        if resolved_implementation == SOURCE_PUSH_PUBLIC_IMPLEMENTATION:
+            raise ValueError(f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires a concrete expert-parallel H100 mesh")
         out, dropped = _moe_mlp_local(
             x,
             selected_experts,
@@ -205,6 +208,22 @@ def moe_mlp(
             )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+
+        if resolved_implementation == SOURCE_PUSH_PUBLIC_IMPLEMENTATION:
+            out, dropped = moe_mlp_ep_source_push_mgpu(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation=activation,
+                mesh=mesh,
+                batch_spec=batch_spec,
+                capacity_factor=capacity_factor,
+            )
+            if report_capacity_overflow:
+                return out, dropped
+            return out
 
         if resolved_implementation == "ring":
             shard_local_fn = _moe_mlp_ep_ring_local
@@ -251,6 +270,9 @@ def moe_mlp(
     # semantics without EP collectives. JAX 0.9 requires shard_map in_specs to
     # match the actual input sharding, so reshard ordinary inputs to the mesh
     # specs that preserve data-axis parallelism.
+    if resolved_implementation == SOURCE_PUSH_PUBLIC_IMPLEMENTATION:
+        raise ValueError(f"{SOURCE_PUSH_PUBLIC_IMPLEMENTATION!r} requires an expert mesh axis with size > 1")
+
     x_spec = _value_spec_or_default(x, batch_spec, replace_replicated=True)
     selected_experts_spec = _value_spec_or_default(selected_experts, batch_spec, replace_replicated=True)
     combine_weights_spec = _value_spec_or_default(combine_weights, batch_spec, replace_replicated=True)
