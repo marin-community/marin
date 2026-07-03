@@ -61,6 +61,12 @@ class K8sDeployment:
     # plus the operator's R2 creds, projected into the pod via envFrom so the
     # server can authenticate. Unused for `gs://` (GCS uses workload identity).
     object_storage_endpoint: str | None = None
+    # PriorityClass stamped on the finelog pod. When finelog is the log backend
+    # for an Iris control plane, set this to `iris-system` so a user job cannot
+    # preempt it off the shared control node. The class must already exist —
+    # Iris creates the iris-* PriorityClasses at `iris cluster start`; `deploy up`
+    # fails fast if it is missing rather than emitting an unschedulable pod.
+    priority_class_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +214,7 @@ def _build_k8s(raw: dict) -> K8sDeployment:
         storage_class=raw.get("storage_class"),
         storage_gb=int(raw.get("storage_gb", 200)),
         object_storage_endpoint=raw.get("object_storage_endpoint"),
+        priority_class_name=raw.get("priority_class_name"),
     )
 
 

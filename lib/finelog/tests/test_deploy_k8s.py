@@ -80,6 +80,26 @@ def test_render_deployment_threads_port_to_env_and_probes(cfg: FinelogConfig) ->
     assert 'value: "gs://bucket/logs"' in rendered
 
 
+def test_render_deployment_omits_priority_class_by_default(cfg: FinelogConfig) -> None:
+    """No priority_class_name configured -> the pod carries no priorityClassName."""
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "priorityClassName" not in rendered
+
+
+def test_render_deployment_stamps_priority_class_when_configured() -> None:
+    """A configured priority_class_name lands in the pod spec so the control-plane
+    finelog is not preemptible by user jobs on the shared node."""
+    cfg = FinelogConfig(
+        name="finelog",
+        port=20001,
+        image="ghcr.io/example/finelog:dev",
+        remote_log_dir="gs://bucket/logs",
+        deployment=Deployment(k8s=K8sDeployment(namespace="iris", priority_class_name="iris-system")),
+    )
+    rendered = _render_manifest(_K8S_MANIFEST_DIR / "02-deployment.yaml.tmpl", cfg)
+    assert "priorityClassName: iris-system" in rendered
+
+
 def test_render_deployment_inlines_cidr_auth_policy() -> None:
     cfg = FinelogConfig(
         name="finelog",

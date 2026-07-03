@@ -32,10 +32,10 @@ from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, pr
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
-    IRIS_PRIORITY_CLASS_BATCH,
-    IRIS_PRIORITY_CLASS_INTERACTIVE,
-    IRIS_PRIORITY_CLASS_PRODUCTION,
+    IRIS_PRIORITY_CLASS_SYSTEM,
+    IRIS_PRIORITY_CLASSES,
     K8sResource,
+    build_priority_class_manifest,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
@@ -146,6 +146,9 @@ def _build_controller_deployment(
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
                 "serviceAccountName": "iris-controller",
+                # Pin the controller above every user band so a user pod can never
+                # preempt it off the shared control node (see IRIS_PRIORITY_CLASSES).
+                "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                 "nodeSelector": node_selector,
                 # Tolerate the NVIDIA GPU taint (so the controller can run on
                 # GPU-only clusters with no CPU NodePool) and CoreWeave's
@@ -740,31 +743,19 @@ class K8sControllerProvider:
         logger.info("LocalQueue %s applied (clusterQueue=%s)", name, cluster_queue)
 
     def ensure_priority_classes(self) -> None:
-        """Create or update the iris-{production,interactive,batch} PriorityClass objects.
+        """Create or update the iris-{system,production,interactive,batch} PriorityClass objects.
 
-        PriorityClass is cluster-scoped. Iris owns these three names; any cluster
+        PriorityClass is cluster-scoped. Iris owns these names; any cluster
         running Iris gets them so pods are stamped without manual admin setup.
 
-        Priority values:
+        Priority values (see IRIS_PRIORITY_CLASSES):
+          iris-system     10000  — control plane (controller, finelog, Kueue); never preempted by user work
           iris-production  1000  — preempts interactive/batch; never preempted
           iris-interactive   10  — normal user work
           iris-batch          0  — opportunistic; below interactive, above CoreWeave NHC
         """
-        priority_classes = [
-            (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
-            (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
-        ]
-        for name, value, preemption_policy in priority_classes:
-            manifest = {
-                "apiVersion": "scheduling.k8s.io/v1",
-                "kind": "PriorityClass",
-                "metadata": {"name": name},
-                "value": value,
-                "preemptionPolicy": preemption_policy,
-                "globalDefault": False,
-                "description": f"Iris {name.removeprefix('iris-')} priority band",
-            }
+        for name, value, preemption_policy in IRIS_PRIORITY_CLASSES:
+            manifest = build_priority_class_manifest(name, value, preemption_policy)
             existing = self._kubectl.get_json(K8sResource.PRIORITY_CLASSES, name)
             if existing and (existing.get("value") != value or existing.get("preemptionPolicy") != preemption_policy):
                 # PriorityClass.value and preemptionPolicy are immutable. Existing
@@ -775,7 +766,7 @@ class K8sControllerProvider:
             self._kubectl.apply_json(manifest)
         logger.info(
             "PriorityClasses applied: %s",
-            ", ".join(n for n, _, _ in priority_classes),
+            ", ".join(n for n, _, _ in IRIS_PRIORITY_CLASSES),
         )
 
     # -- NodePool Management ---------------------------------------------------
