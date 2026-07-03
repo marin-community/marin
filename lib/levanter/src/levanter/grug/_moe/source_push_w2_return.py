@@ -28,6 +28,7 @@ from levanter.grug._moe.source_push_inbox import (
     KERNEL_NAME as W13_KERNEL_NAME,
     PushInboxConfig,
     SourcePushInboxRunSettings,
+    _make_exact_source_push_plan_inputs,
     _make_mesh,
     _make_source_push_plan_inputs,
     _make_weights,
@@ -39,6 +40,7 @@ from levanter.grug._moe.source_push_plan import (
     SOURCE_PUSH_META_FIELDS,
     SOURCE_PUSH_META_LOCAL_EXPERT,
     SOURCE_PUSH_META_LOCAL_ROW_START,
+    SOURCE_PUSH_META_SRC_RANK,
     SOURCE_PUSH_META_VALID_ROWS,
 )
 
@@ -65,8 +67,11 @@ class W2ReturnHostInputs:
 
     hidden: np.ndarray
     recv_meta: np.ndarray
+    expert_base: np.ndarray
+    src_base_by_expert: np.ndarray
     w_down: np.ndarray
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,8 +80,11 @@ class W2ReturnDeviceInputs:
 
     hidden: jax.Array
     recv_meta: jax.Array
+    expert_base: jax.Array
+    src_base_by_expert: jax.Array
     w_down: jax.Array
     queue_stats: dict[str, Any]
+    use_exact_expert_major: bool
 
 
 @dataclass(frozen=True)
@@ -168,13 +176,19 @@ def reference_w2_return_by_destination(
     hidden: Float[Array, "Dst rows I"],
     recv_meta: Int[Array, "Dst Src Q F"],
     w_down: Float[Array, "Dst E I D"],
+    expert_base: Int[Array, "Dst E"] | np.ndarray | None = None,
+    src_base_by_expert: Int[Array, "Dst Src E"] | np.ndarray | None = None,
+    *,
+    use_exact_expert_major: bool = False,
 ) -> Float[Array, "Dst Src Q M D"]:
     """Reference W2 over expert-major hidden rows in destination-local return order."""
 
     hidden_host = np.asarray(jax.device_get(hidden), dtype=np.float32)
     recv_meta_host = np.asarray(jax.device_get(recv_meta), dtype=np.int32)
     w_down_host = np.asarray(jax.device_get(w_down), dtype=np.float32)
-    _validate_reference_shapes(config, hidden_host, recv_meta_host, w_down_host)
+    expert_base_host = _expert_base_or_zeros(config, expert_base)
+    src_base_host = _src_base_by_expert_or_zeros(config, src_base_by_expert)
+    _validate_reference_shapes(config, hidden_host, recv_meta_host, w_down_host, expert_base_host, src_base_host)
 
     return_by_destination = np.zeros(
         (
@@ -193,7 +207,15 @@ def reference_w2_return_by_destination(
                 if valid_rows <= 0:
                     continue
                 expert = int(recv_meta_host[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT])
-                row_start = int(recv_meta_host[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START])
+                row_start = _w2_hidden_row_start(
+                    recv_meta_host,
+                    expert_base_host,
+                    src_base_host,
+                    dst=dst,
+                    src_ordinal=src_ordinal,
+                    entry=entry,
+                    use_exact_expert_major=use_exact_expert_major,
+                )
                 hidden_rows = hidden_host[dst, row_start : row_start + config.block_m]
                 return_by_destination[dst, src_ordinal, entry] = hidden_rows @ w_down_host[dst, expert]
     return jnp.asarray(return_by_destination)
@@ -226,12 +248,54 @@ def make_w2_return_source_plan_inputs(
     return W2ReturnHostInputs(
         hidden=hidden.astype(np.float32),
         recv_meta=host_inputs.recv_meta,
+        expert_base=host_inputs.expert_base,
+        src_base_by_expert=host_inputs.src_base_by_expert,
         w_down=make_w_down(config),
         queue_stats={
             **host_inputs.queue_stats,
             "w2_input_mode": "source_push_plan",
             "w2_hidden_input_mode": hidden_input_mode,
         },
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
+    )
+
+
+def make_w2_return_exact_source_plan_inputs(
+    config: PushInboxConfig,
+    *,
+    hidden_input_mode: str = W2_HIDDEN_INPUT_SYNTHETIC,
+) -> W2ReturnHostInputs:
+    """Build W2 inputs from exact count-derived SourcePushPlan metadata."""
+
+    validate_w2_return_config(config)
+    if hidden_input_mode not in W2_HIDDEN_INPUT_MODES:
+        raise ValueError(f"unknown hidden_input_mode={hidden_input_mode!r}; expected one of {W2_HIDDEN_INPUT_MODES}")
+    host_inputs = _make_exact_source_push_plan_inputs(config)
+    if hidden_input_mode == W2_HIDDEN_INPUT_W13_REFERENCE:
+        w_gate_up = np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32)
+        hidden = _reference_hidden(
+            config,
+            host_inputs.x,
+            host_inputs.send_meta,
+            w_gate_up,
+            host_inputs.expert_base,
+            host_inputs.src_base_by_expert,
+            use_exact_expert_major=host_inputs.use_exact_expert_major,
+        )
+    else:
+        hidden = make_synthetic_hidden(config)
+    return W2ReturnHostInputs(
+        hidden=hidden.astype(np.float32),
+        recv_meta=host_inputs.recv_meta,
+        expert_base=host_inputs.expert_base,
+        src_base_by_expert=host_inputs.src_base_by_expert,
+        w_down=make_w_down(config),
+        queue_stats={
+            **host_inputs.queue_stats,
+            "w2_input_mode": "exact_source_push_plan",
+            "w2_hidden_input_mode": hidden_input_mode,
+        },
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
 
 
@@ -241,12 +305,15 @@ def device_w2_return_inputs_from_host(host_inputs: W2ReturnHostInputs) -> W2Retu
     return W2ReturnDeviceInputs(
         hidden=jnp.asarray(host_inputs.hidden, dtype=jnp.bfloat16),
         recv_meta=jnp.asarray(host_inputs.recv_meta, dtype=jnp.int32),
+        expert_base=jnp.asarray(host_inputs.expert_base, dtype=jnp.int32),
+        src_base_by_expert=jnp.asarray(host_inputs.src_base_by_expert, dtype=jnp.int32),
         w_down=jnp.asarray(host_inputs.w_down, dtype=jnp.bfloat16),
         queue_stats=host_inputs.queue_stats,
+        use_exact_expert_major=host_inputs.use_exact_expert_major,
     )
 
 
-def _make_w2_return_kernel(config: PushInboxConfig):
+def _make_w2_return_kernel(config: PushInboxConfig, *, use_exact_expert_major: bool = False):
     validate_w2_return_config(config)
     k_tiles = config.intermediate_dim // config.block_k
     n_tiles = config.hidden_dim // config.block_n
@@ -254,6 +321,8 @@ def _make_w2_return_kernel(config: PushInboxConfig):
     def body(
         hidden_ref: Float[Ref, "rows I"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
+        expert_base_ref: Int[Ref, "E"],
+        src_base_by_expert_ref: Int[Ref, "SRC E"],
         w_down_ref: Float[Ref, "E I D"],
         return_ref: Float[Ref, "SRC Q M D"],
     ) -> None:
@@ -262,10 +331,18 @@ def _make_w2_return_kernel(config: PushInboxConfig):
         n_tile = pl.program_id(2)
         valid_rows = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
 
+        def _hidden_row_start() -> jax.Array:
+            if use_exact_expert_major:
+                src_rank = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_SRC_RANK]
+                expert = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
+                local_row_start = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+                return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
+            return recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+
         @pl.when(valid_rows > 0)
         def _compute_return_block() -> None:
             expert = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
-            row_start = recv_meta_ref[src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+            row_start = _hidden_row_start()
 
             def acc_scope(acc_ref) -> jax.Array:
                 def smem_scope(hidden_smem, w_down_smem, ready_barrier) -> None:
@@ -327,18 +404,28 @@ def _make_w2_return_kernel(config: PushInboxConfig):
     )
 
 
-def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig):
-    kernel = _make_w2_return_kernel(config)
+def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False):
+    kernel = _make_w2_return_kernel(config, use_exact_expert_major=use_exact_expert_major)
 
     def local_fn(
         hidden_local: Float[Array, "1 rows I"],
         recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
         w_down_local: Float[Array, "1 E I D"],
     ):
         hidden_local = hidden_local[0]
         recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
         w_down_local = w_down_local[0]
-        return_by_src_ordinal = kernel(hidden_local, recv_meta_local, w_down_local)
+        return_by_src_ordinal = kernel(
+            hidden_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_down_local,
+        )
         return return_by_src_ordinal[None, ...]
 
     return shard_map(
@@ -347,6 +434,8 @@ def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig):
         in_specs=(
             P(AXIS, None, None),
             P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
             P(AXIS, None, None, None),
         ),
         out_specs=P(AXIS, None, None, None, None),
@@ -354,7 +443,7 @@ def _sharded_w2_return_kernel(mesh: Mesh, config: PushInboxConfig):
     )
 
 
-def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
+def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig, *, use_exact_expert_major: bool = False):
     validate_w2_return_config(config)
     k_tiles = config.intermediate_dim // config.block_k
     n_tiles = config.hidden_dim // config.block_n
@@ -363,6 +452,8 @@ def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
     def body(
         hidden_ref: Float[Ref, "rows I"],
         recv_meta_ref: Int[Ref, "SRC Q F"],
+        expert_base_ref: Int[Ref, "E"],
+        src_base_by_expert_ref: Int[Ref, "SRC E"],
         w_down_ref: Float[Ref, "E I D"],
         source_return_ref: Float[Ref, "DST Q M D"],
     ) -> None:
@@ -383,10 +474,18 @@ def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
                 )
             valid_rows = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_VALID_ROWS]
 
+            def _hidden_row_start() -> jax.Array:
+                if use_exact_expert_major:
+                    src_rank = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_SRC_RANK]
+                    expert = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
+                    local_row_start = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+                    return expert_base_ref[expert] + src_base_by_expert_ref[src_rank, expert] + local_row_start
+                return recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+
             @pl.when(valid_rows > 0)
             def _compute_return_block() -> None:
                 expert = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT]
-                row_start = recv_meta_ref[static_src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START]
+                row_start = _hidden_row_start()
 
                 def acc_scope(acc_ref) -> jax.Array:
                     def smem_scope(hidden_smem, w_down_smem, ready_barrier) -> None:
@@ -484,18 +583,33 @@ def _make_w2_return_direct_to_source_kernel(config: PushInboxConfig):
     )
 
 
-def _sharded_w2_return_direct_to_source_kernel(mesh: Mesh, config: PushInboxConfig):
-    kernel = _make_w2_return_direct_to_source_kernel(config)
+def _sharded_w2_return_direct_to_source_kernel(
+    mesh: Mesh,
+    config: PushInboxConfig,
+    *,
+    use_exact_expert_major: bool = False,
+):
+    kernel = _make_w2_return_direct_to_source_kernel(config, use_exact_expert_major=use_exact_expert_major)
 
     def local_fn(
         hidden_local: Float[Array, "1 rows I"],
         recv_meta_local: Int[Array, "1 SRC Q F"],
+        expert_base_local: Int[Array, "1 E"],
+        src_base_by_expert_local: Int[Array, "1 SRC E"],
         w_down_local: Float[Array, "1 E I D"],
     ):
         hidden_local = hidden_local[0]
         recv_meta_local = recv_meta_local[0]
+        expert_base_local = expert_base_local[0]
+        src_base_by_expert_local = src_base_by_expert_local[0]
         w_down_local = w_down_local[0]
-        source_return = kernel(hidden_local, recv_meta_local, w_down_local)
+        source_return = kernel(
+            hidden_local,
+            recv_meta_local,
+            expert_base_local,
+            src_base_by_expert_local,
+            w_down_local,
+        )
         return source_return[None, ...]
 
     return shard_map(
@@ -504,6 +618,8 @@ def _sharded_w2_return_direct_to_source_kernel(mesh: Mesh, config: PushInboxConf
         in_specs=(
             P(AXIS, None, None),
             P(AXIS, None, None, None),
+            P(AXIS, None),
+            P(AXIS, None, None),
             P(AXIS, None, None, None),
         ),
         out_specs=P(AXIS, None, None, None, None),
@@ -625,16 +741,18 @@ def _sharded_return_copy_kernel(mesh: Mesh, config: PushInboxConfig):
     )
 
 
-def _sharded_w2_return_to_source_kernel(mesh: Mesh, config: PushInboxConfig):
-    w2_kernel = _sharded_w2_return_kernel(mesh, config)
+def _sharded_w2_return_to_source_kernel(mesh: Mesh, config: PushInboxConfig, *, use_exact_expert_major: bool = False):
+    w2_kernel = _sharded_w2_return_kernel(mesh, config, use_exact_expert_major=use_exact_expert_major)
     return_copy_kernel = _sharded_return_copy_kernel(mesh, config)
 
     def fn(
         hidden: Float[Array, "Dst rows I"],
         recv_meta: Int[Array, "Dst SRC Q F"],
+        expert_base: Int[Array, "Dst E"],
+        src_base_by_expert: Int[Array, "Dst SRC E"],
         w_down: Float[Array, "Dst E I D"],
     ):
-        return_by_destination = w2_kernel(hidden, recv_meta, w_down)
+        return_by_destination = w2_kernel(hidden, recv_meta, expert_base, src_base_by_expert, w_down)
         source_return = return_copy_kernel(return_by_destination, recv_meta)
         return return_by_destination, source_return
 
@@ -645,11 +763,23 @@ def _validate_w2_return(
     config: PushInboxConfig,
     hidden_host: np.ndarray,
     recv_meta_host: np.ndarray,
+    expert_base_host: np.ndarray,
+    src_base_by_expert_host: np.ndarray,
     w_down_host: np.ndarray,
     return_by_destination: jax.Array,
     source_return: jax.Array | None = None,
+    *,
+    use_exact_expert_major: bool = False,
 ) -> W2ReturnValidationMetrics:
-    expected = reference_w2_return_by_destination(config, hidden_host, recv_meta_host, w_down_host)
+    expected = reference_w2_return_by_destination(
+        config,
+        hidden_host,
+        recv_meta_host,
+        w_down_host,
+        expert_base_host,
+        src_base_by_expert_host,
+        use_exact_expert_major=use_exact_expert_major,
+    )
     observed = np.asarray(jax.device_get(return_by_destination), dtype=np.float32)
     expected_host = np.asarray(jax.device_get(expected), dtype=np.float32)
     diff = np.abs(observed - expected_host)
@@ -682,10 +812,22 @@ def _validate_w2_return_source_queue(
     config: PushInboxConfig,
     hidden_host: np.ndarray,
     recv_meta_host: np.ndarray,
+    expert_base_host: np.ndarray,
+    src_base_by_expert_host: np.ndarray,
     w_down_host: np.ndarray,
     source_return: jax.Array,
+    *,
+    use_exact_expert_major: bool = False,
 ) -> W2ReturnValidationMetrics:
-    expected = reference_w2_return_by_destination(config, hidden_host, recv_meta_host, w_down_host)
+    expected = reference_w2_return_by_destination(
+        config,
+        hidden_host,
+        recv_meta_host,
+        w_down_host,
+        expert_base_host,
+        src_base_by_expert_host,
+        use_exact_expert_major=use_exact_expert_major,
+    )
     source_expected = source_queue_from_destination_return(config, expected)
     observed_host = np.asarray(jax.device_get(source_return), dtype=np.float32)
     expected_host = np.asarray(jax.device_get(source_expected), dtype=np.float32)
@@ -720,19 +862,41 @@ def _run_w2_return_one(
         _emit_progress(config, settings.progress_events, "device_put_start")
         hidden = jax.device_put(inputs.hidden, NamedSharding(mesh, P(AXIS, None, None)))
         recv_meta = jax.device_put(inputs.recv_meta, NamedSharding(mesh, P(AXIS, None, None, None)))
+        expert_base = jax.device_put(inputs.expert_base, NamedSharding(mesh, P(AXIS, None)))
+        src_base_by_expert = jax.device_put(inputs.src_base_by_expert, NamedSharding(mesh, P(AXIS, None, None)))
         w_down = jax.device_put(inputs.w_down, NamedSharding(mesh, P(AXIS, None, None, None)))
         _emit_progress(config, settings.progress_events, "jit_start")
         if return_mode == W2_RETURN_MODE_DIRECT_REMOTE:
-            fn = jax.jit(_sharded_w2_return_direct_to_source_kernel(mesh, config))
+            fn = jax.jit(
+                _sharded_w2_return_direct_to_source_kernel(
+                    mesh,
+                    config,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
+                )
+            )
         elif return_mode == W2_RETURN_MODE_SEPARATE_COPY:
-            fn = jax.jit(_sharded_w2_return_to_source_kernel(mesh, config))
+            fn = jax.jit(
+                _sharded_w2_return_to_source_kernel(
+                    mesh,
+                    config,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
+                )
+            )
         else:
-            fn = jax.jit(_sharded_w2_return_kernel(mesh, config))
+            fn = jax.jit(
+                _sharded_w2_return_kernel(
+                    mesh,
+                    config,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
+                )
+            )
 
         timing = _time_jitted(
             fn,
             hidden,
             recv_meta,
+            expert_base,
+            src_base_by_expert,
             w_down,
             warmup=settings.warmup,
             steps=settings.steps,
@@ -747,8 +911,11 @@ def _run_w2_return_one(
                     config,
                     host_inputs.hidden,
                     host_inputs.recv_meta,
+                    host_inputs.expert_base,
+                    host_inputs.src_base_by_expert,
                     host_inputs.w_down,
                     timing.output,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
                 )
             else:
                 return_by_destination = (
@@ -759,9 +926,12 @@ def _run_w2_return_one(
                     config,
                     host_inputs.hidden,
                     host_inputs.recv_meta,
+                    host_inputs.expert_base,
+                    host_inputs.src_base_by_expert,
                     host_inputs.w_down,
                     return_by_destination,
                     source_return,
+                    use_exact_expert_major=inputs.use_exact_expert_major,
                 )
 
         queue_stats = inputs.queue_stats
@@ -900,11 +1070,43 @@ def _emit_progress(config: PushInboxConfig, progress_events: bool, event: str) -
     )
 
 
+def _expert_base_or_zeros(config: PushInboxConfig, expert_base: Any) -> np.ndarray:
+    if expert_base is None:
+        return np.zeros((config.ep_size, config.experts_per_rank), dtype=np.int32)
+    return np.asarray(jax.device_get(expert_base), dtype=np.int32)
+
+
+def _src_base_by_expert_or_zeros(config: PushInboxConfig, src_base_by_expert: Any) -> np.ndarray:
+    if src_base_by_expert is None:
+        return np.zeros((config.ep_size, config.ep_size, config.experts_per_rank), dtype=np.int32)
+    return np.asarray(jax.device_get(src_base_by_expert), dtype=np.int32)
+
+
+def _w2_hidden_row_start(
+    recv_meta: np.ndarray,
+    expert_base: np.ndarray,
+    src_base_by_expert: np.ndarray,
+    *,
+    dst: int,
+    src_ordinal: int,
+    entry: int,
+    use_exact_expert_major: bool,
+) -> int:
+    if use_exact_expert_major:
+        src_rank = int(recv_meta[dst, src_ordinal, entry, SOURCE_PUSH_META_SRC_RANK])
+        expert = int(recv_meta[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_EXPERT])
+        local_row_start = int(recv_meta[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START])
+        return int(expert_base[dst, expert] + src_base_by_expert[dst, src_rank, expert] + local_row_start)
+    return int(recv_meta[dst, src_ordinal, entry, SOURCE_PUSH_META_LOCAL_ROW_START])
+
+
 def _validate_reference_shapes(
     config: PushInboxConfig,
     hidden: np.ndarray,
     recv_meta: np.ndarray,
     w_down: np.ndarray,
+    expert_base: np.ndarray | None = None,
+    src_base_by_expert: np.ndarray | None = None,
 ) -> None:
     if hidden.ndim != 3:
         raise ValueError(f"hidden must have shape [dst, rows, I], got {hidden.shape}")
@@ -922,3 +1124,10 @@ def _validate_reference_shapes(
             f"hidden shape {hidden.shape} must have leading dim {config.ep_size} and trailing dim "
             f"{config.intermediate_dim}"
         )
+    if expert_base is not None and expert_base.shape != (config.ep_size, config.experts_per_rank):
+        raise ValueError(
+            f"expert_base shape must be {(config.ep_size, config.experts_per_rank)}, got {expert_base.shape}"
+        )
+    expected_src_base = (config.ep_size, config.ep_size, config.experts_per_rank)
+    if src_base_by_expert is not None and src_base_by_expert.shape != expected_src_base:
+        raise ValueError(f"src_base_by_expert shape must be {expected_src_base}, got {src_base_by_expert.shape}")

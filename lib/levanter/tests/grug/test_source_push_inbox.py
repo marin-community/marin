@@ -606,6 +606,63 @@ def test_source_push_w2_source_plan_inputs_can_use_w13_reference_hidden():
     assert np.count_nonzero(inputs.hidden) > 0
 
 
+def test_source_push_w2_exact_source_plan_inputs_use_count_derived_row_starts():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=1,
+        inbox_slots=1,
+        hidden_dim=8,
+        intermediate_dim=8,
+        block_m=2,
+        block_k=4,
+        block_n=4,
+        experts_per_rank=1,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=4,
+        topk=1,
+        capacity_factor=1.25,
+    )
+
+    inputs = source_push_w2_return.make_w2_return_exact_source_plan_inputs(
+        config,
+        hidden_input_mode=source_push_w2_return.W2_HIDDEN_INPUT_W13_REFERENCE,
+    )
+    return_by_destination = source_push_w2_return.reference_w2_return_by_destination(
+        config,
+        inputs.hidden,
+        inputs.recv_meta,
+        inputs.w_down,
+        inputs.expert_base,
+        inputs.src_base_by_expert,
+        use_exact_expert_major=inputs.use_exact_expert_major,
+    )
+
+    src = 1
+    dst = 0
+    recv_src_ordinal = source_push_inbox._recv_src_ordinal(config, dst, src)
+    entry = 0
+    local_row_start = inputs.recv_meta[dst, recv_src_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_ROW_START]
+    expert = inputs.recv_meta[dst, recv_src_ordinal, entry, source_push_plan.SOURCE_PUSH_META_LOCAL_EXPERT]
+    exact_row_start = inputs.expert_base[dst, expert] + inputs.src_base_by_expert[dst, src, expert] + local_row_start
+
+    assert inputs.use_exact_expert_major
+    assert inputs.queue_stats["w2_input_mode"] == "exact_source_push_plan"
+    assert inputs.queue_stats["row_start_mode"] == source_push_inbox.ROW_START_MODE_EXACT_EXPERT_MAJOR
+    assert inputs.queue_stats["row_layout"] == source_push_inbox.ROW_LAYOUT_EXACT_EXPERT_MAJOR
+    assert local_row_start == 0
+    assert exact_row_start == config.block_m
+    assert inputs.hidden[dst, local_row_start, 0] != inputs.hidden[dst, exact_row_start, 0]
+    expected = inputs.hidden[dst, exact_row_start : exact_row_start + config.block_m] @ inputs.w_down[dst, expert]
+    np.testing.assert_allclose(
+        np.asarray(return_by_destination[dst, recv_src_ordinal, entry], dtype=np.float32),
+        expected,
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
 def test_source_push_w2_plan_reference_matches_destination_reference_for_non_symmetric_ep():
     config = source_push_inbox.PushInboxConfig(
         ep_size=3,

@@ -487,7 +487,7 @@ def _sharded_source_push_forward_kernel(mesh: Mesh, config: PushInboxConfig):
             src_base_by_expert,
             w_gate_up,
         )
-        source_return = w2_return_kernel(hidden, recv_meta, w_down)
+        source_return = w2_return_kernel(hidden, recv_meta, expert_base, src_base_by_expert, w_down)
         source_return = remote_write_barrier(source_return)
         return combine_kernel(
             source_return,
@@ -585,7 +585,13 @@ def _call_source_push_forward_device_inputs(
             inputs.w_gate_up,
         )
         _block_until_ready(hidden)
-        source_return = w2_return_fn(hidden, inputs.recv_meta, inputs.w_down)
+        source_return = w2_return_fn(
+            hidden,
+            inputs.recv_meta,
+            inputs.expert_base,
+            inputs.src_base_by_expert,
+            inputs.w_down,
+        )
         _block_until_ready(source_return)
         return combine_fn(
             source_return,
@@ -657,7 +663,7 @@ def _time_staged_source_push_forward(
             stage_times[FORWARD_STAGE_W13] = time.perf_counter() - stage_start
 
         stage_start = time.perf_counter()
-        source_return = w2_return_fn(hidden, recv_meta, w_down)
+        source_return = w2_return_fn(hidden, recv_meta, expert_base, src_base_by_expert, w_down)
         _block_until_ready(source_return)
         if record_stage_times:
             stage_times[FORWARD_STAGE_W2_RETURN] = time.perf_counter() - stage_start
