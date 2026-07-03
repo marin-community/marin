@@ -11,11 +11,27 @@ mixtures:
 - Canonical DSP, KL=0.1.
 - OLMix Table-9 macro delta=0.01, KL=0.05, aggregate cap=4.
 - DSP effective-exposure Table-9 macro, KL=0.025.
+- DSP effective-exposure Table-9 macro, trust-region KL sweep values
+  0.05, 0.1, 0.2, and 0.5.
+- DSP effective-exposure Table-9 macro, follow-up trust-region KL values
+  0.25, 0.3, and 0.4.
+- Per-component effective-exposure DSP Table-9 macro, trust-region KL sweep
+  values 0.025, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, and 0.5.
+- Adaptive-shrinkage Table-9 macro probes at the 3e18 validation rung.
+- One-phase OLMix uncheatable BPB delta=0.01, KL=0.05, aggregate cap=4.
+- One-phase DSP effective-exposure uncheatable BPB, KL=0.1.
+- One-phase OLMix Table-9 macro delta=0.01, KL=0.05, aggregate cap=4.
+- One-phase DSP effective-exposure Table-9 macro, trust-region KL sweep values
+  0.05, 0.1, 0.2, 0.25, and 0.3.
+- Repeat controls for the one-phase DSP Table-9 KL=0.1 tied-phase candidate
+  and the two-phase split-saturation/penalty Table-9 KL=0.3 candidate.
 
 Unlike ``launch_delphi_baseline_mixtures.py``, this script intentionally accepts
 phase-asymmetric mixtures and uses the historical 80/20 Dolma3/Dolmino
 two-phase schedule.  The simulated-epoch target budget is fixed across Delphi
-scales; each rung only changes the realized training token budget.
+scales; each rung only changes the realized training token budget.  One-phase
+mixtures are represented as equal phase-0 and phase-1 weights; this preserves
+the launcher schedule while making the effective mixture constant over training.
 """
 
 from __future__ import annotations
@@ -43,8 +59,9 @@ from levanter.main import train_lm
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
+from marin.evaluation.olmo_base_eval.run import olmo_base_eval_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
-from marin.execution.types import ExecutorStep, this_output_path
+from marin.execution.types import ExecutorStep, InputName, this_output_path
 from marin.processing.tokenize import step_to_lm_mixture_component
 from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
@@ -86,6 +103,40 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REFERENCE_OUTPUT_DIR = SCRIPT_DIR / "exploratory" / "two_phase_many" / "reference_outputs"
 LOCAL_ARTIFACT_DIR = REFERENCE_OUTPUT_DIR / "delphi_uncheatable_optimized_mixtures_20260625"
 MIXTURE_ASSET_DIR = SCRIPT_DIR / "assets" / "delphi_optimized_mixtures"
+KL_SWEEP_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_table9_dsp_kl_sweep_3e18_20260627/mixtures"
+)
+TABLE9_DSP_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_table9_dsp_validation_mixtures_20260628/mixtures"
+)
+TABLE9_ADAPTIVE_SHRINKAGE_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_table9_adaptive_shrinkage_validation_mixtures_20260628/mixtures"
+)
+TABLE9_PHASE_SPLIT_DSP_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_table9_phase_split_dsp_validation_mixtures_20260630/mixtures"
+)
+DSP_EXPOSURE_REPAIR_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_dsp_exposure_repair_validation_mixtures_20260702/mixtures"
+)
+DSP_SUPPORT_AWARE_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_dsp_support_aware_validation_mixtures_20260703/mixtures"
+)
+DELPHI_BASELINE_NOISE_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_baseline_noise_validation_mixtures_20260703/mixtures"
+)
+ONE_PHASE_TABLE9_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/" "delphi_one_phase_table9_validation_mixtures_20260628/mixtures"
+)
+ONE_PHASE_UNCHEATABLE_VALIDATION_MIXTURE_GCS_DIR = (
+    "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
+    "delphi_one_phase_uncheatable_validation_mixtures_20260629/mixtures"
+)
+TABLE9_REQUEST_SET_DIR = InputName.hardcoded("raw/eval-datasets/olmo_base_eval_table9/v2")
+TABLE9_EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-8", regions=["us-east5"], zone="us-east5-b", disk="80g")
+TABLE9_TARGET_METRIC = "olmo_base_easy/table9_51_component_macro_bpb"
 
 EXPERIMENT_NAME = "pinlin_calvin_xu/data_mixture/delphi_uncheatable_optimized_mixtures_20260625"
 DEFAULT_ANALYSIS_OUTPUT_PATH = (
@@ -105,6 +156,61 @@ class DelphiValidationMixture(StrEnum):
     DSP_CANONICAL_KL01 = "dsp_canon_kl01"
     OLMIX_TABLE9_D001_KL005_CAP4 = "olmix_table9_d001_kl005_cap4"
     DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0025 = "dsp_effexp_table9_kl0025"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P05 = "dsp_effexp_table9_kl0p05"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P1 = "dsp_effexp_table9_kl0p1"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P2 = "dsp_effexp_table9_kl0p2"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P25 = "dsp_effexp_table9_kl0p25"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P3 = "dsp_effexp_table9_kl0p3"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P4 = "dsp_effexp_table9_kl0p4"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P5 = "dsp_effexp_table9_kl0p5"
+    DSP_PER_COMPONENT_TABLE9_KL0P025 = "dsp_percomp_table9_kl0p025"
+    DSP_PER_COMPONENT_TABLE9_KL0P05 = "dsp_percomp_table9_kl0p05"
+    DSP_PER_COMPONENT_TABLE9_KL0P1 = "dsp_percomp_table9_kl0p1"
+    DSP_PER_COMPONENT_TABLE9_KL0P2 = "dsp_percomp_table9_kl0p2"
+    DSP_PER_COMPONENT_TABLE9_KL0P25 = "dsp_percomp_table9_kl0p25"
+    DSP_PER_COMPONENT_TABLE9_KL0P3 = "dsp_percomp_table9_kl0p3"
+    DSP_PER_COMPONENT_TABLE9_KL0P4 = "dsp_percomp_table9_kl0p4"
+    DSP_PER_COMPONENT_TABLE9_KL0P5 = "dsp_percomp_table9_kl0p5"
+    DSP_SHRINK_FIXED_SPEARMAN_KL0P2 = "dsp_shrink_fixed_spearman_kl0p2"
+    DSP_SHRINK_FIXED_R2HARM_KL0P2 = "dsp_shrink_fixed_r2harm_kl0p2"
+    DSP_SHRINK_TV_SPEARMAN_B0P5_KL0P2 = "dsp_shrink_tv_spearman_b0p5_kl0p2"
+    DSP_SHRINK_TV_R2HARM_B1_KL0P2 = "dsp_shrink_tv_r2harm_b1_kl0p2"
+    DSP_SHRINK_DELTA_SPEARMAN_B0P5_KL0P2 = "dsp_shrink_delta_spearman_b0p5_kl0p2"
+    DSP_SHRINK_DELTA_R2HARM_B1_KL0P2 = "dsp_shrink_delta_r2harm_b1_kl0p2"
+    DSP_SHRINK_UNC_SPEARMAN_G0P25_KL0P2 = "dsp_shrink_unc_spearman_g0p25_kl0p2"
+    DSP_SHRINK_UNC_R2HARM_G0P5_KL0P2 = "dsp_shrink_unc_r2harm_g0p5_kl0p2"
+    QSPLIT_RUN00018_TABLE9_ANCHOR = "qsplit_run00018_table9_anchor"
+    DSP_SPLIT_TABLE9_L2_0P01_KL0P3 = "dsp_split_table9_l2_0p01_kl0p3"
+    DSP_SPLIT_TABLE9_L2_0P01_KL0P4 = "dsp_split_table9_l2_0p01_kl0p4"
+    DSP_SPLIT_TABLE9_L2_0P01_KL0P4_REPEAT = "dsp_split_table9_l2_0p01_kl0p4_repeat"
+    DSP_EFFECTIVE_EXPOSURE_TABLE9_L2_0P01_KL0P5 = "dsp_effexp_table9_l2_0p01_kl0p5"
+    OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL005_CAP4 = "olmix_onephase_uncheatable_d001_kl005_cap4"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1 = "dsp_onephase_effexp_uncheatable_kl0p1"
+    OLMIX_ONE_PHASE_TABLE9_D001_KL005_CAP4 = "olmix_onephase_table9_d001_kl005_cap4"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05 = "dsp_onephase_effexp_table9_kl0p05"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1 = "dsp_onephase_effexp_table9_kl0p1"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P2 = "dsp_onephase_effexp_table9_kl0p2"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P25 = "dsp_onephase_effexp_table9_kl0p25"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P3 = "dsp_onephase_effexp_table9_kl0p3"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_A = "dsp_onephase_effexp_table9_kl0p1_repeat_a"
+    DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_B = "dsp_onephase_effexp_table9_kl0p1_repeat_b"
+    DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_A = "dsp_split_table9_l2_0p01_kl0p3_repeat_a"
+    DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_B = "dsp_split_table9_l2_0p01_kl0p3_repeat_b"
+    DSP_UNCHEATABLE_EXPOSURE_TARGETED = "dsp_uncheatable_exposure_targeted"
+    DSP_UNCHEATABLE_EXPOSURE_ALL_DEFICITS = "dsp_uncheatable_exposure_all_deficits"
+    DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM = "dsp_uncheatable_support_aware_raw_optimum"
+    DSP_TABLE9_EXPOSURE_TARGETED = "dsp_table9_exposure_targeted"
+    DSP_TABLE9_EXPOSURE_ALL_DEFICITS = "dsp_table9_exposure_all_deficits"
+    PROPORTIONAL_NOISE_3E18_A = "proportional_noise_3e18_a"
+    PROPORTIONAL_NOISE_3E18_B = "proportional_noise_3e18_b"
+    PROPORTIONAL_NOISE_3E18_C = "proportional_noise_3e18_c"
+    PROPORTIONAL_NOISE_3E18_D = "proportional_noise_3e18_d"
+    PROPORTIONAL_NOISE_3E18_E = "proportional_noise_3e18_e"
+    PROPORTIONAL_NOISE_3E18_F = "proportional_noise_3e18_f"
+    PROPORTIONAL_NOISE_3E18_G = "proportional_noise_3e18_g"
+    PROPORTIONAL_NOISE_3E18_H = "proportional_noise_3e18_h"
+    PROPORTIONAL_NOISE_3E18_I = "proportional_noise_3e18_i"
+    PROPORTIONAL_NOISE_3E18_J = "proportional_noise_3e18_j"
 
 
 @dataclass(frozen=True)
@@ -119,6 +225,135 @@ class MixtureSource:
     method: str
     wandb_series_tag: str
     expected_max_simulated_epoch: float | None = None
+
+
+def _table9_dsp_validation_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    wandb_series_tag: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{TABLE9_DSP_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag=wandb_series_tag,
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _one_phase_table9_validation_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{ONE_PHASE_TABLE9_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6609,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag="delphi-one-phase-table9-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _one_phase_uncheatable_validation_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{ONE_PHASE_UNCHEATABLE_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6609,
+        target_metric="eval/uncheatable_eval/bpb",
+        method=method,
+        wandb_series_tag="delphi-one-phase-uncheatable-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _table9_adaptive_shrinkage_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{TABLE9_ADAPTIVE_SHRINKAGE_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag="delphi-table9-adaptive-shrinkage",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _table9_phase_split_dsp_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{TABLE9_PHASE_SPLIT_DSP_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method=method,
+        wandb_series_tag="delphi-table9-phase-dsp-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _dsp_exposure_repair_source(
+    *,
+    key: DelphiValidationMixture,
+    display_name: str,
+    target_metric: str,
+    method: str,
+    expected_max_simulated_epoch: float,
+) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=display_name,
+        source_csv=f"{DSP_EXPOSURE_REPAIR_VALIDATION_MIXTURE_GCS_DIR}/{key.value}.csv",
+        github_issue=6611,
+        target_metric=target_metric,
+        method=method,
+        wandb_series_tag="delphi-dsp-exposure-repair-validation",
+        expected_max_simulated_epoch=expected_max_simulated_epoch,
+    )
+
+
+def _proportional_noise_source(*, key: DelphiValidationMixture, label: str) -> MixtureSource:
+    return MixtureSource(
+        key=key,
+        display_name=f"Proportional 3e18 noise repeat {label}",
+        source_csv=f"{DELPHI_BASELINE_NOISE_VALIDATION_MIXTURE_GCS_DIR}/proportional.csv",
+        github_issue=6611,
+        target_metric="noise_floor/proportional_3e18",
+        method=f"proportional_3e18_noise_repeat_{label.lower()}",
+        wandb_series_tag="delphi-3e18-baseline-noise-panel",
+        expected_max_simulated_epoch=None,
+    )
 
 
 MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
@@ -171,7 +406,7 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         display_name="OLMix Table-9 macro delta=0.01 KL=0.05 cap=4",
         source_csv=str(MIXTURE_ASSET_DIR / "olmix_table9_delta0p01_kl0p05_cap4.csv"),
         github_issue=6611,
-        target_metric="olmo_base_easy/table9_51_component_macro_bpb",
+        target_metric=TABLE9_TARGET_METRIC,
         method="olmix_table9_delta0p01_kl0p05_cap4",
         wandb_series_tag="delphi-table9-optimized-mixtures",
         expected_max_simulated_epoch=4.0,
@@ -181,10 +416,371 @@ MIXTURE_SOURCES: dict[DelphiValidationMixture, MixtureSource] = {
         display_name="DSP effective-exposure Table-9 macro KL=0.025",
         source_csv=str(MIXTURE_ASSET_DIR / "dsp_effexp_table9_kl0p025.csv"),
         github_issue=6611,
-        target_metric="olmo_base_easy/table9_51_component_macro_bpb",
+        target_metric=TABLE9_TARGET_METRIC,
         method="dsp_effective_exposure_table9_kl0p025",
         wandb_series_tag="delphi-table9-optimized-mixtures",
         expected_max_simulated_epoch=8.530735,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P05: MixtureSource(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P05,
+        display_name="DSP effective-exposure Table-9 macro KL=0.05",
+        source_csv=f"{KL_SWEEP_MIXTURE_GCS_DIR}/dsp_effexp_table9_kl0p05.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_effective_exposure_table9_kl0p05",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=7.612337,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P1: MixtureSource(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P1,
+        display_name="DSP effective-exposure Table-9 macro KL=0.1",
+        source_csv=f"{KL_SWEEP_MIXTURE_GCS_DIR}/dsp_effexp_table9_kl0p1.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_effective_exposure_table9_kl0p1",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=6.93664,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P2: MixtureSource(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P2,
+        display_name="DSP effective-exposure Table-9 macro KL=0.2",
+        source_csv=f"{KL_SWEEP_MIXTURE_GCS_DIR}/dsp_effexp_table9_kl0p2.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_effective_exposure_table9_kl0p2",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=6.078404,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P25: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P25,
+        display_name="DSP effective-exposure Table-9 macro KL=0.25",
+        method="dsp_effective_exposure_table9_kl0p25",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=5.630997,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P3: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P3,
+        display_name="DSP effective-exposure Table-9 macro KL=0.3",
+        method="dsp_effective_exposure_table9_kl0p3",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=5.050459,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P4: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P4,
+        display_name="DSP effective-exposure Table-9 macro KL=0.4",
+        method="dsp_effective_exposure_table9_kl0p4",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=4.327265,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P5: MixtureSource(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_KL0P5,
+        display_name="DSP effective-exposure Table-9 macro KL=0.5",
+        source_csv=f"{KL_SWEEP_MIXTURE_GCS_DIR}/dsp_effexp_table9_kl0p5.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_effective_exposure_table9_kl0p5",
+        wandb_series_tag="delphi-table9-dsp-kl-sweep",
+        expected_max_simulated_epoch=3.863495,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P025: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P025,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.025",
+        method="dsp_per_component_effective_exposure_table9_kl0p025",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=7.415576,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P05: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P05,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.05",
+        method="dsp_per_component_effective_exposure_table9_kl0p05",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=7.052982,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P1: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P1,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.1",
+        method="dsp_per_component_effective_exposure_table9_kl0p1",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=6.800308,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P2: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P2,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.2",
+        method="dsp_per_component_effective_exposure_table9_kl0p2",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=7.050150,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P25: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P25,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.25",
+        method="dsp_per_component_effective_exposure_table9_kl0p25",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=6.824361,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P3: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P3,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.3",
+        method="dsp_per_component_effective_exposure_table9_kl0p3",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=6.405132,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P4: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P4,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.4",
+        method="dsp_per_component_effective_exposure_table9_kl0p4",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=5.451996,
+    ),
+    DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P5: _table9_dsp_validation_source(
+        key=DelphiValidationMixture.DSP_PER_COMPONENT_TABLE9_KL0P5,
+        display_name="DSP per-component effective-exposure Table-9 KL=0.5",
+        method="dsp_per_component_effective_exposure_table9_kl0p5",
+        wandb_series_tag="delphi-table9-per-component-dsp-kl-sweep",
+        expected_max_simulated_epoch=4.610282,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_FIXED_SPEARMAN_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_FIXED_SPEARMAN_KL0P2,
+        display_name="DSP Table-9 fixed shrinkage, OOF Spearman, KL=0.2",
+        method="dsp_table9_fixed_shrinkage_oof_spearman_kl0p2",
+        expected_max_simulated_epoch=6.280670,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_FIXED_R2HARM_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_FIXED_R2HARM_KL0P2,
+        display_name="DSP Table-9 fixed shrinkage, OOF R2 x harm-t, KL=0.2",
+        method="dsp_table9_fixed_shrinkage_oof_r2_x_harm_t_kl0p2",
+        expected_max_simulated_epoch=4.244335,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_TV_SPEARMAN_B0P5_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_TV_SPEARMAN_B0P5_KL0P2,
+        display_name="DSP Table-9 TV-adaptive shrinkage, OOF Spearman, beta=0.5, KL=0.2",
+        method="dsp_table9_tv_adaptive_shrinkage_oof_spearman_beta0p5_kl0p2",
+        expected_max_simulated_epoch=5.665925,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_TV_R2HARM_B1_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_TV_R2HARM_B1_KL0P2,
+        display_name="DSP Table-9 TV-adaptive shrinkage, OOF R2 x harm-t, beta=1, KL=0.2",
+        method="dsp_table9_tv_adaptive_shrinkage_oof_r2_x_harm_t_beta1_kl0p2",
+        expected_max_simulated_epoch=3.190545,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_DELTA_SPEARMAN_B0P5_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_DELTA_SPEARMAN_B0P5_KL0P2,
+        display_name="DSP Table-9 delta-adaptive shrinkage, OOF Spearman, beta=0.5, KL=0.2",
+        method="dsp_table9_delta_adaptive_shrinkage_oof_spearman_beta0p5_kl0p2",
+        expected_max_simulated_epoch=3.399065,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_DELTA_R2HARM_B1_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_DELTA_R2HARM_B1_KL0P2,
+        display_name="DSP Table-9 delta-adaptive shrinkage, OOF R2 x harm-t, beta=1, KL=0.2",
+        method="dsp_table9_delta_adaptive_shrinkage_oof_r2_x_harm_t_beta1_kl0p2",
+        expected_max_simulated_epoch=1.957739,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_UNC_SPEARMAN_G0P25_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_UNC_SPEARMAN_G0P25_KL0P2,
+        display_name="DSP Table-9 uncertainty penalty, OOF Spearman, gamma=0.25, KL=0.2",
+        method="dsp_table9_uncertainty_penalty_oof_spearman_gamma0p25_kl0p2",
+        expected_max_simulated_epoch=6.279232,
+    ),
+    DelphiValidationMixture.DSP_SHRINK_UNC_R2HARM_G0P5_KL0P2: _table9_adaptive_shrinkage_source(
+        key=DelphiValidationMixture.DSP_SHRINK_UNC_R2HARM_G0P5_KL0P2,
+        display_name="DSP Table-9 uncertainty penalty, OOF R2 x harm-t, gamma=0.5, KL=0.2",
+        method="dsp_table9_uncertainty_penalty_oof_r2_x_harm_t_gamma0p5_kl0p2",
+        expected_max_simulated_epoch=4.216520,
+    ),
+    DelphiValidationMixture.QSPLIT_RUN00018_TABLE9_ANCHOR: _table9_phase_split_dsp_source(
+        key=DelphiValidationMixture.QSPLIT_RUN00018_TABLE9_ANCHOR,
+        display_name="QSplit run00018 Table-9 anchor",
+        method="qsplit_run00018_table9_anchor",
+        expected_max_simulated_epoch=61.809205,
+    ),
+    DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3: _table9_phase_split_dsp_source(
+        key=DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3,
+        display_name="DSP split saturation/penalty Table-9 L2=0.01 KL=0.3",
+        method="dsp_split_saturation_penalty_table9_l2_0p01_kl0p3",
+        expected_max_simulated_epoch=4.293921,
+    ),
+    DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P4: _table9_phase_split_dsp_source(
+        key=DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P4,
+        display_name="DSP split saturation/penalty Table-9 L2=0.01 KL=0.4",
+        method="dsp_split_saturation_penalty_table9_l2_0p01_kl0p4",
+        expected_max_simulated_epoch=3.667958,
+    ),
+    DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P4_REPEAT: _table9_phase_split_dsp_source(
+        key=DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P4_REPEAT,
+        display_name="DSP split saturation/penalty Table-9 L2=0.01 KL=0.4 repeat",
+        method="dsp_split_saturation_penalty_table9_l2_0p01_kl0p4_repeat",
+        expected_max_simulated_epoch=3.667958,
+    ),
+    DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_L2_0P01_KL0P5: _table9_phase_split_dsp_source(
+        key=DelphiValidationMixture.DSP_EFFECTIVE_EXPOSURE_TABLE9_L2_0P01_KL0P5,
+        display_name="DSP effective-exposure Table-9 L2=0.01 KL=0.5",
+        method="dsp_effective_exposure_table9_l2_0p01_kl0p5",
+        expected_max_simulated_epoch=4.805505,
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL005_CAP4: _one_phase_uncheatable_validation_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_UNCHEATABLE_D001_KL005_CAP4,
+        display_name="One-phase OLMix uncheatable BPB delta=0.01 KL=0.05 cap=4",
+        method="one_phase_olmix_uncheatable_delta0p01_kl0p05_cap4",
+        expected_max_simulated_epoch=4.000002,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1: _one_phase_uncheatable_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_UNCHEATABLE_KL0P1,
+        display_name="One-phase DSP effective-exposure uncheatable BPB KL=0.1",
+        method="one_phase_dsp_effective_exposure_uncheatable_l2_0p01_kl0p1",
+        expected_max_simulated_epoch=8.128131,
+    ),
+    DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL005_CAP4: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.OLMIX_ONE_PHASE_TABLE9_D001_KL005_CAP4,
+        display_name="One-phase OLMix Table-9 macro delta=0.01 KL=0.05 cap=4",
+        method="one_phase_olmix_table9_delta0p01_kl0p05_cap4",
+        expected_max_simulated_epoch=4.0,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P05,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.05",
+        method="one_phase_dsp_effective_exposure_table9_kl0p05",
+        expected_max_simulated_epoch=20.648222,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.1",
+        method="one_phase_dsp_effective_exposure_table9_kl0p1",
+        expected_max_simulated_epoch=16.541119,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P2: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P2,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.2",
+        method="one_phase_dsp_effective_exposure_table9_kl0p2",
+        expected_max_simulated_epoch=13.673005,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P25: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P25,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.25",
+        method="one_phase_dsp_effective_exposure_table9_kl0p25",
+        expected_max_simulated_epoch=12.559517,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P3: _one_phase_table9_validation_source(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P3,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.3",
+        method="one_phase_dsp_effective_exposure_table9_kl0p3",
+        expected_max_simulated_epoch=11.590955,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_A: MixtureSource(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_A,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.1 repeat A",
+        source_csv=f"{ONE_PHASE_TABLE9_VALIDATION_MIXTURE_GCS_DIR}/dsp_onephase_effexp_table9_kl0p1.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_dsp_effective_exposure_table9_kl0p1_repeat_a",
+        wandb_series_tag="delphi-table9-phase-diagnostic-repeats",
+        expected_max_simulated_epoch=16.541119,
+    ),
+    DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_B: MixtureSource(
+        key=DelphiValidationMixture.DSP_ONE_PHASE_EFFECTIVE_EXPOSURE_TABLE9_KL0P1_REPEAT_B,
+        display_name="One-phase DSP effective-exposure Table-9 macro KL=0.1 repeat B",
+        source_csv=f"{ONE_PHASE_TABLE9_VALIDATION_MIXTURE_GCS_DIR}/dsp_onephase_effexp_table9_kl0p1.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="one_phase_dsp_effective_exposure_table9_kl0p1_repeat_b",
+        wandb_series_tag="delphi-table9-phase-diagnostic-repeats",
+        expected_max_simulated_epoch=16.541119,
+    ),
+    DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_A: MixtureSource(
+        key=DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_A,
+        display_name="DSP split saturation/penalty Table-9 L2=0.01 KL=0.3 repeat A",
+        source_csv=f"{TABLE9_PHASE_SPLIT_DSP_VALIDATION_MIXTURE_GCS_DIR}/dsp_split_table9_l2_0p01_kl0p3.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_split_saturation_penalty_table9_l2_0p01_kl0p3_repeat_a",
+        wandb_series_tag="delphi-table9-phase-diagnostic-repeats",
+        expected_max_simulated_epoch=4.293921,
+    ),
+    DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_B: MixtureSource(
+        key=DelphiValidationMixture.DSP_SPLIT_TABLE9_L2_0P01_KL0P3_REPEAT_B,
+        display_name="DSP split saturation/penalty Table-9 L2=0.01 KL=0.3 repeat B",
+        source_csv=f"{TABLE9_PHASE_SPLIT_DSP_VALIDATION_MIXTURE_GCS_DIR}/dsp_split_table9_l2_0p01_kl0p3.csv",
+        github_issue=6611,
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_split_saturation_penalty_table9_l2_0p01_kl0p3_repeat_b",
+        wandb_series_tag="delphi-table9-phase-diagnostic-repeats",
+        expected_max_simulated_epoch=4.293921,
+    ),
+    DelphiValidationMixture.DSP_UNCHEATABLE_EXPOSURE_TARGETED: _dsp_exposure_repair_source(
+        key=DelphiValidationMixture.DSP_UNCHEATABLE_EXPOSURE_TARGETED,
+        display_name="DSP uncheatable aggregate-exposure targeted repair",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_uncheatable_exposure_targeted_repair",
+        expected_max_simulated_epoch=8.128129,
+    ),
+    DelphiValidationMixture.DSP_UNCHEATABLE_EXPOSURE_ALL_DEFICITS: _dsp_exposure_repair_source(
+        key=DelphiValidationMixture.DSP_UNCHEATABLE_EXPOSURE_ALL_DEFICITS,
+        display_name="DSP uncheatable aggregate-exposure all-deficits repair",
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_uncheatable_exposure_all_deficits_repair",
+        expected_max_simulated_epoch=8.128129,
+    ),
+    DelphiValidationMixture.DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM: MixtureSource(
+        key=DelphiValidationMixture.DSP_UNCHEATABLE_SUPPORT_AWARE_RAW_OPTIMUM,
+        display_name="DSP uncheatable support-aware raw optimum",
+        source_csv=(f"{DSP_SUPPORT_AWARE_VALIDATION_MIXTURE_GCS_DIR}/" "dsp_uncheatable_support_aware_raw_optimum.csv"),
+        github_issue=6602,
+        target_metric="eval/uncheatable_eval/bpb",
+        method="dsp_uncheatable_support_aware_effexp_floor_raw_optimum",
+        wandb_series_tag="delphi-dsp-support-aware-validation",
+        expected_max_simulated_epoch=7.832061,
+    ),
+    DelphiValidationMixture.DSP_TABLE9_EXPOSURE_TARGETED: _dsp_exposure_repair_source(
+        key=DelphiValidationMixture.DSP_TABLE9_EXPOSURE_TARGETED,
+        display_name="DSP Table-9 aggregate-exposure targeted repair",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_table9_exposure_targeted_repair",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.DSP_TABLE9_EXPOSURE_ALL_DEFICITS: _dsp_exposure_repair_source(
+        key=DelphiValidationMixture.DSP_TABLE9_EXPOSURE_ALL_DEFICITS,
+        display_name="DSP Table-9 aggregate-exposure all-deficits repair",
+        target_metric=TABLE9_TARGET_METRIC,
+        method="dsp_table9_exposure_all_deficits_repair",
+        expected_max_simulated_epoch=16.541118,
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_A: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_A,
+        label="A",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_B: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_B,
+        label="B",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_C: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_C,
+        label="C",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_D: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_D,
+        label="D",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_E: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_E,
+        label="E",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_F: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_F,
+        label="F",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_G: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_G,
+        label="G",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_H: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_H,
+        label="H",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_I: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_I,
+        label="I",
+    ),
+    DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_J: _proportional_noise_source(
+        key=DelphiValidationMixture.PROPORTIONAL_NOISE_3E18_J,
+        label="J",
     ),
 }
 
@@ -417,10 +1013,11 @@ class LaunchArtifacts:
 
     manifest_step: ExecutorStep
     training_steps: list[ExecutorStep]
+    eval_steps: list[ExecutorStep]
 
     @property
     def steps(self) -> list[ExecutorStep]:
-        return [self.manifest_step, *self.training_steps]
+        return [self.manifest_step, *self.training_steps, *self.eval_steps]
 
 
 def _proportional_weights() -> dict[str, float]:
@@ -499,6 +1096,12 @@ def _read_phase_weight_rows(source: MixtureSource) -> list[dict[str, str]]:
         if embedded_csv is not None
         else None
     )
+    if source.source_csv.startswith("gs://"):
+        with fsspec.open(source.source_csv, "r") as handle:
+            remote_rows = _parse_weight_rows(handle.read(), source_label=source.source_csv)
+        if embedded_rows is not None:
+            _validate_embedded_matches_local(embedded_rows, remote_rows, source=source)
+        return remote_rows
     path = Path(source.source_csv)
     if path.exists():
         local_rows = _parse_weight_rows(path.read_text(), source_label=str(path))
@@ -929,36 +1532,62 @@ def build_launch_artifacts(
     tpu_region: str,
     tpu_zone: str,
     run_order_offset: int = 0,
+    include_table9_native_eval: bool = False,
 ) -> LaunchArtifacts:
     """Build the executor graph for selected mixtures and FLOP budgets."""
     training_steps: list[ExecutorStep] = []
+    eval_steps: list[ExecutorStep] = []
+    scaling_fits = _read_scaling_fits(analysis_output_path)
     for target_flops, (tpu_type, batch_size) in target_budgets.items():
         for mixture in mixtures:
             run_order = run_order_offset + len(training_steps)
             run_name = f"{mixture.value}_{_slug(target_flops)}"
-            training_steps.append(
-                ExecutorStep(
-                    name=f"{EXPERIMENT_NAME}/{run_name}",
-                    fn=run_delphi_optimized_training,
-                    resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
-                    config=DelphiOptimizedTrainingConfig(
-                        analysis_output_path=analysis_output_path,
-                        target_flops=target_flops,
-                        tpu_type=tpu_type,
-                        tpu_region=tpu_region,
-                        tpu_zone=tpu_zone,
-                        batch_size=batch_size,
-                        mixture=mixture,
-                        label=LABEL,
-                        output_path=this_output_path(),
-                        run_id=RUN_ID_BASE + run_order,
-                        run_name=run_name,
-                        data_seed=RUN_ID_BASE + run_order,
-                        trainer_seed=0,
-                        validation_configs=validation_configs,
-                    ),
-                )
+            candidate = _candidate_for_budget(
+                scaling_fits=scaling_fits,
+                target_flops=target_flops,
+                batch_size=batch_size,
             )
+            source = MIXTURE_SOURCES[mixture]
+            training_step = ExecutorStep(
+                name=f"{EXPERIMENT_NAME}/{run_name}",
+                fn=run_delphi_optimized_training,
+                resources=ResourceConfig.with_tpu(tpu_type, regions=[tpu_region], zone=tpu_zone),
+                config=DelphiOptimizedTrainingConfig(
+                    analysis_output_path=analysis_output_path,
+                    target_flops=target_flops,
+                    tpu_type=tpu_type,
+                    tpu_region=tpu_region,
+                    tpu_zone=tpu_zone,
+                    batch_size=batch_size,
+                    mixture=mixture,
+                    label=LABEL,
+                    output_path=this_output_path(),
+                    run_id=RUN_ID_BASE + run_order,
+                    run_name=run_name,
+                    data_seed=RUN_ID_BASE + run_order,
+                    trainer_seed=0,
+                    validation_configs=validation_configs,
+                ),
+            )
+            training_steps.append(training_step)
+            if include_table9_native_eval:
+                eval_steps.append(
+                    olmo_base_eval_step(
+                        name=f"t9_{run_name}",
+                        checkpoint=training_step / f"hf/step-{candidate.train_steps - 1}",
+                        request_set_dir=TABLE9_REQUEST_SET_DIR,
+                        resource_config=TABLE9_EVAL_RESOURCES,
+                        wandb_group="olmo_base_eval_table9_scaling_validation",
+                        provenance={
+                            "evaluator": "marin-native-table9-bpb",
+                            "panel": "delphi_optimized_mixtures",
+                            "scale": _slug(target_flops),
+                            "source_run_name": run_name,
+                            "mixture": mixture.value,
+                            "method": source.method,
+                        },
+                    )
+                )
 
     manifest_step = ExecutorStep(
         name=f"{EXPERIMENT_NAME}/manifest",
@@ -979,7 +1608,7 @@ def build_launch_artifacts(
             run_order_offset=run_order_offset,
         ),
     )
-    return LaunchArtifacts(manifest_step=manifest_step, training_steps=training_steps)
+    return LaunchArtifacts(manifest_step=manifest_step, training_steps=training_steps, eval_steps=eval_steps)
 
 
 def _write_local_static_manifest(
@@ -1079,10 +1708,31 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--allow-table9-training-without-native-eval-plan",
+        action="store_true",
+        help=(
+            "Acknowledge that this launcher trains Table-9-targeted checkpoints but does not itself "
+            "schedule Marin-native OLMoBaseEval Table-9. Use only when a separate native Table-9 eval "
+            "job is already tracked for the generated checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--include-table9-native-eval",
+        action="store_true",
+        help=(
+            "Append Marin-native OLMoBaseEval Table-9 executor steps for Table-9-targeted checkpoints. "
+            "This is the preferred path for new Table-9 scaling-validation runs."
+        ),
+    )
     parser.add_argument("--analysis-output-path", default=DEFAULT_ANALYSIS_OUTPUT_PATH)
     parser.add_argument("--experiment-name", default=EXPERIMENT_NAME)
     parser.add_argument("--local-artifact-dir", default=str(LOCAL_ARTIFACT_DIR))
     return parser.parse_known_args()
+
+
+def _has_table9_target(mixtures: tuple[DelphiValidationMixture, ...]) -> bool:
+    return any(MIXTURE_SOURCES[mixture].target_metric == TABLE9_TARGET_METRIC for mixture in mixtures)
 
 
 def main() -> None:
@@ -1103,6 +1753,17 @@ def main() -> None:
 
     mixtures = _parse_mixtures(tuple(args.mixtures))
     target_budgets = _selected_target_budgets(tuple(args.target_budgets))
+    if (
+        _has_table9_target(mixtures)
+        and not args.dry_run
+        and not args.include_table9_native_eval
+        and not args.allow_table9_training_without_native_eval_plan
+    ):
+        raise ValueError(
+            "This training launcher does not schedule Marin-native OLMoBaseEval Table-9. "
+            "For Table-9-targeted mixtures, pass --include-table9-native-eval or submit/track a "
+            "separate native Table-9 eval job and rerun with --allow-table9-training-without-native-eval-plan."
+        )
     if not args.analysis_output_path:
         raise ValueError("--analysis-output-path must be set; do not rerun isoflop analysis in this parent")
     if args.run_order_offset < 0:
@@ -1132,17 +1793,20 @@ def main() -> None:
         tpu_region=args.tpu_region,
         tpu_zone=args.tpu_zone,
         run_order_offset=args.run_order_offset,
+        include_table9_native_eval=args.include_table9_native_eval,
     )
     if os.getenv("CI") is not None:
         logger.info(
-            "Built Delphi optimized-mixture graph with %d training steps; skipping executor launch.",
+            "Built Delphi optimized-mixture graph with %d training steps and %d eval steps; "
+            "skipping executor launch.",
             len(artifacts.training_steps),
+            len(artifacts.eval_steps),
         )
         return
 
     executor_main(
         ExecutorMainConfig(max_concurrent=args.max_concurrent),
-        steps=artifacts.training_steps if args.skip_manifest else artifacts.steps,
+        steps=[*artifacts.training_steps, *artifacts.eval_steps] if args.skip_manifest else artifacts.steps,
         description=f"{EXPERIMENT_NAME}: Delphi optimized-mixture scaling validation",
     )
 
