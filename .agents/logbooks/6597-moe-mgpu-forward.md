@@ -1275,3 +1275,39 @@ the full-forward path now uses the faster direct return by default and records `
 - Next action:
   - Commit and push the direct W2-return path, then update PR #6841 status. A later pass can decide whether direct return
     should be fused with combine or whether source combine needs a lower-memory deterministic variant.
+
+## 2026-07-03 11:28 - Current-head public source-push H100 pytest after direct W2 return
+
+Verified the public opt-in `implementation="pallas_mgpu_source_push"` path at current PR head after the direct
+source-visible W2-return commits.
+
+- Commit Hash: `e3d4d4ff9`
+- Job: `/dlwh/source-push-public-direct-h100-pytest-e3d4d4ff9-20260703-182515`
+- Cluster: `cw-us-east-02a`
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-public-direct-h100-pytest-e3d4d4ff9-20260703-182515 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 3600s uv run --package marin-levanter --group test pytest \
+    lib/levanter/tests/grug/test_grugformer_moe.py -q -n 0 -k source_push
+  ```
+- Iris summary:
+  - State: `succeeded`
+  - Task count: `1`
+  - Exit code: `0`
+  - Duration: `114903 ms`
+  - Failure count: `0`
+  - Preemption count: `0`
+- Pytest result:
+  - `3 passed, 19 deselected, 1 warning in 92.39s`
+- Coverage:
+  - Public source-push backend matches public `ragged_all_to_all` and `ring` baselines on the H100 smoke shape with zero
+    drops and bf16 tolerances.
+  - Repeated public source-push calls under fixed inputs are deterministic.
+  - Tail blocks, empty local experts, and `topk=4` are covered by the H100 edge smoke.
+- Interpretation:
+  - The direct W2-return integration did not regress the checked public H100 source-push forward correctness path.
+  - The remaining source-push work is performance/integration refinement, not a correctness regression from the direct
+    return change.
