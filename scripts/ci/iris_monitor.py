@@ -579,12 +579,12 @@ def collect_diagnostics(
     if process_log.returncode != 0:
         errors.append(f"iris process logs failed (exit {process_log.returncode}): {process_log.stderr.strip()}")
 
-    job_tree = _run([*iris_cmd, "job", "list", "--json", "--prefix", job_id])
-    (output_dir / "job-tree.json").write_text(job_tree.stdout or job_tree.stderr or "")
+    job_tree = _run([*iris_cmd, "job", "list", "--prefix", job_id])
+    (output_dir / "job-tree.txt").write_text(job_tree.stdout or job_tree.stderr or "")
     if job_tree.returncode != 0:
         errors.append(f"iris job list failed (exit {job_tree.returncode}): {job_tree.stderr.strip()}")
     else:
-        files.append("job-tree.json")
+        files.append("job-tree.txt")
 
     if provider == "gcp":
         if not project or not controller_label:

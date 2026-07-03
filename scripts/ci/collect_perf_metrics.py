@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Collect a structured perf report for a finished datakit ferry run.
 
-Given an iris job id, this shells out to the iris CLI to extract:
+Given an iris job id, this uses the Iris client to extract:
 - per-step wall times derived from deterministic ``zephyr-<step>-*`` child-job
-  names + ``started_at``/``finished_at`` on ``iris job list --prefix``
+  names + ``started_at``/``finished_at`` on the job tree
 - aggregated preemption / failure / task-state counts across the whole tree
 - per-task peak memory and a heuristic bucket classification of non-succeeded
-  tasks, fetched via ``iris job summary --json`` for each leaf worker job
+  tasks, fetched from each leaf worker job
 
 The report is written as JSON locally and (optionally) mirrored to a GCS prefix
 under a ``report_<utc-ts>_<short-name>/`` directory so that runs can be compared
@@ -24,10 +24,22 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 import click
+from google.protobuf import json_format
+from iris.cli.job import build_job_summary
+from iris.cli.main import client_credentials, resolve_cluster_name
+from iris.client import IrisClient
+from iris.cluster.composer import provider_bundle
+from iris.cluster.config import load_config
+from iris.cluster.local_cluster import LocalCluster
+from iris.cluster.types import JobName
+from iris.rpc import job_pb2
 from rigging.filesystem import url_to_fs
 
 logger = logging.getLogger(__name__)
@@ -126,6 +138,14 @@ GROUP BY child_job_id
 ORDER BY child_job_id"""
 
 
+class IrisJobReader(Protocol):
+    def list_jobs(self, *, prefix: str) -> list[job_pb2.JobStatus]: ...
+
+    def status(self, job_id: JobName) -> job_pb2.JobStatus: ...
+
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
+
+
 @dataclass
 class PerfReport:
     """In-memory model of the report. Serialised verbatim to JSON."""
@@ -160,7 +180,7 @@ class PerfReport:
 
 
 # --------------------------------------------------------------------------- #
-# iris CLI helpers
+# Iris client / query helpers
 # --------------------------------------------------------------------------- #
 
 
@@ -182,43 +202,67 @@ def _run_iris(args: list[str], iris_config: Path) -> subprocess.CompletedProcess
     return result
 
 
-def fetch_job_summary(job_id: str, iris_config: Path) -> dict | None:
-    """Return the parsed ``iris job summary --json <job>`` payload, or None."""
-    result = _run_iris(["job", "summary", "--json", job_id], iris_config)
-    if result.returncode != 0:
-        logger.warning("iris job summary failed (exit %s): %s", result.returncode, result.stderr.strip())
-        return None
+@contextmanager
+def open_iris_client(iris_config: Path, repo_root: Path) -> Iterator[IrisClient]:
+    """Open an Iris client using the same config path accepted by the CLI."""
+    config = load_config(iris_config)
+    cluster_name = resolve_cluster_name(config, None, None)
+    credentials = client_credentials(config, cluster_name)
+
+    if config.controller.controller_kind() == "local":
+        cluster = LocalCluster(config)
+        try:
+            with IrisClient.remote(cluster.start(), workspace=repo_root, credentials=credentials) as client:
+                yield client
+        finally:
+            cluster.close()
+        return
+
+    bundle = provider_bundle(config)
+    controller_address = config.controller_address() or bundle.controller.discover_controller(config.controller)
+    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
+        with IrisClient.remote(tunnel_url, workspace=repo_root, credentials=credentials) as client:
+            yield client
+
+
+def _job_status_to_dict(job: job_pb2.JobStatus) -> dict:
+    data = json_format.MessageToDict(job, preserving_proto_field_name=True)
+    data["has_children"] = bool(job.has_children)
+    return data
+
+
+def fetch_job_summary(client: IrisJobReader, job_id: str) -> dict | None:
+    """Return a job summary built from Iris client status and task RPCs."""
     try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("iris job summary returned non-JSON: %s", exc)
+        job_name = JobName.from_wire(job_id)
+        return build_job_summary(client.status(job_name), client.list_tasks(job_name))
+    except Exception as exc:
+        logger.warning("iris client job summary failed for %s: %s", job_id, exc)
         return None
 
 
-def fetch_job_tree(job_id: str, iris_config: Path) -> list[dict] | None:
-    """Return ``iris job list --json --prefix <job>`` — the parent + all descendants.
+def fetch_job_tree(client: IrisJobReader, job_id: str) -> list[dict] | None:
+    """Return the parent + all descendants from the Iris client.
 
     Each entry includes job-level ``preemption_count`` / ``failure_count`` /
     ``task_state_counts``. We need the tree (not just the parent's summary)
     because the launcher task is the only thing under the parent itself; the
     actual fan-out workers live in child iris jobs (zephyr pipeline subjobs).
     """
-    result = _run_iris(["job", "list", "--json", "--prefix", job_id], iris_config)
-    if result.returncode != 0:
-        logger.warning("iris job list --prefix failed (exit %s): %s", result.returncode, result.stderr.strip())
-        return None
     try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("iris job list returned non-JSON: %s", exc)
+        jobs = client.list_jobs(prefix=job_id)
+        jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
+        return [_job_status_to_dict(job) for job in jobs]
+    except Exception as exc:
+        logger.warning("iris client job list failed for prefix %s: %s", job_id, exc)
         return None
 
 
-def fetch_leaf_summaries(job_tree: list[dict], iris_config: Path) -> list[dict]:
-    """Fetch ``iris job summary --json`` for every leaf job in the tree.
+def fetch_leaf_summaries(client: IrisJobReader, job_tree: list[dict]) -> list[dict]:
+    """Fetch job summaries for every leaf job in the tree.
 
     Per-task data (``memory_peak_mb``, ``error``, ``exit_code``) lives on each
-    job's own task array, which ``iris job list --prefix`` does not return.
+    job's own task array, which the job tree does not return.
     Leaves are jobs with ``has_children == false`` — those are the worker
     pools where the actual fan-out work runs. Coordinator jobs are skipped:
     their tasks are dispatcher-only and don't carry useful memory or error
@@ -231,7 +275,7 @@ def fetch_leaf_summaries(job_tree: list[dict], iris_config: Path) -> list[dict]:
         job_id = job.get("job_id")
         if not job_id:
             continue
-        s = fetch_job_summary(job_id, iris_config)
+        s = fetch_job_summary(client, job_id)
         if s is not None:
             summaries.append(s)
     return summaries
@@ -499,7 +543,7 @@ def build_report(
         report.warnings.append("ferry_status_path: not readable; status/marin_prefix unset")
 
     if summary is None:
-        report.warnings.append("iris job summary --json: failed; wall_seconds_total unavailable")
+        report.warnings.append("iris client job summary failed; wall_seconds_total unavailable")
     else:
         tasks = summary.get("tasks") or []
         durations = [t.get("duration_ms") for t in tasks if t.get("duration_ms")]
@@ -652,9 +696,10 @@ def main(
         "commit_sha": os.environ.get("GITHUB_SHA"),
     }
 
-    summary = fetch_job_summary(job_id, iris_config)
-    job_tree = fetch_job_tree(job_id, iris_config)
-    leaf_summaries = fetch_leaf_summaries(job_tree, iris_config) if job_tree else []
+    with open_iris_client(iris_config, _REPO_ROOT) as client:
+        summary = fetch_job_summary(client, job_id)
+        job_tree = fetch_job_tree(client, job_id)
+        leaf_summaries = fetch_leaf_summaries(client, job_tree) if job_tree else []
     status = load_ferry_status(status_path)
 
     report = build_report(

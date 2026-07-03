@@ -92,9 +92,11 @@ iris job list --state running           # filter by state
 iris job logs /user/job-name -f         # follow job + child logs
 iris job stop /user/job-name            # kill job + children
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
-iris job summary /user/job-name --json  # same, machine-readable
 iris job bug-report /user/job-name      # structured diagnostic dump
 ```
+
+For machine-readable job data, use the Iris Python client (`IrisClient`) or
+`iris query --format=json` for SQL reads against controller state.
 
 ### `job run` gotchas
 
