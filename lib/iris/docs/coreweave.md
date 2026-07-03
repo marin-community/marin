@@ -187,19 +187,10 @@ Ingress keeps only `/proxy` public.
 #### External address and DNS (`oa.dev` → `coreweave.app`)
 
 The external address is served by **Traefik's** LoadBalancer, not the controller
-Pod. `install_traefik_proxy.py`'s Traefik gets a **stable CoreWeave-managed FQDN** under
-`*.<ORG-ID>-<CLUSTER>.coreweave.app` (the chart sets
-`service.beta.kubernetes.io/external-hostname: '*'`), so you never chase a
-churning IP. Read it and CNAME your host to it (`oa.dev` DNS is at **Namecheap**,
-Advanced DNS panel):
-
-```bash
-kubectl get svc traefik -n traefik \
-  -o=jsonpath='{.status.conditions[?(@.type=="ExternalRecords")].message}'
-# → e.g. <something>.<ORG-ID>-<CLUSTER>.coreweave.app
-#
-# Namecheap:  iris-cw.oa.dev  CNAME  <that>.coreweave.app
-```
+Pod, and CoreWeave gives it a **stable FQDN** under `*.coreweave.app` — you never
+chase a churning IP. `install_traefik_proxy.py --apply` prints the exact CNAME
+record to create (`<public_proxy_host>  CNAME  <that FQDN>`); `oa.dev` DNS is at
+**Namecheap**, Advanced DNS panel.
 
 Three values must agree: this CNAME, `public_proxy_host` (the Ingress `host` /
 Host header clients send), and the cluster's `dashboard_url` (so `marin-serve`'s

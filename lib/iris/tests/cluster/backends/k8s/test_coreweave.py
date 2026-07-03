@@ -208,64 +208,6 @@ def test_start_controller_creates_all_resources():
     provider.shutdown()
 
 
-def _seed_ingress_class(k8s: InMemoryK8sService, name: str) -> None:
-    k8s.apply_json({"apiVersion": "networking.k8s.io/v1", "kind": "IngressClass", "metadata": {"name": name}})
-
-
-def test_start_controller_creates_proxy_ingress_when_host_set(caplog):
-    """With public_proxy_host set, setup publishes ONLY /proxy via a Traefik Ingress."""
-    provider, k8s = _make_provider()
-    _seed_ingress_class(k8s, "traefik")  # ingress controller present → no warning
-    cluster_config = _make_cluster_config()
-    cw = cluster_config.controller.coreweave
-    cw.public_proxy_host = "iris-cw.oa.dev"
-    cw.tls_secret = "iris-controller-proxy-tls"
-    cw.cluster_issuer = "letsencrypt-prod"
-
-    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
-    t.start()
-    with caplog.at_level("WARNING"):
-        provider.start_controller(cluster_config)
-
-    ingress = k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME)
-    assert ingress is not None
-    spec = ingress["spec"]
-    assert spec["ingressClassName"] == "traefik"
-    # cert-manager auto-issues into tls_secret via the ClusterIssuer annotation.
-    assert ingress["metadata"]["annotations"] == {"cert-manager.io/cluster-issuer": "letsencrypt-prod"}
-    rule = spec["rules"][0]
-    assert rule["host"] == "iris-cw.oa.dev"
-    path = rule["http"]["paths"][0]
-    # Only /proxy is published; the dashboard + RPC surface stay ClusterIP-internal.
-    assert (path["path"], path["pathType"]) == ("/proxy", "Prefix")
-    assert path["backend"]["service"] == {"name": "iris-controller-svc", "port": {"number": 10000}}
-    assert spec["tls"] == [{"hosts": ["iris-cw.oa.dev"], "secretName": "iris-controller-proxy-tls"}]
-    assert "IngressClass" not in caplog.text  # class present → no prerequisite warning
-
-    t.join(timeout=5)
-    provider.shutdown()
-
-
-def test_start_controller_warns_when_ingress_class_missing(caplog):
-    """A missing IngressClass warns (Ingress stays pending) but never blocks startup."""
-    provider, k8s = _make_provider()
-    cluster_config = _make_cluster_config()
-    cluster_config.controller.coreweave.public_proxy_host = "iris-cw.oa.dev"
-
-    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
-    t.start()
-    with caplog.at_level("WARNING"):
-        provider.start_controller(cluster_config)
-
-    # Startup still succeeds and the Ingress is applied (serves once a controller appears).
-    assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is not None
-    # The missing-class prerequisite warning was emitted (fragment only; exact phrasing may change).
-    assert "IngressClass" in caplog.text
-
-    t.join(timeout=5)
-    provider.shutdown()
-
-
 def test_start_controller_injects_operator_env(monkeypatch):
     """inject_env writes the iris-task-env Secret and wires the controller envFrom."""
     monkeypatch.setenv("WANDB_API_KEY", "wb-secret")

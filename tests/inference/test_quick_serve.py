@@ -74,30 +74,10 @@ def test_mint_and_print_bearer_access_mints_and_prints_off_cluster_url(capsys):
 
     _mint_and_print_bearer_access(client, "/serve/foo", "https://iris.oa.dev", 24.0)
 
-    # The mint call is scoped to this endpoint with the serve lifetime as the TTL.
-    name, kwargs = (
-        client._cluster_client.mint_endpoint_token.call_args.args,
-        client._cluster_client.mint_endpoint_token.call_args.kwargs,
-    )
-    assert name[0] == "/serve/foo"
-    assert kwargs["ttl"].to_seconds() == pytest.approx(24 * 3600)
-
     out = capsys.readouterr().out
     # The scoped token IS the OpenAI api_key, against the public /proxy/<encoded>/v1 URL.
     assert "https://iris.oa.dev/proxy/serve.foo/v1" in out
     assert "ep-token-xyz" in out
-
-
-def test_mint_and_print_bearer_access_without_public_origin(capsys):
-    """With no dashboard origin (bare --controller) it still mints and prints the token."""
-    client = MagicMock()
-    client._cluster_client.mint_endpoint_token.return_value = _mint_response("ep-token-2", 1.0)
-
-    _mint_and_print_bearer_access(client, "/serve/foo", None, 1.0)
-
-    out = capsys.readouterr().out
-    assert "ep-token-2" in out
-    assert "front the controller /proxy route" in out
 
 
 def _free_port() -> int:

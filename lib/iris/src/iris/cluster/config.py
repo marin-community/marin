@@ -440,13 +440,9 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
-    # Public /proxy ingress. When public_proxy_host is set, start_controller
-    # creates an Ingress that publishes ONLY the /proxy path off-cluster (the
-    # dashboard and RPC surface stay ClusterIP-internal). CoreWeave has no IAP
-    # layer, so the controller's own per-endpoint auth is the sole gate — keep
-    # auth.provider set. Requires an ingress controller (Traefik, CoreWeave's
-    # blessed one) + cert-manager — install them with scripts/install_traefik_proxy.py.
-    # Empty host = no ingress (ClusterIP only). See docs/coreweave.md.
+    # When set, start_controller creates an Ingress publishing ONLY /proxy
+    # off-cluster; the controller's per-endpoint auth is the sole gate, so keep
+    # auth.provider set. See docs/coreweave.md.
     public_proxy_host: str = ""
     ingress_class: str = "traefik"  # ingressClassName for the /proxy ingress
     tls_secret: str = ""  # secret holding the TLS cert for public_proxy_host

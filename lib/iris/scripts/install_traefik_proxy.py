@@ -9,13 +9,9 @@ Ingress (created per-cluster by ``K8sControllerProvider.start_controller``) need
 two cluster-wide components installed first. This script installs them, once, from
 the operator's kubeconfig (the controller's own ServiceAccount can't install CRDs):
 
-  * **Traefik** (``coreweave/traefik``) — the ingress controller. Its chart exposes
-    Traefik as a ``Service type=LoadBalancer`` and sets
-    ``service.beta.kubernetes.io/external-hostname: '*'``, so CKS allocates it a
-    wildcard ``*.<ORG-ID>-<CLUSTER>.coreweave.app`` DNS name. Registers IngressClass
-    ``traefik``.
-  * **cert-manager** (``coreweave/cert-manager``) — issues the TLS cert Traefik
-    terminates with.
+  * **Traefik** — the ingress controller; CKS gives its LoadBalancer a wildcard
+    ``*.coreweave.app`` DNS name.
+  * **cert-manager** — issues the TLS cert Traefik terminates.
 
 It also creates **HTTP-01** Let's Encrypt ClusterIssuers. CoreWeave's bundled
 issuers use DNS-01 against ``acme.coreweave.com`` and only cover
@@ -35,14 +31,10 @@ stops. With ``--apply`` it installs them, then reads the Traefik LoadBalancer's
 allocated ``*.coreweave.app`` FQDN and prints the DNS record to create and the
 restart/config step.
 
-``--uninstall`` tears the stack back down. Order matters: it deletes the
-ClusterIssuers first (once the CRD is gone they can no longer be addressed),
-``helm uninstall``\\ s both releases, deletes their namespaces, then sweeps the
-cluster-scoped resources a bare namespace delete orphans — the
-``*.cert-manager.io`` / ``*.traefik.io`` CRDs, the cert-manager webhook
-configurations, the releases' ClusterRoles/ClusterRoleBindings, and the Traefik
-IngressClass — and ends with a verification pass listing anything still present.
-Like install, it only prints the plan without ``--apply``.
+``--uninstall`` tears the whole stack back down — releases, namespaces, and the
+cluster-scoped CRDs/webhooks/RBAC/IngressClass a namespace delete would orphan —
+then verifies nothing remains. Like install, it only prints the plan without
+``--apply``.
 
 Usage:
     uv run lib/iris/scripts/install_traefik_proxy.py --cluster cw-us-east-02a \\
@@ -199,7 +191,7 @@ def _http01_issuer(env: str, email: str, ingress_class: str) -> dict:
 
 
 # --------------------------------------------------------------------------
-# Install core (importable; the click command calls it).
+# Install
 # --------------------------------------------------------------------------
 def install(
     *,
@@ -234,7 +226,6 @@ def install(
         else []
     )
 
-    # Assemble + print the plan; the only branch is the final apply.
     click.secho("==> Plan (CoreWeave /proxy ingress prerequisites):", fg="blue", bold=True)
     if not skip_traefik:
         click.echo(
@@ -253,7 +244,6 @@ def install(
         click.secho("\nwarn: dry run — nothing applied. Re-run with --apply to install.", fg="yellow", err=True)
         return
 
-    # helm repo add/update touches only local helm config (no cluster mutation).
     click.secho(f"==> Adding/updating helm repo {CW_REPO_NAME} ({CW_REPO_URL})", fg="blue", bold=True)
     run(["helm", "repo", "add", CW_REPO_NAME, CW_REPO_URL], check=True, stdout=subprocess.DEVNULL)
     run(["helm", "repo", "update", CW_REPO_NAME], check=True, stdout=subprocess.DEVNULL)
@@ -355,7 +345,7 @@ def _print_next_steps(
 
 
 # --------------------------------------------------------------------------
-# Uninstall core (importable; the click command calls it).
+# Uninstall
 # --------------------------------------------------------------------------
 # kubectl's error for a kind the API server doesn't know (e.g. a CRD already
 # deleted); from k8s.io/cli-runtime's resource builder: "the server doesn't
@@ -433,7 +423,6 @@ def uninstall(
     issuers = [ISSUER_NAMES[env] for env in ("staging", "prod")]
     namespaces = list(dict.fromkeys([traefik_namespace, cert_manager_namespace]))
 
-    # Assemble + print the plan; the only branch is the final apply.
     click.secho("==> Plan (teardown of the CoreWeave /proxy ingress prerequisites):", fg="blue", bold=True)
     click.echo(f"  kubectl delete clusterissuer {' '.join(issuers)}   # first, while the CRD still exists")
     for release, namespace in release_pairs:

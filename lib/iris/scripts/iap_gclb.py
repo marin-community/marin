@@ -780,18 +780,10 @@ def ensure_frontend(frontend: Frontend, backend: Backend, *, dry_run: bool) -> s
 
 
 # --------------------------------------------------------------------------- #
-# public-proxy stage: an IAP-free backend for /proxy/* on the same controller
+# public-proxy stage: open an unauthenticated /proxy route to the controller.
+# This allows users to expose proxy endpoints to anonymous callers; proxy
+# endpoint access control is handled by the Iris controller.
 # --------------------------------------------------------------------------- #
-#
-# Opens *only* the ``/proxy/*`` path off-cluster, so an off-cluster caller can
-# reach a registered endpoint through the controller's proxy while the dashboard
-# and RPC surface stay IAP-gated. The controller needs no firewall/IAP authority:
-# this admin-run stage adds a second backend service (IAP disabled) on the *same*
-# NEG/controller VM and a URL-map path rule routing ``/proxy/*`` to it. The
-# controller's own per-endpoint ``_authorize_proxy`` (PRIVATE/PUBLIC/BEARER) is
-# then the gate for that path. ``deploy`` runs this stage by default; pass
-# ``--no-public-proxy`` to keep the controller fully IAP-gated, or run the
-# ``public-proxy`` subcommand to open it standalone later.
 
 
 def _backend_self_link(backend: Backend, service: str) -> str:
@@ -881,12 +873,8 @@ def _import_url_map(frontend: Frontend, doc: dict, *, dry_run: bool) -> None:
 def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
     """Route ``<domain>/proxy/*`` to the IAP-free backend, leaving the rest IAP-gated.
 
-    Edits the shared URL map via export -> edit -> import so it works whether the
-    cluster already has a host rule (non-default clusters) or not (the
-    frontend-owning cluster, which serves off the map's default service). Only
-    this cluster's host rule / path matcher is touched, and only the
-    ``/proxy/*`` rule is added; everything else keeps flowing to the IAP backend.
-    Idempotent: a no-op once the rule already points at the proxy backend.
+    Idempotent; touches only this cluster's host rule and ``/proxy/*`` path
+    rule, so every other host keeps flowing to the IAP backend.
     """
     if not backend.domain:
         raise click.ClickException(f"--domain is required to open the public proxy route for {backend.cluster}")
@@ -900,9 +888,8 @@ def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: 
     host_rule = next((h for h in doc["hostRules"] if backend.domain in h.get("hosts", [])), None)
     matcher: dict
     if host_rule is None:
-        # The frontend-owning cluster has no host rule (it uses the map default);
-        # add one whose matcher default stays the IAP backend, so only /proxy/* is
-        # carved out to the IAP-free backend.
+        # Frontend-owning cluster serves off the map default; give it a host
+        # rule whose default stays the IAP backend.
         matcher = {"name": backend.path_matcher, "defaultService": iap_link, "pathRules": []}
         doc["hostRules"].append({"hosts": [backend.domain], "pathMatcher": backend.path_matcher})
         doc["pathMatchers"].append(matcher)
@@ -926,11 +913,7 @@ def ensure_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: 
 
 
 def remove_public_proxy_route(frontend: Frontend, backend: Backend, *, dry_run: bool) -> None:
-    """Remove this cluster's ``/proxy/*`` path rule from the shared URL map (best-effort).
-
-    Leaves the host rule / matcher otherwise intact — an empty-of-proxy matcher
-    whose default is the IAP backend routes the host exactly as before.
-    """
+    """Remove this cluster's ``/proxy/*`` path rule from the shared URL map (best-effort)."""
     if not backend.domain:
         return
     doc = _export_url_map(frontend)
@@ -1101,8 +1084,6 @@ def deploy(
     # Shared frontend + this cluster's route.
     reserved_ip = ensure_frontend(frontend, backend, dry_run=dry_run)
 
-    # IAP-free /proxy route (default; reuses the NEG the backend stage created).
-    # Opt out with --no-public-proxy to keep the controller fully IAP-gated.
     if not no_public_proxy:
         ensure_public_proxy_backend(backend, dry_run=dry_run)
         ensure_public_proxy_route(frontend, backend, dry_run=dry_run)

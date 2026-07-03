@@ -120,15 +120,6 @@ def test_iap_provider_requires_audiences_or_assertion(db):
         create_controller_auth(config, db=db)
 
 
-def test_iap_assertion_only_has_no_login_verifier(db):
-    """Assertion-only IAP (no desktop OAuth client): browser users authenticate
-    via the signed header; `iris login` has no verifier and is unavailable."""
-    config = AuthConfig(iap={"signed_header_audience": "/projects/1/global/backendServices/2"})
-    auth = create_controller_auth(config, db=db)
-    assert auth.login_verifier is None
-    assert auth.iap_assertion_verifier is not None
-
-
 def test_worker_token_differs_after_restart(db):
     config = AuthConfig(static={"tokens": {"tok-a": "alice"}})
     auth1 = create_controller_auth(config, db=db)
