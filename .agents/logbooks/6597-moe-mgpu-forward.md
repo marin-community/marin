@@ -1067,3 +1067,59 @@ does not require manual JSONL post-processing.
 - Interpretation:
   - This is reporting-only and does not change the W13/W2/combine kernels.
   - The next target H100 full-forward gate will emit the median/p90/p95 and slow-tail fields directly in JSONL.
+
+## 2026-07-03 09:36 - Current-head full-forward summary gate
+
+Ran the target full-forward source-push gate on the current PR #6841 head after adding direct benchmark summary rows.
+This verifies that the summary rows are emitted at target shape and refreshes the staged full-forward numbers.
+
+- Commit Hash: `831465357`
+- Job: `/dlwh/source-push-forward-summary-gate-831465357-20260703`
+- Cluster: `cw-us-east-02a`
+- Iris summary: succeeded, one task, `exit_code=0`, `duration_ms=167594`.
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-forward-summary-gate-831465357-20260703 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 7200s bash -lc 'set -euo pipefail
+  JSONL=scratch/source_push_forward_summary_gate_831465357_20260703.jsonl
+  rm -f "$JSONL"
+  COMMON="uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --execution-mode staged_host_sync --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-check --no-progress-events --git-sha 831465357 --jsonl $JSONL"
+  $COMMON --routing balanced --capacity-factor 1.0
+  $COMMON --routing balanced --capacity-factor 1.25
+  $COMMON --routing roughly_balanced --capacity-factor 1.25
+  '
+  ```
+- Full-forward summary rows:
+
+  | routing | capacity | repeats | median total | p90 total | p95 total | rounded forward TFLOP/s/rank | useful forward TFLOP/s/rank | row efficiency | drops |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | 5 | `15.219 ms` | `15.256 ms` | `15.264 ms` | `169.33` | `169.33` | `1.000000` | 0 |
+  | `balanced` | `1.25` | 5 | `15.334 ms` | `15.632 ms` | `15.701 ms` | `168.06` | `168.06` | `1.000000` | 0 |
+  | `roughly_balanced` | `1.25` | 5 | `15.805 ms` | `15.960 ms` | `15.972 ms` | `172.98` | `163.04` | `0.942584` | 0 |
+
+- Stage summary rows:
+
+  | routing | capacity | W13 median | W13 useful TFLOP/s/rank | W13 slow repeats `<160` | W2-return median | W2 TFLOP/s/rank | combine median | combine GB/s/rank |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | `balanced` | `1.0` | `8.090 ms` | `212.36` | `0/5` | `5.695 ms` | `150.83` | `1.351 ms` | `1614.21` |
+  | `balanced` | `1.25` | `8.158 ms` | `210.58` | `0/5` | `5.733 ms` | `149.83` | `1.367 ms` | `1595.68` |
+  | `roughly_balanced` | `1.25` | `8.434 ms` | `203.69` | `0/5` | `5.974 ms` | `152.55` | `1.336 ms` | `1632.79` |
+
+- Total repeat times:
+  - balanced cf1.0: `[15.272, 15.219, 15.128, 15.232, 15.144] ms`.
+  - balanced cf1.25: `[15.424, 15.287, 15.770, 15.282, 15.334] ms`.
+  - roughly-balanced cf1.25: `[15.985, 15.922, 15.793, 15.762, 15.805] ms`.
+- Interpretation:
+  - The new summary rows work at target shape and directly report the median/p90/p95 and W13 slow-tail fields required
+    by the spec.
+  - Current-head full-forward medians are stable against the prior `754fe3005` gate, with the rough-balanced row faster
+    in this sample (`15.805 ms` vs `16.443 ms`) and no rough-balanced slow repeat in 5 repeats.
+  - The broad bottleneck judgment is unchanged: W13 still meets the useful-throughput bar (`203.69 TFLOP/s/rank` useful
+    on rough-balanced), while the staged full-forward path is dominated by W2-return (`~5.97 ms`) plus the memory-bound
+    source combine (`~1.34 ms`) after the W13 stage.
+- Next action:
+  - Keep `831465357` as the current full-forward summary gate. The next production-relevant optimization remains W2-return
+    transport or a producer/consumer return path; do not add more benchmark knobs unless they isolate that cost.
