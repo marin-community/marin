@@ -180,7 +180,7 @@ def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> t
 
 
 def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
-    if "model" not in mesh.shape or int(mesh.shape["model"]) != 1:
+    if "model" not in mesh.shape:
         return None
     return "model"
 
@@ -232,7 +232,6 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
-    metadata_spec = P(batch_axes, None)
     _assert_sequence_axis_unsharded("q", q)
     _assert_sequence_axis_unsharded("k", k)
     _assert_sequence_axis_unsharded("v", v)
@@ -241,7 +240,6 @@ def _fa4_cute_attention_forward_sharded(
 
     @shard_map(
         mesh=mesh,
-        in_specs=(qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec),
         out_specs=qkv_spec,
         check_vma=False,
     )
