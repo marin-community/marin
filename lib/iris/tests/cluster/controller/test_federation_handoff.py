@@ -256,13 +256,18 @@ def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_cli
         ).job
         assert fed_status.child_cluster == "cw"
         assert fed_status.remote_job_id == remote_job_id
+        # Handed off but not yet reported on: the pending reason names the peer,
+        # not the local scheduler diagnostic (which never sees a federated job).
+        assert fed_status.pending_reason == "Handed off to peer cw; awaiting first status report"
 
-        # A local job carries neither (the deep-link falls back to nothing).
+        # A local job carries neither (the deep-link falls back to nothing) and
+        # keeps the local scheduler diagnostic.
         local_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=local.job_id), None
         ).job
         assert local_status.child_cluster == ""
         assert local_status.remote_job_id == ""
+        assert "peer" not in local_status.pending_reason.lower()
 
         def _list(child_cluster: str) -> set[str]:
             resp = parent_service.list_jobs(
@@ -277,6 +282,25 @@ def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_cli
         assert {fed.job_id, local.job_id} <= _list("")
         assert _list("cw") == {fed.job_id}
         assert _list("no-such-peer") == set()
+
+
+def test_federated_pending_reason_reflects_awaiting_acceptance(tmp_path, log_client):
+    """While a handoff is undelivered (PENDING_HANDOFF), the pending reason says the
+    job is awaiting the peer's acceptance — distinguishing it from a handed-off job."""
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        _attach_federation(parent_service, _UnreachablePeerConnection(peer_service))
+
+        response = parent_service.launch_job(_cluster_pinned_request("awaiting-ack"), None)
+        assert _handle(parent_state, JobName.from_wire(response.job_id)).handoff_state == int(
+            HandoffState.PENDING_HANDOFF
+        )
+
+        status = parent_service.get_job_status(
+            controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+        ).job
+        assert status.pending_reason == "Awaiting acceptance by peer cw"
 
 
 def test_cancel_routes_to_peer_and_tombstone_drops_the_handle(tmp_path, log_client):

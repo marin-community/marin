@@ -77,6 +77,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitRouting
+from iris.cluster.federation.store import HandoffState
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -634,6 +635,24 @@ def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[
             for state, count in s.task_state_counts.items()
         },
     }
+
+
+def _federated_pending_reason(child_cluster: str, handoff_state: int | None, has_reported_tasks: bool) -> str:
+    """Pending reason for a federated job, which the local scheduler never sees.
+
+    A handed-off job's tasks live on the peer and are excluded from the local
+    fold, so the local scheduling diagnostic is meaningless for it. Surface the
+    handoff posture instead: awaiting the peer's acceptance, awaiting its first
+    status report, or pending on the peer once it has reported tasks.
+
+    ``handoff_state`` is ``None`` on the list path, which does not load the
+    handle; there the reported-tasks signal alone drives the message.
+    """
+    if handoff_state == int(HandoffState.PENDING_HANDOFF):
+        return f"Awaiting acceptance by peer {child_cluster}"
+    if not has_reported_tasks:
+        return f"Handed off to peer {child_cluster}; awaiting first status report"
+    return f"Pending on peer {child_cluster}"
 
 
 def _filter_and_sort_workers(
@@ -1545,7 +1564,13 @@ class ControllerServiceImpl:
         # is a single dict get — we only attach this job's hint, never the
         # full routing decision.
         pending_reason = ""
-        if job.state == job_pb2.JOB_STATE_PENDING:
+        if job.state == job_pb2.JOB_STATE_PENDING and job.child_cluster:
+            pending_reason = _federated_pending_reason(
+                job.child_cluster,
+                handle.handoff_state if handle else None,
+                summary is not None,
+            )
+        elif job.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(job.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
             hint = self._get_autoscaler_pending_hints().get(job.job_id.to_wire())
@@ -1659,7 +1684,9 @@ class ControllerServiceImpl:
     ) -> job_pb2.JobStatus:
         """Convert a job row and its task summary into a JobStatus proto."""
         pending_reason = j.error or ""
-        if j.state == job_pb2.JOB_STATE_PENDING:
+        if j.state == job_pb2.JOB_STATE_PENDING and j.child_cluster:
+            pending_reason = _federated_pending_reason(j.child_cluster, None, task_summary is not None)
+        elif j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
             pending_reason = sched_reason or "Pending scheduler feedback"
             hint = autoscaler_pending_hints.get(j.job_id.to_wire())

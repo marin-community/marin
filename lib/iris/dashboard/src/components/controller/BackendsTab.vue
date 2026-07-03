@@ -476,7 +476,7 @@ function peerLastSync(p: PeerSummary): string {
         <div class="px-4 pb-4 space-y-2">
           <InfoRow label="kind">peer</InfoRow>
           <InfoRow label="status">{{ peerHealthLabel(p) }}</InfoRow>
-          <InfoRow label="last sync">{{ peerLastSync(p) }}</InfoRow>
+          <InfoRow label="last contact">{{ peerLastSync(p) }}</InfoRow>
 
           <!-- Advertised device chips, unioned across the peer's backends -->
           <div v-if="peerDeviceChips(p).length > 0" class="flex items-start gap-2 text-sm">
