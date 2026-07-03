@@ -91,6 +91,7 @@ def _summary_row(
     diagnostic_variant: str,
     source_push_profile: str,
     input_mode: str,
+    git_sha: str | None,
 ) -> dict[str, Any]:
     valid_rows = [row for row in rows if row.get("error_type") is None and row.get("steady_state_time") is not None]
     errors = [row.get("error") for row in rows if row.get("error_type") is not None]
@@ -105,6 +106,7 @@ def _summary_row(
         "diagnostic_variant": diagnostic_variant,
         "diagnostic_input_mode": input_mode,
         "source_push_profile": source_push_profile,
+        "git_sha": git_sha,
         "repeat_rows": len(valid_rows),
         "error_rows": len(errors),
         "errors": errors,
@@ -145,6 +147,7 @@ def _emit_rows(
     diagnostic_variant: str,
     input_mode: str,
     source_push_profile: str,
+    git_sha: str | None,
     jsonl_file: TextIO | None,
 ) -> dict[str, Any]:
     tagged_rows = []
@@ -155,6 +158,7 @@ def _emit_rows(
             "suite": "source_push_inbox_diagnostics",
             "variant": diagnostic_variant,
             "source_push_profile": source_push_profile,
+            "git_sha": git_sha,
         }
         tagged_rows.append(tagged)
         _write_row(tagged, jsonl_file)
@@ -163,6 +167,7 @@ def _emit_rows(
         diagnostic_variant=diagnostic_variant,
         input_mode=input_mode,
         source_push_profile=source_push_profile,
+        git_sha=git_sha,
     )
     _write_row(summary, jsonl_file)
     return summary
@@ -184,6 +189,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--separate-compile", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--progress-events", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--debug-exceptions", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--git-sha", type=str, default=None)
     parser.add_argument("--jsonl", type=str, default=None)
     return parser.parse_args(argv)
 
@@ -207,6 +213,7 @@ def run_diagnostics(
     variants: Sequence[str],
     input_mode: str,
     source_push_profile: str,
+    git_sha: str | None,
     jsonl_file: TextIO | None,
 ) -> list[dict[str, Any]]:
     summaries = []
@@ -228,6 +235,7 @@ def run_diagnostics(
                 diagnostic_variant=diagnostic_variant,
                 input_mode=input_mode,
                 source_push_profile=source_push_profile,
+                git_sha=git_sha,
                 jsonl_file=jsonl_file,
             )
         )
@@ -257,6 +265,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             variants=args.variants,
             input_mode=input_mode,
             source_push_profile=args.source_push_profile,
+            git_sha=args.git_sha,
             jsonl_file=jsonl_file,
         )
     finally:

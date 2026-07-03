@@ -1062,6 +1062,8 @@ def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys)
             "3",
             "--input-mode",
             "source_push_plan",
+            "--git-sha",
+            "abc123",
         ]
     )
 
@@ -1088,6 +1090,7 @@ def test_source_push_diagnostic_cli_runs_requested_variants(monkeypatch, capsys)
         "source_push_plan",
         "source_push_plan",
     ]
+    assert [row.get("git_sha") for row in rows] == ["abc123"] * len(rows)
     assert [row.get("p90_steady_state_time") for row in rows if row["row_type"] == "summary"] == [
         1.9,
         1.9,
