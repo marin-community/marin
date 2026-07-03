@@ -119,7 +119,9 @@ def _wait_for_endpoint(client: IrisClient, job: Job, endpoint_name: str, timeout
     )
 
 
-def _print_bearer_access(client: IrisClient, endpoint: str, dashboard_url: str | None, ttl_hours: float) -> None:
+def _mint_and_print_bearer_access(
+    client: IrisClient, endpoint: str, dashboard_url: str | None, ttl_hours: float
+) -> None:
     """Mint a scoped endpoint token and print the off-cluster OpenAI base_url + api_key.
 
     Runs CLI-side under the launching user's identity, so the controller's
@@ -302,7 +304,7 @@ def main(
             if endpoint_access is EndpointAccess.BEARER:
                 # Mint after the endpoint registers (the controller resolves the row
                 # for owner authz), so the token is bound to a live endpoint.
-                _print_bearer_access(client, endpoint, dashboard_url, timeout_hours)
+                _mint_and_print_bearer_access(client, endpoint, dashboard_url, timeout_hours)
             click.echo("Tunnel held open; press Ctrl-C to detach (the server stays up on Iris).")
             with contextlib.suppress(KeyboardInterrupt):
                 while True:

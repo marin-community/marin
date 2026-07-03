@@ -789,8 +789,9 @@ def ensure_frontend(frontend: Frontend, backend: Backend, *, dry_run: bool) -> s
 # this admin-run stage adds a second backend service (IAP disabled) on the *same*
 # NEG/controller VM and a URL-map path rule routing ``/proxy/*`` to it. The
 # controller's own per-endpoint ``_authorize_proxy`` (PRIVATE/PUBLIC/BEARER) is
-# then the gate for that path. Kept out of ``deploy`` (like the deny firewall):
-# it widens the public surface, so it is an explicit, deliberate step.
+# then the gate for that path. ``deploy`` runs this stage by default; pass
+# ``--no-public-proxy`` to keep the controller fully IAP-gated, or run the
+# ``public-proxy`` subcommand to open it standalone later.
 
 
 def _backend_self_link(backend: Backend, service: str) -> str:

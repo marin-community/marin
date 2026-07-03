@@ -58,6 +58,8 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from iris.cluster.controller.endpoint_service import wire_name_candidates
+
 logger = logging.getLogger(__name__)
 
 # Resolves an endpoint wire name (e.g. ``/system/log-server``) to an
@@ -258,11 +260,8 @@ class EndpointProxy:
         injected ``resolve`` callable, using the same decode.
         """
         if address is None:
-            # Iris wire-format names start with '/'. Try the slash-prefixed form
-            # first (the common case for task-registered endpoints), then the
-            # bare form for endpoints registered without a leading slash.
-            slashed = encoded_name.replace(".", "/")
-            address = self._resolve(f"/{slashed}") or self._resolve(slashed)
+            slashed, bare = wire_name_candidates(encoded_name)
+            address = self._resolve(slashed) or self._resolve(bare)
         if address is None:
             logger.warning("Proxy %s %s -> no endpoint %r", request.method, request.url.path, encoded_name)
             return JSONResponse(

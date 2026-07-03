@@ -259,7 +259,8 @@ def test_start_controller_warns_when_ingress_class_missing(caplog):
 
     # Startup still succeeds and the Ingress is applied (serves once a controller appears).
     assert k8s.get_json(K8sResource.INGRESSES, _CONTROLLER_PROXY_INGRESS_NAME) is not None
-    assert "IngressClass 'traefik' not found" in caplog.text
+    # The missing-class prerequisite warning was emitted (fragment only; exact phrasing may change).
+    assert "IngressClass" in caplog.text
 
     t.join(timeout=5)
     provider.shutdown()

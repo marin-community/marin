@@ -188,6 +188,29 @@ def _authorize_proxy(
     return None
 
 
+def _resolve_and_authorize_proxy(
+    request: Request,
+    encoded_name: str,
+    endpoint_service: EndpointServiceImpl,
+    policy: RequestAuthPolicy,
+    *,
+    auth_enabled: bool,
+    token: str | None = None,
+) -> tuple[ResolvedEndpoint | None, Response | None]:
+    """Resolve a proxy request's target and run the per-endpoint access check.
+
+    The shared prelude of every proxy entry point (path-style, URL-token,
+    redirect, subdomain): resolve once (access + address + wire name), then
+    apply the endpoint's access mode via :func:`_authorize_proxy`. Returns
+    ``(resolved, deny)``: when ``deny`` is not None the caller must send it and
+    stop; otherwise ``resolved`` is the target (``None`` for an unknown name,
+    which the forwarding layer answers with a 404).
+    """
+    resolved = endpoint_service.resolve_endpoint_row(encoded_name)
+    deny = _authorize_proxy(request, resolved, policy, auth_enabled=auth_enabled, token=token)
+    return resolved, deny
+
+
 class _RouteAuthMiddleware:
     """ASGI middleware that enforces per-route auth policy annotations.
 
@@ -431,11 +454,14 @@ class _SubdomainProxyMiddleware:
             await self._app(scope, receive, send)
             return
 
-        # Resolve once (access + address + wire name), then apply the per-endpoint
-        # access mode — the same policy the path-style proxy route uses.
-        resolved = self._endpoint_service.resolve_endpoint_row(encoded_name)
         request = Request(scope, receive=receive)
-        deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=self._auth_enabled)
+        resolved, deny = _resolve_and_authorize_proxy(
+            request,
+            encoded_name,
+            self._endpoint_service,
+            self._auth_policy,
+            auth_enabled=self._auth_enabled,
+        )
         if deny is not None:
             await deny(scope, receive, send)
             return
@@ -488,6 +514,13 @@ class ControllerDashboard:
         self._port = port
         self._auth_provider = auth_provider
         self._auth_policy = auth_policy
+        # Auth is enforced exactly when a provider is configured AND the policy
+        # has a verifier. A DB-backed null-auth controller still has a JWT
+        # verifier (for worker tokens), so request_auth_enabled alone would
+        # wrongly enable auth. Every auth gate in the dashboard (RPC
+        # interceptor, route middleware, proxy authorization) keys off this one
+        # flag so the gates cannot drift.
+        self._auth_enabled = auth_provider is not None and auth_policy.request_auth_enabled
         # In-process RPC statistics. Fed by RequestTimingInterceptor on the
         # ControllerService chain only; LogService's chatty FetchLogs traffic
         # would dominate the numbers if included.
@@ -507,7 +540,7 @@ class ControllerDashboard:
         # use the generic endpoint proxy and are measured by the log server.
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb, collector=self._stats_collector)
-        if self._auth_provider is not None and self._auth_policy.request_auth_enabled:
+        if self._auth_enabled:
             auth_interceptor = _DashboardAuthInterceptor(self._auth_policy)
         else:
             # Null-auth mode: no provider configured. Verify worker tokens
@@ -543,12 +576,6 @@ class ControllerDashboard:
 
         self._endpoint_proxy = EndpointProxy(self._endpoint_service.resolve_endpoint)
 
-        # Auth is enforced exactly when a provider is configured AND the policy
-        # has a verifier — the same condition that installs _RouteAuthMiddleware.
-        # A DB-backed null-auth controller still has a JWT verifier (for worker
-        # tokens), so request_auth_enabled alone would wrongly gate the proxy.
-        proxy_auth_enabled = self._auth_provider is not None and self._auth_policy.request_auth_enabled
-
         # The proxy routes are @public so the route-annotation middleware does
         # not apply the whole-dashboard @requires_auth (which would over-grant a
         # served-model token the RPC surface). They enforce their own
@@ -556,8 +583,9 @@ class ControllerDashboard:
         @public
         async def _proxy_endpoint(request: Request) -> Response:
             name = request.path_params["endpoint_name"]
-            resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled)
+            resolved, deny = _resolve_and_authorize_proxy(
+                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled
+            )
             if deny is not None:
                 return deny
             return await self._endpoint_proxy.dispatch(
@@ -575,8 +603,9 @@ class ControllerDashboard:
             # form, lifted from the path and validated the same way.
             token = request.path_params["token"]
             name = request.path_params["endpoint_name"]
-            resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled, token=token)
+            resolved, deny = _resolve_and_authorize_proxy(
+                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled, token=token
+            )
             if deny is not None:
                 return deny
             return await self._endpoint_proxy.dispatch(
@@ -597,8 +626,9 @@ class ControllerDashboard:
             # internal bind IP. A path-only Location resolves against the
             # browser's current origin, so no internal address leaks.
             name = request.path_params["endpoint_name"]
-            resolved = self._endpoint_service.resolve_endpoint_row(name)
-            deny = _authorize_proxy(request, resolved, self._auth_policy, auth_enabled=proxy_auth_enabled)
+            _, deny = _resolve_and_authorize_proxy(
+                request, name, self._endpoint_service, self._auth_policy, auth_enabled=self._auth_enabled
+            )
             if deny is not None:
                 return deny
             query = f"?{request.url.query}" if request.url.query else ""
@@ -672,7 +702,7 @@ class ControllerDashboard:
         # kwarg, so we flip it after construction.
         app.router.redirect_slashes = False
         wrapped: ASGIApp = app
-        if self._auth_policy.request_auth_enabled and self._auth_provider is not None:
+        if self._auth_enabled:
             wrapped = _RouteAuthMiddleware(app, self._auth_policy)
         # Subdomain dispatch wraps everything: subdomain requests don't match
         # any Starlette route, so _RouteAuthMiddleware would default-allow
@@ -682,7 +712,7 @@ class ControllerDashboard:
             endpoint_proxy=self._endpoint_proxy,
             endpoint_service=self._endpoint_service,
             auth_policy=self._auth_policy,
-            auth_enabled=self._auth_provider is not None and self._auth_policy.request_auth_enabled,
+            auth_enabled=self._auth_enabled,
         )
         return wrapped
 

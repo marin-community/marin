@@ -25,7 +25,7 @@ from iris.cluster.controller.endpoint_proxy import (
     EndpointProxy,
     _rewrite_location,
 )
-from iris.cluster.controller.endpoint_service import ResolvedEndpoint
+from iris.cluster.controller.endpoint_service import ResolvedEndpoint, wire_name_candidates
 from iris.cluster.controller.projections.endpoints import EndpointAccess
 from iris.cluster.dashboard_common import on_shutdown
 from iris.managed_thread import ThreadContainer
@@ -683,18 +683,18 @@ class _DictEndpointService:
     """Minimal endpoint_service for the subdomain middleware in tests.
 
     Backs ``resolve_endpoint_row`` with the same ``name -> address`` dict the
-    proxy resolves against, mirroring production's ``.`` -> ``/`` decode and
-    slash-prefixed-then-bare lookup. All endpoints resolve as PRIVATE; the
-    subdomain tests run with the default (auth-disabled) policy, so the access
-    mode does not gate — they exercise dispatch, not authorization.
+    proxy resolves against, delegating the wire-name decode to production's
+    ``wire_name_candidates`` so it cannot drift. All endpoints resolve as
+    PRIVATE; the subdomain tests run with the default (auth-disabled) policy,
+    so the access mode does not gate — they exercise dispatch, not
+    authorization.
     """
 
     def __init__(self, endpoints: dict[str, str]):
         self._endpoints = endpoints
 
     def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
-        slashed = encoded_name.replace(".", "/")
-        for name in (f"/{slashed}", slashed):
+        for name in wire_name_candidates(encoded_name):
             address = self._endpoints.get(name)
             if address is not None:
                 return ResolvedEndpoint(name=name, address=address, access=EndpointAccess.PRIVATE)

@@ -95,23 +95,23 @@ def test_public_allows_without_token(policy):
     assert _authorize_proxy(_request(), _resolved(EndpointAccess.PUBLIC), policy, auth_enabled=True) is None
 
 
-def test_bearer_accepts_matching_scoped_token(jwt, policy, auth_enabled=True):
+def test_bearer_accepts_matching_scoped_token(jwt, policy):
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True) is None
 
 
-def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy, auth_enabled=True):
+def test_bearer_rejects_scoped_token_for_other_endpoint(jwt, policy):
     token = jwt.create_endpoint_token("/serve/other", "k", ttl_seconds=60)
     deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 403
 
 
-def test_bearer_accepts_full_identity(jwt, policy, auth_enabled=True):
+def test_bearer_accepts_full_identity(jwt, policy):
     token = jwt.create_token("alice", "admin", "k1")
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.BEARER), policy, auth_enabled=True) is None
 
 
-def test_private_rejects_scoped_token(jwt, policy, auth_enabled=True):
+def test_private_rejects_scoped_token(jwt, policy):
     token = jwt.create_endpoint_token(_ENDPOINT, "k", ttl_seconds=60)
     deny = _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True)
     assert deny is not None and deny.status_code == 403
@@ -122,7 +122,7 @@ def test_private_rejects_missing_token(policy):
     assert deny is not None and deny.status_code == 401
 
 
-def test_private_accepts_full_identity(jwt, policy, auth_enabled=True):
+def test_private_accepts_full_identity(jwt, policy):
     token = jwt.create_token("alice", "admin", "k1")
     assert _authorize_proxy(_request(token=token), _resolved(EndpointAccess.PRIVATE), policy, auth_enabled=True) is None
 

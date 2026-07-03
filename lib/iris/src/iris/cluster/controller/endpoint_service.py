@@ -56,6 +56,19 @@ def _access_from_proto(access: int) -> EndpointAccess:
     return EndpointAccess(access)
 
 
+def wire_name_candidates(encoded_name: str) -> tuple[str, str]:
+    """Decode a proxy ``encoded_name`` into wire-name lookup candidates.
+
+    Proxy URLs and subdomains encode ``/`` as ``.`` (``user.jobX.dash`` ->
+    ``/user/jobX/dash``); the encode side lives in the dashboard and the actor
+    ``ProxyResolver``. Iris wire names start with ``/``, so the slash-prefixed
+    form is tried first; the bare form covers endpoints registered without a
+    leading slash.
+    """
+    slashed = encoded_name.replace(".", "/")
+    return f"/{slashed}", slashed
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedEndpoint:
     """A proxy request's resolved target: canonical wire name, address, access.
@@ -224,8 +237,7 @@ class EndpointServiceImpl:
         (no owning task) are intentionally not returned. Accepts either the
         ``/``-prefixed wire name or the bare form.
         """
-        slashed = name.replace(".", "/")
-        for candidate in (f"/{slashed}", slashed):
+        for candidate in wire_name_candidates(name):
             row = self._endpoints.resolve(candidate)
             if row is not None:
                 return row
@@ -234,15 +246,13 @@ class EndpointServiceImpl:
     def resolve_endpoint_row(self, encoded_name: str) -> ResolvedEndpoint | None:
         """Resolve a proxy request's ``encoded_name`` to its target, or None.
 
-        Owns the ``.`` -> ``/`` decode and the slash-prefixed-then-bare lookup
-        that the proxy's forwarding path also performs, returning the endpoint's
-        access mode, address, and canonical wire name in a single lookup so
-        authorization and forwarding cannot drift. ``/system/`` endpoints come
-        from the in-memory map, which has no access column, and always resolve
-        as ``PRIVATE``.
+        Applies :func:`wire_name_candidates` (the same decode the proxy's
+        forwarding path uses), returning the endpoint's access mode, address,
+        and canonical wire name in a single lookup so authorization and
+        forwarding cannot drift. ``/system/`` endpoints come from the in-memory
+        map, which has no access column, and always resolve as ``PRIVATE``.
         """
-        slashed = encoded_name.replace(".", "/")
-        for name in (f"/{slashed}", slashed):
+        for name in wire_name_candidates(encoded_name):
             row = self._endpoints.resolve(name)
             if row is not None:
                 return ResolvedEndpoint(name=row.name, address=row.address, access=row.access)

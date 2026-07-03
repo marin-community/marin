@@ -57,6 +57,7 @@ Usage:
 
 import subprocess
 import time
+from typing import NamedTuple
 
 import click
 import yaml
@@ -356,13 +357,24 @@ def _print_next_steps(
 # --------------------------------------------------------------------------
 # Uninstall core (importable; the click command calls it).
 # --------------------------------------------------------------------------
+# kubectl's error for a kind the API server doesn't know (e.g. a CRD already
+# deleted); from k8s.io/cli-runtime's resource builder: "the server doesn't
+# have a resource type %q". Any other nonzero exit (auth, network, …) is a
+# real failure and must not read as "nothing left".
+_UNKNOWN_KIND_MARKER = "doesn't have a resource type"
+
+
 def _resource_names(kind: str, kflags: list[str], selector: str | None = None) -> list[str]:
     """List ``kind/name`` strings for ``kind``; [] when the kind itself is unknown (CRD gone)."""
     cmd = ["kubectl", *kflags, "get", kind, "-o", "name"]
     if selector:
         cmd += ["-l", selector]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.stdout.split() if result.returncode == 0 else []
+    if result.returncode == 0:
+        return result.stdout.split()
+    if _UNKNOWN_KIND_MARKER in result.stderr:
+        return []
+    raise click.ClickException(f"`{' '.join(cmd)}` failed: {result.stderr.strip()}")
 
 
 def _short_name(qualified: str) -> str:
@@ -515,7 +527,15 @@ def uninstall(
     )
 
 
-def _derive_from_cluster(name: str) -> dict:
+class ClusterIngressSettings(NamedTuple):
+    """CoreWeave ingress settings derived from a named Iris cluster config."""
+
+    host: str
+    ingress_class: str
+    kubeconfig: str
+
+
+def _derive_from_cluster(name: str) -> ClusterIngressSettings:
     """Read a named Iris cluster config and return its CoreWeave ingress settings.
 
     Resolves ``name`` the same way ``iris --cluster`` does, so the host, ingress
@@ -530,11 +550,11 @@ def _derive_from_cluster(name: str) -> dict:
     if cw is None:
         raise click.ClickException(f"Cluster {name!r} has no controller.coreweave block — not a CoreWeave cluster.")
     platform = config.platform.coreweave
-    return {
-        "host": cw.public_proxy_host,
-        "ingress_class": cw.ingress_class,
-        "kubeconfig": platform.kubeconfig_path if platform else "",
-    }
+    return ClusterIngressSettings(
+        host=cw.public_proxy_host,
+        ingress_class=cw.ingress_class,
+        kubeconfig=platform.kubeconfig_path if platform else "",
+    )
 
 
 @click.command()
@@ -607,9 +627,9 @@ def main(
             explicit = ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
             return cli_value if explicit else (cfg_value or cli_value)
 
-        host = pick("host", host, derived["host"])
-        ingress_class = pick("ingress_class", ingress_class, derived["ingress_class"])
-        kubeconfig = pick("kubeconfig", kubeconfig, derived["kubeconfig"])
+        host = pick("host", host, derived.host)
+        ingress_class = pick("ingress_class", ingress_class, derived.ingress_class)
+        kubeconfig = pick("kubeconfig", kubeconfig, derived.kubeconfig)
 
     if uninstall_mode:
         install_only = (
