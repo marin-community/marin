@@ -948,6 +948,35 @@ def test_source_push_combine_inputs_invert_queue_rows_to_route_slots():
     assert np.count_nonzero(expected) > 0
 
 
+def test_source_push_combine_ignores_invalid_padded_queue_rows():
+    selected_experts = np.asarray([[[0, 1], [0, 1], [0, 1]]], dtype=np.int32)
+    combine_weights = np.asarray([[[1.0, 0.5], [2.0, 0.25], [3.0, 0.125]]], dtype=np.float32)
+    plan = source_push_plan.build_source_push_plan(
+        jnp.asarray(selected_experts),
+        jnp.asarray(combine_weights),
+        ep_size=1,
+        experts_per_rank=2,
+        block_m=4,
+        capacity_factor=2.0,
+        entries_per_dst=2,
+    )
+    return_y = np.zeros((*plan.assignment_ids.shape, 2), dtype=np.float32)
+    assignment_ids = np.asarray(plan.assignment_ids)
+    valid_mask = np.asarray(plan.valid_mask)
+    for src, dst_ord, entry, row in np.argwhere(valid_mask):
+        assignment_id = int(assignment_ids[src, dst_ord, entry, row])
+        return_y[src, dst_ord, entry, row, :] = [assignment_id + 1.0, 10.0 * (assignment_id + 1.0)]
+
+    expected = np.asarray(source_push_plan.source_push_combine(jnp.asarray(return_y), plan), dtype=np.float32)
+    poisoned_return_y = return_y.copy()
+    poisoned_return_y[~valid_mask] = 1.0e6
+    observed = np.asarray(source_push_plan.source_push_combine(jnp.asarray(poisoned_return_y), plan), dtype=np.float32)
+
+    np.testing.assert_allclose(observed, expected, atol=0, rtol=0)
+    assert np.count_nonzero(expected) > 0
+    assert np.any(~valid_mask)
+
+
 def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     config = source_push_inbox.PushInboxConfig(
         ep_size=2,

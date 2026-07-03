@@ -1730,3 +1730,21 @@ within one `(src, dst, expert)` run, and that tail/unused queue rows stay invali
     - Result: `8 passed, 11 warnings in 12.11s`.
   - `./infra/pre-commit.py --changed-files --fix`
     - Result: all checks passed.
+
+## 2026-07-03 15:55 - Cover combine masking of padded return rows
+
+Added a source combine regression for the invariant that padded queue rows must not affect source-token output. The test
+fills invalid return queue rows with large sentinel values and verifies the deterministic route-buffer combine result is
+unchanged.
+
+- Code:
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - Added `test_source_push_combine_ignores_invalid_padded_queue_rows`.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_combine_ignores_invalid_padded_queue_rows or source_push_combine_inputs_invert_queue_rows_to_route_slots'`
+    - Result: `2 passed, 11 warnings in 11.65s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_plan or source_push_combine'`
+    - Result: `13 passed, 11 warnings in 19.89s`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
