@@ -113,6 +113,17 @@ class SourcePushForwardHostInputs:
 
 
 @dataclass(frozen=True)
+class SourcePushForwardRawInputs:
+    """Real source-major arrays used to build a source-push full-forward plan."""
+
+    x: np.ndarray
+    selected_experts: np.ndarray
+    combine_weights: np.ndarray
+    w_gate_up: np.ndarray
+    w_down: np.ndarray
+
+
+@dataclass(frozen=True)
 class SourcePushForwardDeviceInputs:
     """Device inputs for the chained source-push forward harness."""
 
@@ -197,6 +208,21 @@ def make_source_push_forward_inputs(
 def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> SourcePushForwardHostInputs:
     """Build shared source-push plan inputs for full forward timing."""
 
+    raw_inputs = make_source_push_forward_source_plan_raw_inputs(config)
+    return make_source_push_forward_inputs(
+        config,
+        raw_inputs.x,
+        raw_inputs.selected_experts,
+        raw_inputs.combine_weights,
+        raw_inputs.w_gate_up,
+        raw_inputs.w_down,
+        input_mode="source_push_plan",
+    )
+
+
+def make_source_push_forward_source_plan_raw_inputs(config: PushInboxConfig) -> SourcePushForwardRawInputs:
+    """Build synthetic-but-real source-major arrays for source-push integration smokes."""
+
     validate_source_push_forward_config(config)
     counts = _routing_counts(config)
     selected_experts = np.stack(
@@ -205,14 +231,12 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
     )
     combine_weights = _make_combine_weights(config)
     source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
-    return make_source_push_forward_inputs(
-        config,
-        source_tokens,
-        selected_experts,
-        combine_weights,
-        np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32),
-        make_w_down(config),
-        input_mode="source_push_plan",
+    return SourcePushForwardRawInputs(
+        x=source_tokens,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        w_gate_up=np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32),
+        w_down=make_w_down(config),
     )
 
 

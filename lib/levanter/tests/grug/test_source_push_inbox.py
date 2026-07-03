@@ -1,8 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +28,9 @@ REPRO_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / 
 W2_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_w2_return.py"
 COMBINE_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_combine.py"
 FORWARD_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward.py"
+FORWARD_PUBLIC_COMPARE_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_forward_public_compare.py"
+)
 SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None
 source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -43,6 +46,14 @@ assert FORWARD_SCRIPT_SPEC is not None
 source_push_forward_cli = importlib.util.module_from_spec(FORWARD_SCRIPT_SPEC)
 assert FORWARD_SCRIPT_SPEC.loader is not None
 FORWARD_SCRIPT_SPEC.loader.exec_module(source_push_forward_cli)
+FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "bench_source_push_forward_public_compare",
+    FORWARD_PUBLIC_COMPARE_SCRIPT_PATH,
+)
+assert FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC is not None
+source_push_forward_public_compare_cli = importlib.util.module_from_spec(FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC)
+assert FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC.loader is not None
+FORWARD_PUBLIC_COMPARE_SCRIPT_SPEC.loader.exec_module(source_push_forward_public_compare_cli)
 
 DIAGNOSTIC_SCRIPT_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox_diagnostics.py"
@@ -905,6 +916,17 @@ def test_source_push_forward_bench_cli_imports():
     assert result.returncode == 0, result.stderr
 
 
+def test_source_push_forward_public_compare_bench_cli_imports():
+    result = subprocess.run(
+        [sys.executable, str(FORWARD_PUBLIC_COMPARE_SCRIPT_PATH), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_source_push_diagnostic_runner_tags_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 
@@ -1084,3 +1106,69 @@ def test_source_push_forward_cli_passes_profile_defaults(monkeypatch, capsys):
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert calls == [("roughly_balanced", 288, 3, "staged_host_sync")]
     assert rows == [{"git_sha": "abc123", "kernel": "source_push_forward", "repeat_runs": 3}]
+
+
+def test_source_push_forward_public_compare_cli_passes_profile_defaults(monkeypatch, capsys):
+    calls = []
+
+    def fake_run_source_push_forward_public_compare(
+        config,
+        *,
+        source_push_implementation,
+        source_push_execution_mode,
+        public_implementations,
+    ):
+        calls.append(
+            (
+                config.routing,
+                config.entries_per_rank,
+                source_push_implementation,
+                source_push_execution_mode,
+                public_implementations,
+            )
+        )
+        return [
+            {
+                "kernel": "source_push_forward_public_compare",
+                "public_implementation": public_implementations[0],
+            }
+        ]
+
+    monkeypatch.setattr(
+        source_push_forward_public_compare_cli,
+        "run_source_push_forward_public_compare",
+        fake_run_source_push_forward_public_compare,
+    )
+
+    source_push_forward_public_compare_cli.main(
+        [
+            "--source-push-profile",
+            SOURCE_PUSH_PROFILE_STABLE_216,
+            "--source-push-implementation",
+            "reference",
+            "--source-push-execution-mode",
+            "staged_host_sync",
+            "--public-implementations",
+            "ring,ragged_all_to_all",
+            "--git-sha",
+            "abc123",
+        ]
+    )
+
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert calls == [
+        (
+            "roughly_balanced",
+            288,
+            "reference",
+            "staged_host_sync",
+            ("ring", "ragged_all_to_all"),
+        )
+    ]
+    assert rows == [
+        {
+            "git_sha": "abc123",
+            "kernel": "source_push_forward_public_compare",
+            "public_implementation": "ring",
+        }
+    ]
