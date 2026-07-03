@@ -1,0 +1,140 @@
+name: "Ducky - Deploy"
+
+# Deploys the ducky service to an Iris cluster on merge to main (when lib/ducky
+# changes) and on manual dispatch. The deploy builds the Vue dashboard, opens an
+# SSH tunnel to the cluster controller (gcloud OS Login + controller SA
+# impersonation), and submits the always-on ducky job (RECREATE-replaces the
+# running instance).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'lib/ducky/**'
+      - '.github/workflows/ducky-deploy.yaml'
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "Iris cluster to deploy to"
+        default: "marin"
+      name:
+        description: "Ducky job name"
+        default: "ducky"
+      region:
+        description: "Region to pin the job to"
+        default: "us-east5"
+      tpu:
+        description: "TPU variant for the whole-host grab (empty for CPU-only)"
+        default: "v6e-4"
+      cpu:
+        description: "CPUs to request"
+        default: "180"
+      memory:
+        description: "Memory to request"
+        default: "690GB"
+      scratch_bucket:
+        description: "DUCKY_SCRATCH_BUCKET (required)"
+        default: "gs://marin-us-east5/tmp/ttl=7d"
+      result_ttl_days:
+        description: "DUCKY_RESULT_TTL_DAYS"
+        default: "7"
+      allowed_buckets:
+        description: "DUCKY_ALLOWED_BUCKETS (comma-separated read allowlist prefixes)"
+        default: "gs://marin-us-east,s3://marin-na,s3://marin-us-east-02a"
+      r2_endpoint:
+        description: "DUCKY_R2_ENDPOINT (host only, no scheme)"
+        default: "74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com"
+      cw_endpoint:
+        description: "DUCKY_CW_ENDPOINT"
+        default: "cwobject.com"
+      cw_access_key:
+        description: "DUCKY_CW_ACCESS_KEY"
+        default: "CWXSLOAORRUJOJKH"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ducky-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
+      # ducky's tunnel spawns the iris CLI; drive it through uv from the repo.
+      DUCKY_IRIS_CMD: "uv run iris"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: lib/ducky/dashboard/package-lock.json
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Set up OS Login SSH key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keygen -t rsa -b 4096 -f ~/.ssh/google_compute_engine -N "" -q -C "gha-${{ github.run_id }}-${{ github.run_attempt }}"
+          chmod 600 ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --ttl=2h
+
+      - name: Deploy ducky
+        env:
+          # Secrets (must be configured in the repo/environment):
+          DUCKY_GCS_HMAC_KEY_ID: ${{ secrets.DUCKY_GCS_HMAC_KEY_ID }}
+          DUCKY_GCS_HMAC_SECRET: ${{ secrets.DUCKY_GCS_HMAC_SECRET }}
+          DUCKY_R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY_ID }}
+          DUCKY_R2_SECRET_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          DUCKY_CW_SECRET_KEY: ${{ secrets.DUCKY_CW_SECRET_KEY }}
+          # Parameters (defaults above; overridable on manual dispatch). The
+          # `|| '...'` fallbacks apply on push events, where inputs are unset.
+          DUCKY_SCRATCH_BUCKET: ${{ inputs.scratch_bucket || 'gs://marin-us-east5/tmp/ttl=7d' }}
+          DUCKY_RESULT_TTL_DAYS: ${{ inputs.result_ttl_days || '7' }}
+          DUCKY_ALLOWED_BUCKETS: ${{ inputs.allowed_buckets || 'gs://marin-us-east,s3://marin-na,s3://marin-us-east-02a' }}
+          DUCKY_R2_ENDPOINT: ${{ inputs.r2_endpoint || '74981a43be0de7712369306c7b19133d.r2.cloudflarestorage.com' }}
+          DUCKY_CW_ENDPOINT: ${{ inputs.cw_endpoint || 'cwobject.com' }}
+          DUCKY_CW_ACCESS_KEY: ${{ inputs.cw_access_key || 'CWXSLOAORRUJOJKH' }}
+        run: |
+          uv run ducky deploy \
+            --cluster "${{ inputs.cluster || 'marin' }}" \
+            --name "${{ inputs.name || 'ducky' }}" \
+            --region "${{ inputs.region || 'us-east5' }}" \
+            --tpu "${{ inputs.tpu || 'v6e-4' }}" \
+            --cpu "${{ inputs.cpu || '180' }}" \
+            --memory "${{ inputs.memory || '690GB' }}"
+
+      - name: Remove OS Login SSH key
+        if: always()
+        run: |
+          gcloud compute os-login ssh-keys remove \
+            --impersonate-service-account="$IRIS_CONTROLLER_SERVICE_ACCOUNT" \
+            --key-file ~/.ssh/google_compute_engine.pub || true
