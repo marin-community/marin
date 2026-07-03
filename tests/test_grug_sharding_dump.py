@@ -11,7 +11,6 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.sharding_dump import (
-    default_grug_sharding_dump_path,
     dump_grug_state_sharding,
     grug_state_sharding_dict,
 )
@@ -54,9 +53,3 @@ def test_dump_grug_state_sharding_writes_json(tmp_path) -> None:
         "params": {"['weight']": "P('data',)"},
         "opt_state": {"['moment']": "P('data',)"},
     }
-
-
-def test_default_grug_sharding_dump_path_uses_run_artifacts_dir(tmp_path) -> None:
-    assert default_grug_sharding_dump_path(tmp_path / "logs", "run-123") == (
-        tmp_path / "logs" / "run-123" / "artifacts" / "grug_sharding_spec.json"
-    )
