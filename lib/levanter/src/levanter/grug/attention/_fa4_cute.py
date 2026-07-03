@@ -242,17 +242,11 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
-    metadata_spec = P(batch_axes, None)
     _assert_sequence_axis_unsharded("q", q)
     _assert_sequence_axis_unsharded("k", k)
     _assert_sequence_axis_unsharded("v", v)
     _assert_sequence_axis_unsharded("lower_bounds", lower_bounds)
     _assert_sequence_axis_unsharded("valid", valid)
-    q = reshard(q, qkv_spec)
-    k = reshard(k, qkv_spec)
-    v = reshard(v, qkv_spec)
-    lower_bounds = reshard(lower_bounds, metadata_spec)
-    valid = reshard(valid, metadata_spec)
 
     @shard_map(
         mesh=mesh,
