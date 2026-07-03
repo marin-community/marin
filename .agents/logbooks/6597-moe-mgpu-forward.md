@@ -1040,3 +1040,28 @@ current full-forward structure than the single-JIT path.
   - Treat `15.3 ms` balanced and `16.4 ms` rough-balanced staged full-forward medians as the current PR #6841 target
     full-forward baseline. The next production-relevant optimization remains reducing W2-return transport cost or
     replacing the current staged return boundary with a real producer/consumer return path.
+
+## 2026-07-03 09:06 - Full-forward benchmark summary rows
+
+Added aggregate summary rows to the package-private full-forward source-push benchmark output so target-gate reporting
+does not require manual JSONL post-processing.
+
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Change:
+  - `run_source_push_forward_source_plan` now appends `row_type="summary"` rows for `total`, `w13`, `w2_return`, and
+    `combine` when repeat rows are present.
+  - Summary rows include median metrics, min/max/p90/p95 `steady_state_time`, flattened queue stats, and W13 slow-repeat
+    accounting against the existing `<160 useful TFLOP/s/rank` threshold.
+  - Error rows remain unchanged; summary rows are added only for successful repeat rows.
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'forward_adds_summary or source_push_forward_runner_returns_structured_validation_errors or source_push_forward_bench_cli_imports or source_push_forward_cli_passes_profile_defaults'`
+    - Result: `4 passed, 11 warnings`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q -n 0`
+    - Result: `47 passed, 1 warning`.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- Interpretation:
+  - This is reporting-only and does not change the W13/W2/combine kernels.
+  - The next target H100 full-forward gate will emit the median/p90/p95 and slow-tail fields directly in JSONL.

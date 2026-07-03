@@ -874,6 +874,57 @@ def test_source_push_forward_runner_returns_structured_validation_errors():
     assert rows[0]["repeat_runs"] == 1
 
 
+def test_source_push_forward_adds_summary_rows_for_target_gate_reporting():
+    def repeat(stage, steady_state_time, **metrics):
+        row_type = "repeat" if stage == "total" else "stage_repeat"
+        return {
+            "kernel": "source_push_forward",
+            "implementation": "source_push_forward" if stage == "total" else f"source_push_forward_{stage}",
+            "row_type": row_type,
+            "stage": stage,
+            "execution_mode": "staged_host_sync",
+            "config": {"routing": "roughly_balanced"},
+            "queue_stats": {"plan_row_efficiency": 0.9},
+            "repeat_runs": 2,
+            "steady_state_time": steady_state_time,
+            "error_type": None,
+            **metrics,
+        }
+
+    rows = [
+        repeat("total", 3.0, rounded_forward_tflops_per_rank=90.0, useful_forward_tflops_per_rank=81.0),
+        repeat("w13", 1.0, useful_w13_tflops_per_rank=200.0),
+        repeat("w2_return", 1.5, w2_tflops_per_rank=120.0),
+        repeat("combine", 0.5, combine_gbps_per_rank=1000.0),
+        repeat("total", 5.0, rounded_forward_tflops_per_rank=50.0, useful_forward_tflops_per_rank=45.0),
+        repeat("w13", 2.0, useful_w13_tflops_per_rank=100.0),
+        repeat("w2_return", 2.5, w2_tflops_per_rank=80.0),
+        repeat("combine", 0.7, combine_gbps_per_rank=800.0),
+    ]
+
+    observed = source_push_forward._add_forward_summary_rows(rows)
+
+    summaries = [row for row in observed if row["row_type"] == "summary"]
+    assert [row["stage"] for row in summaries] == ["total", "w13", "w2_return", "combine"]
+    total_summary = summaries[0]
+    assert total_summary["median_steady_state_time"] == 4.0
+    assert total_summary["median_rounded_forward_tflops_per_rank"] == 70.0
+    assert total_summary["median_useful_forward_tflops_per_rank"] == 63.0
+    assert total_summary["p90_steady_state_time"] == 4.8
+    assert total_summary["p95_steady_state_time"] == 4.9
+    assert total_summary["plan_row_efficiency"] == 0.9
+
+    w13_summary = summaries[1]
+    assert w13_summary["median_useful_w13_tflops_per_rank"] == 150.0
+    assert w13_summary["min_useful_w13_tflops_per_rank"] == 100.0
+    assert w13_summary["slow_useful_w13_threshold"] == 160.0
+    assert w13_summary["slow_useful_w13_repeats"] == 1
+    assert w13_summary["slow_useful_w13_fraction"] == 0.5
+
+    assert summaries[2]["median_w2_tflops_per_rank"] == 100.0
+    assert summaries[3]["median_combine_gbps_per_rank"] == 900.0
+
+
 def test_source_push_repro_wrapper_imports_active_bench_cli():
     result = subprocess.run(
         [sys.executable, str(REPRO_SCRIPT_PATH), "--help"],

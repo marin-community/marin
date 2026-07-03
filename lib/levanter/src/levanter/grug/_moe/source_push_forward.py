@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import traceback
 from dataclasses import asdict, dataclass
+from statistics import median
 from typing import Any, Callable, Literal, TypeAlias
 
 import jax
@@ -77,6 +79,24 @@ FORWARD_STAGES = (FORWARD_STAGE_W13, FORWARD_STAGE_W2_RETURN, FORWARD_STAGE_COMB
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_REFERENCE = "reference"
 SOURCE_PUSH_FORWARD_IMPLEMENTATION_PALLAS_MGPU = "pallas_mgpu"
 SourcePushForwardImplementation: TypeAlias = Literal["reference", "pallas_mgpu"]
+SLOW_USEFUL_W13_TFLOPS_PER_RANK = 160.0
+FORWARD_SUMMARY_METRICS = (
+    "steady_state_time",
+    "bytes_per_rank",
+    "forward_gbps_per_rank",
+    "rounded_forward_tflops_per_rank",
+    "useful_forward_tflops_per_rank",
+    "w13_tflops_per_rank",
+    "rounded_w13_tflops_per_rank",
+    "useful_w13_tflops_per_rank",
+    "w2_tflops_per_rank",
+    "combine_gbps_per_rank",
+    "compile_time",
+    "lower_compile_time",
+    "first_run_time",
+    "max_abs_diff",
+    "mean_abs_diff",
+)
 
 
 @dataclass(frozen=True)
@@ -898,7 +918,7 @@ def _run_forward_one(
                     stage_row["bytes_per_rank"] = combine_bytes_per_rank
                     stage_row["combine_gbps_per_rank"] = combine_bytes_per_rank / stage_steady_state_time / 1e9
                 rows.append(stage_row)
-        return rows
+        return _add_forward_summary_rows(rows)
     except Exception as exc:  # noqa: BLE001 - benchmark rows should capture unsupported candidates.
         if settings.debug_exceptions:
             raise
@@ -934,6 +954,105 @@ def _run_forward_one(
         ]
     finally:
         jax.clear_caches()
+
+
+def _add_forward_summary_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append aggregate rows for full-forward target-gate reporting."""
+
+    summaries = []
+    for stage, repeat_row_type in (
+        (FORWARD_STAGE_TOTAL, "repeat"),
+        (FORWARD_STAGE_W13, "stage_repeat"),
+        (FORWARD_STAGE_W2_RETURN, "stage_repeat"),
+        (FORWARD_STAGE_COMBINE, "stage_repeat"),
+    ):
+        stage_rows = [
+            row
+            for row in rows
+            if row.get("stage") == stage
+            and row.get("row_type") == repeat_row_type
+            and row.get("error_type") is None
+            and row.get("steady_state_time") is not None
+        ]
+        if stage_rows:
+            summaries.append(_forward_summary_row(stage_rows, stage=stage))
+    return [*rows, *summaries]
+
+
+def _forward_summary_row(rows: list[dict[str, Any]], *, stage: str) -> dict[str, Any]:
+    first = rows[0]
+    queue_stats = first.get("queue_stats")
+    summary: dict[str, Any] = {
+        "kernel": KERNEL_NAME,
+        "implementation": first.get("implementation"),
+        "row_type": "summary",
+        "stage": stage,
+        "execution_mode": first.get("execution_mode"),
+        "config": first.get("config"),
+        "queue_stats": queue_stats,
+        "repeat_runs": first.get("repeat_runs"),
+        "repeat_rows": len(rows),
+        "error": None,
+        "error_type": None,
+        "error_message": None,
+        "min_steady_state_time": _min_field(rows, "steady_state_time"),
+        "max_steady_state_time": _max_field(rows, "steady_state_time"),
+        "p90_steady_state_time": _percentile_field(rows, "steady_state_time", 0.90),
+        "p95_steady_state_time": _percentile_field(rows, "steady_state_time", 0.95),
+    }
+    if isinstance(queue_stats, dict):
+        summary.update(queue_stats)
+    for metric in FORWARD_SUMMARY_METRICS:
+        summary[f"median_{metric}"] = _median_field(rows, metric)
+    if stage == FORWARD_STAGE_W13:
+        useful_w13_values = [
+            row["useful_w13_tflops_per_rank"] for row in rows if row.get("useful_w13_tflops_per_rank") is not None
+        ]
+        slow_repeats = sum(value < SLOW_USEFUL_W13_TFLOPS_PER_RANK for value in useful_w13_values)
+        summary.update(
+            {
+                "slow_useful_w13_threshold": SLOW_USEFUL_W13_TFLOPS_PER_RANK,
+                "slow_useful_w13_repeats": slow_repeats,
+                "slow_useful_w13_fraction": slow_repeats / len(useful_w13_values) if useful_w13_values else None,
+                "min_useful_w13_tflops_per_rank": _min_field(rows, "useful_w13_tflops_per_rank"),
+            }
+        )
+    return summary
+
+
+def _median_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+    values = [row[field] for row in rows if row.get(field) is not None]
+    if not values:
+        return None
+    return median(values)
+
+
+def _min_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+    values = [row[field] for row in rows if row.get(field) is not None]
+    if not values:
+        return None
+    return min(values)
+
+
+def _max_field(rows: list[dict[str, Any]], field: str) -> float | int | None:
+    values = [row[field] for row in rows if row.get(field) is not None]
+    if not values:
+        return None
+    return max(values)
+
+
+def _percentile_field(rows: list[dict[str, Any]], field: str, percentile: float) -> float | int | None:
+    values = sorted(row[field] for row in rows if row.get(field) is not None)
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    position = (len(values) - 1) * percentile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return values[lower]
+    return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
 def run_source_push_forward_source_plan(
