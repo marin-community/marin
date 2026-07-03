@@ -817,7 +817,7 @@ def _make_mesh(ep_size: int) -> Mesh:
     return Mesh(devices, (AXIS,))
 
 
-def _destination_ranks(config: PushInboxConfig, src: int):
+def _destination_ranks(config: PushInboxConfig):
     return range(config.ep_size)
 
 
@@ -848,7 +848,7 @@ def _make_weights(config: PushInboxConfig):
 def _recv_meta_from_send_meta(config: PushInboxConfig, send_meta: np.ndarray) -> np.ndarray:
     recv_meta = np.zeros_like(send_meta)
     for dst in range(config.ep_size):
-        for src in _destination_ranks(config, dst):
+        for src in _destination_ranks(config):
             send_dst_ordinal = _dst_ordinal(config, src, dst)
             recv_src_ordinal = _recv_src_ordinal(config, dst, src)
             recv_meta[dst, recv_src_ordinal, :, :] = send_meta[src, send_dst_ordinal, :, :]
@@ -877,7 +877,7 @@ def _queue_stats(config: PushInboxConfig, send_meta: np.ndarray) -> dict[str, An
     )
     max_slot_reuse_depth = 0
     for src in range(config.ep_size):
-        for dst in _destination_ranks(config, src):
+        for dst in _destination_ranks(config):
             dst_ordinal = _dst_ordinal(config, src, dst)
             pair_live_entries = int(entries_per_pair[src, dst_ordinal])
             entries_by_dst[dst] += pair_live_entries
@@ -1586,7 +1586,7 @@ def _validate(
     max_abs_diff = 0.0
     metadata_mismatches = 0
     for src in range(config.ep_size):
-        for dst in _destination_ranks(config, src):
+        for dst in _destination_ranks(config):
             dst_ordinal = _dst_ordinal(config, src, dst)
             live_entries = int(np.sum(send_meta_expected[src, dst_ordinal, :, 3] > 0))
             for slot in range(min(config.inbox_slots, live_entries)):

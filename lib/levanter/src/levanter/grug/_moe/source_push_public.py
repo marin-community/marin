@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import jax
 import numpy as np
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P
@@ -28,6 +26,7 @@ _BLOCK_N = 128
 _TARGET_BLOCK_K = 128
 _SMALL_BLOCK_K = 64
 _MAX_EP_SIZE = 8
+_MAX_INBOX_SLOTS = 12
 
 
 def moe_mlp_ep_source_push_mgpu(
@@ -37,17 +36,12 @@ def moe_mlp_ep_source_push_mgpu(
     w_up_gate: Float[Array, "E D I2"],
     w_down: Float[Array, "E I D"],
     *,
-    activation: Any,
+    activation: ActivationFunctionEnum,
     mesh: Mesh | AbstractMesh,
     batch_spec: P,
     capacity_factor: float,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
-    """Run the staged source-push prototype from the public EP ``moe_mlp`` layout.
-
-    This is deliberately narrow while source-push plan construction remains
-    host-side. It gives users an explicit public implementation name for H100x8
-    experiments without pretending the path is a general jittable backend.
-    """
+    """Run the opt-in source-push MGPU backend from the public EP ``moe_mlp`` layout."""
 
     _validate_source_push_public_request(
         activation=activation,
@@ -110,7 +104,7 @@ def moe_mlp_ep_source_push_mgpu(
 
 def _validate_source_push_public_request(
     *,
-    activation: Any,
+    activation: ActivationFunctionEnum,
     mesh: Mesh | AbstractMesh,
     x: jax.Array,
     selected_experts: jax.Array,
@@ -200,7 +194,7 @@ def _source_push_config_from_public_inputs(
     return PushInboxConfig(
         ep_size=ep_size,
         entries_per_rank=entries_per_rank,
-        inbox_slots=max(1, min(12, entries_per_rank)),
+        inbox_slots=max(1, min(_MAX_INBOX_SLOTS, entries_per_rank)),
         hidden_dim=hidden_dim,
         intermediate_dim=intermediate_dim,
         block_m=_BLOCK_M,

@@ -32,6 +32,7 @@ from levanter.grug.grug_moe import moe_mlp
 
 
 PUBLIC_EP_BACKENDS = ("ring", "ragged_all_to_all")
+KERNEL_NAME = "source_push_forward_public_compare"
 
 
 def _profile_defaults(argv: Sequence[str] | None = None) -> dict[str, Any]:
@@ -177,8 +178,8 @@ def run_source_push_forward_public_compare(
             diff = np.abs(source_push_host - public_host)
             rows.append(
                 {
-                    "kernel": "source_push_forward_public_compare",
-                    "implementation": "source_push_forward_public_compare",
+                    "kernel": KERNEL_NAME,
+                    "implementation": KERNEL_NAME,
                     "source_push_implementation": source_push_implementation,
                     "source_push_execution_mode": source_push_execution_mode,
                     "public_implementation": public_implementation,
@@ -198,8 +199,8 @@ def run_source_push_forward_public_compare(
     except Exception as exc:  # noqa: BLE001 - comparison scripts should emit structured failure rows.
         return [
             {
-                "kernel": "source_push_forward_public_compare",
-                "implementation": "source_push_forward_public_compare",
+                "kernel": KERNEL_NAME,
+                "implementation": KERNEL_NAME,
                 "source_push_implementation": source_push_implementation,
                 "source_push_execution_mode": source_push_execution_mode,
                 "public_implementation": ",".join(public_implementations),
