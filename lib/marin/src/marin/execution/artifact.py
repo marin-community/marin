@@ -27,7 +27,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Self, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem import marin_prefix, open_url, url_to_fs
+from rigging.filesystem import marin_prefix, open_url, prefix_join, url_to_fs
 from rigging.provenance import Provenance
 
 from marin.execution.fingerprint import describe_drift
@@ -180,15 +180,11 @@ def _resolved(output_path: str) -> str:
     Mirrors the launcher's path resolution so a manual ``read_artifact``/``read_record`` of a
     relative step name reads the same location the runner wrote.
     """
-    return f"{marin_prefix()}/{output_path}" if _is_relative_path(output_path) else output_path
-
-
-def _join(output_path: str, filename: str) -> str:
-    return f"{output_path.rstrip('/')}/{filename}"
+    return prefix_join(marin_prefix(), output_path) if _is_relative_path(output_path) else output_path
 
 
 def _read_text(output_path: str, filename: str) -> str | None:
-    path = _join(output_path, filename)
+    path = prefix_join(output_path, filename)
     fs = url_to_fs(path, use_listings_cache=False)[0]
     if not fs.exists(path):
         return None
@@ -265,7 +261,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
 
 def write_record(record: ArtifactRecord) -> None:
     """Write ``record`` to ``{record.output_path}/.artifact.json``."""
-    with open_url(_join(record.output_path, RECORD_FILENAME), "w") as f:
+    with open_url(prefix_join(record.output_path, RECORD_FILENAME), "w") as f:
         f.write(record.model_dump_json(indent=2))
 
 

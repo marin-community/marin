@@ -6,7 +6,23 @@
 from pathlib import Path
 
 import pytest
-from rigging.filesystem import atomic_rename, unique_temp_path
+from rigging.filesystem import atomic_rename, prefix_join, unique_temp_path
+
+
+@pytest.mark.parametrize(
+    ("prefix", "expected"),
+    [
+        ("s3://marin-na/marin", "s3://marin-na/marin/a/b"),
+        ("s3://marin-na/marin/", "s3://marin-na/marin/a/b"),
+        ("s3://marin-na/marin//", "s3://marin-na/marin/a/b"),
+        ("/tmp/marin/", "/tmp/marin/a/b"),
+        ("mirror://", "mirror://a/b"),
+    ],
+)
+def test_prefix_join_uses_exactly_one_separator(prefix, expected):
+    """Object-store keys are not normalized: a doubled ``/`` addresses a different key,
+    silently splitting writers from readers (marin-community/marin#6904)."""
+    assert prefix_join(prefix, "a/b") == expected
 
 
 def test_unique_temp_path_produces_distinct_paths():

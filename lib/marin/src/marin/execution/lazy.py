@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Generic, TypeVar, cast
 from urllib.parse import urlparse
 
-from rigging.filesystem import marin_prefix, marin_region, url_to_fs
+from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_fs
 from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
@@ -60,16 +60,6 @@ T = TypeVar("T", bound=Artifact)
 
 # A calendar version: YYYY.MM.DD, optionally .N for two immutable revisions on the same day.
 _CALVER_RE = re.compile(r"^\d{4}\.\d{2}\.\d{2}(\.\d+)?$")
-
-
-def _artifact_path(name: str, version: str, prefix: str) -> str:
-    """The explicit, hash-free address of an artifact under a storage prefix.
-
-    A prefix may already end in ``/`` — an empty-authority scheme like ``mirror://``, or a
-    ``MARIN_PREFIX`` written with a trailing slash — so the separator is not doubled.
-    """
-    base = prefix if prefix.endswith("/") else f"{prefix}/"
-    return f"{base}{name}/{version}"
 
 
 def _validate_segment(label: str, value: str) -> None:
@@ -270,9 +260,10 @@ class ArtifactStep(Generic[T]):
         location = self.adopt_source if self.adopt_source is not None else self.override_path
         if location is not None:
             if _is_relative_path(location):
-                return f"{resolved_prefix}/{location}"
+                return prefix_join(resolved_prefix, location)
             return location
-        return _artifact_path(self.name, self.version, resolved_prefix)
+        # The explicit, hash-free ``{prefix}/{name}/{version}`` address.
+        return prefix_join(resolved_prefix, f"{self.name}/{self.version}")
 
     def lower(self) -> StepSpec:
         """Lower this handle graph into a ``StepSpec`` graph the ``StepRunner`` can run.

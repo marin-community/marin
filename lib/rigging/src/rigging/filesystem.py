@@ -152,12 +152,15 @@ class DataConfig:
         Precedence: ``MARIN_PREFIX`` env > ``self.root`` > region-local bucket
         from ``region_buckets[<gcs metadata region>]`` > ``{scheme}://marin-{region}``
         for a detected-but-unmapped region > :data:`_DEFAULT_LOCAL_PREFIX`.
+
+        A trailing ``/`` on the env/explicit value is stripped so downstream joins
+        never double the separator (#6904).
         """
         env_prefix = os.environ.get(_MARIN_PREFIX_ENV)
         if env_prefix:
-            return env_prefix
+            return _normalized_prefix(env_prefix)
         if self.root is not None:
-            return self.root
+            return _normalized_prefix(self.root)
         region = region_from_metadata()
         if region is not None:
             spec = self.region_buckets.get(region)
@@ -328,6 +331,28 @@ def marin_region() -> str | None:
 def marin_prefix() -> str:
     """Return the active cluster's storage prefix (``data_config().resolved_root()``)."""
     return data_config().resolved_root()
+
+
+def _normalized_prefix(prefix: str) -> str:
+    """``prefix`` without its trailing ``/``; an empty-authority scheme like
+    ``mirror://`` is returned unchanged (its slashes belong to the scheme, not the path)."""
+    stripped = prefix.rstrip("/")
+    if not stripped or stripped.endswith(":"):
+        return prefix
+    return stripped
+
+
+def prefix_join(prefix: str, relative: str) -> str:
+    """Join a relative path onto a storage prefix with exactly one ``/`` separator.
+
+    Object-store keys are not normalized: a naive ``f"{prefix}/{relative}"`` join of a
+    trailing-slash prefix produces a doubled separator — a *different* key — silently
+    splitting writers from slash-collapsing readers (#6904).
+    """
+    base = _normalized_prefix(prefix)
+    if base.endswith("/"):  # empty-authority scheme, e.g. ``mirror://``
+        return f"{base}{relative}"
+    return f"{base}/{relative}"
 
 
 @functools.cache
