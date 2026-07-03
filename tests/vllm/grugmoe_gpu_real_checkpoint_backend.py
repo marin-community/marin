@@ -820,18 +820,10 @@ def _server_root_url(env: Any) -> str:
     return str(env.server_url).removesuffix("/v1")
 
 
-def _collective_rpc_payload(
-    env: Any,
-    method: str,
-    *,
-    data_parallel_rank: int | None = None,
-) -> dict[str, Any]:
-    headers = {}
-    if data_parallel_rank is not None:
-        headers["X-data-parallel-rank"] = str(data_parallel_rank)
+def _collective_rpc_payload(env: Any, method: str) -> dict[str, Any]:
     response = requests.post(
         f"{_server_root_url(env)}/collective_rpc",
-        headers=headers,
+        headers={},
         json={"method": method, "timeout": 300},
         timeout=300,
     )
@@ -839,7 +831,6 @@ def _collective_rpc_payload(
         "vllm_gpu_collective_rpc_status="
         + json.dumps(
             {
-                "data_parallel_rank": data_parallel_rank,
                 "method": method,
                 "status_code": response.status_code,
             },
@@ -860,20 +851,15 @@ def _collective_rpc_payload(
 
 
 def _collect_grug_moe_worker_ep_states(env: Any) -> list[dict[str, Any]]:
+    payload = _collective_rpc_payload(env, "grugmoe_ep_state")
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise AssertionError(f"collective_rpc missing results list: {payload!r}")
     states: list[dict[str, Any]] = []
-    for data_parallel_rank in range(VLLM_DATA_PARALLEL_SIZE):
-        payload = _collective_rpc_payload(
-            env,
-            "grugmoe_ep_state",
-            data_parallel_rank=data_parallel_rank,
-        )
-        results = payload.get("results")
-        if not isinstance(results, list):
-            raise AssertionError(f"collective_rpc missing results list: {payload!r}")
-        for result in results:
-            if not isinstance(result, dict):
-                raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
-            states.append(result)
+    for result in results:
+        if not isinstance(result, dict):
+            raise AssertionError(f"collective_rpc result is not a dict: {result!r}")
+        states.append(result)
     return states
 
 
@@ -884,6 +870,9 @@ def _assert_grug_moe_worker_ep_states(
 ) -> dict[str, Any]:
     if len(states) != EXPECTED_GPU_COUNT:
         raise AssertionError(f"expected {EXPECTED_GPU_COUNT} worker states, got {states!r}")
+    dp_ranks = sorted(int(state.get("dp_rank", -1)) for state in states)
+    if dp_ranks != list(range(VLLM_DATA_PARALLEL_SIZE)):
+        raise AssertionError(f"worker DP ranks did not cover all ranks: {dp_ranks!r}")
     ep_ranks = sorted(int(state.get("ep_rank", -1)) for state in states)
     if ep_ranks != list(range(VLLM_EXPERT_PARALLEL_SIZE)):
         raise AssertionError(f"worker EP ranks did not cover all ranks: {ep_ranks!r}")
@@ -919,6 +908,8 @@ def _assert_grug_moe_worker_ep_states(
         )
     return {
         "worker_count": len(states),
+        "dp_ranks": dp_ranks,
+        "dp_rank_coverage": True,
         "ep_ranks": ep_ranks,
         "ep_rank_coverage": True,
         "local_expert_coverage": True,
@@ -1170,6 +1161,7 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         "worker_ep_states": worker_ep_states,
         "worker_ep_summary": worker_ep_summary,
         "rank_request_batches": rank_request_batches,
+        "observed_worker_data_parallel_ranks": worker_ep_summary["dp_ranks"],
         "requested_data_parallel_ranks": [batch["data_parallel_rank"] for batch in rank_request_batches],
         "routed_experts_by_completion": routed_experts_by_completion,
         "routed_expert_num_experts": num_experts,

@@ -268,6 +268,9 @@ def _write_summary_update(
         summary["vllm_routed_expert_owner_rank_coverage"] = backend_results["vllm"].get(
             "routed_expert_owner_rank_coverage"
         )
+        summary["vllm_observed_worker_data_parallel_ranks"] = backend_results["vllm"].get(
+            "observed_worker_data_parallel_ranks"
+        )
         summary["vllm_requested_data_parallel_ranks"] = backend_results["vllm"].get("requested_data_parallel_ranks")
         levanter_jax_runtime = backend_results["levanter"].get("jax_runtime", {})
         levanter_jax_mesh = backend_results["levanter"].get("jax_mesh", {})
@@ -285,6 +288,7 @@ def _write_summary_update(
             and summary["vllm_levanter_match"]
             and summary["vllm_levanter_batch_match"]
             and summary["vllm_routed_expert_owner_rank_coverage"] is True
+            and backend_results["vllm"].get("worker_ep_summary", {}).get("dp_rank_coverage") is True
             and backend_results["vllm"].get("worker_ep_summary", {}).get("ep_rank_coverage") is True
             and backend_results["vllm"].get("worker_ep_summary", {}).get("local_expert_coverage") is True
         )
@@ -382,7 +386,7 @@ def test_grugmoe_worker_extension_reports_structured_ep_state() -> None:
     }
 
 
-def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_grugmoe_collective_rpc_collects_all_data_parallel_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
     class FakeResponse:
@@ -390,25 +394,23 @@ def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: py
         status_code = 200
         text = "{}"
 
-        def __init__(self, ep_rank: int):
-            self.ep_rank = ep_rank
-
         def json(self) -> dict[str, Any]:
-            first_expert = self.ep_rank * 32
-            return {
-                "results": [
+            results: list[dict[str, Any]] = []
+            for ep_rank in range(backend.VLLM_EXPERT_PARALLEL_SIZE):
+                first_expert = ep_rank * 32
+                results.append(
                     {
                         "found": True,
-                        "worker_rank": self.ep_rank,
-                        "local_rank": self.ep_rank,
+                        "worker_rank": ep_rank,
+                        "local_rank": ep_rank,
                         "module_name": "model.layers.0.mlp",
                         "use_ep": True,
                         "tp_size": 1,
                         "tp_rank": 0,
                         "dp_size": 8,
-                        "dp_rank": self.ep_rank,
+                        "dp_rank": ep_rank,
                         "ep_size": 8,
-                        "ep_rank": self.ep_rank,
+                        "ep_rank": ep_rank,
                         "global_num_experts": 256,
                         "logical_num_experts": 256,
                         "local_num_experts": 32,
@@ -419,7 +421,9 @@ def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: py
                         "all2all_backend": "allgather_reducescatter",
                         "routed_experts_capture_enabled": True,
                     }
-                ]
+                )
+            return {
+                "results": results,
             }
 
         def raise_for_status(self) -> None:
@@ -427,8 +431,7 @@ def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: py
 
     def fake_post(url: str, **kwargs: Any) -> FakeResponse:
         calls.append({"url": url, **kwargs})
-        rank = int(kwargs["headers"]["X-data-parallel-rank"])
-        return FakeResponse(rank)
+        return FakeResponse()
 
     monkeypatch.setattr(backend.requests, "post", fake_post)
     env = SimpleNamespace(server_url="http://127.0.0.1:8000/v1")
@@ -436,12 +439,14 @@ def test_grugmoe_collective_rpc_collects_each_data_parallel_rank(monkeypatch: py
     states = backend._collect_grug_moe_worker_ep_states(env)
     summary = backend._assert_grug_moe_worker_ep_states(states, num_experts=256)
 
-    assert [call["headers"]["X-data-parallel-rank"] for call in calls] == [
-        str(rank) for rank in range(backend.VLLM_DATA_PARALLEL_SIZE)
-    ]
+    assert len(calls) == 1
     assert {call["url"] for call in calls} == {"http://127.0.0.1:8000/collective_rpc"}
+    assert calls[0]["headers"] == {}
+    assert calls[0]["json"] == {"method": "grugmoe_ep_state", "timeout": 300}
+    assert [state["dp_rank"] for state in states] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
     assert [state["ep_rank"] for state in states] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
     assert summary["worker_count"] == backend.EXPECTED_GPU_COUNT
+    assert summary["dp_rank_coverage"] is True
     assert summary["ep_rank_coverage"] is True
     assert summary["local_expert_coverage"] is True
 
@@ -471,10 +476,13 @@ def test_grugmoe_gpu_real_checkpoint_vllm_output(
     assert vllm_result["single_prompt_completion"] == backend.EXPECTED_CONTINUATION
     assert len(vllm_result["completions"]) == backend.PROMPT_BATCH_SIZE
     assert all(completion == backend.EXPECTED_CONTINUATION for completion in vllm_result["completions"])
+    assert vllm_result["observed_worker_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
     assert vllm_result["requested_data_parallel_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
     assert vllm_result["routed_expert_owner_ranks"] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
     assert vllm_result["routed_expert_owner_rank_coverage"] is True
     assert vllm_result["worker_ep_summary"]["worker_count"] == backend.EXPECTED_GPU_COUNT
+    assert vllm_result["worker_ep_summary"]["dp_ranks"] == list(range(backend.VLLM_DATA_PARALLEL_SIZE))
+    assert vllm_result["worker_ep_summary"]["dp_rank_coverage"] is True
     assert vllm_result["worker_ep_summary"]["ep_ranks"] == list(range(backend.VLLM_EXPERT_PARALLEL_SIZE))
     assert vllm_result["worker_ep_summary"]["ep_rank_coverage"] is True
     assert vllm_result["worker_ep_summary"]["local_expert_coverage"] is True
