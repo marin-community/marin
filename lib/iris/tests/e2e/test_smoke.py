@@ -669,7 +669,9 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
             "() => document.body.textContent.includes('cw-smoke-peer')",
             timeout=10000,
         )
-        assert_visible(smoke_page, "text=cw-smoke-peer")
+        # Target the peer card heading, not the peer's (hidden) <option> in the
+        # scope <select>, which also carries the peer id.
+        assert_visible(smoke_page, "h3:has-text('cw-smoke-peer')")
         smoke_screenshot(
             "backends-tab-peer",
             "Execution-targets tab with a federation peer card: health dot, peer tag, "
