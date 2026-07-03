@@ -1748,3 +1748,66 @@ unchanged.
     - Result: `13 passed, 11 warnings in 19.89s`.
   - `./infra/pre-commit.py --changed-files --fix`
     - Result: all checks passed.
+
+## 2026-07-03 16:04 - Benchmark refactored SourcePushPlan W13 path
+
+Benchmarked the current PR head after the `SourcePushPlan` refactor and planner/combine regression tests. This is the
+production profile fed by production-like compact routing metadata, not the older exact-balanced synthetic path.
+
+- Commit Hash: `e35e9357b355573ad4c657b0c19d7b9d512eaf14`
+- Job: `/dlwh/source-push-plan-w13-target-e35e9357b-20260703-1555`
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller iris --cluster=cw-us-east-02a job run --no-wait \
+    --job-name source-push-plan-w13-target-e35e9357b-20260703-1555 \
+    --cpu 16 --memory 128GB --disk 16GB --gpu H100x8 --reserve H100x8 \
+    --enable-extra-resources --extra gpu -- \
+    timeout 3600s uv run --package marin-levanter --group test python \
+    lib/levanter/scripts/bench/bench_source_push_inbox.py \
+    --source-push-profile hopper_source_push_inbox_rough_balanced_216 \
+    --input-mode source_push_plan \
+    --warmup 2 --steps 5 --repeat-runs 9 \
+    --separate-compile --no-check --no-progress-events \
+    --git-sha e35e9357b \
+    --jsonl scratch/source_push_plan_w13_target_e35e9357b.jsonl
+  ```
+- Iris summary:
+  - State: `JOB_STATE_SUCCEEDED`
+  - Exit code: `0`
+  - Task duration: `54084 ms`
+  - Failure count: `0`
+  - Preemption count: `0`
+- Median over 9 repeats:
+
+  | metric | value |
+  | --- | ---: |
+  | steady_state_time | `8.307660 ms` |
+  | useful_w13_tflops_per_rank | `206.795531` |
+  | rounded_w13_tflops_per_rank | `219.392084` |
+  | effective send bandwidth per rank | `85.700033 GB/s` |
+  | plan_row_efficiency | `0.942584283` |
+  | plan_masked_row_fraction | `0.057415717` |
+  | dropped_routes | `0` |
+
+- Planner shape:
+  - `live_entries_total`: `17382`
+  - `plan_useful_rows_total`: `1048576`
+  - `plan_rounded_rows_total`: `1112448`
+  - `plan_layout_padding_rows_total`: `63872`
+- Repeat rows:
+
+  | repeat | time ms | useful TFLOP/s/rank | rounded TFLOP/s/rank | send GB/s/rank |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 0 | `8.307660` | `206.795531` | `219.392084` | `85.700033` |
+  | 1 | `8.259195` | `208.008998` | `220.679468` | `86.202917` |
+  | 2 | `8.260961` | `207.964531` | `220.632292` | `86.184489` |
+  | 3 | `8.328544` | `206.276986` | `218.841954` | `85.485138` |
+  | 4 | `8.253787` | `208.145289` | `220.824060` | `86.259399` |
+  | 5 | `8.353879` | `205.651396` | `218.178257` | `85.225882` |
+  | 6 | `8.327901` | `206.292899` | `218.858836` | `85.491733` |
+  | 7 | `8.243126` | `208.414493` | `221.109662` | `86.370962` |
+  | 8 | `8.315828` | `206.592406` | `219.176587` | `85.615854` |
+- Interpretation:
+  - The refactored `SourcePushPlan` path preserves the known rough-balanced W13 performance envelope.
+  - This is slightly faster than the prior `8.415 ms` rough-balanced reference and comparable to the previous
+    precomputed SourcePushPlan row (`8.441 ms`), with no drops and the expected `5.74%` padded-row tax.
