@@ -32,7 +32,6 @@ from iris.cluster.config import AuthConfig, StaticAuthConfig
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
-from iris.rpc.auth import DASHBOARD_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +48,9 @@ CIDR_PROVIDER = "cidr"
 # (authorize_method denies any audience-bearing identity); it exists only so the
 # token has a role claim and so audit rows read sensibly.
 ENDPOINT_TOKEN_ROLE = "endpoint"
+# Scope claim marking a token as endpoint-scoped; verify() surfaces its aud as
+# the identity's audience only when this scope is present.
+ENDPOINT_TOKEN_SCOPE = "proxy"
 # Default lifetime of a minted endpoint token when the caller requests none.
 DEFAULT_ENDPOINT_TOKEN_TTL_SECONDS = 3600  # 1 hour
 # Hard ceiling on a requested endpoint-token TTL.
@@ -242,7 +244,7 @@ class JwtTokenManager:
             "sub": f"endpoint:{endpoint_name}",
             "role": ENDPOINT_TOKEN_ROLE,
             "aud": endpoint_name,
-            "scope": "proxy",
+            "scope": ENDPOINT_TOKEN_SCOPE,
             "jti": key_id,
             "iat": int(now),
             "exp": int(now + ttl_seconds),
@@ -275,7 +277,7 @@ class JwtTokenManager:
 
         # A scoped proxy token carries its endpoint wire name in aud; any other
         # token is a full identity (audience=None).
-        audience = payload.get("aud") if payload.get("scope") == "proxy" else None
+        audience = payload.get("aud") if payload.get("scope") == ENDPOINT_TOKEN_SCOPE else None
         return VerifiedIdentity(
             user_id=payload["sub"],
             role=payload.get("role", "user"),
@@ -364,12 +366,13 @@ def request_auth_policy(auth: ControllerAuth | None) -> RequestAuthPolicy:
 _IAP_ROLE_CACHE_TTL_SECONDS = 60.0
 
 
-def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
+def _make_iap_role_resolver(db: ControllerDB, unprovisioned_role: str) -> Callable[[str], str]:
     """Return a function that maps a verified IAP email to its Iris role.
 
-    Looks up the role from the user store; falls back to ``dashboard`` for an
-    unprovisioned email. Results are cached for ``_IAP_ROLE_CACHE_TTL_SECONDS``
-    to keep the per-RPC assertion path off the database.
+    Looks up the role from the user store; falls back to ``unprovisioned_role``
+    for an email with no row. Results are cached for
+    ``_IAP_ROLE_CACHE_TTL_SECONDS`` to keep the per-RPC assertion path off the
+    database.
     """
     cache: dict[str, tuple[float, str]] = {}
 
@@ -379,7 +382,7 @@ def _make_iap_role_resolver(db: ControllerDB) -> Callable[[str], str]:
             return cached[1]
         with db.read_snapshot() as tx:
             role = reads.get_user_role_or_none(tx, email)
-        resolved = role if role is not None else DASHBOARD_ROLE
+        resolved = role if role is not None else unprovisioned_role
         # Atomic dict assignment; a benign race just recomputes the same value.
         cache[email] = (time.monotonic() + _IAP_ROLE_CACHE_TTL_SECONDS, resolved)
         return resolved
@@ -478,7 +481,10 @@ def create_controller_auth(
         # provisioned). Without a DB the resolver defaults to dashboard.
         signed_header_audience = auth_config.iap.signed_header_audience
         if signed_header_audience:
-            role_resolver = _make_iap_role_resolver(db) if db else (lambda _email: DASHBOARD_ROLE)
+            unprovisioned_role = auth_config.iap.unprovisioned_role
+            role_resolver = (
+                _make_iap_role_resolver(db, unprovisioned_role) if db else (lambda _email: unprovisioned_role)
+            )
             iap_assertion_verifier = IapAssertionVerifier(signed_header_audience, role_resolver=role_resolver)
 
     optional = auth_config.optional

@@ -35,14 +35,20 @@ storage:
 # and tasks; loopback covers SSH tunnels); anything forwarded through the LB
 # carries X-Forwarded-For and never matches a CIDR.
 auth:
-  # Assertion-only IAP: no desktop OAuth client is registered for iris.oa.dev,
-  # so `iris login` is unavailable (UNIMPLEMENTED). Add oauth_client_id /
-  # oauth_client_secret / audiences per docs/iap-gclb.md to enable it.
   iap:
     url: https://iris.oa.dev
+    # `iris login` drives the browser flow with the Marin desktop OAuth client
+    # shipped in rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT (no oauth_client_id /
+    # oauth_client_secret override here). The controller accepts login ID
+    # tokens minted for that client:
+    audiences:
+      - 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
     # Audience of IAP's signed assertion: the iris-marin-be backend service in
     # hai-gcp-models (project number 748532799086).
     signed_header_audience: /projects/748532799086/global/backendServices/2663834686758326555
+    # IAP's allowlist already restricts who reaches the controller; anyone
+    # Google admits acts as admin (a provisioned user still gets their DB role).
+    unprovisioned_role: admin
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
 
 worker_provider: {}

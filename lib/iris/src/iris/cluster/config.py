@@ -513,6 +513,10 @@ class IapAuthConfig(_Config):
     oauth_client_secret: str = ""
     audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
+    # Role granted to an IAP-verified email with no row in the user store; a
+    # provisioned user always resolves to their stored role. "admin" makes
+    # IAP's own allowlist the sole gate.
+    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
 
 
 class AuthConfig(_OneofConfig):

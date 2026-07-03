@@ -661,14 +661,21 @@ def test_dashboard_interceptor_login_reachable_for_unprovisioned_iap_browser():
 
 def test_iap_role_resolver_maps_provisioned_and_unknown_emails(db: ControllerDB):
     # The resolver the controller injects into IapAssertionVerifier: a provisioned
-    # email gets its stored role; an unprovisioned email gets read-only dashboard.
+    # email gets its stored role; an unprovisioned email gets the configured
+    # fallback role.
     now = Timestamp.now()
     with db.transaction() as tx:
         writes.ensure_user(tx, "admin@example.com", now, role="admin")
         writes.set_user_role(tx, "admin@example.com", "admin")
         writes.ensure_user(tx, "user@example.com", now, role="user")
 
-    resolve = _make_iap_role_resolver(db)
+    resolve = _make_iap_role_resolver(db, DASHBOARD_ROLE)
     assert resolve("admin@example.com") == "admin"
     assert resolve("user@example.com") == "user"
     assert resolve("stranger@example.com") == DASHBOARD_ROLE
+
+    # unprovisioned_role=admin (IAP's own allowlist as the sole gate): strangers
+    # act as admin, a provisioned user still gets their stored role.
+    resolve_admin = _make_iap_role_resolver(db, "admin")
+    assert resolve_admin("user@example.com") == "user"
+    assert resolve_admin("stranger@example.com") == "admin"

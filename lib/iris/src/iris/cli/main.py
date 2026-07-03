@@ -10,7 +10,7 @@ import logging
 import sys
 
 import click
-from rigging.auth import GcpAccessTokenProvider, StaticTokenProvider, run_iap_desktop_login
+from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, GcpAccessTokenProvider, StaticTokenProvider, run_iap_desktop_login
 from rigging.cluster_manifest import AuthProvider, ClusterAuth, IapAuth
 from rigging.config_discovery import resolve_cluster_config
 from rigging.credential_store import CredentialRecord, cluster_name_from_url, save_credentials
@@ -61,8 +61,13 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
         # edge token must carry an IAP-secured audience — never the desktop one,
         # which IAP rejects — so the desktop client id is dropped here and only
         # genuine programmatic audiences reach the service-account token path.
+        # When the config fronts no cluster-specific client, the effective
+        # desktop client is the Marin one (the same fallback the login flow and
+        # rigging.credentials use), so its id is dropped from the programmatic
+        # set too.
         desktop_oauth_client_id = auth.iap.oauth_client_id or None
-        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != desktop_oauth_client_id)
+        effective_desktop_id = desktop_oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
+        programmatic_audiences = tuple(a for a in auth.iap.audiences if a != effective_desktop_id)
         return ClusterAuth(
             AuthProvider.IAP,
             iap=IapAuth(
@@ -180,11 +185,14 @@ def _login_iap(controller_url: str, iap: IapAuthConfig, cluster_name: str) -> No
     ID token for an Iris JWT over the IAP transport (the ID token rides in
     Proxy-Authorization so IAP admits the exchange request to the controller).
     """
-    if not iap.oauth_client_id or not iap.oauth_client_secret:
-        raise click.ClickException("IAP auth config is missing oauth_client_id/oauth_client_secret")
+    # Config may front a cluster-specific desktop client; otherwise the Marin
+    # desktop client shipped in rigging drives the flow (same fallback as
+    # rigging.credentials._desktop_client).
+    client_id = iap.oauth_client_id or MARIN_DESKTOP_OAUTH_CLIENT.client_id
+    client_secret = iap.oauth_client_secret or MARIN_DESKTOP_OAUTH_CLIENT.client_secret
     click.echo("Opening browser to authenticate with Google IAP...")
     try:
-        id_token, refresh_token = run_iap_desktop_login(iap.oauth_client_id, iap.oauth_client_secret)
+        id_token, refresh_token = run_iap_desktop_login(client_id, client_secret)
     except Exception as e:
         raise click.ClickException(f"IAP authentication failed: {e}") from e
 
