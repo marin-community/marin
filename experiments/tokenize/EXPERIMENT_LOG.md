@@ -1,0 +1,93 @@
+# Tokenizer bake-off — experiment log
+
+Chronological log of every experiment in the grug-moe tokenizer investigation (issue #6796).
+Each entry is self-contained: the hypothesis, the exact launch command to **reproduce** it, the
+command to **replay** the analysis from stored logs, and the result. Goal: **≥10% feBPB
+improvement over the stock Llama-3 tokenizer** for target grug-moe models.
+
+## Conventions
+
+- **Cluster**: `cw-rno2a` (8×H100 × 64). `export KUBECONFIG=~/.kube/coreweave-iris-rno2a` and
+  prefix iris/gh with `env -u GH_TOKEN`.
+- **Proxy shape** (unless noted): hidden 1024, 16 layers, 32 experts, top-4, expert-axis 4,
+  batch 128, seq 1024. Only `vocab_size` follows the tokenizer arm.
+- **isoFLOP ladder**: SCALE_STEPS ∈ {1500, 3500, 8000} → 3 `(train_flops, BPB)` points/arm; ≥3
+  lets `bakeoff_analysis` fit `BPB(C)=a·C^-b+c`.
+- **Metric**: BPB on the Uncheatable-Eval held-out subsets (`eval/bpb`, tokenizer-agnostic).
+  feBPB = BPB read at the FLOP budget an arm earns after its serving-cost discount.
+- **Collect**: `python -m experiments.tokenize.collect_ladder --prefix grug-bakeoff- --cluster cw-rno2a --out results/ladder.json`
+  (state-first, skips non-succeeded jobs). **Score**:
+  `python -m experiments.tokenize.bakeoff_analysis --fertility results/fertility_raw.json --bpb results/ladder.json [knobs]`.
+
+---
+
+## EXP-001 — Fertility pre-filter (no training)
+
+- **Hypothesis**: rank tokenizer arms by serving cost (tokens/byte × head cost) before spending GPU.
+- **Reproduce**: `uv run python -m experiments.tokenize.fertility_report --max-mb 4 --out results/fertility_raw.json`
+- **Result** (`results/fertility_raw.json`): superbpe-128k emits ~30% more bytes/token than
+  Llama-3 on English/code/math (−18% serving FLOPs/byte at equal vocab); regresses −37% on
+  Chinese. gpt-neox-50k cheap head but high fertility; gemma3-262k/qwen3 expensive.
+- **Conclusion**: superbpe-128k is the serving-cost frontrunner for an English/math target;
+  carried to the trained ladder.
+
+## EXP-002 — isoFLOP tokenizer ladder (5 arms × 3 points)
+
+- **Hypothesis**: at equal training FLOPs, a superword tokenizer reaches lower BPB (ingests more
+  bytes/FLOP); the FLOP-fair rubric will demote big-head arms that only look good on raw BPB.
+- **Arms**: marin-128k (llama3), superbpe-128k, gpt-oss-200k, qwen3-152k, gpt-neox-50k.
+- **Reproduce**: `uv run python -m experiments.tokenize.launch_bakeoff_ladder --arms marin-128k,superbpe-128k,gpt-oss-200k,qwen3-152k,gpt-neox-50k --run`
+- **Replay**: `bakeoff_analysis --fertility results/fertility_raw.json --bpb results/ladder.json --domain-weights english_web=0.8,math=0.2`
+- **Result** (BPB at matched FLOPs; feBPB @ English/math, 16k ctx):
+
+  | arm | BPB s1500/s3500/s8000 | feBPB | vs llama3 |
+  |---|---|---|---|
+  | superbpe-128k | 1.336 / 1.200 / 1.114 | **1.179** | **−4.7%** |
+  | marin/llama3-128k | 1.378 / 1.238 / 1.147 | 1.238 | ref |
+  | gpt-oss-200k | 1.366 / 1.230 / 1.135 | 1.257 | +1.6% |
+  | qwen3-152k | 1.377 / 1.241 / 1.148 | 1.275 | +3.2% |
+  | gpt-neox-50k | 1.332 / 1.206 / (rerun) | n/a (2 pts) | — |
+
+- **Conclusion**: superbpe-128k wins on both axes (−4.7% feBPB), robust across replays (natural
+  −1.9%, 64k −4.7%, serving-heavy −6.0%). Best single-lever tokenizer so far, but short of the
+  10% goal — need a second, stacking lever.
+
+## EXP-003 — n-gram input embedding, FIRST attempt (MISCONFIGURED)
+
+- **Hypothesis**: an Over-Tokenized/LongCat hashed n-gram input embedding adds quality at ~0
+  serving FLOPs (gather, not matmul; output head untouched), stacking on any tokenizer.
+- **Config used**: base marin-128k, `orders=(2,3)`, `num_hashes=2`, **`hash_buckets=65_537`**,
+  **`combine="sum"`**, `init_std_scale` ∈ {0.0 (r3), 1.0 (r2)}, full-dim (no low-rank).
+- **Reproduce**: `launch_bakeoff_ladder --arms marin-128k --ngram --run` (old defaults) — env
+  `BAKEOFF_NGRAM=1 BAKEOFF_NGRAM_BUCKETS=65537`.
+- **Result** (BPB vs marin baseline, all budgets):
+
+  | budget | marin | ngram init=0 (r3) | ngram init=1.0 (r2) |
+  |---|---|---|---|
+  | s1500 | 1.378 | 1.424 (+3.3%) | 1.475 |
+  | s3500 | 1.238 | 1.261 (+1.9%) | 1.278 |
+  | s8000 | 1.147 | 1.157 (+0.9%) | 1.174 |
+
+- **Diagnosis (why it diverged from the paper)**: this did **not** test the method. Read
+  arXiv 2601.21204 §n-gram + 2501.16975: their gain needs (a) a **large** hashed n-gram vocab
+  (30× base ≈ 3.84M–4.2M buckets/table) — I used 65,537, ~60× too small, so bigrams over a 128k
+  vocab (~10⁹ possible) collide into 65k slots = pure noise; (b) **mean** combine with per-table
+  projections, not sum; (c) **standard, norm-matched** init, not zero; (d) low-rank sub-tables
+  D/((N−1)K); (e) N=3–5, K≥2 (they report N=2,K=1 "notably inferior"). All five wrong here.
+- **Conclusion**: discard as a method test. Rebuild with paper config → EXP-004+.
+
+---
+
+## EXP-004 — n-gram, PROPER config: hash-bucket sweep _(in progress)_
+
+- **Hypothesis**: BPB improves monotonically as hash buckets grow from 65k → millions,
+  recovering the paper's gain; the EXP-003 regression was a collision-noise artifact.
+- **Config**: base marin-128k, `combine="mean"`, `orders=(2,3,4)`, `num_hashes=2`, `rank=128`
+  (low-rank + up-proj), init norm-matched to base (ratio 1.0), buckets swept. Screen at s3500.
+- **Buckets swept**: 65_537 (repro-bad) · 786_433 · 3_145_739 · 4_000_037 (all primes chosen to
+  avoid integer multiples of the 128,256 base vocab, per the paper's collision-spike warning).
+- **Reproduce**: env `BAKEOFF_NGRAM=1 BAKEOFF_NGRAM_COMBINE=mean BAKEOFF_NGRAM_ORDERS=2,3,4
+  BAKEOFF_NGRAM_RANK=128 BAKEOFF_NGRAM_BUCKETS=<b> BAKEOFF_NGRAM_RATIO=1.0` on
+  `launch_tokenizer_bakeoff` with the proxy shape (see the driver).
+- **Result**: _pending_
+- **Conclusion**: _pending_

@@ -34,6 +34,7 @@ Use ``SCALE_TRACKER=wandb`` for a durable, queryable ``eval/bpb`` history; the d
 
 import dataclasses
 import datetime
+import math
 import os
 
 from fray.cluster import ResourceConfig
@@ -125,22 +126,31 @@ def build_bakeoff_checkpoint(*, version: str = "dev") -> ArtifactStep[LevanterCh
     # the arm's, so the output head and embedding table size track the tokenizer under test.
     model = dataclasses.replace(build_scale_model(), vocab_size=arm.vocab_size)
 
-    # BAKEOFF_NGRAM toggles the hashed multi-gram input embedding (axis D). It adds input-side
-    # embedding capacity at the same vocab, output head, and serving FLOPs, so a BPB drop vs the
-    # same arm without it is a compute-free uplift. combine="sum" with init_std_scale=0 starts the
-    # model bit-identical to the no-n-gram baseline (the zero-initialized tables still receive
-    # gradients and grow), so the n-gram can only help; a large init instead injects input noise
-    # several times the base embedding and needs many steps just to recover.
+    # BAKEOFF_NGRAM toggles the hashed multi-gram input embedding (Over-Encoding / LongCat,
+    # arXiv 2501.16975 & 2601.21204). It adds input-side embedding capacity at the same vocab,
+    # output head, and serving FLOPs, so a BPB drop vs the same arm without it is a compute-free
+    # uplift. The paper's gain needs a LARGE hashed n-gram vocabulary (30x base = millions of
+    # buckets per table); low-rank sub-tables (rank << hidden) keep that memory-feasible, and
+    # mean-combine with a norm-matched init keeps the initial embedding at the baseline output
+    # norm (Embedding Amplification). Every knob is env-swept by the ladder driver.
     ngram_enabled = bool(os.environ.get("BAKEOFF_NGRAM"))
     if ngram_enabled:
+        orders = tuple(int(o) for o in os.environ.get("BAKEOFF_NGRAM_ORDERS", "2,3,4").split(","))
+        rank = env_int("BAKEOFF_NGRAM_RANK", 128)
+        width = rank if rank > 0 else model.hidden_dim
+        # The module builds tables with per-element std init_std_scale/sqrt(width); the base token
+        # embedding has per-element std model.initializer_std, so this multiplier makes each n-gram
+        # term match the base embedding scale (ratio 1.0) and lets the ratio be swept.
+        ratio = float(os.environ.get("BAKEOFF_NGRAM_RATIO", "1.0"))
         model = dataclasses.replace(
             model,
             ngram=NgramEmbedConfig(
-                orders=(2, 3),
-                num_hashes=2,
-                hash_buckets=env_int("BAKEOFF_NGRAM_BUCKETS", 65_537),
-                combine="sum",
-                init_std_scale=float(os.environ.get("BAKEOFF_NGRAM_INIT", "0.0")),
+                orders=orders,
+                num_hashes=env_int("BAKEOFF_NGRAM_HASHES", 2),
+                hash_buckets=env_int("BAKEOFF_NGRAM_BUCKETS", 4_000_037),
+                rank=rank if rank > 0 else None,
+                combine=os.environ.get("BAKEOFF_NGRAM_COMBINE", "mean"),
+                init_std_scale=ratio * model.initializer_std * math.sqrt(width),
             ),
         )
     if model.num_experts % expert_axis != 0:
