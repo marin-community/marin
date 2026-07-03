@@ -26,9 +26,11 @@ Both variants:
   2. Enable the plain-Pod integration via the controller-manager ``Configuration``
      (``integrations.frameworks: ["batch/job","pod"]``). ``manageJobsWithoutQueueName``
      stays false, so Kueue only gates pods carrying ``kueue.x-k8s.io/queue-name``
-     (the ones Iris stamps); every other pod passes through untouched — this is a
-     broad, whole-cluster install with the chart-default webhook namespace
-     selector (all namespaces except kube-system/kueue-system).
+     (the ones Iris stamps). The plain-Pod *admission webhook* is opt-in scoped via
+     ``integrations.podOptions.namespaceSelector`` to only ``--pod-namespace``
+     (default ``iris``) — NOT the chart default (every namespace except
+     kube-system/kueue-system), which fail-closed-intercepts CNI/system pods on a
+     shared cluster and deadlocks node delivery. See build_controller_manager_config.
   3. Create the Topology CRs (infiniband + multinode-nvlink-ib) so TAS can resolve
      the podset-topology annotations (``backend.coreweave.cloud/leafgroup``,
      ``ds.coreweave.com/nvlink.domain``).
@@ -63,6 +65,7 @@ import os
 import subprocess
 import tempfile
 import time
+from collections.abc import Sequence
 
 import click
 import yaml
@@ -99,6 +102,11 @@ UPSTREAM_DEFAULT_VERSION = "0.11.0"
 
 RELEASE_DEFAULT = "kueue"
 OPERATOR_NS = "kueue-system"
+
+# Namespace(s) Iris submits gang pods into (the k8s provider namespace, default
+# "iris"). The plain-Pod webhook is scoped to ONLY these — see
+# build_controller_manager_config for why a broad selector is dangerous.
+DEFAULT_POD_NAMESPACES = ("iris",)
 
 # Standard k8s per-node label, the finest topology level.
 _K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
@@ -162,16 +170,26 @@ COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 # --------------------------------------------------------------------------
 # Pure builders (return plain dicts; no I/O).
 # --------------------------------------------------------------------------
-def build_controller_manager_config() -> dict:
+def build_controller_manager_config(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
     """Return the kueue ``Configuration`` (controller-manager config) as a dict.
 
     Serialized to YAML and embedded as the chart's ``controllerManagerConfigYaml``
     value. Enables the "pod" framework (gang admission for plain pods) alongside
     "batch/job" cluster-wide. ``manageJobsWithoutQueueName`` stays false so Kueue
-    only gates pods carrying ``kueue.x-k8s.io/queue-name`` (the ones Iris stamps);
-    every other pod passes through, so no podOptions.namespaceSelector is needed.
+    only *gates* pods carrying ``kueue.x-k8s.io/queue-name`` (the ones Iris stamps).
     internalCertManagement is enabled so Kueue self-signs its webhook certs (no
     cert-manager dependency); the names match both charts' webhook service/secret.
+
+    ``podOptions.namespaceSelector`` scopes the pod *admission webhook* to only
+    ``pod_namespaces`` (the namespace Iris submits into). This is critical and
+    separate from ``manageJobsWithoutQueueName``: that flag governs whether Kueue
+    *gates* an already-intercepted pod, but the fail-closed webhook still
+    *intercepts* every CREATE in every selected namespace. Kueue's default
+    selector excludes only kube-system/kueue-system, so on a shared CoreWeave
+    cluster it would intercept CNI/system pods (e.g. cilium in cw-cilium-system).
+    On a freshly delivered node the CNI pod is then gated by a webhook it can't
+    reach (no network yet) → the pod is rejected → the node never goes Ready.
+    Opt-in scoping keeps the webhook off every namespace but our own.
     """
     return {
         "apiVersion": "config.kueue.x-k8s.io/v1beta1",
@@ -187,11 +205,22 @@ def build_controller_manager_config() -> dict:
         },
         "integrations": {
             "frameworks": ["batch/job", "pod"],
+            "podOptions": {
+                "namespaceSelector": {
+                    "matchExpressions": [
+                        {
+                            "key": "kubernetes.io/metadata.name",
+                            "operator": "In",
+                            "values": list(pod_namespaces),
+                        }
+                    ]
+                }
+            },
         },
     }
 
 
-def build_cks_values() -> dict:
+def build_cks_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
     """Return the ``cks-kueue`` (CoreWeave) helm values: managerConfig + topologies.
 
     cks-kueue nests the upstream kueue subchart under ``kueue:`` and renders
@@ -202,7 +231,9 @@ def build_cks_values() -> dict:
     deliberately do NOT set ``featureGates`` — overriding it (especially as a map)
     breaks the chart's ``kueue.featureGates`` template.
     """
-    config_yaml = yaml.safe_dump(build_controller_manager_config(), default_flow_style=False, sort_keys=False)
+    config_yaml = yaml.safe_dump(
+        build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
+    )
     return {
         "kueue": {
             "enableKueueViz": False,
@@ -212,7 +243,7 @@ def build_cks_values() -> dict:
     }
 
 
-def build_upstream_values() -> dict:
+def build_upstream_values(pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES) -> dict:
     """Return the upstream Kueue OCI-chart helm values.
 
     The upstream chart puts ``managerConfig`` at the top level and takes feature
@@ -221,7 +252,9 @@ def build_upstream_values() -> dict:
     ``crds/`` (installed by helm before templates), so no bootstrap pass is needed;
     the Topology CRs are applied with kubectl after the operator is up.
     """
-    config_yaml = yaml.safe_dump(build_controller_manager_config(), default_flow_style=False, sort_keys=False)
+    config_yaml = yaml.safe_dump(
+        build_controller_manager_config(pod_namespaces), default_flow_style=False, sort_keys=False
+    )
     return {
         "enableKueueViz": False,
         "controllerManager": {
@@ -412,6 +445,7 @@ def run_install(
     with_queues: bool = False,
     cluster_queue: str = "iris-cq",
     flavor_topology: str = INFINIBAND_TOPOLOGY_NAME,
+    pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     apply: bool = False,
 ) -> None:
     """Install + configure Kueue for the given ``variant`` (coreweave | upstream).
@@ -419,6 +453,8 @@ def run_install(
     Idempotent. Prints the plan and returns without mutating the cluster unless
     ``apply`` is set. ``flavor_topology`` selects the Topology the ResourceFlavor
     binds (default InfiniBand; the kind smoke passes multinode-nvlink-ib).
+    ``pod_namespaces`` scopes the plain-Pod admission webhook (default: the ``iris``
+    namespace) — never widen this to system namespaces on a shared cluster.
     """
     if variant not in (VARIANT_COREWEAVE, VARIANT_UPSTREAM):
         raise ValueError(f"unknown variant {variant!r} (expected {VARIANT_COREWEAVE!r} or {VARIANT_UPSTREAM!r})")
@@ -428,11 +464,11 @@ def run_install(
     queue_docs = [build_resource_flavor(flavor_topology), build_cluster_queue(cluster_queue)] if with_queues else []
 
     if variant == VARIANT_COREWEAVE:
-        values = build_cks_values()
+        values = build_cks_values(pod_namespaces)
         chart = CW_CHART
         version = chart_version
     else:
-        values = build_upstream_values()
+        values = build_upstream_values(pod_namespaces)
         chart = UPSTREAM_CHART
         version = chart_version or UPSTREAM_DEFAULT_VERSION
 
@@ -589,6 +625,14 @@ def _apply(
     default=INFINIBAND_TOPOLOGY_NAME,
     help="Topology the cw-ib ResourceFlavor binds (default: infiniband; multinode-nvlink-ib exposes nvlink.domain).",
 )
+@click.option(
+    "--pod-namespace",
+    "pod_namespaces",
+    multiple=True,
+    default=DEFAULT_POD_NAMESPACES,
+    show_default=True,
+    help="Namespace(s) the plain-Pod webhook is scoped to (where Iris submits gang pods). Repeatable.",
+)
 @click.option("--apply/--no-apply", default=False, help="Actually mutate the cluster (default: dry-run only).")
 def main(
     variant: str,
@@ -599,6 +643,7 @@ def main(
     with_queues: bool,
     cluster_queue: str,
     flavor_topology: str,
+    pod_namespaces: tuple[str, ...],
     apply: bool,
 ) -> None:
     """Install + configure Kueue (coreweave or upstream) for Iris gang admission."""
@@ -611,6 +656,7 @@ def main(
         with_queues=with_queues,
         cluster_queue=cluster_queue,
         flavor_topology=flavor_topology,
+        pod_namespaces=pod_namespaces,
         apply=apply,
     )
 
