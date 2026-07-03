@@ -661,6 +661,109 @@ def test_source_push_forward_inputs_share_one_plan_across_all_stages():
     assert int(np.asarray(inputs.plan.route_slots[src, dst_ord, entry, row])) == int(route_slot)
 
 
+def test_source_push_forward_real_inputs_match_independent_moe_reference():
+    config = source_push_inbox.PushInboxConfig(
+        ep_size=2,
+        entries_per_rank=2,
+        inbox_slots=2,
+        hidden_dim=4,
+        intermediate_dim=4,
+        block_m=2,
+        block_k=2,
+        block_n=2,
+        experts_per_rank=2,
+        send_worker_programs_per_peer=1,
+        worker_programs_per_peer=4,
+        routing="balanced",
+        tokens_per_rank=4,
+        topk=2,
+        capacity_factor=1.25,
+    )
+    x = np.arange(config.ep_size * config.tokens_per_rank * config.hidden_dim, dtype=np.float32).reshape(
+        config.ep_size,
+        config.tokens_per_rank,
+        config.hidden_dim,
+    )
+    x = 0.05 + x * 0.001
+    selected_experts = np.asarray(
+        [
+            [[0, 2], [1, 3], [0, 2], [1, 3]],
+            [[2, 0], [3, 1], [2, 0], [3, 1]],
+        ],
+        dtype=np.int32,
+    )
+    combine_weights = np.asarray(
+        [
+            [[0.50, 0.25], [0.75, 0.125], [0.375, 0.625], [0.25, 0.50]],
+            [[0.20, 0.80], [0.60, 0.40], [0.30, 0.70], [0.90, 0.10]],
+        ],
+        dtype=np.float32,
+    )
+    w_gate_up = np.arange(
+        config.ep_size * config.experts_per_rank * config.hidden_dim * 2 * config.intermediate_dim,
+        dtype=np.float32,
+    ).reshape(config.ep_size, config.experts_per_rank, config.hidden_dim, 2 * config.intermediate_dim)
+    w_gate_up = 0.01 + w_gate_up * 0.0001
+    w_down = np.arange(
+        config.ep_size * config.experts_per_rank * config.intermediate_dim * config.hidden_dim,
+        dtype=np.float32,
+    ).reshape(config.ep_size, config.experts_per_rank, config.intermediate_dim, config.hidden_dim)
+    w_down = 0.02 + w_down * 0.0002
+
+    inputs = source_push_forward.make_source_push_forward_inputs(
+        config,
+        x,
+        selected_experts,
+        combine_weights,
+        w_gate_up,
+        w_down,
+    )
+    observed = np.asarray(source_push_forward.reference_source_push_forward(config, inputs), dtype=np.float32)
+    expected = _naive_source_push_forward(config, x, selected_experts, combine_weights, w_gate_up, w_down)
+
+    valid_routes = np.argwhere(inputs.route_valid_mask)
+    src, token, route_slot = valid_routes[0]
+    dst_ord = inputs.queue_dst_ord[src, token, route_slot]
+    entry = inputs.queue_entry[src, token, route_slot]
+    row = inputs.queue_row[src, token, route_slot]
+
+    assert inputs.queue_stats["input_mode"] == "real_arrays"
+    assert inputs.queue_stats["dropped_routes"] == 0
+    np.testing.assert_array_equal(inputs.x[src, dst_ord, entry, row], x[src, token])
+    np.testing.assert_array_equal(inputs.w_gate_up, w_gate_up)
+    np.testing.assert_array_equal(inputs.w_down, w_down)
+    assert inputs.route_combine_weights[src, token, route_slot] == combine_weights[src, token, route_slot]
+    np.testing.assert_allclose(observed, expected, atol=2e-3, rtol=2e-3)
+
+
+def _naive_source_push_forward(
+    config: source_push_inbox.PushInboxConfig,
+    x: np.ndarray,
+    selected_experts: np.ndarray,
+    combine_weights: np.ndarray,
+    w_gate_up: np.ndarray,
+    w_down: np.ndarray,
+) -> np.ndarray:
+    out = np.zeros((config.ep_size, config.tokens_per_rank, config.hidden_dim), dtype=np.float32)
+    for src in range(config.ep_size):
+        for token in range(config.tokens_per_rank):
+            for route_slot in range(config.topk):
+                global_expert = int(selected_experts[src, token, route_slot])
+                dst = global_expert // config.experts_per_rank
+                local_expert = global_expert % config.experts_per_rank
+                w13 = x[src, token] @ w_gate_up[dst, local_expert]
+                gate = w13[: config.intermediate_dim]
+                up = w13[config.intermediate_dim :]
+                hidden = gate * (1.0 / (1.0 + np.exp(-gate))) * up
+                hidden = np.asarray(jnp.asarray(hidden, dtype=jnp.bfloat16), dtype=np.float32)
+                w_down_bf16 = np.asarray(jnp.asarray(w_down[dst, local_expert], dtype=jnp.bfloat16), dtype=np.float32)
+                route_out = hidden @ w_down_bf16
+                route_out = np.asarray(jnp.asarray(route_out, dtype=jnp.bfloat16), dtype=np.float32)
+                weighted = route_out * combine_weights[src, token, route_slot]
+                out[src, token] += np.asarray(jnp.asarray(weighted, dtype=jnp.bfloat16), dtype=np.float32)
+    return out
+
+
 def test_source_push_package_private_runner_returns_structured_validation_errors():
     config = source_push_inbox.PushInboxConfig(ep_size=1)
 

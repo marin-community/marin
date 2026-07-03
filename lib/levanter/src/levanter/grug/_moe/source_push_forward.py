@@ -144,6 +144,53 @@ def validate_source_push_forward_config(config: PushInboxConfig) -> None:
     validate_source_combine_config(config)
 
 
+def make_source_push_forward_inputs(
+    config: PushInboxConfig,
+    x: Float[Array, "S T D"],
+    selected_experts: Int[Array, "S T K"],
+    combine_weights: Float[Array, "S T K"],
+    w_gate_up: Float[Array, "S E D twoI"],
+    w_down: Float[Array, "S E I D"],
+    *,
+    input_mode: str = "real_arrays",
+) -> SourcePushForwardHostInputs:
+    """Build full-forward source-push inputs from real source-local MoE arrays."""
+
+    validate_source_push_forward_config(config)
+    x_host = np.asarray(jax.device_get(x), dtype=np.float32)
+    selected_host = np.asarray(jax.device_get(selected_experts), dtype=np.int32)
+    combine_host = np.asarray(jax.device_get(combine_weights), dtype=np.float32)
+    w_gate_up_host = np.asarray(jax.device_get(w_gate_up), dtype=np.float32)
+    w_down_host = np.asarray(jax.device_get(w_down), dtype=np.float32)
+    _validate_source_push_forward_array_shapes(
+        config,
+        x_host,
+        selected_host,
+        combine_host,
+        w_gate_up_host,
+        w_down_host,
+    )
+
+    plan = build_source_push_plan(
+        jnp.asarray(selected_host, dtype=jnp.int32),
+        jnp.asarray(combine_host, dtype=jnp.float32),
+        ep_size=config.ep_size,
+        experts_per_rank=config.experts_per_rank,
+        block_m=config.block_m,
+        capacity_factor=config.capacity_factor,
+        entries_per_dst=config.entries_per_rank,
+    )
+    packed_x = np.asarray(pack_source_push_tokens(jnp.asarray(x_host, dtype=jnp.float32), plan), dtype=np.float32)
+    return _make_source_push_forward_inputs_from_plan(
+        config,
+        plan,
+        packed_x,
+        w_gate_up_host,
+        w_down_host,
+        input_mode=input_mode,
+    )
+
+
 def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> SourcePushForwardHostInputs:
     """Build shared source-push plan inputs for full forward timing."""
 
@@ -154,17 +201,27 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
         axis=0,
     )
     combine_weights = _make_combine_weights(config)
-    plan = build_source_push_plan(
-        jnp.asarray(selected_experts, dtype=jnp.int32),
-        jnp.asarray(combine_weights, dtype=jnp.float32),
-        ep_size=config.ep_size,
-        experts_per_rank=config.experts_per_rank,
-        block_m=config.block_m,
-        capacity_factor=config.capacity_factor,
-        entries_per_dst=config.entries_per_rank,
-    )
     source_tokens = np.stack([_make_source_tokens(config, src) for src in range(config.ep_size)], axis=0)
-    x = np.asarray(pack_source_push_tokens(jnp.asarray(source_tokens, dtype=jnp.float32), plan), dtype=np.float32)
+    return make_source_push_forward_inputs(
+        config,
+        source_tokens,
+        selected_experts,
+        combine_weights,
+        np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32),
+        make_w_down(config),
+        input_mode="source_push_plan",
+    )
+
+
+def _make_source_push_forward_inputs_from_plan(
+    config: PushInboxConfig,
+    plan: SourcePushPlan,
+    packed_x: np.ndarray,
+    w_gate_up: np.ndarray,
+    w_down: np.ndarray,
+    *,
+    input_mode: str,
+) -> SourcePushForwardHostInputs:
     rounded_counts, expert_base, src_base_by_expert = source_push_source_padded_row_bases(plan, config.block_m)
     send_meta = _source_padded_plan_send_meta(plan, expert_base, src_base_by_expert)
     recv_meta = _recv_meta_from_send_meta(config, send_meta)
@@ -175,7 +232,7 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
     combine_stats = _combine_queue_stats(config, valid_mask, int(jax.device_get(plan.dropped_routes)))
     queue_stats.update(
         {
-            "input_mode": "source_push_plan",
+            "input_mode": input_mode,
             "forward_mode": "w13_w2_return_copy_combine",
             "row_start_mode": "source_padded_row_start",
             "combine_mode": combine_stats["combine_mode"],
@@ -196,13 +253,13 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
         }
     )
     return SourcePushForwardHostInputs(
-        x=x,
+        x=packed_x,
         send_meta=send_meta,
         recv_meta=recv_meta,
         expert_base=expert_base,
         src_base_by_expert=src_base_by_expert,
-        w_gate_up=np.asarray(jax.device_get(_make_weights(config)), dtype=np.float32),
-        w_down=make_w_down(config),
+        w_gate_up=w_gate_up,
+        w_down=w_down,
         queue_dst_ord=route_inverse["queue_dst_ord"],
         queue_entry=route_inverse["queue_entry"],
         queue_row=route_inverse["queue_row"],
@@ -211,6 +268,40 @@ def make_source_push_forward_source_plan_inputs(config: PushInboxConfig) -> Sour
         plan=plan,
         queue_stats=queue_stats,
     )
+
+
+def _validate_source_push_forward_array_shapes(
+    config: PushInboxConfig,
+    x: np.ndarray,
+    selected_experts: np.ndarray,
+    combine_weights: np.ndarray,
+    w_gate_up: np.ndarray,
+    w_down: np.ndarray,
+) -> None:
+    expected_x = (config.ep_size, config.tokens_per_rank, config.hidden_dim)
+    expected_routes = (config.ep_size, config.tokens_per_rank, config.topk)
+    expected_w_gate_up = (
+        config.ep_size,
+        config.experts_per_rank,
+        config.hidden_dim,
+        2 * config.intermediate_dim,
+    )
+    expected_w_down = (
+        config.ep_size,
+        config.experts_per_rank,
+        config.intermediate_dim,
+        config.hidden_dim,
+    )
+    if x.shape != expected_x:
+        raise ValueError(f"x shape {x.shape} must match {expected_x}")
+    if selected_experts.shape != expected_routes:
+        raise ValueError(f"selected_experts shape {selected_experts.shape} must match {expected_routes}")
+    if combine_weights.shape != expected_routes:
+        raise ValueError(f"combine_weights shape {combine_weights.shape} must match {expected_routes}")
+    if w_gate_up.shape != expected_w_gate_up:
+        raise ValueError(f"w_gate_up shape {w_gate_up.shape} must match {expected_w_gate_up}")
+    if w_down.shape != expected_w_down:
+        raise ValueError(f"w_down shape {w_down.shape} must match {expected_w_down}")
 
 
 def device_source_push_forward_inputs_from_host(
