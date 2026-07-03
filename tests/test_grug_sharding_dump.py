@@ -9,12 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from levanter.tracker import current_tracker
-from levanter.tracker.tracker import DictTracker
 
 from experiments.grug.sharding_dump import (
+    default_grug_sharding_dump_path,
     dump_grug_state_sharding,
-    dump_grug_state_sharding_artifact,
     grug_state_sharding_dict,
 )
 
@@ -46,27 +44,14 @@ def test_dump_grug_state_sharding_writes_json(tmp_path) -> None:
         params={"weight": jnp.ones((1,), dtype=jnp.float32)},
         opt_state={"moment": jnp.zeros((1,), dtype=jnp.float32)},
     )
-    path = tmp_path / "sharding.json"
+    path = tmp_path / "run" / "artifacts" / "sharding.json"
 
     dump_grug_state_sharding(state, path)
 
     assert json.loads(path.read_text()) == grug_state_sharding_dict(state)
 
 
-def test_dump_grug_state_sharding_artifact_logs_tracker_artifact(tmp_path) -> None:
-    state = _State(
-        params={"weight": jnp.ones((1,), dtype=jnp.float32)},
-        opt_state={"moment": jnp.zeros((1,), dtype=jnp.float32)},
+def test_default_grug_sharding_dump_path_uses_run_artifacts_dir(tmp_path) -> None:
+    assert default_grug_sharding_dump_path(tmp_path / "logs", "run-123") == (
+        tmp_path / "logs" / "run-123" / "artifacts" / "grug_sharding_spec.json"
     )
-    path = tmp_path / "sharding.json"
-    tracker = DictTracker()
-
-    with current_tracker(tracker):
-        dump_grug_state_sharding_artifact(state, path)
-
-    assert json.loads(path.read_text()) == grug_state_sharding_dict(state)
-    assert tracker.metrics["artifact"] == {
-        "path": path,
-        "name": "grug_sharding_spec",
-        "type": "sharding",
-    }
