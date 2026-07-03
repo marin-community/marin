@@ -417,3 +417,69 @@ gather instead of scatter into an uninitialized output buffer, so dropped route 
 - Next action:
   - Wire the three package-private pieces into a full source-push forward comparison path, then compare full forward
     against `ring`/`ragged_all_to_all` on a small H100 mesh before optimizing return-copy or fusing combine.
+
+## 2026-07-03 03:49 - Full source-push forward harness and reference fix
+
+Added the package-private full-forward harness and corrected a bad CPU/JAX oracle that made the first H100 smoke look
+wrong.
+
+- Commit Hashes:
+  - `6438ad4f0`: full source-push forward harness chaining W13 -> W2 return-copy -> source combine.
+  - `ac2a35f02`: single-JIT return-copy completion barrier experiment.
+  - `bb457edfc`: diagnostic `staged_host_sync` execution mode.
+  - `bc0c377c1`: fixed `source_push_w2_return` destination ordinal inverse and fp32 reference accumulation.
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_forward.py`
+  - `lib/levanter/src/levanter/grug/_moe/source_push_plan.py`
+  - `lib/levanter/scripts/bench/bench_source_push_forward.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+- Local verification:
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_source_push_plan.py -q`
+  - Result: `42 passed, 11 warnings`.
+  - `./infra/pre-commit.py --changed-files --fix`
+  - Result: all checks passed.
+- Debug sequence:
+  - Initial full-forward smoke `/dlwh/source-push-forward-smoke-6438ad4f0-20260703-0304` completed but reported
+    `max_abs_diff=0.732421875`, `mean_abs_diff=0.0743179`.
+  - Initial target run `/dlwh/source-push-forward-target-6438ad4f0-20260703-0307` returned a structured
+    `JaxRuntimeError: CUDA_ERROR_ILLEGAL_ADDRESS` row and no timing rows.
+  - Barrier smoke `/dlwh/source-push-forward-barrier-smoke-ac2a35f02-20260703-1021` still reported
+    `max_abs_diff=0.732421875`; staged smoke `/dlwh/source-push-forward-staged-smoke-bb457edfc-20260703-1025`
+    also reported `max_abs_diff=0.732421875`.
+  - Isolated same-shape W13 `/dlwh/source-push-w13-same-shape-bb457edfc-20260703-1028` was correct:
+    `metadata_mismatches=0`, `hidden_max_abs_diff=0.000949293`, `hidden_unwritten_max_abs=0`.
+  - Isolated same-shape W2+return `/dlwh/source-push-w2-return-same-shape-bb457edfc-20260703-1029` was correct:
+    `max_abs_diff=0.00907660`, `source_queue_max_abs_diff=0.00907660`.
+  - A W2+combine probe with reference hidden reproduced the full diff, which exposed that the plan-level W2 reference
+    used `dst_ordinal(src, dst_ord, ep_size)` as the inverse of a source-local destination ordinal. That only works for
+    `EP=2`; the correct inverse is `dst = (src + dst_ord) % ep_size`.
+  - After `bc0c377c1`, full-forward smoke
+    `/dlwh/source-push-forward-fixed-ref-smoke-bc0c377c1-20260703-1038` succeeded with
+    `max_abs_diff=0.0078125`, `mean_abs_diff=0.000339662`, `dropped_routes=0`.
+- Target full-forward benchmark commands:
+  - Rough-balanced cf1.25:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha bc0c377c1 --jsonl scratch/source_push_forward_target_bc0c377c1.jsonl`
+  - Balanced cf1.0:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --routing balanced --capacity-factor 1.0 --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha bc0c377c1 --jsonl scratch/source_push_forward_balanced_cf100_bc0c377c1.jsonl`
+  - Balanced cf1.25:
+    `uv run --package marin-levanter --group test python lib/levanter/scripts/bench/bench_source_push_forward.py --source-push-profile hopper_source_push_inbox_rough_balanced_216 --routing balanced --capacity-factor 1.25 --no-check --warmup 1 --steps 3 --repeat-runs 5 --separate-compile --no-progress-events --git-sha bc0c377c1 --jsonl scratch/source_push_forward_balanced_cf125_bc0c377c1.jsonl`
+- Target full-forward results:
+
+| routing | capacity | job | repeat times (ms) | median (ms) | rounded TFLOP/s/rank | useful TFLOP/s/rank | row efficiency | drops | CUDA illegal address logs |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| balanced | `1.0` | `/dlwh/source-push-forward-balanced-cf100-bc0c377c1-20260703-1043` | `[17.794, 17.422, 28.973, 17.313, 17.248]` | `17.422` | `147.91` | `147.91` | `1.000000` | 0 | 0 |
+| balanced | `1.25` | `/dlwh/source-push-forward-balanced-cf125-bc0c377c1-20260703-1045` | `[17.596, 19.085, 25.202, 17.394, 17.345]` | `17.596` | `146.45` | `146.45` | `1.000000` | 0 | 0 |
+| roughly_balanced | `1.25` | `/dlwh/source-push-forward-target-bc0c377c1-20260703-1039` | `[18.091, 17.918, 17.801, 17.961, 17.973]` | `17.961` | `152.22` | `143.48` | `0.942584` | 0 | 0 |
+
+- Interpretation:
+  - The previous large full-forward diff was a bad oracle, not a kernel error. `EP=3` now has a regression test that
+    compares the plan-level W2 return reference against destination-local W2 plus source-queue reorder.
+  - The target full-forward harness now runs at the three benchmark-gate routing/capacity rows without drops or
+    `CUDA_ERROR_ILLEGAL_ADDRESS`.
+  - Median full forward is about `17.4-18.0 ms`, worse than the prior segment estimate of `~15.7 ms`; the remaining
+    gap is likely from composing all stages in one large graph plus the separate return-copy/source-combine memory tax.
+  - This is still a package-private harness, not the final integrated `grug_moe` implementation.
+- Next action:
+  - Compare single-JIT full forward against the staged diagnostic and stage-sum timings on target to quantify graph
+    composition overhead, then decide whether to keep full forward as three explicit stages or introduce a real
+    producer/consumer return path.
