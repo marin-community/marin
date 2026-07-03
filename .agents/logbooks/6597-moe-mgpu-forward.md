@@ -1867,3 +1867,78 @@ Summary medians over 5 repeats:
     (`13.876 ms` -> `14.100 ms`) and W13 (`8.415 ms` -> `8.529 ms`), but remains within the W13 acceptance bar.
   - W2 return and combine are stable at about `4.1 ms` and `1.34 ms`; the route-buffer combine remains a meaningful
     full-forward tax after proving invertibility.
+
+## 2026-07-03 16:56 - Replace route-buffer combine with direct gather-sum
+
+Replaced the package-private source-push combine Pallas kernel with a direct deterministic gather-sum kernel. The old
+kernel scattered weighted route outputs into a dense `[T, K, D]` route buffer and then summed over `K`; the new kernel
+launches over `(token_block, D_tile)`, gathers each token's `K` returned route rows, accumulates in fixed route-slot
+order, and writes `[T, D]` directly. This removes the large route-buffer write/read and keeps the planner reference
+combine as the correctness oracle.
+
+- Commit Hash: `c32e5dd06`
+- Code:
+  - `lib/levanter/src/levanter/grug/_moe/source_push_combine.py`
+  - `lib/levanter/tests/grug/test_source_push_inbox.py`
+  - `lib/levanter/tests/grug/test_grugformer_moe.py`
+- Local verification:
+  - `python -m py_compile lib/levanter/src/levanter/grug/_moe/source_push_combine.py lib/levanter/src/levanter/grug/_moe/source_push_forward.py lib/levanter/tests/grug/test_source_push_inbox.py lib/levanter/tests/grug/test_grugformer_moe.py`
+    - Result: passed.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_source_push_inbox.py -q -k 'source_push_combine or source_push_forward_inputs_share_one_plan'`
+    - Result: `6 passed, 11 warnings in 14.36s`.
+  - `uv run --package marin-levanter --group test pytest lib/levanter/tests/grug/test_grugformer_moe.py -q -k 'source_push_stage_kernels_match_references_on_h100'`
+    - Result: `3 skipped, 11 warnings in 10.14s` locally, as expected off H100.
+  - `./infra/pre-commit.py --changed-files --fix`
+    - Result: all checks passed.
+- H100 correctness smoke:
+  - Job: `/dlwh/source-push-direct-combine-smoke-a8bd45f6b8-20260703-234052`
+  - Config: small EP8, `T/rank=64`, `D=128`, `K=4`, `--check`.
+  - Result: succeeded, `combine_mode=direct_gather_sum`, `dropped_routes=0`, `max_abs_diff=0.001953125`,
+    `mean_abs_diff=0.000266954`.
+- Target combine-only timing:
+  - Job: `/dlwh/source-push-direct-combine-target-a8bd45f6b8-20260703-234353`
+  - Config: `hopper_source_push_inbox_rough_balanced_216`, `routing=roughly_balanced`, `capacity_factor=1.25`,
+    `warmup=2`, `steps=5`, `repeat_runs=9`, `--separate-compile`, `--no-check`.
+  - Result: succeeded, `dropped_routes=0`, `row_efficiency=0.942584283`, `route_buffer_elements_per_rank=0`.
+  - Median over 9 repeats:
+
+    | metric | value |
+    | --- | ---: |
+    | combine steady_state_time | `0.579442 ms` |
+    | direct combine GB/s/rank | `1447.705470` |
+    | compile_time | `0.096366 s` |
+    | first_run_time | `2.984593 ms` |
+
+- Full-forward gate:
+  - Job: `/dlwh/source-push-forward-direct-combine-gate-a8bd45f6b8-20260703-234648`
+  - Config: same three target rows as the previous gate, `execution_mode=staged_host_sync`, `warmup=1`, `steps=3`,
+    `repeat_runs=5`, `--separate-compile`, `--no-check`.
+  - Result: succeeded, no drops/errors.
+
+  | routing | cf | stage | median time | useful TFLOP/s/rank | rounded TFLOP/s/rank | previous time | delta |
+  | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+  | balanced | 1.0 | total | `12.709 ms` | `202.77` | `202.77` | `13.461 ms` | `-0.752 ms` |
+  | balanced | 1.0 | W13 | `8.080 ms` | `212.62` | `212.62` | `8.072 ms` | `+0.008 ms` |
+  | balanced | 1.0 | W2 return | `3.948 ms` | - | - | `3.929 ms` | `+0.019 ms` |
+  | balanced | 1.0 | combine | `0.600 ms` | - | - | `1.341 ms` | `-0.741 ms` |
+  | balanced | 1.25 | total | `12.592 ms` | `204.66` | `204.66` | `13.487 ms` | `-0.895 ms` |
+  | balanced | 1.25 | W13 | `8.020 ms` | `214.21` | `214.21` | `8.133 ms` | `-0.113 ms` |
+  | balanced | 1.25 | W2 return | `3.888 ms` | - | - | `3.899 ms` | `-0.011 ms` |
+  | balanced | 1.25 | combine | `0.584 ms` | - | - | `1.336 ms` | `-0.752 ms` |
+  | roughly_balanced | 1.25 | total | `13.282 ms` | `194.02` | `205.84` | `14.100 ms` | `-0.818 ms` |
+  | roughly_balanced | 1.25 | W13 | `8.509 ms` | `201.90` | `214.19` | `8.529 ms` | `-0.020 ms` |
+  | roughly_balanced | 1.25 | W2 return | `4.079 ms` | - | - | `4.112 ms` | `-0.033 ms` |
+  | roughly_balanced | 1.25 | combine | `0.583 ms` | - | - | `1.337 ms` | `-0.754 ms` |
+
+- Full-forward checked smoke:
+  - Job: `/dlwh/source-push-forward-direct-combine-check-a8bd45f6b8-20260703-235229`
+  - Config: small EP8, `T/rank=64`, `D=128`, `K=4`, `execution_mode=staged_host_sync`, `--check`.
+  - Result: succeeded, `combine_mode=direct_gather_sum`, `dropped_routes=0`, `max_abs_diff=0.015625`,
+    `mean_abs_diff=0.000549275`, total `steady_state_time=4.333 ms`.
+- Interpretation:
+  - The source-side route-buffer combine was a real integrated tax. Removing it cuts target combine from about
+    `1.34 ms` to `0.58-0.60 ms` and improves rough-balanced full-forward total from `14.100 ms` to `13.282 ms`.
+  - W13 and W2 timings are effectively unchanged, so this isolates the win to source combine rather than measurement
+    noise in the compute stages.
+  - Compare combine times, not combine GB/s, across the route-buffer and direct kernels: the direct path intentionally
+    reports fewer bytes because it no longer writes and rereads `[T, K, D]`.
