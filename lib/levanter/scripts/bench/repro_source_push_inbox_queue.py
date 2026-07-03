@@ -3,7 +3,7 @@
 
 """CLI wrapper for the package-private source-push inbox MGPU MoE prototype."""
 
-from levanter.grug._moe.source_push_inbox import main
+from bench_source_push_inbox import main
 
 
 if __name__ == "__main__":

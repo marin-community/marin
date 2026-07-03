@@ -3,6 +3,8 @@
 
 import json
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,7 @@ from levanter.grug._moe.source_push_inbox_profiles import (
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "bench_source_push_inbox.py"
+REPRO_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "bench" / "repro_source_push_inbox_queue.py"
 SCRIPT_SPEC = importlib.util.spec_from_file_location("bench_source_push_inbox", SCRIPT_PATH)
 assert SCRIPT_SPEC is not None
 source_push_cli = importlib.util.module_from_spec(SCRIPT_SPEC)
@@ -216,6 +219,19 @@ def test_source_push_package_private_runner_returns_structured_validation_errors
     assert rows[0]["error_type"] == "ValueError"
     assert rows[0]["kernel"] == "source_push_inbox"
     assert rows[0]["repeat_runs"] == 1
+
+
+def test_source_push_repro_wrapper_imports_active_bench_cli():
+    result = subprocess.run(
+        [sys.executable, str(REPRO_SCRIPT_PATH), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "source-push inbox MGPU benchmark" in result.stdout
+    assert "cannot import name 'main'" not in result.stderr
 
 
 def test_source_push_diagnostic_runner_tags_structured_validation_errors():
