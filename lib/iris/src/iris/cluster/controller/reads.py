@@ -973,7 +973,7 @@ def bulk_get_attempts(
 def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
-    Loads the full attempt history per task, not the list view's bounded set.
+    Returns the complete attempt history per task, with no per-task cap.
     """
     if not task_ids:
         return {}

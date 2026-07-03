@@ -630,7 +630,7 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
                     "controllerAddress": "https://cw.example:8443",
                     "dashboardUrl": "https://cw.example",
                     "reachable": True,
-                    "lastSyncMs": "1720000000000",
+                    "lastContactMs": "1720000000000",
                     "activeFederatedJobs": 2,
                     "backends": [
                         {

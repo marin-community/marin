@@ -238,8 +238,8 @@ def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client
 
 def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_client):
     """The dashboard reads see a federated job: GetJobStatus stamps child_cluster
-    and the peer-side remote_job_id (for the deep-link), and the ListJobs
-    child_cluster filter isolates federated jobs from local ones."""
+    and the peer-side remote_job_id, and the ListJobs child_cluster filter
+    isolates federated jobs from local ones."""
     with ExitStack() as stack:
         parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
@@ -250,7 +250,7 @@ def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_cli
         remote_job_id = encode_remote_job_id("parent", fed_job_id)
         local = parent_service.launch_job(make_direct_job_request("local-job", replicas=1), None)
 
-        # GetJobStatus exposes the discriminator + the peer-side id the deep-link needs.
+        # GetJobStatus exposes the discriminator + the peer-side remote job id.
         fed_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=fed.job_id), None
         ).job
@@ -260,8 +260,7 @@ def test_dashboard_reads_expose_child_cluster_and_filter_by_it(tmp_path, log_cli
         # not the local scheduler diagnostic (which never sees a federated job).
         assert fed_status.pending_reason == "Handed off to peer cw; awaiting first status report"
 
-        # A local job carries neither (the deep-link falls back to nothing) and
-        # keeps the local scheduler diagnostic.
+        # A local job carries neither and keeps the local scheduler diagnostic.
         local_status = parent_service.get_job_status(
             controller_pb2.Controller.GetJobStatusRequest(job_id=local.job_id), None
         ).job
